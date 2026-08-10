@@ -1,0 +1,510 @@
+.mq-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  justify-content: flex-end;
+  color: #edf2ea;
+  background: rgba(2, 4, 3, 0.76);
+  backdrop-filter: blur(6px);
+  animation: mq-fade-in 150ms ease both;
+}
+
+.mq-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(700px, 100%);
+  height: 100dvh;
+  min-width: 0;
+  overflow: hidden;
+  color: #edf2ea;
+  background:
+    linear-gradient(135deg, rgba(180, 255, 55, 0.025), transparent 34%),
+    #151915;
+  border-left: 1px solid #3a4337;
+  outline: 0;
+  box-shadow: -20px 0 80px rgba(0, 0, 0, 0.5);
+  animation: mq-panel-in 210ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.mq-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: max(18px, env(safe-area-inset-top, 0px)) 20px 16px;
+  border-bottom: 1px solid #30382e;
+}
+
+.mq-heading-copy {
+  min-width: 0;
+}
+
+.mq-eyebrow {
+  margin: 0;
+  color: #a8d75c;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.11em;
+}
+
+.mq-header h2 {
+  margin: 3px 0 0;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 24px;
+  font-weight: 570;
+  letter-spacing: -0.045em;
+}
+
+.mq-session-name {
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: #848e81;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-session-name span {
+  color: #cbd2c8;
+}
+
+.mq-session-name code {
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+}
+
+.mq-header-actions,
+.mq-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mq-icon-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  place-items: center;
+  color: #bfc8bc;
+  background: #20261f;
+  border: 1px solid #3b4538;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mq-icon-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.mq-icon-button:hover:not(:disabled),
+.mq-icon-button:focus-visible {
+  color: #eeffce;
+  border-color: #64735e;
+}
+
+.mq-icon-button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.mq-add-form {
+  flex: 0 0 auto;
+  padding: 16px 20px 15px;
+  background: #191e18;
+  border-bottom: 1px solid #30382e;
+}
+
+.mq-field-heading,
+.mq-add-footer,
+.mq-edit-footer,
+.mq-item-meta,
+.mq-delete-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mq-field-heading label {
+  color: #d9dfd6;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.mq-count {
+  color: #717b6e;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.mq-count-over {
+  color: #ff968c;
+}
+
+.mq-add-form textarea,
+.mq-edit-form textarea {
+  display: block;
+  width: 100%;
+  margin: 8px 0 10px;
+  padding: 12px 13px;
+  resize: vertical;
+  color: #edf2ea;
+  background: #0d100e;
+  border: 1px solid #3a4337;
+  border-radius: 4px;
+  outline: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  /* Prevent iOS from zooming the fixed queue panel when dictation starts. */
+  font-size: 16px;
+  line-height: 1.5;
+  caret-color: #b5f05d;
+}
+
+.mq-add-form textarea {
+  min-height: 80px;
+  max-height: 28dvh;
+}
+
+.mq-add-form textarea:focus,
+.mq-edit-form textarea:focus {
+  border-color: #7c9d57;
+  box-shadow: 0 0 0 3px rgba(181, 240, 93, 0.08);
+}
+
+.mq-add-form textarea[aria-invalid="true"],
+.mq-edit-form textarea[aria-invalid="true"] {
+  border-color: #b65d55;
+}
+
+.mq-add-form textarea:disabled,
+.mq-edit-form textarea:disabled {
+  opacity: 0.55;
+}
+
+.mq-add-footer {
+  align-items: flex-end;
+}
+
+.mq-add-footer p {
+  max-width: 420px;
+  margin: 0;
+  color: #778174;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.mq-button {
+  min-height: 40px;
+  padding: 0 13px;
+  color: #c9d1c6;
+  background: #252c23;
+  border: 1px solid #3c4639;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.mq-button:hover:not(:disabled),
+.mq-button:focus-visible {
+  color: #f1f6ee;
+  border-color: #687663;
+}
+
+.mq-button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.mq-button-primary {
+  color: #10140e;
+  background: #b5f05d;
+  border-color: #b5f05d;
+}
+
+.mq-button-primary:hover:not(:disabled),
+.mq-button-primary:focus-visible {
+  color: #10140e;
+  background: #c5fa77;
+  border-color: #c5fa77;
+}
+
+.mq-button-send {
+  color: #e7c284;
+  background: rgba(255, 182, 72, 0.07);
+  border-color: rgba(255, 182, 72, 0.28);
+}
+
+.mq-button-danger {
+  color: #fff3f1;
+  background: #9d4039;
+  border-color: #bd554d;
+}
+
+.mq-button-quiet-danger {
+  color: #d99892;
+}
+
+.mq-announcements {
+  flex: 0 0 auto;
+}
+
+.mq-alert,
+.mq-notice {
+  margin: 0;
+  padding: 9px 20px;
+  border-bottom: 1px solid;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mq-alert {
+  color: #ffaaa2;
+  background: rgba(255, 95, 81, 0.07);
+  border-color: rgba(255, 95, 81, 0.17);
+}
+
+.mq-notice {
+  color: #c9e4a4;
+  background: rgba(181, 240, 93, 0.045);
+  border-color: rgba(181, 240, 93, 0.13);
+}
+
+.mq-list-region {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    #101310;
+  background-size: 100% 22px;
+}
+
+.mq-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px calc(22px + env(safe-area-inset-bottom, 0px));
+  list-style: none;
+}
+
+.mq-item {
+  min-width: 0;
+  padding: 13px;
+  background: rgba(27, 33, 26, 0.96);
+  border: 1px solid #343d32;
+  border-radius: 5px;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.13);
+}
+
+.mq-item-meta {
+  margin-bottom: 10px;
+  color: #737d70;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.mq-position {
+  display: inline-grid;
+  width: 28px;
+  height: 20px;
+  place-items: center;
+  color: #a8d75c;
+  background: rgba(181, 240, 93, 0.06);
+  border: 1px solid rgba(181, 240, 93, 0.15);
+  border-radius: 3px;
+}
+
+.mq-message-text {
+  max-height: 240px;
+  margin: 0 0 12px;
+  overflow: auto;
+  color: #dbe2d8;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.mq-item-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.mq-edit-form textarea {
+  min-height: 120px;
+  max-height: 38dvh;
+  margin-top: 0;
+}
+
+.mq-edit-footer {
+  align-items: flex-end;
+}
+
+.mq-delete-confirm {
+  min-height: 46px;
+  padding: 8px 8px 8px 12px;
+  color: #e9b4af;
+  background: rgba(255, 95, 81, 0.055);
+  border: 1px solid rgba(255, 95, 81, 0.17);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.mq-delete-confirm span {
+  margin-right: auto;
+}
+
+.mq-state {
+  display: grid;
+  min-height: 230px;
+  padding: 28px;
+  place-content: center;
+  justify-items: center;
+  color: #879183;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 11px;
+  text-align: center;
+}
+
+.mq-state p {
+  margin: 0 0 14px;
+}
+
+.mq-state-error {
+  color: #ffaaa2;
+}
+
+.mq-state-empty {
+  gap: 7px;
+}
+
+.mq-state-empty strong {
+  color: #cbd3c8;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 15px;
+}
+
+.mq-state-empty span {
+  max-width: 360px;
+  line-height: 1.5;
+}
+
+.mq-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 560px) {
+  .mq-dialog {
+    border-left: 0;
+  }
+
+  .mq-header {
+    padding-right: 13px;
+    padding-left: 15px;
+  }
+
+  .mq-header h2 {
+    font-size: 21px;
+  }
+
+  .mq-add-form {
+    padding: 13px 14px;
+  }
+
+  .mq-add-form textarea {
+    max-height: 24dvh;
+  }
+
+  .mq-add-footer {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .mq-add-footer .mq-button {
+    width: 100%;
+  }
+
+  .mq-list {
+    padding: 10px 10px calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mq-item-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mq-item-actions .mq-button {
+    width: 100%;
+  }
+
+  .mq-delete-confirm {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mq-delete-confirm span {
+    grid-column: 1 / -1;
+  }
+
+  .mq-delete-confirm .mq-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 340px) {
+  .mq-header-actions {
+    gap: 5px;
+  }
+
+  .mq-icon-button {
+    width: 38px;
+    height: 38px;
+  }
+
+  .mq-session-name {
+    max-width: 190px;
+  }
+
+  .mq-item {
+    padding: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mq-backdrop,
+  .mq-dialog {
+    animation: none;
+  }
+}
+
+@keyframes mq-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes mq-panel-in {
+  from { transform: translateX(24px); }
+}

@@ -1,0 +1,28 @@
+# Render every placeholder according to AGENT_DEPLOYMENT_GUIDE.md before installing.
+# Muxdeck must run as the same Unix user that owns the target tmux server.
+[Unit]
+Description=Muxdeck tmux web console
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@@RUN_USER@@
+Group=@@RUN_GROUP@@
+WorkingDirectory=@@APP_DIR@@
+Environment=PYTHONUNBUFFERED=1
+Environment=MUXDECK_HOST=127.0.0.1
+Environment=MUXDECK_PORT=@@PORT@@
+Environment=MUXDECK_BASE_PATH=@@BASE_PATH@@
+Environment=MUXDECK_TITLES_FILE=@@STATE_DIR@@/session-titles.json
+Environment=MUXDECK_MESSAGES_FILE=@@STATE_DIR@@/session-messages.json
+Environment=TMUX_BIN=@@TMUX_BIN@@
+ExecStart=@@APP_DIR@@/.venv/bin/python -m tmux_console.app
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGINT
+TimeoutStopSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

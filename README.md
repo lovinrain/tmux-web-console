@@ -1,0 +1,223 @@
+# Muxdeck
+
+Muxdeck is a small, mobile-friendly web console for tmux. It discovers existing
+sessions, attaches a real tmux client over a WebSocket, relays raw terminal input
+and output, and captures retained tmux scrollback only when requested.
+
+## MVP features
+
+- Live inventory of every tmux session and pane
+- Claude, Codex, shell, and process labels
+- Exact terminal rendering through xterm.js and a real PTY
+- Direct raw-key, control-key, arrow-key, and bracketed-paste input
+- Local Page Up/Page Down controls for fixed mobile terminal views
+- Permanent dictation-safe staged input with a per-session local draft
+- Acknowledged staged delivery that retains uncertain or rejected input
+- Persistent per-session memorandum queues with add, edit, delete, load, and send actions
+- Automatic reconnect after a dropped mobile connection
+- Immutable, paginated history snapshots
+- Claude/Codex activity states with filters for human and command waits
+- Card dashboard by default, with a compact list view and shareable view preferences
+- Visible, ordered multi-criterion sorting and optional attention-first state groups
+- One-tap, persistent stars that pin frequently used sessions above the rest
+- Quick filters for All, Agents, Claude, Codex, and Shells
+- Optional human titles persisted by tmux session name
+- Separate new-window links while card clicks keep same-window navigation
+- Explicit warning when a full-screen alternate-screen app has no tmux history
+- Responsive phone, tablet, and desktop layouts
+
+## Run locally
+
+Requirements: Python 3.11+, tmux 3.x, and Node.js `^20.19.0` or
+`>=22.12.0`.
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+npm ci
+npm run build
+.venv/bin/python -m tmux_console.app
+```
+
+Open `http://127.0.0.1:7683/mux/`.
+
+For frontend development, run `npm run dev`. Vite runs at
+`http://127.0.0.1:5173/mux/` and proxies the API and WebSocket to port 7683.
+
+## Test
+
+```bash
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pytest -q
+npm test
+npm run build
+npm run test:e2e
+```
+
+The Python end-to-end test and Playwright test run on dedicated tmux sockets,
+fully isolated from the live tmux server. Even a broad cleanup such as
+`kill-server` can only affect the disposable test server.
+
+## Service deployment
+
+For a fresh host, archive migration, systemd service, Caddy, state migration,
+validation, rollback, and tmux-safety instructions, follow
+[`AGENT_DEPLOYMENT_GUIDE.md`](AGENT_DEPLOYMENT_GUIDE.md). The files under
+`deploy/` are templates and must not be installed before all `@@TOKEN@@` values
+are rendered.
+
+The minimal local build remains:
+
+```bash
+/usr/bin/python3 -m venv .venv
+.venv/bin/pip install -e .
+npm ci
+npm run build
+```
+
+## How live terminals work
+
+Each browser WebSocket owns one short-lived PTY running roughly:
+
+```text
+tmux attach-session -E -f active-pane -t $SESSION_ID
+```
+
+Input from xterm.js is written directly to the PTY. Output from the PTY is sent
+as binary WebSocket frames. Closing the tab terminates only that tmux client;
+the underlying session and Claude/Codex process continue running.
+
+The staged input box is intentionally separate from the editable line inside the
+terminal. Its draft is saved in the current browser under the tmux session name,
+which lets iOS dictation and replacement-style input methods finish composing in
+a normal textarea without xterm clearing their provisional text. Muxdeck never
+tries to merge terminal-side cursor edits back into that local draft.
+
+`Send` and `Send + Enter` take one snapshot of the staged text and wait for the
+server to confirm that the complete payload was written to the attached tmux PTY.
+Only then is the local draft cleared. A timeout or reconnect leaves it intact and
+is never retried automatically, because an unconfirmed retry could execute the
+same command twice. The confirmation does not claim that Claude, Codex, or the
+shell finished processing the text; it only confirms PTY delivery.
+
+On wider screens, the header exposes two sizing modes:
+
+- `Fit active` lets the browser resize the shared tmux window. This is the useful
+  interactive mode on a phone and matches ttyd behavior.
+- `Size protected` attaches with tmux's `ignore-size` flag. It does not disturb
+  another client's dimensions, but tmux must crop the larger shared window.
+
+Tmux cannot render the same pane at two independent responsive sizes.
+
+The mobile `PgUp` and `PgDn` controls send real Page Up/Page Down key sequences
+to the foreground tmux application, matching a physical keyboard. This lets
+Claude Code and Codex page their own terminal views. Use History for retained
+tmux content from before the browser attached.
+
+The sticky `Name` shortcut in the terminal's bottom bar opens the same optional
+human-title editor used by the dashboard. It updates the label shown by Muxdeck,
+not the real tmux session name, so attached clients and saved metadata remain
+stable.
+
+The adjacent `Memo` shortcut opens that session's reusable message queue. Queue
+items are stored by the server and remain available across browsers and service
+restarts. `Use` copies an item into the local staged draft, while `Send now`
+delivers it with Enter using the same acknowledgment protocol. Neither action
+deletes the stored item; deletion is always explicit.
+
+## Agent state detection
+
+Muxdeck recognizes the live title signals emitted by current Claude Code and
+Codex versions. An animated title means the agent is active; for those panes,
+Muxdeck inspects only the tail of the visible screen to distinguish explicit
+background-command waits from active work. Static Claude/Codex titles indicate
+that the agent needs human input. Dead, stale, or unfamiliar signals are marked
+Unclear instead of being guessed.
+
+This is a terminal heuristic, not an agent API. The server samples session state
+about once per second and streams changed snapshots to the dashboard with
+server-sent events. The browser automatically reconnects and falls back to a
+four-second poll if the stream is unavailable; the header shows `live` or
+`polling` accordingly.
+
+Muxdeck records when it first observes each state and updates that timestamp only
+when the state changes. Transition timestamps are held in memory, so restarting
+the service starts a fresh observation timeline.
+
+## Session organization
+
+Use the pencil on a session card to add an optional title. The original tmux
+session name remains visible and is used as the stable storage key. Saving an
+empty title clears it.
+
+Cards are the default dashboard view. Use the Cards/List control to switch to a
+compact list. Sorting applies identically to both views and is shown as a
+numbered priority of badges. For example, `1 State, 2 Title` compares state
+first, then uses the optional human title (or tmux name when no title exists) to
+order sessions within the same state. Move, remove, or add badges to change that
+priority.
+
+Sort directions are fixed and visible in the badges: activity and state-change
+time use newest first; titles and tmux names use natural A-Z order (`cx2` before
+`cx10`); state uses Needs input, Working, Command wait, Unclear, then Other.
+Grouping is independent of sorting. Enabling Group / State splits regular
+results into that attention-first state order, then applies the badge criteria
+inside each group.
+
+Dashboard controls are encoded in the URL, so a bookmark or shared link restores
+the same search, filters, card/list view, grouping, and comparator priority:
+
+```text
+/mux/?q=deploy&kind=codex&state=waiting_human&view=list&group=state&sort=state,title
+```
+
+Supported sort keys are `activity`, `state`, `state-change`, `title`, and
+`tmux-name`, listed from highest to lowest priority after `sort=`. Opening a
+console carries the dashboard query with it, and Back restores the exact
+dashboard configuration. A bare dashboard URL can still reuse older locally
+saved view/sort preferences and then writes them into the URL.
+
+Use the star beside a session title to add or remove it from the pinned section
+with one tap. Stars persist across server restarts. Pinned sessions remain
+visible above the regular results independently of the active All, Agents,
+Claude, Codex, or Shells quick filter.
+
+Selecting the main body of a card or list row opens its console in the current
+window. Use the adjacent `New window` link to open that console in a separate
+browser context instead. The link carries the current dashboard query, so its
+Back action returns to the same filters, view, grouping, and sort priority.
+
+`MUXDECK_TITLES_FILE` stores both optional titles and starred session names,
+using the original tmux session name as the key.
+
+## History behavior
+
+Opening History runs `tmux capture-pane` and stores the result in memory for ten
+minutes. Older pages come from that immutable snapshot, so live output cannot
+cause duplicate or skipped lines while the user reads.
+
+Tmux on this host retains at most 2,000 normal-screen rows. Claude Code commonly
+uses the alternate screen, where tmux often retains no previous rows. Muxdeck can
+show Claude's current screen but cannot reconstruct alternate-screen content that
+tmux never saved.
+
+History follows the pane selected when the web client attaches. If you switch to
+another tmux pane or window from inside the live terminal, return to the session
+list and reopen it before capturing that pane's history.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MUXDECK_HOST` | `127.0.0.1` | HTTP listen address |
+| `MUXDECK_PORT` | `7683` | HTTP listen port |
+| `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
+| `TMUX_BIN` | `tmux` | tmux executable |
+| `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
+| `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent optional titles and starred session names |
+| `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session memorandum queues |
+| `LOG_LEVEL` | `INFO` | Python log level |
+
+Muxdeck intentionally has no application-level authentication in this MVP. Keep
+it behind a trusted reverse proxy or private network until authentication and
+controller leases are added.

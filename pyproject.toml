@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "muxdeck"
+version = "0.1.0"
+description = "A mobile-friendly web console for existing tmux sessions"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.10,<4"]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.15,<2",
+    "pytest>=8,<9",
+    "pytest-asyncio>=1,<2",
+    "ruff>=0.11,<1",
+]
+
+[project.scripts]
+muxdeck = "tmux_console.app:main"
+
+[tool.setuptools]
+packages = ["tmux_console"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

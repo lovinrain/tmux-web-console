@@ -1,0 +1,8 @@
+# Render @@BASE_PATH@@ and @@PORT@@, then put these routes inside the intended
+# Caddy site block before any fallback handler. Keep the path prefix intact.
+redir @@BASE_PATH@@ @@BASE_PATH@@/
+handle @@BASE_PATH@@/* {
+	reverse_proxy 127.0.0.1:@@PORT@@ {
+		flush_interval -1
+	}
+}
