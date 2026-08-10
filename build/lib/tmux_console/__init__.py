@@ -1,2 +1,0 @@
-"""Muxdeck server package."""
-
