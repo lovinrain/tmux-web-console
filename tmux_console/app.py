@@ -15,6 +15,11 @@ from .history import SnapshotStore
 from .messages import MessageNotFoundError, SessionMessageStore
 from .metadata import SessionTitleStore
 from .pty_bridge import PtyBridge, clamp_size
+from .snippets import (
+    SnippetRevisionConflict,
+    SnippetStore,
+    SnippetStoreUnavailable,
+)
 from .status import AgentStateDetector
 from .tmux import TmuxClient, TmuxError
 
@@ -27,6 +32,7 @@ TMUX_KEY = web.AppKey("tmux", TmuxClient)
 SNAPSHOTS_KEY = web.AppKey("snapshots", SnapshotStore)
 TITLES_KEY = web.AppKey("titles", SessionTitleStore)
 MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
+SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
@@ -233,12 +239,14 @@ def create_app(
     agent_states: AgentStateDetector | None = None,
     base_path: str | None = None,
     messages: SessionMessageStore | None = None,
+    snippets: SnippetStore | None = None,
 ) -> web.Application:
     app = web.Application(client_max_size=MAX_INPUT_BYTES)
     app[TMUX_KEY] = tmux or TmuxClient()
     app[SNAPSHOTS_KEY] = snapshots or SnapshotStore()
     app[TITLES_KEY] = titles or SessionTitleStore()
     app[MESSAGES_KEY] = messages or SessionMessageStore()
+    app[SNIPPETS_KEY] = snippets or SnippetStore()
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
         app[TMUX_KEY],
@@ -466,6 +474,50 @@ def create_app(
             return json_error("unable to save queued messages", 500)
         return web.Response(status=204)
 
+    async def list_snippets(_: web.Request) -> web.Response:
+        try:
+            snapshot = app[SNIPPETS_KEY].get_snapshot()
+        except SnippetStoreUnavailable as error:
+            return json_error(str(error), 503)
+        return web.json_response(snapshot)
+
+    async def replace_snippets(request: web.Request) -> web.Response:
+        # ValueError includes malformed JSON and text decoding failures.
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        missing = sorted({"revision", "tree"} - set(payload))
+        if missing:
+            return json_error(f"{missing[0]} is required", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"revision", "tree"})
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        revision = payload["revision"]
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            return json_error("revision must be an integer", 400)
+        try:
+            snapshot = app[SNIPPETS_KEY].replace_tree(
+                payload["tree"], expected_revision=revision
+            )
+        except SnippetRevisionConflict as error:
+            return web.json_response(
+                {"error": str(error), "revision": error.current_revision},
+                status=409,
+            )
+        except SnippetStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception("Unable to save snippet tree")
+            return json_error("unable to save snippets", 500)
+        return web.json_response(snapshot)
+
     async def create_history(request: web.Request) -> web.Response:
         pane_id = request.match_info["pane_id"]
         limit = max(20, min(parse_int(request.query.get("limit"), 250), 1000))
@@ -619,6 +671,8 @@ def create_app(
         f"{prefix}/api/sessions/{{session}}/messages/{{message_id}}",
         delete_session_message,
     )
+    app.router.add_get(f"{prefix}/api/snippets", list_snippets)
+    app.router.add_put(f"{prefix}/api/snippets", replace_snippets)
     app.router.add_put(f"{prefix}/api/session-title", update_session_title)
     app.router.add_put(f"{prefix}/api/session-star", update_session_star)
     app.router.add_post(f"{prefix}/api/panes/{{pane_id}}/history", create_history)

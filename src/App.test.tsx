@@ -4,9 +4,16 @@ import { BASE_PATH } from "./api";
 import { App } from "./App";
 
 vi.mock("./components/SessionDashboard", () => ({
-  SessionDashboard: ({ onOpen }: { onOpen: (session: string) => void }) => (
+  SessionDashboard: ({
+    onOpen,
+    onOpenSnippets,
+  }: {
+    onOpen: (session: string) => void;
+    onOpenSnippets: () => void;
+  }) => (
     <main aria-label="Dashboard" data-search={window.location.search}>
       <button type="button" onClick={() => onOpen("work/name #1")}>Open test session</button>
+      <button type="button" onClick={onOpenSnippets}>Open snippets</button>
     </main>
   ),
 }));
@@ -22,6 +29,14 @@ vi.mock("./components/ConsoleScreen", () => ({
     <main aria-label="Console">
       <span>{sessionName}</span>
       <button type="button" onClick={onBack}>Back to sessions</button>
+    </main>
+  ),
+}));
+
+vi.mock("./components/SnippetLibrary", () => ({
+  SnippetLibrary: ({ onOpenSessions }: { onOpenSessions: () => void }) => (
+    <main aria-label="Snippets">
+      <button type="button" onClick={onOpenSessions}>Open sessions</button>
     </main>
   ),
 }));
@@ -133,5 +148,31 @@ describe("App routing", () => {
       expect(screen.getByRole("main", { name: "Console" })).toBeVisible();
     });
     expect(window.location.search).toBe(codexSearch);
+  });
+
+  it("routes to snippets without leaking dashboard query keys and restores them on return", async () => {
+    const search = "?kind=codex&view=list&sort=state,title";
+    replaceUrl(dashboardUrl(search));
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
+    expect(screen.getByRole("main", { name: "Snippets" })).toBeVisible();
+    expect(window.location.pathname).toBe(`${BASE_PATH}/snippets`);
+    expect(window.location.search).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open sessions" }));
+    await waitFor(() => expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible());
+    expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+    expect(window.location.search).toBe(search);
+  });
+
+  it("opens a direct snippets deep link and returns to a clean dashboard", () => {
+    replaceUrl(`${BASE_PATH}/snippets?ignored=1`);
+    render(<App />);
+
+    expect(screen.getByRole("main", { name: "Snippets" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open sessions" }));
+    expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+    expect(window.location.href.endsWith(`${BASE_PATH}/`)).toBe(true);
   });
 });

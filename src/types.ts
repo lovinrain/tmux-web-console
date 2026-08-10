@@ -66,6 +66,27 @@ export interface MessageQueue {
   messages: QueuedMessage[];
 }
 
+export interface SnippetFolder {
+  id: string;
+  type: "folder";
+  name: string;
+  children: SnippetNode[];
+}
+
+export interface SnippetLeaf {
+  id: string;
+  type: "snippet";
+  name: string;
+  text: string;
+}
+
+export type SnippetNode = SnippetFolder | SnippetLeaf;
+
+export interface SnippetTree {
+  tree: SnippetNode[];
+  revision: number;
+}
+
 export type ConnectionState =
   | "connecting"
   | "live"

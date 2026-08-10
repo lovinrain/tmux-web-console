@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_PATH,
+  ApiRequestError,
   createQueuedMessage,
   deleteQueuedMessage,
+  getSnippetTree,
   listQueuedMessages,
+  saveSnippetTree,
   subscribeToSessions,
   updateQueuedMessage,
 } from "./api";
@@ -120,6 +123,54 @@ describe("subscribeToSessions", () => {
     expect(() => subscribeToSessions({ onSessions: vi.fn() })).toThrow(
       "Server-sent events are not supported",
     );
+  });
+});
+
+describe("snippet library API", () => {
+  const tree = [{
+    id: "root-folder",
+    type: "folder" as const,
+    name: "Review",
+    children: [{ id: "diff", type: "snippet" as const, name: "Diff", text: "git diff\n" }],
+  }];
+
+  it("loads and revision-saves the complete ordered tree", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 3, tree }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 4, tree }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getSnippetTree()).resolves.toEqual({ revision: 3, tree });
+    await expect(saveSnippetTree(tree, 3)).resolves.toEqual({ revision: 4, tree });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/snippets`);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      `${BASE_PATH}/api/snippets`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ tree, revision: 3 }),
+      }),
+    ]);
+  });
+
+  it("exposes stale-write status while preserving the server message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "snippet tree changed",
+      revision: 8,
+    }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    const error = await saveSnippetTree(tree, 3).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ message: "snippet tree changed", status: 409 });
   });
 });
 

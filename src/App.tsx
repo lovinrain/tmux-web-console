@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { BASE_PATH } from "./api";
 import { ConsoleScreen } from "./components/ConsoleScreen";
 import { SessionDashboard } from "./components/SessionDashboard";
+import { SnippetLibrary } from "./components/SnippetLibrary";
 
 interface MuxLocation {
   path: string;
@@ -9,6 +10,7 @@ interface MuxLocation {
 }
 
 const FROM_DASHBOARD_KEY = "muxdeckFromDashboard";
+const SNIPPETS_FROM_DASHBOARD_KEY = "muxdeckSnippetsFromDashboard";
 
 function currentLocation(): MuxLocation {
   const path = window.location.pathname;
@@ -52,6 +54,25 @@ export function App() {
     setLocation(currentLocation());
   };
 
+  const openSnippets = () => {
+    window.history.pushState(
+      { [SNIPPETS_FROM_DASHBOARD_KEY]: true },
+      "",
+      targetUrl("/snippets", ""),
+    );
+    setLocation(currentLocation());
+  };
+
+  const returnFromSnippets = () => {
+    const state = window.history.state as Record<string, unknown> | null;
+    if (state?.[SNIPPETS_FROM_DASHBOARD_KEY] === true) {
+      window.history.back();
+      return;
+    }
+    window.history.replaceState({}, "", targetUrl("/", ""));
+    setLocation(currentLocation());
+  };
+
   const sessionMatch = location.path.match(/^\/session\/(.+)$/);
   if (sessionMatch) {
     let sessionName: string;
@@ -63,5 +84,15 @@ export function App() {
     return <ConsoleScreen sessionName={sessionName} onBack={returnToDashboard} />;
   }
 
-  return <SessionDashboard key={location.search} onOpen={openSession} />;
+  if (location.path === "/snippets" || location.path === "/snippets/") {
+    return <SnippetLibrary onOpenSessions={returnFromSnippets} />;
+  }
+
+  return (
+    <SessionDashboard
+      key={location.search}
+      onOpen={openSession}
+      onOpenSnippets={openSnippets}
+    />
+  );
 }

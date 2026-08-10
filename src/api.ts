@@ -1,6 +1,20 @@
-import type { HistoryPage, MessageQueue, QueuedMessage, Session } from "./types";
+import type {
+  HistoryPage,
+  MessageQueue,
+  QueuedMessage,
+  Session,
+  SnippetNode,
+  SnippetTree,
+} from "./types";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
 
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_PATH}${path}`, {
@@ -9,7 +23,7 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const payload = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) {
-    throw new Error(payload.error || `Request failed (${response.status})`);
+    throw new ApiRequestError(payload.error || `Request failed (${response.status})`, response.status);
   }
   return payload as T;
 }
@@ -159,6 +173,21 @@ export async function deleteQueuedMessage(
     `${messageQueuePath(session)}/${encodeURIComponent(messageId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function getSnippetTree(signal?: AbortSignal): Promise<SnippetTree> {
+  return jsonRequest<SnippetTree>("/api/snippets", { signal });
+}
+
+export async function saveSnippetTree(
+  tree: SnippetNode[],
+  revision: number,
+): Promise<SnippetTree> {
+  return jsonRequest<SnippetTree>("/api/snippets", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tree, revision }),
+  });
 }
 
 export function createHistorySnapshot(paneId: string, limit = 250): Promise<HistoryPage> {

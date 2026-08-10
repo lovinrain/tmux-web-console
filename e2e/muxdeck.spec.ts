@@ -7,17 +7,19 @@ const socketName = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET || "muxdeck-playwr
 const tmux = ["-L", socketName];
 const titlesFile = process.env.MUXDECK_PLAYWRIGHT_TITLES_FILE;
 const messagesFile = process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE;
+const snippetsFile = process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE;
 const originalQueuedCommand = "printf 'MEMO_QUEUE_ORIGINAL\\n'";
 const editedQueuedCommand = "printf 'MEMO_QUEUE_EDITED\\n'";
 let paneId = "";
 
-if (!titlesFile || !messagesFile) {
+if (!titlesFile || !messagesFile || !snippetsFile) {
   throw new Error("Playwright metadata paths were not configured");
 }
 
 test.beforeAll(() => {
   rmSync(titlesFile, { force: true });
   rmSync(messagesFile, { force: true });
+  rmSync(snippetsFile, { force: true });
   try {
     execFileSync("tmux", [...tmux, "kill-server"], { stdio: "ignore" });
   } catch {
@@ -36,6 +38,7 @@ test.afterAll(() => {
   }
   rmSync(titlesFile, { force: true });
   rmSync(messagesFile, { force: true });
+  rmSync(snippetsFile, { force: true });
 });
 
 test("desktop dashboard renders a three-column session grid", async ({ page }) => {
@@ -132,6 +135,69 @@ test("dashboard query survives new-window and same-window console navigation", a
   await page.getByRole("button", { name: "Back to sessions" }).click();
   await expect(page).toHaveURL("/mux/?kind=shells&view=list&sort=title,tmux-name");
   await expect(page.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("snippet tree persists and stages exact input from cards and lists", async ({ page }) => {
+  const snippetCommand = "printf 'SNIPPET_E2E_OK\\n'";
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/mux/");
+  await page.getByRole("button", { name: "Snippets", exact: true }).click();
+  await expect(page).toHaveURL("/mux/snippets");
+
+  const libraryControls = page.getByLabel("Snippet library controls");
+  await libraryControls.getByRole("button", { name: "New folder", exact: true }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("Shared prompts");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("button", { name: "Open folder Shared prompts" }).click();
+  await libraryControls.getByRole("button", { name: "New snippet", exact: true }).click();
+  await page.getByRole("textbox", { name: "Name" }).fill("E2E status");
+  const snippetEditor = page.getByRole("textbox", { name: "Snippet text" });
+  await expect(snippetEditor).toHaveCSS("font-size", "16px");
+  await snippetEditor.fill(snippetCommand);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit snippet E2E status" })).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Open folder Shared prompts" }).click();
+  await expect(page.getByRole("button", { name: "Edit snippet E2E status" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/snippets-mobile.png", fullPage: true });
+
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await expect(page).toHaveURL("/mux/");
+  await page.getByRole("button", { name: `Use snippet with ${sessionName}` }).click();
+  await page.getByRole("searchbox", { name: "Search all snippets" }).fill("E2E status");
+  await page.getByRole("button", { name: "Preview snippet E2E status" }).click();
+  await page.screenshot({ path: "artifacts/snippet-picker-mobile.png" });
+  await expect(page.getByRole("button", { name: "Insert", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Insert", exact: true }).click();
+
+  await expect(page).toHaveURL(`/mux/session/${sessionName}`);
+  let stagedInput = page.getByRole("textbox", { name: "Staged input" });
+  await expect(stagedInput).toHaveValue(snippetCommand);
+  expect(execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" }))
+    .not.toContain("SNIPPET_E2E_OK");
+  await expect(page.getByRole("button", { name: "Send + Enter" })).toBeEnabled({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Send + Enter" }).click();
+  await expect.poll(() => execFileSync(
+    "tmux",
+    [...tmux, "capture-pane", "-p", "-t", paneId],
+    { encoding: "utf8" },
+  )).toContain("SNIPPET_E2E_OK");
+
+  await page.getByRole("button", { name: "Back to sessions" }).click();
+  await page.getByRole("button", { name: "List" }).click();
+  await page.setViewportSize({ width: 320, height: 700 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const rowSnippet = page.getByRole("button", { name: `Use snippet with ${sessionName}` });
+  await expect(rowSnippet.locator("xpath=ancestor::article[contains(@class, 'session-row')]")).toBeVisible();
+  await rowSnippet.click();
+  await page.getByRole("searchbox", { name: "Search all snippets" }).fill("E2E status");
+  await page.getByRole("button", { name: "Preview snippet E2E status" }).click();
+  await page.getByRole("button", { name: "Insert", exact: true }).click();
+  stagedInput = page.getByRole("textbox", { name: "Staged input" });
+  await expect(stagedInput).toHaveValue(snippetCommand);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test("mobile dashboard manages memoranda and sends acknowledged staged input", async ({ page }) => {

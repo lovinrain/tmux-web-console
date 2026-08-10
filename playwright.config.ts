@@ -5,6 +5,7 @@ import { defineConfig } from "@playwright/test";
 const runId = process.env.MUXDECK_PLAYWRIGHT_RUN_ID || `${process.pid}-${Date.now()}`;
 const titlesFile = `/tmp/muxdeck-playwright-${runId}-titles.json`;
 const messagesFile = `/tmp/muxdeck-playwright-${runId}-messages.json`;
+const snippetsFile = `/tmp/muxdeck-playwright-${runId}-snippets.json`;
 const socketName = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET || `muxdeck-playwright-${runId}`;
 const localPython = resolve(".venv/bin/python");
 const pythonBin = process.env.MUXDECK_PLAYWRIGHT_PYTHON
@@ -16,6 +17,7 @@ const browserExecutable = process.env.MUXDECK_PLAYWRIGHT_BROWSER
 process.env.MUXDECK_PLAYWRIGHT_RUN_ID = runId;
 process.env.MUXDECK_PLAYWRIGHT_TITLES_FILE = titlesFile;
 process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE = messagesFile;
+process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE = snippetsFile;
 process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET = socketName;
 
 export default defineConfig({
@@ -31,7 +33,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} ${pythonBin} -m tmux_console.app`,
+    command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} ${pythonBin} -m tmux_console.app`,
     url: "http://127.0.0.1:7684/mux/api/health",
     reuseExistingServer: false,
     timeout: 10_000,

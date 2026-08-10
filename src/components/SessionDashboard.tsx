@@ -9,6 +9,7 @@ import {
   MemoIcon,
   RefreshIcon,
   SearchIcon,
+  SnippetIcon,
   StarIcon,
   TerminalIcon,
 } from "../icons";
@@ -27,12 +28,16 @@ import {
   type SessionViewMode,
 } from "../sessionDashboardModel";
 import type { AgentState, Pane, Session } from "../types";
+import { AppTabs } from "./AppTabs";
+import { stageSessionDraft } from "./InputBar";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { SessionSortControls } from "./SessionSortControls";
+import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 
 interface SessionDashboardProps {
   onOpen: (session: string) => void;
+  onOpenSnippets?: () => void;
 }
 
 type UpdateMode = "connecting" | "live" | "polling";
@@ -141,6 +146,7 @@ interface SessionItemProps {
   onOpen: (name: string) => void;
   onEdit: (name: string, trigger: HTMLButtonElement) => void;
   onMessages: (name: string, trigger: HTMLButtonElement) => void;
+  onSnippets: (name: string, trigger: HTMLButtonElement) => void;
   onToggleStar: (session: Session) => void;
 }
 
@@ -153,6 +159,7 @@ function SessionItem({
   onOpen,
   onEdit,
   onMessages,
+  onSnippets,
   onToggleStar,
 }: SessionItemProps) {
   const pane = activePane(session);
@@ -207,6 +214,15 @@ function SessionItem({
       <div className="session-card-actions">
         <button
           type="button"
+          className="session-snippets-toggle"
+          aria-label={`Use snippet with ${displayName}`}
+          title="Stage a snippet"
+          onClick={(event) => onSnippets(session.name, event.currentTarget)}
+        >
+          <SnippetIcon />
+        </button>
+        <button
+          type="button"
           className="session-messages-toggle"
           aria-label={`Manage memoranda for ${displayName}`}
           title="Queued memoranda"
@@ -240,7 +256,7 @@ function SessionItem({
   );
 }
 
-export function SessionDashboard({ onOpen }: SessionDashboardProps) {
+export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [route, setRoute] = useState<SessionDashboardRouteState>(initialDashboardRoute);
   const [loading, setLoading] = useState(true);
@@ -251,9 +267,11 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [editingSessionName, setEditingSessionName] = useState<string | null>(null);
   const [messageSessionName, setMessageSessionName] = useState<string | null>(null);
+  const [snippetSessionName, setSnippetSessionName] = useState<string | null>(null);
   const [starBusyNames, setStarBusyNames] = useState<Set<string>>(() => new Set());
   const editTriggerRef = useRef<HTMLButtonElement | null>(null);
   const messageTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const snippetTriggerRef = useRef<HTMLButtonElement | null>(null);
   const {
     query,
     kind: filter,
@@ -438,6 +456,16 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
     window.requestAnimationFrame(() => messageTriggerRef.current?.focus());
   }, []);
 
+  const openSnippets = useCallback((name: string, trigger: HTMLButtonElement) => {
+    snippetTriggerRef.current = trigger;
+    setSnippetSessionName(name);
+  }, []);
+
+  const closeSnippets = useCallback(() => {
+    setSnippetSessionName(null);
+    window.requestAnimationFrame(() => snippetTriggerRef.current?.focus());
+  }, []);
+
   const chooseViewMode = (next: SessionViewMode) => updateRoute({ ...route, view: next });
 
   const chooseSortCriteria = (next: SessionSortKey[]) => updateRoute({
@@ -482,9 +510,16 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
             <h1>Muxdeck</h1>
           </div>
         </div>
-        <div className="server-pulse">
-          <span className={error ? "pulse-dot error" : "pulse-dot"} />
-          {error ? "offline" : `${sessions.length} sessions / ${updateMode}`}
+        <div className="dashboard-header-tools">
+          <div className="server-pulse">
+            <span className={error ? "pulse-dot error" : "pulse-dot"} />
+            {error ? "offline" : `${sessions.length} sessions / ${updateMode}`}
+          </div>
+          <AppTabs
+            active="sessions"
+            onSessions={() => undefined}
+            onSnippets={() => onOpenSnippets?.()}
+          />
         </div>
       </header>
 
@@ -601,6 +636,7 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
                       setEditingSessionName(name);
                     }}
                     onMessages={openMessages}
+                    onSnippets={openSnippets}
                     onToggleStar={(item) => void toggleStar(item)}
                   />
                 ))}
@@ -639,6 +675,7 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
                             setEditingSessionName(name);
                           }}
                           onMessages={openMessages}
+                          onSnippets={openSnippets}
                           onToggleStar={(item) => void toggleStar(item)}
                         />
                       ))}
@@ -662,6 +699,7 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
                       setEditingSessionName(name);
                     }}
                     onMessages={openMessages}
+                    onSnippets={openSnippets}
                     onToggleStar={(item) => void toggleStar(item)}
                   />
                 ))}
@@ -694,6 +732,24 @@ export function SessionDashboard({ onOpen }: SessionDashboardProps) {
           sessionName={messageSession.name}
           sessionTitle={messageSession.customTitle}
           onClose={closeMessages}
+        />
+      )}
+      {snippetSessionName && (
+        <SnippetPickerDialog
+          title={`Stage a snippet for ${snippetSessionName}`}
+          onClose={closeSnippets}
+          onManage={onOpenSnippets}
+          onChoose={(snippet) => {
+            const result = stageSessionDraft(snippetSessionName, snippet.text);
+            if (result === "cancelled") return false;
+            if (result === "storage-error") {
+              throw new Error("The snippet could not be saved in this browser; the staged input was left unchanged.");
+            }
+            if (result === "invalid") {
+              throw new Error("This snippet does not fit in the staged input.");
+            }
+            onOpen(snippetSessionName);
+          }}
         />
       )}
     </main>

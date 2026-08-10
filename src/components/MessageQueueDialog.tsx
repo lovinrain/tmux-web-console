@@ -11,8 +11,10 @@ import {
   listQueuedMessages,
   updateQueuedMessage,
 } from "../api";
-import { CloseIcon, RefreshIcon } from "../icons";
-import type { QueuedMessage } from "../types";
+import { acquireBodyScrollLock } from "../bodyScrollLock";
+import { CloseIcon, RefreshIcon, SnippetIcon } from "../icons";
+import type { QueuedMessage, SnippetLeaf } from "../types";
+import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import "./MessageQueueDialog.css";
 
 export const MAX_QUEUED_MESSAGE_LENGTH = 65_536;
@@ -66,6 +68,7 @@ export function MessageQueueDialog({
   const [editLength, setEditLength] = useState(0);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [addLength, setAddLength] = useState(0);
+  const [snippetTarget, setSnippetTarget] = useState<"add" | "edit" | null>(null);
   const addTextareaRef = useRef<HTMLTextAreaElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -78,13 +81,12 @@ export function MessageQueueDialog({
     const previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const releaseBodyScroll = acquireBodyScrollLock();
     dialogRef.current?.focus();
 
     return () => {
-      document.body.style.overflow = previousOverflow;
-      previousFocus?.focus();
+      releaseBodyScroll();
+      if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
 
@@ -128,6 +130,7 @@ export function MessageQueueDialog({
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (snippetTarget) return;
       if (event.key === "Escape") {
         if (pending) return;
         if (confirmDeleteId) {
@@ -163,7 +166,7 @@ export function MessageQueueDialog({
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [confirmDeleteId, editingId, onClose, pending]);
+  }, [confirmDeleteId, editingId, onClose, pending, snippetTarget]);
 
   const refresh = async () => {
     const requestedSession = sessionName;
@@ -296,10 +299,26 @@ export function MessageQueueDialog({
     event.stopPropagation();
   };
 
+  const insertSnippet = (snippet: SnippetLeaf) => {
+    const textarea = snippetTarget === "edit" ? editTextareaRef.current : addTextareaRef.current;
+    if (!textarea) throw new Error("The target input is no longer available.");
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const nextValue = `${textarea.value.slice(0, start)}${snippet.text}${textarea.value.slice(end)}`;
+    if (codePointLength(nextValue) > MAX_QUEUED_MESSAGE_LENGTH) {
+      throw new Error("This snippet does not fit within the message limit.");
+    }
+    textarea.setRangeText(snippet.text, start, end, "end");
+    if (snippetTarget === "edit") setEditLength(codePointLength(textarea.value));
+    else setAddLength(codePointLength(textarea.value));
+    textarea.focus();
+  };
+
   const addIsValid = addLength > 0 && addLength <= MAX_QUEUED_MESSAGE_LENGTH
     && Boolean(addTextareaRef.current?.value.trim());
 
   return (
+    <>
     <div className="mq-backdrop" role="presentation" onMouseDown={closeFromBackdrop}>
       <section
         ref={dialogRef}
@@ -346,9 +365,14 @@ export function MessageQueueDialog({
         <form className="mq-add-form" onSubmit={(event) => void addMessage(event)}>
           <div className="mq-field-heading">
             <label htmlFor="message-queue-add">Add a message</label>
-            <span className={addLength > MAX_QUEUED_MESSAGE_LENGTH ? "mq-count mq-count-over" : "mq-count"}>
-              {addLength.toLocaleString()} / {MAX_QUEUED_MESSAGE_LENGTH.toLocaleString()}
-            </span>
+            <div>
+              <button type="button" className="mq-snippet-button" onClick={() => setSnippetTarget("add")} disabled={loading || Boolean(pending)}>
+                <SnippetIcon /> Insert snippet
+              </button>
+              <span className={addLength > MAX_QUEUED_MESSAGE_LENGTH ? "mq-count mq-count-over" : "mq-count"}>
+                {addLength.toLocaleString()} / {MAX_QUEUED_MESSAGE_LENGTH.toLocaleString()}
+              </span>
+            </div>
           </div>
           <textarea
             ref={addTextareaRef}
@@ -424,9 +448,14 @@ export function MessageQueueDialog({
                           onInput={(event) => setEditLength(codePointLength(event.currentTarget.value))}
                         />
                         <div className="mq-edit-footer">
-                          <span className={editLength > MAX_QUEUED_MESSAGE_LENGTH ? "mq-count mq-count-over" : "mq-count"}>
-                            {editLength.toLocaleString()} / {MAX_QUEUED_MESSAGE_LENGTH.toLocaleString()}
-                          </span>
+                          <div className="mq-edit-snippet-tools">
+                            <button type="button" className="mq-snippet-button" onClick={() => setSnippetTarget("edit")} disabled={itemPending}>
+                              <SnippetIcon /> Insert snippet
+                            </button>
+                            <span className={editLength > MAX_QUEUED_MESSAGE_LENGTH ? "mq-count mq-count-over" : "mq-count"}>
+                              {editLength.toLocaleString()} / {MAX_QUEUED_MESSAGE_LENGTH.toLocaleString()}
+                            </span>
+                          </div>
                           <div className="mq-actions">
                             <button type="button" className="mq-button" onClick={() => setEditingId(null)} disabled={itemPending}>Cancel</button>
                             <button type="submit" className="mq-button mq-button-primary" disabled={!editIsValid || itemPending}>
@@ -472,5 +501,13 @@ export function MessageQueueDialog({
         </div>
       </section>
     </div>
+    {snippetTarget && (
+      <SnippetPickerDialog
+        title={snippetTarget === "edit" ? "Insert into queued message" : "Insert into new memorandum"}
+        onClose={() => setSnippetTarget(null)}
+        onChoose={insertSnippet}
+      />
+    )}
+    </>
   );
 }

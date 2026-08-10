@@ -134,3 +134,46 @@ export function MemoIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function SnippetIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9 5H5v14h4M15 5h4v14h-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m13.5 8-3 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3.5 6.5h6l2 2h9v10h-17v-12Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M3.5 9h17" stroke="currentColor" strokeWidth="1.8" />
+    </IconBase>
+  );
+}
+
+export function TrashIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 11v5M14 11v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
+export function ArrowUpIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 14 6-6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function ArrowDownIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 10 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}

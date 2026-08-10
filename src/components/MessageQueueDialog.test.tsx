@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createQueuedMessage,
   deleteQueuedMessage,
+  getSnippetTree,
   listQueuedMessages,
   updateQueuedMessage,
 } from "../api";
@@ -12,6 +13,7 @@ import { MessageQueueDialog } from "./MessageQueueDialog";
 vi.mock("../api", () => ({
   createQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn(),
+  getSnippetTree: vi.fn(),
   listQueuedMessages: vi.fn(),
   updateQueuedMessage: vi.fn(),
 }));
@@ -40,9 +42,44 @@ beforeEach(() => {
   vi.mocked(createQueuedMessage).mockReset();
   vi.mocked(updateQueuedMessage).mockReset();
   vi.mocked(deleteQueuedMessage).mockReset();
+  vi.mocked(getSnippetTree).mockReset().mockResolvedValue({ revision: 0, tree: [] });
 });
 
 describe("MessageQueueDialog", () => {
+  it("inserts a selected snippet into the new memorandum without sending", async () => {
+    vi.mocked(getSnippetTree).mockResolvedValue({
+      revision: 1,
+      tree: [{ id: "status", type: "snippet", name: "Status check", text: "git status\n" }],
+    });
+    render(<MessageQueueDialog sessionName="work" onClose={vi.fn()} />);
+    await screen.findByText(firstMessage.text);
+    const textarea = screen.getByLabelText("Add a message") as HTMLTextAreaElement;
+    fireEvent.input(textarea, { target: { value: "Before: " } });
+    textarea.setSelectionRange(8, 8);
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert snippet" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Status check" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+
+    await waitFor(() => expect(textarea).toHaveValue("Before: git status\n"));
+    expect(textarea).toHaveFocus();
+    expect(createQueuedMessage).not.toHaveBeenCalled();
+  });
+
+  it("restores page scrolling when the queue and nested snippet picker unmount together", async () => {
+    document.body.style.overflow = "clip";
+    const { unmount } = render(<MessageQueueDialog sessionName="work" onClose={vi.fn()} />);
+    await screen.findByText(firstMessage.text);
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert snippet" }));
+    expect(await screen.findByRole("dialog", { name: "Insert into new memorandum" })).toBeVisible();
+    expect(document.body.style.overflow).toBe("hidden");
+
+    unmount();
+    expect(document.body.style.overflow).toBe("clip");
+    document.body.style.overflow = "";
+  });
+
   it("loads messages and exposes choose and send callbacks", async () => {
     const onChoose = vi.fn();
     const onSend = vi.fn().mockResolvedValue(undefined);

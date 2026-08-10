@@ -84,7 +84,7 @@ playwright-report/
 must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
-- titles/stars and memoranda stored outside the source folder;
+- titles/stars, memoranda, and the snippet library stored outside the source folder;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -245,8 +245,8 @@ journalctl -u muxdeck.service -n 100 --no-pager
 caddy validate --config /etc/caddy/Caddyfile
 ```
 
-Back up the existing unit, the relevant Caddy configuration, both state JSON
-files, and the old release path. Use timestamped copies; do not overwrite the
+Back up the existing unit, the relevant Caddy configuration, all three state
+JSON files, and the old release path. Use timestamped copies; do not overwrite the
 only known-good copy.
 
 ## 5. Build a clean release
@@ -336,26 +336,30 @@ The default source paths are under the old service user's state directory:
 ```text
 ~/.local/state/muxdeck/session-titles.json
 ~/.local/state/muxdeck/session-messages.json
+~/.local/state/muxdeck/snippets.json
 ```
 
 The first file contains titles and starred session names. The second contains
-memoranda and may include sensitive commands or prose. An existing unit may
-override both paths; inspect its environment rather than assuming defaults.
+memoranda and may include sensitive commands or prose. The third contains the
+global folder/snippet tree and may also contain sensitive commands or prose. An
+existing unit may override any path; inspect its environment rather than
+assuming defaults.
 
 Migration procedure:
 
 1. Stop only Muxdeck on the source if a consistent final copy is needed. This
    disconnects web clients but does not stop tmux sessions.
-2. Copy the two JSON files separately from the source archive.
+2. Copy the three JSON files separately from the source archive.
 3. Create the target state directory with owner/group equal to the run user and
    mode `0700`.
 4. Install migrated JSON files with mode `0600` and the same owner/group.
 5. Point the rendered unit at their absolute target paths.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
-State is keyed by tmux session name. Old entries may remain dormant until a
-session with the same name exists. Do not run two Muxdeck processes against the
-same state files; persistence is atomic within one process, not coordinated
+Title and memorandum entries are keyed by tmux session name, so old entries may
+remain dormant until a session with the same name exists. The snippet tree is
+global and is not keyed by session. Do not run two Muxdeck processes against
+the same state files; persistence is atomic within one process, not coordinated
 between processes.
 
 Not migrated: tmux sessions, browser local storage, history snapshots, and
@@ -515,7 +519,7 @@ From a client allowed by the chosen access controls, verify:
 4. A dashboard URL with filters/view/group/sort reloads identically.
 5. A session deep link returns the SPA.
 6. Card and list layouts have no horizontal overflow at phone width.
-7. Titles/stars/memoranda appear if state was migrated.
+7. Titles/stars, memoranda, and the snippet library appear if state was migrated.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux
@@ -530,7 +534,7 @@ The deployment agent should report:
 - run user/group and tmux socket selection;
 - Python, Node, npm, and tmux versions;
 - base path, port, and proxy/access-control choice;
-- whether state was migrated and its target directory (not memorandum content);
+- whether state was migrated and its target directory (not memorandum or snippet content);
 - source/unit/Caddy backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
@@ -586,8 +590,8 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | HTML loads but assets/API/WebSocket fail | Build/runtime/proxy base paths differ | Rebuild with `/prefix/`; use runtime `/prefix`; preserve prefix in Caddy. |
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
 | Console WebSocket fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
-| Titles/stars/memoranda do not persist | State path or ownership/mode is wrong | Inspect unit environment, directory ownership, mode `0700`, files mode `0600`, and journal. |
+| Titles/stars/memoranda/snippets do not persist | State path or ownership/mode is wrong | Inspect unit environment, directory ownership, mode `0700`, files mode `0600`, and journal. |
+| Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Another terminal layout changes | Browser opened in `Fit active` | This is tmux shared-size behavior; use `Size protected` for observation. |
 | Playwright cannot find a browser | No Playwright Chromium and no configured system browser | Run `npx playwright install chromium` or set `MUXDECK_PLAYWRIGHT_BROWSER`. |
 | Port already in use | Existing Muxdeck or unrelated listener | Identify the listener before stopping anything; choose another port only if all coupled settings change. |
-

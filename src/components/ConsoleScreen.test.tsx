@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listQueuedMessages, listSessions, updateSessionTitle } from "../api";
+import { getSnippetTree, listQueuedMessages, listSessions, updateSessionTitle } from "../api";
 import type { Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
 
@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
   createQueuedMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn(),
+  getSnippetTree: vi.fn(),
   updateSessionStar: vi.fn(),
   updateSessionTitle: vi.fn(),
 }));
@@ -60,10 +61,30 @@ function session(customTitle: string | null = null): Session {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  window.localStorage.clear();
+  vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
   document.title = "Muxdeck";
 });
 
 describe("ConsoleScreen session title", () => {
+  it("inserts snippets into the staged draft without sending", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(getSnippetTree).mockResolvedValue({
+      revision: 1,
+      tree: [{ id: "continue", type: "snippet", name: "Continue", text: "continue from here" }],
+    });
+    render(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("continue from here"));
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveFocus();
+  });
+
   it("updates the human title from the bottom shortcut bar", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionTitle).mockResolvedValue("Mobile work");

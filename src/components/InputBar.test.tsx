@@ -1,7 +1,12 @@
 import { createRef } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { InputBar, type InputBarHandle } from "./InputBar";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  InputBar,
+  MAX_DRAFT_LENGTH,
+  stageSessionDraft,
+  type InputBarHandle,
+} from "./InputBar";
 
 const props = {
   sessionName: "test-session",
@@ -14,6 +19,10 @@ const props = {
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("InputBar", () => {
@@ -104,22 +113,76 @@ describe("InputBar", () => {
     expect(screen.getByText(/Memorandum loaded locally/)).toBeVisible();
   });
 
+  it("inserts a snippet at the current selection and persists the exact draft", () => {
+    const ref = createRef<InputBarHandle>();
+    render(<InputBar {...props} ref={ref} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" }) as HTMLTextAreaElement;
+    fireEvent.input(textarea, { target: { value: "alpha omega" } });
+    textarea.setSelectionRange(6, 11);
+
+    let inserted = false;
+    act(() => {
+      inserted = ref.current?.insertText("beta\nnext") ?? false;
+    });
+
+    expect(inserted).toBe(true);
+    expect(textarea).toHaveValue("alpha beta\nnext");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
+      .toBe("alpha beta\nnext");
+  });
+
+  it("rejects an over-limit snippet without truncating or changing the draft", () => {
+    const ref = createRef<InputBarHandle>();
+    render(<InputBar {...props} ref={ref} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" }) as HTMLTextAreaElement;
+    const existing = "x".repeat(MAX_DRAFT_LENGTH - 1);
+    fireEvent.input(textarea, { target: { value: existing } });
+    textarea.setSelectionRange(existing.length, existing.length);
+
+    let inserted = true;
+    act(() => {
+      inserted = ref.current?.insertText("too long") ?? true;
+    });
+
+    expect(inserted).toBe(false);
+    expect(textarea).toHaveValue(existing);
+  });
+
+  it("reports failure when card staging cannot persist to browser storage", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage is unavailable", "QuotaExceededError");
+    });
+
+    expect(stageSessionDraft("test-session", "do not lose this")).toBe("storage-error");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBeNull();
+
+    render(<InputBar {...props} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(textarea, { target: { value: "still visible" } });
+    expect(textarea).toHaveValue("still visible");
+    expect(screen.getByText(/could not be saved on this device/i)).toBeVisible();
+  });
+
   it("opens metadata controls independently of terminal connectivity", () => {
     const onEditSessionTitle = vi.fn();
     const onOpenMessages = vi.fn();
+    const onOpenSnippets = vi.fn();
     render(
       <InputBar
         {...props}
         enabled={false}
         onEditSessionTitle={onEditSessionTitle}
         onOpenMessages={onOpenMessages}
+        onOpenSnippets={onOpenSnippets}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Update session name" }));
     fireEvent.click(screen.getByRole("button", { name: "Open memoranda" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
 
     expect(onEditSessionTitle).toHaveBeenCalledOnce();
     expect(onOpenMessages).toHaveBeenCalledOnce();
+    expect(onOpenSnippets).toHaveBeenCalledOnce();
   });
 });

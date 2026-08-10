@@ -5,9 +5,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { EditIcon, KeyboardIcon, MemoIcon } from "../icons";
+import { EditIcon, KeyboardIcon, MemoIcon, SnippetIcon } from "../icons";
 
-const MAX_DRAFT_LENGTH = 65_536;
+export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
 
 interface InputBarProps {
@@ -18,11 +18,13 @@ interface InputBarProps {
   onFocus: () => void;
   onEditSessionTitle?: () => void;
   onOpenMessages?: () => void;
+  onOpenSnippets?: () => void;
   messageCount?: number;
 }
 
 export interface InputBarHandle {
   loadDraft: (text: string) => boolean;
+  insertText: (text: string) => boolean;
   focus: () => void;
 }
 
@@ -39,7 +41,9 @@ const KEYS = [
   { label: "Right", data: "\x1b[C", compact: ">" },
 ];
 
-type DraftStatus = "idle" | "saved" | "loaded" | "sending" | "sent" | "unconfirmed" | "clipboard-error";
+type DraftStatus = "idle" | "saved" | "loaded" | "sending" | "sent" | "unconfirmed" | "clipboard-error" | "storage-error";
+
+export type StageSessionDraftResult = "staged" | "cancelled" | "storage-error" | "invalid";
 
 function draftKey(sessionName: string): string {
   return `${DRAFT_KEY_PREFIX}${sessionName}`;
@@ -53,13 +57,26 @@ function readDraft(sessionName: string): string {
   }
 }
 
-function writeDraft(sessionName: string, value: string): void {
+function writeDraft(sessionName: string, value: string): boolean {
   try {
     if (value) window.localStorage.setItem(draftKey(sessionName), value);
     else window.localStorage.removeItem(draftKey(sessionName));
+    return true;
   } catch {
     // The textarea remains the source of truth when storage is unavailable.
+    return false;
   }
+}
+
+export function stageSessionDraft(sessionName: string, text: string): StageSessionDraftResult {
+  if (!text || text.length > MAX_DRAFT_LENGTH) return "invalid";
+  const current = readDraft(sessionName);
+  if (
+    current
+    && current !== text
+    && !window.confirm(`Replace the staged input already saved for ${sessionName}?`)
+  ) return "cancelled";
+  return writeDraft(sessionName, text) ? "staged" : "storage-error";
 }
 
 function resizeTextarea(textarea: HTMLTextAreaElement): void {
@@ -75,6 +92,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onFocus,
   onEditSessionTitle,
   onOpenMessages,
+  onOpenSnippets,
   messageCount = 0,
 }, ref) {
   const initialDraftRef = useRef<string | null>(null);
@@ -87,9 +105,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [sending, setSending] = useState(false);
 
   const recordDraft = (value: string, nextStatus: DraftStatus = "saved") => {
-    writeDraft(sessionName, value);
+    const persisted = writeDraft(sessionName, value);
     setDraftLength(value.length);
-    setStatus(value ? nextStatus : "idle");
+    setStatus(persisted ? (value ? nextStatus : "idle") : "storage-error");
+    return persisted;
   };
 
   const loadDraft = (text: string): boolean => {
@@ -108,8 +127,23 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     return true;
   };
 
+  const insertText = (text: string): boolean => {
+    const textarea = textareaRef.current;
+    if (!textarea || !text || composingRef.current || sendingRef.current) return false;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const nextLength = textarea.value.length - (end - start) + text.length;
+    if (nextLength > MAX_DRAFT_LENGTH) return false;
+    textarea.setRangeText(text, start, end, "end");
+    recordDraft(textarea.value, "loaded");
+    resizeTextarea(textarea);
+    textarea.focus();
+    return true;
+  };
+
   useImperativeHandle(ref, () => ({
     loadDraft,
+    insertText,
     focus: () => textareaRef.current?.focus(),
   }));
 
@@ -149,8 +183,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return;
     }
     textarea.value = "";
-    recordDraft("", "sent");
-    setStatus("sent");
+    if (recordDraft("", "sent")) setStatus("sent");
     resizeTextarea(textarea);
     textarea.focus();
   };
@@ -183,21 +216,26 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
   };
 
-  const statusText = status === "sent"
-    ? "Written once to the attached tmux PTY; the local draft was cleared."
-    : status === "sending"
-      ? "Writing this staged snapshot to the attached tmux PTY..."
-    : status === "loaded"
-      ? "Memorandum loaded locally. Edit it or send when ready."
-      : status === "unconfirmed"
-        ? "Delivery was not confirmed. The draft is retained; check the terminal before retrying."
-        : status === "clipboard-error"
-          ? "Clipboard access was unavailable. Use the keyboard paste command here."
-          : draftLength > 0
-            ? "Saved on this device. Terminal-side edits do not rewrite this draft."
-            : enabled
-              ? "Nothing is sent until you choose Send."
-              : "Compose now; sending unlocks when the terminal reconnects.";
+  let statusText: string;
+  if (status === "sent") {
+    statusText = "Written once to the attached tmux PTY; the local draft was cleared.";
+  } else if (status === "sending") {
+    statusText = "Writing this staged snapshot to the attached tmux PTY...";
+  } else if (status === "loaded") {
+    statusText = "Memorandum loaded locally. Snippets are inserted here too; edit or send when ready.";
+  } else if (status === "unconfirmed") {
+    statusText = "Delivery was not confirmed. The draft is retained; check the terminal before retrying.";
+  } else if (status === "clipboard-error") {
+    statusText = "Clipboard access was unavailable. Use the keyboard paste command here.";
+  } else if (status === "storage-error") {
+    statusText = "This draft is visible but could not be saved on this device. Copy it before leaving this page.";
+  } else if (draftLength > 0) {
+    statusText = "Saved on this device. Terminal-side edits do not rewrite this draft.";
+  } else {
+    statusText = enabled
+      ? "Nothing is sent until you choose Send."
+      : "Compose now; sending unlocks when the terminal reconnects.";
+  }
 
   return (
     <section className="input-dock" aria-label="Terminal input">
@@ -218,7 +256,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="Dictate, type, or load a memorandum..."
+            placeholder="Dictate, type, or insert a snippet or memorandum..."
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={(event) => {
               composingRef.current = false;
@@ -261,6 +299,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           aria-label="Open memoranda"
         >
           <MemoIcon /> <span>Memo{messageCount > 0 ? ` ${messageCount}` : ""}</span>
+        </button>
+        <button
+          type="button"
+          className="key-button snippet-key"
+          onClick={onOpenSnippets}
+          disabled={!onOpenSnippets}
+          aria-label="Open snippets"
+        >
+          <SnippetIcon /> <span>Snippets</span>
         </button>
         <button type="button" className="key-button keyboard-key" onClick={onFocus} disabled={!enabled} aria-label="Raw terminal keyboard">
           <KeyboardIcon /> <span>Raw keys</span>

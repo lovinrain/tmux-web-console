@@ -7,6 +7,7 @@ import { InputBar, type InputBarHandle } from "./InputBar";
 import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
+import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 
 interface ConsoleScreenProps {
@@ -32,6 +33,7 @@ export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [titleEditorOpen, setTitleEditorOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [ignoreSize, setIgnoreSize] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
 
@@ -132,6 +134,7 @@ export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
         onFocus={() => terminalRef.current?.focus()}
         onEditSessionTitle={session ? () => setTitleEditorOpen(true) : undefined}
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
+        onOpenSnippets={() => setSnippetsOpen(true)}
         messageCount={session?.queuedMessageCount ?? 0}
       />
       {historyOpen && pane && <HistoryPanel pane={pane} onClose={() => setHistoryOpen(false)} />}
@@ -156,6 +159,17 @@ export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
             const accepted = await terminalRef.current?.submit(message.text, true);
             if (!accepted) {
               throw new Error("Delivery was not confirmed; check the terminal before retrying.");
+            }
+          }}
+        />
+      )}
+      {snippetsOpen && (
+        <SnippetPickerDialog
+          title="Insert into staged input"
+          onClose={() => setSnippetsOpen(false)}
+          onChoose={(snippet) => {
+            if (!inputBarRef.current?.insertText(snippet.text)) {
+              throw new Error("The snippet does not fit or the current draft is busy.");
             }
           }}
         />

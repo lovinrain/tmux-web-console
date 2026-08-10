@@ -105,6 +105,12 @@ a:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 
+.dashboard-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
 .brand-lockup {
   display: flex;
   align-items: center;
@@ -888,7 +894,7 @@ a:focus-visible {
 }
 
 .session-card-top .activity-time {
-  margin-right: 108px;
+  margin-right: 146px;
 }
 
 .session-badges {
@@ -1067,7 +1073,8 @@ a:focus-visible {
 
 .session-title-edit,
 .session-star-toggle,
-.session-messages-toggle {
+.session-messages-toggle,
+.session-snippets-toggle {
   position: relative;
   display: grid;
   width: 32px;
@@ -1079,6 +1086,12 @@ a:focus-visible {
   border: 1px solid #354032;
   border-radius: 3px;
   cursor: pointer;
+}
+
+.session-snippets-toggle:hover,
+.session-snippets-toggle:focus-visible {
+  color: var(--acid);
+  border-color: rgba(187, 244, 81, 0.42);
 }
 
 .session-star-toggle:hover,
@@ -1112,6 +1125,10 @@ a:focus-visible {
 
 .session-messages-toggle svg {
   width: 15px;
+}
+
+.session-snippets-toggle svg {
+  width: 16px;
 }
 
 .session-messages-toggle > span {
@@ -1204,7 +1221,7 @@ a:focus-visible {
   grid-template-rows: auto auto;
   align-items: center;
   column-gap: 24px;
-  padding: 12px 132px 12px 15px;
+  padding: 12px 170px 12px 15px;
 }
 
 .session-row .session-card-top {
@@ -1434,6 +1451,10 @@ a:focus-visible {
 
 .composer-status.sent {
   color: var(--acid);
+}
+
+.composer-status.storage-error {
+  color: var(--amber);
 }
 
 .console-header {
@@ -1689,7 +1710,8 @@ a:focus-visible {
 
 .keyboard-key svg,
 .session-title-key svg,
-.memo-key svg {
+.memo-key svg,
+.snippet-key svg {
   width: 17px;
 }
 
@@ -1705,6 +1727,13 @@ a:focus-visible {
   align-items: center;
   gap: 6px;
   color: var(--cyan);
+}
+
+.snippet-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--acid);
 }
 
 .action-key {
@@ -2065,15 +2094,26 @@ a:focus-visible {
 
 @media (max-width: 735px) {
   .session-card.session-row {
-    min-height: 126px;
+    min-height: 184px;
   }
 
   .session-row .session-card-main {
-    min-height: 124px;
+    min-height: 182px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto auto;
     row-gap: 3px;
-    padding: 11px 130px 11px 13px;
+    padding: 59px 13px 52px;
+  }
+
+  .session-row .session-card-actions {
+    top: 8px;
+    right: auto;
+    left: 13px;
+  }
+
+  .session-row .session-open-new {
+    right: 8px;
+    bottom: 8px;
   }
 
   .session-row .session-card-top {
@@ -2110,7 +2150,16 @@ a:focus-visible {
   }
 
   .dashboard-header {
+    align-items: flex-start;
     padding-bottom: 16px;
+  }
+
+  .dashboard-header-tools {
+    gap: 7px;
+  }
+
+  .dashboard-header-tools .server-pulse {
+    display: none;
   }
 
   .brand-mark {
@@ -2263,7 +2312,8 @@ a:focus-visible {
 
   .session-title-edit,
   .session-star-toggle,
-  .session-messages-toggle {
+  .session-messages-toggle,
+  .session-snippets-toggle {
     width: 40px;
     height: 40px;
   }
@@ -2275,7 +2325,15 @@ a:focus-visible {
   }
 
   .session-card {
-    min-height: 214px;
+    min-height: 252px;
+  }
+
+  .session-card:not(.session-row) .session-card-main {
+    padding-top: 64px;
+  }
+
+  .session-card:not(.session-row) .session-card-top .activity-time {
+    margin-right: 0;
   }
 
   .console-header {
@@ -2382,6 +2440,12 @@ a:focus-visible {
   .memo-key {
     position: sticky;
     left: 50px;
+    z-index: 1;
+  }
+
+  .snippet-key {
+    position: sticky;
+    left: 100px;
     z-index: 1;
     box-shadow: 7px 0 9px #151915;
   }

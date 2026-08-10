@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listQueuedMessages, listSessions, subscribeToSessions, updateSessionStar, updateSessionTitle } from "../api";
+import { getSnippetTree, listQueuedMessages, listSessions, subscribeToSessions, updateSessionStar, updateSessionTitle } from "../api";
 import type { Pane, Session } from "../types";
 import { activePane, classifyPane, SessionDashboard } from "./SessionDashboard";
 
@@ -11,6 +11,7 @@ vi.mock("../api", () => ({
   createQueuedMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn(),
+  getSnippetTree: vi.fn(),
   subscribeToSessions: vi.fn(),
   updateSessionStar: vi.fn(),
   updateSessionTitle: vi.fn(),
@@ -69,6 +70,7 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/mux/");
   window.localStorage.clear();
   vi.mocked(listQueuedMessages).mockResolvedValue({ session: "test", messages: [] });
+  vi.mocked(getSnippetTree).mockResolvedValue({ revision: 1, tree: [] });
 });
 
 afterEach(() => {
@@ -108,6 +110,75 @@ describe("session classification", () => {
     expect(rowAction.closest(".session-row")).not.toBeNull();
     fireEvent.click(rowAction);
     expect(await screen.findByRole("dialog", { name: "Queued messages" })).toBeVisible();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("stages a chosen snippet from cards and lists without sending it", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(getSnippetTree).mockResolvedValue({
+      revision: 2,
+      tree: [{ id: "review", type: "snippet", name: "Review diff", text: "review\nthe diff" }],
+    });
+    const onOpen = vi.fn();
+    render(<SessionDashboard onOpen={onOpen} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use snippet with test" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith("test"));
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test")).toBe("review\nthe diff");
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    const rowAction = screen.getByRole("button", { name: "Use snippet with test" });
+    expect(rowAction.closest(".session-row")).not.toBeNull();
+    fireEvent.click(rowAction);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the snippet picker open when browser draft storage is unavailable", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(getSnippetTree).mockResolvedValue({
+      revision: 1,
+      tree: [{ id: "review", type: "snippet", name: "Review diff", text: "review the diff" }],
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage is unavailable", "QuotaExceededError");
+    });
+    const onOpen = vi.fn();
+    render(<SessionDashboard onOpen={onOpen} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use snippet with test" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be saved in this browser");
+    expect(screen.getByRole("dialog", { name: "Stage a snippet for test" })).toBeVisible();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("quietly retains the picker when replacing an existing draft is cancelled", async () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:test", "keep this draft");
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(getSnippetTree).mockResolvedValue({
+      revision: 1,
+      tree: [{ id: "review", type: "snippet", name: "Review diff", text: "replacement" }],
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onOpen = vi.fn();
+    render(<SessionDashboard onOpen={onOpen} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use snippet with test" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledOnce());
+    expect(screen.getByRole("dialog", { name: "Stage a snippet for test" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test")).toBe("keep this draft");
     expect(onOpen).not.toHaveBeenCalled();
   });
 

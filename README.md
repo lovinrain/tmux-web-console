@@ -14,6 +14,7 @@ and output, and captures retained tmux scrollback only when requested.
 - Permanent dictation-safe staged input with a per-session local draft
 - Acknowledged staged delivery that retains uncertain or rejected input
 - Persistent per-session memorandum queues with add, edit, delete, load, and send actions
+- A persistent hierarchical snippet library with nested folders and safe draft insertion
 - Automatic reconnect after a dropped mobile connection
 - Immutable, paginated history snapshots
 - Claude/Codex activity states with filters for human and command waits
@@ -125,6 +126,18 @@ restarts. `Use` copies an item into the local staged draft, while `Send now`
 delivers it with Enter using the same acknowledgment protocol. Neither action
 deletes the stored item; deletion is always explicit.
 
+The `Snippets` shortcut opens the global snippet library picker. Choosing a
+snippet inserts its exact text at the staged textarea's current selection and
+never sends automatically. The same picker is available on every dashboard
+card/list row and inside memorandum editors. From a dashboard row, choosing a
+snippet saves it as that session's local draft and opens the console for review.
+
+Use the top-level `Snippets` section to configure the shared tree. The virtual
+library root can contain snippets or folders, folders can nest, and snippets are
+always leaves. Items can be renamed, moved between folders, reordered, or
+deleted. Saves use a revision check so an older browser cannot silently
+overwrite changes made by a newer one.
+
 ## Agent state detection
 
 Muxdeck recognizes the live title signals emitted by current Claude Code and
@@ -190,6 +203,9 @@ Back action returns to the same filters, view, grouping, and sort priority.
 `MUXDECK_TITLES_FILE` stores both optional titles and starred session names,
 using the original tmux session name as the key.
 
+`MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
+drafts, it lives on the server and is shared across browsers.
+
 ## History behavior
 
 Opening History runs `tmux capture-pane` and stores the result in memory for ten
@@ -216,6 +232,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
 | `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent optional titles and starred session names |
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session memorandum queues |
+| `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
 Muxdeck intentionally has no application-level authentication in this MVP. Keep
