@@ -191,4 +191,21 @@ describe("session dashboard filters", () => {
     const route = parseSessionDashboardSearch("?q=api&kind=agents&state=waiting_human");
     expect(filterSessions(sessions, route).map((item) => item.name)).toEqual(["one"]);
   });
+
+  it("treats cursor-agent panes as agents under both its own chip and Agents", () => {
+    const sessions = [
+      session({ name: "cursor-one", panes: [pane({ command: "agent" })] }),
+      session({ name: "cursor-two", id: "$2", panes: [pane({ command: "cursor-agent" })] }),
+      session({ name: "codex-one", id: "$3", panes: [pane({ command: "codex" })] }),
+      session({ name: "shell-one", id: "$4", panes: [pane({ command: "bash" })] }),
+    ];
+    const names = (search: string) =>
+      filterSessions(sessions, parseSessionDashboardSearch(search)).map((item) => item.name);
+
+    expect(names("?kind=cursor")).toEqual(["cursor-one", "cursor-two"]);
+    expect(names("?kind=cursor-agent")).toEqual(["cursor-one", "cursor-two"]);
+    expect(names("?kind=agents")).toEqual(["cursor-one", "cursor-two", "codex-one"]);
+    expect(names("?kind=codex")).toEqual(["codex-one"]);
+    expect(names("?kind=shells")).toEqual(["shell-one"]);
+  });
 });

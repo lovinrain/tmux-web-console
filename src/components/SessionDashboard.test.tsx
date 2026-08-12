@@ -1,6 +1,7 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSnippetTree, listQueuedMessages, listSessions, subscribeToSessions, updateSessionStar, updateSessionTitle } from "../api";
+import { renderWithTheme } from "../test-utils";
 import type { Pane, Session } from "../types";
 import { activePane, classifyPane, SessionDashboard } from "./SessionDashboard";
 
@@ -79,9 +80,11 @@ afterEach(() => {
 });
 
 describe("session classification", () => {
-  it("recognizes Claude and Codex panes", () => {
+  it("recognizes Claude, Codex, and Cursor panes", () => {
     expect(classifyPane(pane({ command: "claude" })).tone).toBe("claude");
     expect(classifyPane(pane({ command: "codex" })).tone).toBe("codex");
+    expect(classifyPane(pane({ command: "agent" })).label).toBe("Cursor");
+    expect(classifyPane(pane({ command: "cursor-agent" })).tone).toBe("cursor");
   });
 
   it("selects the server-declared active pane", () => {
@@ -95,9 +98,10 @@ describe("session classification", () => {
   it("manages memoranda from both card and list views without opening the session", async () => {
     vi.mocked(listSessions).mockResolvedValue([session({ queuedMessageCount: 2 })]);
     const onOpen = vi.fn();
-    render(<SessionDashboard onOpen={onOpen} />);
+    renderWithTheme(<SessionDashboard onOpen={onOpen} />);
 
     const cardAction = await screen.findByRole("button", { name: "Manage memoranda for test" });
+    expect(screen.getByRole("button", { name: "Light theme" })).toBeVisible();
     expect(cardAction).toHaveTextContent("2");
     fireEvent.click(cardAction);
 
@@ -120,7 +124,7 @@ describe("session classification", () => {
       tree: [{ id: "review", type: "snippet", name: "Review diff", text: "review\nthe diff" }],
     });
     const onOpen = vi.fn();
-    render(<SessionDashboard onOpen={onOpen} />);
+    renderWithTheme(<SessionDashboard onOpen={onOpen} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Use snippet with test" }));
     fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
@@ -149,7 +153,7 @@ describe("session classification", () => {
       throw new DOMException("Storage is unavailable", "QuotaExceededError");
     });
     const onOpen = vi.fn();
-    render(<SessionDashboard onOpen={onOpen} />);
+    renderWithTheme(<SessionDashboard onOpen={onOpen} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Use snippet with test" }));
     fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
@@ -169,7 +173,7 @@ describe("session classification", () => {
     });
     vi.spyOn(window, "confirm").mockReturnValue(false);
     const onOpen = vi.fn();
-    render(<SessionDashboard onOpen={onOpen} />);
+    renderWithTheme(<SessionDashboard onOpen={onOpen} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Use snippet with test" }));
     fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
@@ -192,7 +196,7 @@ describe("session classification", () => {
       session({ name: "work/name #1", customTitle: "Deploy API" }),
     ]);
     const onOpen = vi.fn();
-    render(<SessionDashboard onOpen={onOpen} />);
+    renderWithTheme(<SessionDashboard onOpen={onOpen} />);
 
     const link = await screen.findByRole("link", {
       name: "Open Deploy API in new window",
@@ -235,7 +239,7 @@ describe("session classification", () => {
       }),
     ]);
 
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     expect(await screen.findByRole("button", { name: "Open Deploy API" })).toBeVisible();
     expect(screen.getByText("tmux / test")).toBeVisible();
@@ -247,7 +251,7 @@ describe("session classification", () => {
   it("saves an optional human title from the card editor", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionTitle).mockResolvedValue("Muxdeck work");
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit title for test" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Human title" }), {
@@ -262,7 +266,7 @@ describe("session classification", () => {
   it("clears a human title and falls back to the tmux session name", async () => {
     vi.mocked(listSessions).mockResolvedValue([session({ customTitle: "Old title" })]);
     vi.mocked(updateSessionTitle).mockResolvedValue(null);
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit title for test" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
@@ -278,7 +282,7 @@ describe("session classification", () => {
       session({ name: "codex-one", id: "$2", panes: [pane({ command: "codex" })] }),
       session({ name: "shell-one", id: "$3" }),
     ]);
-    const { container } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open claude-one" });
     fireEvent.click(screen.getByRole("button", { name: /^claude$/i }));
@@ -290,6 +294,23 @@ describe("session classification", () => {
     expect(window.localStorage.getItem("muxdeck-session-view")).toBe("list");
     fireEvent.click(screen.getByRole("button", { name: "Cards" }));
     expect(container.querySelector(".session-list")).not.toBeInTheDocument();
+  });
+
+  it("keeps cursor-agent sessions visible under the Cursor and Agents chips", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: "cursor-one", id: "$1", panes: [pane({ command: "agent" })] }),
+      session({ name: "codex-one", id: "$2", panes: [pane({ command: "codex" })] }),
+    ]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open cursor-one" });
+    fireEvent.click(screen.getByRole("button", { name: /^agents$/i }));
+    expect(screen.getByRole("button", { name: "Open cursor-one" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open codex-one" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /^cursor$/i }));
+    expect(screen.getByRole("button", { name: "Open cursor-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open codex-one" })).not.toBeInTheDocument();
   });
 
   it("hydrates filters, grouping, view, and ordered sorting from the URL", async () => {
@@ -320,7 +341,7 @@ describe("session classification", () => {
         panes: [pane({ command: "claude" })],
       }),
     ]);
-    const { container } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     expect(await screen.findByRole("button", { name: "Open Deploy API" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Open Deploy Web" })).not.toBeInTheDocument();
@@ -338,7 +359,7 @@ describe("session classification", () => {
 
   it("adds, removes, and reorders the visible sort-priority badges", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
-    const { container } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open test" });
     const badgeLabels = () => [...container.querySelectorAll(".sort-priority-copy strong")]
@@ -388,7 +409,7 @@ describe("session classification", () => {
         agentState: "waiting_human",
       }),
     ]);
-    const { container } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open Zulu" });
     expect(openOrder()).toEqual(["Open Beta", "Open Zulu", "Open Alpha"]);
@@ -416,7 +437,7 @@ describe("session classification", () => {
       session({ name: "alpha", customTitle: "Alpha task" }),
       session({ name: "beta", id: "$2", customTitle: "Beta task" }),
     ]);
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open Alpha task" });
     act(() => {
@@ -444,7 +465,7 @@ describe("session classification", () => {
       session({ name: "needs-new", id: "$4", agentState: "waiting_human", agentStateChangedAt: now - 10 }),
       session({ name: "shell", id: "$5", agentState: "other", agentStateChangedAt: now - 1 }),
     ]);
-    const { container } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open needs-old" });
 
@@ -475,7 +496,7 @@ describe("session classification", () => {
     vi.mocked(listSessions).mockResolvedValue([
       session({ name: "aging", agentStateChangedAt: now - 59 }),
     ]);
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await act(async () => {
       await Promise.resolve();
@@ -493,7 +514,7 @@ describe("session classification", () => {
       streamOptions = options;
       return vi.fn();
     });
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open initial" });
     act(() => {
@@ -520,7 +541,7 @@ describe("session classification", () => {
       streamOptions = options;
       return vi.fn();
     });
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     act(() => {
       streamOptions?.onSessions([session({ name: "stream-new" })]);
@@ -541,7 +562,7 @@ describe("session classification", () => {
       throw new Error("SSE unavailable");
     });
     const setIntervalSpy = vi.spyOn(window, "setInterval");
-    const { unmount } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { unmount } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open test" });
     expect(screen.getByText(/1 sessions \/ polling/i)).toBeVisible();
@@ -555,7 +576,7 @@ describe("session classification", () => {
     vi.mocked(updateSessionStar)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
-    render(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add test to starred" }));
     await waitFor(() => expect(updateSessionStar).toHaveBeenCalledWith("test", true));
@@ -575,7 +596,7 @@ describe("session classification", () => {
     vi.mocked(listSessions).mockReturnValue(pendingRequest);
     const setIntervalSpy = vi.spyOn(window, "setInterval");
 
-    const { unmount } = render(<SessionDashboard onOpen={vi.fn()} />);
+    const { unmount } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
     expect(listSessions).toHaveBeenCalledOnce();
 
     const signal = vi.mocked(listSessions).mock.calls[0][0];

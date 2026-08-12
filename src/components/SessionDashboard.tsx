@@ -17,6 +17,7 @@ import {
   DEFAULT_SESSION_SORT,
   SESSION_STATE_ORDER,
   filterSessions,
+  paneCommandKind,
   parseSessionDashboardSearch,
   sessionStateChangedAt,
   serializeSessionDashboardSearch,
@@ -34,6 +35,7 @@ import { MessageQueueDialog } from "./MessageQueueDialog";
 import { SessionSortControls } from "./SessionSortControls";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface SessionDashboardProps {
   onOpen: (session: string) => void;
@@ -46,7 +48,14 @@ const VIEW_MODE_KEY = "muxdeck-session-view";
 const SORT_MODE_KEY = "muxdeck-session-sort";
 const SORT_PRIORITY_KEY = "muxdeck-session-sort-priority";
 const GROUP_MODE_KEY = "muxdeck-session-group";
-const KIND_FILTERS: SessionKindFilter[] = ["all", "agents", "claude", "codex", "shells"];
+const KIND_FILTERS: SessionKindFilter[] = [
+  "all",
+  "agents",
+  "claude",
+  "codex",
+  "cursor",
+  "shells",
+];
 const STATE_GROUP_ORDER = [...SESSION_STATE_ORDER];
 const DASHBOARD_QUERY_KEYS = ["q", "kind", "filter", "state", "view", "group", "sort"];
 
@@ -68,11 +77,18 @@ const STATE_FILTERS: SessionStateFilter[] = [
 ];
 
 export function classifyPane(pane?: Pane): { label: string; tone: string } {
-  const command = pane?.command.toLowerCase() || "";
-  if (command.includes("claude")) return { label: "Claude", tone: "claude" };
-  if (command.includes("codex")) return { label: "Codex", tone: "codex" };
-  if (["bash", "zsh", "fish", "sh"].includes(command)) return { label: "Shell", tone: "shell" };
-  return { label: pane?.command || "Process", tone: "process" };
+  switch (paneCommandKind(pane?.command || "")) {
+    case "claude":
+      return { label: "Claude", tone: "claude" };
+    case "codex":
+      return { label: "Codex", tone: "codex" };
+    case "cursor":
+      return { label: "Cursor", tone: "cursor" };
+    case "shells":
+      return { label: "Shell", tone: "shell" };
+    default:
+      return { label: pane?.command || "Process", tone: "process" };
+  }
 }
 
 export function activePane(session: Session): Pane | undefined {
@@ -520,6 +536,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
             onSessions={() => undefined}
             onSnippets={() => onOpenSnippets?.()}
           />
+          <ThemeToggle />
         </div>
       </header>
 

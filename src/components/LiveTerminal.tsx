@@ -10,6 +10,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl } from "../api";
 import { prepareTerminalSubmission } from "../terminalInput";
+import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import type { ConnectionState } from "../types";
 
 export interface LiveTerminalHandle {
@@ -23,6 +24,7 @@ export interface LiveTerminalHandle {
 interface LiveTerminalProps {
   session: string;
   ignoreSize: boolean;
+  theme: TerminalThemeMode;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
 }
@@ -38,7 +40,7 @@ function nextSubmissionId(): string {
 }
 
 export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
-  function LiveTerminal({ session, ignoreSize, onStateChange, onPaneChange }, ref) {
+  function LiveTerminal({ session, ignoreSize, theme, onStateChange, onPaneChange }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
@@ -105,29 +107,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         letterSpacing: 0,
         scrollback: 5000,
         allowTransparency: true,
-        theme: {
-          background: "#0b0e0c",
-          foreground: "#e3e8df",
-          cursor: "#ffb648",
-          cursorAccent: "#0b0e0c",
-          selectionBackground: "#bbf45144",
-          black: "#151915",
-          red: "#ff6b5f",
-          green: "#bbf451",
-          yellow: "#ffca68",
-          blue: "#77bdfb",
-          magenta: "#d9a0ff",
-          cyan: "#68dfd0",
-          white: "#e3e8df",
-          brightBlack: "#667064",
-          brightRed: "#ff8f86",
-          brightGreen: "#d1ff7d",
-          brightYellow: "#ffdd95",
-          brightBlue: "#9ed0ff",
-          brightMagenta: "#e7bdff",
-          brightCyan: "#91f1e4",
-          brightWhite: "#ffffff",
-        },
+        theme: TERMINAL_THEMES[theme],
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
@@ -280,6 +260,12 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         terminalRef.current = null;
       };
     }, [ignoreSize, onPaneChange, onStateChange, session]);
+
+    useEffect(() => {
+      if (terminalRef.current) {
+        terminalRef.current.options.theme = TERMINAL_THEMES[theme];
+      }
+    }, [theme]);
 
     return (
       <div className="terminal-stage">

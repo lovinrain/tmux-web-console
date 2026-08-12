@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listSessions, updateSessionTitle } from "../api";
 import { ArrowLeftIcon, HistoryIcon, TerminalIcon } from "../icons";
+import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session } from "../types";
 import { HistoryPanel } from "./HistoryPanel";
 import { InputBar, type InputBarHandle } from "./InputBar";
@@ -9,6 +10,7 @@ import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface ConsoleScreenProps {
   sessionName: string;
@@ -25,6 +27,7 @@ const STATE_LABEL: Record<ConnectionState, string> = {
 };
 
 export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
+  const { theme } = useTheme();
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -78,6 +81,7 @@ export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
   if (lookupError && !session) {
     return (
       <main className="missing-session">
+        <div className="missing-session-theme"><ThemeToggle /></div>
         <TerminalIcon />
         <p className="eyebrow">SESSION UNAVAILABLE</p>
         <h1>{sessionName}</h1>
@@ -111,6 +115,7 @@ export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
           <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="History">
             <HistoryIcon /><span>History</span>
           </button>
+          <ThemeToggle />
         </div>
       </header>
 
@@ -119,6 +124,7 @@ export function ConsoleScreen({ sessionName, onBack }: ConsoleScreenProps) {
         ref={terminalRef}
         session={sessionName}
         ignoreSize={ignoreSize}
+        theme={theme}
         onStateChange={stateChange}
         onPaneChange={paneChange}
       />

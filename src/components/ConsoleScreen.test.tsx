@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSnippetTree, listQueuedMessages, listSessions, updateSessionTitle } from "../api";
+import { renderWithTheme } from "../test-utils";
+import type { Theme } from "../theme";
 import type { Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
 
@@ -16,7 +18,9 @@ vi.mock("../api", () => ({
 }));
 
 vi.mock("./LiveTerminal", () => ({
-  LiveTerminal: () => <div data-testid="live-terminal" />,
+  LiveTerminal: ({ theme }: { theme: Theme }) => (
+    <div data-testid="live-terminal" data-terminal-theme={theme} />
+  ),
 }));
 
 function pane(): Pane {
@@ -67,13 +71,26 @@ beforeEach(() => {
 });
 
 describe("ConsoleScreen session title", () => {
+  it("exposes the theme control and passes changes to the live terminal", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    expect(screen.getByTestId("live-terminal")).toHaveAttribute("data-terminal-theme", "dark");
+
+    fireEvent.click(screen.getByRole("button", { name: "Light theme" }));
+
+    expect(screen.getByRole("button", { name: "Light theme" })).toBePressed();
+    expect(screen.getByTestId("live-terminal")).toHaveAttribute("data-terminal-theme", "light");
+  });
+
   it("inserts snippets into the staged draft without sending", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(getSnippetTree).mockResolvedValue({
       revision: 1,
       tree: [{ id: "continue", type: "snippet", name: "Continue", text: "continue from here" }],
     });
-    render(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "test" });
     fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
@@ -88,7 +105,7 @@ describe("ConsoleScreen session title", () => {
   it("updates the human title from the bottom shortcut bar", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionTitle).mockResolvedValue("Mobile work");
-    render(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "test" });
     fireEvent.click(screen.getByRole("button", { name: "Update session name" }));
@@ -107,7 +124,7 @@ describe("ConsoleScreen session title", () => {
   it("clears the human title without renaming the tmux session", async () => {
     vi.mocked(listSessions).mockResolvedValue([session("Old label")]);
     vi.mocked(updateSessionTitle).mockResolvedValue(null);
-    render(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "Old label" });
     fireEvent.click(screen.getByRole("button", { name: "Update session name" }));
@@ -132,7 +149,7 @@ describe("ConsoleScreen session title", () => {
         position: 0,
       }],
     });
-    render(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "test" });
     fireEvent.click(screen.getByRole("button", { name: "Open memoranda" }));

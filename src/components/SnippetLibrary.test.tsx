@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithTheme } from "../test-utils";
 import type { SnippetNode } from "../types";
 import { SnippetLibrary } from "./SnippetLibrary";
 
@@ -30,7 +31,8 @@ describe("SnippetLibrary", () => {
       return jsonResponse({ revision: body.revision + 1, tree: body.tree });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Light theme" })).toBeVisible();
 
     fireEvent.click(await screen.findByRole("button", { name: "Open folder Work" }));
     const controls = screen.getByLabelText("Snippet library controls");
@@ -75,7 +77,7 @@ describe("SnippetLibrary", () => {
       return jsonResponse(snapshot);
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open folder Nested" });
     fireEvent.click(screen.getByRole("button", { name: "Move Nested up" }));
@@ -98,7 +100,7 @@ describe("SnippetLibrary", () => {
       }, 409))
       .mockResolvedValueOnce(jsonResponse({ revision: 5, tree }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit snippet One" }));
     fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Updated" } });
@@ -121,7 +123,7 @@ describe("SnippetLibrary", () => {
         return jsonResponse({ revision: body.revision + 1, tree: body.tree });
       });
     vi.stubGlobal("fetch", fetchMock);
-    render(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit snippet One" }));
     const name = screen.getByLabelText("Name");
@@ -147,7 +149,7 @@ describe("SnippetLibrary", () => {
     }];
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ revision: 1, tree })));
     document.body.style.overflow = "clip";
-    render(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
 
     const trigger = await screen.findByRole("button", { name: "Delete Nested" });
     trigger.focus();
@@ -189,7 +191,7 @@ describe("SnippetLibrary", () => {
       nested,
     ];
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ revision: 1, tree })));
-    render(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit snippet Root snippet" }));
     const location = screen.getByRole("combobox", { name: "Location" });

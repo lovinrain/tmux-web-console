@@ -1,6 +1,7 @@
 import type { AgentState, Pane, Session } from "./types";
 
-export type SessionKindFilter = "all" | "agents" | "claude" | "codex" | "shells";
+export type SessionKindFilter = "all" | "agents" | "claude" | "codex" | "cursor" | "shells";
+type SessionKind = "claude" | "codex" | "cursor" | "shells" | "other";
 export type SessionStateFilter = "any" | AgentState;
 export type SessionViewMode = "cards" | "list";
 export type SessionGroupMode = "none" | "state";
@@ -42,7 +43,18 @@ export const DEFAULT_SESSION_DASHBOARD_ROUTE: Readonly<SessionDashboardRouteStat
   sort: [...DEFAULT_SESSION_SORT],
 };
 
-const KIND_FILTERS = new Set<SessionKindFilter>(["all", "agents", "claude", "codex", "shells"]);
+const KIND_FILTERS = new Set<SessionKindFilter>([
+  "all",
+  "agents",
+  "claude",
+  "codex",
+  "cursor",
+  "shells",
+]);
+const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "cursor"]);
+/** The Cursor CLI installs as `cursor-agent` plus a bare `agent` symlink. */
+const CURSOR_PANE_COMMANDS = new Set(["agent", "cursor", "cursor-agent"]);
+const SHELL_PANE_COMMANDS = new Set(["bash", "zsh", "fish", "sh"]);
 const STATE_FILTERS = new Set<SessionStateFilter>(["any", ...SESSION_STATE_ORDER]);
 const VIEW_MODES = new Set<SessionViewMode>(["cards", "list"]);
 const GROUP_MODES = new Set<SessionGroupMode>(["none", "state"]);
@@ -92,6 +104,7 @@ function parseKind(value: string | null): SessionKindFilter {
   if (!value) return "all";
   const normalized = value.toLowerCase();
   if (normalized === "agent") return "agents";
+  if (normalized === "cursor-agent") return "cursor";
   if (normalized === "shell") return "shells";
   return KIND_FILTERS.has(normalized as SessionKindFilter)
     ? normalized as SessionKindFilter
@@ -293,12 +306,17 @@ function activePane(session: Session): Pane | undefined {
   return session.panes.find((pane) => pane.id === session.activePaneId) || session.panes[0];
 }
 
-function sessionKind(session: Session): "claude" | "codex" | "shells" | "other" {
-  const command = activePane(session)?.command.toLowerCase() || "";
-  if (command.includes("claude")) return "claude";
-  if (command.includes("codex")) return "codex";
-  if (["bash", "zsh", "fish", "sh"].includes(command)) return "shells";
+export function paneCommandKind(command: string): SessionKind {
+  const normalized = command.toLowerCase();
+  if (normalized.includes("claude")) return "claude";
+  if (normalized.includes("codex")) return "codex";
+  if (CURSOR_PANE_COMMANDS.has(normalized)) return "cursor";
+  if (SHELL_PANE_COMMANDS.has(normalized)) return "shells";
   return "other";
+}
+
+function sessionKind(session: Session): SessionKind {
+  return paneCommandKind(activePane(session)?.command || "");
 }
 
 /** Apply the shareable query, kind, and state controls using dashboard semantics. */
@@ -318,7 +336,7 @@ export function filterSessions(
       pane?.command,
     ].filter(Boolean).some((value) => value!.toLowerCase().includes(needle));
     const matchesKind = filters.kind === "all"
-      || (filters.kind === "agents" && (kind === "claude" || kind === "codex"))
+      || (filters.kind === "agents" && AGENT_KINDS.has(kind))
       || filters.kind === kind;
     const matchesState = filters.state === "any" || filters.state === session.agentState;
     return matchesQuery && matchesKind && matchesState;

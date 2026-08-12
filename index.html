@@ -4,7 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#151914" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
+    <script>
+      (() => {
+        let theme = "dark";
+        try {
+          if (window.localStorage.getItem("muxdeck-theme") === "light") theme = "light";
+        } catch {
+          // The app keeps working with its dark default when storage is blocked.
+        }
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]').content =
+          theme === "light" ? "#f4f0e7" : "#151914";
+      })();
+    </script>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23bbf451'/%3E%3Cpath d='m16 20 12 12-12 12M32 44h16' fill='none' stroke='%23111410' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <title>Muxdeck</title>
   </head>

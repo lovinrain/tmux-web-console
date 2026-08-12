@@ -7,8 +7,9 @@ and output, and captures retained tmux scrollback only when requested.
 ## MVP features
 
 - Live inventory of every tmux session and pane
-- Claude, Codex, shell, and process labels
+- Claude, Codex, Cursor, shell, and process labels
 - Exact terminal rendering through xterm.js and a real PTY
+- Persistent Light/Dark appearance for the dashboard, dialogs, and terminal palette
 - Direct raw-key, control-key, arrow-key, and bracketed-paste input
 - Local Page Up/Page Down controls for fixed mobile terminal views
 - Permanent dictation-safe staged input with a per-session local draft
@@ -17,11 +18,11 @@ and output, and captures retained tmux scrollback only when requested.
 - A persistent hierarchical snippet library with nested folders and safe draft insertion
 - Automatic reconnect after a dropped mobile connection
 - Immutable, paginated history snapshots
-- Claude/Codex activity states with filters for human and command waits
+- Claude/Codex/Cursor activity states with filters for human and command waits
 - Card dashboard by default, with a compact list view and shareable view preferences
 - Visible, ordered multi-criterion sorting and optional attention-first state groups
 - One-tap, persistent stars that pin frequently used sessions above the rest
-- Quick filters for All, Agents, Claude, Codex, and Shells
+- Quick filters for All, Agents, Claude, Codex, Cursor, and Shells
 - Optional human titles persisted by tmux session name
 - Separate new-window links while card clicks keep same-window navigation
 - Explicit warning when a full-screen alternate-screen app has no tmux history
@@ -110,6 +111,11 @@ On wider screens, the header exposes two sizing modes:
 
 Tmux cannot render the same pane at two independent responsive sizes.
 
+The `Theme` control switches the full browser UI and xterm ANSI palette together.
+Dark remains the default, and the selected appearance is stored only in that
+browser. Changing it never sends terminal input, resizes tmux, or reconnects the
+PTY client.
+
 The mobile `PgUp` and `PgDn` controls send real Page Up/Page Down key sequences
 to the foreground tmux application, matching a physical keyboard. This lets
 Claude Code and Codex page their own terminal views. Use History for retained
@@ -146,6 +152,12 @@ Muxdeck inspects only the tail of the visible screen to distinguish explicit
 background-command waits from active work. Static Claude/Codex titles indicate
 that the agent needs human input. Dead, stale, or unfamiliar signals are marked
 Unclear instead of being guessed.
+
+Cursor Agent (`cursor-agent`, also installed as `agent`) names its pane after the
+conversation, so its title carries no state. Muxdeck reads the footer of its
+visible screen instead: the interrupt hint that Cursor renders only during a live
+turn means the agent is active, and its absence means the agent is idle at its
+input prompt or holding a dialog open.
 
 This is a terminal heuristic, not an agent API. The server samples session state
 about once per second and streams changed snapshots to the dashboard with
@@ -193,7 +205,7 @@ saved view/sort preferences and then writes them into the URL.
 Use the star beside a session title to add or remove it from the pinned section
 with one tap. Stars persist across server restarts. Pinned sessions remain
 visible above the regular results independently of the active All, Agents,
-Claude, Codex, or Shells quick filter.
+Claude, Codex, Cursor, or Shells quick filter.
 
 Selecting the main body of a card or list row opens its console in the current
 window. Use the adjacent `New window` link to open that console in a separate

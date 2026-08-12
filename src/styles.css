@@ -14,6 +14,7 @@
   --amber: #ffb648;
   --red: #ff7368;
   --cyan: #68dfd0;
+  --violet: #a99bff;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
@@ -109,6 +110,60 @@ a:focus-visible {
   display: flex;
   align-items: center;
   gap: 13px;
+}
+
+.snippet-library-header-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  min-width: 112px;
+  min-height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  color: #b9c3b6;
+  background: #20261f;
+  border: 1px solid #394336;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus-visible {
+  color: var(--paper);
+  background: #293128;
+  border-color: #64735e;
+}
+
+.theme-toggle[aria-pressed="true"] {
+  color: var(--acid);
+  background: #252d23;
+  border-color: #5d714f;
+}
+
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.missing-session-theme {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top, 0px));
+  right: 16px;
 }
 
 .brand-lockup {
@@ -924,6 +979,12 @@ a:focus-visible {
   color: var(--amber);
   background: rgba(255, 182, 72, 0.08);
   border-color: rgba(255, 182, 72, 0.2);
+}
+
+.agent-badge.cursor {
+  color: var(--violet);
+  background: rgba(169, 155, 255, 0.09);
+  border-color: rgba(169, 155, 255, 0.22);
 }
 
 .agent-badge.shell {
@@ -2158,6 +2219,28 @@ a:focus-visible {
     gap: 7px;
   }
 
+  .snippet-library-header-tools {
+    gap: 6px;
+  }
+
+  .theme-toggle {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+  }
+
+  .theme-toggle span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
   .dashboard-header-tools .server-pulse {
     display: none;
   }
@@ -2497,6 +2580,25 @@ a:focus-visible {
 }
 
 @media (max-width: 340px) {
+  .dashboard-header,
+  .snippet-library-header {
+    gap: 8px;
+  }
+
+  .dashboard-header .brand-lockup,
+  .snippet-library-header .brand-lockup {
+    gap: 8px;
+  }
+
+  .dashboard-header .brand-lockup .eyebrow {
+    display: none;
+  }
+
+  .dashboard-header-tools,
+  .snippet-library-header-tools {
+    gap: 4px;
+  }
+
   .results-tools {
     flex-wrap: wrap;
     justify-content: flex-start;

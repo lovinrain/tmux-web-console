@@ -3,6 +3,7 @@ import { BASE_PATH } from "./api";
 import { ConsoleScreen } from "./components/ConsoleScreen";
 import { SessionDashboard } from "./components/SessionDashboard";
 import { SnippetLibrary } from "./components/SnippetLibrary";
+import { ThemeProvider } from "./theme";
 
 interface MuxLocation {
   path: string;
@@ -24,7 +25,7 @@ function targetUrl(path: string, search = window.location.search): string {
   return `${BASE_PATH}${path === "/" ? "/" : path}${search}`;
 }
 
-export function App() {
+function AppRoutes() {
   const [location, setLocation] = useState(currentLocation);
 
   useEffect(() => {
@@ -94,5 +95,13 @@ export function App() {
       onOpen={openSession}
       onOpenSnippets={openSnippets}
     />
+  );
+}
+
+export function App() {
+  return (
+    <ThemeProvider>
+      <AppRoutes />
+    </ThemeProvider>
   );
 }

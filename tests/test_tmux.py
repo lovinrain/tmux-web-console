@@ -1,7 +1,16 @@
+import time
 from dataclasses import replace
+from typing import cast
 
-from tmux_console.status import classify_agent_state
-from tmux_console.tmux import OUTPUT_FIELD_SEPARATOR, PANE_FORMAT_FIELDS, Pane, parse_sessions
+from tmux_console.status import AgentStateDetector, classify_agent_state
+from tmux_console.tmux import (
+    OUTPUT_FIELD_SEPARATOR,
+    PANE_FORMAT_FIELDS,
+    Pane,
+    Session,
+    TmuxClient,
+    parse_sessions,
+)
 
 
 def pane_row(**overrides: str) -> str:
@@ -127,3 +136,96 @@ def test_agent_state_is_conservative_for_stale_or_unknown_signals():
     )
     assert classify_agent_state(agent_pane(dead=True), now=1000).name == "unknown"
     assert classify_agent_state(agent_pane(command="bash"), now=1000).name == "other"
+
+
+CURSOR_RUNNING_SCREEN = "\n".join(
+    [
+        "    Grepped \"sample_module\" in .",
+        " \u2818\u2823 Running  30.77k tokens",
+        "",
+        "  \u2192 Add a follow-up                                 ctrl+c to stop",
+        "",
+        "  Opus 5 1M Max Fast \u00b7 MAX \u00b7 13.5%                  Run Everything",
+        "  ~/work \u00b7 main",
+    ]
+)
+CURSOR_IDLE_SCREEN = "\n".join(
+    [
+        "    reply with only the word pong",
+        "    pong",
+        "",
+        "  \u2192 Add a follow-up",
+        "  Opus 5 1M Max Fast \u00b7 MAX \u00b7 6.5%",
+        "  ~/work \u00b7 main",
+    ]
+)
+
+
+def cursor_pane(**overrides: object) -> Pane:
+    defaults: dict[str, object] = {"command": "agent", "title": "Example conversation"}
+    return agent_pane(**{**defaults, **overrides})
+
+
+class RecordingTmux:
+    def __init__(self, screens: dict[str, str]) -> None:
+        self.screens = screens
+        self.captured: list[str] = []
+
+    async def capture_visible(self, pane_id: str) -> str:
+        self.captured.append(pane_id)
+        return self.screens[pane_id]
+
+
+def test_cursor_agent_state_comes_from_the_footer_interrupt_hint():
+    # Cursor names the pane after the conversation, so the title carries no state.
+    for command in ("agent", "cursor-agent"):
+        pane = cursor_pane(command=command)
+        assert (
+            classify_agent_state(pane, visible_screen=CURSOR_RUNNING_SCREEN, now=1000).name
+            == "working"
+        )
+        assert (
+            classify_agent_state(pane, visible_screen=CURSOR_IDLE_SCREEN, now=1000).name
+            == "waiting_human"
+        )
+
+    waiting_screen = CURSOR_RUNNING_SCREEN.replace(
+        "Grepped \"sample_module\" in .", "Waiting for background terminal"
+    )
+    assert (
+        classify_agent_state(cursor_pane(), visible_screen=waiting_screen, now=1000).name
+        == "waiting_command"
+    )
+
+
+def test_cursor_agent_state_requires_a_fresh_screen_capture():
+    assert classify_agent_state(cursor_pane(), now=1000).name == "unknown"
+    assert (
+        classify_agent_state(
+            cursor_pane(activity=900), visible_screen=CURSOR_RUNNING_SCREEN, now=1000
+        ).name
+        == "unknown"
+    )
+
+    # A hint scrolled up into the transcript must not read as a live turn.
+    scrolled_away = "\n".join(["  ctrl+c to stop", *([""] * 12), CURSOR_IDLE_SCREEN])
+    assert (
+        classify_agent_state(cursor_pane(), visible_screen=scrolled_away, now=1000).name
+        == "waiting_human"
+    )
+
+
+async def test_detect_sessions_captures_the_screen_for_cursor_panes():
+    cursor = cursor_pane(activity=int(time.time()))
+    idle_codex = agent_pane(id="%43", title="repo")
+    tmux = RecordingTmux({cursor.id: CURSOR_RUNNING_SCREEN})
+    sessions = [
+        Session(name="cursor-one", id="$1", windows=1, attached=0, created=1, panes=[cursor]),
+        Session(name="codex-one", id="$2", windows=1, attached=0, created=1, panes=[idle_codex]),
+    ]
+
+    states = await AgentStateDetector().detect_sessions(cast(TmuxClient, tmux), sessions)
+
+    assert states["cursor-one"].name == "working"
+    assert states["codex-one"].name == "waiting_human"
+    assert tmux.captured == [cursor.id]

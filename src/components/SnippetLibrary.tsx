@@ -36,6 +36,7 @@ import {
 } from "../snippets";
 import type { SnippetLeaf, SnippetNode, SnippetTree } from "../types";
 import { AppTabs } from "./AppTabs";
+import { ThemeToggle } from "./ThemeToggle";
 import "./SnippetLibrary.css";
 
 const MAX_NAME_LENGTH = 120;
@@ -573,7 +574,10 @@ export function SnippetLibrary({ onOpenSessions }: SnippetLibraryProps) {
             <h1>Muxdeck</h1>
           </div>
         </div>
-        <AppTabs active="snippets" onSessions={onOpenSessions} onSnippets={() => undefined} />
+        <div className="snippet-library-header-tools">
+          <AppTabs active="snippets" onSessions={onOpenSessions} onSnippets={() => undefined} />
+          <ThemeToggle />
+        </div>
       </header>
 
       <section className="snippet-library-intro">

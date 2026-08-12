@@ -53,6 +53,77 @@ test("desktop dashboard renders a three-column session grid", async ({ page }) =
   expect(columns).toBe(3);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/dashboard-desktop.png" });
+
+  const desktopThemeToggle = page.getByRole("button", { name: "Light theme" });
+  await desktopThemeToggle.click();
+  await page.mouse.move(0, 0);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(desktopThemeToggle).toHaveCSS("background-color", "rgb(230, 239, 215)");
+  await expect(page.locator(".session-card").first()).toHaveCSS(
+    "background-color",
+    "rgba(255, 253, 248, 0.94)",
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/dashboard-desktop-light.png" });
+});
+
+test("light theme persists across dashboard, snippets, overlays, and console", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/mux/");
+  await expect(page.locator(".session-card").first()).toBeVisible();
+
+  const themeToggle = page.getByRole("button", { name: "Light theme" });
+  await expect(themeToggle).toHaveAttribute("aria-pressed", "false");
+  const darkToggleBox = await themeToggle.boundingBox();
+  expect(darkToggleBox?.width).toBeGreaterThanOrEqual(40);
+  expect(darkToggleBox?.height).toBeGreaterThanOrEqual(40);
+  await themeToggle.click();
+  await expect(themeToggle).toHaveAttribute("aria-pressed", "true");
+  const lightToggleBox = await themeToggle.boundingBox();
+  expect(lightToggleBox?.width).toBe(darkToggleBox?.width);
+  expect(lightToggleBox?.height).toBe(darkToggleBox?.height);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#f4f0e7");
+  expect(await page.evaluate(() => window.localStorage.getItem("muxdeck-theme"))).toBe("light");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/dashboard-mobile-light.png", fullPage: true });
+
+  await page.getByRole("button", { name: "Snippets", exact: true }).click();
+  await expect(page).toHaveURL("/mux/snippets");
+  await expect(page.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
+  const libraryControls = page.getByLabel("Snippet library controls");
+  await libraryControls.getByRole("button", { name: "New folder", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "New folder" })).toBeVisible();
+  await expect(page.locator(".snippet-editor-sheet")).toHaveCSS("opacity", "1");
+  await expect(page.locator(".snippet-editor-backdrop")).toHaveCSS("opacity", "1");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/snippet-editor-mobile-light.png" });
+  await page.getByRole("button", { name: "Close snippet editor" }).click();
+
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await page.getByRole("button", { name: `Open ${sessionName}` }).click();
+  await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+  await expect(page.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".terminal-stage")).toHaveCSS("background-color", "rgb(251, 250, 245)");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/console-mobile-light.png" });
+
+  await page.getByRole("button", { name: "History" }).click();
+  await expect(page.getByRole("heading", { name: "Scrollback" })).toBeVisible();
+  await expect(page.locator(".history-panel")).toHaveCSS("opacity", "1");
+  await expect(page.locator(".history-backdrop")).toHaveCSS("opacity", "1");
+  await expect(page.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
+  await page.screenshot({ path: "artifacts/history-mobile-light.png" });
+  await page.getByRole("button", { name: "Close history" }).click();
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#f4f0e7");
+  await expect(page.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Light theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#151914");
+  expect(await page.evaluate(() => window.localStorage.getItem("muxdeck-theme"))).toBe("dark");
 });
 
 test("shareable dashboard URL restores ordered sorting and fits narrow screens", async ({ page }) => {
