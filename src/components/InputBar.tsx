@@ -1,9 +1,11 @@
 import {
   forwardRef,
   useEffect,
+  useId,
   useImperativeHandle,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { EditIcon, KeyboardIcon, MemoIcon, SnippetIcon } from "../icons";
 
@@ -28,18 +30,94 @@ export interface InputBarHandle {
   focus: () => void;
 }
 
-const KEYS = [
-  { label: "PgUp", data: "\x1b[5~" },
-  { label: "PgDn", data: "\x1b[6~" },
+interface TerminalKey {
+  label: string;
+  data: string;
+  compact?: string;
+  ariaLabel?: string;
+  title?: string;
+}
+
+const PAGE_UP_SEQUENCE = "\x1b[5~";
+const PAGE_DOWN_SEQUENCE = "\x1b[6~";
+
+const KEYS: TerminalKey[] = [
+  {
+    label: "Tmux PgUp",
+    compact: "T Up",
+    data: `\x02${PAGE_UP_SEQUENCE}`,
+    ariaLabel: "Tmux Page Up",
+    title: "Enter tmux copy mode one page up (Ctrl+B, then Page Up)",
+  },
+  {
+    label: "Tmux PgDn",
+    compact: "T Dn",
+    // Default tmux handles Page Down directly after Page Up enters copy mode.
+    data: PAGE_DOWN_SEQUENCE,
+    ariaLabel: "Tmux Page Down",
+    title: "Page down while tmux copy mode is active",
+  },
+  {
+    label: "^A",
+    data: "\x01",
+    ariaLabel: "Ctrl+A - move to start of input",
+    title: "Move to the start of input in supported shells and agents (Ctrl+A)",
+  },
+  {
+    label: "^E",
+    data: "\x05",
+    ariaLabel: "Ctrl+E - move to end of input",
+    title: "Move to the end of input in supported shells and agents (Ctrl+E)",
+  },
+  {
+    label: "PgUp",
+    data: PAGE_UP_SEQUENCE,
+    title: "Page up in the foreground application or tmux copy mode",
+  },
+  {
+    label: "PgDn",
+    data: PAGE_DOWN_SEQUENCE,
+    title: "Page down in the foreground application or tmux copy mode",
+  },
   { label: "Esc", data: "\x1b" },
   { label: "Tab", data: "\t" },
-  { label: "^C", data: "\x03" },
+  { label: "^C", data: "\x03", title: "Send Ctrl+C or leave tmux copy mode" },
   { label: "Enter", data: "\r" },
-  { label: "Up", data: "\x1b[A", compact: "^" },
-  { label: "Down", data: "\x1b[B", compact: "v" },
-  { label: "Left", data: "\x1b[D", compact: "<" },
-  { label: "Right", data: "\x1b[C", compact: ">" },
 ];
+
+const OTHER_KEYS: TerminalKey[] = [
+  { label: "Up", data: "\x1b[A" },
+  { label: "Down", data: "\x1b[B" },
+  { label: "Left", data: "\x1b[D" },
+  { label: "Right", data: "\x1b[C" },
+];
+
+interface TerminalKeyButtonProps {
+  terminalKey: TerminalKey;
+  enabled: boolean;
+  onSend: (data: string) => boolean;
+}
+
+function TerminalKeyButton({ terminalKey, enabled, onSend }: TerminalKeyButtonProps) {
+  return (
+    <button
+      type="button"
+      className="key-button"
+      disabled={!enabled}
+      aria-label={terminalKey.ariaLabel || terminalKey.label}
+      title={terminalKey.title}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onSend(terminalKey.data)}
+    >
+      <span className={terminalKey.compact ? "wide-key-label" : ""}>
+        {terminalKey.label}
+      </span>
+      {terminalKey.compact && (
+        <span className="compact-key-label">{terminalKey.compact}</span>
+      )}
+    </button>
+  );
+}
 
 type DraftStatus = "idle" | "saved" | "loaded" | "sending" | "sent" | "unconfirmed" | "clipboard-error" | "storage-error";
 
@@ -97,12 +175,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 }, ref) {
   const initialDraftRef = useRef<string | null>(null);
   if (initialDraftRef.current === null) initialDraftRef.current = readDraft(sessionName);
+  const otherKeyPanelId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const sendingRef = useRef(false);
   const [draftLength, setDraftLength] = useState(initialDraftRef.current.length);
   const [status, setStatus] = useState<DraftStatus>(initialDraftRef.current ? "saved" : "idle");
   const [sending, setSending] = useState(false);
+  const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
 
   const recordDraft = (value: string, nextStatus: DraftStatus = "saved") => {
     const persisted = writeDraft(sessionName, value);
@@ -188,6 +269,26 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     textarea.focus();
   };
 
+  const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    const isSendWithEnterShortcut = event.key === "Enter"
+      && event.shiftKey
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey;
+    if (!isSendWithEnterShortcut) return;
+
+    // Some browsers report 229 when Enter completes an IME composition.
+    if (
+      composingRef.current
+      || event.nativeEvent.isComposing
+      || event.nativeEvent.keyCode === 229
+    ) return;
+    if (!enabled || !event.currentTarget.value || sendingRef.current) return;
+
+    event.preventDefault();
+    if (!event.repeat) void sendDraft(true);
+  };
+
   const clearDraft = () => {
     const textarea = textareaRef.current;
     if (!textarea || !textarea.value) return;
@@ -257,6 +358,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             autoCorrect="off"
             spellCheck={false}
             placeholder="Dictate, type, or insert a snippet or memorandum..."
+            onKeyDown={handleDraftKeyDown}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={(event) => {
               composingRef.current = false;
@@ -273,7 +375,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           <div className="composer-actions-primary">
             <button type="button" className="secondary-button composer-clear" disabled={!draftLength || sending} onClick={clearDraft}>Clear</button>
             <button type="button" className="secondary-button" disabled={!enabled || !draftLength || sending} onClick={() => void sendDraft(false)}>Send</button>
-            <button type="button" className="primary-button" disabled={!enabled || !draftLength || sending} onClick={() => void sendDraft(true)}>Send + Enter</button>
+            <button
+              type="button"
+              className="primary-button composer-send-enter"
+              disabled={!enabled || !draftLength || sending}
+              aria-keyshortcuts="Shift+Enter"
+              title="Send staged input followed by Enter (Shift+Enter)"
+              onClick={() => void sendDraft(true)}
+            >
+              <span>Send + Enter</span>
+              <span className="composer-shortcut-hint" aria-hidden="true">
+                <kbd>Shift</kbd><span>+</span><kbd>Enter</kbd>
+              </span>
+            </button>
           </div>
         </div>
         <p className={`composer-status ${status}`} aria-live="polite">
@@ -281,7 +395,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         </p>
       </div>
 
-      <div className="input-bar" aria-label="Terminal input shortcuts">
+      <div className="input-bar" role="group" aria-label="Terminal input shortcuts">
         <button
           type="button"
           className="key-button session-title-key"
@@ -309,25 +423,61 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         >
           <SnippetIcon /> <span>Snippets</span>
         </button>
-        <button type="button" className="key-button keyboard-key" onClick={onFocus} disabled={!enabled} aria-label="Raw terminal keyboard">
+        <button
+          type="button"
+          className="key-button keyboard-key"
+          onClick={onFocus}
+          disabled={!enabled}
+          aria-label="Raw terminal keyboard"
+          title="Focus the live terminal so keyboard input goes directly to tmux"
+        >
           <KeyboardIcon /> <span>Raw keys</span>
         </button>
-        {KEYS.map((key) => (
-          <button
-            type="button"
-            className="key-button"
-            key={key.label}
-            disabled={!enabled}
-            aria-label={key.label}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onSend(key.data)}
-          >
-            <span className={key.compact ? "wide-key-label" : ""}>{key.label}</span>
-            {key.compact && <span className="compact-key-label">{key.compact}</span>}
-          </button>
+        {KEYS.map((terminalKey) => (
+          <TerminalKeyButton
+            key={terminalKey.label}
+            terminalKey={terminalKey}
+            enabled={enabled}
+            onSend={onSend}
+          />
         ))}
         <button type="button" className="key-button action-key" onClick={() => void pasteClipboard()}>Paste to draft</button>
+        <button
+          type="button"
+          className="key-button other-keys-toggle"
+          aria-expanded={otherKeyPanelOpen}
+          aria-controls={otherKeyPanelId}
+          aria-label={otherKeyPanelOpen ? "Hide other keys" : "Show other keys"}
+          title={otherKeyPanelOpen ? "Hide additional key controls" : "Show additional key controls"}
+          onMouseDown={(event) => {
+            // Preserve terminal/draft focus unless focus must leave the tray before collapse.
+            if (!otherKeyPanelRef.current?.contains(document.activeElement)) event.preventDefault();
+          }}
+          onClick={() => setOtherKeyPanelOpen((open) => !open)}
+        >
+          <span>Other Keys</span>
+        </button>
       </div>
+
+      {otherKeyPanelOpen && (
+        <div
+          id={otherKeyPanelId}
+          ref={otherKeyPanelRef}
+          className="other-key-panel"
+          role="group"
+          aria-label="Other keys"
+        >
+          <span className="other-key-panel-label" aria-hidden="true">Other</span>
+          {OTHER_KEYS.map((terminalKey) => (
+            <TerminalKeyButton
+              key={terminalKey.label}
+              terminalKey={terminalKey}
+              enabled={enabled}
+              onSend={onSend}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 });

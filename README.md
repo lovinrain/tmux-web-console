@@ -97,6 +97,8 @@ tries to merge terminal-side cursor edits back into that local draft.
 
 `Send` and `Send + Enter` take one snapshot of the staged text and wait for the
 server to confirm that the complete payload was written to the attached tmux PTY.
+With the staged textarea focused, `Shift+Enter` invokes `Send + Enter`; plain
+`Enter` remains available for multiline drafts.
 Only then is the local draft cleared. A timeout or reconnect leaves it intact and
 is never retried automatically, because an unconfirmed retry could execute the
 same command twice. The confirmation does not claim that Claude, Codex, or the
@@ -116,10 +118,22 @@ Dark remains the default, and the selected appearance is stored only in that
 browser. Changing it never sends terminal input, resizes tmux, or reconnects the
 PTY client.
 
-The mobile `PgUp` and `PgDn` controls send real Page Up/Page Down key sequences
-to the foreground tmux application, matching a physical keyboard. This lets
-Claude Code and Codex page their own terminal views. Use History for retained
-tmux content from before the browser attached.
+The `PgUp` and `PgDn` controls send real Page Up/Page Down key sequences to the
+foreground application, matching a physical keyboard for tools such as Claude
+Code. For Codex or other content in tmux history, `Tmux PgUp` sends `Ctrl+B`
+followed by Page Up to enter copy mode one page back; `Tmux PgDn` pages down once
+that mode is active. `^C` returns to the live pane. The tmux controls assume the
+default `Ctrl+B` prefix. Use History for retained content from before the browser
+attached.
+
+`^A` and `^E` send `Ctrl+A` and `Ctrl+E` respectively, letting compatible shells
+and agents move to the beginning or end of their active input. The `Other Keys`
+control reveals `Up`, `Down`, `Left`, and `Right` in a secondary row so those
+less-frequent controls do not crowd the main shortcut strip.
+
+`Raw keys` focuses the live xterm input. It does not enable a separate mode or
+send a control sequence; subsequent keyboard input goes directly to the
+application attached through tmux instead of into the staged draft.
 
 The sticky `Name` shortcut in the terminal's bottom bar opens the same optional
 human-title editor used by the dashboard. It updates the label shown by Muxdeck,

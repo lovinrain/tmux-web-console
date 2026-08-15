@@ -1389,6 +1389,8 @@ a:focus-visible {
 
 .input-dock {
   z-index: 6;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   background: #151915;
   border-top: 1px solid #2f372d;
@@ -1475,6 +1477,34 @@ a:focus-visible {
   min-height: 0;
   padding-inline: 12px;
   white-space: nowrap;
+}
+
+.composer-send-enter {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.composer-shortcut-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.68;
+}
+
+.composer-shortcut-hint kbd {
+  padding: 1px 3px;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font: inherit;
 }
 
 .composer-clear {
@@ -1721,7 +1751,44 @@ a:focus-visible {
   display: none;
 }
 
+.other-key-panel {
+  order: 1;
+  display: grid;
+  grid-template-columns: auto repeat(4, minmax(44px, 64px));
+  min-width: 0;
+  align-items: center;
+  justify-content: end;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background:
+    linear-gradient(90deg, rgba(104, 223, 208, 0.055), transparent 38%),
+    #111511;
+  border-top: 1px solid #293127;
+  scrollbar-width: none;
+  animation: fade-in 130ms ease-out both;
+}
+
+.other-key-panel::-webkit-scrollbar {
+  display: none;
+}
+
+.other-key-panel-label {
+  margin-right: 4px;
+  color: #758172;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.other-key-panel .key-button {
+  width: 100%;
+}
+
 .input-bar {
+  order: 2;
   display: flex;
   min-height: calc(50px + var(--safe-bottom));
   align-items: flex-start;
@@ -1760,6 +1827,32 @@ a:focus-visible {
 .key-button:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.other-keys-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.other-keys-toggle::after {
+  width: 8px;
+  content: "+";
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.78;
+  text-align: center;
+}
+
+.other-keys-toggle[aria-expanded="true"] {
+  color: var(--cyan);
+  background: #19302d;
+  border-color: #3b6f68;
+}
+
+.other-keys-toggle[aria-expanded="true"]::after {
+  content: "-";
 }
 
 .keyboard-key {
@@ -2205,16 +2298,7 @@ a:focus-visible {
   }
 }
 
-@media (max-width: 640px) {
-  .dashboard-shell {
-    padding: 16px 13px 60px;
-  }
-
-  .dashboard-header {
-    align-items: flex-start;
-    padding-bottom: 16px;
-  }
-
+@media (max-width: 800px) {
   .dashboard-header-tools {
     gap: 7px;
   }
@@ -2243,6 +2327,17 @@ a:focus-visible {
 
   .dashboard-header-tools .server-pulse {
     display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-shell {
+    padding: 16px 13px 60px;
+  }
+
+  .dashboard-header {
+    align-items: flex-start;
+    padding-bottom: 16px;
   }
 
   .brand-mark {
@@ -2495,6 +2590,23 @@ a:focus-visible {
     grid-column: auto;
     padding-inline: 7px;
     font-size: 11px;
+  }
+
+  .composer-shortcut-hint {
+    display: none;
+  }
+
+  .other-key-panel {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .other-key-panel-label {
+    display: none;
+  }
+
+  .other-key-panel .key-button {
+    min-width: 0;
+    padding-inline: 5px;
   }
 
   .key-button {

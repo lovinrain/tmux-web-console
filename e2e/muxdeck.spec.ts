@@ -136,6 +136,12 @@ test("shareable dashboard URL restores ordered sorting and fits narrow screens",
     /01State changednewest first/,
     /02Tmux nameA-Z/,
   ]);
+  const narrowThemeToggle = page.getByRole("button", { name: "Light theme" });
+  await expect(narrowThemeToggle).toBeVisible();
+  const narrowThemeToggleBox = await narrowThemeToggle.boundingBox();
+  expect(narrowThemeToggleBox?.width).toBe(40);
+  expect(narrowThemeToggleBox?.height).toBeGreaterThanOrEqual(40);
+  await expect(page.locator(".dashboard-header-tools .server-pulse")).toBeHidden();
   await page.reload();
   await expect(page.locator(".sort-priority-chip")).toHaveText([
     /01State changednewest first/,
@@ -357,8 +363,10 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await page.reload({ waitUntil: "domcontentloaded" });
   stagedInput = page.getByRole("textbox", { name: "Staged input" });
   await expect(stagedInput).toHaveValue(retainedCommand);
-  await expect(page.getByRole("button", { name: "Send + Enter" })).toBeEnabled({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Send + Enter" }).click();
+  const sendWithEnter = page.getByRole("button", { name: "Send + Enter" });
+  await expect(sendWithEnter).toBeEnabled({ timeout: 10_000 });
+  await expect(sendWithEnter).toHaveAttribute("aria-keyshortcuts", "Shift+Enter");
+  await stagedInput.press("Shift+Enter");
   await expect(stagedInput).toHaveValue("");
   await expect(page.locator(".composer-status")).toContainText("Written once to the attached tmux PTY");
   await expect.poll(() => page.evaluate(
@@ -398,6 +406,23 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await page.setViewportSize({ width: 320, height: 700 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(await page.locator(".staged-composer").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const terminalShortcuts = page.getByRole("group", { name: "Terminal input shortcuts" });
+  expect(await terminalShortcuts.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  const otherKeysToggle = terminalShortcuts.locator(".other-keys-toggle");
+  await expect(otherKeysToggle).toHaveAccessibleName("Show other keys");
+  await expect(otherKeysToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("group", { name: "Other keys" })).toHaveCount(0);
+  await otherKeysToggle.click();
+  const otherKeyPanel = page.getByRole("group", { name: "Other keys" });
+  await expect(otherKeysToggle).toHaveAccessibleName("Hide other keys");
+  await expect(otherKeysToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(otherKeyPanel.getByRole("button")).toHaveText(["Up", "Down", "Left", "Right"]);
+  expect(await otherKeyPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/console-mobile-other-keys.png" });
+  await otherKeysToggle.click();
+  await expect(otherKeysToggle).toHaveAccessibleName("Show other keys");
+  await expect(page.getByRole("group", { name: "Other keys" })).toHaveCount(0);
   await page.getByRole("button", { name: "Open memoranda" }).click();
   queueDialog = page.getByRole("dialog", { name: "Queued messages" });
   expect(await queueDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -424,6 +449,40 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect.poll(() => {
     return execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
   }).toContain(String.raw`PAGE_DOWN_KEY=$'\E[6~'`);
+
+  await stagedInput.fill("IFS= read -rsn1 key; printf 'CTRL_A_KEY=%q\\n' \"$key\"");
+  await page.getByRole("button", { name: "Send + Enter" }).click();
+  await expect.poll(() => {
+    return execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
+  }).toContain("CTRL_A_KEY=%q");
+  await page.getByRole("button", { name: "Ctrl+A - move to start of input" }).click();
+  await expect.poll(() => {
+    return execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
+  }).toContain(String.raw`CTRL_A_KEY=$'\001'`);
+
+  await stagedInput.fill("IFS= read -rsn1 key; printf 'CTRL_E_KEY=%q\\n' \"$key\"");
+  await page.getByRole("button", { name: "Send + Enter" }).click();
+  await expect.poll(() => {
+    return execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
+  }).toContain("CTRL_E_KEY=%q");
+  await page.getByRole("button", { name: "Ctrl+E - move to end of input" }).click();
+  await expect.poll(() => {
+    return execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
+  }).toContain(String.raw`CTRL_E_KEY=$'\005'`);
+
+  const paneFormat = (format: string) => execFileSync(
+    "tmux",
+    [...tmux, "display-message", "-p", "-t", paneId, format],
+    { encoding: "utf8" },
+  ).trim();
+  await page.getByRole("button", { name: "Tmux Page Up" }).click();
+  await expect.poll(() => paneFormat("#{pane_in_mode}")).toBe("1");
+  await expect.poll(() => Number(paneFormat("#{scroll_position}"))).toBeGreaterThan(0);
+  const scrollPosition = Number(paneFormat("#{scroll_position}"));
+  await page.getByRole("button", { name: "Tmux Page Down" }).click();
+  await expect.poll(() => Number(paneFormat("#{scroll_position}"))).toBeLessThan(scrollPosition);
+  await page.getByRole("button", { name: "^C" }).click();
+  await expect.poll(() => paneFormat("#{pane_in_mode}")).toBe("0");
   await page.screenshot({ path: "artifacts/console-mobile.png" });
 
   await page.getByRole("button", { name: "History" }).click();

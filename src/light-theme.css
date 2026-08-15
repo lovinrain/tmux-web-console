@@ -411,7 +411,7 @@ html[data-theme="light"] .state-badge {
 }
 
 html[data-theme="light"] .state-badge.working {
-  color: #4f771b;
+  color: #4d7519;
   background: #e8f0dc;
   border-color: #c5d3ad;
 }
@@ -602,6 +602,17 @@ html[data-theme="light"] .input-bar {
   border-color: #c7c0b4;
 }
 
+html[data-theme="light"] .other-key-panel {
+  background:
+    linear-gradient(90deg, rgba(8, 122, 112, 0.075), transparent 38%),
+    #e9e4da;
+  border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .other-key-panel-label {
+  color: #606a5e;
+}
+
 html[data-theme="light"] .staged-composer {
   background:
     linear-gradient(90deg, rgba(8, 122, 112, 0.06), transparent 32%),
@@ -660,6 +671,13 @@ html[data-theme="light"] .key-button:hover:not(:disabled) {
 html[data-theme="light"] .key-button:active {
   color: #fff;
   background: #557c1d;
+}
+
+html[data-theme="light"] .other-keys-toggle[aria-expanded="true"],
+html[data-theme="light"] .other-keys-toggle[aria-expanded="true"]:hover:not(:disabled) {
+  color: #086a61;
+  background: #dcefeb;
+  border-color: #75a8a1;
 }
 
 html[data-theme="light"] .keyboard-key,
