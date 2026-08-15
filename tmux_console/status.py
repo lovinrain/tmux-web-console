@@ -18,9 +18,20 @@ COMMAND_WAIT_PATTERN = re.compile(
 # The Cursor CLI installs as ``cursor-agent`` plus a bare ``agent`` symlink.
 CURSOR_COMMANDS = frozenset({"agent", "cursor-agent"})
 AGENT_COMMANDS = frozenset({"claude", "codex"}) | CURSOR_COMMANDS
-# Cursor's interrupt hint sits in the footer and only renders during a live turn.
+# Cursor's interrupt hint sits in the footer during a live turn, but it is drawn
+# as a placeholder, so typing a follow-up mid-turn hides it again.
 CURSOR_RUNNING_PATTERN = re.compile(
     r"\b(?:ctrl\+c|esc) to (?:stop|interrupt)\b", re.IGNORECASE
+)
+# Cursor marks its input line with an arrow and keeps the turn indicators on and
+# just above it, under any queued messages.
+CURSOR_PROMPT_MARKER = "\u2192"
+# A running turn spins two braille frames ahead of the current verb.
+CURSOR_SPINNER_PATTERN = re.compile(r"^\s*[\u2800-\u28ff]{2}\s+\S")
+CURSOR_STATUS_LOOKBACK = 5
+# Tool and mode approvals replace the input placeholder with their own prompt.
+CURSOR_DECISION_PATTERN = re.compile(
+    r"waiting for decision|approve mode switch", re.IGNORECASE
 )
 CURSOR_FOOTER_LINES = 12
 SCREEN_TAIL_LINES = 20
@@ -39,13 +50,37 @@ class CachedState:
     state: AgentState
 
 
+def _rendered_lines(screen: str) -> list[str]:
+    # Agent CLIs draw inline, so their footer ends where the output ends. Anchoring
+    # to the pane floor instead would miss it whenever the pane is taller than the
+    # transcript, which is every session until it has scrolled once.
+    lines = screen.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
 def _tail(screen: str, lines: int) -> str:
-    return "\n".join(screen.splitlines()[-lines:])
+    return "\n".join(_rendered_lines(screen)[-lines:])
 
 
 def _activity_is_stale(pane: Pane, now: float | None) -> bool:
     age = max(0.0, (now if now is not None else time.time()) - pane.activity)
     return age > ACTIVITY_STALE_SECONDS
+
+
+def _cursor_prompt_index(footer: list[str]) -> int:
+    for index in reversed(range(len(footer))):
+        if CURSOR_PROMPT_MARKER in footer[index]:
+            return index
+    return len(footer) - 1
+
+
+def _cursor_turn_is_live(footer: list[str], prompt: int) -> bool:
+    if CURSOR_RUNNING_PATTERN.search("\n".join(footer)):
+        return True
+    spinner = footer[max(0, prompt - CURSOR_STATUS_LOOKBACK) : prompt]
+    return any(CURSOR_SPINNER_PATTERN.match(line) for line in spinner)
 
 
 def _classify_cursor_state(
@@ -55,7 +90,11 @@ def _classify_cursor_state(
     # live turn apart from an idle prompt.
     if visible_screen is None:
         return AgentState("unknown", "Cursor screen capture is unavailable")
-    if not CURSOR_RUNNING_PATTERN.search(_tail(visible_screen, CURSOR_FOOTER_LINES)):
+    footer = _rendered_lines(visible_screen)[-CURSOR_FOOTER_LINES:]
+    prompt = _cursor_prompt_index(footer)
+    if prompt >= 0 and CURSOR_DECISION_PATTERN.search(footer[prompt]):
+        return AgentState("waiting_human", "Cursor is waiting on an approval decision")
+    if not _cursor_turn_is_live(footer, prompt):
         return AgentState("waiting_human", "Cursor is idle at its input prompt")
     if _activity_is_stale(pane, now):
         return AgentState("unknown", "Agent activity indicator is stale")

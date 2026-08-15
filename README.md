@@ -155,9 +155,12 @@ Unclear instead of being guessed.
 
 Cursor Agent (`cursor-agent`, also installed as `agent`) names its pane after the
 conversation, so its title carries no state. Muxdeck reads the footer of its
-visible screen instead: the interrupt hint that Cursor renders only during a live
-turn means the agent is active, and its absence means the agent is idle at its
-input prompt or holding a dialog open.
+visible screen instead, locating it from the last rendered line because Cursor
+draws inline rather than filling the pane. A turn counts as live while the footer
+shows the interrupt hint or, since typing a follow-up hides that hint, while the
+spinner still sits above the input prompt. An approval prompt on the input line
+means Cursor is waiting on an answer, and a footer carrying neither signal means
+the agent is idle at its input prompt or holding a dialog open.
 
 This is a terminal heuristic, not an agent API. The server samples session state
 about once per second and streams changed snapshots to the dashboard with

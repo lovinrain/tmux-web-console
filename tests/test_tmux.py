@@ -198,6 +198,44 @@ def test_cursor_agent_state_comes_from_the_footer_interrupt_hint():
     )
 
 
+def test_cursor_turn_survives_a_pane_taller_than_its_transcript():
+    # Cursor draws inline, so its footer sits far above the pane floor until the
+    # transcript is long enough to fill the pane.
+    padded = "\n".join([CURSOR_RUNNING_SCREEN, *([""] * 40)])
+
+    assert (
+        classify_agent_state(cursor_pane(), visible_screen=padded, now=1000).name
+        == "working"
+    )
+
+
+def test_cursor_turn_survives_a_follow_up_typed_mid_turn():
+    # The interrupt hint is a placeholder, so typing hides it while the turn runs.
+    typed = CURSOR_RUNNING_SCREEN.replace(
+        "Add a follow-up                                 ctrl+c to stop",
+        "also check the retry path",
+    )
+
+    assert "ctrl+c to stop" not in typed
+    assert (
+        classify_agent_state(cursor_pane(), visible_screen=typed, now=1000).name
+        == "working"
+    )
+
+
+def test_cursor_approval_prompt_outranks_the_running_spinner():
+    # Cursor keeps spinning while a tool approval blocks the turn on an answer.
+    pending = CURSOR_RUNNING_SCREEN.replace(
+        "Add a follow-up                                 ctrl+c to stop",
+        "Waiting for decision (y/n/p)...",
+    )
+
+    assert (
+        classify_agent_state(cursor_pane(), visible_screen=pending, now=1000).name
+        == "waiting_human"
+    )
+
+
 def test_cursor_agent_state_requires_a_fresh_screen_capture():
     assert classify_agent_state(cursor_pane(), now=1000).name == "unknown"
     assert (
@@ -211,6 +249,15 @@ def test_cursor_agent_state_requires_a_fresh_screen_capture():
     scrolled_away = "\n".join(["  ctrl+c to stop", *([""] * 12), CURSOR_IDLE_SCREEN])
     assert (
         classify_agent_state(cursor_pane(), visible_screen=scrolled_away, now=1000).name
+        == "waiting_human"
+    )
+
+    # Neither must a spinner that is no longer sitting above the input prompt.
+    stale_spinner = "\n".join(
+        [" \u2818\u2823 Running", *([""] * 4), CURSOR_IDLE_SCREEN]
+    )
+    assert (
+        classify_agent_state(cursor_pane(), visible_screen=stale_spinner, now=1000).name
         == "waiting_human"
     )
 
