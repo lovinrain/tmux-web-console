@@ -30,6 +30,7 @@ export interface Session {
   agentStateChangedAt: number;
   customTitle: string | null;
   starred: boolean;
+  ignored: boolean;
   queuedMessageCount: number;
   panes: Pane[];
 }

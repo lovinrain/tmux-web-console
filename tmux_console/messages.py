@@ -152,6 +152,21 @@ class SessionMessageStore:
             queue.pop(position)
             self._replace_queue(session_name, queue)
 
+    def rename_session(self, current_name: str, new_name: str) -> None:
+        current_name = validate_session_name(current_name)
+        new_name = validate_session_name(new_name)
+        if current_name == new_name:
+            raise ValueError("new session name must differ from current session name")
+
+        with self._lock:
+            queues = self._queues.copy()
+            queue = queues.pop(current_name, None)
+            queues.pop(new_name, None)
+            if queue:
+                queues[new_name] = queue
+            self._persist(queues)
+            self._queues = queues
+
     def _replace_queue(
         self, session_name: str, queue: list[QueuedMessage]
     ) -> None:

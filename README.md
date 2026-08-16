@@ -17,14 +17,19 @@ and output, and captures retained tmux scrollback only when requested.
 - Persistent per-session memorandum queues with add, edit, delete, load, and send actions
 - A persistent hierarchical snippet library with nested folders and safe draft insertion
 - Automatic reconnect after a dropped mobile connection
-- Immutable, paginated history snapshots
+- Immutable, paginated history snapshots in an adjustable desktop drawer
 - Claude/Codex/Cursor activity states with filters for human and command waits
 - Card dashboard by default, with a compact list view and shareable view preferences
 - Visible, ordered multi-criterion sorting and optional attention-first state groups
 - One-tap, persistent stars that pin frequently used sessions above the rest
+- A persistent ignored bucket for long-running background sessions
 - Quick filters for All, Agents, Claude, Codex, Cursor, and Shells
-- Optional human titles persisted by tmux session name
+- Optional Muxdeck display aliases, kept separate from native tmux names
+- Native tmux session rename with URL, tab, draft, and metadata migration
 - Separate new-window links while card clicks keep same-window navigation
+- A routed, confirm-before-create flow for starting a fresh default-shell session
+- Page-local quick tabs, session switching, and a recently visited trail
+- Always-available controls to hide session tabs, staged input, and shortcut keys
 - Explicit warning when a full-screen alternate-screen app has no tmux history
 - Responsive phone, tablet, and desktop layouts
 
@@ -123,8 +128,13 @@ foreground application, matching a physical keyboard for tools such as Claude
 Code. For Codex or other content in tmux history, `Tmux PgUp` sends `Ctrl+B`
 followed by Page Up to enter copy mode one page back; `Tmux PgDn` pages down once
 that mode is active. `^C` returns to the live pane. The tmux controls assume the
-default `Ctrl+B` prefix. Use History for retained content from before the browser
+default `Ctrl+B` prefix. Use Scrollback for retained content from before the browser
 attached.
+
+On tablet and desktop layouts, drag the left edge of the Scrollback drawer to
+change its width. The resize handle also supports Left/Right arrows, Home/End,
+and Enter to reset. The chosen width survives SPA navigation in the current page
+but resets on reload; phone layouts keep Scrollback full-width.
 
 `^A` and `^E` send `Ctrl+A` and `Ctrl+E` respectively, letting compatible shells
 and agents move to the beginning or end of their active input. The `Other Keys`
@@ -135,10 +145,19 @@ less-frequent controls do not crowd the main shortcut strip.
 send a control sequence; subsequent keyboard input goes directly to the
 application attached through tmux instead of into the staged draft.
 
-The sticky `Name` shortcut in the terminal's bottom bar opens the same optional
-human-title editor used by the dashboard. It updates the label shown by Muxdeck,
-not the real tmux session name, so attached clients and saved metadata remain
-stable.
+The sticky `Alias` shortcut in the terminal's bottom bar opens the same optional
+display-title editor used by the dashboard. It changes only the label shown by
+Muxdeck; the native tmux session name and attach target do not change.
+
+The adjacent `Tmux` shortcut renames the real session, equivalent to tmux's
+default `Ctrl+B`, then `$` command. A successful rename updates the active route,
+all ordered `tab=` values, page-local Recents, and the staged-draft key without
+adding a browser-history entry. Muxdeck also migrates the server-side display
+alias, star/ignored status, and memoranda. Browser Back and Forward entries that
+still contain the old name are canonicalized for the lifetime of the page. As in
+tmux itself, names cannot contain a colon or period; Muxdeck also rejects names
+ending in a semicolon because tmux parses that final character as a command
+separator.
 
 The adjacent `Memo` shortcut opens that session's reusable message queue. Queue
 items are stored by the server and remain available across browsers and service
@@ -188,9 +207,9 @@ the service starts a fresh observation timeline.
 
 ## Session organization
 
-Use the pencil on a session card to add an optional title. The original tmux
-session name remains visible and is used as the stable storage key. Saving an
-empty title clears it.
+Use the pencil on a session card to add an optional Muxdeck display alias. The
+native tmux session name remains visible underneath it. Saving an empty alias
+clears it; renaming the native session from its console preserves the alias.
 
 Cards are the default dashboard view. Use the Cards/List control to switch to a
 compact list. Sorting applies identically to both views and is shown as a
@@ -224,20 +243,81 @@ with one tap. Stars persist across server restarts. Pinned sessions remain
 visible above the regular results independently of the active All, Agents,
 Claude, Codex, Cursor, or Shells quick filter.
 
+Use the eye-off action to move a long-running background session into the
+collapsed `Ignored` section below the filtered results. Ignored sessions do not
+contribute to the regular filtered queue or its agent-state counts, but remain
+available in that section and can still be opened normally. Restoring one makes
+it eligible for the current filters again. Starred and ignored are mutually
+exclusive: ignoring a starred session unpins it, while starring an ignored
+session restores and pins it. Both choices persist across browser and Muxdeck
+restarts.
+
 Selecting the main body of a card or list row opens its console in the current
 window. Use the adjacent `New window` link to open that console in a separate
 browser context instead. The link carries the current dashboard query, so its
-Back action returns to the same filters, view, grouping, and sort priority.
+Back action returns to the same filters, view, grouping, and sort priority. A
+new window starts with only the selected session in its quick-tab workspace.
 
-`MUXDECK_TITLES_FILE` stores both optional titles and starred session names,
-using the original tmux session name as the key.
+The landing-page `New session` action opens `/sessions/new` as a synthetic
+workspace tab and waits for explicit confirmation before changing tmux. On
+confirmation, Muxdeck assigns a collision-resistant `muxdeck-*` name, starts
+tmux's configured default shell in the service user's home directory, and
+replaces the route with `/session/:name`. Existing ordered quick tabs stay in
+place and the created session is appended. `New window` opens the same
+confirmation screen in an isolated browser workspace. The synthetic tab is
+represented by the route, never by a fake `tab=` value. Closing the browser
+clears only the browser-local workspace state; a successfully created tmux
+session remains alive until it is ended through tmux itself.
+
+The top `View` toolbar stays available while the console is open. Its `Tabs`,
+`Input`, and `Keys` controls independently collapse the quick-tab strip, staged
+composer, and terminal shortcut strip so the terminal can use more of a phone's
+screen. These choices remain only in the current React page: they survive SPA
+session switches and dashboard round trips, but reset when the page reloads or
+the browser tab closes. They do not change the URL or reconnect the terminal.
+
+Below the console header, a horizontally scrollable quick-tab strip selects
+another session by replacing the active `/session/:name` URL without adding a
+browser-history entry, so browser Back still returns to the filtered dashboard.
+The URL includes one ordered `tab=` query parameter per open session; the active
+session remains in the path. Only the selected terminal is attached: inactive
+quick tabs are lightweight navigation records and cannot resize tmux or consume
+background PTY connections.
+
+`Recents` opens the route `/session/:name/recents`. The sheet separates open
+quick tabs, closed recently visited sessions, and other sessions currently on
+the tmux server. Closing an active tab selects its neighbor; closing the final
+tab returns to the dashboard. Browser Back closes a sheet opened from a live
+console, and selecting any row updates the canonical active-session URL.
+
+Open quick tabs and their order are URL-backed across console, dashboard, and
+Snippets routes. Reloading or sharing that URL restores the ordered tabs, while
+the closed-session visit trail remains page-local and clears on reload. Neither
+collection is written to the server or `localStorage`. Existing appearance,
+dashboard preference, staged-draft, title, star, ignored-session, memorandum,
+and snippet storage keep their documented behavior.
+
+`MUXDECK_TITLES_FILE` stores optional display aliases plus starred and ignored
+session names in the server-side `session-titles.json` file, keyed by the
+current native tmux name. The metadata is shared across browsers and reloaded
+when Muxdeck starts. A Muxdeck native rename moves the key to the new name.
+Entries for sessions that disappear outside Muxdeck remain dormant; a future
+tmux session that reuses such a name inherits its saved alias and organization
+status.
+
+The current metadata schema is version 3. Existing version 1 and 2 files load
+without migration work and initially have no ignored sessions; the next title,
+star, or ignored-status write atomically rewrites the file as version 3. Keep a
+pre-upgrade copy when rollback is possible. Older releases that only write
+version 1 or 2 ignore the version 3 ignored list and will discard it on their
+next title or star write.
 
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
 
-## History behavior
+## Scrollback behavior
 
-Opening History runs `tmux capture-pane` and stores the result in memory for ten
+Opening Scrollback runs `tmux capture-pane` and stores the result in memory for ten
 minutes. Older pages come from that immutable snapshot, so live output cannot
 cause duplicate or skipped lines while the user reads.
 
@@ -246,7 +326,7 @@ uses the alternate screen, where tmux often retains no previous rows. Muxdeck ca
 show Claude's current screen but cannot reconstruct alternate-screen content that
 tmux never saved.
 
-History follows the pane selected when the web client attaches. If you switch to
+Scrollback follows the pane selected when the web client attaches. If you switch to
 another tmux pane or window from inside the live terminal, return to the session
 list and reopen it before capturing that pane's history.
 
@@ -259,7 +339,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
-| `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent optional titles and starred session names |
+| `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles plus starred and ignored session names |
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session memorandum queues |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
 | `LOG_LEVEL` | `INFO` | Python log level |

@@ -87,6 +87,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
 
     useEffect(() => {
       if (!hostRef.current) return;
+      setAwayFromLive(false);
       let cancelled = false;
       let ended = false;
       let reconnectTimer: number | undefined;
@@ -172,14 +173,19 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         socket.binaryType = "arraybuffer";
         socketRef.current = socket;
 
-        socket.addEventListener("open", () => sendResize());
+        socket.addEventListener("open", () => {
+          if (!cancelled) sendResize();
+        });
         socket.addEventListener("message", (event) => {
+          if (cancelled) return;
           if (event.data instanceof ArrayBuffer) {
             terminal.write(new Uint8Array(event.data));
             return;
           }
           if (event.data instanceof Blob) {
-            void event.data.arrayBuffer().then((data) => terminal.write(new Uint8Array(data)));
+            void event.data.arrayBuffer().then((data) => {
+              if (!cancelled) terminal.write(new Uint8Array(data));
+            });
             return;
           }
           try {
@@ -268,7 +274,12 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     }, [theme]);
 
     return (
-      <div className="terminal-stage">
+      <div
+        id="muxdeck-active-console"
+        className="terminal-stage"
+        role="tabpanel"
+        aria-label={`${session} live terminal`}
+      >
         <div
           ref={hostRef}
           className="terminal-host"

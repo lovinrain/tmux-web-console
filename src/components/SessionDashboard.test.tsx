@@ -1,6 +1,14 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getSnippetTree, listQueuedMessages, listSessions, subscribeToSessions, updateSessionStar, updateSessionTitle } from "../api";
+import {
+  getSnippetTree,
+  listQueuedMessages,
+  listSessions,
+  subscribeToSessions,
+  updateSessionIgnored,
+  updateSessionStar,
+  updateSessionTitle,
+} from "../api";
 import { renderWithTheme } from "../test-utils";
 import type { Pane, Session } from "../types";
 import { activePane, classifyPane, SessionDashboard } from "./SessionDashboard";
@@ -14,6 +22,7 @@ vi.mock("../api", () => ({
   deleteQueuedMessage: vi.fn(),
   getSnippetTree: vi.fn(),
   subscribeToSessions: vi.fn(),
+  updateSessionIgnored: vi.fn(),
   updateSessionStar: vi.fn(),
   updateSessionTitle: vi.fn(),
 }));
@@ -54,6 +63,7 @@ function session(overrides: Partial<Session> = {}): Session {
     agentStateChangedAt: 1,
     customTitle: null,
     starred: false,
+    ignored: false,
     panes: [pane()],
     ...overrides,
     queuedMessageCount: overrides.queuedMessageCount ?? 0,
@@ -63,6 +73,16 @@ function session(overrides: Partial<Session> = {}): Session {
 function openOrder(): string[] {
   return screen.getAllByRole("button", { name: /^Open / })
     .map((button) => button.getAttribute("aria-label") || "");
+}
+
+function deferredAttentionUpdate() {
+  let resolve!: (value: Pick<Session, "starred" | "ignored">) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<Pick<Session, "starred" | "ignored">>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, reject, resolve };
 }
 
 beforeEach(() => {
@@ -93,6 +113,54 @@ describe("session classification", () => {
       panes: [pane(), pane({ id: "%2", command: "codex" })],
     });
     expect(activePane(item)?.id).toBe("%2");
+  });
+
+  it("offers same-page and new-window session creation actions", () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const onNewSession = vi.fn();
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        onNewSession={onNewSession}
+        newSessionWindowHref="/mux/sessions/new?q=deploy"
+      />,
+    );
+
+    const primary = screen.getByRole("button", { name: "New session" });
+    expect(primary.closest(".dashboard-intro")).not.toBeNull();
+    fireEvent.click(primary);
+    expect(onNewSession).toHaveBeenCalledOnce();
+
+    const newWindow = screen.getByRole("link", {
+      name: "Open new session in new window",
+    });
+    expect(newWindow).toHaveAttribute("href", "/mux/sessions/new?q=deploy");
+    expect(newWindow).toHaveAttribute("target", "_blank");
+    expect(newWindow).toHaveAttribute("rel", "noopener noreferrer");
+    expect(newWindow).toHaveTextContent("New window");
+  });
+
+  it("uses the base-path new-session route for the default window link", () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    expect(screen.getByRole("link", {
+      name: "Open new session in new window",
+    })).toHaveAttribute("href", "/mux/sessions/new");
+  });
+
+  it("keeps current dashboard filters but isolates quick tabs in the default new-window link", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/mux/?kind=shells&tab=alpha&view=list&tab=beta",
+    );
+    vi.mocked(listSessions).mockResolvedValue([]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    expect(screen.getByRole("link", {
+      name: "Open new session in new window",
+    })).toHaveAttribute("href", "/mux/sessions/new?kind=shells&view=list");
   });
 
   it("manages memoranda from both card and list views without opening the session", async () => {
@@ -186,11 +254,11 @@ describe("session classification", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("offers a query-preserving new-window link without changing default navigation", async () => {
+  it("isolates new-window quick tabs while preserving the dashboard query", async () => {
     window.history.replaceState(
       {},
       "",
-      "/mux/?q=work&kind=shells&sort=title,tmux-name",
+      "/mux/?q=work&tab=alpha&kind=shells&tab=beta&sort=title,tmux-name",
     );
     vi.mocked(listSessions).mockResolvedValue([
       session({ name: "work/name #1", customTitle: "Deploy API" }),
@@ -200,11 +268,16 @@ describe("session classification", () => {
 
     const link = await screen.findByRole("link", {
       name: "Open Deploy API in new window",
-    });
+    }) as HTMLAnchorElement;
     expect(link).toHaveAttribute(
       "href",
-      "/mux/session/work%2Fname%20%231?q=work&kind=shells&sort=title,tmux-name",
+      "/mux/session/work%2Fname%20%231?q=work&kind=shells&sort=title,tmux-name&tab=work%2Fname%20%231",
     );
+    expect(new URL(link.href).searchParams.getAll("tab")).toEqual(["work/name #1"]);
+    expect(new URL(window.location.href).searchParams.getAll("tab")).toEqual([
+      "alpha",
+      "beta",
+    ]);
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(link).toHaveTextContent("New window");
@@ -218,8 +291,29 @@ describe("session classification", () => {
     expect(rowLink.closest(".session-row")).not.toBeNull();
     expect(rowLink).toHaveAttribute(
       "href",
-      "/mux/session/work%2Fname%20%231?q=work&kind=shells&view=list&sort=title,tmux-name",
+      "/mux/session/work%2Fname%20%231?q=work&kind=shells&view=list&sort=title,tmux-name&tab=work%2Fname%20%231",
     );
+  });
+
+  it("keeps ordered workspace tabs canonical when dashboard controls update the URL", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/mux/?tab=space%20name&tab=plus%2Bname",
+    );
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open test" });
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+
+    expect(window.location.search).toBe(
+      "?view=list&tab=space%20name&tab=plus%2Bname",
+    );
+    expect(new URLSearchParams(window.location.search).getAll("tab")).toEqual([
+      "space name",
+      "plus+name",
+    ]);
   });
 
   it("shows human titles and filters agent attention states", async () => {
@@ -571,11 +665,212 @@ describe("session classification", () => {
     unmount();
   });
 
+  it("keeps starred and ignored sessions outside filters while reporting active counts", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/mux/?q=deploy&kind=codex&state=waiting_human",
+    );
+    vi.mocked(listSessions).mockResolvedValue([
+      session({
+        name: "deploy",
+        id: "$deploy",
+        customTitle: "Deploy target",
+        agentState: "waiting_human",
+        panes: [pane({ command: "codex" })],
+      }),
+      session({
+        name: "worker",
+        id: "$worker",
+        agentState: "unknown",
+        panes: [pane({ command: "claude" })],
+      }),
+      session({
+        name: "pinned",
+        id: "$pinned",
+        customTitle: "Pinned control",
+        starred: true,
+      }),
+      session({
+        name: "ignored-session",
+        id: "$observe",
+        customTitle: "Observe demo",
+        ignored: true,
+        agentState: "working",
+      }),
+    ]);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "Open Deploy target" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open Pinned control" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open worker" })).not.toBeInTheDocument();
+    expect(screen.getByText(
+      "1 starred / 1 filtered / 1 ignored",
+      { selector: ".results-summary" },
+    )).toBeVisible();
+    expect(screen.getByRole("button", { name: /Needs input 1/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /Working 0/ })).toBeVisible();
+
+    const ignored = container.querySelector<HTMLDetailsElement>("details.ignored-section");
+    expect(ignored).not.toBeNull();
+    expect(ignored).not.toHaveAttribute("open");
+    expect(within(ignored!).getByText("1", { selector: ".ignored-section-count" })).toBeVisible();
+    const ignoredCard = within(ignored!).getByRole("button", {
+      name: "Open Observe demo",
+      hidden: true,
+    });
+    expect(ignoredCard).not.toBeVisible();
+
+    fireEvent.click(ignored!.querySelector("summary")!);
+    expect(ignored).toHaveAttribute("open");
+    expect(ignoredCard).toBeVisible();
+    expect(within(ignored!).getByRole("button", {
+      name: "Remove Observe demo from ignored",
+    })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("always shows the collapsed ignored section when its count is zero", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open test" });
+    const ignored = container.querySelector<HTMLDetailsElement>("details.ignored-section");
+    expect(ignored).not.toBeNull();
+    expect(ignored).not.toHaveAttribute("open");
+    expect(within(ignored!).getByText("Ignored", {
+      selector: ".ignored-section-title",
+    })).toBeVisible();
+    expect(within(ignored!).getByText("0", {
+      selector: ".ignored-section-count",
+    })).toBeVisible();
+    expect(within(ignored!).queryByRole("button", {
+      name: /^Open /,
+      hidden: true,
+    })).not.toBeInTheDocument();
+  });
+
+  it("restores an ignored session to the filtered section", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ customTitle: "Observe demo", ignored: true }),
+    ]);
+    vi.mocked(updateSessionIgnored).mockResolvedValue({ starred: false, ignored: false });
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByText("Ignored", { selector: ".ignored-section-title" });
+    const ignored = container.querySelector<HTMLDetailsElement>("details.ignored-section")!;
+    fireEvent.click(ignored.querySelector("summary")!);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Remove Observe demo from ignored",
+    }));
+
+    await waitFor(() => expect(updateSessionIgnored).toHaveBeenCalledWith("test", false));
+    expect(await screen.findByRole("button", { name: "Open Observe demo" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Ignore Observe demo" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    const emptyIgnored = container.querySelector<HTMLDetailsElement>("details.ignored-section");
+    expect(emptyIgnored).not.toBeNull();
+    expect(within(emptyIgnored!).getByText("0", {
+      selector: ".ignored-section-count",
+    })).toBeVisible();
+    expect(screen.getByText(
+      "0 starred / 1 filtered / 0 ignored",
+      { selector: ".results-summary" },
+    )).toBeVisible();
+  });
+
+  it("makes star and ignored mutually exclusive under one per-session busy lock", async () => {
+    const starRequest = deferredAttentionUpdate();
+    const ignoreRequest = deferredAttentionUpdate();
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ customTitle: "Background job", ignored: true }),
+    ]);
+    vi.mocked(updateSessionStar).mockReturnValue(starRequest.promise);
+    vi.mocked(updateSessionIgnored).mockReturnValue(ignoreRequest.promise);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByText("Ignored", { selector: ".ignored-section-title" });
+    fireEvent.click(container.querySelector(".ignored-section summary")!);
+    fireEvent.click(screen.getByRole("button", { name: "Add Background job to starred" }));
+
+    expect(updateSessionStar).toHaveBeenCalledWith("test", true);
+    const starredToggle = screen.getByRole("button", {
+      name: "Remove Background job from starred",
+    });
+    const ignoreToggle = screen.getByRole("button", { name: "Ignore Background job" });
+    expect(starredToggle).toHaveAttribute("aria-pressed", "true");
+    expect(ignoreToggle).toHaveAttribute("aria-pressed", "false");
+    expect(starredToggle).toBeDisabled();
+    expect(ignoreToggle).toBeDisabled();
+    expect(within(container.querySelector("details.ignored-section")!).getByText("0", {
+      selector: ".ignored-section-count",
+    })).toBeVisible();
+
+    await act(async () => {
+      starRequest.resolve({ starred: true, ignored: false });
+      await starRequest.promise;
+    });
+    await waitFor(() => expect(starredToggle).toBeEnabled());
+
+    fireEvent.click(ignoreToggle);
+    expect(updateSessionIgnored).toHaveBeenCalledWith("test", true);
+    expect(screen.queryByRole("heading", { name: "Starred" })).not.toBeInTheDocument();
+    const ignored = container.querySelector<HTMLDetailsElement>("details.ignored-section")!;
+    const hiddenIgnoreToggle = ignored.querySelector<HTMLButtonElement>(".session-ignore-toggle")!;
+    const hiddenStarToggle = ignored.querySelector<HTMLButtonElement>(".session-star-toggle")!;
+    expect(hiddenIgnoreToggle).toHaveAttribute("aria-label", "Remove Background job from ignored");
+    expect(hiddenIgnoreToggle).toHaveAttribute("aria-pressed", "true");
+    expect(hiddenStarToggle).toHaveAttribute("aria-pressed", "false");
+    expect(hiddenIgnoreToggle).toBeDisabled();
+    expect(hiddenStarToggle).toBeDisabled();
+
+    await act(async () => {
+      ignoreRequest.resolve({ starred: false, ignored: true });
+      await ignoreRequest.promise;
+    });
+    await waitFor(() => expect(hiddenIgnoreToggle).toBeEnabled());
+    expect(hiddenStarToggle).toBeEnabled();
+  });
+
+  it("rolls both attention flags back when ignoring a starred session fails", async () => {
+    const request = deferredAttentionUpdate();
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ customTitle: "Important job", starred: true }),
+    ]);
+    vi.mocked(updateSessionIgnored).mockReturnValue(request.promise);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ignore Important job" }));
+    expect(updateSessionIgnored).toHaveBeenCalledWith("test", true);
+    expect(screen.queryByRole("heading", { name: "Starred" })).not.toBeInTheDocument();
+    expect(container.querySelector("details.ignored-section")).toBeInTheDocument();
+
+    await act(async () => {
+      request.reject(new Error("metadata disk is unavailable"));
+      await request.promise.catch(() => undefined);
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("metadata disk is unavailable");
+    expect(screen.getByRole("heading", { name: "Starred" })).toBeVisible();
+    const emptyIgnored = container.querySelector<HTMLDetailsElement>("details.ignored-section");
+    expect(emptyIgnored).not.toBeNull();
+    expect(within(emptyIgnored!).getByText("0", {
+      selector: ".ignored-section-count",
+    })).toBeVisible();
+    expect(screen.getByRole("button", {
+      name: "Remove Important job from starred",
+    })).toHaveAttribute("aria-pressed", "true");
+    const restoredIgnore = screen.getByRole("button", { name: "Ignore Important job" });
+    expect(restoredIgnore).toHaveAttribute("aria-pressed", "false");
+    expect(restoredIgnore).toBeEnabled();
+  });
+
   it("adds and removes sessions from the pinned starred section", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionStar)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+      .mockResolvedValueOnce({ starred: true, ignored: false })
+      .mockResolvedValueOnce({ starred: false, ignored: false });
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Add test to starred" }));

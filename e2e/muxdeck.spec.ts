@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const sessionName = `muxdeck-browser-${process.pid}`;
+const alternateSessionName = `${sessionName}-alternate`;
 const socketName = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET || "muxdeck-playwright-test";
 const tmux = ["-L", socketName];
 const titlesFile = process.env.MUXDECK_PLAYWRIGHT_TITLES_FILE;
@@ -10,7 +11,25 @@ const messagesFile = process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE;
 const snippetsFile = process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE;
 const originalQueuedCommand = "printf 'MEMO_QUEUE_ORIGINAL\\n'";
 const editedQueuedCommand = "printf 'MEMO_QUEUE_EDITED\\n'";
+const CSS_PIXEL_TOLERANCE = 0.01;
 let paneId = "";
+
+async function expectRoute(
+  page: Page,
+  pathname: string,
+  tabs: string[],
+  query: Record<string, string> = {},
+): Promise<void> {
+  const queryKeys = Object.keys(query);
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return {
+      pathname: url.pathname,
+      tabs: url.searchParams.getAll("tab"),
+      query: Object.fromEntries(queryKeys.map((key) => [key, url.searchParams.get(key)])),
+    };
+  }).toEqual({ pathname, tabs, query });
+}
 
 if (!titlesFile || !messagesFile || !snippetsFile) {
   throw new Error("Playwright metadata paths were not configured");
@@ -47,7 +66,10 @@ test("desktop dashboard renders a three-column session grid", async ({ page }) =
   await expect(page.getByRole("heading", { name: "Muxdeck", exact: true })).toBeVisible();
   await expect(page.locator(".session-card").first()).toBeVisible();
   await expect(page.getByText(/1 sessions \/ live/i)).toBeVisible();
-  const columns = await page.locator(".session-grid").evaluate((element) => {
+  const activeSessionGrid = page.locator(
+    ".session-section:not(.ignored-section) .session-grid",
+  ).first();
+  const columns = await activeSessionGrid.evaluate((element) => {
     return getComputedStyle(element).gridTemplateColumns.split(" ").length;
   });
   expect(columns).toBe(3);
@@ -65,6 +87,22 @@ test("desktop dashboard renders a three-column session grid", async ({ page }) =
   );
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/dashboard-desktop-light.png" });
+
+  await page.setViewportSize({ width: 1100, height: 900 });
+  const mediumColumns = await activeSessionGrid.evaluate((element) => (
+    getComputedStyle(element).gridTemplateColumns.split(" ").length
+  ));
+  expect(mediumColumns).toBe(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
+
+  await page.setViewportSize({ width: 768, height: 900 });
+  const tabletColumns = await activeSessionGrid.evaluate((element) => (
+    getComputedStyle(element).gridTemplateColumns.split(" ").length
+  ));
+  expect(tabletColumns).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
 });
 
 test("light theme persists across dashboard, snippets, overlays, and console", async ({ page }) => {
@@ -108,9 +146,12 @@ test("light theme persists across dashboard, snippets, overlays, and console", a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/console-mobile-light.png" });
 
-  await page.getByRole("button", { name: "History" }).click();
+  await page.getByRole("button", { name: "Pane scrollback" }).click();
   await expect(page.getByRole("heading", { name: "Scrollback" })).toBeVisible();
   await expect(page.locator(".history-panel")).toHaveCSS("opacity", "1");
+  await expect(page.locator(".history-panel")).toHaveCSS("width", "390px");
+  await expect(page.locator(".history-resize-handle")).toBeHidden();
+  await expect(page.locator(".history-resize-handle")).toHaveAttribute("tabindex", "-1");
   await expect(page.locator(".history-backdrop")).toHaveCSS("opacity", "1");
   await expect(page.getByRole("button", { name: "Light theme" })).toHaveAttribute("aria-pressed", "true");
   await page.screenshot({ path: "artifacts/history-mobile-light.png" });
@@ -179,6 +220,14 @@ test("shareable dashboard URL restores ordered sorting and fits narrow screens",
 
 test("dashboard query survives new-window and same-window console navigation", async ({ page }) => {
   const dashboardUrl = `/mux/?q=${encodeURIComponent(sessionName)}&kind=shells&state=other&view=list&group=state&sort=state,tmux-name`;
+  const dashboardQuery = {
+    q: sessionName,
+    kind: "shells",
+    state: "other",
+    view: "list",
+    group: "state",
+    sort: "state,tmux-name",
+  };
   await page.goto(dashboardUrl);
   await expect(page.getByRole("button", { name: `Open ${sessionName}` })).toBeVisible();
   await expect(page.getByLabel("Find a session")).toHaveValue(sessionName);
@@ -193,25 +242,507 @@ test("dashboard query survives new-window and same-window console navigation", a
     page.waitForEvent("popup"),
     newWindowLink.click(),
   ]);
-  await expect(newWindow).toHaveURL(`/mux/session/${sessionName}${dashboardUrl.slice(5)}`);
+  await expectRoute(
+    newWindow,
+    `/mux/session/${sessionName}`,
+    [sessionName],
+    dashboardQuery,
+  );
   await expect(newWindow.getByRole("button", { name: "Back to sessions" })).toBeVisible();
   await expect(page).toHaveURL(dashboardUrl);
   await newWindow.close();
 
   await page.getByRole("button", { name: `Open ${sessionName}` }).click();
-  await expect(page).toHaveURL(new RegExp(`/mux/session/${sessionName}\\?`));
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], dashboardQuery);
   await page.goBack();
-  await expect(page).toHaveURL(dashboardUrl);
+  await expectRoute(page, "/mux/", [sessionName], dashboardQuery);
   await expect(page.getByLabel("Find a session")).toHaveValue(sessionName);
   await page.goForward();
   await expect(page.getByRole("button", { name: "Back to sessions" })).toBeVisible();
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], dashboardQuery);
   await page.getByRole("button", { name: "Back to sessions" }).click();
-  await expect(page).toHaveURL(dashboardUrl);
+  await expectRoute(page, "/mux/", [sessionName], dashboardQuery);
 
   await page.goto(`/mux/session/${sessionName}?kind=shells&view=list&sort=title,tmux-name`);
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], {
+    kind: "shells",
+    view: "list",
+    sort: "title,tmux-name",
+  });
   await page.getByRole("button", { name: "Back to sessions" }).click();
-  await expect(page).toHaveURL("/mux/?kind=shells&view=list&sort=title,tmux-name");
+  await expectRoute(page, "/mux/", [sessionName], {
+    kind: "shells",
+    view: "list",
+    sort: "title,tmux-name",
+  });
   await expect(page.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("new session creation preserves SPA tabs and isolates a new browser window", async ({ page }) => {
+  test.setTimeout(60_000);
+  const createdSessions: string[] = [];
+  let popup: Page | null = null;
+  const dashboardQuery = { kind: "shells", view: "list" };
+
+  const createdSessionName = async (target: Page): Promise<string> => {
+    await expect.poll(() => new URL(target.url()).pathname).toMatch(/^\/mux\/session\/[^/]+$/);
+    return decodeURIComponent(new URL(target.url()).pathname.replace("/mux/session/", ""));
+  };
+
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/mux/?kind=shells&view=list");
+    await expect(page.getByRole("button", { name: `Open ${sessionName}`, exact: true })).toBeVisible();
+
+    const primaryAction = page.getByRole("button", { name: "New session", exact: true });
+    const windowAction = page.getByRole("link", { name: "Open new session in new window" });
+    for (const action of [primaryAction, windowAction]) {
+      const box = await action.boundingBox();
+      expect(box?.height).toBeGreaterThanOrEqual(48);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    // Seed this browser page with one real quick tab before opening the synthetic creation tab.
+    await page.getByRole("button", { name: `Open ${sessionName}`, exact: true }).click();
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await page.getByRole("button", { name: "Back to sessions" }).click();
+    await expectRoute(page, "/mux/", [sessionName], dashboardQuery);
+
+    const isolatedHref = new URL(
+      await page.getByRole("link", { name: "Open new session in new window" }).getAttribute("href")
+        || "",
+      page.url(),
+    );
+    expect(isolatedHref.pathname).toBe("/mux/sessions/new");
+    expect(isolatedHref.searchParams.getAll("tab")).toEqual([]);
+
+    await page.getByRole("button", { name: "New session", exact: true }).click();
+    await expectRoute(page, "/mux/sessions/new", [sessionName], dashboardQuery);
+    const creationTab = page.getByRole("tab", { name: "New session, not created yet" });
+    await expect(creationTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("heading", { name: "Start a new session." })).toBeFocused();
+    await expect(page.locator(".new-session-card")).toHaveCSS("opacity", "1");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await page.screenshot({ path: "artifacts/new-session-mobile.png", fullPage: true });
+    await page.setViewportSize({ width: 320, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    for (const action of ["Create session", "Cancel"]) {
+      const box = await page.getByRole("button", { name: action }).boundingBox();
+      expect(box?.height).toBeGreaterThanOrEqual(48);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    await page.getByRole("button", { name: "Create session" }).click();
+    const createdInSpa = await createdSessionName(page);
+    createdSessions.push(createdInSpa);
+    await expectRoute(
+      page,
+      `/mux/session/${encodeURIComponent(createdInSpa)}`,
+      [sessionName, createdInSpa],
+      dashboardQuery,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+
+    await page.getByRole("button", { name: "Back to sessions" }).click();
+    await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
+
+    const [openedPopup] = await Promise.all([
+      page.waitForEvent("popup"),
+      page.getByRole("link", { name: "Open new session in new window" }).click(),
+    ]);
+    popup = openedPopup;
+    await expectRoute(openedPopup, "/mux/sessions/new", [], dashboardQuery);
+    await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
+
+    await openedPopup.getByRole("button", { name: "Create session" }).click();
+    const createdInWindow = await createdSessionName(openedPopup);
+    createdSessions.push(createdInWindow);
+    await expectRoute(
+      openedPopup,
+      `/mux/session/${encodeURIComponent(createdInWindow)}`,
+      [createdInWindow],
+      dashboardQuery,
+    );
+    await expect(openedPopup.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
+  } finally {
+    if (popup && !popup.isClosed()) await popup.close();
+    for (const createdSession of createdSessions) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${createdSession}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to sessions created on this test's disposable socket.
+      }
+    }
+  }
+});
+
+test("desktop scrollback width is adjustable for the current browser tab", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}`);
+  await expect(page.getByRole("button", { name: "Pane scrollback" })).toBeEnabled();
+  await page.getByRole("button", { name: "Pane scrollback" }).click();
+
+  const panel = page.locator(".history-panel");
+  const resizeHandle = page.getByRole("separator", {
+    name: "Resize scrollback panel",
+  });
+  await expect(panel).toHaveCSS("width", "680px");
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "680");
+
+  const handleBox = await resizeHandle.boundingBox();
+  if (!handleBox) throw new Error("Scrollback resize handle has no bounding box");
+  expect(handleBox.width).toBeGreaterThanOrEqual(44);
+  const startX = handleBox.x + handleBox.width / 2;
+  const startY = handleBox.y + handleBox.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX - 140, startY, { steps: 4 });
+  await page.mouse.up();
+  await expect(panel).toHaveCSS("width", "820px");
+  await expect(resizeHandle).toHaveAttribute("aria-valuenow", "820");
+
+  await resizeHandle.press("Shift+ArrowRight");
+  await expect(panel).toHaveCSS("width", "756px");
+  await page.screenshot({ path: "artifacts/history-desktop-resized.png" });
+  await page.getByRole("button", { name: "Close history" }).click();
+  await page.getByRole("button", { name: "Pane scrollback" }).click();
+  await expect(panel).toHaveCSS("width", "756px");
+
+  await page.getByRole("button", { name: "Close history" }).click();
+  await page.getByRole("button", { name: "Back to sessions" }).click();
+  await page.getByRole("button", { name: `Open ${sessionName}`, exact: true }).click();
+  await page.getByRole("button", { name: "Pane scrollback" }).click();
+  await expect(panel).toHaveCSS("width", "756px");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await page.getByRole("button", { name: "Close history" }).click();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("button", { name: "Pane scrollback" })).toBeEnabled();
+  await page.getByRole("button", { name: "Pane scrollback" }).click();
+  await expect(panel).toHaveCSS("width", "680px");
+});
+
+test("mobile workspace quick-switches one live terminal and keeps a page-local visit trail", async ({ page }) => {
+  test.setTimeout(60_000);
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    alternateSessionName,
+    "bash",
+    "--noprofile",
+    "--norc",
+  ]);
+
+  const primaryTabName = new RegExp(`^${sessionName},`);
+  const alternateTabName = new RegExp(`^${alternateSessionName},`);
+
+  try {
+    await page.addInitScript(() => {
+      const sockets: WebSocket[] = [];
+      Object.defineProperty(window, "__muxdeckTestSockets", {
+        value: sockets,
+        configurable: true,
+      });
+      window.WebSocket = new Proxy(window.WebSocket, {
+        construct(target, args) {
+          const socket = Reflect.construct(target, args) as WebSocket;
+          sockets.push(socket);
+          return socket;
+        },
+      });
+    });
+    const activeTerminalSockets = () => page.evaluate(() => {
+      const sockets = (window as Window & { __muxdeckTestSockets: WebSocket[] })
+        .__muxdeckTestSockets;
+      return sockets
+        .filter((socket) => socket.url.includes("/ws/terminal") && socket.readyState === WebSocket.OPEN)
+        .map((socket) => socket.url);
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const dashboardUrl = "/mux/?kind=shells&view=list";
+    const dashboardQuery = { kind: "shells", view: "list" };
+    await page.goto(dashboardUrl);
+    await expect(page.getByRole("button", { name: `Open ${sessionName}`, exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Open ${alternateSessionName}`, exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: `Open ${sessionName}`, exact: true }).click();
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect(page.getByRole("tab", { name: primaryTabName })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}`,
+      [sessionName],
+      dashboardQuery,
+    );
+
+    const consoleBars = page.getByRole("group", { name: "Console bars" });
+    const sessionTabsToggle = consoleBars.getByRole("button", {
+      name: "Session tabs",
+      exact: true,
+    });
+    const stagedInputToggle = consoleBars.getByRole("button", {
+      name: "Staged input",
+      exact: true,
+    });
+    const terminalShortcutsToggle = consoleBars.getByRole("button", {
+      name: "Terminal shortcut buttons",
+      exact: true,
+    });
+    const sessionTabs = page.locator("#muxdeck-session-tabs");
+    const stagedInputRegion = page.locator("#muxdeck-staged-input");
+    const terminalShortcuts = page.locator("#muxdeck-terminal-shortcuts");
+
+    await expect(consoleBars).toBeVisible();
+    for (const [toggle, targetId] of [
+      [sessionTabsToggle, "muxdeck-session-tabs"],
+      [stagedInputToggle, "muxdeck-staged-input"],
+      [terminalShortcutsToggle, "muxdeck-terminal-shortcuts"],
+    ] as const) {
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await expect(toggle).toHaveAttribute("aria-controls", targetId);
+      const box = await toggle.boundingBox();
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+    }
+    await expect(sessionTabs).toBeVisible();
+    await expect(stagedInputRegion).toBeVisible();
+    await expect(terminalShortcuts).toBeVisible();
+
+    const recentsButton = page.getByRole("button", { name: /Open session switcher/ });
+    const recentsBox = await recentsButton.boundingBox();
+    expect(recentsBox?.width).toBeGreaterThanOrEqual(44);
+    expect(recentsBox?.height).toBeGreaterThanOrEqual(44);
+    await recentsButton.click();
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}/recents`,
+      [sessionName],
+      dashboardQuery,
+    );
+    const switcher = page.getByRole("dialog", { name: "Switch sessions" });
+    await expect(switcher).toBeVisible();
+    const switcherBox = await switcher.boundingBox();
+    expect(switcherBox?.width).toBeLessThanOrEqual(390);
+    expect(switcherBox?.height).toBeLessThanOrEqual(844);
+
+    await switcher.getByRole("button", { name: new RegExp(alternateSessionName) }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${alternateSessionName}`,
+      [sessionName, alternateSessionName],
+      dashboardQuery,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await expect(page.getByRole("tab", { name: alternateTabName })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    const orderedTabSearch = `?kind=shells&view=list&tab=${encodeURIComponent(sessionName)}&tab=${encodeURIComponent(alternateSessionName)}`;
+    const alternateUrl = `/mux/session/${alternateSessionName}${orderedTabSearch}`;
+    const primaryUrl = `/mux/session/${sessionName}${orderedTabSearch}`;
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await expect(page.getByRole("tab").nth(0)).toHaveAccessibleName(primaryTabName);
+    await expect(page.getByRole("tab").nth(1)).toHaveAccessibleName(alternateTabName);
+    await expect(page.getByRole("tab", { name: alternateTabName })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expectRoute(
+      page,
+      `/mux/session/${alternateSessionName}`,
+      [sessionName, alternateSessionName],
+      dashboardQuery,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+
+    const visibilityDraft = "visibility controls keep this staged draft";
+    const alternateDraft = page.getByRole("textbox", { name: "Staged input" });
+    await alternateDraft.fill(visibilityDraft);
+    const terminalHeightWithAllBars = await page.locator(".terminal-stage").evaluate(
+      (element) => element.getBoundingClientRect().height,
+    );
+
+    await stagedInputToggle.click();
+    await expect(stagedInputToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(stagedInputRegion).toBeHidden();
+    await expect(sessionTabs).toBeVisible();
+    await expect(terminalShortcuts).toBeVisible();
+    await expect(page).toHaveURL(alternateUrl);
+    await expect(stagedInputToggle).toBeFocused();
+    await stagedInputToggle.click();
+    await expect(stagedInputRegion).toBeVisible();
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
+
+    await page.getByRole("button", { name: "Show other keys" }).click();
+    await expect(page.getByRole("group", { name: "Other keys" })).toBeVisible();
+    await terminalShortcutsToggle.click();
+    await expect(terminalShortcutsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(terminalShortcuts).toBeHidden();
+    await expect(page.getByRole("group", { name: "Other keys" })).toHaveCount(0);
+    await expect(sessionTabs).toBeVisible();
+    await expect(stagedInputRegion).toBeVisible();
+    await expect(page).toHaveURL(alternateUrl);
+    await terminalShortcutsToggle.click();
+    await expect(terminalShortcuts).toBeVisible();
+    await expect(page.getByRole("button", { name: "Show other keys" })).toBeVisible();
+
+    await sessionTabsToggle.click();
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(sessionTabs).toBeHidden();
+    await expect(stagedInputRegion).toBeVisible();
+    await expect(terminalShortcuts).toBeVisible();
+    await expect(consoleBars).toBeVisible();
+    await expect(page).toHaveURL(alternateUrl);
+    await sessionTabsToggle.click();
+    await expect(sessionTabs).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+
+    await sessionTabsToggle.click();
+    await stagedInputToggle.click();
+    await terminalShortcutsToggle.click();
+    await expect(sessionTabs).toBeHidden();
+    await expect(stagedInputRegion).toBeHidden();
+    await expect(terminalShortcuts).toBeHidden();
+    await expect(consoleBars).toBeVisible();
+    await expect(page).toHaveURL(alternateUrl);
+    await expect.poll(async () => {
+      const sockets = await activeTerminalSockets();
+      return sockets.length === 1 && sockets[0].includes(`session=${alternateSessionName}`);
+    }).toBe(true);
+    const terminalHeightWithBarsHidden = await page.locator(".terminal-stage").evaluate(
+      (element) => element.getBoundingClientRect().height,
+    );
+    expect(terminalHeightWithBarsHidden).toBeGreaterThan(terminalHeightWithAllBars);
+
+    await page.goBack();
+    await expectRoute(page, "/mux/", [sessionName, alternateSessionName], dashboardQuery);
+    await page.goForward();
+    await expect(page).toHaveURL(alternateUrl);
+    await expect(page.getByRole("dialog", { name: "Switch sessions" })).toBeHidden();
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(stagedInputToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(terminalShortcutsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(sessionTabs).toBeHidden();
+    await expect(stagedInputRegion).toBeHidden();
+    await expect(terminalShortcuts).toBeHidden();
+    await expect.poll(async () => {
+      const sockets = await activeTerminalSockets();
+      return sockets.length === 1 && sockets[0].includes(`session=${alternateSessionName}`);
+    }).toBe(true);
+
+    await sessionTabsToggle.click();
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(sessionTabs).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await expect(page).toHaveURL(alternateUrl);
+
+    const firstTab = page.getByRole("tab", { name: primaryTabName });
+    const firstTabBox = await firstTab.boundingBox();
+    expect(firstTabBox?.height).toBeGreaterThanOrEqual(44);
+    await firstTab.focus();
+    await firstTab.press("Enter");
+    await expect(page).toHaveURL(primaryUrl);
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}`,
+      [sessionName, alternateSessionName],
+      dashboardQuery,
+    );
+    await expect(firstTab).toBeFocused();
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect.poll(async () => {
+      const sockets = await activeTerminalSockets();
+      return sockets.length === 1 && sockets[0].includes(`session=${sessionName}&`);
+    }).toBe(true);
+    await expect(stagedInputToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(terminalShortcutsToggle).toHaveAttribute("aria-pressed", "false");
+    await stagedInputToggle.click();
+    await terminalShortcutsToggle.click();
+    await expect(stagedInputRegion).toBeVisible();
+    await expect(terminalShortcuts).toBeVisible();
+
+    await page.getByRole("button", { name: /Open session switcher/ }).click();
+    await page.getByRole("dialog", { name: "Switch sessions" })
+      .getByRole("button", { name: `Close ${sessionName} quick tab` })
+      .click();
+    const alternateOnlyUrl = `/mux/session/${alternateSessionName}?kind=shells&view=list&tab=${encodeURIComponent(alternateSessionName)}`;
+    await expect(page).toHaveURL(alternateOnlyUrl);
+    await expectRoute(
+      page,
+      `/mux/session/${alternateSessionName}`,
+      [alternateSessionName],
+      dashboardQuery,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue(visibilityDraft);
+
+    await page.getByRole("button", { name: /Open session switcher/ }).click();
+    await expect(page.getByRole("heading", { name: "Recently visited" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Switch sessions" }))
+      .toContainText(sessionName);
+    const workspaceSearch = switcher.getByRole("searchbox", { name: "Find a workspace session" });
+    await workspaceSearch.fill(sessionName);
+    const clearWorkspaceSearch = switcher.getByRole("button", { name: "Clear workspace search" });
+    await clearWorkspaceSearch.focus();
+    await clearWorkspaceSearch.press("Enter");
+    await page.keyboard.press("Tab");
+    expect(await switcher.evaluate((dialog) => dialog.contains(document.activeElement))).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: "artifacts/workspace-recents-mobile.png" });
+    await page.getByRole("button", { name: "Close session switcher" }).click();
+    await expect(page).toHaveURL(alternateOnlyUrl);
+
+    await page.getByRole("button", { name: /Open session switcher/ }).click();
+    await page.getByRole("button", { name: "Browse all" }).click();
+    await expectRoute(page, "/mux/", [alternateSessionName], dashboardQuery);
+    await page.goForward();
+    await expect(page).toHaveURL(alternateOnlyUrl);
+    await expect(page.getByRole("dialog", { name: "Switch sessions" })).toBeHidden();
+
+    await sessionTabsToggle.click();
+    await stagedInputToggle.click();
+    await terminalShortcutsToggle.click();
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(stagedInputToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(terminalShortcutsToggle).toHaveAttribute("aria-pressed", "false");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(consoleBars).toBeVisible();
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(stagedInputToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(terminalShortcutsToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(sessionTabs).toBeVisible();
+    await expect(stagedInputRegion).toBeVisible();
+    await expect(terminalShortcuts).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    await expect(page.getByRole("tab", { name: alternateTabName })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.goBack();
+    await expectRoute(page, "/mux/", [alternateSessionName], dashboardQuery);
+  } finally {
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${alternateSessionName}`]);
+    } catch {
+      // The isolated session may already have ended after a failed assertion.
+    }
+  }
 });
 
 test("snippet tree persists and stages exact input from cards and lists", async ({ page }) => {
@@ -249,7 +780,7 @@ test("snippet tree persists and stages exact input from cards and lists", async 
   await expect(page.getByRole("button", { name: "Insert", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Insert", exact: true }).click();
 
-  await expect(page).toHaveURL(`/mux/session/${sessionName}`);
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName]);
   let stagedInput = page.getByRole("textbox", { name: "Staged input" });
   await expect(stagedInput).toHaveValue(snippetCommand);
   expect(execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" }))
@@ -275,6 +806,81 @@ test("snippet tree persists and stages exact input from cards and lists", async 
   stagedInput = page.getByRole("textbox", { name: "Staged input" });
   await expect(stagedInput).toHaveValue(snippetCommand);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("mobile ignored sessions persist collapsed and remain recoverable", async ({ page, request }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  let restored = false;
+
+  try {
+    await page.goto("/mux/");
+    const ignoredSection = page.locator("details.ignored-section");
+    const ignoredSummary = ignoredSection.locator("summary");
+    await expect(ignoredSection).toBeVisible();
+    await expect(ignoredSection).not.toHaveAttribute("open", "");
+    await expect(ignoredSection.locator(".ignored-section-count")).toHaveText("0");
+
+    const ignoreButton = page.getByRole("button", { name: `Ignore ${sessionName}` });
+    await expect(ignoreButton).toBeVisible();
+    await expect(ignoreButton).toHaveAttribute("aria-pressed", "false");
+
+    const ignoreButtonBox = await ignoreButton.boundingBox();
+    expect(ignoreButtonBox?.width).toBeGreaterThanOrEqual(44 - CSS_PIXEL_TOLERANCE);
+    expect(ignoreButtonBox?.height).toBeGreaterThanOrEqual(44 - CSS_PIXEL_TOLERANCE);
+    await ignoreButton.click();
+
+    await expect(ignoredSection).toBeVisible();
+    await expect(ignoredSection).not.toHaveAttribute("open", "");
+    await expect(ignoredSummary).toContainText("Ignored");
+    await expect(ignoredSection.locator(".ignored-section-count")).toHaveText("1");
+    await expect(page.getByText("0 starred / 0 filtered / 1 ignored")).toBeVisible();
+    await expect(ignoredSection.getByRole("button", { name: `Open ${sessionName}` }))
+      .toBeHidden();
+    await expect(ignoredSection.locator(".session-ignore-toggle")).toBeEnabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(ignoredSection).toBeVisible();
+    await expect(ignoredSection).not.toHaveAttribute("open", "");
+    await expect(ignoredSection.locator(".ignored-section-count")).toHaveText("1");
+    await expect(page.getByText("0 starred / 0 filtered / 1 ignored")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    const summaryBox = await ignoredSummary.boundingBox();
+    expect(summaryBox?.height).toBeGreaterThanOrEqual(44);
+    await ignoredSummary.click();
+    await expect(ignoredSection).toHaveAttribute("open", "");
+    const ignoredSectionBox = await ignoredSection.boundingBox();
+    const ignoredGridBox = await ignoredSection.locator(".session-grid").boundingBox();
+    expect(ignoredSectionBox).not.toBeNull();
+    expect(ignoredGridBox).not.toBeNull();
+    expect(ignoredGridBox!.x).toBeGreaterThan(ignoredSectionBox!.x);
+    expect(ignoredGridBox!.x + ignoredGridBox!.width)
+      .toBeLessThanOrEqual(ignoredSectionBox!.x + ignoredSectionBox!.width);
+    const restoreButton = ignoredSection.getByRole("button", {
+      name: `Remove ${sessionName} from ignored`,
+    });
+    await expect(restoreButton).toBeVisible();
+    await restoreButton.click();
+
+    await expect(ignoredSection).toBeVisible();
+    await expect(ignoredSection.locator(".ignored-section-count")).toHaveText("0");
+    await expect(page.getByText("0 starred / 1 filtered / 0 ignored")).toBeVisible();
+    const restoredIgnoreButton = page.getByRole("button", { name: `Ignore ${sessionName}` });
+    await expect(restoredIgnoreButton).toBeEnabled();
+    await expect(restoredIgnoreButton).toHaveAttribute("aria-pressed", "false");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    restored = true;
+  } finally {
+    if (!restored) {
+      await request.put("/mux/api/session-ignored", {
+        data: { session: sessionName, ignored: false },
+      });
+    }
+  }
 });
 
 test("mobile dashboard manages memoranda and sends acknowledged staged input", async ({ page }) => {
@@ -349,7 +955,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(stagedInput).toBeVisible();
   await expect(stagedInput).toHaveCSS("font-size", "16px");
 
-  await page.getByRole("button", { name: "Update session name" }).click();
+  await page.getByRole("button", { name: "Edit display title" }).click();
   await page.getByRole("textbox", { name: "Human title" }).fill("Console E2E");
   await page.getByRole("button", { name: "Save title" }).click();
   await expect(page.getByRole("heading", { name: "Console E2E" })).toBeVisible();
@@ -485,7 +1091,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect.poll(() => paneFormat("#{pane_in_mode}")).toBe("0");
   await page.screenshot({ path: "artifacts/console-mobile.png" });
 
-  await page.getByRole("button", { name: "History" }).click();
+  await page.getByRole("button", { name: "Pane scrollback" }).click();
   await expect(page.getByRole("heading", { name: "Scrollback" })).toBeVisible();
   await expect(page.locator(".history-scroll pre")).toContainText("BROWSER_E2E_OK_100");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -496,4 +1102,210 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(emptyMemoButton).toBeVisible();
   await expect(emptyMemoButton.locator("span")).toHaveCount(0);
   expect(browserErrors).toEqual([]);
+});
+
+test("native tmux rename preserves alias, workspace order, draft, and metadata", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(60_000);
+  const helperSession = `${sessionName}-rename-helper`;
+  const renamedSession = `${sessionName}-renamed`;
+
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    helperSession,
+    "bash",
+    "--noprofile",
+    "--norc",
+  ]);
+
+  try {
+    await request.put("/mux/api/session-title", {
+      data: { session: sessionName, title: "Rename E2E" },
+    });
+    await request.put("/mux/api/session-star", {
+      data: { session: sessionName, starred: true },
+    });
+    const queued = await request.post(
+      `/mux/api/sessions/${encodeURIComponent(sessionName)}/messages`,
+      { data: { text: "Persist across native rename" } },
+    );
+    expect(queued.ok()).toBe(true);
+    const queuedMessage = (await queued.json()).message;
+
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto(
+      `/mux/?kind=shells&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
+    );
+    await page.getByRole("button", { name: "Open Rename E2E" }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}`,
+      [sessionName, helperSession],
+      { kind: "shells" },
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+
+    const stagedInput = page.getByRole("textbox", { name: "Staged input" });
+    await stagedInput.fill("keep this unsent draft");
+    await expect.poll(() => page.evaluate(
+      (key) => window.localStorage.getItem(key),
+      `muxdeck-terminal-draft:${sessionName}`,
+    )).toBe("keep this unsent draft");
+
+    const aliasButton = page.getByRole("button", { name: "Edit display title" });
+    const renameButton = page.getByRole("button", { name: "Rename tmux session" });
+    const primaryShortcuts = [
+      aliasButton,
+      renameButton,
+      page.getByRole("button", { name: "Open memoranda" }),
+      page.getByRole("button", { name: "Open snippets" }),
+    ];
+    const primaryShortcutBoxes = [];
+    for (const button of primaryShortcuts) {
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+      primaryShortcutBoxes.push(box!);
+    }
+    for (let index = 1; index < primaryShortcutBoxes.length; index += 1) {
+      const previous = primaryShortcutBoxes[index - 1];
+      const current = primaryShortcutBoxes[index];
+      expect(previous.x + previous.width).toBeLessThanOrEqual(current.x);
+    }
+    const lastShortcut = primaryShortcutBoxes.at(-1)!;
+    expect(lastShortcut.x + lastShortcut.width).toBeLessThanOrEqual(320);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    const historyLength = await page.evaluate(() => window.history.length);
+    await renameButton.click();
+    const renameDialog = page.getByRole("dialog", { name: "Rename tmux session" });
+    await expect(renameDialog).toContainText("separate Muxdeck display title is preserved");
+    await page.setViewportSize({ width: 320, height: 300 });
+    const compactDialogBox = await renameDialog.boundingBox();
+    expect(compactDialogBox).not.toBeNull();
+    expect(compactDialogBox!.y).toBeGreaterThanOrEqual(0);
+    expect(compactDialogBox!.y + compactDialogBox!.height).toBeLessThanOrEqual(300);
+    await expect(renameDialog.getByRole("button", { name: "Rename session" })).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 700 });
+    await renameDialog.getByRole("textbox", { name: "Native tmux name" })
+      .fill(renamedSession);
+    await renameDialog.getByRole("button", { name: "Rename session" }).click();
+
+    await expectRoute(
+      page,
+      `/mux/session/${renamedSession}`,
+      [renamedSession, helperSession],
+      { kind: "shells" },
+    );
+    expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+    await expect(page.getByRole("heading", { name: "Rename E2E" })).toBeVisible();
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await expect(page.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("keep this unsent draft");
+    expect(await page.evaluate(
+      (key) => window.localStorage.getItem(key),
+      `muxdeck-terminal-draft:${sessionName}`,
+    )).toBeNull();
+    expect(await page.evaluate(
+      (key) => window.localStorage.getItem(key),
+      `muxdeck-terminal-draft:${renamedSession}`,
+    )).toBe("keep this unsent draft");
+
+    const sessionsPayload = await (await request.get("/mux/api/sessions")).json();
+    const renamedRecord = sessionsPayload.sessions.find(
+      (session: { name: string }) => session.name === renamedSession,
+    );
+    expect(renamedRecord).toMatchObject({
+      customTitle: "Rename E2E",
+      starred: true,
+      ignored: false,
+    });
+    expect(sessionsPayload.sessions.some(
+      (session: { name: string }) => session.name === sessionName,
+    )).toBe(false);
+    const migratedQueue = await (
+      await request.get(
+        `/mux/api/sessions/${encodeURIComponent(renamedSession)}/messages`,
+      )
+    ).json();
+    expect(migratedQueue.messages).toEqual([queuedMessage]);
+
+    const nativeNames = execFileSync(
+      "tmux",
+      [...tmux, "list-sessions", "-F", "#{session_name}"],
+      { encoding: "utf8" },
+    ).trim().split("\n");
+    expect(nativeNames).toContain(renamedSession);
+    expect(nativeNames).not.toContain(sessionName);
+
+    await page.getByRole("button", { name: "Back to sessions" }).click();
+    await expectRoute(
+      page,
+      "/mux/",
+      [renamedSession, helperSession],
+      { kind: "shells" },
+    );
+    await page.goForward();
+    await expectRoute(
+      page,
+      `/mux/session/${renamedSession}`,
+      [renamedSession, helperSession],
+      { kind: "shells" },
+    );
+
+    // Reusing the released native name must not be swallowed by the old-name
+    // browser-history redirect, because it now belongs to a different tmux ID.
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      sessionName,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+    await page.getByRole("button", { name: "Back to sessions" }).click();
+    await expectRoute(
+      page,
+      "/mux/",
+      [renamedSession, helperSession],
+      { kind: "shells" },
+    );
+    const reusedSessionButton = page.getByRole("button", {
+      name: `Open ${sessionName}`,
+      exact: true,
+    });
+    await expect(reusedSessionButton).toBeVisible({ timeout: 10_000 });
+    await reusedSessionButton.click();
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}`,
+      [renamedSession, helperSession, sessionName],
+      { kind: "shells" },
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+  } finally {
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to this test's helper session on the disposable socket.
+    }
+  }
 });

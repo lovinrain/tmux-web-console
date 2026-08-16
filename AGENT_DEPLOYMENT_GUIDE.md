@@ -84,7 +84,8 @@ playwright-report/
 must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
-- titles/stars, memoranda, and the snippet library stored outside the source folder;
+- titles, starred/ignored session names, memoranda, and the snippet library
+  stored outside the source folder;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -247,7 +248,9 @@ caddy validate --config /etc/caddy/Caddyfile
 
 Back up the existing unit, the relevant Caddy configuration, all three state
 JSON files, and the old release path. Use timestamped copies; do not overwrite the
-only known-good copy.
+only known-good copy. In particular, retain the pre-upgrade
+`session-titles.json` through the rollback window because its schema may be
+upgraded by the new release.
 
 ## 5. Build a clean release
 
@@ -339,11 +342,19 @@ The default source paths are under the old service user's state directory:
 ~/.local/state/muxdeck/snippets.json
 ```
 
-The first file contains titles and starred session names. The second contains
-memoranda and may include sensitive commands or prose. The third contains the
-global folder/snippet tree and may also contain sensitive commands or prose. An
-existing unit may override any path; inspect its environment rather than
-assuming defaults.
+The first file contains titles plus starred and ignored session names. The
+second contains memoranda and may include sensitive commands or prose. The third
+contains the global folder/snippet tree and may also contain sensitive commands
+or prose. An existing unit may override any path; inspect its environment rather
+than assuming defaults.
+
+Muxdeck accepts version 1 and 2 title files and treats their missing ignored list
+as empty. The first title, star, or ignored-status mutation under this release
+atomically rewrites that file as version 3. This upgrade needs no separate
+migration command, but it creates a rollback boundary: a prior release that only
+writes version 1 or 2 will ignore the version 3 ignored list and discard it on
+its next title or star write. Keep the timestamped pre-upgrade file until the new
+release is accepted.
 
 Migration procedure:
 
@@ -356,11 +367,19 @@ Migration procedure:
 5. Point the rendered unit at their absolute target paths.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
-Title and memorandum entries are keyed by tmux session name, so old entries may
-remain dormant until a session with the same name exists. The snippet tree is
-global and is not keyed by session. Do not run two Muxdeck processes against
-the same state files; persistence is atomic within one process, not coordinated
+Title, star, ignored, and memorandum entries are keyed by tmux session name, so
+old entries may remain dormant until a session with the same name exists. A new
+session that reuses that name inherits the stored metadata. The snippet tree is
+global and is not keyed by session. Do not run two Muxdeck processes against the
+same state files; persistence is atomic within one process, not coordinated
 between processes.
+
+Renaming a native session through Muxdeck moves its title/star/ignored metadata
+and memorandum queue to the new name. Renaming directly in another tmux client
+does not notify Muxdeck to migrate those name-keyed files. If Muxdeck reports a
+post-rename storage warning, the tmux rename itself has already succeeded; keep
+both state files and resolve the warned migration before deleting old-name
+records.
 
 Not migrated: tmux sessions, browser local storage, history snapshots, and
 state-change observation times.
@@ -519,7 +538,9 @@ From a client allowed by the chosen access controls, verify:
 4. A dashboard URL with filters/view/group/sort reloads identically.
 5. A session deep link returns the SPA.
 6. Card and list layouts have no horizontal overflow at phone width.
-7. Titles/stars, memoranda, and the snippet library appear if state was migrated.
+7. Titles, starred/ignored organization, memoranda, and the snippet library
+   appear if state was migrated. Ignored sessions should be in the collapsed
+   background section and absent from regular state counts.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux
@@ -535,7 +556,7 @@ The deployment agent should report:
 - Python, Node, npm, and tmux versions;
 - base path, port, and proxy/access-control choice;
 - whether state was migrated and its target directory (not memorandum or snippet content);
-- source/unit/Caddy backups retained for rollback;
+- source/unit/Caddy and state-file backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
 - pre/post tmux identity comparison;
@@ -554,10 +575,15 @@ For a failed replacement:
 
 1. Remove or restore the new Caddy route first if external traffic is affected.
 2. Validate the restored Caddy configuration, then reload Caddy.
-3. Restore the prior systemd unit or point it back to the prior release.
-4. Run `systemctl daemon-reload` and restart only `muxdeck.service`.
-5. Restore state JSON only while Muxdeck is stopped; preserve owner and modes.
-6. Recheck local health, external routing, and the recorded tmux identities.
+3. Stop only `muxdeck.service`, then restore the prior systemd unit or point it
+   back to the prior release.
+4. Restore state JSON only while Muxdeck is stopped; preserve owner and modes.
+   When rolling back to a release that only writes title-file version 1 or 2,
+   restore the pre-upgrade `session-titles.json` or explicitly accept that its
+   ignored statuses will be lost on the next title/star write.
+5. Run `systemctl daemon-reload` and start only `muxdeck.service`.
+6. Recheck local health, external routing, persistent session organization, and
+   the recorded tmux identities.
 
 Never use `tmux kill-server` as deployment cleanup or rollback.
 
@@ -569,7 +595,8 @@ tree:
 1. stage the new archive in a new exact directory;
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
-4. retain the external state directory unchanged;
+4. retain the external state directory unchanged and keep a timestamped
+   pre-upgrade copy of `session-titles.json`;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;
@@ -590,7 +617,7 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | HTML loads but assets/API/WebSocket fail | Build/runtime/proxy base paths differ | Rebuild with `/prefix/`; use runtime `/prefix`; preserve prefix in Caddy. |
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
 | Console WebSocket fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
-| Titles/stars/memoranda/snippets do not persist | State path or ownership/mode is wrong | Inspect unit environment, directory ownership, mode `0700`, files mode `0600`, and journal. |
+| Titles/starred/ignored organization, memoranda, or snippets do not persist | State path or ownership/mode is wrong | Inspect unit environment, directory ownership, mode `0700`, files mode `0600`, and journal. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Another terminal layout changes | Browser opened in `Fit active` | This is tmux shared-size behavior; use `Size protected` for observation. |
 | Playwright cannot find a browser | No Playwright Chromium and no configured system browser | Run `npx playwright install chromium` or set `MUXDECK_PLAYWRIGHT_BROWSER`. |

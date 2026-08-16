@@ -7,18 +7,23 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { EditIcon, KeyboardIcon, MemoIcon, SnippetIcon } from "../icons";
+import { EditIcon, KeyboardIcon, MemoIcon, SnippetIcon, TerminalIcon } from "../icons";
 
 export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
 
 interface InputBarProps {
   sessionName: string;
+  sessionId?: string;
   enabled: boolean;
+  composerVisible?: boolean;
+  shortcutsVisible?: boolean;
   onSend: (data: string) => boolean;
   onSubmit: (data: string, withEnter: boolean) => Promise<boolean>;
   onFocus: () => void;
+  onRevealComposer?: () => void;
   onEditSessionTitle?: () => void;
+  onRenameSession?: () => void;
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
   messageCount?: number;
@@ -27,6 +32,7 @@ interface InputBarProps {
 export interface InputBarHandle {
   loadDraft: (text: string) => boolean;
   insertText: (text: string) => boolean;
+  getDraft: () => string;
   focus: () => void;
 }
 
@@ -122,6 +128,15 @@ function TerminalKeyButton({ terminalKey, enabled, onSend }: TerminalKeyButtonPr
 type DraftStatus = "idle" | "saved" | "loaded" | "sending" | "sent" | "unconfirmed" | "clipboard-error" | "storage-error";
 
 export type StageSessionDraftResult = "staged" | "cancelled" | "storage-error" | "invalid";
+export type RenameSessionDraftResult = "migrated" | "swapped" | "unchanged" | "storage-error";
+
+interface RenamedSessionDraftHandoff {
+  sessionId: string;
+  draft: string;
+  storageError: boolean;
+}
+
+const renamedSessionDraftHandoffs = new Map<string, RenamedSessionDraftHandoff>();
 
 function draftKey(sessionName: string): string {
   return `${DRAFT_KEY_PREFIX}${sessionName}`;
@@ -154,7 +169,69 @@ export function stageSessionDraft(sessionName: string, text: string): StageSessi
     && current !== text
     && !window.confirm(`Replace the staged input already saved for ${sessionName}?`)
   ) return "cancelled";
-  return writeDraft(sessionName, text) ? "staged" : "storage-error";
+  if (!writeDraft(sessionName, text)) return "storage-error";
+  renamedSessionDraftHandoffs.delete(sessionName);
+  return "staged";
+}
+
+export function renameSessionDraft(
+  previousName: string,
+  nextName: string,
+  visibleDraft?: string,
+): RenameSessionDraftResult {
+  if (!previousName || !nextName || previousName === nextName) return "unchanged";
+  try {
+    const previousKey = draftKey(previousName);
+    const nextKey = draftKey(nextName);
+    const storedPreviousDraft = window.localStorage.getItem(previousKey);
+    const previousDraft = visibleDraft ?? storedPreviousDraft;
+    if (previousDraft === null) return "unchanged";
+    const nextDraft = window.localStorage.getItem(nextKey);
+
+    if (nextDraft && nextDraft !== previousDraft) {
+      // The destination can have a stale draft even though tmux rejects live name collisions.
+      window.localStorage.setItem(previousKey, nextDraft);
+      try {
+        if (previousDraft) window.localStorage.setItem(nextKey, previousDraft);
+        else window.localStorage.removeItem(nextKey);
+      } catch {
+        try {
+          if (storedPreviousDraft) {
+            window.localStorage.setItem(previousKey, storedPreviousDraft);
+          } else {
+            window.localStorage.removeItem(previousKey);
+          }
+        } catch {
+          // The in-memory handoff remains authoritative when rollback also fails.
+        }
+        return "storage-error";
+      }
+      return "swapped";
+    }
+
+    if (previousDraft) window.localStorage.setItem(nextKey, previousDraft);
+    else window.localStorage.removeItem(nextKey);
+    window.localStorage.removeItem(previousKey);
+    return "migrated";
+  } catch {
+    return "storage-error";
+  }
+}
+
+export function handoffRenamedSessionDraft(
+  previousName: string,
+  nextName: string,
+  sessionId: string,
+  visibleDraft: string,
+): RenameSessionDraftResult {
+  if (!previousName || !nextName || !sessionId || previousName === nextName) {
+    return "unchanged";
+  }
+  const handoff = { sessionId, draft: visibleDraft, storageError: false };
+  renamedSessionDraftHandoffs.set(nextName, handoff);
+  const result = renameSessionDraft(previousName, nextName, visibleDraft);
+  handoff.storageError = result === "storage-error";
+  return result;
 }
 
 function resizeTextarea(textarea: HTMLTextAreaElement): void {
@@ -164,24 +241,40 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
 
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({
   sessionName,
+  sessionId,
   enabled,
+  composerVisible = true,
+  shortcutsVisible = true,
   onSend,
   onSubmit,
   onFocus,
+  onRevealComposer,
   onEditSessionTitle,
+  onRenameSession,
   onOpenMessages,
   onOpenSnippets,
   messageCount = 0,
 }, ref) {
-  const initialDraftRef = useRef<string | null>(null);
-  if (initialDraftRef.current === null) initialDraftRef.current = readDraft(sessionName);
+  const [initialDraftState] = useState(() => {
+    const pendingHandoff = renamedSessionDraftHandoffs.get(sessionName);
+    const handoff = pendingHandoff?.sessionId === sessionId ? pendingHandoff : undefined;
+    return {
+      draft: handoff?.draft ?? readDraft(sessionName),
+      handoff,
+    };
+  });
+  const initialDraft = initialDraftState.draft;
   const otherKeyPanelId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const sendingRef = useRef(false);
-  const [draftLength, setDraftLength] = useState(initialDraftRef.current.length);
-  const [status, setStatus] = useState<DraftStatus>(initialDraftRef.current ? "saved" : "idle");
+  const [draftLength, setDraftLength] = useState(initialDraft.length);
+  const [status, setStatus] = useState<DraftStatus>(
+    initialDraftState.handoff?.storageError
+      ? "storage-error"
+      : initialDraft ? "saved" : "idle",
+  );
   const [sending, setSending] = useState(false);
   const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
 
@@ -225,8 +318,35 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   useImperativeHandle(ref, () => ({
     loadDraft,
     insertText,
+    getDraft: () => textareaRef.current?.value ?? initialDraft,
     focus: () => textareaRef.current?.focus(),
-  }));
+  }), [initialDraft]);
+
+  useEffect(() => {
+    const handoff = initialDraftState.handoff;
+    if (handoff && renamedSessionDraftHandoffs.get(sessionName) === handoff) {
+      renamedSessionDraftHandoffs.delete(sessionName);
+    }
+  }, [initialDraftState.handoff, sessionName]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const handoff = renamedSessionDraftHandoffs.get(sessionName);
+    if (!handoff) return;
+    if (handoff.sessionId !== sessionId) {
+      renamedSessionDraftHandoffs.delete(sessionName);
+      return;
+    }
+
+    const textarea = textareaRef.current;
+    if (textarea && textarea.value === initialDraft) {
+      textarea.value = handoff.draft;
+      setDraftLength(handoff.draft.length);
+      setStatus(handoff.storageError ? "storage-error" : handoff.draft ? "saved" : "idle");
+      resizeTextarea(textarea);
+    }
+    renamedSessionDraftHandoffs.delete(sessionName);
+  }, [initialDraft, sessionId, sessionName]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -234,6 +354,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const frame = window.requestAnimationFrame(() => resizeTextarea(textarea));
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  useEffect(() => {
+    if (!shortcutsVisible) setOtherKeyPanelOpen(false);
+  }, [shortcutsVisible]);
 
   const sendDraft = async (withEnter: boolean) => {
     const textarea = textareaRef.current;
@@ -310,7 +434,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       textarea.setRangeText(insertion, textarea.selectionStart, textarea.selectionEnd, "end");
       recordDraft(textarea.value);
       resizeTextarea(textarea);
-      textarea.focus();
+      onRevealComposer?.();
+      window.requestAnimationFrame(() => textarea.focus());
     } catch {
       setStatus("clipboard-error");
       textarea.focus();
@@ -339,8 +464,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }
 
   return (
-    <section className="input-dock" aria-label="Terminal input">
-      <div className="staged-composer">
+    <section
+      className="input-dock"
+      aria-label="Terminal input"
+      hidden={!composerVisible && !shortcutsVisible}
+    >
+      <div
+        id="muxdeck-staged-input"
+        className="staged-composer"
+        hidden={!composerVisible}
+      >
         <div className="composer-heading">
           <label htmlFor="terminal-staged-input">Staged input</label>
           <span>{draftLength.toLocaleString()} / {MAX_DRAFT_LENGTH.toLocaleString()}</span>
@@ -349,7 +482,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           <textarea
             id="terminal-staged-input"
             ref={textareaRef}
-            defaultValue={initialDraftRef.current}
+            defaultValue={initialDraft}
             maxLength={MAX_DRAFT_LENGTH}
             rows={2}
             inputMode="text"
@@ -395,15 +528,31 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         </p>
       </div>
 
-      <div className="input-bar" role="group" aria-label="Terminal input shortcuts">
+      <div
+        id="muxdeck-terminal-shortcuts"
+        className="input-bar"
+        role="group"
+        aria-label="Terminal input shortcuts"
+        hidden={!shortcutsVisible}
+      >
         <button
           type="button"
           className="key-button session-title-key"
           onClick={onEditSessionTitle}
           disabled={!onEditSessionTitle}
-          aria-label="Update session name"
+          aria-label="Edit display title"
         >
-          <EditIcon /> <span>Name</span>
+          <EditIcon /> <span>Alias</span>
+        </button>
+        <button
+          type="button"
+          className="key-button session-rename-key"
+          onClick={onRenameSession}
+          disabled={!onRenameSession}
+          aria-label="Rename tmux session"
+          title="Rename the real tmux session (Ctrl+B, then $)"
+        >
+          <TerminalIcon /> <span>Tmux</span>
         </button>
         <button
           type="button"
@@ -459,7 +608,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         </button>
       </div>
 
-      {otherKeyPanelOpen && (
+      {shortcutsVisible && otherKeyPanelOpen && (
         <div
           id={otherKeyPanelId}
           ref={otherKeyPanelRef}

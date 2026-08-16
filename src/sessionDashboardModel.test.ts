@@ -47,6 +47,7 @@ function session(overrides: Partial<Session> = {}): Session {
     agentStateChangedAt: 1,
     customTitle: null,
     starred: false,
+    ignored: false,
     queuedMessageCount: 0,
     panes: [pane()],
     ...overrides,

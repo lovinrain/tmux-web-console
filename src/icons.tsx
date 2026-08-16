@@ -104,6 +104,16 @@ export function StarIcon({ filled = false, ...props }: IconProps & { filled?: bo
   );
 }
 
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3 3l18 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M10.6 5.2c.5-.1 1-.2 1.4-.2 5.2 0 8.5 5.1 8.5 7 0 .8-.7 2.1-1.9 3.4M6.2 6.2C4.5 7.5 3.5 9.2 3.5 12c0 1.9 3.3 7 8.5 7 1.4 0 2.6-.3 3.7-.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9.9 9.9A3 3 0 0 0 14.1 14.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
 export function GridIcon(props: IconProps) {
   return (
     <IconBase {...props}>

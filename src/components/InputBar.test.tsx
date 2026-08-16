@@ -1,9 +1,11 @@
-import { createRef } from "react";
+import { createRef, StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   InputBar,
+  handoffRenamedSessionDraft,
   MAX_DRAFT_LENGTH,
+  renameSessionDraft,
   stageSessionDraft,
   type InputBarHandle,
 } from "./InputBar";
@@ -26,6 +28,65 @@ afterEach(() => {
 });
 
 describe("InputBar", () => {
+  it("keeps both regions mounted and preserves the draft while visibility changes", () => {
+    const view = render(<InputBar {...props} />);
+    const dock = screen.getByRole("region", { name: "Terminal input" });
+    const composer = document.getElementById("muxdeck-staged-input");
+    const shortcuts = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+
+    expect(composer).not.toHaveAttribute("hidden");
+    expect(shortcuts).not.toHaveAttribute("hidden");
+    fireEvent.input(textarea, { target: { value: "keep this draft in place" } });
+
+    view.rerender(
+      <InputBar {...props} composerVisible={false} shortcutsVisible />,
+    );
+
+    expect(composer).toHaveAttribute("hidden");
+    expect(shortcuts).not.toHaveAttribute("hidden");
+    expect(dock).not.toHaveAttribute("hidden");
+    expect(screen.queryByRole("textbox", { name: "Staged input" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Terminal input shortcuts" })).toBeVisible();
+    expect(document.getElementById("terminal-staged-input")).toBe(textarea);
+
+    view.rerender(
+      <InputBar {...props} composerVisible={false} shortcutsVisible={false} />,
+    );
+
+    expect(dock).toHaveAttribute("hidden");
+    expect(document.getElementById("muxdeck-staged-input")).toBe(composer);
+    expect(document.getElementById("muxdeck-terminal-shortcuts")).toBe(shortcuts);
+    expect(document.getElementById("terminal-staged-input")).toBe(textarea);
+
+    view.rerender(
+      <InputBar {...props} composerVisible shortcutsVisible={false} />,
+    );
+
+    expect(dock).not.toHaveAttribute("hidden");
+    expect(composer).not.toHaveAttribute("hidden");
+    expect(shortcuts).toHaveAttribute("hidden");
+    expect(screen.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("keep this draft in place");
+    expect(screen.queryByRole("group", { name: "Terminal input shortcuts" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("closes the additional key panel when terminal shortcuts are hidden", async () => {
+    const view = render(<InputBar {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show other keys" }));
+    expect(screen.getByRole("group", { name: "Other keys" })).toBeVisible();
+
+    view.rerender(<InputBar {...props} shortcutsVisible={false} />);
+
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Other keys" }))
+      .not.toBeInTheDocument());
+    view.rerender(<InputBar {...props} shortcutsVisible />);
+    expect(screen.getByRole("button", { name: "Show other keys" }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("group", { name: "Other keys" })).not.toBeInTheDocument();
+  });
+
   it("sends exact terminal control sequences", () => {
     const onSend = vi.fn(() => true);
     render(<InputBar {...props} onSend={onSend} />);
@@ -316,8 +377,129 @@ describe("InputBar", () => {
     expect(screen.getByText(/could not be saved on this device/i)).toBeVisible();
   });
 
+  it("moves a staged draft to the renamed tmux session key", () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:before", "keep this input");
+
+    expect(renameSessionDraft("before", "after")).toBe("migrated");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:before")).toBeNull();
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:after"))
+      .toBe("keep this input");
+  });
+
+  it("swaps a stale destination draft instead of discarding either value", () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:before", "active draft");
+    window.localStorage.setItem("muxdeck-terminal-draft:after", "stale draft");
+
+    expect(renameSessionDraft("before", "after")).toBe("swapped");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:before"))
+      .toBe("stale draft");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:after"))
+      .toBe("active draft");
+  });
+
+  it("leaves the source draft intact when rename storage is unavailable", () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:before", "do not lose this");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage is unavailable", "QuotaExceededError");
+    });
+
+    expect(renameSessionDraft("before", "after")).toBe("storage-error");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:before"))
+      .toBe("do not lose this");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:after")).toBeNull();
+  });
+
+  it("hands the exact visible draft across one rename mount when storage fails", () => {
+    const beforeRef = createRef<InputBarHandle>();
+    const before = render(
+      <InputBar {...props} sessionName="handoff-before" ref={beforeRef} />,
+    );
+    const input = screen.getByRole("textbox", { name: "Staged input" });
+    const storageSet = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage is unavailable", "QuotaExceededError");
+    });
+    fireEvent.input(input, { target: { value: "  exact visible draft\n" } });
+
+    expect(beforeRef.current?.getDraft()).toBe("  exact visible draft\n");
+    expect(handoffRenamedSessionDraft(
+      "handoff-before",
+      "handoff-after",
+      "$handoff",
+      beforeRef.current?.getDraft() ?? "",
+    )).toBe("storage-error");
+    before.unmount();
+
+    const afterRef = createRef<InputBarHandle>();
+    const after = render(
+      <StrictMode>
+        <InputBar
+          {...props}
+          sessionName="handoff-after"
+          sessionId="$handoff"
+          ref={afterRef}
+        />
+      </StrictMode>,
+    );
+    expect(screen.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("  exact visible draft\n");
+    expect(afterRef.current?.getDraft()).toBe("  exact visible draft\n");
+    expect(screen.getByText(/could not be saved on this device/i)).toBeVisible();
+    after.unmount();
+    storageSet.mockRestore();
+
+    render(<InputBar {...props} sessionName="handoff-after" />);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+  });
+
+  it("does not let an older rename handoff replace a subsequently staged draft", () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:handoff-source", "old handoff");
+    expect(handoffRenamedSessionDraft(
+      "handoff-source",
+      "handoff-destination",
+      "$same-session",
+      "old handoff",
+    )).toBe("migrated");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    expect(stageSessionDraft("handoff-destination", "newer staged draft")).toBe("staged");
+
+    render(
+      <InputBar
+        {...props}
+        sessionName="handoff-destination"
+        sessionId="$same-session"
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("newer staged draft");
+  });
+
+  it("does not hand a draft to a different tmux ID that reuses the name", () => {
+    const storageSet = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage is unavailable", "QuotaExceededError");
+    });
+    expect(handoffRenamedSessionDraft(
+      "reuse-source",
+      "reuse-destination",
+      "$original-session",
+      "belongs to the original session",
+    )).toBe("storage-error");
+    storageSet.mockRestore();
+
+    render(
+      <InputBar
+        {...props}
+        sessionName="reuse-destination"
+        sessionId="$reused-session"
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+  });
+
   it("opens metadata controls independently of terminal connectivity", () => {
     const onEditSessionTitle = vi.fn();
+    const onRenameSession = vi.fn();
     const onOpenMessages = vi.fn();
     const onOpenSnippets = vi.fn();
     render(
@@ -325,17 +507,46 @@ describe("InputBar", () => {
         {...props}
         enabled={false}
         onEditSessionTitle={onEditSessionTitle}
+        onRenameSession={onRenameSession}
         onOpenMessages={onOpenMessages}
         onOpenSnippets={onOpenSnippets}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Update session name" }));
+    const aliasButton = screen.getByRole("button", { name: "Edit display title" });
+    const renameButton = screen.getByRole("button", { name: "Rename tmux session" });
+    expect(aliasButton).toHaveTextContent("Alias");
+    expect(renameButton).toHaveTextContent("Tmux");
+    expect(renameButton).toHaveAttribute(
+      "title",
+      expect.stringContaining("Ctrl+B, then $"),
+    );
+    expect(aliasButton).toBeEnabled();
+    expect(renameButton).toBeEnabled();
+
+    fireEvent.click(aliasButton);
+    expect(onEditSessionTitle).toHaveBeenCalledOnce();
+    expect(onRenameSession).not.toHaveBeenCalled();
+
+    fireEvent.click(renameButton);
     fireEvent.click(screen.getByRole("button", { name: "Open memoranda" }));
     fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
 
-    expect(onEditSessionTitle).toHaveBeenCalledOnce();
+    expect(onRenameSession).toHaveBeenCalledOnce();
     expect(onOpenMessages).toHaveBeenCalledOnce();
     expect(onOpenSnippets).toHaveBeenCalledOnce();
+  });
+
+  it("disables alias and native rename independently when callbacks are unavailable", () => {
+    const onRenameSession = vi.fn();
+    const view = render(<InputBar {...props} onRenameSession={onRenameSession} />);
+
+    expect(screen.getByRole("button", { name: "Edit display title" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rename tmux session" })).toBeEnabled();
+
+    view.rerender(<InputBar {...props} onEditSessionTitle={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Edit display title" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Rename tmux session" })).toBeDisabled();
   });
 });

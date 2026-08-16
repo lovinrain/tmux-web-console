@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { BASE_PATH, listSessions, subscribeToSessions, updateSessionStar, updateSessionTitle } from "../api";
+import {
+  BASE_PATH,
+  listSessions,
+  subscribeToSessions,
+  updateSessionIgnored,
+  updateSessionStar,
+  updateSessionTitle,
+} from "../api";
 import {
   ChevronRightIcon,
   EditIcon,
+  EyeOffIcon,
   ExternalLinkIcon,
   GridIcon,
   ListIcon,
@@ -29,6 +37,10 @@ import {
   type SessionViewMode,
 } from "../sessionDashboardModel";
 import type { AgentState, Pane, Session } from "../types";
+import {
+  searchWithWorkspaceTabs,
+  workspaceTabsFromSearch,
+} from "../workspaceState";
 import { AppTabs } from "./AppTabs";
 import { stageSessionDraft } from "./InputBar";
 import { MessageQueueDialog } from "./MessageQueueDialog";
@@ -40,6 +52,9 @@ import { ThemeToggle } from "./ThemeToggle";
 interface SessionDashboardProps {
   onOpen: (session: string) => void;
   onOpenSnippets?: () => void;
+  onNewSession?: () => void;
+  newSessionWindowHref?: string;
+  onSessionsChange?: (sessions: Session[]) => void;
 }
 
 type UpdateMode = "connecting" | "live" | "polling";
@@ -144,13 +159,16 @@ function persistDashboardPreferences(route: SessionDashboardRouteState): void {
 }
 
 function replaceDashboardUrl(route: SessionDashboardRouteState): void {
-  const search = serializeSessionDashboardSearch(route, window.location.search);
+  const openSessions = workspaceTabsFromSearch(window.location.search);
+  const dashboardSearch = serializeSessionDashboardSearch(route, window.location.search);
+  const search = searchWithWorkspaceTabs(dashboardSearch, openSessions);
   const target = `${window.location.pathname}${search}${window.location.hash}`;
   window.history.replaceState(window.history.state, "", target);
 }
 
 function sessionConsoleHref(sessionName: string): string {
-  return `${BASE_PATH}/session/${encodeURIComponent(sessionName)}${window.location.search}`;
+  const search = searchWithWorkspaceTabs(window.location.search, [sessionName]);
+  return `${BASE_PATH}/session/${encodeURIComponent(sessionName)}${search}`;
 }
 
 interface SessionItemProps {
@@ -158,12 +176,13 @@ interface SessionItemProps {
   index: number;
   viewMode: SessionViewMode;
   showStateChangeTime: boolean;
-  starBusy: boolean;
+  attentionBusy: boolean;
   onOpen: (name: string) => void;
   onEdit: (name: string, trigger: HTMLButtonElement) => void;
   onMessages: (name: string, trigger: HTMLButtonElement) => void;
   onSnippets: (name: string, trigger: HTMLButtonElement) => void;
   onToggleStar: (session: Session) => void;
+  onToggleIgnored: (session: Session) => void;
 }
 
 function SessionItem({
@@ -171,12 +190,13 @@ function SessionItem({
   index,
   viewMode,
   showStateChangeTime,
-  starBusy,
+  attentionBusy,
   onOpen,
   onEdit,
   onMessages,
   onSnippets,
   onToggleStar,
+  onToggleIgnored,
 }: SessionItemProps) {
   const pane = activePane(session);
   const classification = classifyPane(pane);
@@ -249,11 +269,24 @@ function SessionItem({
         </button>
         <button
           type="button"
+          className={session.ignored ? "session-ignore-toggle active" : "session-ignore-toggle"}
+          aria-label={session.ignored
+            ? `Remove ${displayName} from ignored`
+            : `Ignore ${displayName}`}
+          aria-pressed={session.ignored}
+          title={session.ignored ? "Restore session" : "Ignore long-running session"}
+          disabled={attentionBusy}
+          onClick={() => onToggleIgnored(session)}
+        >
+          <EyeOffIcon />
+        </button>
+        <button
+          type="button"
           className={session.starred ? "session-star-toggle active" : "session-star-toggle"}
           aria-label={`${session.starred ? "Remove" : "Add"} ${displayName} ${session.starred ? "from" : "to"} starred`}
           aria-pressed={session.starred}
           title={session.starred ? "Remove from starred" : "Add to starred"}
-          disabled={starBusy}
+          disabled={attentionBusy}
           onClick={() => onToggleStar(session)}
         >
           <StarIcon filled={session.starred} />
@@ -272,7 +305,13 @@ function SessionItem({
   );
 }
 
-export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardProps) {
+export function SessionDashboard({
+  onOpen,
+  onOpenSnippets,
+  onNewSession,
+  newSessionWindowHref,
+  onSessionsChange,
+}: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [route, setRoute] = useState<SessionDashboardRouteState>(initialDashboardRoute);
   const [loading, setLoading] = useState(true);
@@ -284,7 +323,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
   const [editingSessionName, setEditingSessionName] = useState<string | null>(null);
   const [messageSessionName, setMessageSessionName] = useState<string | null>(null);
   const [snippetSessionName, setSnippetSessionName] = useState<string | null>(null);
-  const [starBusyNames, setStarBusyNames] = useState<Set<string>>(() => new Set());
+  const [attentionBusyNames, setAttentionBusyNames] = useState<Set<string>>(() => new Set());
   const editTriggerRef = useRef<HTMLButtonElement | null>(null);
   const messageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const snippetTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -296,6 +335,12 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
     group: groupMode,
     sort: sortCriteria,
   } = route;
+  const resolvedNewSessionWindowHref = newSessionWindowHref
+    ?? `${BASE_PATH}/sessions/new${searchWithWorkspaceTabs(window.location.search, [])}`;
+
+  useEffect(() => {
+    onSessionsChange?.(sessions);
+  }, [onSessionsChange, sessions]);
 
   const updateRoute = useCallback((next: SessionDashboardRouteState) => {
     setRoute(next);
@@ -416,10 +461,15 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
     [route, sessions],
   );
 
-  const stateCounts = useMemo(() => sessions.reduce<Record<AgentState, number>>(
+  const activeSessions = useMemo(
+    () => sessions.filter((session) => !session.ignored || session.starred),
+    [sessions],
+  );
+
+  const stateCounts = useMemo(() => activeSessions.reduce<Record<AgentState, number>>(
     (counts, session) => ({ ...counts, [session.agentState]: counts[session.agentState] + 1 }),
     { working: 0, waiting_human: 0, waiting_command: 0, unknown: 0, other: 0 },
-  ), [sessions]);
+  ), [activeSessions]);
 
   const sortVisibleSessions = useCallback(
     (items: Session[]) => sortSessions(items, sortCriteria),
@@ -430,8 +480,14 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
     () => sortVisibleSessions(sessions.filter((session) => session.starred)),
     [sessions, sortVisibleSessions],
   );
+  const ignoredSessions = useMemo(
+    () => sortVisibleSessions(sessions.filter((session) => session.ignored && !session.starred)),
+    [sessions, sortVisibleSessions],
+  );
   const regularSessions = useMemo(
-    () => sortVisibleSessions(visibleSessions.filter((session) => !session.starred)),
+    () => sortVisibleSessions(visibleSessions.filter(
+      (session) => !session.starred && !session.ignored,
+    )),
     [sortVisibleSessions, visibleSessions],
   );
   const regularStateGroups = useMemo(() => STATE_GROUP_ORDER
@@ -492,22 +548,60 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
   const toggleStar = useCallback(async (session: Session) => {
     const next = !session.starred;
     setActionError(null);
-    setStarBusyNames((current) => new Set(current).add(session.name));
+    setAttentionBusyNames((current) => new Set(current).add(session.name));
     setSessions((current) => current.map((item) => (
-      item.name === session.name ? { ...item, starred: next } : item
+      item.name === session.name
+        ? { ...item, starred: next, ignored: next ? false : item.ignored }
+        : item
     )));
     try {
-      const starred = await updateSessionStar(session.name, next);
+      const attention = await updateSessionStar(session.name, next);
       setSessions((current) => current.map((item) => (
-        item.name === session.name ? { ...item, starred } : item
+        item.name === session.name ? { ...item, ...attention } : item
       )));
     } catch (starError) {
       setSessions((current) => current.map((item) => (
-        item.name === session.name ? { ...item, starred: session.starred } : item
+        item.name === session.name
+          ? { ...item, starred: session.starred, ignored: session.ignored }
+          : item
       )));
       setActionError(starError instanceof Error ? starError.message : "Unable to update star");
     } finally {
-      setStarBusyNames((current) => {
+      setAttentionBusyNames((current) => {
+        const nextBusy = new Set(current);
+        nextBusy.delete(session.name);
+        return nextBusy;
+      });
+    }
+  }, []);
+
+  const toggleIgnored = useCallback(async (session: Session) => {
+    const next = !session.ignored;
+    setActionError(null);
+    setAttentionBusyNames((current) => new Set(current).add(session.name));
+    setSessions((current) => current.map((item) => (
+      item.name === session.name
+        ? { ...item, ignored: next, starred: next ? false : item.starred }
+        : item
+    )));
+    try {
+      const attention = await updateSessionIgnored(session.name, next);
+      setSessions((current) => current.map((item) => (
+        item.name === session.name ? { ...item, ...attention } : item
+      )));
+    } catch (ignoreError) {
+      setSessions((current) => current.map((item) => (
+        item.name === session.name
+          ? { ...item, starred: session.starred, ignored: session.ignored }
+          : item
+      )));
+      setActionError(
+        ignoreError instanceof Error
+          ? ignoreError.message
+          : "Unable to update ignored status",
+      );
+    } finally {
+      setAttentionBusyNames((current) => {
         const nextBusy = new Set(current);
         nextBusy.delete(session.name);
         return nextBusy;
@@ -543,7 +637,27 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
       <section className="dashboard-intro">
         <p className="section-index">01 / SELECT</p>
         <h2>Pick up where<br />the agents left off.</h2>
-        <p className="intro-copy">Open any running Claude, Codex, or shell session. Output stays live; input goes straight to its tmux client.</p>
+        <div className="intro-copy">
+          <p>Open any running Claude, Codex, or shell session. Output stays live; input goes straight to its tmux client.</p>
+          <div className="dashboard-new-session-actions" role="group" aria-label="New session actions">
+            <button
+              type="button"
+              className="primary-button dashboard-new-session-primary"
+              onClick={() => onNewSession?.()}
+            >
+              <TerminalIcon /> New session
+            </button>
+            <a
+              className="secondary-button dashboard-new-session-window"
+              href={resolvedNewSessionWindowHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Open new session in new window"
+            >
+              <ExternalLinkIcon /> New window
+            </a>
+          </div>
+        </div>
       </section>
 
       <section className="session-controls" aria-label="Session filters">
@@ -608,7 +722,9 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
           <div className="results-toolbar">
             <div>
               <p className="eyebrow">02 / SESSIONS</p>
-              <p className="results-summary">{starredSessions.length} starred / {regularSessions.length} filtered</p>
+              <p className="results-summary">
+                {starredSessions.length} starred / {regularSessions.length} filtered / {ignoredSessions.length} ignored
+              </p>
             </div>
             <div className="results-tools">
               <div className="view-switch" aria-label="Session view">
@@ -646,7 +762,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
                     index={index}
                     viewMode={viewMode}
                     showStateChangeTime={showStateChangeTime}
-                    starBusy={starBusyNames.has(session.name)}
+                    attentionBusy={attentionBusyNames.has(session.name)}
                     onOpen={onOpen}
                     onEdit={(name, trigger) => {
                       editTriggerRef.current = trigger;
@@ -655,6 +771,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
                     onMessages={openMessages}
                     onSnippets={openSnippets}
                     onToggleStar={(item) => void toggleStar(item)}
+                    onToggleIgnored={(item) => void toggleIgnored(item)}
                   />
                 ))}
               </div>
@@ -685,7 +802,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
                           index={index}
                           viewMode={viewMode}
                           showStateChangeTime
-                          starBusy={starBusyNames.has(session.name)}
+                          attentionBusy={attentionBusyNames.has(session.name)}
                           onOpen={onOpen}
                           onEdit={(name, trigger) => {
                             editTriggerRef.current = trigger;
@@ -694,6 +811,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
                           onMessages={openMessages}
                           onSnippets={openSnippets}
                           onToggleStar={(item) => void toggleStar(item)}
+                          onToggleIgnored={(item) => void toggleIgnored(item)}
                         />
                       ))}
                     </div>
@@ -709,7 +827,7 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
                     index={index}
                     viewMode={viewMode}
                     showStateChangeTime={showStateChangeTime}
-                    starBusy={starBusyNames.has(session.name)}
+                    attentionBusy={attentionBusyNames.has(session.name)}
                     onOpen={onOpen}
                     onEdit={(name, trigger) => {
                       editTriggerRef.current = trigger;
@@ -718,20 +836,58 @@ export function SessionDashboard({ onOpen, onOpenSnippets }: SessionDashboardPro
                     onMessages={openMessages}
                     onSnippets={openSnippets}
                     onToggleStar={(item) => void toggleStar(item)}
+                    onToggleIgnored={(item) => void toggleIgnored(item)}
                   />
                 ))}
               </div>
             )}
           </section>
 
-          {regularSessions.length === 0 && starredSessions.length === 0 && (
+          <details className="session-section ignored-section">
+            <summary className="ignored-section-summary">
+              <span className="ignored-section-heading">
+                <span className="eyebrow">BACKGROUND</span>
+                <span className="ignored-section-title"><EyeOffIcon /> Ignored</span>
+              </span>
+              <span className="ignored-section-count">{ignoredSessions.length}</span>
+            </summary>
+            <p className="ignored-section-copy">
+              Long-running sessions kept out of the active filtered queue.
+            </p>
+            <div className={viewMode === "list" ? "session-grid session-list" : "session-grid"}>
+              {ignoredSessions.map((session, index) => (
+                <SessionItem
+                  key={session.id}
+                  session={session}
+                  index={index}
+                  viewMode={viewMode}
+                  showStateChangeTime={showStateChangeTime}
+                  attentionBusy={attentionBusyNames.has(session.name)}
+                  onOpen={onOpen}
+                  onEdit={(name, trigger) => {
+                    editTriggerRef.current = trigger;
+                    setEditingSessionName(name);
+                  }}
+                  onMessages={openMessages}
+                  onSnippets={openSnippets}
+                  onToggleStar={(item) => void toggleStar(item)}
+                  onToggleIgnored={(item) => void toggleIgnored(item)}
+                />
+              ))}
+            </div>
+          </details>
+
+          {regularSessions.length === 0
+            && starredSessions.length === 0
+            && ignoredSessions.length === 0 && (
             <div className="empty-state">
               <TerminalIcon />
               <h3>No matching sessions</h3>
               <p>Try another search or filter.</p>
             </div>
           )}
-          {regularSessions.length === 0 && starredSessions.length > 0 && (
+          {regularSessions.length === 0
+            && (starredSessions.length > 0 || ignoredSessions.length > 0) && (
             <div className="no-filter-results">No other sessions match the current filters.</div>
           )}
         </>

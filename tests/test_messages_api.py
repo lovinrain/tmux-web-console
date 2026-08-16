@@ -22,27 +22,38 @@ def session_messages_path(session_name: str) -> str:
     return f"/api/sessions/{quote(session_name, safe='')}/messages"
 
 
+def make_session(name: str, session_id: str = "$1") -> Session:
+    return Session(
+        name=name,
+        id=session_id,
+        windows=1,
+        attached=0,
+        created=1_700_000_000,
+    )
+
+
 @pytest.mark.asyncio
 async def test_messages_api_crud_order_persistence_and_absent_session(tmp_path):
     path = tmp_path / "messages.json"
     store = SessionMessageStore(path)
+    session_name = "agent active/for now"
     client = TestClient(
         TestServer(
             create_app(
-                tmux=StaticTmux(),
+                tmux=StaticTmux([make_session(session_name)]),
                 messages=store,
                 base_path="",
             )
         )
     )
-    session_name = "agent absent/for now"
     collection = session_messages_path(session_name)
 
     try:
         await client.start_server()
-        response = await client.get(collection)
+        absent_session = "agent absent/for now"
+        response = await client.get(session_messages_path(absent_session))
         assert response.status == 200
-        assert await response.json() == {"session": session_name, "messages": []}
+        assert await response.json() == {"session": absent_session, "messages": []}
 
         response = await client.post(collection, json={"text": "  first\n"})
         assert response.status == 201
@@ -80,7 +91,7 @@ async def test_messages_api_crud_order_persistence_and_absent_session(tmp_path):
     finally:
         await client.close()
 
-    # Queue data is independent from tmux discovery and survives application restarts.
+    # Queue data survives application restarts after writes to a live session.
     persisted = SessionMessageStore(path).list_messages(session_name)
     assert [item["id"] for item in persisted] == [first["id"]]
     assert persisted[0]["position"] == 0
@@ -92,7 +103,7 @@ async def test_messages_api_validation_and_not_found_responses(tmp_path):
     client = TestClient(
         TestServer(
             create_app(
-                tmux=StaticTmux(),
+                tmux=StaticTmux([make_session("cx20")]),
                 messages=SessionMessageStore(tmp_path / "messages.json"),
                 base_path="",
             )
@@ -149,17 +160,12 @@ async def test_messages_api_validation_and_not_found_responses(tmp_path):
 
 @pytest.mark.asyncio
 async def test_messages_api_has_no_cross_session_leakage_and_reports_count(tmp_path):
-    active_session = Session(
-        name="alpha",
-        id="$1",
-        windows=1,
-        attached=0,
-        created=1_700_000_000,
-    )
+    active_session = make_session("alpha")
+    second_session = make_session("beta", "$2")
     client = TestClient(
         TestServer(
             create_app(
-                tmux=StaticTmux([active_session]),
+                tmux=StaticTmux([active_session, second_session]),
                 messages=SessionMessageStore(tmp_path / "messages.json"),
                 base_path="",
             )

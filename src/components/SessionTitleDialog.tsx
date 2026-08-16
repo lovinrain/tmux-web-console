@@ -45,8 +45,8 @@ export function SessionTitleDialog({ session, onClose, onSave }: SessionTitleDia
       >
         <header>
           <div>
-            <p className="eyebrow">SESSION LABEL</p>
-            <h2 id="session-title-heading">Name this work</h2>
+            <p className="eyebrow">MUXDECK DISPLAY TITLE</p>
+            <h2 id="session-title-heading">Edit display title</h2>
           </div>
           <button type="button" className="icon-button" onClick={onClose} disabled={saving} aria-label="Close title editor"><CloseIcon /></button>
         </header>
@@ -61,7 +61,10 @@ export function SessionTitleDialog({ session, onClose, onSave }: SessionTitleDia
             placeholder="What is this session about?"
             aria-describedby="session-title-hint"
           />
-          <p id="session-title-hint">Optional. Leave blank to use the tmux name <code>{session.name}</code>.</p>
+          <p id="session-title-hint">
+            Optional Muxdeck alias only. This does not rename the real tmux session
+            {" "}<code>{session.name}</code>.
+          </p>
           {error && <p className="title-error" role="alert">{error}</p>}
         </div>
         <div className="title-actions">

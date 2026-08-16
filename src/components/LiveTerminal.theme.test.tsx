@@ -5,6 +5,8 @@ import { LiveTerminal } from "./LiveTerminal";
 
 interface MockTerminalInstance {
   options: Record<string, unknown>;
+  write: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
 }
 
 const terminalMocks = vi.hoisted(() => ({
@@ -27,12 +29,12 @@ vi.mock("@xterm/xterm", () => ({
 
     loadAddon() {}
     open() {}
-    write() {}
+    write = vi.fn();
     writeln() {}
     paste() {}
     focus() {}
     scrollToBottom() {}
-    dispose() {}
+    dispose = vi.fn();
     onData() { return { dispose: vi.fn() }; }
     onScroll() { return { dispose: vi.fn() }; }
   },
@@ -71,6 +73,11 @@ class MockWebSocket {
   emit(type: string) {
     if (type === "open") this.readyState = MockWebSocket.OPEN;
     for (const listener of this.listeners.get(type) ?? []) listener(new Event(type));
+  }
+
+  emitMessage(data: unknown) {
+    const event = { data } as MessageEvent;
+    for (const listener of this.listeners.get("message") ?? []) listener(event);
   }
 }
 
@@ -155,5 +162,52 @@ describe("LiveTerminal themes", () => {
     expect(socketMocks.instances).toHaveLength(1);
     expect(terminalMocks.fit).toHaveBeenCalledTimes(1);
     expect(socket.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores queued events from the disposed socket after switching sessions", async () => {
+    const view = render(
+      <LiveTerminal
+        session="alpha"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const oldTerminal = terminalMocks.instances[0];
+    const oldSocket = socketMocks.instances[0];
+    let resolveLateBlob: ((data: ArrayBuffer) => void) | undefined;
+    const lateBlob = new Blob();
+    Object.defineProperty(lateBlob, "arrayBuffer", {
+      configurable: true,
+      value: vi.fn(() => new Promise<ArrayBuffer>((resolve) => {
+        resolveLateBlob = resolve;
+      })),
+    });
+    oldSocket.emitMessage(lateBlob);
+
+    view.rerender(
+      <LiveTerminal
+        session="beta"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+
+    const activeSocket = socketMocks.instances[1];
+    activeSocket.emit("open");
+    const stateCallCount = callbacks.onStateChange.mock.calls.length;
+
+    oldSocket.emit("open");
+    oldSocket.emitMessage(JSON.stringify({ type: "ready", paneId: "%old" }));
+    oldSocket.emitMessage(new ArrayBuffer(2));
+    resolveLateBlob?.(new ArrayBuffer(2));
+    await Promise.resolve();
+
+    expect(oldTerminal.dispose).toHaveBeenCalledOnce();
+    expect(oldTerminal.write).not.toHaveBeenCalled();
+    expect(callbacks.onPaneChange).not.toHaveBeenCalled();
+    expect(callbacks.onStateChange).toHaveBeenCalledTimes(stateCallCount);
+    expect(activeSocket.send).toHaveBeenCalledTimes(1);
   });
 });

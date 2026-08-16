@@ -3,11 +3,15 @@ import {
   BASE_PATH,
   ApiRequestError,
   createQueuedMessage,
+  createSession,
   deleteQueuedMessage,
   getSnippetTree,
   listQueuedMessages,
+  renameSession,
   saveSnippetTree,
   subscribeToSessions,
+  updateSessionIgnored,
+  updateSessionStar,
   updateQueuedMessage,
 } from "./api";
 import type { Session } from "./types";
@@ -55,6 +59,7 @@ function session(): Session {
     agentStateChangedAt: 3,
     customTitle: null,
     starred: false,
+    ignored: false,
     queuedMessageCount: 0,
     panes: [],
   };
@@ -63,6 +68,123 @@ function session(): Session {
 afterEach(() => {
   MockEventSource.instances = [];
   vi.unstubAllGlobals();
+});
+
+describe("session creation API", () => {
+  it("creates a default session with an explicit empty JSON object", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "muxdeck-abc123def456",
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createSession()).resolves.toBe("muxdeck-abc123def456");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions`,
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+  });
+
+  it("preserves the server error and status when creation fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "unable to create tmux session",
+    }), { status: 503, headers: { "Content-Type": "application/json" } })));
+
+    const error = await createSession().catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      message: "unable to create tmux session",
+      status: 503,
+    });
+  });
+});
+
+describe("native session rename API", () => {
+  it("renames the tmux session separately from its display title", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: " new work ",
+      previousSession: "old/work",
+      warnings: ["unable to migrate queued messages"],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(renameSession("old/work", " new work ")).resolves.toEqual({
+      previousSession: "old/work",
+      session: " new work ",
+      warnings: ["unable to migrate queued messages"],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/session-name`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ session: "old/work", name: " new work " }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+  });
+
+  it("normalizes an omitted warning list without discarding rename identity", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "after",
+      previousSession: "before",
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    await expect(renameSession("before", "after")).resolves.toEqual({
+      previousSession: "before",
+      session: "after",
+      warnings: [],
+    });
+  });
+});
+
+describe("session attention API", () => {
+  it("updates mutually exclusive starred and ignored metadata", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        session: "work/name",
+        starred: true,
+        ignored: false,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        session: "work/name",
+        starred: false,
+        ignored: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateSessionStar("work/name", true)).resolves.toEqual({
+      starred: true,
+      ignored: false,
+    });
+    await expect(updateSessionIgnored("work/name", true)).resolves.toEqual({
+      starred: false,
+      ignored: true,
+    });
+
+    expect(fetchMock.mock.calls[0]).toEqual([
+      `${BASE_PATH}/api/session-star`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ session: "work/name", starred: true }),
+      }),
+    ]);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      `${BASE_PATH}/api/session-ignored`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ session: "work/name", ignored: true }),
+      }),
+    ]);
+  });
 });
 
 describe("subscribeToSessions", () => {

@@ -12,8 +12,13 @@ from typing import Any, Callable
 from aiohttp import WSMsgType, web
 
 from .history import SnapshotStore
-from .messages import MessageNotFoundError, SessionMessageStore
-from .metadata import SessionTitleStore
+from .messages import (
+    MessageNotFoundError,
+    SessionMessageStore,
+    validate_message_text,
+    validate_session_name,
+)
+from .metadata import SessionTitleStore, normalize_title
 from .pty_bridge import PtyBridge, clamp_size
 from .snippets import (
     SnippetRevisionConflict,
@@ -21,8 +26,13 @@ from .snippets import (
     SnippetStoreUnavailable,
 )
 from .status import AgentStateDetector
-from .tmux import TmuxClient, TmuxError
-
+from .tmux import (
+    TmuxClient,
+    TmuxError,
+    TmuxRenameUnverifiedError,
+    validate_tmux_new_session_name,
+    validate_tmux_session_name,
+)
 
 LOGGER = logging.getLogger("muxdeck")
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +45,7 @@ MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
 SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
+SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 
@@ -84,6 +95,7 @@ class SessionSnapshotBuilder:
                         "agentStateChangedAt": changed_at,
                         "customTitle": self._titles.get_title(item.name),
                         "starred": self._titles.is_starred(item.name),
+                        "ignored": self._titles.is_ignored(item.name),
                         "queuedMessageCount": (
                             self._messages.count_messages(item.name)
                             if self._messages is not None
@@ -248,6 +260,7 @@ def create_app(
     app[MESSAGES_KEY] = messages or SessionMessageStore()
     app[SNIPPETS_KEY] = snippets or SnippetStore()
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
+    app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
         app[TMUX_KEY],
         app[TITLES_KEY],
@@ -281,6 +294,144 @@ def create_app(
         except TmuxError as error:
             return json_error(str(error), 503)
         return web.json_response(payload)
+
+    async def create_session(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        unknown_fields = sorted(payload)
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+
+        try:
+            session_name = await app[TMUX_KEY].create_session()
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        return web.json_response({"session": session_name}, status=201)
+
+    async def rename_session(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        missing_fields = sorted({"session", "name"} - set(payload))
+        if missing_fields:
+            return json_error(f"{missing_fields[0]} is required", 400)
+        unknown_fields = sorted(set(payload) - {"session", "name"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+
+        current_name = payload["session"]
+        new_name = payload["name"]
+        if not isinstance(current_name, str):
+            return json_error("session must be a string", 400)
+        if not isinstance(new_name, str):
+            return json_error("name must be a string", 400)
+        try:
+            current_name = validate_tmux_session_name(current_name)
+            new_name = validate_tmux_new_session_name(new_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        if current_name == new_name:
+            return json_error(
+                "new session name must differ from current session name", 400
+            )
+
+        async with app[SESSION_RENAME_LOCK_KEY]:
+            try:
+                sessions_before_rename = await app[TMUX_KEY].list_sessions()
+            except TmuxError as error:
+                return json_error(str(error), 503)
+            source_session = next(
+                (
+                    session
+                    for session in sessions_before_rename
+                    if session.name == current_name
+                ),
+                None,
+            )
+            if source_session is None:
+                return json_error(f"tmux session not found: {current_name}", 404)
+            if any(session.name == new_name for session in sessions_before_rename):
+                return json_error(f"tmux session already exists: {new_name}", 409)
+
+            warnings: list[str] = []
+            try:
+                renamed_session = await app[TMUX_KEY].rename_session(
+                    current_name,
+                    new_name,
+                    session_id=source_session.id,
+                )
+            except TmuxRenameUnverifiedError as error:
+                renamed_session = error.requested_name
+                LOGGER.warning(
+                    "Tmux renamed session %s to %s, but verification failed: %s",
+                    current_name,
+                    renamed_session,
+                    error.verification_error,
+                )
+                warnings.append(
+                    "tmux rename succeeded but its final session name could not be verified"
+                )
+            except ValueError as error:
+                return json_error(str(error), 400)
+            except TmuxError as error:
+                message = str(error)
+                lowered_message = message.lower()
+                if "duplicate session" in lowered_message:
+                    return json_error(message, 409)
+                if any(
+                    marker in lowered_message
+                    for marker in (
+                        "can't find session",
+                        "no such session",
+                        "session not found",
+                    )
+                ):
+                    return json_error(message, 404)
+                return json_error(message, 503)
+
+            if renamed_session != new_name:
+                LOGGER.warning(
+                    "Tmux renamed session %s to unexpected native name %s (requested %s)",
+                    current_name,
+                    renamed_session,
+                    new_name,
+                )
+                warnings.append("tmux returned a different session name than requested")
+            try:
+                app[TITLES_KEY].rename_session(current_name, renamed_session)
+            except Exception:
+                # The tmux rename is already committed, so storage errors cannot undo it.
+                LOGGER.exception(
+                    "Unable to migrate metadata after renaming tmux session %s to %s",
+                    current_name,
+                    renamed_session,
+                )
+                warnings.append("unable to migrate session metadata")
+            try:
+                app[MESSAGES_KEY].rename_session(current_name, renamed_session)
+            except Exception:
+                LOGGER.exception(
+                    "Unable to migrate queued messages after renaming tmux session %s to %s",
+                    current_name,
+                    renamed_session,
+                )
+                warnings.append("unable to migrate queued messages")
+
+            response: dict[str, Any] = {
+                "previousSession": current_name,
+                "session": renamed_session,
+            }
+            if warnings:
+                response["warnings"] = warnings
+            return web.json_response(response)
 
     async def sessions_stream(request: web.Request) -> web.StreamResponse:
         queue = await app[SESSION_STREAM_BROKER_KEY].subscribe()
@@ -348,10 +499,16 @@ def create_app(
             return json_error("session is required", 400)
         if not isinstance(title, str):
             return json_error("title must be a string", 400)
+        try:
+            session_name = validate_session_name(session_name)
+            normalize_title(title)
+        except ValueError as error:
+            return json_error(str(error), 400)
 
         try:
-            await app[TMUX_KEY].get_session(session_name)
-            saved_title = app[TITLES_KEY].set_title(session_name, title)
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                saved_title = app[TITLES_KEY].set_title(session_name, title)
         except TmuxError as error:
             return json_error(str(error), 404)
         except ValueError as error:
@@ -375,16 +532,67 @@ def create_app(
             return json_error("session is required", 400)
         if not isinstance(starred, bool):
             return json_error("starred must be a boolean", 400)
+        try:
+            session_name = validate_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
 
         try:
-            await app[TMUX_KEY].get_session(session_name)
-            saved_starred = app[TITLES_KEY].set_starred(session_name, starred)
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                saved_starred = app[TITLES_KEY].set_starred(session_name, starred)
+                saved_ignored = app[TITLES_KEY].is_ignored(session_name)
         except TmuxError as error:
             return json_error(str(error), 404)
         except OSError:
             LOGGER.exception("Unable to save star for tmux session %s", session_name)
             return json_error("unable to save session star", 500)
-        return web.json_response({"session": session_name, "starred": saved_starred})
+        return web.json_response(
+            {
+                "session": session_name,
+                "starred": saved_starred,
+                "ignored": saved_ignored,
+            }
+        )
+
+    async def update_session_ignored(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, TypeError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        session_name = payload.get("session")
+        ignored = payload.get("ignored")
+        if not isinstance(session_name, str) or not session_name:
+            return json_error("session is required", 400)
+        if not isinstance(ignored, bool):
+            return json_error("ignored must be a boolean", 400)
+        try:
+            session_name = validate_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                saved_ignored = app[TITLES_KEY].set_ignored(session_name, ignored)
+                saved_starred = app[TITLES_KEY].is_starred(session_name)
+        except TmuxError as error:
+            return json_error(str(error), 404)
+        except OSError:
+            LOGGER.exception(
+                "Unable to save ignored status for tmux session %s", session_name
+            )
+            return json_error("unable to save session ignored status", 500)
+        return web.json_response(
+            {
+                "session": session_name,
+                "starred": saved_starred,
+                "ignored": saved_ignored,
+            }
+        )
 
     async def list_session_messages(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -407,7 +615,16 @@ def create_app(
         if not isinstance(text, str):
             return json_error("text must be a string", 400)
         try:
-            message = app[MESSAGES_KEY].add_message(session_name, text)
+            session_name = validate_session_name(session_name)
+            text = validate_message_text(text)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                message = app[MESSAGES_KEY].add_message(session_name, text)
+        except TmuxError as error:
+            return json_error(str(error), 404)
         except ValueError as error:
             return json_error(str(error), 400)
         except OSError:
@@ -433,20 +650,33 @@ def create_app(
         has_position = "position" in payload
         if not has_text and not has_position:
             return json_error("text or position is required", 400)
-        text = payload.get("text")
-        if has_text and not isinstance(text, str):
-            return json_error("text must be a string", 400)
+        text: str | None = None
+        if has_text:
+            candidate_text = payload.get("text")
+            if not isinstance(candidate_text, str):
+                return json_error("text must be a string", 400)
+            text = candidate_text
         position = payload.get("position")
         if has_position and (isinstance(position, bool) or not isinstance(position, int)):
             return json_error("position must be an integer", 400)
 
         try:
-            message = app[MESSAGES_KEY].update_message(
-                session_name,
-                message_id,
-                text=text if has_text else None,
-                position=position if has_position else None,
-            )
+            session_name = validate_session_name(session_name)
+            if text is not None:
+                text = validate_message_text(text)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                message = app[MESSAGES_KEY].update_message(
+                    session_name,
+                    message_id,
+                    text=text,
+                    position=position if has_position else None,
+                )
+        except TmuxError as error:
+            return json_error(str(error), 404)
         except MessageNotFoundError as error:
             return json_error(str(error), 404)
         except ValueError as error:
@@ -462,7 +692,15 @@ def create_app(
         session_name = request.match_info["session"]
         message_id = request.match_info["message_id"]
         try:
-            app[MESSAGES_KEY].delete_message(session_name, message_id)
+            session_name = validate_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                app[MESSAGES_KEY].delete_message(session_name, message_id)
+        except TmuxError as error:
+            return json_error(str(error), 404)
         except MessageNotFoundError as error:
             return json_error(str(error), 404)
         except ValueError as error:
@@ -656,6 +894,8 @@ def create_app(
 
     app.router.add_get(f"{prefix}/api/health", health)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
+    app.router.add_post(f"{prefix}/api/sessions", create_session)
+    app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
     app.router.add_get(
         f"{prefix}/api/sessions/{{session}}/messages", list_session_messages
@@ -675,6 +915,7 @@ def create_app(
     app.router.add_put(f"{prefix}/api/snippets", replace_snippets)
     app.router.add_put(f"{prefix}/api/session-title", update_session_title)
     app.router.add_put(f"{prefix}/api/session-star", update_session_star)
+    app.router.add_put(f"{prefix}/api/session-ignored", update_session_ignored)
     app.router.add_post(f"{prefix}/api/panes/{{pane_id}}/history", create_history)
     app.router.add_get(f"{prefix}/api/history/{{snapshot_id}}", history_page)
     app.router.add_get(f"{prefix}/ws/terminal", terminal)

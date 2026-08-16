@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Sequence
-
+from pathlib import Path
 
 # tmux escapes this control byte as the literal text ``\037`` in format output.
 FORMAT_FIELD_SEPARATOR = "\x1f"
@@ -33,12 +34,44 @@ PANE_FORMAT_FIELDS = (
     "pane_dead",
 )
 PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT_FIELDS)
+MAX_SESSION_NAME_LENGTH = 256
 
 
 class TmuxError(RuntimeError):
     def __init__(self, message: str, returncode: int | None = None):
         super().__init__(message)
         self.returncode = returncode
+
+
+class TmuxRenameUnverifiedError(TmuxError):
+    def __init__(self, requested_name: str, verification_error: TmuxError):
+        super().__init__("tmux rename succeeded but its result could not be verified")
+        self.requested_name = requested_name
+        self.verification_error = verification_error
+
+
+def validate_tmux_session_name(value: str) -> str:
+    if not value.strip():
+        raise ValueError("session name is required")
+    if len(value) > MAX_SESSION_NAME_LENGTH:
+        raise ValueError(
+            f"session name must be {MAX_SESSION_NAME_LENGTH} characters or fewer"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("session name cannot contain control characters")
+    if ":" in value or "." in value:
+        raise ValueError("session name cannot contain ':' or '.'")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise ValueError("session name contains invalid Unicode")
+    return value
+
+
+def validate_tmux_new_session_name(value: str) -> str:
+    value = validate_tmux_session_name(value)
+    if value.endswith(";"):
+        # tmux parses a final semicolon as a command separator even with exec argv.
+        raise ValueError("session name cannot end with ';'")
+    return value
 
 
 @dataclass(frozen=True)
@@ -153,7 +186,9 @@ def parse_sessions(output: str) -> list[Session]:
         session.panes.append(pane)
         session.activity = max(session.activity, pane.activity)
 
-    return sorted(sessions.values(), key=lambda item: (-item.activity, item.name.lower()))
+    return sorted(
+        sessions.values(), key=lambda item: (-item.activity, item.name.lower())
+    )
 
 
 class TmuxClient:
@@ -166,7 +201,9 @@ class TmuxClient:
         self.binary: str = binary or os.environ.get("TMUX_BIN") or "tmux"
         self.timeout = timeout
         self.socket_name = (
-            socket_name if socket_name is not None else os.environ.get("MUXDECK_TMUX_SOCKET")
+            socket_name
+            if socket_name is not None
+            else os.environ.get("MUXDECK_TMUX_SOCKET")
         )
 
     @property
@@ -205,11 +242,80 @@ class TmuxClient:
             message = str(error).lower()
             if any(
                 marker in message
-                for marker in ("no server running", "failed to connect", "error connecting")
+                for marker in (
+                    "no server running",
+                    "failed to connect",
+                    "error connecting",
+                )
             ):
                 return []
             raise
         return parse_sessions(output)
+
+    async def create_session(self) -> str:
+        requested_name = f"muxdeck-{secrets.token_hex(6)}"
+        output = await self.run(
+            [
+                "new-session",
+                "-d",
+                "-P",
+                "-F",
+                "#{session_name}",
+                "-s",
+                requested_name,
+                "-c",
+                str(Path.home()),
+            ]
+        )
+        session_names = output.strip().splitlines()
+        if len(session_names) != 1 or not session_names[0]:
+            raise TmuxError("tmux did not return the created session name")
+        if session_names[0] != requested_name:
+            raise TmuxError("tmux returned an unexpected created session name")
+        return requested_name
+
+    async def rename_session(
+        self,
+        current_name: str,
+        new_name: str,
+        *,
+        session_id: str | None = None,
+    ) -> str:
+        current_name = validate_tmux_session_name(current_name)
+        new_name = validate_tmux_new_session_name(new_name)
+        if current_name == new_name:
+            raise ValueError("new session name must differ from current session name")
+        if session_id is None:
+            session_id = (await self.get_session(current_name)).id
+        if not session_id.startswith("$") or not session_id[1:].isdigit():
+            raise ValueError("invalid tmux session id")
+
+        try:
+            await self.run(["rename-session", "-t", session_id, "--", new_name])
+        except TmuxError:
+            # A timed-out client can still leave the tmux server-side rename committed.
+            try:
+                actual_name = await self._session_name_by_id(session_id)
+            except TmuxError:
+                pass
+            else:
+                if actual_name != current_name:
+                    return actual_name
+            raise
+
+        try:
+            actual_name = await self._session_name_by_id(session_id)
+        except TmuxError as error:
+            raise TmuxRenameUnverifiedError(new_name, error) from error
+        if actual_name == current_name:
+            raise TmuxError("tmux did not apply the requested session rename")
+        return actual_name
+
+    async def _session_name_by_id(self, session_id: str) -> str:
+        for session in await self.list_sessions():
+            if session.id == session_id:
+                return session.name
+        raise TmuxError(f"tmux session not found after rename: {session_id}")
 
     async def get_session(self, name: str) -> Session:
         for session in await self.list_sessions():

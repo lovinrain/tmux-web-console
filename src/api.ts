@@ -33,6 +33,44 @@ export async function listSessions(signal?: AbortSignal): Promise<Session[]> {
   return result.sessions;
 }
 
+export async function createSession(): Promise<string> {
+  const result = await jsonRequest<{ session: string }>("/api/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return result.session;
+}
+
+export interface SessionRenameResult {
+  previousSession: string;
+  session: string;
+  warnings: string[];
+}
+
+export async function renameSession(
+  session: string,
+  name: string,
+): Promise<SessionRenameResult> {
+  const result = await jsonRequest<{
+    session: string;
+    previousSession: string;
+    warnings?: string[];
+  }>(
+    "/api/session-name",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, name }),
+    },
+  );
+  return {
+    previousSession: result.previousSession,
+    session: result.session,
+    warnings: result.warnings ?? [],
+  };
+}
+
 export type SessionStreamStatus = "connecting" | "open" | "error";
 
 export interface SessionStreamOptions {
@@ -106,8 +144,12 @@ export async function updateSessionTitle(
 export async function updateSessionStar(
   session: string,
   starred: boolean,
-): Promise<boolean> {
-  const result = await jsonRequest<{ session: string; starred: boolean }>(
+): Promise<Pick<Session, "starred" | "ignored">> {
+  const result = await jsonRequest<{
+    session: string;
+    starred: boolean;
+    ignored: boolean;
+  }>(
     "/api/session-star",
     {
       method: "PUT",
@@ -115,7 +157,26 @@ export async function updateSessionStar(
       body: JSON.stringify({ session, starred }),
     },
   );
-  return result.starred;
+  return { starred: result.starred, ignored: result.ignored };
+}
+
+export async function updateSessionIgnored(
+  session: string,
+  ignored: boolean,
+): Promise<Pick<Session, "starred" | "ignored">> {
+  const result = await jsonRequest<{
+    session: string;
+    starred: boolean;
+    ignored: boolean;
+  }>(
+    "/api/session-ignored",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, ignored }),
+    },
+  );
+  return { starred: result.starred, ignored: result.ignored };
 }
 
 function messageQueuePath(session: string): string {

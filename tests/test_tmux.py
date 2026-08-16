@@ -1,15 +1,25 @@
 import time
+from collections.abc import Sequence
 from dataclasses import replace
+from pathlib import Path
 from typing import cast
+
+import pytest
 
 from tmux_console.status import AgentStateDetector, classify_agent_state
 from tmux_console.tmux import (
+    MAX_SESSION_NAME_LENGTH,
     OUTPUT_FIELD_SEPARATOR,
+    PANE_FORMAT,
     PANE_FORMAT_FIELDS,
     Pane,
     Session,
     TmuxClient,
+    TmuxError,
+    TmuxRenameUnverifiedError,
     parse_sessions,
+    validate_tmux_new_session_name,
+    validate_tmux_session_name,
 )
 
 
@@ -82,6 +92,160 @@ def test_parse_sessions_preserves_tabs_inside_pane_titles():
     assert sessions[0].panes[0].title == "Codex\tworking"
 
 
+class RecordingRunTmux(TmuxClient):
+    def __init__(self, output: str | TmuxError | list[str | TmuxError]) -> None:
+        super().__init__(binary="unused-tmux", socket_name="isolated-test")
+        self.output = output
+        self.calls: list[list[str]] = []
+
+    async def run(self, args: Sequence[str]) -> str:
+        self.calls.append(list(args))
+        result = self.output.pop(0) if isinstance(self.output, list) else self.output
+        if isinstance(result, TmuxError):
+            raise result
+        return result
+
+
+async def test_create_session_uses_collision_resistant_name_default_shell_and_home(
+    monkeypatch,
+):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
+    tmux = RecordingRunTmux("  muxdeck-abc123def456\n")
+
+    session_name = await tmux.create_session()
+
+    assert session_name == "muxdeck-abc123def456"
+    assert tmux.calls == [
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            "#{session_name}",
+            "-s",
+            "muxdeck-abc123def456",
+            "-c",
+            str(Path.home()),
+        ]
+    ]
+
+
+@pytest.mark.parametrize("output", ["", "\n", "0\n1\n"])
+async def test_create_session_rejects_missing_or_ambiguous_name(output: str):
+    tmux = RecordingRunTmux(output)
+
+    with pytest.raises(TmuxError, match="tmux did not return the created session name"):
+        await tmux.create_session()
+
+
+async def test_create_session_rejects_an_unexpected_returned_name(monkeypatch):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
+    tmux = RecordingRunTmux("some-other-session\n")
+
+    with pytest.raises(TmuxError, match="unexpected created session name"):
+        await tmux.create_session()
+
+
+async def test_rename_session_uses_exact_target_and_safe_argv_separator():
+    tmux = RecordingRunTmux(
+        ["", pane_row(session_name="-renamed;work", session_id="$7")]
+    )
+
+    renamed = await tmux.rename_session(
+        "work/name #1", "-renamed;work", session_id="$7"
+    )
+
+    assert renamed == "-renamed;work"
+    assert tmux.calls == [
+        [
+            "rename-session",
+            "-t",
+            "$7",
+            "--",
+            "-renamed;work",
+        ],
+        ["list-panes", "-a", "-F", PANE_FORMAT],
+    ]
+
+
+async def test_rename_session_returns_verified_native_name():
+    tmux = RecordingRunTmux(
+        ["", pane_row(session_name="tmux-result", session_id="$7")]
+    )
+
+    renamed = await tmux.rename_session("work", "requested", session_id="$7")
+
+    assert renamed == "tmux-result"
+
+
+async def test_rename_session_reports_success_when_result_verification_fails():
+    verification_error = TmuxError("verification timed out")
+    tmux = RecordingRunTmux(["", verification_error])
+
+    with pytest.raises(TmuxRenameUnverifiedError) as raised:
+        await tmux.rename_session("work", "renamed", session_id="$7")
+
+    assert raised.value.requested_name == "renamed"
+    assert raised.value.verification_error is verification_error
+    assert raised.value.__cause__ is verification_error
+
+
+async def test_rename_session_recovers_a_committed_timeout():
+    timeout = TmuxError("tmux command timed out")
+    tmux = RecordingRunTmux(
+        [timeout, pane_row(session_name="renamed", session_id="$7")]
+    )
+
+    renamed = await tmux.rename_session("work", "renamed", session_id="$7")
+
+    assert renamed == "renamed"
+
+
+async def test_rename_session_preserves_a_definite_command_failure():
+    failure = TmuxError("rename denied", returncode=1)
+    tmux = RecordingRunTmux(
+        [failure, pane_row(session_name="work", session_id="$7")]
+    )
+
+    with pytest.raises(TmuxError, match="rename denied") as raised:
+        await tmux.rename_session("work", "renamed", session_id="$7")
+
+    assert raised.value is failure
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [
+        ("", "required"),
+        ("   ", "required"),
+        ("line\nbreak", "control"),
+        ("has:colon", "cannot contain"),
+        ("has.period", "cannot contain"),
+        ("\ud800", "invalid Unicode"),
+        ("x" * (MAX_SESSION_NAME_LENGTH + 1), "256 characters"),
+    ],
+)
+def test_tmux_session_name_validation_rejects_invalid_names(name: str, message: str):
+    with pytest.raises(ValueError, match=message):
+        validate_tmux_session_name(name)
+
+
+def test_new_tmux_session_name_rejects_a_trailing_command_separator():
+    with pytest.raises(ValueError, match="cannot end"):
+        validate_tmux_new_session_name("trailing;")
+
+    assert validate_tmux_new_session_name("embedded;semicolon") == "embedded;semicolon"
+
+
+async def test_rename_session_rejects_an_unchanged_name_without_running_tmux():
+    tmux = RecordingRunTmux("")
+
+    with pytest.raises(ValueError, match="must differ"):
+        await tmux.rename_session("work", "work", session_id="$7")
+
+    assert tmux.calls == []
+
+
 def agent_pane(**overrides: object) -> Pane:
     pane = Pane(
         id="%42",
@@ -122,12 +286,16 @@ def test_agent_state_distinguishes_work_input_and_command_waits():
         ).name
         == "waiting_human"
     )
-    assert classify_agent_state(agent_pane(title="repo"), now=1000).name == "waiting_human"
+    assert (
+        classify_agent_state(agent_pane(title="repo"), now=1000).name == "waiting_human"
+    )
 
 
 def test_agent_state_is_conservative_for_stale_or_unknown_signals():
     assert (
-        classify_agent_state(agent_pane(title="\u2838 repo", activity=900), now=1000).name
+        classify_agent_state(
+            agent_pane(title="\u2838 repo", activity=900), now=1000
+        ).name
         == "unknown"
     )
     assert (
@@ -140,7 +308,7 @@ def test_agent_state_is_conservative_for_stale_or_unknown_signals():
 
 CURSOR_RUNNING_SCREEN = "\n".join(
     [
-        "    Grepped \"sample_module\" in .",
+        '    Grepped "sample_module" in .',
         " \u2818\u2823 Running  30.77k tokens",
         "",
         "  \u2192 Add a follow-up                                 ctrl+c to stop",
@@ -181,7 +349,9 @@ def test_cursor_agent_state_comes_from_the_footer_interrupt_hint():
     for command in ("agent", "cursor-agent"):
         pane = cursor_pane(command=command)
         assert (
-            classify_agent_state(pane, visible_screen=CURSOR_RUNNING_SCREEN, now=1000).name
+            classify_agent_state(
+                pane, visible_screen=CURSOR_RUNNING_SCREEN, now=1000
+            ).name
             == "working"
         )
         assert (
@@ -190,10 +360,12 @@ def test_cursor_agent_state_comes_from_the_footer_interrupt_hint():
         )
 
     waiting_screen = CURSOR_RUNNING_SCREEN.replace(
-        "Grepped \"sample_module\" in .", "Waiting for background terminal"
+        'Grepped "sample_module" in .', "Waiting for background terminal"
     )
     assert (
-        classify_agent_state(cursor_pane(), visible_screen=waiting_screen, now=1000).name
+        classify_agent_state(
+            cursor_pane(), visible_screen=waiting_screen, now=1000
+        ).name
         == "waiting_command"
     )
 
@@ -267,11 +439,22 @@ async def test_detect_sessions_captures_the_screen_for_cursor_panes():
     idle_codex = agent_pane(id="%43", title="repo")
     tmux = RecordingTmux({cursor.id: CURSOR_RUNNING_SCREEN})
     sessions = [
-        Session(name="cursor-one", id="$1", windows=1, attached=0, created=1, panes=[cursor]),
-        Session(name="codex-one", id="$2", windows=1, attached=0, created=1, panes=[idle_codex]),
+        Session(
+            name="cursor-one", id="$1", windows=1, attached=0, created=1, panes=[cursor]
+        ),
+        Session(
+            name="codex-one",
+            id="$2",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[idle_codex],
+        ),
     ]
 
-    states = await AgentStateDetector().detect_sessions(cast(TmuxClient, tmux), sessions)
+    states = await AgentStateDetector().detect_sessions(
+        cast(TmuxClient, tmux), sessions
+    )
 
     assert states["cursor-one"].name == "working"
     assert states["codex-one"].name == "waiting_human"
