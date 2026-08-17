@@ -17,6 +17,7 @@ Environment=MUXDECK_BASE_PATH=@@BASE_PATH@@
 Environment=MUXDECK_TITLES_FILE=@@STATE_DIR@@/session-titles.json
 Environment=MUXDECK_MESSAGES_FILE=@@STATE_DIR@@/session-messages.json
 Environment=MUXDECK_SNIPPETS_FILE=@@STATE_DIR@@/snippets.json
+Environment=MUXDECK_WORKSPACES_FILE=@@STATE_DIR@@/workspaces.json
 Environment=TMUX_BIN=@@TMUX_BIN@@
 ExecStart=@@APP_DIR@@/.venv/bin/python -m tmux_console.app
 Restart=on-failure

@@ -94,7 +94,11 @@ describe("SessionRenameDialog", () => {
     expect(submit).toBeDisabled();
 
     fireEvent.change(input, { target: { value: "invalid.name" } });
-    expect(screen.getByRole("alert")).toHaveTextContent("colon or period");
+    expect(screen.getByRole("alert")).toHaveTextContent("colon, period, or backslash");
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "invalid\\name" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("colon, period, or backslash");
     expect(submit).toBeDisabled();
 
     fireEvent.change(input, { target: { value: "trailing-semicolon;" } });

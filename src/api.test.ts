@@ -4,7 +4,10 @@ import {
   ApiRequestError,
   createQueuedMessage,
   createSession,
+  createWorkspace,
   deleteQueuedMessage,
+  deleteWorkspace,
+  getWorkspace,
   getSnippetTree,
   listQueuedMessages,
   renameSession,
@@ -13,6 +16,9 @@ import {
   updateSessionIgnored,
   updateSessionStar,
   updateQueuedMessage,
+  updateWorkspace,
+  updateWorkspaceActivity,
+  listWorkspaces,
 } from "./api";
 import type { Session } from "./types";
 
@@ -74,10 +80,14 @@ describe("session creation API", () => {
   it("creates a default session with an explicit empty JSON object", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       session: "muxdeck-abc123def456",
+      sessionId: "$12",
     }), { status: 201, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(createSession()).resolves.toBe("muxdeck-abc123def456");
+    await expect(createSession()).resolves.toEqual({
+      name: "muxdeck-abc123def456",
+      id: "$12",
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       `${BASE_PATH}/api/sessions`,
       expect.objectContaining({
@@ -87,6 +97,26 @@ describe("session creation API", () => {
           Accept: "application/json",
           "Content-Type": "application/json",
         }),
+      }),
+    );
+  });
+
+  it("sends an exact requested native session name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "  work/session #1  ",
+      sessionId: "$13",
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createSession("  work/session #1  ")).resolves.toEqual({
+      name: "  work/session #1  ",
+      id: "$13",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "  work/session #1  " }),
       }),
     );
   });
@@ -103,6 +133,19 @@ describe("session creation API", () => {
       status: 503,
     });
   });
+
+  it("preserves a duplicate-name conflict", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "duplicate session: existing",
+    }), { status: 409, headers: { "Content-Type": "application/json" } })));
+
+    const error = await createSession("existing").catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      message: "duplicate session: existing",
+      status: 409,
+    });
+  });
 });
 
 describe("native session rename API", () => {
@@ -110,14 +153,14 @@ describe("native session rename API", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       session: " new work ",
       previousSession: "old/work",
-      warnings: ["unable to migrate queued messages"],
+      warnings: ["unable to migrate memo entries"],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(renameSession("old/work", " new work ")).resolves.toEqual({
       previousSession: "old/work",
       session: " new work ",
-      warnings: ["unable to migrate queued messages"],
+      warnings: ["unable to migrate memo entries"],
     });
     expect(fetchMock).toHaveBeenCalledWith(
       `${BASE_PATH}/api/session-name`,
@@ -184,6 +227,112 @@ describe("session attention API", () => {
         body: JSON.stringify({ session: "work/name", ignored: true }),
       }),
     ]);
+  });
+});
+
+describe("saved workspace API", () => {
+  const workspace = {
+    id: "workspace/id",
+    name: "Release train",
+    tabs: ["api", "web client"],
+    activeSession: "web client",
+    sessionRevision: 7,
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_010_000,
+    lastActiveAt: 1_700_000_020_000,
+  };
+
+  it("lists and loads saved workspaces", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspaces: [workspace] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspace }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listWorkspaces()).resolves.toEqual([workspace]);
+    await expect(getWorkspace("workspace/id")).resolves.toEqual(workspace);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/workspaces`);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `${BASE_PATH}/api/workspaces/workspace%2Fid`,
+    );
+  });
+
+  it("creates a workspace with its ordered tabs and active session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ workspace }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const input = {
+      name: "Release train",
+      tabs: ["api", "web client"],
+      activeSession: "web client",
+    };
+    await expect(createWorkspace(input)).resolves.toEqual(workspace);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/workspaces`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    );
+  });
+
+  it("separates metadata updates from last-active updates", async () => {
+    const renamed = { ...workspace, name: "Launch room" };
+    const active = { ...renamed, tabs: ["api"], activeSession: "api" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspace: renamed }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspace: active }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateWorkspace("workspace/id", { name: "Launch room" }))
+      .resolves.toEqual(renamed);
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], "api", 7))
+      .resolves.toEqual(active);
+
+    expect(fetchMock.mock.calls[0]).toEqual([
+      `${BASE_PATH}/api/workspaces/workspace%2Fid`,
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ name: "Launch room" }),
+      }),
+    ]);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/activity`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          tabs: ["api"],
+          activeSession: "api",
+          sessionRevision: 7,
+        }),
+      }),
+    ]);
+  });
+
+  it("deletes an encoded workspace id and accepts an empty response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteWorkspace("workspace/id")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/workspaces/workspace%2Fid`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });
 
@@ -300,6 +449,7 @@ describe("queued message API", () => {
   const message = {
     id: "message/1",
     text: "Review the failing test",
+    state: "queued" as const,
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
     position: 0,
@@ -322,7 +472,8 @@ describe("queued message API", () => {
     );
   });
 
-  it("creates and edits messages with JSON request bodies", async () => {
+  it("creates queued messages by default and accepts an explicit memorandum state", async () => {
+    const note = { ...message, id: "note/1", state: "note" as const };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
         session: "work",
@@ -330,25 +481,48 @@ describe("queued message API", () => {
       }), { status: 201, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         session: "work",
-        message: { ...message, text: "Updated", position: 2 },
-      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        message: note,
+      }), { status: 201, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(createQueuedMessage("work", message.text)).resolves.toEqual(message);
-    await expect(updateQueuedMessage("work", "message/1", {
-      text: "Updated",
-      position: 2,
-    })).resolves.toMatchObject({ text: "Updated", position: 2 });
+    await expect(createQueuedMessage("work", note.text, "note")).resolves.toEqual(note);
 
     expect(fetchMock.mock.calls[0]).toEqual([
       `${BASE_PATH}/api/sessions/work/messages`,
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ text: message.text }) }),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ text: message.text, state: "queued" }),
+      }),
     ]);
     expect(fetchMock.mock.calls[1]).toEqual([
+      `${BASE_PATH}/api/sessions/work/messages`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ text: note.text, state: "note" }),
+      }),
+    ]);
+  });
+
+  it("edits memorandum text, position, and state with one JSON request body", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        session: "work",
+        message: { ...message, text: "Updated", position: 2, state: "note" },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateQueuedMessage("work", "message/1", {
+      text: "Updated",
+      position: 2,
+      state: "note",
+    })).resolves.toMatchObject({ text: "Updated", position: 2, state: "note" });
+
+    expect(fetchMock.mock.calls[0]).toEqual([
       `${BASE_PATH}/api/sessions/work/messages/message%2F1`,
       expect.objectContaining({
         method: "PATCH",
-        body: JSON.stringify({ text: "Updated", position: 2 }),
+        body: JSON.stringify({ text: "Updated", position: 2, state: "note" }),
       }),
     ]);
   });

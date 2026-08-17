@@ -40,7 +40,17 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         text=True,
     ).strip()
     subprocess.run(
-        [*tmux, "send-keys", "-t", pane_id, "printf 'HISTORY_MARKER\\n'", "Enter"],
+        [
+            *tmux,
+            "send-keys",
+            "-t",
+            pane_id,
+            (
+                "printf 'HISTORY_MARKER\\n'; "
+                "for i in $(seq 1 80); do printf 'HISTORY_LINE_%03d\\n' \"$i\"; done"
+            ),
+            "Enter",
+        ],
         check=True,
     )
 
@@ -109,19 +119,332 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         assert b"ACK_MARKER staged-input-ok" in output
 
         await websocket.send_str(json.dumps({"type": "resize", "cols": 74, "rows": 23}))
-        await asyncio.sleep(0.25)
-        size = subprocess.check_output(
+        size = ""
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            size = await asyncio.to_thread(
+                subprocess.check_output,
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    pane_id,
+                    "#{pane_width}x#{pane_height}",
+                ],
+                text=True,
+            )
+            size = size.strip()
+            if size == "74x22":
+                break
+            await asyncio.sleep(0.05)
+        assert size == "74x22"
+
+        async def request_history(action: str) -> dict:
+            await websocket.send_json({"type": "history", "action": action})
+            deadline = asyncio.get_running_loop().time() + 5
+            while asyncio.get_running_loop().time() < deadline:
+                message = await asyncio.wait_for(websocket.receive(), 2)
+                if message.type == WSMsgType.BINARY:
+                    output.extend(message.data)
+                elif message.type == WSMsgType.TEXT:
+                    payload = json.loads(message.data)
+                    if payload.get("action") == action and payload.get("type") in {
+                        "historyAck",
+                        "historyNack",
+                    }:
+                        return payload
+            raise AssertionError(f"missing history response for {action}")
+
+        def pane_format(format_string: str) -> str:
+            return subprocess.check_output(
+                [*tmux, "display-message", "-p", "-t", pane_id, format_string],
+                text=True,
+            ).strip()
+
+        assert await request_history("page-up") == {
+            "type": "historyAck",
+            "action": "page-up",
+        }
+        assert pane_format("#{pane_in_mode}") == "1"
+        first_scroll_position = int(pane_format("#{scroll_position}"))
+        assert first_scroll_position > 0
+
+        assert await request_history("page-up") == {
+            "type": "historyAck",
+            "action": "page-up",
+        }
+        second_scroll_position = int(pane_format("#{scroll_position}"))
+        assert second_scroll_position > first_scroll_position
+
+        assert await request_history("page-down") == {
+            "type": "historyAck",
+            "action": "page-down",
+        }
+        assert int(pane_format("#{scroll_position}")) < second_scroll_position
+
+        assert await request_history("exit") == {
+            "type": "historyAck",
+            "action": "exit",
+        }
+        assert pane_format("#{pane_in_mode}") == "0"
+        assert await request_history("exit") == {
+            "type": "historyNack",
+            "action": "exit",
+        }
+
+        second_pane_id = subprocess.check_output(
             [
                 *tmux,
-                "display-message",
-                "-p",
+                "split-window",
+                "-d",
+                "-P",
+                "-F",
+                "#{pane_id}",
                 "-t",
                 pane_id,
-                "#{pane_width}x#{pane_height}",
+                "bash",
+                "--noprofile",
+                "--norc",
             ],
             text=True,
         ).strip()
-        assert size == "74x22"
+        subprocess.run(
+            [
+                *tmux,
+                "send-keys",
+                "-t",
+                second_pane_id,
+                "for i in $(seq 1 80); do echo SECOND_PANE_HISTORY_$i; done",
+                "Enter",
+            ],
+            check=True,
+        )
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            history_size = subprocess.check_output(
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    second_pane_id,
+                    "#{history_size}",
+                ],
+                text=True,
+            ).strip()
+            if int(history_size) > 0:
+                break
+            await asyncio.sleep(0.05)
+        assert int(history_size) > 0
+
+        client_row = subprocess.check_output(
+            [
+                *tmux,
+                "list-clients",
+                "-t",
+                f"={session_name}",
+                "-F",
+                "#{client_name}\t#{pane_id}",
+            ],
+            text=True,
+        ).strip()
+        client_name, initial_client_pane = client_row.split("\t")
+        assert initial_client_pane == pane_id
+        subprocess.run([*tmux, "set-option", "-g", "prefix", "C-b"], check=True)
+        subprocess.run(
+            [
+                *tmux,
+                "bind-key",
+                "-T",
+                "prefix",
+                "o",
+                "select-pane",
+                "-t",
+                ":.+",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                *tmux,
+                "bind-key",
+                "-T",
+                "prefix",
+                "x",
+                "set-option",
+                "-gF",
+                "@muxdeck-test-client-pane",
+                "#{pane_id}",
+            ],
+            check=True,
+        )
+        for input_id, data in (
+            ("select-second-pane", "\x02o"),
+            ("record-second-pane", "\x02x"),
+        ):
+            await websocket.send_json({"type": "input", "id": input_id, "data": data})
+            while True:
+                selection_message = await asyncio.wait_for(websocket.receive(), 2)
+                if selection_message.type != WSMsgType.TEXT:
+                    continue
+                selection_payload = json.loads(selection_message.data)
+                if selection_payload.get("id") == input_id:
+                    assert selection_payload == {"type": "inputAck", "id": input_id}
+                    break
+            await asyncio.sleep(0.1)
+        recorded_client_pane = subprocess.check_output(
+            [*tmux, "show-options", "-gv", "@muxdeck-test-client-pane"],
+            text=True,
+        ).strip()
+        assert recorded_client_pane == second_pane_id
+        globally_active_pane = subprocess.check_output(
+            [
+                *tmux,
+                "list-panes",
+                "-t",
+                f"={session_name}",
+                "-f",
+                "#{pane_active}",
+                "-F",
+                "#{pane_id}",
+            ],
+            text=True,
+        ).strip()
+        assert globally_active_pane == pane_id
+
+        block_channel = f"muxdeck-test-block-{os.getpid()}"
+        block_ready_channel = f"{block_channel}-ready"
+        await asyncio.to_thread(
+            subprocess.run,
+            [
+                *tmux,
+                "bind-key",
+                "-T",
+                "prefix",
+                "b",
+                f"wait-for -S {block_ready_channel} ; wait-for {block_channel}",
+            ],
+            check=True,
+        )
+        for input_id, data in (
+            ("block-client-queue", "\x02b"),
+            ("queue-prefix-race", "\x02x"),
+        ):
+            await websocket.send_json({"type": "input", "id": input_id, "data": data})
+            while True:
+                race_message = await asyncio.wait_for(websocket.receive(), 2)
+                if race_message.type != WSMsgType.TEXT:
+                    continue
+                race_payload = json.loads(race_message.data)
+                if race_payload.get("id") == input_id:
+                    assert race_payload == {"type": "inputAck", "id": input_id}
+                    break
+            if input_id == "block-client-queue":
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [*tmux, "wait-for", block_ready_channel],
+                    check=True,
+                    timeout=5,
+                )
+
+        raced_history = asyncio.create_task(request_history("page-up"))
+        client_key_table = ""
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            client_key_table = await asyncio.to_thread(
+                subprocess.check_output,
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-c",
+                    client_name,
+                    "#{client_key_table}",
+                ],
+                text=True,
+            )
+            client_key_table = client_key_table.strip()
+            if client_key_table.startswith("muxdeck-history-"):
+                break
+            await asyncio.sleep(0.05)
+        assert client_key_table.startswith("muxdeck-history-")
+        await asyncio.to_thread(
+            subprocess.run,
+            [*tmux, "wait-for", "-S", block_channel],
+            check=True,
+        )
+        assert await raced_history == {
+            "type": "historyNack",
+            "action": "page-up",
+        }
+        assert pane_format("#{pane_in_mode}") == "0"
+        assert (
+            subprocess.check_output(
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    second_pane_id,
+                    "#{pane_in_mode}",
+                ],
+                text=True,
+            ).strip()
+            == "0"
+        )
+        remaining_bindings = await asyncio.to_thread(
+            subprocess.check_output,
+            [*tmux, "list-keys", "-a"],
+            text=True,
+        )
+        assert "muxdeck-history-" not in remaining_bindings
+        assert "User999" not in remaining_bindings
+        remaining_options = await asyncio.to_thread(
+            subprocess.check_output,
+            [*tmux, "show-options", "-g"],
+            text=True,
+        )
+        assert "@muxdeck-history-" not in remaining_options
+
+        assert await request_history("page-up") == {
+            "type": "historyAck",
+            "action": "page-up",
+        }
+        assert pane_format("#{pane_in_mode}") == "0"
+        assert (
+            subprocess.check_output(
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    second_pane_id,
+                    "#{pane_in_mode}",
+                ],
+                text=True,
+            ).strip()
+            == "1"
+        )
+        assert await request_history("exit") == {
+            "type": "historyAck",
+            "action": "exit",
+        }
+        assert (
+            subprocess.check_output(
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    second_pane_id,
+                    "#{pane_in_mode}",
+                ],
+                text=True,
+            ).strip()
+            == "0"
+        )
+        assert not websocket.closed
         await websocket.close()
         await asyncio.sleep(0.1)
 
@@ -198,16 +521,12 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         }
 
         listed = await (await client.get("/api/sessions")).json()
-        assert [session["name"] for session in listed["sessions"]] == [
-            renamed_session
-        ]
+        assert [session["name"] for session in listed["sessions"]] == [renamed_session]
         assert listed["sessions"][0]["customTitle"] == "Browser agent"
         assert listed["sessions"][0]["starred"] is False
         assert listed["sessions"][0]["ignored"] is True
         old_messages = await (
-            await client.get(
-                f"/api/sessions/{quote(session_name, safe='')}/messages"
-            )
+            await client.get(f"/api/sessions/{quote(session_name, safe='')}/messages")
         ).json()
         new_messages = await (
             await client.get(
@@ -254,7 +573,9 @@ async def test_real_tmux_create_session_api_is_immediately_attachable():
         await client.start_server()
         response = await client.post("/mux/api/sessions", json={})
         assert response.status == 201
-        session_name = (await response.json())["session"]
+        created_payload = await response.json()
+        session_name = created_payload["session"]
+        assert created_payload["sessionId"].startswith("$")
         suffix = session_name.removeprefix("muxdeck-")
         assert session_name.startswith("muxdeck-")
         assert len(suffix) == 12
@@ -278,6 +599,25 @@ async def test_real_tmux_create_session_api_is_immediately_attachable():
         assert ready["session"] == session_name
         assert ready["paneId"].startswith("%")
         await websocket.close()
+
+        requested_name = "named-#{pid}"
+        named_response = await client.post(
+            "/mux/api/sessions", json={"name": requested_name}
+        )
+        assert named_response.status == 201
+        named_payload = await named_response.json()
+        assert named_payload["session"] == requested_name
+        assert named_payload["sessionId"].startswith("$")
+
+        conflict = await client.post("/mux/api/sessions", json={"name": requested_name})
+        assert conflict.status == 409
+        assert "duplicate session" in (await conflict.json())["error"].lower()
+
+        listed = await (await client.get("/mux/api/sessions")).json()
+        assert {session["name"] for session in listed["sessions"]} == {
+            session_name,
+            requested_name,
+        }
     finally:
         await client.close()
         subprocess.run([*tmux_command, "kill-server"], check=False)

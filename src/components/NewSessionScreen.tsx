@@ -5,14 +5,35 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { createSession } from "../api";
+import { createSession, type CreatedSession } from "../api";
 import { TerminalIcon } from "../icons";
 import { ThemeToggle } from "./ThemeToggle";
 
 export const NEW_SESSION_PANEL_ID = "muxdeck-new-session";
+const MAX_SESSION_NAME_LENGTH = 256;
+
+function sessionNameError(name: string): string | null {
+  if (!name) return null;
+  if (!name.trim()) {
+    return "A custom session name cannot be blank. Clear the field to use an assigned name.";
+  }
+  if (name.length > MAX_SESSION_NAME_LENGTH) {
+    return `A tmux session name must be ${MAX_SESSION_NAME_LENGTH} characters or fewer.`;
+  }
+  if (name.includes(":") || name.includes(".")) {
+    return "A tmux session name cannot contain a colon or period.";
+  }
+  if (name.includes("\\")) {
+    return "A tmux session name cannot contain a backslash.";
+  }
+  if (name.endsWith(";")) {
+    return "A tmux session name cannot end with a semicolon.";
+  }
+  return null;
+}
 
 export interface NewSessionScreenProps {
-  onCreated: (name: string) => void;
+  onCreated: (name: string, sessionId: string) => void;
   onCancel: () => void;
   sessionNavigation?: ReactNode;
 }
@@ -22,11 +43,13 @@ export function NewSessionScreen({
   onCancel,
   sessionNavigation,
 }: NewSessionScreenProps) {
+  const [draftName, setDraftName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const creatingRef = useRef(false);
   const mountedRef = useRef(true);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const nameError = sessionNameError(draftName);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -49,15 +72,17 @@ export function NewSessionScreen({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (creatingRef.current) return;
+    if (creatingRef.current || nameError) return;
 
     creatingRef.current = true;
     setCreating(true);
     setError(null);
 
-    let sessionName: string;
+    let createdSession: CreatedSession;
     try {
-      sessionName = await createSession();
+      createdSession = draftName === ""
+        ? await createSession()
+        : await createSession(draftName);
     } catch (creationError) {
       if (!mountedRef.current) return;
       creatingRef.current = false;
@@ -74,7 +99,7 @@ export function NewSessionScreen({
       creatingRef.current = false;
       setCreating(false);
     }
-    onCreated(sessionName);
+    onCreated(createdSession.name, createdSession.id);
   };
 
   return (
@@ -115,9 +140,45 @@ export function NewSessionScreen({
             <div className="new-session-default">
               <span>DEFAULT SESSION</span>
               <strong>Fresh shell</strong>
-              <p>The server assigns a unique tmux name. Nothing starts until you confirm.</p>
+              <p>Name it below or let the server assign a unique tmux name.</p>
             </div>
 
+            <div className="new-session-name-field">
+              <label htmlFor="new-session-name-input">
+                TMUX SESSION NAME
+                <em>OPTIONAL</em>
+              </label>
+              <input
+                id="new-session-name-input"
+                name="session-name"
+                value={draftName}
+                maxLength={MAX_SESSION_NAME_LENGTH}
+                disabled={creating}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="muxdeck-generated-name"
+                aria-describedby={nameError
+                  ? "new-session-name-hint new-session-name-error"
+                  : "new-session-name-hint"}
+                aria-invalid={nameError ? "true" : undefined}
+                onChange={(event) => {
+                  setDraftName(event.target.value);
+                  setError(null);
+                }}
+              />
+              <small id="new-session-name-hint">
+                Leave blank for an assigned name. Colons, periods, backslashes, and a
+                final semicolon are not allowed; leading and trailing spaces are preserved.
+              </small>
+            </div>
+
+            {nameError && (
+              <p id="new-session-name-error" className="new-session-error" role="alert">
+                {nameError}
+              </p>
+            )}
             {error && <p className="new-session-error" role="alert">{error}</p>}
 
             <div className="new-session-actions">
@@ -129,7 +190,11 @@ export function NewSessionScreen({
               >
                 Cancel
               </button>
-              <button type="submit" className="primary-button" disabled={creating}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={creating || Boolean(nameError)}
+              >
                 <TerminalIcon />
                 {creating ? "Creating..." : "Create session"}
               </button>

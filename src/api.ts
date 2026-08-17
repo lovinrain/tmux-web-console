@@ -1,5 +1,6 @@
 import type {
   HistoryPage,
+  MemorandumState,
   MessageQueue,
   QueuedMessage,
   Session,
@@ -33,13 +34,18 @@ export async function listSessions(signal?: AbortSignal): Promise<Session[]> {
   return result.sessions;
 }
 
-export async function createSession(): Promise<string> {
-  const result = await jsonRequest<{ session: string }>("/api/sessions", {
+export interface CreatedSession {
+  name: string;
+  id: string;
+}
+
+export async function createSession(name?: string): Promise<CreatedSession> {
+  const result = await jsonRequest<{ session: string; sessionId: string }>("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({}),
+    body: JSON.stringify(name === undefined ? {} : { name }),
   });
-  return result.session;
+  return { name: result.session, id: result.sessionId };
 }
 
 export interface SessionRenameResult {
@@ -179,6 +185,98 @@ export async function updateSessionIgnored(
   return { starred: result.starred, ignored: result.ignored };
 }
 
+export interface SavedWorkspace {
+  id: string;
+  name: string;
+  tabs: string[];
+  activeSession: string | null;
+  sessionRevision: number;
+  createdAt: number;
+  updatedAt: number;
+  lastActiveAt: number;
+}
+
+export interface CreateWorkspaceInput {
+  name: string;
+  tabs: string[];
+  activeSession: string | null;
+}
+
+export type WorkspaceUpdate = Partial<Pick<
+  SavedWorkspace,
+  "name" | "tabs" | "activeSession" | "sessionRevision"
+>>;
+
+function workspacePath(workspaceId: string): string {
+  return `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+}
+
+export async function listWorkspaces(signal?: AbortSignal): Promise<SavedWorkspace[]> {
+  const result = await jsonRequest<{ workspaces: SavedWorkspace[] }>(
+    "/api/workspaces",
+    { signal },
+  );
+  return result.workspaces;
+}
+
+export async function getWorkspace(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<SavedWorkspace> {
+  const result = await jsonRequest<{ workspace: SavedWorkspace }>(
+    workspacePath(workspaceId),
+    { signal },
+  );
+  return result.workspace;
+}
+
+export async function createWorkspace(
+  workspace: CreateWorkspaceInput,
+): Promise<SavedWorkspace> {
+  const result = await jsonRequest<{ workspace: SavedWorkspace }>("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(workspace),
+  });
+  return result.workspace;
+}
+
+export async function updateWorkspace(
+  workspaceId: string,
+  update: WorkspaceUpdate,
+): Promise<SavedWorkspace> {
+  const result = await jsonRequest<{ workspace: SavedWorkspace }>(
+    workspacePath(workspaceId),
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(update),
+    },
+  );
+  return result.workspace;
+}
+
+export async function updateWorkspaceActivity(
+  workspaceId: string,
+  tabs: string[],
+  activeSession: string | null,
+  sessionRevision: number,
+): Promise<SavedWorkspace> {
+  const result = await jsonRequest<{ workspace: SavedWorkspace }>(
+    `${workspacePath(workspaceId)}/activity`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tabs, activeSession, sessionRevision }),
+    },
+  );
+  return result.workspace;
+}
+
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  await jsonRequest<unknown>(workspacePath(workspaceId), { method: "DELETE" });
+}
+
 function messageQueuePath(session: string): string {
   return `/api/sessions/${encodeURIComponent(session)}/messages`;
 }
@@ -193,13 +291,14 @@ export async function listQueuedMessages(
 export async function createQueuedMessage(
   session: string,
   text: string,
+  state: MemorandumState = "queued",
 ): Promise<QueuedMessage> {
   const result = await jsonRequest<{ session: string; message: QueuedMessage }>(
     messageQueuePath(session),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, state }),
     },
   );
   return result.message;
@@ -208,6 +307,7 @@ export async function createQueuedMessage(
 export interface QueuedMessageUpdate {
   text?: string;
   position?: number;
+  state?: MemorandumState;
 }
 
 export async function updateQueuedMessage(

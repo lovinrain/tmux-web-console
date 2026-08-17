@@ -1,5 +1,7 @@
 import {
+  useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -7,15 +9,18 @@ import {
 } from "react";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
+  CheckIcon,
   CloseIcon,
   GridIcon,
   HistoryIcon,
+  SaveIcon,
   SearchIcon,
   TerminalIcon,
 } from "../icons";
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
 import type { AgentState, Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
+import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
@@ -32,14 +37,57 @@ export interface SessionWorkspaceNavigationProps {
   onCloseRecents: () => void;
   onClearRecents: () => void;
   onOpenDashboard: () => void;
+  onOpenTabSearch?: () => void;
+  workspacePersistenceState?: WorkspacePersistenceState;
+  onSaveWorkspace?: (name: string) => Promise<void>;
+}
+
+export type WorkspacePersistenceState = "unsaved" | "loading" | "saved" | "error";
+
+export const WORKSPACE_TAB_SHORTCUTS = {
+  previous: "Ctrl+Shift+,",
+  next: "Ctrl+Shift+.",
+  search: "Ctrl+Shift+;",
+  direct: "Ctrl+Shift+1-9",
+} as const;
+
+export const MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID = "muxdeck-mobile-workspace-overview";
+
+export function isCompactWorkspaceViewport(): boolean {
+  const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  const coarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  return viewportWidth <= 640
+    || (viewportWidth <= 1024 && (coarsePointer || viewportHeight <= 500));
 }
 
 const STATE_LABELS: Record<AgentState, string> = {
   working: "Working",
   waiting_human: "Needs input",
-  waiting_command: "Command wait",
+  waiting_command: "Background work",
   unknown: "Unclear",
   other: "Other",
+};
+
+const WORKSPACE_PERSISTENCE_COPY: Record<
+  Exclude<WorkspacePersistenceState, "unsaved">,
+  { label: string; accessibleLabel: string; description: string }
+> = {
+  saved: {
+    label: "Saved",
+    accessibleLabel: "Workspace saved automatically",
+    description: "Tab order and your active session save automatically.",
+  },
+  loading: {
+    label: "Opening",
+    accessibleLabel: "Opening saved workspace",
+    description: "Opening this saved workspace from the server.",
+  },
+  error: {
+    label: "Sync issue",
+    accessibleLabel: "Workspace sync issue",
+    description: "This saved workspace has a sync issue.",
+  },
 };
 
 function activePane(session: Session): Pane | undefined {
@@ -51,6 +99,7 @@ function paneLabel(pane?: Pane): string {
     case "claude": return "Claude";
     case "codex": return "Codex";
     case "cursor": return "Cursor";
+    case "grok": return "Grok";
     case "shells": return "Shell";
     default: return pane?.command || "Process";
   }
@@ -59,6 +108,273 @@ function paneLabel(pane?: Pane): string {
 function tabTitle(sessionName: string, sessionsByName: Map<string, Session>): string {
   const session = sessionsByName.get(sessionName);
   return session ? sessionDisplayTitle(session) : sessionName;
+}
+
+interface WorkspaceTabSearchDialogProps {
+  activeSession: string | null;
+  openSessions: string[];
+  sessions: Session[];
+  onSelect: (sessionName: string) => void;
+  onClose: () => void;
+}
+
+interface TabSearchResult {
+  sessionName: string;
+  title: string;
+  session: Session | undefined;
+  position: number;
+  score: number;
+}
+
+function searchScore(title: string, sessionName: string, query: string): number | null {
+  if (!query) return 0;
+  const normalizedTitle = title.toLowerCase();
+  const normalizedName = sessionName.toLowerCase();
+  if (normalizedTitle === query) return 0;
+  if (normalizedName === query) return 1;
+  if (normalizedTitle.startsWith(query)) return 2;
+  if (normalizedName.startsWith(query)) return 3;
+  if (normalizedTitle.includes(query)) return 4;
+  if (normalizedName.includes(query)) return 5;
+  return null;
+}
+
+export function WorkspaceTabSearchDialog({
+  activeSession,
+  openSessions,
+  sessions,
+  onSelect,
+  onClose,
+}: WorkspaceTabSearchDialogProps) {
+  const [query, setQuery] = useState("");
+  const [highlightedSession, setHighlightedSession] = useState<string | null>(activeSession);
+  const dialogRef = useRef<HTMLElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listId = useId();
+  const sessionsByName = useMemo(
+    () => new Map(sessions.map((session) => [session.name, session])),
+    [sessions],
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const results = useMemo<TabSearchResult[]>(() => openSessions
+    .map((sessionName, position) => {
+      const session = sessionsByName.get(sessionName);
+      const title = tabTitle(sessionName, sessionsByName);
+      const score = searchScore(title, sessionName, normalizedQuery);
+      return score === null ? null : { sessionName, title, session, position, score };
+    })
+    .filter((result): result is TabSearchResult => result !== null)
+    .sort((left, right) => left.score - right.score || left.position - right.position), [
+    normalizedQuery,
+    openSessions,
+    sessionsByName,
+  ]);
+  const resultNames = results.map((result) => result.sessionName).join("\u0000");
+
+  useEffect(() => {
+    const activeResult = normalizedQuery
+      ? undefined
+      : results.find((result) => result.sessionName === activeSession);
+    setHighlightedSession(activeResult?.sessionName ?? results[0]?.sessionName ?? null);
+  }, [activeSession, normalizedQuery, resultNames, results]);
+
+  useEffect(() => {
+    if (!highlightedSession) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(
+        `${listId}-${encodeURIComponent(highlightedSession)}`,
+      )?.scrollIntoView?.({ block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [highlightedSession, listId]);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const releaseBodyScroll = acquireBodyScrollLock();
+    const frame = window.requestAnimationFrame(() => searchRef.current?.focus());
+    const closeOnCompactLayout = () => {
+      if (isCompactWorkspaceViewport()) onClose();
+    };
+    const handleDialogKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+      )).filter((element) => !element.hasAttribute("hidden") && element.tabIndex >= 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!dialogRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener("resize", closeOnCompactLayout);
+    window.addEventListener("keydown", handleDialogKeyDown, true);
+    window.visualViewport?.addEventListener("resize", closeOnCompactLayout);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", closeOnCompactLayout);
+      window.removeEventListener("keydown", handleDialogKeyDown, true);
+      window.visualViewport?.removeEventListener("resize", closeOnCompactLayout);
+      releaseBodyScroll();
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [onClose]);
+
+  const moveHighlight = (offset: number) => {
+    if (results.length === 0) return;
+    const currentIndex = results.findIndex((result) => (
+      result.sessionName === highlightedSession
+    ));
+    const nextIndex = currentIndex < 0
+      ? 0
+      : (currentIndex + offset + results.length) % results.length;
+    setHighlightedSession(results[nextIndex].sessionName);
+  };
+
+  const chooseSession = (sessionName: string) => {
+    onClose();
+    onSelect(sessionName);
+  };
+
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveHighlight(1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveHighlight(-1);
+      return;
+    }
+    if (event.key === "Enter" && highlightedSession) {
+      event.preventDefault();
+      chooseSession(highlightedSession);
+    }
+  };
+
+  return (
+    <div className="workspace-tab-search-backdrop" role="presentation" onMouseDown={onClose}>
+      <aside
+        ref={dialogRef}
+        className="workspace-tab-search-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workspace-tab-search-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="workspace-tab-search-header">
+          <div>
+            <p className="eyebrow">OPEN WORKSPACE TABS</p>
+            <h2 id="workspace-tab-search-title">Jump to tab</h2>
+          </div>
+          <div className="workspace-tab-search-header-actions">
+            <kbd>{WORKSPACE_TAB_SHORTCUTS.search}</kbd>
+            <button type="button" className="icon-button" onClick={onClose} aria-label="Close tab search">
+              <CloseIcon />
+            </button>
+          </div>
+        </header>
+
+        <label className="workspace-tab-search-field">
+          <SearchIcon />
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Type a title or tmux name"
+            aria-label="Search open tabs by title or tmux name"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-activedescendant={highlightedSession
+              ? `${listId}-${encodeURIComponent(highlightedSession)}`
+              : undefined}
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} aria-label="Clear tab search">
+              Clear
+            </button>
+          )}
+        </label>
+
+        <p className="workspace-sr-only" role="status" aria-live="polite">
+          {results.length} {results.length === 1 ? "tab" : "tabs"} found
+        </p>
+
+        <div className="workspace-tab-search-results" id={listId} role="listbox" aria-label="Open tabs">
+          {results.map((result) => {
+            const highlighted = result.sessionName === highlightedSession;
+            const active = result.sessionName === activeSession;
+            const state = result.session?.agentState || "unavailable";
+            return (
+              <button
+                type="button"
+                id={`${listId}-${encodeURIComponent(result.sessionName)}`}
+                key={result.sessionName}
+                className={highlighted ? "workspace-tab-search-result highlighted" : "workspace-tab-search-result"}
+                role="option"
+                aria-selected={highlighted}
+                tabIndex={-1}
+                onMouseEnter={() => setHighlightedSession(result.sessionName)}
+                onClick={() => chooseSession(result.sessionName)}
+              >
+                <span className={`workspace-state-dot ${state}`} aria-hidden="true" />
+                <span className="workspace-tab-search-result-copy">
+                  <strong>{result.title}</strong>
+                  <span>{result.title === result.sessionName ? "tmux session" : result.sessionName}</span>
+                </span>
+                <span className={`workspace-tab-search-result-state ${state}`}>
+                  {active ? "Current" : result.session ? STATE_LABELS[result.session.agentState] : "Unavailable"}
+                </span>
+              </button>
+            );
+          })}
+          {results.length === 0 && (
+            <div className="workspace-tab-search-empty">
+              <SearchIcon />
+              <strong>No matching open tabs</strong>
+              <span>Search by custom title or tmux session name.</span>
+            </div>
+          )}
+        </div>
+
+        <footer className="workspace-tab-search-footer">
+          <span>
+            <kbd>{WORKSPACE_TAB_SHORTCUTS.previous}</kbd>
+            <kbd>{WORKSPACE_TAB_SHORTCUTS.next}</kbd>
+            cycle tabs
+          </span>
+          <span><kbd>{WORKSPACE_TAB_SHORTCUTS.direct}</kbd> direct</span>
+          <span><kbd>↑</kbd><kbd>↓</kbd> choose</span>
+          <span><kbd>Enter</kbd> jump</span>
+          <span><kbd>Esc</kbd> close</span>
+        </footer>
+      </aside>
+    </div>
+  );
 }
 
 function tabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
@@ -119,8 +435,18 @@ function WorkspaceSessionRow({
             {session ? paneLabel(pane) : "tmux session ended"}
           </span>
         </span>
-        <span className={`workspace-session-status ${session?.agentState || "unavailable"}`}>
-          {active ? "Active" : stateLabel}
+        <span className="workspace-session-indicators">
+          <span className={`workspace-session-status ${session?.agentState || "unavailable"}`}>
+            {active ? `Active \u00b7 ${stateLabel}` : stateLabel}
+          </span>
+          {session && session.queuedMessageCount > 0 && (
+            <span
+              className="workspace-session-memo-queue"
+              aria-label={`${session.queuedMessageCount} queued memo ${session.queuedMessageCount === 1 ? "item" : "items"}`}
+            >
+              Q {session.queuedMessageCount}
+            </span>
+          )}
         </span>
       </button>
       {open && onClose && (
@@ -140,6 +466,7 @@ function WorkspaceSessionRow({
 
 interface WorkspaceRecentsDialogProps extends SessionWorkspaceNavigationProps {
   sessionsByName: Map<string, Session>;
+  onRequestSaveWorkspace: () => void;
 }
 
 function WorkspaceRecentsDialog({
@@ -153,6 +480,9 @@ function WorkspaceRecentsDialog({
   onCloseRecents,
   onClearRecents,
   onOpenDashboard,
+  workspacePersistenceState = "unsaved",
+  onSaveWorkspace,
+  onRequestSaveWorkspace,
 }: WorkspaceRecentsDialogProps) {
   const [query, setQuery] = useState("");
   const dialogRef = useRef<HTMLElement>(null);
@@ -160,6 +490,9 @@ function WorkspaceRecentsDialog({
   const openSet = useMemo(() => new Set(openSessions), [openSessions]);
   const recentSet = useMemo(() => new Set(recentSessions), [recentSessions]);
   const normalizedQuery = query.trim().toLowerCase();
+  const persistenceCopy = workspacePersistenceState === "unsaved"
+    ? null
+    : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
 
   const matchesQuery = (sessionName: string): boolean => {
     if (!normalizedQuery) return true;
@@ -196,7 +529,15 @@ function WorkspaceRecentsDialog({
       ? document.activeElement
       : null;
     const releaseBodyScroll = acquireBodyScrollLock();
-    const frame = window.requestAnimationFrame(() => searchRef.current?.focus());
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const coarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+    const compactTouchLayout = viewportWidth <= 640
+      || (viewportWidth <= 1024 && (coarsePointer || viewportHeight <= 500));
+    const frame = window.requestAnimationFrame(() => {
+      if (compactTouchLayout) dialogRef.current?.focus();
+      else searchRef.current?.focus();
+    });
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -364,10 +705,41 @@ function WorkspaceRecentsDialog({
         </div>
 
         <footer className="workspace-recents-footer">
-          <p>Open tabs follow this URL. Closed visits clear when the page reloads.</p>
-          <button type="button" className="secondary-button" onClick={onOpenDashboard}>
-            <GridIcon /> Browse all
-          </button>
+          <p>
+            {persistenceCopy?.description
+              ?? "Save these open tabs to resume them here or on another device."}
+          </p>
+          <div className="workspace-recents-footer-actions">
+            {workspacePersistenceState === "unsaved" ? onSaveWorkspace && (
+              <button
+                type="button"
+                className="secondary-button workspace-recents-save-button"
+                onClick={onRequestSaveWorkspace}
+                aria-haspopup="dialog"
+                aria-controls="workspace-save-dialog"
+              >
+                <SaveIcon /> Save
+              </button>
+            ) : persistenceCopy && (
+              <span
+                className={`workspace-recents-saved-status ${workspacePersistenceState}`}
+                role="status"
+                tabIndex={-1}
+                aria-label={persistenceCopy.accessibleLabel}
+                title={persistenceCopy.accessibleLabel}
+              >
+                {workspacePersistenceState === "saved"
+                  ? <CheckIcon />
+                  : workspacePersistenceState === "loading"
+                    ? <HistoryIcon />
+                    : <SaveIcon />}
+                {persistenceCopy.label}
+              </span>
+            )}
+            <button type="button" className="secondary-button" onClick={onOpenDashboard}>
+              <GridIcon /> Browse all
+            </button>
+          </div>
         </footer>
       </aside>
     </div>
@@ -387,15 +759,55 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseTab,
     onCloseNewSession,
     onOpenRecents,
+    onCloseRecents,
     onOpenDashboard,
+    onOpenTabSearch,
+    workspacePersistenceState = "unsaved",
+    onSaveWorkspace,
   } = props;
   const activeTabRef = useRef<HTMLButtonElement>(null);
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
+  const persistenceStatusRef = useRef<HTMLSpanElement>(null);
   const focusActiveTabAfterClose = useRef(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveAfterRecents, setSaveAfterRecents] = useState(false);
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
     [sessions],
   );
   const closedRecentCount = recentSessions.filter((name) => !openSessions.includes(name)).length;
+  const persistenceCopy = workspacePersistenceState === "unsaved"
+    ? null
+    : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
+
+  const focusSaveReplacement = useCallback(() => {
+    if (isCompactWorkspaceViewport()) {
+      const overviewControl = document.getElementById(MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID);
+      if (overviewControl instanceof HTMLElement) {
+        overviewControl.focus();
+        return;
+      }
+    }
+    const target = persistenceStatusRef.current || saveButtonRef.current;
+    target?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (workspacePersistenceState === "unsaved") return;
+    setSaveDialogOpen(false);
+    setSaveAfterRecents(false);
+  }, [workspacePersistenceState]);
+
+  useEffect(() => {
+    if (
+      recentsOpen
+      || !saveAfterRecents
+      || workspacePersistenceState !== "unsaved"
+      || !onSaveWorkspace
+    ) return;
+    setSaveAfterRecents(false);
+    setSaveDialogOpen(true);
+  }, [onSaveWorkspace, recentsOpen, saveAfterRecents, workspacePersistenceState]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -419,6 +831,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseNewSession?.();
   };
 
+  const requestSaveFromRecents = () => {
+    if (!onSaveWorkspace || workspacePersistenceState !== "unsaved") return;
+    setSaveAfterRecents(true);
+    onCloseRecents();
+  };
+
   return (
     <>
       <nav
@@ -439,7 +857,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           </button>
           <div className="workspace-tab-viewport">
             <div className="workspace-tab-list" role="tablist" aria-label="Session workspace tabs">
-              {openSessions.map((sessionName) => {
+              {openSessions.map((sessionName, index) => {
                 const session = sessionsByName.get(sessionName);
                 const title = tabTitle(sessionName, sessionsByName);
                 const active = !newSessionActive && sessionName === activeSession;
@@ -452,6 +870,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       aria-selected={active}
                       aria-controls={active ? "muxdeck-active-console" : undefined}
                       aria-label={`${title}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}`}
+                      aria-keyshortcuts={index < 9 ? `Control+Shift+${index + 1}` : undefined}
+                      title={index < 9 ? `${title} (Ctrl+Shift+${index + 1})` : title}
                       tabIndex={active ? 0 : -1}
                       onKeyDown={tabKeyDown}
                       onClick={() => onSelect(sessionName)}
@@ -501,6 +921,53 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           </div>
+          {workspacePersistenceState === "unsaved" ? onSaveWorkspace && (
+            <button
+              ref={saveButtonRef}
+              type="button"
+              className="workspace-save-button"
+              onClick={() => setSaveDialogOpen(true)}
+              aria-haspopup="dialog"
+              aria-controls="workspace-save-dialog"
+              aria-expanded={saveDialogOpen}
+              aria-label="Save workspace"
+              title="Save workspace"
+            >
+              <SaveIcon />
+              <span className="workspace-save-label-full">Save workspace</span>
+              <span className="workspace-save-label-compact">Save</span>
+            </button>
+          ) : persistenceCopy && (
+            <span
+              ref={persistenceStatusRef}
+              className={`workspace-saved-indicator ${workspacePersistenceState}`}
+              role="status"
+              tabIndex={-1}
+              aria-label={persistenceCopy.accessibleLabel}
+              title={persistenceCopy.accessibleLabel}
+            >
+              {workspacePersistenceState === "saved"
+                ? <CheckIcon />
+                : workspacePersistenceState === "loading"
+                  ? <HistoryIcon />
+                  : <SaveIcon />}
+              <span>{persistenceCopy.label}</span>
+            </span>
+          )}
+          {onOpenTabSearch && openSessions.length > 0 && (
+            <button
+              type="button"
+              className="workspace-tab-search-button"
+              onClick={onOpenTabSearch}
+              aria-label="Search open tabs"
+              aria-keyshortcuts="Control+Shift+;"
+              title={`Search open tabs (${WORKSPACE_TAB_SHORTCUTS.search})`}
+            >
+              <SearchIcon />
+              <span>Find tab</span>
+              <kbd>{WORKSPACE_TAB_SHORTCUTS.search}</kbd>
+            </button>
+          )}
           <button
             type="button"
             className={recentsOpen ? "workspace-recents-button active" : "workspace-recents-button"}
@@ -524,7 +991,21 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       </p>
 
       {recentsOpen && (
-        <WorkspaceRecentsDialog {...props} sessionsByName={sessionsByName} />
+        <WorkspaceRecentsDialog
+          {...props}
+          sessionsByName={sessionsByName}
+          onRequestSaveWorkspace={requestSaveFromRecents}
+        />
+      )}
+
+      {saveDialogOpen && onSaveWorkspace && workspacePersistenceState === "unsaved" && (
+        <WorkspaceSaveDialog
+          tabs={openSessions}
+          activeSession={activeSession}
+          onSave={onSaveWorkspace}
+          onClose={() => setSaveDialogOpen(false)}
+          onFallbackFocus={focusSaveReplacement}
+        />
       )}
     </>
   );

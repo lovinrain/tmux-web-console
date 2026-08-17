@@ -1,16 +1,19 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  deleteWorkspace,
   getSnippetTree,
   listQueuedMessages,
   listSessions,
+  listWorkspaces,
   subscribeToSessions,
   updateSessionIgnored,
   updateSessionStar,
   updateSessionTitle,
+  type SavedWorkspace,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
-import type { Pane, Session } from "../types";
+import type { Pane, QueuedMessage, Session } from "../types";
 import { activePane, classifyPane, SessionDashboard } from "./SessionDashboard";
 
 vi.mock("../api", () => ({
@@ -20,6 +23,10 @@ vi.mock("../api", () => ({
   createQueuedMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn(),
+  listWorkspaces: vi.fn(),
+  createWorkspace: vi.fn(),
+  updateWorkspace: vi.fn(),
+  deleteWorkspace: vi.fn(),
   getSnippetTree: vi.fn(),
   subscribeToSessions: vi.fn(),
   updateSessionIgnored: vi.fn(),
@@ -92,6 +99,8 @@ beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(listQueuedMessages).mockResolvedValue({ session: "test", messages: [] });
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 1, tree: [] });
+  vi.mocked(listWorkspaces).mockResolvedValue([]);
+  vi.mocked(deleteWorkspace).mockResolvedValue();
 });
 
 afterEach(() => {
@@ -100,11 +109,15 @@ afterEach(() => {
 });
 
 describe("session classification", () => {
-  it("recognizes Claude, Codex, and Cursor panes", () => {
+  it("recognizes Claude, Codex, Cursor, and Grok panes", () => {
     expect(classifyPane(pane({ command: "claude" })).tone).toBe("claude");
     expect(classifyPane(pane({ command: "codex" })).tone).toBe("codex");
     expect(classifyPane(pane({ command: "agent" })).label).toBe("Cursor");
     expect(classifyPane(pane({ command: "cursor-agent" })).tone).toBe("cursor");
+    expect(classifyPane(pane({ command: "grok" }))).toEqual({
+      label: "Grok",
+      tone: "grok",
+    });
   });
 
   it("selects the server-declared active pane", () => {
@@ -122,7 +135,7 @@ describe("session classification", () => {
       <SessionDashboard
         onOpen={vi.fn()}
         onNewSession={onNewSession}
-        newSessionWindowHref="/mux/sessions/new?q=deploy"
+        newSessionWindowHref="/mux/sessions/new?q=deploy&tab=leak&workspace=saved-id"
       />,
     );
 
@@ -138,6 +151,82 @@ describe("session classification", () => {
     expect(newWindow).toHaveAttribute("target", "_blank");
     expect(newWindow).toHaveAttribute("rel", "noopener noreferrer");
     expect(newWindow).toHaveTextContent("New window");
+    expect(screen.queryByRole("button", { name: /Resume workspace/ })).not.toBeInTheDocument();
+  });
+
+  it("offers a return to the preserved workspace with its tab count and target", () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const onResumeWorkspace = vi.fn();
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        onResumeWorkspace={onResumeWorkspace}
+        workspaceReturnSession="work/name #1"
+        workspaceTabCount={3}
+      />,
+    );
+
+    const resume = screen.getByRole("button", {
+      name: "Resume workspace at work/name #1, 3 open tabs",
+    });
+    expect(resume.closest(".dashboard-intro")).not.toBeNull();
+    expect(resume).toHaveTextContent("Resume workspace");
+    expect(resume).toHaveTextContent("Resume at · work/name #1");
+    expect(resume).toHaveTextContent("3 tabs");
+
+    fireEvent.click(resume);
+    expect(onResumeWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("renders server workspaces between the intro and sessions and forwards actions", async () => {
+    const savedWorkspace: SavedWorkspace = {
+      id: "saved-id",
+      name: "Release room",
+      tabs: ["api", "web"],
+      activeSession: "web",
+      sessionRevision: 0,
+      createdAt: Date.now() - 3_600_000,
+      updatedAt: Date.now() - 60_000,
+      lastActiveAt: Date.now() - 60_000,
+    };
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(listWorkspaces).mockResolvedValue([savedWorkspace]);
+    const onOpenSavedWorkspace = vi.fn();
+    const onSavedWorkspaceDeleted = vi.fn();
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        currentWorkspaceTabs={["current-api", "current-web"]}
+        activeSession="current-web"
+        activeWorkspaceId="saved-id"
+        onOpenSavedWorkspace={onOpenSavedWorkspace}
+        onSavedWorkspaceDeleted={onSavedWorkspaceDeleted}
+      />,
+    );
+
+    const workspaceHeading = await screen.findByRole("heading", { name: "Saved workspaces" });
+    const workspaceSection = workspaceHeading.closest(".saved-workspaces");
+    const intro = document.querySelector(".dashboard-intro");
+    const controls = screen.getByRole("region", { name: "Session filters" });
+    expect(intro?.compareDocumentPosition(workspaceSection as Node)
+      ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(workspaceSection?.compareDocumentPosition(controls)
+      ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(within(workspaceSection as HTMLElement).getByText("Current")).toBeVisible();
+    expect(screen.getByText("03 / SESSIONS")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
+    expect(screen.getByText("Save the 2 currently open tabs in this order.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume workspace Release room" }));
+    expect(onOpenSavedWorkspace).toHaveBeenCalledWith(savedWorkspace);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete workspace Release room" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Delete workspace",
+    }));
+    await waitFor(() => expect(onSavedWorkspaceDeleted).toHaveBeenCalledWith("saved-id"));
   });
 
   it("uses the base-path new-session route for the default window link", () => {
@@ -153,7 +242,7 @@ describe("session classification", () => {
     window.history.replaceState(
       {},
       "",
-      "/mux/?kind=shells&tab=alpha&view=list&tab=beta",
+      "/mux/?kind=shells&tab=alpha&workspace=saved-id&view=list&tab=beta",
     );
     vi.mocked(listSessions).mockResolvedValue([]);
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
@@ -164,24 +253,68 @@ describe("session classification", () => {
   });
 
   it("manages memoranda from both card and list views without opening the session", async () => {
-    vi.mocked(listSessions).mockResolvedValue([session({ queuedMessageCount: 2 })]);
+    const messages: QueuedMessage[] = [
+      {
+        id: "queued-1",
+        text: "Run the focused tests",
+        state: "queued",
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+        position: 0,
+      },
+      {
+        id: "queued-2",
+        text: "Check the deployment",
+        state: "queued",
+        createdAt: 1_700_000_001_000,
+        updatedAt: 1_700_000_001_000,
+        position: 1,
+      },
+      {
+        id: "note-1",
+        text: "Possible follow-up",
+        state: "note",
+        createdAt: 1_700_000_002_000,
+        updatedAt: 1_700_000_002_000,
+        position: 2,
+      },
+      {
+        id: "note-2",
+        text: "Scratch result",
+        state: "note",
+        createdAt: 1_700_000_003_000,
+        updatedAt: 1_700_000_003_000,
+        position: 3,
+      },
+    ];
+    vi.mocked(listSessions).mockResolvedValue([session({
+      memorandumCount: 4,
+      queuedMessageCount: 2,
+    })]);
+    vi.mocked(listQueuedMessages).mockResolvedValue({ session: "test", messages });
     const onOpen = vi.fn();
     renderWithTheme(<SessionDashboard onOpen={onOpen} />);
 
-    const cardAction = await screen.findByRole("button", { name: "Manage memoranda for test" });
+    const cardAction = await screen.findByRole("button", {
+      name: "Manage memoranda for test, 2 queued",
+    });
     expect(screen.getByRole("button", { name: "Light theme" })).toBeVisible();
-    expect(cardAction).toHaveTextContent("2");
+    expect(cardAction).toHaveTextContent("Q2");
+    expect(cardAction).toHaveClass("has-queued");
     fireEvent.click(cardAction);
 
-    expect(await screen.findByRole("dialog", { name: "Queued messages" })).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "Memo" })).toBeVisible();
+    expect(screen.getByText(/4 SAVED · 2 QUEUED/)).toBeVisible();
     expect(onOpen).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Close queued messages" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close memo" }));
 
     fireEvent.click(screen.getByRole("button", { name: "List" }));
-    const rowAction = screen.getByRole("button", { name: "Manage memoranda for test" });
+    const rowAction = screen.getByRole("button", {
+      name: "Manage memoranda for test, 2 queued",
+    });
     expect(rowAction.closest(".session-row")).not.toBeNull();
     fireEvent.click(rowAction);
-    expect(await screen.findByRole("dialog", { name: "Queued messages" })).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "Memo" })).toBeVisible();
     expect(onOpen).not.toHaveBeenCalled();
   });
 
@@ -258,7 +391,7 @@ describe("session classification", () => {
     window.history.replaceState(
       {},
       "",
-      "/mux/?q=work&tab=alpha&kind=shells&tab=beta&sort=title,tmux-name",
+      "/mux/?q=work&tab=alpha&kind=shells&workspace=saved-id&tab=beta&sort=title,tmux-name",
     );
     vi.mocked(listSessions).mockResolvedValue([
       session({ name: "work/name #1", customTitle: "Deploy API" }),
@@ -271,9 +404,10 @@ describe("session classification", () => {
     }) as HTMLAnchorElement;
     expect(link).toHaveAttribute(
       "href",
-      "/mux/session/work%2Fname%20%231?q=work&kind=shells&sort=title,tmux-name&tab=work%2Fname%20%231",
+      "/mux/session/work%2Fname%20%231?q=work&kind=shells&sort=title,tmux-name",
     );
-    expect(new URL(link.href).searchParams.getAll("tab")).toEqual(["work/name #1"]);
+    expect(new URL(link.href).searchParams.getAll("tab")).toEqual([]);
+    expect(new URL(link.href).searchParams.has("workspace")).toBe(false);
     expect(new URL(window.location.href).searchParams.getAll("tab")).toEqual([
       "alpha",
       "beta",
@@ -291,7 +425,7 @@ describe("session classification", () => {
     expect(rowLink.closest(".session-row")).not.toBeNull();
     expect(rowLink).toHaveAttribute(
       "href",
-      "/mux/session/work%2Fname%20%231?q=work&kind=shells&view=list&sort=title,tmux-name&tab=work%2Fname%20%231",
+      "/mux/session/work%2Fname%20%231?q=work&kind=shells&view=list&sort=title,tmux-name",
     );
   });
 
@@ -342,6 +476,32 @@ describe("session classification", () => {
     expect(screen.queryByRole("button", { name: "Open worker" })).not.toBeInTheDocument();
   });
 
+  it.each(["command-wait", "background-work"])(
+    "filters and canonicalizes the %s state alias",
+    async (stateAlias) => {
+      window.history.replaceState({}, "", `/mux/?state=${stateAlias}`);
+      vi.mocked(listSessions).mockResolvedValue([
+        session({
+          name: "background",
+          agentState: "waiting_command",
+          agentStateReason: "Agent is waiting for background work",
+        }),
+        session({ name: "foreground", id: "$2", agentState: "working" }),
+      ]);
+
+      renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+      const background = await screen.findByRole("button", { name: "Open background" });
+      expect(background).toHaveAccessibleDescription("Background work");
+      expect(screen.queryByRole("button", { name: "Open foreground" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Background work 1/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(window.location.search).toBe("?state=waiting_command");
+    },
+  );
+
   it("saves an optional human title from the card editor", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionTitle).mockResolvedValue("Muxdeck work");
@@ -390,20 +550,28 @@ describe("session classification", () => {
     expect(container.querySelector(".session-list")).not.toBeInTheDocument();
   });
 
-  it("keeps cursor-agent sessions visible under the Cursor and Agents chips", async () => {
+  it("keeps Cursor and Grok sessions under their own and the Agents chips", async () => {
     vi.mocked(listSessions).mockResolvedValue([
       session({ name: "cursor-one", id: "$1", panes: [pane({ command: "agent" })] }),
-      session({ name: "codex-one", id: "$2", panes: [pane({ command: "codex" })] }),
+      session({ name: "grok-one", id: "$2", panes: [pane({ command: "grok" })] }),
+      session({ name: "codex-one", id: "$3", panes: [pane({ command: "codex" })] }),
     ]);
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open cursor-one" });
     fireEvent.click(screen.getByRole("button", { name: /^agents$/i }));
     expect(screen.getByRole("button", { name: "Open cursor-one" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open grok-one" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open codex-one" })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: /^cursor$/i }));
     expect(screen.getByRole("button", { name: "Open cursor-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open grok-one" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open codex-one" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^grok$/i }));
+    expect(screen.getByRole("button", { name: "Open grok-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open cursor-one" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open codex-one" })).not.toBeInTheDocument();
   });
 
@@ -565,7 +733,8 @@ describe("session classification", () => {
 
     const groupLabels = [...container.querySelectorAll(".state-group-header h3")]
       .map((heading) => heading.textContent);
-    expect(groupLabels).toEqual(["Needs input", "Working", "Command wait", "Other"]);
+    expect(groupLabels).toEqual(["Needs input", "Working", "Background work", "Other"]);
+    expect(screen.getByRole("button", { name: /Background work 1/ })).toBeVisible();
     const needsInputOrder = [...container.querySelectorAll(".state-session-group.waiting_human .session-card-main")]
       .map((button) => button.getAttribute("aria-label"));
     expect(needsInputOrder).toEqual(["Open needs-new", "Open needs-old"]);

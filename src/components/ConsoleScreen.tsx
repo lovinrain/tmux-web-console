@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { listSessions, renameSession, updateSessionTitle } from "../api";
-import { ArrowLeftIcon, HistoryIcon, TerminalIcon } from "../icons";
+import {
+  createQueuedMessage,
+  listSessions,
+  renameSession,
+  updateSessionTitle,
+} from "../api";
+import {
+  ArrowLeftIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
+  ContractIcon,
+  ExpandIcon,
+  GridIcon,
+  HistoryIcon,
+  KeyboardIcon,
+  TerminalIcon,
+} from "../icons";
 import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session } from "../types";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
@@ -15,6 +30,7 @@ import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
+import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
 
 interface ConsoleScreenProps {
@@ -22,6 +38,10 @@ interface ConsoleScreenProps {
   onBack: () => void;
   sessionNavigation?: ReactNode;
   workspaceOverlayOpen?: boolean;
+  mobileMode?: MobileConsoleMode;
+  onMobileModeChange?: (mode: MobileConsoleMode) => void;
+  onOpenWorkspaceOverview?: () => void;
+  onCloseWorkspaceOverview?: () => void;
   barVisibility?: ConsoleBarVisibility;
   onBarVisibilityChange?: (bar: ConsoleBar, visible: boolean) => void;
   historyPanelWidth?: number;
@@ -52,6 +72,8 @@ export interface ConsoleBarVisibility {
 
 export type ConsoleBar = keyof ConsoleBarVisibility;
 
+export type MobileConsoleMode = "terminal" | "input";
+
 export const DEFAULT_CONSOLE_BAR_VISIBILITY: ConsoleBarVisibility = {
   sessionTabs: true,
   stagedInput: true,
@@ -66,6 +88,9 @@ const STATE_LABEL: Record<ConnectionState, string> = {
   ended: "Ended",
   error: "Connection error",
 };
+
+const RAW_PAGE_UP_SEQUENCE = "\x1b[5~";
+const RAW_PAGE_DOWN_SEQUENCE = "\x1b[6~";
 
 interface ConsoleBarToolbarProps {
   visibility: ConsoleBarVisibility;
@@ -139,6 +164,10 @@ export function ConsoleScreen({
   onBack,
   sessionNavigation,
   workspaceOverlayOpen = false,
+  mobileMode,
+  onMobileModeChange,
+  onOpenWorkspaceOverview,
+  onCloseWorkspaceOverview,
   barVisibility,
   onBarVisibilityChange,
   historyPanelWidth,
@@ -150,6 +179,7 @@ export function ConsoleScreen({
   onDismissRenameWarning,
 }: ConsoleScreenProps) {
   const { theme } = useTheme();
+  const consoleShellRef = useRef<HTMLElement>(null);
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
   const [loadedSession, setLoadedSession] = useState<Session | null>(null);
@@ -167,6 +197,10 @@ export function ConsoleScreen({
   const [localBarVisibility, setLocalBarVisibility] = useState(
     DEFAULT_CONSOLE_BAR_VISIBILITY,
   );
+  const [localMobileMode, setLocalMobileMode] = useState<MobileConsoleMode>("terminal");
+  const [mobileDistractionFreeMode, setMobileDistractionFreeMode] = useState<
+    MobileConsoleMode | null
+  >(null);
   const [localHistoryPanelWidth, setLocalHistoryPanelWidth] = useState(
     DEFAULT_HISTORY_PANEL_WIDTH,
   );
@@ -187,7 +221,14 @@ export function ConsoleScreen({
     ? lookupError.message
     : null;
   const visibleBars = barVisibility ?? localBarVisibility;
+  const visibleMobileMode = mobileMode ?? localMobileMode;
+  const activeMobileFocus = workspaceOverlayOpen ? "overview" : visibleMobileMode;
+  const mobileTerminalDistractionFree = mobileDistractionFreeMode === "terminal";
+  const mobileInputDistractionFree = mobileDistractionFreeMode === "input";
+  const mobileDistractionFree = mobileDistractionFreeMode === activeMobileFocus;
   const visibleHistoryPanelWidth = historyPanelWidth ?? localHistoryPanelWidth;
+  const memorandumCount = session?.memorandumCount ?? session?.queuedMessageCount ?? 0;
+  const queuedMemorandumCount = session?.queuedMessageCount ?? 0;
 
   const setBarVisible = useCallback((bar: ConsoleBar, visible: boolean) => {
     if (onBarVisibilityChange) {
@@ -196,6 +237,14 @@ export function ConsoleScreen({
     }
     setLocalBarVisibility((current) => ({ ...current, [bar]: visible }));
   }, [onBarVisibilityChange]);
+
+  const setMobileMode = useCallback((mode: MobileConsoleMode) => {
+    if (onMobileModeChange) {
+      onMobileModeChange(mode);
+      return;
+    }
+    setLocalMobileMode(mode);
+  }, [onMobileModeChange]);
 
   const showComposer = useCallback(() => {
     setBarVisible("stagedInput", true);
@@ -207,9 +256,56 @@ export function ConsoleScreen({
   }, [historyPanelWidth, onHistoryPanelWidthChange]);
 
   const revealAndFocusComposer = useCallback(() => {
+    setMobileMode("input");
     showComposer();
     window.requestAnimationFrame(() => inputBarRef.current?.focus());
-  }, [showComposer]);
+  }, [setMobileMode, showComposer]);
+
+  const selectMobileFocus = useCallback((focus: "overview" | MobileConsoleMode) => {
+    setMobileDistractionFreeMode(null);
+    if (focus === "overview") {
+      inputBarRef.current?.blur();
+      setMobileMode("terminal");
+      if (onOpenWorkspaceOverview) onOpenWorkspaceOverview();
+      else onBack();
+      return;
+    }
+
+    if (workspaceOverlayOpen) onCloseWorkspaceOverview?.();
+    setMobileMode(focus);
+    if (focus === "input") {
+      setBarVisible("stagedInput", true);
+      setBarVisible("shortcuts", true);
+      window.requestAnimationFrame(() => inputBarRef.current?.focus());
+    } else {
+      inputBarRef.current?.blur();
+    }
+  }, [
+    onBack,
+    onCloseWorkspaceOverview,
+    onOpenWorkspaceOverview,
+    setBarVisible,
+    setMobileMode,
+    workspaceOverlayOpen,
+  ]);
+
+  useEffect(() => {
+    const shell = consoleShellRef.current;
+    const viewport = window.visualViewport;
+    if (!shell || !viewport) return;
+
+    const syncViewport = () => {
+      shell.style.setProperty("--console-viewport-height", `${viewport.height}px`);
+      shell.style.setProperty("--console-viewport-top", `${viewport.offsetTop}px`);
+    };
+    syncViewport();
+    viewport.addEventListener("resize", syncViewport);
+    viewport.addEventListener("scroll", syncViewport);
+    return () => {
+      viewport.removeEventListener("resize", syncViewport);
+      viewport.removeEventListener("scroll", syncViewport);
+    };
+  }, [currentLookupError, sessionName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,6 +348,7 @@ export function ConsoleScreen({
 
   useEffect(() => {
     setPaneId(null);
+    setMobileDistractionFreeMode(null);
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
@@ -261,12 +358,20 @@ export function ConsoleScreen({
 
   useEffect(() => {
     if (!workspaceOverlayOpen) return;
+    setMobileDistractionFreeMode(null);
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setMessagesOpen(false);
     setSnippetsOpen(false);
   }, [workspaceOverlayOpen]);
+
+  useEffect(() => {
+    if (
+      mobileDistractionFreeMode
+      && activeMobileFocus !== mobileDistractionFreeMode
+    ) setMobileDistractionFreeMode(null);
+  }, [activeMobileFocus, mobileDistractionFreeMode]);
 
   useEffect(() => {
     const title = session?.name === sessionName ? session.customTitle || sessionName : sessionName;
@@ -279,12 +384,55 @@ export function ConsoleScreen({
     setConnectionSnapshot({ sessionName, state });
   }, [sessionName]);
   const paneChange = useCallback((nextPaneId: string | null) => setPaneId(nextPaneId), []);
+  const toggleMobileTerminalDistractionFree = useCallback(() => {
+    const next = mobileDistractionFreeMode !== "terminal";
+    if (next) {
+      inputBarRef.current?.blur();
+      setHistoryOpen(false);
+      setTitleEditorOpen(false);
+      setRenameEditorOpen(false);
+      setMessagesOpen(false);
+      setSnippetsOpen(false);
+    }
+    setMobileDistractionFreeMode(next ? "terminal" : null);
+  }, [mobileDistractionFreeMode]);
+  const toggleMobileInputDistractionFree = useCallback(() => {
+    const next = mobileDistractionFreeMode !== "input";
+    if (next) {
+      setHistoryOpen(false);
+      setTitleEditorOpen(false);
+      setRenameEditorOpen(false);
+      setMessagesOpen(false);
+      setSnippetsOpen(false);
+    }
+    setMobileDistractionFreeMode(next ? "input" : null);
+    window.requestAnimationFrame(() => inputBarRef.current?.focus());
+  }, [mobileDistractionFreeMode]);
   const saveSessionTitle = useCallback(async (title: string) => {
     const customTitle = await updateSessionTitle(sessionName, title);
     if (session) onSessionUpdate?.({ ...session, customTitle });
     setLoadedSession((current) => current?.name === sessionName ? { ...current, customTitle } : current);
     setTitleEditorOpen(false);
   }, [onSessionUpdate, session, sessionName]);
+  const updateMemorandumCounts = useCallback((counts: { total: number; queued: number }) => {
+    if (!session) return;
+    const updatedSession = {
+      ...session,
+      memorandumCount: counts.total,
+      queuedMessageCount: counts.queued,
+    };
+    setLoadedSession(updatedSession);
+    onSessionUpdate?.(updatedSession);
+  }, [onSessionUpdate, session]);
+
+  const addDraftToMemo = useCallback(async (text: string) => {
+    if (!session) throw new Error("This tmux session is no longer available.");
+    const message = await createQueuedMessage(session.name, text, "queued");
+    updateMemorandumCounts({
+      total: Math.max(memorandumCount + 1, message.position + 1),
+      queued: queuedMemorandumCount + 1,
+    });
+  }, [memorandumCount, queuedMemorandumCount, session, updateMemorandumCounts]);
   const saveSessionName = useCallback(async (name: string) => {
     if (!session) throw new Error("This tmux session is no longer available.");
     const visibleDraft = inputBarRef.current?.getDraft() ?? "";
@@ -331,15 +479,70 @@ export function ConsoleScreen({
 
   return (
     <main
+      ref={consoleShellRef}
       className={sessionNavigation ? "console-shell has-session-navigation" : "console-shell"}
-      data-composer-visible={visibleBars.stagedInput}
-      data-shortcuts-visible={visibleBars.shortcuts}
+      data-composer-visible={visibleBars.stagedInput || visibleMobileMode === "input"}
+      data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
+      data-mobile-focus={activeMobileFocus}
+      data-mobile-distraction-free={mobileDistractionFree ? "true" : "false"}
     >
       <ConsoleBarToolbar
         visibility={visibleBars}
         availability={{ sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
       />
+      <nav className="mobile-console-focus" aria-label="Mobile console focus">
+        <button
+          id={MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID}
+          type="button"
+          className="mobile-console-focus-button overview"
+          aria-pressed={activeMobileFocus === "overview"}
+          aria-haspopup="dialog"
+          aria-expanded={workspaceOverlayOpen}
+          onClick={() => selectMobileFocus("overview")}
+        >
+          <GridIcon />
+          <span>Overview</span>
+        </button>
+        <button
+          type="button"
+          className="mobile-console-focus-button terminal"
+          aria-pressed={activeMobileFocus === "terminal"}
+          aria-controls="muxdeck-active-console"
+          onClick={() => selectMobileFocus("terminal")}
+        >
+          <TerminalIcon />
+          <span>Terminal</span>
+        </button>
+        <button
+          type="button"
+          className={[
+            "mobile-console-focus-button input",
+            session?.agentState === "waiting_human" ? "needs-input" : "",
+            queuedMemorandumCount > 0 ? "has-queued-memos" : "",
+          ].filter(Boolean).join(" ")}
+          aria-label={queuedMemorandumCount > 0
+            ? `Input, ${queuedMemorandumCount} queued memo ${queuedMemorandumCount === 1 ? "item" : "items"}`
+            : "Input"}
+          aria-pressed={activeMobileFocus === "input"}
+          aria-controls="muxdeck-staged-input"
+          title={session?.agentState === "waiting_human"
+            ? "This session needs input"
+            : "Focus the staged input"}
+          onClick={() => selectMobileFocus("input")}
+        >
+          <KeyboardIcon />
+          <span>Input</span>
+          {queuedMemorandumCount > 0 && (
+            <strong className="mobile-console-memo-count" aria-hidden="true">
+              Q {queuedMemorandumCount}
+            </strong>
+          )}
+          {session?.agentState === "waiting_human" && (
+            <span className="mobile-console-focus-attention" aria-hidden="true" />
+          )}
+        </button>
+      </nav>
       <header className="console-header">
         <button type="button" className="icon-button back-button" onClick={onBack} aria-label="Back to sessions"><ArrowLeftIcon /></button>
         <div className="console-identity">
@@ -397,26 +600,116 @@ export function ConsoleScreen({
       )}
 
       <div className="terminal-coordinate top-left">{pane ? `${pane.width}x${pane.height}` : "--x--"}</div>
-      <LiveTerminal
-        ref={terminalRef}
-        session={sessionName}
-        ignoreSize={ignoreSize}
-        theme={theme}
-        onStateChange={stateChange}
-        onPaneChange={paneChange}
-      />
+      <div className="terminal-view">
+        <LiveTerminal
+          ref={terminalRef}
+          session={sessionName}
+          ignoreSize={ignoreSize}
+          layoutSuspended={mobileInputDistractionFree}
+          theme={theme}
+          onStateChange={stateChange}
+          onPaneChange={paneChange}
+        />
+        <nav className="terminal-view-controls" aria-label="Terminal view controls">
+          <button
+            type="button"
+            className="terminal-view-control"
+            aria-label="Raw terminal Page Up"
+            aria-controls="muxdeck-active-console"
+            title="Send Page Up to the foreground terminal application"
+            disabled={connection !== "live"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => terminalRef.current?.send(RAW_PAGE_UP_SEQUENCE)}
+          >
+            <ArrowUpIcon />
+            <span>PgUp</span>
+          </button>
+          <button
+            type="button"
+            className="terminal-view-control"
+            aria-label="Raw terminal Page Down"
+            aria-controls="muxdeck-active-console"
+            title="Send Page Down to the foreground terminal application"
+            disabled={connection !== "live"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => terminalRef.current?.send(RAW_PAGE_DOWN_SEQUENCE)}
+          >
+            <ArrowDownIcon />
+            <span>PgDn</span>
+          </button>
+          <button
+            type="button"
+            className="terminal-view-control tmux-history"
+            aria-label="Tmux Page Up"
+            aria-controls="muxdeck-active-console"
+            title="Enter tmux copy mode one page up"
+            disabled={connection !== "live"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => terminalRef.current?.navigateHistory("page-up")}
+          >
+            <HistoryIcon />
+            <span>T Up</span>
+          </button>
+          <button
+            type="button"
+            className="terminal-view-control tmux-history"
+            aria-label="Tmux Page Down"
+            aria-controls="muxdeck-active-console"
+            title="Page down while tmux copy mode is active"
+            disabled={connection !== "live"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => terminalRef.current?.navigateHistory("page-down")}
+          >
+            <HistoryIcon />
+            <span>T Dn</span>
+          </button>
+          <button
+            type="button"
+            className="terminal-view-control live-toggle"
+            aria-label="Return to live terminal"
+            aria-controls="muxdeck-active-console"
+            title="Leave tmux copy mode and return to live output"
+            disabled={connection !== "live"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              terminalRef.current?.navigateHistory("exit");
+              terminalRef.current?.jumpToLive();
+            }}
+          >
+            <TerminalIcon />
+            <span>Live</span>
+          </button>
+          <button
+            type="button"
+            className="terminal-view-control distraction-toggle"
+            aria-label={mobileTerminalDistractionFree
+              ? "Exit distraction-free terminal"
+              : "Enter distraction-free terminal"}
+            aria-controls="muxdeck-active-console"
+            aria-pressed={mobileTerminalDistractionFree}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={toggleMobileTerminalDistractionFree}
+          >
+            {mobileTerminalDistractionFree ? <ContractIcon /> : <ExpandIcon />}
+            <span>{mobileTerminalDistractionFree ? "Exit" : "Focus"}</span>
+          </button>
+        </nav>
+      </div>
       <InputBar
         key={sessionName}
         ref={inputBarRef}
         sessionName={sessionName}
         sessionId={session?.id}
         enabled={connection === "live"}
-        composerVisible={visibleBars.stagedInput}
-        shortcutsVisible={visibleBars.shortcuts}
+        composerVisible={visibleBars.stagedInput || visibleMobileMode === "input"}
+        shortcutsVisible={visibleBars.shortcuts || visibleMobileMode === "input"}
         onSend={(data) => terminalRef.current?.send(data) ?? false}
         onSubmit={(data, withEnter) => (
           terminalRef.current?.submit(data, withEnter) ?? Promise.resolve(false)
         )}
+        onAddToMemo={session ? addDraftToMemo : undefined}
+        mobileDistractionFree={mobileInputDistractionFree}
+        onToggleMobileDistractionFree={toggleMobileInputDistractionFree}
         onFocus={() => terminalRef.current?.focus()}
         onRevealComposer={showComposer}
         onEditSessionTitle={session ? () => setTitleEditorOpen(true) : undefined}
@@ -425,7 +718,8 @@ export function ConsoleScreen({
           : undefined}
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
         onOpenSnippets={() => setSnippetsOpen(true)}
-        messageCount={session?.queuedMessageCount ?? 0}
+        messageCount={memorandumCount}
+        queuedMessageCount={queuedMemorandumCount}
       />
       {!workspaceOverlayOpen && historyOpen && pane && (
         <HistoryPanel
@@ -454,6 +748,7 @@ export function ConsoleScreen({
           sessionName={session.name}
           sessionTitle={session.customTitle}
           onClose={() => setMessagesOpen(false)}
+          onCountsChange={updateMemorandumCounts}
           onChoose={(message) => {
             if (!inputBarRef.current?.loadDraft(message.text)) {
               throw new Error("The current staged draft was left unchanged.");

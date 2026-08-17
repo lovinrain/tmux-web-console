@@ -21,11 +21,13 @@ from tmux_console.messages import SessionMessageStore
 from tmux_console.metadata import SessionTitleStore
 from tmux_console.status import AgentState, AgentStateDetector
 from tmux_console.tmux import (
+    CreatedSession,
     Session,
     TmuxClient,
     TmuxError,
     TmuxRenameUnverifiedError,
 )
+from tmux_console.workspaces import WorkspaceStore
 
 
 def make_session(name: str = "agent-one") -> Session:
@@ -77,13 +79,13 @@ class FakeTmux(TmuxClient):
 
 
 class CreatingFakeTmux(FakeTmux):
-    def __init__(self, result: str | TmuxError) -> None:
+    def __init__(self, result: CreatedSession | TmuxError) -> None:
         super().__init__([[]])
         self.result = result
-        self.create_calls = 0
+        self.create_calls: list[str | None] = []
 
-    async def create_session(self) -> str:
-        self.create_calls += 1
+    async def create_session(self, requested_name: str | None = None) -> CreatedSession:
+        self.create_calls.append(requested_name)
         if isinstance(self.result, TmuxError):
             raise self.result
         return self.result
@@ -203,7 +205,7 @@ def event_payload(record: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_create_session_api_returns_created_native_name():
-    tmux = CreatingFakeTmux("muxdeck-abc123def456")
+    tmux = CreatingFakeTmux(CreatedSession("muxdeck-abc123def456", "$12"))
     client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
 
     try:
@@ -211,15 +213,38 @@ async def test_create_session_api_returns_created_native_name():
         response = await client.post("/api/sessions", json={})
 
         assert response.status == 201
-        assert await response.json() == {"session": "muxdeck-abc123def456"}
-        assert tmux.create_calls == 1
+        assert await response.json() == {
+            "session": "muxdeck-abc123def456",
+            "sessionId": "$12",
+        }
+        assert tmux.create_calls == [None]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_create_session_api_preserves_a_requested_native_name():
+    requested_name = "  work/name #1  "
+    tmux = CreatingFakeTmux(CreatedSession(requested_name, "$13"))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post("/api/sessions", json={"name": requested_name})
+
+        assert response.status == 201
+        assert await response.json() == {
+            "session": requested_name,
+            "sessionId": "$13",
+        }
+        assert tmux.create_calls == [requested_name]
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
 async def test_create_session_api_rejects_invalid_bodies_and_fields():
-    tmux = CreatingFakeTmux("unused")
+    tmux = CreatingFakeTmux(CreatedSession("unused", "$14"))
     client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
 
     try:
@@ -237,10 +262,35 @@ async def test_create_session_api_rejects_invalid_bodies_and_fields():
         assert non_object.status == 400
         assert await non_object.json() == {"error": "request body must be an object"}
 
-        unknown = await client.post("/api/sessions", json={"name": "work"})
+        unknown = await client.post(
+            "/api/sessions", json={"name": "work", "launch": "shell"}
+        )
         assert unknown.status == 400
-        assert await unknown.json() == {"error": "unknown field: name"}
-        assert tmux.create_calls == 0
+        assert await unknown.json() == {"error": "unknown field: launch"}
+
+        for value in (None, 7, True, []):
+            wrong_type = await client.post("/api/sessions", json={"name": value})
+            assert wrong_type.status == 400
+            assert await wrong_type.json() == {"error": "name must be a string"}
+
+        invalid_names = {
+            "": "session name is required",
+            "   ": "session name is required",
+            "bad:name": "session name cannot contain ':' or '.'",
+            "bad.name": "session name cannot contain ':' or '.'",
+            "bad\\name": "session name cannot contain '\\'",
+            "bad;": "session name cannot end with ';'",
+            "line\nbreak": "session name cannot contain control characters",
+            "left\u2028right": "session name cannot contain Unicode line separators",
+            "\ud800": "session name contains invalid Unicode",
+            "x" * 257: "session name must be 256 characters or fewer",
+        }
+        for name, message in invalid_names.items():
+            invalid = await client.post("/api/sessions", json={"name": name})
+            assert invalid.status == 400
+            assert await invalid.json() == {"error": message}
+
+        assert tmux.create_calls == []
     finally:
         await client.close()
 
@@ -256,7 +306,23 @@ async def test_create_session_api_reports_tmux_failures_as_unavailable():
 
         assert response.status == 503
         assert await response.json() == {"error": "permission denied"}
-        assert tmux.create_calls == 1
+        assert tmux.create_calls == [None]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_create_session_api_reports_an_atomic_name_conflict():
+    tmux = CreatingFakeTmux(TmuxError("duplicate session: existing", returncode=1))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post("/api/sessions", json={"name": "existing"})
+
+        assert response.status == 409
+        assert await response.json() == {"error": "duplicate session: existing"}
+        assert tmux.create_calls == ["existing"]
     finally:
         await client.close()
 
@@ -268,6 +334,7 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
     tmux = RenamingFakeTmux([make_session(old_name)])
     titles_path = tmp_path / "titles.json"
     messages_path = tmp_path / "messages.json"
+    workspaces_path = tmp_path / "workspaces.json"
     titles = SessionTitleStore(titles_path)
     messages = SessionMessageStore(messages_path, id_factory=lambda: "message-id")
     titles.set_title(old_name, "Human alias")
@@ -276,12 +343,23 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
     titles.set_starred(new_name, True)
     old_message = messages.add_message(old_name, "Continue the task")
     messages.add_message(new_name, "Stale queue")
+    workspaces = WorkspaceStore(
+        workspaces_path,
+        clock=lambda: 1_700_000_000,
+        id_factory=lambda: "workspace-id",
+    )
+    saved_workspace = workspaces.create_workspace(
+        name="Project",
+        tabs=[old_name, "other", new_name],
+        active_session=old_name,
+    )
     client = TestClient(
         TestServer(
             create_app(
                 tmux=tmux,
                 titles=titles,
                 messages=messages,
+                workspaces=workspaces,
                 base_path="",
             )
         )
@@ -310,6 +388,94 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
         reloaded_messages = SessionMessageStore(messages_path)
         assert reloaded_messages.list_messages(old_name) == []
         assert reloaded_messages.list_messages(new_name) == [old_message]
+        reloaded_workspace = WorkspaceStore(workspaces_path).get_workspace(
+            "workspace-id"
+        )
+        assert reloaded_workspace["tabs"] == [new_name, "other"]
+        assert reloaded_workspace["activeSession"] == new_name
+        assert reloaded_workspace["lastActiveAt"] == saved_workspace["lastActiveAt"]
+        assert reloaded_workspace["updatedAt"] > saved_workspace["updatedAt"]
+        assert reloaded_workspace["sessionRevision"] == 1
+
+        stale_activity = await client.post(
+            "/api/workspaces/workspace-id/activity",
+            json={
+                "tabs": [old_name, "other"],
+                "activeSession": old_name,
+                "sessionRevision": saved_workspace["sessionRevision"],
+            },
+        )
+        assert stale_activity.status == 409
+        assert "reload the workspace" in (await stale_activity.json())["error"]
+        assert workspaces.get_workspace("workspace-id") == reloaded_workspace
+
+        current_activity = await client.post(
+            "/api/workspaces/workspace-id/activity",
+            json={
+                "tabs": [new_name, "ended-but-preserved"],
+                "activeSession": "ended-but-preserved",
+                "sessionRevision": reloaded_workspace["sessionRevision"],
+            },
+        )
+        assert current_activity.status == 200
+        current_workspace = (await current_activity.json())["workspace"]
+        assert current_workspace["tabs"] == [new_name, "ended-but-preserved"]
+        assert current_workspace["activeSession"] == "ended-but-preserved"
+        assert current_workspace["sessionRevision"] == 1
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_rename_session_api_invalidates_a_stale_removed_tab_snapshot(tmp_path):
+    old_name = "agent-old"
+    new_name = "agent-new"
+    workspaces = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        clock=lambda: 1_700_000_000,
+        id_factory=lambda: "workspace-id",
+    )
+    created = workspaces.create_workspace(
+        name="Project",
+        tabs=[old_name, "keep"],
+        active_session=old_name,
+    )
+    current_before_rename = workspaces.record_activity(
+        "workspace-id",
+        tabs=["keep"],
+        active_session="keep",
+        session_revision=created["sessionRevision"],
+    )
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=RenamingFakeTmux([make_session(old_name)]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        renamed = await client.put(
+            "/api/session-name", json={"session": old_name, "name": new_name}
+        )
+        assert renamed.status == 200
+        after_rename = workspaces.get_workspace("workspace-id")
+        assert after_rename["tabs"] == ["keep"]
+        assert after_rename["sessionRevision"] == 1
+
+        stale_activity = await client.post(
+            "/api/workspaces/workspace-id/activity",
+            json={
+                "tabs": [old_name, "keep"],
+                "activeSession": old_name,
+                "sessionRevision": current_before_rename["sessionRevision"],
+            },
+        )
+        assert stale_activity.status == 409
+        assert workspaces.get_workspace("workspace-id") == after_rename
     finally:
         await client.close()
 
@@ -943,7 +1109,7 @@ async def test_rename_session_api_returns_success_when_message_migration_fails(
         assert await response.json() == {
             "previousSession": old_name,
             "session": new_name,
-            "warnings": ["unable to migrate queued messages"],
+            "warnings": ["unable to migrate memo entries"],
         }
         assert tmux.rename_calls == [(old_name, new_name)]
         assert titles.get_title(old_name) is None

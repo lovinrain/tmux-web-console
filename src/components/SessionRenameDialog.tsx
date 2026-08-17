@@ -23,7 +23,9 @@ export function SessionRenameDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const blankName = !draft.trim();
-  const invalidCharacters = draft.includes(":") || draft.includes(".");
+  const invalidCharacters = draft.includes(":")
+    || draft.includes(".")
+    || draft.includes("\\");
   const trailingCommandSeparator = draft.endsWith(";");
   const canRename = !blankName
     && draft !== sessionName
@@ -158,13 +160,13 @@ export function SessionRenameDialog({
           <p id="session-rename-hint">
             This is the real tmux rename (default prefix <code>Ctrl+B</code>, then
             {" "}<code>$</code>). It updates this workspace&apos;s tabs and URL; your
-            separate Muxdeck display title is preserved. Colons, periods, and a final semicolon
-            are not allowed.
+            separate Muxdeck display title is preserved. Colons, periods, backslashes, and a
+            final semicolon are not allowed.
             Leading and trailing spaces are part of the name and will be preserved.
           </p>
           {invalidCharacters && (
             <p className="title-error" role="alert">
-              A tmux session name cannot contain a colon or period.
+              A tmux session name cannot contain a colon, period, or backslash.
             </p>
           )}
           {trailingCommandSeparator && (

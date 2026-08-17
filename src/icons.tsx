@@ -125,6 +125,22 @@ export function GridIcon(props: IconProps) {
   );
 }
 
+export function ExpandIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function ContractIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function ListIcon(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -184,6 +200,23 @@ export function ArrowDownIcon(props: IconProps) {
   return (
     <IconBase {...props}>
       <path d="m6 10 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function SaveIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M5 4h11l3 3v13H5V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M8 4v6h8V4M8 20v-6h8v6" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m5 12.5 4.2 4.2L19 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </IconBase>
   );
 }

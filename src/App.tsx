@@ -6,17 +6,31 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { BASE_PATH } from "./api";
+import {
+  ApiRequestError,
+  BASE_PATH,
+  createWorkspace,
+  getWorkspace,
+  listSessions,
+  updateWorkspaceActivity,
+  type SavedWorkspace,
+} from "./api";
 import {
   ConsoleScreen,
   DEFAULT_CONSOLE_BAR_VISIBILITY,
   type ConsoleBar,
+  type MobileConsoleMode,
   type SessionRenameWarning,
 } from "./components/ConsoleScreen";
 import { SessionDashboard } from "./components/SessionDashboard";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
-import { SessionWorkspaceNavigation } from "./components/SessionWorkspaceNavigation";
+import {
+  SessionWorkspaceNavigation,
+  WorkspaceTabSearchDialog,
+  isCompactWorkspaceViewport,
+  type WorkspacePersistenceState,
+} from "./components/SessionWorkspaceNavigation";
 import { SnippetLibrary } from "./components/SnippetLibrary";
 import { ThemeProvider } from "./theme";
 import type { Session } from "./types";
@@ -26,6 +40,8 @@ import {
   createSessionWorkspace,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
+  savedWorkspaceIdFromSearch,
+  searchWithSavedWorkspaceId,
   searchWithWorkspaceTabs,
   sessionAfterClose,
   visitWorkspaceSession,
@@ -49,6 +65,7 @@ interface NewSessionRoute {
 
 interface PendingRecentsNavigation {
   sessionName: string;
+  sessionId?: string;
   replaceRestoredEntry?: boolean;
 }
 
@@ -69,10 +86,22 @@ interface SessionHistoryBindings {
   tabs: SessionHistoryBinding[];
 }
 
+interface WorkspaceActivitySnapshot {
+  workspaceId: string;
+  tabs: string[];
+  activeSession: string | null;
+  sessionRevision: number;
+}
+
+interface WorkspaceSyncProblem {
+  kind: "load" | "save" | "detached" | "create";
+  message: string;
+}
+
 type NewSessionViewToken = symbol;
 
 interface RoutedNewSessionScreenProps {
-  onCreated: (name: string, viewToken: NewSessionViewToken) => void;
+  onCreated: (name: string, sessionId: string, viewToken: NewSessionViewToken) => void;
   onCancel: () => void;
   onActiveChange: (viewToken: NewSessionViewToken, active: boolean) => void;
   sessionNavigation: ReactNode;
@@ -83,6 +112,68 @@ const SNIPPETS_FROM_DASHBOARD_KEY = "muxdeckSnippetsFromDashboard";
 const RECENTS_ENTRY_KEY = "muxdeckRecentsEntry";
 const SESSION_BINDINGS_KEY = "muxdeckSessionBindings";
 const NEW_SESSION_PATH = "/sessions/new";
+const WORKSPACE_ACTIVITY_DEBOUNCE_MS = 400;
+
+function workspaceErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function sameWorkspaceActivity(
+  left: WorkspaceActivitySnapshot | null,
+  right: WorkspaceActivitySnapshot,
+): boolean {
+  return Boolean(
+    left
+    && left.workspaceId === right.workspaceId
+    && left.sessionRevision === right.sessionRevision
+    && left.activeSession === right.activeSession
+    && left.tabs.length === right.tabs.length
+    && left.tabs.every((tab, index) => tab === right.tabs[index]),
+  );
+}
+
+function workspaceActivityUrl(workspaceId: string): string {
+  return `${BASE_PATH}/api/workspaces/${encodeURIComponent(workspaceId)}/activity`;
+}
+
+function persistWorkspaceActivityOnPageHide(snapshot: WorkspaceActivitySnapshot): void {
+  const body = JSON.stringify({
+    tabs: snapshot.tabs,
+    activeSession: snapshot.activeSession,
+    sessionRevision: snapshot.sessionRevision,
+  });
+  const url = workspaceActivityUrl(snapshot.workspaceId);
+  if (typeof navigator.sendBeacon === "function") {
+    try {
+      if (navigator.sendBeacon(url, new Blob([body], { type: "application/json" }))) {
+        return;
+      }
+    } catch {
+      // Fall through to a keepalive request when beacon delivery is unavailable.
+    }
+  }
+  void fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+function liveWorkspaceSession(
+  savedWorkspace: SavedWorkspace,
+  sessions: readonly Session[],
+): string | null {
+  const liveNames = new Set(sessions.map((session) => session.name));
+  if (savedWorkspace.activeSession && liveNames.has(savedWorkspace.activeSession)) {
+    return savedWorkspace.activeSession;
+  }
+  return savedWorkspace.tabs.find((sessionName) => liveNames.has(sessionName)) ?? null;
+}
+
+function isDashboardPath(path: string): boolean {
+  return path === "/" || path === "";
+}
 
 function currentLocation(): MuxLocation {
   const path = window.location.pathname;
@@ -408,7 +499,7 @@ function RoutedNewSessionScreen({
 
   return (
     <NewSessionScreen
-      onCreated={(name) => onCreated(name, viewToken)}
+      onCreated={(name, sessionId) => onCreated(name, sessionId, viewToken)}
       onCancel={onCancel}
       sessionNavigation={sessionNavigation}
     />
@@ -418,6 +509,9 @@ function RoutedNewSessionScreen({
 function AppRoutes() {
   const [location, setLocation] = useState(currentLocation);
   const [consoleBars, setConsoleBars] = useState(DEFAULT_CONSOLE_BAR_VISIBILITY);
+  const [mobileConsoleMode, setMobileConsoleMode] = useState<MobileConsoleMode>(
+    "terminal",
+  );
   const [historyPanelWidth, setHistoryPanelWidth] = useState(
     DEFAULT_HISTORY_PANEL_WIDTH,
   );
@@ -430,7 +524,14 @@ function AppRoutes() {
       workspaceTabsFromSearch(initialLocation.search, route?.sessionName),
     );
   });
+  const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
+  const [workspaceSyncProblem, setWorkspaceSyncProblem] = useState<WorkspaceSyncProblem | null>(
+    null,
+  );
+  const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
+    useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
+  const [tabSearchOpen, setTabSearchOpen] = useState(false);
   const [renameWarnings, setRenameWarnings] = useState<Map<string, SessionRenameWarning>>(
     () => new Map(),
   );
@@ -440,8 +541,44 @@ function AppRoutes() {
   const sessionRenames = useRef<SessionRenameAliases>(new Map());
   const knownSessionsRef = useRef<Session[]>([]);
   const workspaceRef = useRef(workspace);
+  const hydratedWorkspaceIdRef = useRef<string | null>(null);
+  const workspaceHydrationRequest = useRef(0);
+  const workspaceHydrationInFlight = useRef<string | null>(null);
+  const workspaceSessionRevision = useRef<{
+    workspaceId: string;
+    value: number;
+  } | null>(null);
+  const workspaceActivityTimer = useRef<number | null>(null);
+  const stagedWorkspaceActivity = useRef<WorkspaceActivitySnapshot | null>(null);
+  const queuedWorkspaceActivities = useRef<WorkspaceActivitySnapshot[]>([]);
+  const failedWorkspaceActivity = useRef<WorkspaceActivitySnapshot | null>(null);
+  const lastSavedWorkspaceActivity = useRef<WorkspaceActivitySnapshot | null>(null);
+  const workspaceActivityRunning = useRef(false);
+  const workspaceActivityInFlight = useRef<WorkspaceActivitySnapshot | null>(null);
+  const workspaceActivityFlush = useRef<() => void>(() => undefined);
+  const workspaceActivityCommit = useRef<() => void>(() => undefined);
+  const navigationGeneration = useRef(0);
+  const appMounted = useRef(true);
 
   workspaceRef.current = workspace;
+
+  const setHydratedWorkspaceBinding = useCallback((workspaceId: string | null) => {
+    hydratedWorkspaceIdRef.current = workspaceId;
+    setHydratedWorkspaceId(workspaceId);
+  }, []);
+
+  useEffect(() => {
+    appMounted.current = true;
+    return () => {
+      appMounted.current = false;
+      workspaceHydrationRequest.current += 1;
+      workspaceHydrationInFlight.current = null;
+      if (workspaceActivityTimer.current !== null) {
+        window.clearTimeout(workspaceActivityTimer.current);
+        workspaceActivityTimer.current = null;
+      }
+    };
+  }, []);
 
   const stateForLocation = useCallback((
     state: unknown,
@@ -469,6 +606,7 @@ function AppRoutes() {
     search: string,
     overrides: readonly SessionHistoryBinding[] = [],
   ) => {
+    navigationGeneration.current += 1;
     window.history.replaceState(
       stateForLocation(state, path, search, overrides),
       "",
@@ -482,12 +620,209 @@ function AppRoutes() {
     search: string,
     overrides: readonly SessionHistoryBinding[] = [],
   ) => {
+    navigationGeneration.current += 1;
     window.history.pushState(
       stateForLocation(state, path, search, overrides),
       "",
       targetUrl(path, search),
     );
   }, [stateForLocation]);
+
+  const detachSavedWorkspace = useCallback((message?: string) => {
+    const detachedWorkspaceId = hydratedWorkspaceIdRef.current;
+    workspaceHydrationRequest.current += 1;
+    workspaceHydrationInFlight.current = null;
+    workspaceSessionRevision.current = null;
+    setHydratedWorkspaceBinding(null);
+    if (stagedWorkspaceActivity.current?.workspaceId === detachedWorkspaceId) {
+      stagedWorkspaceActivity.current = null;
+    }
+    queuedWorkspaceActivities.current = queuedWorkspaceActivities.current.filter(
+      (activity) => activity.workspaceId !== detachedWorkspaceId,
+    );
+    failedWorkspaceActivity.current = null;
+    lastSavedWorkspaceActivity.current = null;
+    if (workspaceActivityTimer.current !== null) {
+      window.clearTimeout(workspaceActivityTimer.current);
+      workspaceActivityTimer.current = null;
+    }
+
+    const current = currentLocation();
+    const search = searchWithSavedWorkspaceId(
+      searchWithWorkspaceTabs(current.search, workspaceRef.current.openSessions),
+      null,
+    );
+    replaceLocation(window.history.state, current.path, search);
+    setLocation({ path: current.path, search });
+    setWorkspaceSyncProblem(message ? { kind: "detached", message } : null);
+  }, [replaceLocation, setHydratedWorkspaceBinding]);
+
+  const hydrateSavedWorkspace = useCallback(async (
+    workspaceId: string,
+    resume = false,
+  ) => {
+    workspaceActivityCommit.current();
+    const requestId = ++workspaceHydrationRequest.current;
+    workspaceHydrationInFlight.current = workspaceId;
+    workspaceSessionRevision.current = null;
+    setHydratedWorkspaceBinding(null);
+    failedWorkspaceActivity.current = null;
+    setWorkspaceSyncProblem(null);
+
+    try {
+      const [savedWorkspace, sessions] = await Promise.all([
+        getWorkspace(workspaceId),
+        listSessions().catch(() => knownSessionsRef.current),
+      ]);
+      if (
+        !appMounted.current
+        || requestId !== workspaceHydrationRequest.current
+        || savedWorkspaceIdFromSearch(currentLocation().search) !== workspaceId
+      ) return;
+
+      const targetSession = liveWorkspaceSession(savedWorkspace, sessions);
+      const restoredWorkspace = restoreWorkspaceTabs(
+        createSessionWorkspace(),
+        savedWorkspace.activeSession ?? targetSession ?? undefined,
+        savedWorkspace.tabs,
+      );
+      workspaceRef.current = restoredWorkspace;
+      setWorkspace(restoredWorkspace);
+      knownSessionsRef.current = sessions;
+      setKnownSessions(sessions);
+      failedWorkspaceActivity.current = null;
+      lastSavedWorkspaceActivity.current = null;
+      workspaceSessionRevision.current = {
+        workspaceId,
+        value: savedWorkspace.sessionRevision,
+      };
+      setHydratedWorkspaceBinding(workspaceId);
+      workspaceHydrationInFlight.current = null;
+
+      const current = currentLocation();
+      const route = parseSessionRoute(current.path);
+      let path = current.path;
+      if (route || (resume && isDashboardPath(current.path))) {
+        path = targetSession
+          ? sessionPath(targetSession, Boolean(route?.recentsOpen))
+          : "/";
+      }
+      const search = searchWithSavedWorkspaceId(
+        searchWithWorkspaceTabs(current.search, savedWorkspace.tabs),
+        workspaceId,
+      );
+      const liveTarget = targetSession
+        ? sessions.find((session) => session.name === targetSession)
+        : undefined;
+      replaceLocation(
+        window.history.state,
+        path,
+        search,
+        liveTarget ? [{ name: liveTarget.name, sessionId: liveTarget.id }] : [],
+      );
+      setLocation({ path, search });
+    } catch (error) {
+      if (
+        !appMounted.current
+        || requestId !== workspaceHydrationRequest.current
+        || savedWorkspaceIdFromSearch(currentLocation().search) !== workspaceId
+      ) return;
+      workspaceHydrationInFlight.current = null;
+      if (error instanceof ApiRequestError && error.status === 404) {
+        detachSavedWorkspace(
+          "That saved workspace no longer exists. Its current tabs are still open as an unsaved workspace.",
+        );
+        return;
+      }
+      setHydratedWorkspaceBinding(null);
+      setWorkspaceSyncProblem({
+        kind: "load",
+        message: workspaceErrorMessage(error, "Unable to load the saved workspace"),
+      });
+    }
+  }, [detachSavedWorkspace, replaceLocation, setHydratedWorkspaceBinding]);
+
+  const openSavedWorkspace = useCallback((savedWorkspace: SavedWorkspace) => {
+    const current = currentLocation();
+    const search = searchWithSavedWorkspaceId(current.search, savedWorkspace.id);
+    replaceLocation(window.history.state, current.path, search);
+    setLocation({ path: current.path, search });
+    void hydrateSavedWorkspace(savedWorkspace.id, true);
+  }, [hydrateSavedWorkspace, replaceLocation]);
+
+  const saveCurrentWorkspace = useCallback(async (name: string) => {
+    const startingLocation = currentLocation();
+    if (
+      savedWorkspaceIdFromSearch(startingLocation.search)
+      || hydratedWorkspaceIdRef.current
+    ) {
+      throw new Error("This workspace is already saved and syncing automatically.");
+    }
+
+    const currentWorkspace = workspaceRef.current;
+    const tabs = [...currentWorkspace.openSessions];
+    const route = parseSessionRoute(startingLocation.path);
+    const activeSession = route && tabs.includes(route.sessionName)
+      ? route.sessionName
+      : null;
+    const startingNavigationGeneration = navigationGeneration.current;
+    const created = await createWorkspace({ name, tabs, activeSession });
+    if (!appMounted.current) return;
+
+    const latestLocation = currentLocation();
+    if (navigationGeneration.current !== startingNavigationGeneration) {
+      const message = (
+        "The workspace was saved on the server, but this page changed before it could be "
+        + "opened. Find it in Sessions; this page was not changed."
+      );
+      setWorkspaceSyncProblem({ kind: "create", message });
+      throw new Error(message);
+    }
+    if (
+      savedWorkspaceIdFromSearch(latestLocation.search)
+      || hydratedWorkspaceIdRef.current
+    ) {
+      throw new Error(
+        "The workspace was saved, but this page switched workspaces before it could be opened. Find it in Sessions.",
+      );
+    }
+
+    workspaceHydrationRequest.current += 1;
+    workspaceHydrationInFlight.current = null;
+    failedWorkspaceActivity.current = null;
+    stagedWorkspaceActivity.current = null;
+    if (workspaceActivityTimer.current !== null) {
+      window.clearTimeout(workspaceActivityTimer.current);
+      workspaceActivityTimer.current = null;
+    }
+
+    const boundWorkspace = restoreWorkspaceTabs(
+      workspaceRef.current,
+      created.activeSession ?? undefined,
+      created.tabs,
+    );
+    workspaceRef.current = boundWorkspace;
+    setWorkspace(boundWorkspace);
+    workspaceSessionRevision.current = {
+      workspaceId: created.id,
+      value: created.sessionRevision,
+    };
+    lastSavedWorkspaceActivity.current = {
+      workspaceId: created.id,
+      tabs: [...created.tabs],
+      activeSession: created.activeSession,
+      sessionRevision: created.sessionRevision,
+    };
+    setHydratedWorkspaceBinding(created.id);
+    setWorkspaceSyncProblem(null);
+
+    const search = searchWithSavedWorkspaceId(
+      searchWithWorkspaceTabs(latestLocation.search, created.tabs),
+      created.id,
+    );
+    replaceLocation(window.history.state, latestLocation.path, search);
+    setLocation({ path: latestLocation.path, search });
+  }, [replaceLocation, setHydratedWorkspaceBinding]);
 
   const syncLocation = useCallback(() => {
     const restoredLocation = currentLocation();
@@ -519,6 +854,11 @@ function AppRoutes() {
         targetUrl(nextLocation.path, nextLocation.search),
       );
     }
+    const savedWorkspaceId = savedWorkspaceIdFromSearch(nextLocation.search);
+    if (savedWorkspaceId && hydratedWorkspaceIdRef.current !== savedWorkspaceId) {
+      setLocation(nextLocation);
+      return;
+    }
     const route = parseSessionRoute(nextLocation.path);
     const orderedTabs = workspaceTabsFromSearch(
       nextLocation.search,
@@ -540,9 +880,14 @@ function AppRoutes() {
 
   useEffect(() => {
     const update = () => {
+      navigationGeneration.current += 1;
       const pending = pendingRecentsNavigation.current;
+      const pendingTabs = pendingLocationTabs.current;
       if (pending) {
         pendingRecentsNavigation.current = null;
+        const overrides = pending.sessionId
+          ? [{ name: pending.sessionName, sessionId: pending.sessionId }]
+          : [];
         const restored = currentLocation();
         const restoredSearch = searchWithWorkspaceTabs(
           restored.search,
@@ -553,6 +898,7 @@ function AppRoutes() {
             withoutRecentsEntry(window.history.state),
             sessionPath(pending.sessionName),
             restoredSearch,
+            overrides,
           );
           syncLocation();
           return;
@@ -561,14 +907,16 @@ function AppRoutes() {
           window.history.state,
           restored.path,
           restoredSearch,
+          overrides,
         );
         pushLocation(
           { [FROM_DASHBOARD_KEY]: true },
           sessionPath(pending.sessionName),
           restoredSearch,
+          overrides,
         );
-      } else if (pendingLocationTabs.current) {
-        const openSessions = pendingLocationTabs.current;
+      } else if (pendingTabs) {
+        const openSessions = pendingTabs;
         pendingLocationTabs.current = null;
         const restored = currentLocation();
         replaceLocation(
@@ -577,16 +925,55 @@ function AppRoutes() {
           searchWithWorkspaceTabs(restored.search, openSessions),
         );
       }
+      if (pending || pendingTabs) {
+        syncLocation();
+        return;
+      }
+      const restored = currentLocation();
+      const savedWorkspaceId = savedWorkspaceIdFromSearch(restored.search);
+      if (savedWorkspaceId) {
+        setLocation(restored);
+        void hydrateSavedWorkspace(savedWorkspaceId);
+        return;
+      }
       syncLocation();
     };
     window.addEventListener("popstate", update);
     return () => window.removeEventListener("popstate", update);
-  }, [pushLocation, replaceLocation, syncLocation]);
+  }, [hydrateSavedWorkspace, pushLocation, replaceLocation, syncLocation]);
+
+  useEffect(() => {
+    const savedWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+    if (!savedWorkspaceId) {
+      setWorkspaceSyncProblem((current) => (
+        current?.kind === "load" || current?.kind === "save" ? null : current
+      ));
+      setDismissedWorkspaceSyncProblem(null);
+      workspaceHydrationRequest.current += 1;
+      workspaceHydrationInFlight.current = null;
+      if (hydratedWorkspaceIdRef.current !== null) {
+        workspaceActivityCommit.current();
+        setHydratedWorkspaceBinding(null);
+        workspaceSessionRevision.current = null;
+        failedWorkspaceActivity.current = null;
+        lastSavedWorkspaceActivity.current = null;
+      }
+      return;
+    }
+    if (
+      hydratedWorkspaceIdRef.current !== savedWorkspaceId
+      && workspaceHydrationInFlight.current !== savedWorkspaceId
+    ) {
+      void hydrateSavedWorkspace(savedWorkspaceId);
+    }
+  }, [hydrateSavedWorkspace, location.search, setHydratedWorkspaceBinding]);
 
   const activeRoute = parseSessionRoute(location.path);
   const newSessionRoute = parseNewSessionRoute(location.path);
 
   useEffect(() => {
+    const savedWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+    if (savedWorkspaceId && hydratedWorkspaceIdRef.current !== savedWorkspaceId) return;
     const route = parseSessionRoute(location.path);
     const orderedTabs = workspaceTabsFromSearch(location.search, route?.sessionName);
     setWorkspace((current) => restoreWorkspaceTabs(
@@ -605,8 +992,203 @@ function AppRoutes() {
     syncLocation();
   }, [location.path, location.search, replaceLocation, syncLocation]);
 
+  const flushWorkspaceActivity = useCallback(() => {
+    if (workspaceActivityRunning.current || !appMounted.current) return;
+    const snapshot = queuedWorkspaceActivities.current.shift();
+    if (!snapshot) return;
+    workspaceActivityRunning.current = true;
+    workspaceActivityInFlight.current = snapshot;
+
+    void updateWorkspaceActivity(
+      snapshot.workspaceId,
+      snapshot.tabs,
+      snapshot.activeSession,
+      snapshot.sessionRevision,
+    ).then((savedWorkspace) => {
+      if (
+        !appMounted.current
+        || hydratedWorkspaceIdRef.current !== snapshot.workspaceId
+        || savedWorkspaceIdFromSearch(currentLocation().search) !== snapshot.workspaceId
+      ) return;
+      const currentRevision = workspaceSessionRevision.current;
+      if (
+        currentRevision?.workspaceId === snapshot.workspaceId
+        && currentRevision.value > snapshot.sessionRevision
+      ) return;
+      workspaceSessionRevision.current = {
+        workspaceId: snapshot.workspaceId,
+        value: savedWorkspace.sessionRevision,
+      };
+      lastSavedWorkspaceActivity.current = snapshot;
+      if (failedWorkspaceActivity.current?.workspaceId === snapshot.workspaceId) {
+        failedWorkspaceActivity.current = null;
+        setWorkspaceSyncProblem((current) => (
+          current?.kind === "save" ? null : current
+        ));
+      }
+    }).catch((error: unknown) => {
+      if (
+        !appMounted.current
+        || hydratedWorkspaceIdRef.current !== snapshot.workspaceId
+        || savedWorkspaceIdFromSearch(currentLocation().search) !== snapshot.workspaceId
+      ) return;
+      if (error instanceof ApiRequestError && error.status === 404) {
+        detachSavedWorkspace(
+          "That workspace was deleted on another device. Its tabs remain open here as an unsaved workspace.",
+        );
+        return;
+      }
+      if (error instanceof ApiRequestError && error.status === 409) {
+        const currentRevision = workspaceSessionRevision.current;
+        if (
+          currentRevision?.workspaceId === snapshot.workspaceId
+          && currentRevision.value > snapshot.sessionRevision
+        ) return;
+        if (
+          stagedWorkspaceActivity.current?.workspaceId === snapshot.workspaceId
+          && stagedWorkspaceActivity.current.sessionRevision <= snapshot.sessionRevision
+        ) {
+          stagedWorkspaceActivity.current = null;
+          if (workspaceActivityTimer.current !== null) {
+            window.clearTimeout(workspaceActivityTimer.current);
+            workspaceActivityTimer.current = null;
+          }
+        }
+        queuedWorkspaceActivities.current = queuedWorkspaceActivities.current.filter(
+          (activity) => (
+            activity.workspaceId !== snapshot.workspaceId
+            || activity.sessionRevision > snapshot.sessionRevision
+          ),
+        );
+        if (
+          failedWorkspaceActivity.current?.workspaceId === snapshot.workspaceId
+          && failedWorkspaceActivity.current.sessionRevision <= snapshot.sessionRevision
+        ) failedWorkspaceActivity.current = null;
+        if (
+          lastSavedWorkspaceActivity.current?.workspaceId === snapshot.workspaceId
+          && lastSavedWorkspaceActivity.current.sessionRevision <= snapshot.sessionRevision
+        ) lastSavedWorkspaceActivity.current = null;
+        void hydrateSavedWorkspace(snapshot.workspaceId);
+        return;
+      }
+      failedWorkspaceActivity.current = snapshot;
+      setWorkspaceSyncProblem({
+        kind: "save",
+        message: workspaceErrorMessage(error, "Unable to save workspace changes"),
+      });
+    }).finally(() => {
+      if (workspaceActivityInFlight.current === snapshot) {
+        workspaceActivityInFlight.current = null;
+      }
+      workspaceActivityRunning.current = false;
+      if (appMounted.current && queuedWorkspaceActivities.current.length > 0) {
+        window.setTimeout(() => workspaceActivityFlush.current(), 0);
+      }
+    });
+  }, [detachSavedWorkspace, hydrateSavedWorkspace]);
+
+  workspaceActivityFlush.current = flushWorkspaceActivity;
+
+  const commitStagedWorkspaceActivity = useCallback(() => {
+    if (workspaceActivityTimer.current !== null) {
+      window.clearTimeout(workspaceActivityTimer.current);
+      workspaceActivityTimer.current = null;
+    }
+    const snapshot = stagedWorkspaceActivity.current;
+    if (!snapshot) return;
+    stagedWorkspaceActivity.current = null;
+    const queued = queuedWorkspaceActivities.current;
+    const lastQueued = queued.at(-1);
+    if (lastQueued?.workspaceId === snapshot.workspaceId) {
+      queued[queued.length - 1] = snapshot;
+    } else {
+      queued.push(snapshot);
+    }
+    workspaceActivityFlush.current();
+  }, []);
+
+  workspaceActivityCommit.current = commitStagedWorkspaceActivity;
+
+  const queueWorkspaceActivity = useCallback((
+    snapshot: WorkspaceActivitySnapshot,
+    delay = WORKSPACE_ACTIVITY_DEBOUNCE_MS,
+  ) => {
+    if (sameWorkspaceActivity(stagedWorkspaceActivity.current, snapshot)) return;
+    stagedWorkspaceActivity.current = snapshot;
+    if (workspaceActivityTimer.current !== null) {
+      window.clearTimeout(workspaceActivityTimer.current);
+    }
+    workspaceActivityTimer.current = window.setTimeout(() => {
+      workspaceActivityCommit.current();
+    }, delay);
+  }, []);
+
+  const currentWorkspaceActivitySnapshot = useCallback((): WorkspaceActivitySnapshot | null => {
+    const workspaceId = hydratedWorkspaceIdRef.current;
+    const sessionRevision = workspaceSessionRevision.current;
+    const current = currentLocation();
+    if (
+      !workspaceId
+      || sessionRevision?.workspaceId !== workspaceId
+      || savedWorkspaceIdFromSearch(current.search) !== workspaceId
+    ) return null;
+
+    const currentWorkspace = workspaceRef.current;
+    const openSessions = currentWorkspace.openSessions;
+    const route = parseSessionRoute(current.path);
+    const liveNames = new Set(knownSessionsRef.current.map((session) => session.name));
+    const activeSession = route && openSessions.includes(route.sessionName)
+      ? route.sessionName
+      : currentWorkspace.recentSessions.find((sessionName) => (
+          openSessions.includes(sessionName) && liveNames.has(sessionName)
+        )) ?? null;
+    return {
+      workspaceId,
+      tabs: [...openSessions],
+      activeSession,
+      sessionRevision: sessionRevision.value,
+    };
+  }, []);
+
+  useEffect(() => {
+    const saveLatestWorkspaceActivity = () => {
+      const snapshot = currentWorkspaceActivitySnapshot();
+      if (
+        !snapshot
+        || sameWorkspaceActivity(lastSavedWorkspaceActivity.current, snapshot)
+      ) return;
+      persistWorkspaceActivityOnPageHide(snapshot);
+    };
+
+    window.addEventListener("pagehide", saveLatestWorkspaceActivity);
+    return () => window.removeEventListener("pagehide", saveLatestWorkspaceActivity);
+  }, [currentWorkspaceActivitySnapshot]);
+
+  useEffect(() => {
+    const snapshot = currentWorkspaceActivitySnapshot();
+    if (
+      !snapshot
+      || hydratedWorkspaceId !== snapshot.workspaceId
+    ) return;
+    if (
+      sameWorkspaceActivity(lastSavedWorkspaceActivity.current, snapshot)
+      && !failedWorkspaceActivity.current
+    ) return;
+    queueWorkspaceActivity(snapshot);
+  }, [
+    currentWorkspaceActivitySnapshot,
+    hydratedWorkspaceId,
+    knownSessions,
+    location.path,
+    location.search,
+    queueWorkspaceActivity,
+    workspace.openSessions,
+    workspace.recentSessions,
+  ]);
+
   const openSession = useCallback((sessionName: string) => {
     const nextWorkspace = visitWorkspaceSession(workspace, sessionName);
+    workspaceRef.current = nextWorkspace;
     setWorkspace(nextWorkspace);
     const current = currentLocation();
     const nextSearch = searchWithWorkspaceTabs(
@@ -633,6 +1215,25 @@ function AppRoutes() {
     );
     syncLocation();
   }, [pushLocation, replaceLocation, syncLocation, workspace]);
+
+  const openSessionInput = useCallback((sessionName: string) => {
+    setMobileConsoleMode("input");
+    openSession(sessionName);
+  }, [openSession]);
+
+  const resumeWorkspace = useCallback(() => {
+    const currentWorkspace = workspaceRef.current;
+    const liveNames = new Set(knownSessionsRef.current.map((session) => session.name));
+    const target = hydratedWorkspaceIdRef.current
+      ? currentWorkspace.recentSessions.find((sessionName) => (
+          currentWorkspace.openSessions.includes(sessionName)
+          && liveNames.has(sessionName)
+        )) ?? currentWorkspace.openSessions.find((sessionName) => liveNames.has(sessionName))
+      : currentWorkspace.recentSessions.find(
+          (sessionName) => currentWorkspace.openSessions.includes(sessionName),
+        ) ?? currentWorkspace.openSessions.at(-1);
+    if (target) openSession(target);
+  }, [openSession]);
 
   const openNewSession = useCallback(() => {
     const current = currentLocation();
@@ -666,9 +1267,22 @@ function AppRoutes() {
 
   const completeNewSession = useCallback((
     sessionName: string,
+    sessionId: string,
     viewToken: NewSessionViewToken,
   ) => {
-    const nextWorkspace = visitWorkspaceSession(workspaceRef.current, sessionName);
+    const current = currentLocation();
+    const newRoute = parseNewSessionRoute(current.path);
+    const ownsCurrentView = Boolean(newRoute)
+      && activeNewSessionView.current === viewToken;
+    const currentWorkspace = workspaceRef.current;
+    const nextWorkspace = ownsCurrentView
+      ? visitWorkspaceSession(currentWorkspace, sessionName)
+      : {
+          ...currentWorkspace,
+          openSessions: currentWorkspace.openSessions.includes(sessionName)
+            ? currentWorkspace.openSessions
+            : [...currentWorkspace.openSessions, sessionName],
+        };
     workspaceRef.current = nextWorkspace;
     if (
       pendingLocationTabs.current
@@ -677,19 +1291,16 @@ function AppRoutes() {
       pendingLocationTabs.current = [...pendingLocationTabs.current, sessionName];
     }
     setWorkspace(nextWorkspace);
-    const current = currentLocation();
-    const newRoute = parseNewSessionRoute(current.path);
     const nextSearch = searchWithWorkspaceTabs(
       current.search,
       nextWorkspace.openSessions,
     );
-    const ownsCurrentView = Boolean(newRoute)
-      && activeNewSessionView.current === viewToken;
     const state = window.history.state as Record<string, unknown> | null;
 
     if (ownsCurrentView && newRoute?.recentsOpen && state?.[RECENTS_ENTRY_KEY] === true) {
       pendingRecentsNavigation.current = {
         sessionName,
+        sessionId,
         replaceRestoredEntry: state[FROM_DASHBOARD_KEY] !== true,
       };
       if (state[FROM_DASHBOARD_KEY] === true) {
@@ -704,6 +1315,7 @@ function AppRoutes() {
       window.history.state,
       ownsCurrentView ? sessionPath(sessionName) : current.path,
       nextSearch,
+      [{ name: sessionName, sessionId }],
     );
     syncLocation();
   }, [replaceLocation, syncLocation]);
@@ -779,6 +1391,90 @@ function AppRoutes() {
     setWorkspace(nextWorkspace);
     finishSessionSwitch(sessionName, nextWorkspace);
   }, [finishSessionSwitch, workspace]);
+
+  const openTabSearch = useCallback(() => {
+    if (
+      workspaceRef.current.openSessions.length === 0
+      || isCompactWorkspaceViewport()
+      || document.querySelector('[aria-modal="true"]')
+    ) return;
+    setTabSearchOpen(true);
+  }, []);
+  const closeTabSearch = useCallback(() => setTabSearchOpen(false), []);
+
+  useEffect(() => {
+    if (tabSearchOpen && workspace.openSessions.length === 0) {
+      setTabSearchOpen(false);
+    }
+  }, [tabSearchOpen, workspace.openSessions.length]);
+
+  useEffect(() => {
+    setTabSearchOpen(false);
+  }, [location.path]);
+
+  useEffect(() => {
+    const handleWorkspaceShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented
+        || event.isComposing
+        || event.keyCode === 229
+        || tabSearchOpen
+        || isCompactWorkspaceViewport()
+        || document.querySelector('[aria-modal="true"]')
+        || !event.ctrlKey
+        || !event.shiftKey
+        || event.altKey
+        || event.metaKey
+      ) return;
+
+      const searchRequested = event.code === "Semicolon";
+      const direction = event.code === "Comma"
+        ? -1
+        : event.code === "Period"
+          ? 1
+          : 0;
+      const directMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
+      const directIndex = directMatch ? Number(directMatch[1]) - 1 : null;
+      if (!searchRequested && direction === 0 && directIndex === null) return;
+
+      const currentWorkspace = workspaceRef.current;
+      if (currentWorkspace.openSessions.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (searchRequested) {
+        setTabSearchOpen(true);
+        return;
+      }
+
+      if (directIndex !== null) {
+        const targetSession = currentWorkspace.openSessions[directIndex];
+        if (targetSession) switchSession(targetSession);
+        return;
+      }
+
+      const current = currentLocation();
+      const route = parseSessionRoute(current.path);
+      const newSession = parseNewSessionRoute(current.path);
+      const fallbackActive = newSession
+        ? null
+        : currentWorkspace.recentSessions.find((sessionName) => (
+          currentWorkspace.openSessions.includes(sessionName)
+        )) ?? null;
+      const activeSession = route?.sessionName ?? fallbackActive;
+      const currentIndex = activeSession
+        ? currentWorkspace.openSessions.indexOf(activeSession)
+        : -1;
+      const nextIndex = currentIndex < 0
+        ? direction > 0 ? 0 : currentWorkspace.openSessions.length - 1
+        : (currentIndex + direction + currentWorkspace.openSessions.length)
+          % currentWorkspace.openSessions.length;
+      switchSession(currentWorkspace.openSessions[nextIndex]);
+    };
+
+    window.addEventListener("keydown", handleWorkspaceShortcut, true);
+    return () => window.removeEventListener("keydown", handleWorkspaceShortcut, true);
+  }, [switchSession, tabSearchOpen]);
 
   const navigateToDashboard = useCallback((openSessions: readonly string[]) => {
     const state = window.history.state as Record<string, unknown> | null;
@@ -856,6 +1552,7 @@ function AppRoutes() {
     const nextSession = sessionAfterClose(workspace.openSessions, sessionName);
     const closedWorkspace = closeWorkspaceSession(workspace, sessionName);
     if (route?.sessionName !== sessionName) {
+      workspaceRef.current = closedWorkspace;
       setWorkspace(closedWorkspace);
       const current = currentLocation();
       replaceLocation(
@@ -872,6 +1569,7 @@ function AppRoutes() {
       setWorkspace(nextWorkspace);
       finishSessionSwitch(nextSession, nextWorkspace);
     } else {
+      workspaceRef.current = closedWorkspace;
       setWorkspace(closedWorkspace);
       navigateToDashboard(closedWorkspace.openSessions);
     }
@@ -1008,6 +1706,44 @@ function AppRoutes() {
     });
   }, []);
 
+  const savedWorkspaceDeleted = useCallback((workspaceId: string) => {
+    if (savedWorkspaceIdFromSearch(currentLocation().search) !== workspaceId) return;
+    detachSavedWorkspace(
+      "Saved workspace deleted. Its tabs remain open here as an unsaved workspace.",
+    );
+  }, [detachSavedWorkspace]);
+
+  const retryWorkspaceSync = useCallback(() => {
+    const workspaceId = savedWorkspaceIdFromSearch(currentLocation().search);
+    if (
+      workspaceSyncProblem?.kind === "save"
+      && failedWorkspaceActivity.current
+      && workspaceId === failedWorkspaceActivity.current.workspaceId
+      && hydratedWorkspaceIdRef.current === workspaceId
+    ) {
+      const failedActivity = failedWorkspaceActivity.current;
+      workspaceActivityCommit.current();
+      const pendingActivityWillSupersedeFailure = (
+        workspaceActivityInFlight.current?.workspaceId === workspaceId
+        || queuedWorkspaceActivities.current.some((activity) => (
+          activity.workspaceId === workspaceId
+        ))
+      );
+      if (!pendingActivityWillSupersedeFailure) {
+        queuedWorkspaceActivities.current.push(failedActivity);
+      }
+      workspaceActivityFlush.current();
+      return;
+    }
+    if (!workspaceId) {
+      setWorkspaceSyncProblem(null);
+      return;
+    }
+    if (workspaceSyncProblem?.kind === "load") {
+      void hydrateSavedWorkspace(workspaceId);
+    }
+  }, [hydrateSavedWorkspace, workspaceSyncProblem?.kind]);
+
   const openSnippets = () => {
     const current = currentLocation();
     const dashboardSearch = searchWithWorkspaceTabs(
@@ -1022,7 +1758,10 @@ function AppRoutes() {
     pushLocation(
       { [SNIPPETS_FROM_DASHBOARD_KEY]: true },
       "/snippets",
-      searchWithWorkspaceTabs("", workspace.openSessions),
+      searchWithSavedWorkspaceId(
+        searchWithWorkspaceTabs("", workspace.openSessions),
+        savedWorkspaceIdFromSearch(current.search),
+      ),
     );
     syncLocation();
   };
@@ -1037,10 +1776,113 @@ function AppRoutes() {
     replaceLocation(
       {},
       "/",
-      searchWithWorkspaceTabs("", workspace.openSessions),
+      searchWithSavedWorkspaceId(
+        searchWithWorkspaceTabs("", workspace.openSessions),
+        savedWorkspaceIdFromSearch(currentLocation().search),
+      ),
     );
     syncLocation();
   };
+
+  const tabSearchActiveSession = activeRoute?.sessionName
+    ?? (newSessionRoute
+      ? null
+      : workspace.recentSessions.find((sessionName) => (
+        workspace.openSessions.includes(sessionName)
+      )) ?? null);
+  const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+  const workspacePersistenceState: WorkspacePersistenceState = (
+    !locationWorkspaceId
+      ? "unsaved"
+      : workspaceSyncProblem?.kind === "load" || workspaceSyncProblem?.kind === "save"
+        ? "error"
+        : hydratedWorkspaceId === locationWorkspaceId
+          ? "saved"
+          : "loading"
+  );
+  const workspaceSyncNoticeDismissed = (
+    workspaceSyncProblem !== null
+    && dismissedWorkspaceSyncProblem === workspaceSyncProblem
+  );
+
+  const dismissWorkspaceSyncNotice = () => {
+    if (!workspaceSyncProblem) return;
+    if (workspaceSyncProblem.kind === "load" || workspaceSyncProblem.kind === "save") {
+      setDismissedWorkspaceSyncProblem(workspaceSyncProblem);
+      return;
+    }
+    setWorkspaceSyncProblem(null);
+  };
+
+  const withWorkspaceSyncNotice = (content: ReactNode) => (
+    <>
+      {workspaceSyncProblem && !workspaceSyncNoticeDismissed && (
+        <aside
+          className={activeRoute
+            ? "workspace-sync-notice workspace-sync-notice--console"
+            : "workspace-sync-notice"}
+          role="alert"
+        >
+          <div>
+            <strong>
+              {workspaceSyncProblem.kind === "load"
+                ? "Saved workspace unavailable"
+                : workspaceSyncProblem.kind === "save"
+                  ? "Workspace changes are not saved"
+                  : workspaceSyncProblem.kind === "create"
+                    ? "Workspace saved separately"
+                    : "Workspace is now unsaved"}
+            </strong>
+            <p>{workspaceSyncProblem.message}</p>
+          </div>
+          <div className="workspace-sync-notice-actions">
+            {(workspaceSyncProblem.kind === "load"
+              || workspaceSyncProblem.kind === "save") && (
+              <button type="button" onClick={retryWorkspaceSync}>Retry</button>
+            )}
+            <button type="button" onClick={dismissWorkspaceSyncNotice}>
+              {workspaceSyncProblem.kind === "load" || workspaceSyncProblem.kind === "save"
+                ? "Hide details"
+                : "Dismiss"}
+            </button>
+          </div>
+        </aside>
+      )}
+      {workspaceSyncProblem && workspaceSyncNoticeDismissed && (
+        <aside
+          className={activeRoute
+            ? "workspace-sync-notice workspace-sync-notice--compact workspace-sync-notice--console"
+            : "workspace-sync-notice workspace-sync-notice--compact"}
+          aria-label="Workspace sync recovery"
+          aria-live="polite"
+        >
+          <div>
+            <strong>Workspace sync issue</strong>
+          </div>
+          <div className="workspace-sync-notice-actions">
+            <button type="button" onClick={retryWorkspaceSync}>Retry</button>
+            <button
+              type="button"
+              aria-label="Show workspace sync details"
+              onClick={() => setDismissedWorkspaceSyncProblem(null)}
+            >
+              Details
+            </button>
+          </div>
+        </aside>
+      )}
+      {tabSearchOpen && (
+        <WorkspaceTabSearchDialog
+          activeSession={tabSearchActiveSession}
+          openSessions={workspace.openSessions}
+          sessions={knownSessions}
+          onSelect={switchSession}
+          onClose={closeTabSearch}
+        />
+      )}
+      {content}
+    </>
+  );
 
   if (activeRoute) {
     const { sessionName, recentsOpen } = activeRoute;
@@ -1050,11 +1892,15 @@ function AppRoutes() {
       : [...renameWarnings.values()].find((warning) => (
         warning.sessionName === sessionName
       )) || null;
-    return (
+    return withWorkspaceSyncNotice(
       <ConsoleScreen
         sessionName={sessionName}
         onBack={returnToDashboard}
         workspaceOverlayOpen={recentsOpen}
+        mobileMode={mobileConsoleMode}
+        onMobileModeChange={setMobileConsoleMode}
+        onOpenWorkspaceOverview={openRecents}
+        onCloseWorkspaceOverview={closeRecents}
         barVisibility={consoleBars}
         onBarVisibilityChange={setConsoleBarVisibility}
         historyPanelWidth={historyPanelWidth}
@@ -1078,6 +1924,9 @@ function AppRoutes() {
             onCloseRecents={closeRecents}
             onClearRecents={clearRecents}
             onOpenDashboard={returnToDashboard}
+            onOpenTabSearch={openTabSearch}
+            workspacePersistenceState={workspacePersistenceState}
+            onSaveWorkspace={saveCurrentWorkspace}
           />
         )}
       />
@@ -1085,7 +1934,7 @@ function AppRoutes() {
   }
 
   if (newSessionRoute) {
-    return (
+    return withWorkspaceSyncNotice(
       <RoutedNewSessionScreen
         onCreated={completeNewSession}
         onCancel={returnToDashboard}
@@ -1105,6 +1954,9 @@ function AppRoutes() {
             onCloseRecents={closeRecents}
             onClearRecents={clearRecents}
             onOpenDashboard={returnToDashboard}
+            onOpenTabSearch={openTabSearch}
+            workspacePersistenceState={workspacePersistenceState}
+            onSaveWorkspace={saveCurrentWorkspace}
           />
         )}
       />
@@ -1112,16 +1964,38 @@ function AppRoutes() {
   }
 
   if (location.path === "/snippets" || location.path === "/snippets/") {
-    return <SnippetLibrary onOpenSessions={returnFromSnippets} />;
+    return withWorkspaceSyncNotice(
+      <SnippetLibrary onOpenSessions={returnFromSnippets} />,
+    );
   }
 
-  return (
+  const workspaceReturnSession = hydratedWorkspaceId
+    ? workspace.recentSessions.find((sessionName) => (
+        workspace.openSessions.includes(sessionName)
+        && knownSessions.some((session) => session.name === sessionName)
+      )) ?? workspace.openSessions.find((sessionName) => (
+        knownSessions.some((session) => session.name === sessionName)
+      ))
+    : workspace.recentSessions.find(
+        (sessionName) => workspace.openSessions.includes(sessionName),
+      ) ?? workspace.openSessions.at(-1);
+
+  return withWorkspaceSyncNotice(
     <SessionDashboard
       key={location.search}
       onOpen={openSession}
+      onOpenInput={openSessionInput}
+      onResumeWorkspace={workspaceReturnSession ? resumeWorkspace : undefined}
+      workspaceReturnSession={workspaceReturnSession}
+      workspaceTabCount={workspace.openSessions.length}
       onOpenSnippets={openSnippets}
       onNewSession={openNewSession}
       onSessionsChange={replaceKnownSessions}
+      currentWorkspaceTabs={workspace.openSessions}
+      activeSession={workspaceReturnSession ?? null}
+      activeWorkspaceId={hydratedWorkspaceId}
+      onOpenSavedWorkspace={openSavedWorkspace}
+      onSavedWorkspaceDeleted={savedWorkspaceDeleted}
     />
   );
 }

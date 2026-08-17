@@ -84,8 +84,8 @@ playwright-report/
 must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
-- titles, starred/ignored session names, memoranda, and the snippet library
-  stored outside the source folder;
+- titles, starred/ignored session names, memoranda, the snippet library, and
+  saved workspaces stored outside the source folder;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -246,9 +246,9 @@ journalctl -u muxdeck.service -n 100 --no-pager
 caddy validate --config /etc/caddy/Caddyfile
 ```
 
-Back up the existing unit, the relevant Caddy configuration, all three state
-JSON files, and the old release path. Use timestamped copies; do not overwrite the
-only known-good copy. In particular, retain the pre-upgrade
+Back up the existing unit, the relevant Caddy configuration, all four state
+JSON files, and the old release path. Use timestamped copies; do not overwrite
+the only known-good copy. In particular, retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
 upgraded by the new release.
 
@@ -329,8 +329,9 @@ MUXDECK_PLAYWRIGHT_BROWSER=/absolute/path/to/chrome npm run test:e2e
 ```
 
 The Playwright configuration uses the project `.venv` when present and creates
-a unique disposable tmux socket per run. Do not run browser validation against
-valuable target sessions.
+a unique disposable tmux socket plus title, memorandum, snippet, and workspace
+state files per run. Do not run browser validation against valuable target
+sessions, and do not remove those state-file overrides.
 
 ## 6. Optional runtime-state migration
 
@@ -340,13 +341,23 @@ The default source paths are under the old service user's state directory:
 ~/.local/state/muxdeck/session-titles.json
 ~/.local/state/muxdeck/session-messages.json
 ~/.local/state/muxdeck/snippets.json
+~/.local/state/muxdeck/workspaces.json
 ```
 
 The first file contains titles plus starred and ignored session names. The
 second contains memoranda and may include sensitive commands or prose. The third
 contains the global folder/snippet tree and may also contain sensitive commands
-or prose. An existing unit may override any path; inspect its environment rather
-than assuming defaults.
+or prose. The fourth contains saved workspace names, ordered tmux session names,
+and activity times. An existing unit may override any path; inspect its
+environment rather than assuming defaults.
+
+The workspace file uses schema version 2. Version 1 loads at native-session
+rename revision zero and upgrades atomically on the next workspace write. Each
+record permits an 80-character name and at most 32 unique ordered tabs. Keep a
+pre-upgrade copy for rollback because a version-1-only release rejects the
+version 2 document. As with snippets, an unreadable, malformed, or unsupported
+existing workspace file makes that store unavailable; Muxdeck returns `503` for
+workspace APIs instead of overwriting the file.
 
 Muxdeck accepts version 1 and 2 title files and treats their missing ignored list
 as empty. The first title, star, or ignored-status mutation under this release
@@ -360,29 +371,41 @@ Migration procedure:
 
 1. Stop only Muxdeck on the source if a consistent final copy is needed. This
    disconnects web clients but does not stop tmux sessions.
-2. Copy the three JSON files separately from the source archive.
+2. Copy the four JSON files that exist separately from the source archive. An
+   older release may not have created `workspaces.json` yet.
 3. Create the target state directory with owner/group equal to the run user and
    mode `0700`.
 4. Install migrated JSON files with mode `0600` and the same owner/group.
 5. Point the rendered unit at their absolute target paths.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
-Title, star, ignored, and memorandum entries are keyed by tmux session name, so
-old entries may remain dormant until a session with the same name exists. A new
-session that reuses that name inherits the stored metadata. The snippet tree is
-global and is not keyed by session. Do not run two Muxdeck processes against the
-same state files; persistence is atomic within one process, not coordinated
-between processes.
+Title, star, ignored, memorandum, and saved-workspace tab entries are keyed by
+tmux session name, so old entries may remain dormant until a session with the
+same name exists. A new session that reuses that name inherits the stored
+metadata or workspace position. The snippet tree and saved-workspace collection
+are global to the Muxdeck instance rather than per browser. Do not run two
+Muxdeck processes against the same state files; persistence is atomic within one
+process, not coordinated between processes.
 
-Renaming a native session through Muxdeck moves its title/star/ignored metadata
-and memorandum queue to the new name. Renaming directly in another tmux client
-does not notify Muxdeck to migrate those name-keyed files. If Muxdeck reports a
-post-rename storage warning, the tmux rename itself has already succeeded; keep
-both state files and resolve the warned migration before deleting old-name
-records.
+Saved workspaces are server-global and shared by every browser that can reach
+this Muxdeck instance. Their stable `workspace=` URL identifier is independent
+of the editable workspace name. Opening or changing one records its ordered tabs,
+active session, and last-active time. Concurrent pages use last-write-wins
+semantics for ordinary activity. Each snapshot echoes the document-wide native
+session rename revision; stale pre-rename snapshots receive `409` and reload
+instead of restoring an obsolete session name. Deleting a saved workspace
+removes only that JSON record; it must not stop, rename, resize, or send input to
+any referenced tmux session.
 
-Not migrated: tmux sessions, browser local storage, history snapshots, and
-state-change observation times.
+Renaming a native session through Muxdeck moves its title/star/ignored metadata,
+memorandum queue, and every saved-workspace tab to the new name. Renaming
+directly in another tmux client does not notify Muxdeck to migrate those
+name-keyed files. If Muxdeck reports a post-rename storage warning, the tmux
+rename itself has already succeeded; keep all affected state files and resolve
+the warned migration before deleting old-name records.
+
+Not migrated: tmux sessions, browser local storage, page-local workspace
+Recents, history snapshots, and state-change observation times.
 
 ## 7. Render and install the systemd unit
 
@@ -472,6 +495,9 @@ curl -fsS \
 curl -fsS \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/" >/dev/null
 curl -fsS \
+  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/workspaces" \
+  >/dev/null
+curl -fsS \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/session/nonexistent" \
   >/dev/null
 curl --max-time 5 -NsS \
@@ -484,8 +510,10 @@ Expected results:
 - health returns `{"ok": true, "sessions": N}`;
 - `N` matches the intended tmux server, not merely any tmux server;
 - dashboard and deep-link routes return the built SPA;
+- the workspace API returns a JSON workspace list rather than a storage `503`;
 - the SSE request emits a `sessions` event (the command may end at its timeout);
-- logs contain no import, permission, socket, or malformed-state errors.
+- logs contain no import, permission, socket, or malformed-state errors,
+  including errors loading the saved-workspace file.
 
 Compare the recorded pre-deployment session/pane identities now. Session IDs,
 pane IDs, pane PIDs, commands, and dead/alive flags should remain unchanged.
@@ -538,9 +566,14 @@ From a client allowed by the chosen access controls, verify:
 4. A dashboard URL with filters/view/group/sort reloads identically.
 5. A session deep link returns the SPA.
 6. Card and list layouts have no horizontal overflow at phone width.
-7. Titles, starred/ignored organization, memoranda, and the snippet library
-   appear if state was migrated. Ignored sessions should be in the collapsed
-   background section and absent from regular state counts.
+7. Titles, starred/ignored organization, memoranda, the snippet library, and
+   saved workspaces appear if state was migrated. Ignored sessions should be in
+   the collapsed background section and absent from regular state counts.
+8. Opening a saved workspace restores its ordered tabs and active session. Its
+   approximate last-active label updates after an explicit workspace
+   interaction; merely listing workspaces must not touch tmux.
+9. Deleting a disposable saved workspace removes only that workspace record and
+   leaves all referenced tmux sessions and pane identities unchanged.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux
@@ -555,7 +588,8 @@ The deployment agent should report:
 - run user/group and tmux socket selection;
 - Python, Node, npm, and tmux versions;
 - base path, port, and proxy/access-control choice;
-- whether state was migrated and its target directory (not memorandum or snippet content);
+- whether state was migrated and its target directory (not memorandum, snippet,
+  workspace-name, or workspace-tab content);
 - source/unit/Caddy and state-file backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
@@ -577,7 +611,10 @@ For a failed replacement:
 2. Validate the restored Caddy configuration, then reload Caddy.
 3. Stop only `muxdeck.service`, then restore the prior systemd unit or point it
    back to the prior release.
-4. Restore state JSON only while Muxdeck is stopped; preserve owner and modes.
+4. Restore all four state JSON files only while Muxdeck is stopped; preserve
+   owner and modes. Preserve `workspaces.json` even when the rollback release
+   does not understand it, so a later compatible release can recover the saved
+   workspace list.
    When rolling back to a release that only writes title-file version 1 or 2,
    restore the pre-upgrade `session-titles.json` or explicitly accept that its
    ignored statuses will be lost on the next title/star write.
@@ -595,8 +632,8 @@ tree:
 1. stage the new archive in a new exact directory;
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
-4. retain the external state directory unchanged and keep a timestamped
-   pre-upgrade copy of `session-titles.json`;
+4. retain the external state directory unchanged and keep timestamped
+   pre-upgrade copies of all four state files;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;
@@ -617,8 +654,9 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | HTML loads but assets/API/WebSocket fail | Build/runtime/proxy base paths differ | Rebuild with `/prefix/`; use runtime `/prefix`; preserve prefix in Caddy. |
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
 | Console WebSocket fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
-| Titles/starred/ignored organization, memoranda, or snippets do not persist | State path or ownership/mode is wrong | Inspect unit environment, directory ownership, mode `0700`, files mode `0600`, and journal. |
+| Titles/starred/ignored organization, memoranda, snippets, or saved workspaces do not persist | State path or ownership/mode is wrong | Inspect all four configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
+| Workspace API returns `503` | The configured workspace file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. Do not delete tmux sessions. |
 | Another terminal layout changes | Browser opened in `Fit active` | This is tmux shared-size behavior; use `Size protected` for observation. |
 | Playwright cannot find a browser | No Playwright Chromium and no configured system browser | Run `npx playwright install chromium` or set `MUXDECK_PLAYWRIGHT_BROWSER`. |
 | Port already in use | Existing Muxdeck or unrelated listener | Identify the listener before stopping anything; choose another port only if all coupled settings change. |

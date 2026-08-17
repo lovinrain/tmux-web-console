@@ -32,6 +32,7 @@ export interface Session {
   starred: boolean;
   ignored: boolean;
   queuedMessageCount: number;
+  memorandumCount?: number;
   panes: Pane[];
 }
 
@@ -54,9 +55,12 @@ export interface HistoryPage {
   alternateOn: boolean;
 }
 
+export type MemorandumState = "note" | "queued";
+
 export interface QueuedMessage {
   id: string;
   text: string;
+  state: MemorandumState;
   createdAt: number;
   updatedAt: number;
   position: number;

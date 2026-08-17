@@ -10,6 +10,7 @@ export const EMPTY_SESSION_WORKSPACE: Readonly<SessionWorkspaceState> = {
 
 const MAX_RECENT_SESSIONS = 30;
 export const WORKSPACE_TAB_SEARCH_PARAM = "tab";
+export const SAVED_WORKSPACE_SEARCH_PARAM = "workspace";
 
 function uniqueSessionNames(sessionNames: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -56,6 +57,24 @@ export function searchWithoutWorkspaceTabs(search: string): string {
   const parts = queryParts(search).filter(
     (part) => queryPartName(part) !== WORKSPACE_TAB_SEARCH_PARAM,
   );
+  return parts.length > 0 ? `?${parts.join("&")}` : "";
+}
+
+export function savedWorkspaceIdFromSearch(search: string): string | null {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  return params.get(SAVED_WORKSPACE_SEARCH_PARAM) || null;
+}
+
+export function searchWithSavedWorkspaceId(
+  search: string,
+  workspaceId: string | null,
+): string {
+  const parts = queryParts(search).filter(
+    (part) => queryPartName(part) !== SAVED_WORKSPACE_SEARCH_PARAM,
+  );
+  if (workspaceId) {
+    parts.push(`${SAVED_WORKSPACE_SEARCH_PARAM}=${encodeURIComponent(workspaceId)}`);
+  }
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 

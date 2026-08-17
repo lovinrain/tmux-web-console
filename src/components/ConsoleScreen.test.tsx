@@ -1,16 +1,31 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createQueuedMessage,
   getSnippetTree,
   listQueuedMessages,
   listSessions,
   renameSession,
+  updateQueuedMessage,
   updateSessionTitle,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import { ThemeProvider, type Theme } from "../theme";
 import type { Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
+import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
+
+const liveTerminalHandle = vi.hoisted(() => ({
+  send: vi.fn((_data: string) => true),
+  paste: vi.fn((_data: string) => true),
+  submit: vi.fn(async (_data: string, _withEnter: boolean) => true),
+  focus: vi.fn(),
+  navigateHistory: vi.fn((_action: "page-up" | "page-down" | "exit") => true),
+  jumpToLive: vi.fn(),
+}));
+const liveTerminalState = vi.hoisted(() => ({
+  onStateChange: null as null | ((state: "live") => void),
+}));
 
 vi.mock("../api", () => ({
   listSessions: vi.fn(),
@@ -24,11 +39,33 @@ vi.mock("../api", () => ({
   updateSessionTitle: vi.fn(),
 }));
 
-vi.mock("./LiveTerminal", () => ({
-  LiveTerminal: ({ theme }: { theme: Theme }) => (
-    <div data-testid="live-terminal" data-terminal-theme={theme} />
-  ),
-}));
+vi.mock("./LiveTerminal", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    LiveTerminal: forwardRef(function MockLiveTerminal(
+      {
+        layoutSuspended,
+        theme,
+        onStateChange,
+      }: {
+        layoutSuspended?: boolean;
+        theme: Theme;
+        onStateChange: (state: "live") => void;
+      },
+      ref,
+    ) {
+      liveTerminalState.onStateChange = onStateChange;
+      useImperativeHandle(ref, () => liveTerminalHandle, []);
+      return (
+        <div
+          data-testid="live-terminal"
+          data-layout-suspended={layoutSuspended ? "true" : "false"}
+          data-terminal-theme={theme}
+        />
+      );
+    }),
+  };
+});
 
 function pane(): Pane {
   return {
@@ -84,12 +121,264 @@ function deferred<T>(): {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  liveTerminalState.onStateChange = null;
   window.localStorage.clear();
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
   document.title = "Muxdeck";
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("offers exclusive mobile purposes without remounting the terminal or losing a draft", async () => {
+    const needsInputSession = {
+      ...session(),
+      agentState: "waiting_human" as const,
+      agentStateReason: "Agent is waiting for input",
+      memorandumCount: 3,
+      queuedMessageCount: 2,
+    };
+    const openOverview = vi.fn();
+    const closeOverview = vi.fn();
+    vi.mocked(listSessions).mockResolvedValue([needsInputSession]);
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+        onOpenWorkspaceOverview={openOverview}
+        onCloseWorkspaceOverview={closeOverview}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const focus = screen.getByRole("navigation", { name: "Mobile console focus" });
+    const overview = within(focus).getByRole("button", { name: "Overview" });
+    const terminal = within(focus).getByRole("button", { name: "Terminal" });
+    const input = within(focus).getByRole("button", {
+      name: "Input, 2 queued memo items",
+    });
+    const stagedInput = screen.getByRole("textbox", { name: "Staged input" });
+    const liveTerminal = screen.getByTestId("live-terminal");
+
+    expect(overview).toHaveAttribute("id", MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID);
+    expect(shell).toHaveAttribute("data-mobile-focus", "terminal");
+    expect([overview, terminal, input].filter((button) => (
+      button.getAttribute("aria-pressed") === "true"
+    ))).toEqual([terminal]);
+    expect(input).toHaveClass("needs-input");
+    expect(input).toHaveClass("has-queued-memos");
+    expect(input).toHaveTextContent("Q 2");
+    expect(input).toHaveAttribute("title", "This session needs input");
+
+    fireEvent.click(input);
+    expect(shell).toHaveAttribute("data-mobile-focus", "input");
+    expect(input).toBePressed();
+    await waitFor(() => expect(stagedInput).toHaveFocus());
+    fireEvent.input(stagedInput, { target: { value: "keep this reply" } });
+
+    fireEvent.click(terminal);
+    expect(shell).toHaveAttribute("data-mobile-focus", "terminal");
+    expect(stagedInput).not.toHaveFocus();
+    expect(liveTerminal).toBe(screen.getByTestId("live-terminal"));
+
+    fireEvent.click(overview);
+    expect(openOverview).toHaveBeenCalledOnce();
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="test"
+          onBack={vi.fn()}
+          sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+          workspaceOverlayOpen
+          onOpenWorkspaceOverview={openOverview}
+          onCloseWorkspaceOverview={closeOverview}
+        />
+      </ThemeProvider>,
+    );
+    expect(shell).toHaveAttribute("data-mobile-focus", "overview");
+    expect(overview).toBePressed();
+
+    fireEvent.click(input);
+    expect(closeOverview).toHaveBeenCalledOnce();
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="test"
+          onBack={vi.fn()}
+          sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+          onOpenWorkspaceOverview={openOverview}
+          onCloseWorkspaceOverview={closeOverview}
+        />
+      </ThemeProvider>,
+    );
+    expect(shell).toHaveAttribute("data-mobile-focus", "input");
+    expect(screen.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("keep this reply");
+    expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
+  });
+
+  it("uses raw and tmux history controls and exits distraction-free mode for input", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const mobileFocus = screen.getByRole("navigation", { name: "Mobile console focus" });
+    const terminalControls = screen.getByRole("navigation", {
+      name: "Terminal view controls",
+    });
+    const rawPageUp = within(terminalControls).getByRole("button", {
+      name: "Raw terminal Page Up",
+    });
+    const rawPageDown = within(terminalControls).getByRole("button", {
+      name: "Raw terminal Page Down",
+    });
+    const tmuxPageUp = within(terminalControls).getByRole("button", {
+      name: "Tmux Page Up",
+    });
+    const tmuxPageDown = within(terminalControls).getByRole("button", {
+      name: "Tmux Page Down",
+    });
+    const returnToLive = within(terminalControls).getByRole("button", {
+      name: "Return to live terminal",
+    });
+    const stagedInput = screen.getByRole("textbox", { name: "Staged input" });
+    const liveTerminal = screen.getByTestId("live-terminal");
+
+    expect(rawPageUp).toBeDisabled();
+    expect(rawPageDown).toBeDisabled();
+    expect(tmuxPageUp).toBeDisabled();
+    expect(tmuxPageDown).toBeDisabled();
+    expect(returnToLive).toBeDisabled();
+    act(() => liveTerminalState.onStateChange?.("live"));
+    expect(rawPageUp).toBeEnabled();
+    expect(rawPageDown).toBeEnabled();
+    expect(tmuxPageUp).toBeEnabled();
+    expect(tmuxPageDown).toBeEnabled();
+    expect(returnToLive).toBeEnabled();
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "false");
+    const enterDistractionFree = within(terminalControls).getByRole("button", {
+      name: "Enter distraction-free terminal",
+    });
+    expect(enterDistractionFree).not.toBePressed();
+    for (const control of [
+      rawPageUp,
+      rawPageDown,
+      tmuxPageUp,
+      tmuxPageDown,
+      returnToLive,
+      enterDistractionFree,
+    ]) {
+      const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      expect(control.dispatchEvent(mouseDown)).toBe(false);
+      expect(mouseDown.defaultPrevented).toBe(true);
+    }
+
+    fireEvent.input(stagedInput, { target: { value: "keep this reply available" } });
+    fireEvent.click(rawPageUp);
+    fireEvent.click(rawPageDown);
+    fireEvent.click(tmuxPageUp);
+    fireEvent.click(tmuxPageDown);
+    fireEvent.click(returnToLive);
+
+    expect(liveTerminalHandle.send.mock.calls).toEqual([
+      ["\x1b[5~"],
+      ["\x1b[6~"],
+    ]);
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([
+      ["page-up"],
+      ["page-down"],
+      ["exit"],
+    ]);
+    expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
+
+    fireEvent.click(enterDistractionFree);
+
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "true");
+    const exitDistractionFree = within(terminalControls).getByRole("button", {
+      name: "Exit distraction-free terminal",
+    });
+    expect(exitDistractionFree).toBePressed();
+    expect(screen.queryByRole("button", {
+      name: "Enter distraction-free terminal",
+    })).not.toBeInTheDocument();
+    expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
+    expect(stagedInput).toHaveValue("keep this reply available");
+
+    fireEvent.click(exitDistractionFree);
+
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "false");
+    expect(within(terminalControls).getByRole("button", {
+      name: "Enter distraction-free terminal",
+    })).not.toBePressed();
+
+    fireEvent.click(within(terminalControls).getByRole("button", {
+      name: "Enter distraction-free terminal",
+    }));
+    fireEvent.click(within(mobileFocus).getByRole("button", { name: "Input" }));
+
+    expect(shell).toHaveAttribute("data-mobile-focus", "input");
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "false");
+    expect(within(mobileFocus).getByRole("button", { name: "Input" })).toBePressed();
+    await waitFor(() => expect(stagedInput).toHaveFocus());
+    expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
+    expect(stagedInput).toHaveValue("keep this reply available");
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledTimes(3);
+    expect(liveTerminalHandle.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("focuses staged input without remounting or resizing the terminal", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const mobileFocus = screen.getByRole("navigation", { name: "Mobile console focus" });
+    const stagedInput = screen.getByRole("textbox", { name: "Staged input" });
+    const liveTerminal = screen.getByTestId("live-terminal");
+
+    fireEvent.click(within(mobileFocus).getByRole("button", { name: "Input" }));
+    await waitFor(() => expect(stagedInput).toHaveFocus());
+    fireEvent.input(stagedInput, { target: { value: "queue\tthis exact draft" } });
+    expect(liveTerminal).toHaveAttribute("data-layout-suspended", "false");
+
+    const enterInputFocus = screen.getByRole("button", {
+      name: "Enter distraction-free input",
+    });
+    expect(enterInputFocus).not.toBePressed();
+    fireEvent.click(enterInputFocus);
+
+    expect(shell).toHaveAttribute("data-mobile-focus", "input");
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "true");
+    expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
+    expect(liveTerminal).toHaveAttribute("data-layout-suspended", "true");
+    expect(stagedInput).toHaveValue("queue\tthis exact draft");
+    await waitFor(() => expect(stagedInput).toHaveFocus());
+    const exitInputFocus = screen.getByRole("button", {
+      name: "Exit distraction-free input",
+    });
+    expect(exitInputFocus).toBePressed();
+
+    fireEvent.click(exitInputFocus);
+
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "false");
+    expect(liveTerminal).toHaveAttribute("data-layout-suspended", "false");
+    expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
+    expect(stagedInput).toHaveValue("queue\tthis exact draft");
+  });
+
   it("toggles console regions independently and keeps their toolbar available", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(
@@ -587,25 +876,74 @@ describe("ConsoleScreen session identity", () => {
   });
 
   it("loads a queued memorandum into the permanent staged input", async () => {
+    const queuedMemo = {
+      id: "memo-1",
+      text: "Review the latest test failure",
+      state: "queued" as const,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+      position: 0,
+    };
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(listQueuedMessages).mockResolvedValue({
       session: "test",
-      messages: [{
-        id: "memo-1",
-        text: "Review the latest test failure",
-        createdAt: 1_700_000_000_000,
-        updatedAt: 1_700_000_000_000,
-        position: 0,
-      }],
+      messages: [queuedMemo],
     });
+    vi.mocked(updateQueuedMessage).mockResolvedValue({ ...queuedMemo, state: "note" });
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "test" });
     fireEvent.click(screen.getByRole("button", { name: "Open memoranda" }));
     expect(await screen.findByText("Review the latest test failure")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Use" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stage" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Queued messages" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Memo" })).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("Review the latest test failure");
+    expect(updateQueuedMessage).toHaveBeenCalledWith("test", "memo-1", { state: "note" });
+  });
+
+  it("queues staged input without a live PTY and updates the memo count immediately", async () => {
+    const loadedSession = { ...session(), memorandumCount: 2, queuedMessageCount: 2 };
+    const onSessionUpdate = vi.fn();
+    vi.mocked(listSessions).mockResolvedValue([loadedSession]);
+    vi.mocked(createQueuedMessage).mockResolvedValue({
+      id: "memo-3",
+      text: "  keep this for later\n",
+      state: "queued",
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+      position: 2,
+    });
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionUpdate={onSessionUpdate}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(textarea, { target: { value: "  keep this for later\n" } });
+    const addButton = screen.getByRole("button", { name: "Queue in memo" });
+    expect(addButton).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Send + Enter" })).toBeDisabled();
+
+    fireEvent.click(addButton);
+
+    await waitFor(() => expect(createQueuedMessage).toHaveBeenCalledWith(
+      "test",
+      "  keep this for later\n",
+      "queued",
+    ));
+    await waitFor(() => expect(textarea).toHaveValue(""));
+    const memoButton = screen.getByRole("button", { name: "Open memoranda, 3 queued" });
+    expect(within(memoButton).getByText("Memo")).toBeVisible();
+    expect(within(memoButton).getByText("Q 3")).toBeVisible();
+    expect(onSessionUpdate).toHaveBeenCalledWith({
+      ...loadedSession,
+      memorandumCount: 3,
+      queuedMessageCount: 3,
+    });
   });
 });

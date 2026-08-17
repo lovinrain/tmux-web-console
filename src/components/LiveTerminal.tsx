@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -18,12 +19,14 @@ export interface LiveTerminalHandle {
   paste: (data: string) => boolean;
   submit: (data: string, withEnter: boolean) => Promise<boolean>;
   focus: () => void;
+  navigateHistory: (action: "page-up" | "page-down" | "exit") => boolean;
   jumpToLive: () => void;
 }
 
 interface LiveTerminalProps {
   session: string;
   ignoreSize: boolean;
+  layoutSuspended?: boolean;
   theme: TerminalThemeMode;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
@@ -40,14 +43,29 @@ function nextSubmissionId(): string {
 }
 
 export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
-  function LiveTerminal({ session, ignoreSize, theme, onStateChange, onPaneChange }, ref) {
+  function LiveTerminal({
+    session,
+    ignoreSize,
+    layoutSuspended = false,
+    theme,
+    onStateChange,
+    onPaneChange,
+  }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
+    const layoutSuspendedRef = useRef(layoutSuspended);
+    const scheduleFitAndResizeRef = useRef<(() => void) | null>(null);
     const submitRef = useRef<(data: string, withEnter: boolean) => Promise<boolean>>(
       async () => false,
     );
     const [awayFromLive, setAwayFromLive] = useState(false);
+
+    useLayoutEffect(() => {
+      const wasSuspended = layoutSuspendedRef.current;
+      layoutSuspendedRef.current = layoutSuspended;
+      if (wasSuspended && !layoutSuspended) scheduleFitAndResizeRef.current?.();
+    }, [layoutSuspended]);
 
     useImperativeHandle(ref, () => ({
       send(data: string) {
@@ -79,6 +97,15 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       focus() {
         terminalRef.current?.focus();
       },
+      navigateHistory(action) {
+        if (socketRef.current?.readyState !== WebSocket.OPEN) return false;
+        try {
+          socketRef.current.send(JSON.stringify({ type: "history", action }));
+          return true;
+        } catch {
+          return false;
+        }
+      },
       jumpToLive() {
         terminalRef.current?.scrollToBottom();
         setAwayFromLive(false);
@@ -93,6 +120,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       let reconnectTimer: number | undefined;
       let resizeTimer: number | undefined;
       let attempts = 0;
+      let lastResize: { socket: WebSocket; cols: number; rows: number } | null = null;
       const pendingSubmissions = new Map<string, {
         resolve: (accepted: boolean) => void;
         timer: number;
@@ -102,7 +130,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         cursorBlink: true,
         cursorStyle: "bar",
         fontFamily: '"JetBrains Mono Variable", monospace',
-        fontSize: window.innerWidth < 640 ? 11 : 13,
+        fontSize: 13,
         fontWeight: 430,
         lineHeight: 1.08,
         letterSpacing: 0,
@@ -150,19 +178,34 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       const sendResize = () => {
         const socket = socketRef.current;
         if (socket?.readyState === WebSocket.OPEN) {
+          if (
+            lastResize?.socket === socket
+            && lastResize.cols === terminal.cols
+            && lastResize.rows === terminal.rows
+          ) return;
           socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+          lastResize = { socket, cols: terminal.cols, rows: terminal.rows };
         }
       };
 
       const fitAndResize = () => {
-        if (cancelled || !hostRef.current) return;
+        if (cancelled || layoutSuspendedRef.current || !hostRef.current) return;
         try {
           fit.fit();
+          // Invalidate every row after the host grows so xterm paints the newly exposed area.
+          terminal.refresh(0, terminal.rows - 1);
           sendResize();
         } catch {
           // The terminal can briefly have zero height while the mobile keyboard moves.
         }
       };
+
+      const scheduleFitAndResize = () => {
+        if (layoutSuspendedRef.current) return;
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(fitAndResize, 80);
+      };
+      scheduleFitAndResizeRef.current = scheduleFitAndResize;
 
       const connect = () => {
         if (cancelled || ended) return;
@@ -238,11 +281,11 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         setAwayFromLive(buffer.viewportY < buffer.baseY);
       });
       const resizeObserver = new ResizeObserver(() => {
-        window.clearTimeout(resizeTimer);
-        resizeTimer = window.setTimeout(fitAndResize, 80);
+        scheduleFitAndResize();
       });
       resizeObserver.observe(hostRef.current);
-      window.visualViewport?.addEventListener("resize", fitAndResize);
+      window.visualViewport?.addEventListener("resize", scheduleFitAndResize);
+      window.visualViewport?.addEventListener("scroll", scheduleFitAndResize);
 
       requestAnimationFrame(() => {
         fitAndResize();
@@ -256,8 +299,12 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         onStateChange("disconnected");
         window.clearTimeout(reconnectTimer);
         window.clearTimeout(resizeTimer);
+        if (scheduleFitAndResizeRef.current === scheduleFitAndResize) {
+          scheduleFitAndResizeRef.current = null;
+        }
         resizeObserver.disconnect();
-        window.visualViewport?.removeEventListener("resize", fitAndResize);
+        window.visualViewport?.removeEventListener("resize", scheduleFitAndResize);
+        window.visualViewport?.removeEventListener("scroll", scheduleFitAndResize);
         input.dispose();
         scroll.dispose();
         socketRef.current?.close(1000, "view closed");

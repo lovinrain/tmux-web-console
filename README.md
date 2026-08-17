@@ -7,28 +7,28 @@ and output, and captures retained tmux scrollback only when requested.
 ## MVP features
 
 - Live inventory of every tmux session and pane
-- Claude, Codex, Cursor, shell, and process labels
+- Claude, Codex, Cursor, Grok, shell, and process labels
 - Exact terminal rendering through xterm.js and a real PTY
 - Persistent Light/Dark appearance for the dashboard, dialogs, and terminal palette
 - Direct raw-key, control-key, arrow-key, and bracketed-paste input
 - Local Page Up/Page Down controls for fixed mobile terminal views
 - Permanent dictation-safe staged input with a per-session local draft
 - Acknowledged staged delivery that retains uncertain or rejected input
-- Persistent per-session memorandum queues with add, edit, delete, load, and send actions
+- Persistent per-session memos for drafts, scratch notes, and explicitly queued input
 - A persistent hierarchical snippet library with nested folders and safe draft insertion
 - Automatic reconnect after a dropped mobile connection
 - Immutable, paginated history snapshots in an adjustable desktop drawer
-- Claude/Codex/Cursor activity states with filters for human and command waits
+- Claude/Codex/Cursor/Grok activity states for human input and background work
 - Card dashboard by default, with a compact list view and shareable view preferences
 - Visible, ordered multi-criterion sorting and optional attention-first state groups
 - One-tap, persistent stars that pin frequently used sessions above the rest
 - A persistent ignored bucket for long-running background sessions
-- Quick filters for All, Agents, Claude, Codex, Cursor, and Shells
+- Quick filters for All, Agents, Claude, Codex, Cursor, Grok, and Shells
 - Optional Muxdeck display aliases, kept separate from native tmux names
 - Native tmux session rename with URL, tab, draft, and metadata migration
 - Separate new-window links while card clicks keep same-window navigation
 - A routed, confirm-before-create flow for starting a fresh default-shell session
-- Page-local quick tabs, session switching, and a recently visited trail
+- Named server-backed workspaces, ordered quick tabs, desktop shortcuts, and title search
 - Always-available controls to hide session tabs, staged input, and shortcut keys
 - Explicit warning when a full-screen alternate-screen app has no tmux history
 - Responsive phone, tablet, and desktop layouts
@@ -92,7 +92,7 @@ tmux attach-session -E -f active-pane -t $SESSION_ID
 
 Input from xterm.js is written directly to the PTY. Output from the PTY is sent
 as binary WebSocket frames. Closing the tab terminates only that tmux client;
-the underlying session and Claude/Codex process continue running.
+the underlying session and foreground process continue running.
 
 The staged input box is intentionally separate from the editable line inside the
 terminal. Its draft is saved in the current browser under the tmux session name,
@@ -106,8 +106,15 @@ With the staged textarea focused, `Shift+Enter` invokes `Send + Enter`; plain
 `Enter` remains available for multiline drafts.
 Only then is the local draft cleared. A timeout or reconnect leaves it intact and
 is never retried automatically, because an unconfirmed retry could execute the
-same command twice. The confirmation does not claim that Claude, Codex, or the
-shell finished processing the text; it only confirms PTY delivery.
+same command twice. The confirmation does not claim that the agent or shell
+finished processing the text; it only confirms PTY delivery.
+
+`Queue in memo` moves the same exact staged snapshot to the current session's
+server-backed memo without writing anything to tmux and marks it as queued input.
+It remains available when the terminal is disconnected. The local draft is
+cleared only after persistence succeeds; a validation, session, storage, or
+network failure leaves the draft intact for retry. Whitespace-only drafts cannot
+be queued.
 
 On wider screens, the header exposes two sizing modes:
 
@@ -123,23 +130,33 @@ Dark remains the default, and the selected appearance is stored only in that
 browser. Changing it never sends terminal input, resizes tmux, or reconnects the
 PTY client.
 
-The `PgUp` and `PgDn` controls send real Page Up/Page Down key sequences to the
-foreground application, matching a physical keyboard for tools such as Claude
-Code. For Codex or other content in tmux history, `Tmux PgUp` sends `Ctrl+B`
-followed by Page Up to enter copy mode one page back; `Tmux PgDn` pages down once
-that mode is active. `^C` returns to the live pane. The tmux controls assume the
-default `Ctrl+B` prefix. Use Scrollback for retained content from before the browser
-attached.
+The shortcut strip in `Input` mode sends terminal input. Its `PgUp` and `PgDn`
+controls send real Page Up/Page Down key sequences to the foreground application,
+matching a physical keyboard for tools such as Claude Code. For Codex or other
+content in tmux history, `Tmux PgUp` sends `Ctrl+B` followed by Page Up to enter
+copy mode one page back; `Tmux PgDn` pages down once that mode is active. `^C`
+returns to the live pane. The tmux controls assume the default `Ctrl+B` prefix.
+
+The phone `Terminal` layout has a separate tmux-history rail. `Page up` enters
+tmux copy mode one page back, `Page down` moves toward the current output, and
+`Live` safely cancels copy mode. These actions use explicit WebSocket control
+messages dispatched to the exact tmux attachment. The server verifies that
+attachment's process and stable session ID, then lets tmux resolve its
+client-local active pane. No history action sends key bytes to or interrupts the
+foreground application. The three history actions are available while the
+terminal connection is live; `Focus` / `Exit` remains available even during a
+reconnect. Use Scrollback for a separate retained snapshot.
 
 On tablet and desktop layouts, drag the left edge of the Scrollback drawer to
 change its width. The resize handle also supports Left/Right arrows, Home/End,
 and Enter to reset. The chosen width survives SPA navigation in the current page
 but resets on reload; phone layouts keep Scrollback full-width.
 
-`^A` and `^E` send `Ctrl+A` and `Ctrl+E` respectively, letting compatible shells
-and agents move to the beginning or end of their active input. The `Other Keys`
-control reveals `Up`, `Down`, `Left`, and `Right` in a secondary row so those
-less-frequent controls do not crowd the main shortcut strip.
+`^A`, `^E`, and `^K` send `Ctrl+A`, `Ctrl+E`, and `Ctrl+K` respectively, letting
+compatible shells and agents move to the beginning or end of their active input,
+or delete from the cursor to the end. The `Other Keys` control reveals `Up`,
+`Down`, `Left`, and `Right` in a secondary row so those less-frequent controls do
+not crowd the main shortcut strip.
 
 `Raw keys` focuses the live xterm input. It does not enable a separate mode or
 send a control sequence; subsequent keyboard input goes directly to the
@@ -155,15 +172,22 @@ all ordered `tab=` values, page-local Recents, and the staged-draft key without
 adding a browser-history entry. Muxdeck also migrates the server-side display
 alias, star/ignored status, and memoranda. Browser Back and Forward entries that
 still contain the old name are canonicalized for the lifetime of the page. As in
-tmux itself, names cannot contain a colon or period; Muxdeck also rejects names
-ending in a semicolon because tmux parses that final character as a command
-separator.
+tmux itself, names cannot contain a colon or period. Muxdeck also rejects
+backslashes, unsafe line separators, and names ending in a semicolon because they
+cannot be round-tripped safely through tmux's command and inventory formats.
 
-The adjacent `Memo` shortcut opens that session's reusable message queue. Queue
-items are stored by the server and remain available across browsers and service
-restarts. `Use` copies an item into the local staged draft, while `Send now`
-delivers it with Enter using the same acknowledgment protocol. Neither action
-deletes the stored item; deletion is always explicit.
+The adjacent `Memo` shortcut opens durable space for drafts, staged thoughts,
+scratch notes, and reusable prompts. New items written in the drawer default to
+notes; choose `Queue next` only for text intended as a future session input.
+Queued items appear first and drive the amber `Q` indicators on mobile Input,
+the Memo shortcut, Overview rows, and dashboard cards. `Stage` copies an item
+into the local staged draft, while `Send now` delivers it with Enter using the
+same acknowledgment protocol. Staging or successfully sending a queued item
+moves it back to notes without deleting its text, so the queue remains an honest
+list of work still waiting for input. `Send now` persists that move before PTY
+delivery; if Memo cannot save the state change, nothing is sent. This ordering
+prevents an acknowledged command from reappearing in the queue and being run
+twice after a reload or on another device.
 
 The `Snippets` shortcut opens the global snippet library picker. Choosing a
 snippet inserts its exact text at the staged textarea's current selection and
@@ -179,12 +203,20 @@ overwrite changes made by a newer one.
 
 ## Agent state detection
 
-Muxdeck recognizes the live title signals emitted by current Claude Code and
-Codex versions. An animated title means the agent is active; for those panes,
-Muxdeck inspects only the tail of the visible screen to distinguish explicit
-background-command waits from active work. Static Claude/Codex titles indicate
-that the agent needs human input. Dead, stale, or unfamiliar signals are marked
-Unclear instead of being guessed.
+Muxdeck recognizes the live title signals emitted by current Claude Code, Codex,
+and Grok Build versions. An animated title means the agent has an active turn;
+for those panes, Muxdeck inspects the visible screen to distinguish foreground
+work from `Background work`. That state means the parent agent is parked on
+commands, background agents, or dynamic workflows: no human action is required,
+but the terminal remains available for steering input. Claude's latest
+column-zero activity headline is decisive across the visible pane, so an older
+wait banner does not hide resumed work and a dense task panel does not hide the
+current wait. Static titles indicate that the agent needs human input.
+Dead, stale, or unfamiliar signals are marked Unclear instead of being guessed.
+Grok Build is recognized when the active pane command is `grok`, which is also
+the command used to launch it normally. Its working title begins with an animated
+braille frame; its idle title is `grok` or ends in `- grok` after the conversation
+receives a title.
 
 Cursor Agent (`cursor-agent`, also installed as `agent`) names its pane after the
 conversation, so its title carries no state. Muxdeck reads the footer of its
@@ -220,7 +252,7 @@ priority.
 
 Sort directions are fixed and visible in the badges: activity and state-change
 time use newest first; titles and tmux names use natural A-Z order (`cx2` before
-`cx10`); state uses Needs input, Working, Command wait, Unclear, then Other.
+`cx10`); state uses Needs input, Working, Background work, Unclear, then Other.
 Grouping is independent of sorting. Enabling Group / State splits regular
 results into that attention-first state order, then applies the badge criteria
 inside each group.
@@ -232,6 +264,11 @@ the same search, filters, card/list view, grouping, and comparator priority:
 /mux/?q=deploy&kind=codex&state=waiting_human&view=list&group=state&sort=state,title
 ```
 
+The canonical background-work filter is `state=waiting_command`. Muxdeck also
+accepts the more readable `state=background-work` and the older
+`state=command-wait`, then canonicalizes either alias without breaking saved
+links.
+
 Supported sort keys are `activity`, `state`, `state-change`, `title`, and
 `tmux-name`, listed from highest to lowest priority after `sort=`. Opening a
 console carries the dashboard query with it, and Back restores the exact
@@ -241,7 +278,7 @@ saved view/sort preferences and then writes them into the URL.
 Use the star beside a session title to add or remove it from the pinned section
 with one tap. Stars persist across server restarts. Pinned sessions remain
 visible above the regular results independently of the active All, Agents,
-Claude, Codex, Cursor, or Shells quick filter.
+Claude, Codex, Cursor, Grok, or Shells quick filter.
 
 Use the eye-off action to move a long-running background session into the
 collapsed `Ignored` section below the filtered results. Ignored sessions do not
@@ -258,23 +295,74 @@ browser context instead. The link carries the current dashboard query, so its
 Back action returns to the same filters, view, grouping, and sort priority. A
 new window starts with only the selected session in its quick-tab workspace.
 
+The landing page lists named saved workspaces in rough last-active order. `New
+workspace` saves the currently open tabs in their existing order, or creates an
+empty workspace when no tabs are open. A saved workspace can be resumed,
+renamed, or deleted from that list. Deleting one removes only the saved tab
+group; it never stops, renames, or sends input to any tmux session.
+
+An unsaved multi-tab console also exposes `Save workspace` directly in its tab
+bar. On phone layouts, the same action is available in the `Overview` footer.
+After naming the workspace, the current console stays open and its URL gains the
+stable workspace identifier. The action then becomes a `Saved` indicator because
+later tab-order and active-session changes synchronize automatically.
+
+Each saved workspace keeps its name, ordered open tabs, active session, and
+server-generated creation, update, and last-active times in
+`MUXDECK_WORKSPACES_FILE`. Opening or changing a saved workspace refreshes its
+rough last-active time. Workspace names and tab membership are shared by every
+browser connected to the same Muxdeck instance, so a phone or another computer
+can resume the same group. Concurrent pages use last-write-wins semantics; the
+most recently accepted full tab/activity update becomes the saved state. Each
+snapshot also carries the server's native-session rename revision. If another
+device tries to save names captured before a Muxdeck rename, the server rejects
+that stale snapshot and the page reloads the migrated workspace instead of
+restoring an obsolete tmux name.
+
+The stable `workspace=` query parameter identifies a saved workspace without
+putting its editable name in the route. Ordered `tab=` values remain in the URL
+for navigation and backward-compatible ad hoc workspaces. When a saved workspace
+is loaded, its server record is authoritative. A URL with `tab=` values but no
+`workspace=` remains an unsaved browser workspace; its `Resume workspace` action
+returns to the most recently active open tab without changing their order.
+
 The landing-page `New session` action opens `/sessions/new` as a synthetic
 workspace tab and waits for explicit confirmation before changing tmux. On
-confirmation, Muxdeck assigns a collision-resistant `muxdeck-*` name, starts
-tmux's configured default shell in the service user's home directory, and
-replaces the route with `/session/:name`. Existing ordered quick tabs stay in
-place and the created session is appended. `New window` opens the same
-confirmation screen in an isolated browser workspace. The synthetic tab is
-represented by the route, never by a fake `tab=` value. Closing the browser
-clears only the browser-local workspace state; a successfully created tmux
-session remains alive until it is ended through tmux itself.
+confirmation, Muxdeck uses the optional native tmux name entered in the form or
+assigns a collision-resistant `muxdeck-*` name when the field is empty. It starts
+tmux's configured default shell in the service user's home directory and replaces
+the route with `/session/:name`. Existing ordered quick tabs stay in place and the
+created session is appended. `New window` opens the same confirmation screen in
+an isolated browser workspace. The synthetic tab is represented by the route,
+never by a fake `tab=` value. A successfully created tmux session remains alive
+until it is ended through tmux itself, independently of whether its quick tab is
+saved in a named workspace.
 
-The top `View` toolbar stays available while the console is open. Its `Tabs`,
-`Input`, and `Keys` controls independently collapse the quick-tab strip, staged
-composer, and terminal shortcut strip so the terminal can use more of a phone's
-screen. These choices remain only in the current React page: they survive SPA
-session switches and dashboard round trips, but reset when the page reloads or
-the browser tab closes. They do not change the URL or reconnect the terminal.
+On phones, the top purpose switcher gives the console three mutually exclusive
+layouts. `Overview` opens the routed, status-labelled workspace session list;
+`Terminal` is the fresh-load default and keeps the compact identity header,
+readable 13px terminal, and tmux-history rail; `Input` keeps terminal context
+above the staged composer and input-sending shortcut strip. A Needs input session
+marks the Input choice in amber, but live status changes never open the keyboard
+or pull the user away from terminal context automatically. Explicitly entering
+Input focuses the saved draft, while leaving it blurs the field and dismisses the
+mobile keyboard.
+
+`Focus` on the Terminal rail enters a distraction-free layout containing only
+the terminal and that rail; the control becomes `Exit` so the normal purpose
+switcher and identity header are always recoverable. Entering or leaving Focus
+does not remount the terminal, reconnect its WebSocket, change the URL, or discard
+the staged draft. The distraction-free choice resets when the active session
+changes, Overview or Input is selected, the workspace overlay opens, the console
+is left, or the page is reloaded.
+
+The mobile purpose choice remains only in the current React page: it survives
+SPA session switches and dashboard round trips, resets to Terminal on reload,
+and never changes the URL, saved workspace, or terminal connection. The wider
+desktop layout retains the independent `Tabs`, `Input`, and `Keys` visibility
+controls. The console also follows `visualViewport` height and offset on iOS so
+the composer and send actions remain inside the visible area while the software
+keyboard moves.
 
 Below the console header, a horizontally scrollable quick-tab strip selects
 another session by replacing the active `/session/:name` URL without adding a
@@ -284,6 +372,17 @@ session remains in the path. Only the selected terminal is attached: inactive
 quick tabs are lightweight navigation records and cannot resize tmux or consume
 background PTY connections.
 
+On desktop, `Ctrl+Shift+,` and `Ctrl+Shift+.` select the previous or next open
+tab and wrap at either end. `Ctrl+Shift+1` through `Ctrl+Shift+9` select that
+numbered open tab directly; both the number row and numeric keypad work, and a
+position that is not open is a no-op. `Ctrl+Shift+;` opens the `Find tab`
+palette, which ranks matches against both the custom display title and native
+tmux name; arrow keys choose a result and Enter jumps directly to it. These
+exact chords remain available while xterm or staged input owns focus, while
+unrelated browser/editor commands such as `Ctrl+/` pass through untouched. All
+workspace shortcuts pause behind a modal dialog and are disabled in the compact
+mobile layout, where Overview remains the session-switching surface.
+
 `Recents` opens the route `/session/:name/recents`. The sheet separates open
 quick tabs, closed recently visited sessions, and other sessions currently on
 the tmux server. Closing an active tab selects its neighbor; closing the final
@@ -291,11 +390,13 @@ tab returns to the dashboard. Browser Back closes a sheet opened from a live
 console, and selecting any row updates the canonical active-session URL.
 
 Open quick tabs and their order are URL-backed across console, dashboard, and
-Snippets routes. Reloading or sharing that URL restores the ordered tabs, while
-the closed-session visit trail remains page-local and clears on reload. Neither
-collection is written to the server or `localStorage`. Existing appearance,
-dashboard preference, staged-draft, title, star, ignored-session, memorandum,
-and snippet storage keep their documented behavior.
+Snippets routes. Reloading or sharing an ad hoc URL restores its ordered tabs.
+When `workspace=` is present, Muxdeck also synchronizes the ordered tabs and
+active session to the server so another device can resume them. The
+closed-session visit trail remains page-local and clears on reload; it is not
+part of a saved workspace. Existing appearance, dashboard preference,
+staged-draft, title, star, ignored-session, memorandum, and snippet storage keep
+their documented behavior.
 
 `MUXDECK_TITLES_FILE` stores optional display aliases plus starred and ignored
 session names in the server-side `session-titles.json` file, keyed by the
@@ -315,6 +416,22 @@ next title or star write.
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
 
+`MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list. Tabs are keyed
+by native tmux session name. A native rename performed through Muxdeck migrates
+that name in every saved workspace; an out-of-band tmux rename cannot do so.
+Unavailable names remain visible in the saved group until the workspace is
+updated or deleted. The file contains workspace names and tmux session names, so
+treat it as potentially sensitive runtime state.
+
+The workspace schema is version 2. Version 1 files load at rename revision zero
+and upgrade atomically on the next write. A workspace name is limited to 80
+characters and a workspace can contain at most 32 unique ordered tabs. Writes
+use an atomic file replacement. Keep a pre-upgrade copy when rollback is
+possible because a version-1-only release rejects the version 2 document. If an
+existing workspace file is unreadable, malformed, or uses an unsupported
+schema, the workspace API returns `503` and refuses to overwrite it until the
+file is repaired and Muxdeck is restarted.
+
 ## Scrollback behavior
 
 Opening Scrollback runs `tmux capture-pane` and stores the result in memory for ten
@@ -322,9 +439,9 @@ minutes. Older pages come from that immutable snapshot, so live output cannot
 cause duplicate or skipped lines while the user reads.
 
 Tmux on this host retains at most 2,000 normal-screen rows. Claude Code commonly
-uses the alternate screen, where tmux often retains no previous rows. Muxdeck can
-show Claude's current screen but cannot reconstruct alternate-screen content that
-tmux never saved.
+uses the alternate screen, and Grok Build defaults to it, where tmux often retains
+no previous rows. Muxdeck can show the current screen but cannot reconstruct
+alternate-screen content that tmux never saved.
 
 Scrollback follows the pane selected when the web client attaches. If you switch to
 another tmux pane or window from inside the live terminal, return to the session
@@ -340,8 +457,9 @@ list and reopen it before capturing that pane's history.
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
 | `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles plus starred and ignored session names |
-| `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session memorandum queues |
+| `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session notes and queued memo input |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
+| `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, and activity times |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
 Muxdeck intentionally has no application-level authentication in this MVP. Keep

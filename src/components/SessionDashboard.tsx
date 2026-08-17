@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   BASE_PATH,
   listSessions,
@@ -6,6 +14,7 @@ import {
   updateSessionIgnored,
   updateSessionStar,
   updateSessionTitle,
+  type SavedWorkspace,
 } from "../api";
 import {
   ChevronRightIcon,
@@ -38,12 +47,14 @@ import {
 } from "../sessionDashboardModel";
 import type { AgentState, Pane, Session } from "../types";
 import {
+  searchWithSavedWorkspaceId,
   searchWithWorkspaceTabs,
   workspaceTabsFromSearch,
 } from "../workspaceState";
 import { AppTabs } from "./AppTabs";
 import { stageSessionDraft } from "./InputBar";
 import { MessageQueueDialog } from "./MessageQueueDialog";
+import { SavedWorkspaceList } from "./SavedWorkspaceList";
 import { SessionSortControls } from "./SessionSortControls";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
@@ -51,10 +62,19 @@ import { ThemeToggle } from "./ThemeToggle";
 
 interface SessionDashboardProps {
   onOpen: (session: string) => void;
+  onOpenInput?: (session: string) => void;
+  onResumeWorkspace?: () => void;
+  workspaceReturnSession?: string;
+  workspaceTabCount?: number;
   onOpenSnippets?: () => void;
   onNewSession?: () => void;
   newSessionWindowHref?: string;
   onSessionsChange?: (sessions: Session[]) => void;
+  currentWorkspaceTabs?: readonly string[];
+  activeSession?: string | null;
+  activeWorkspaceId?: string | null;
+  onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
+  onSavedWorkspaceDeleted?: (workspaceId: string) => void;
 }
 
 type UpdateMode = "connecting" | "live" | "polling";
@@ -69,6 +89,7 @@ const KIND_FILTERS: SessionKindFilter[] = [
   "claude",
   "codex",
   "cursor",
+  "grok",
   "shells",
 ];
 const STATE_GROUP_ORDER = [...SESSION_STATE_ORDER];
@@ -77,7 +98,7 @@ const DASHBOARD_QUERY_KEYS = ["q", "kind", "filter", "state", "view", "group", "
 const STATE_LABELS: Record<AgentState, string> = {
   working: "Working",
   waiting_human: "Needs input",
-  waiting_command: "Command wait",
+  waiting_command: "Background work",
   unknown: "Unclear",
   other: "Other",
 };
@@ -99,6 +120,8 @@ export function classifyPane(pane?: Pane): { label: string; tone: string } {
       return { label: "Codex", tone: "codex" };
     case "cursor":
       return { label: "Cursor", tone: "cursor" };
+    case "grok":
+      return { label: "Grok", tone: "grok" };
     case "shells":
       return { label: "Shell", tone: "shell" };
     default:
@@ -166,8 +189,19 @@ function replaceDashboardUrl(route: SessionDashboardRouteState): void {
   window.history.replaceState(window.history.state, "", target);
 }
 
+function isolatedWorkspaceSearch(search: string): string {
+  return searchWithSavedWorkspaceId(searchWithWorkspaceTabs(search, []), null);
+}
+
+function isolatedWorkspaceHref(href: string): string {
+  const url = new URL(href, window.location.href);
+  url.search = isolatedWorkspaceSearch(url.search);
+  if (url.origin === window.location.origin) return `${url.pathname}${url.search}${url.hash}`;
+  return url.toString();
+}
+
 function sessionConsoleHref(sessionName: string): string {
-  const search = searchWithWorkspaceTabs(window.location.search, [sessionName]);
+  const search = isolatedWorkspaceSearch(window.location.search);
   return `${BASE_PATH}/session/${encodeURIComponent(sessionName)}${search}`;
 }
 
@@ -198,10 +232,18 @@ function SessionItem({
   onToggleStar,
   onToggleIgnored,
 }: SessionItemProps) {
+  const stateDescriptionId = useId();
   const pane = activePane(session);
   const classification = classifyPane(pane);
   const cardStyle = { "--i": Math.min(index, 14) } as CSSProperties;
   const displayName = session.customTitle || session.name;
+  const memorandumCount = session.memorandumCount ?? session.queuedMessageCount;
+  const queuedMemorandumCount = session.queuedMessageCount;
+  const memoLabel = queuedMemorandumCount > 0
+    ? `Manage memoranda for ${displayName}, ${queuedMemorandumCount} queued`
+    : memorandumCount > 0
+      ? `Manage memoranda for ${displayName}, ${memorandumCount} saved`
+      : `Manage memoranda for ${displayName}`;
 
   return (
     <article
@@ -213,11 +255,18 @@ function SessionItem({
         className="session-card-main"
         onClick={() => onOpen(session.name)}
         aria-label={`Open ${displayName}`}
+        aria-describedby={stateDescriptionId}
       >
         <div className="session-card-top">
           <span className="session-badges">
             <span className={`agent-badge ${classification.tone}`}>{classification.label}</span>
-            <span className={`state-badge ${session.agentState}`} title={session.agentStateReason}>{STATE_LABELS[session.agentState]}</span>
+            <span
+              id={stateDescriptionId}
+              className={`state-badge ${session.agentState}`}
+              title={session.agentStateReason}
+            >
+              {STATE_LABELS[session.agentState]}
+            </span>
           </span>
           <span className={showStateChangeTime ? "activity-time state-change-time" : "activity-time"}>
             {showStateChangeTime ? `state ${relativeTime(sessionStateChangedAt(session))}` : relativeTime(session.activity)}
@@ -259,13 +308,23 @@ function SessionItem({
         </button>
         <button
           type="button"
-          className="session-messages-toggle"
-          aria-label={`Manage memoranda for ${displayName}`}
-          title="Queued memoranda"
+          className={queuedMemorandumCount > 0
+            ? "session-messages-toggle has-queued"
+            : memorandumCount > 0
+              ? "session-messages-toggle has-memos"
+              : "session-messages-toggle"}
+          aria-label={memoLabel}
+          title={queuedMemorandumCount > 0
+            ? `${queuedMemorandumCount} queued in memo`
+            : "Open session memo"}
           onClick={(event) => onMessages(session.name, event.currentTarget)}
         >
           <MemoIcon />
-          {session.queuedMessageCount > 0 && <span>{session.queuedMessageCount}</span>}
+          {queuedMemorandumCount > 0 ? (
+            <span className="queued">Q{queuedMemorandumCount}</span>
+          ) : memorandumCount > 0 ? (
+            <span>{memorandumCount}</span>
+          ) : null}
         </button>
         <button
           type="button"
@@ -307,10 +366,19 @@ function SessionItem({
 
 export function SessionDashboard({
   onOpen,
+  onOpenInput,
+  onResumeWorkspace,
+  workspaceReturnSession,
+  workspaceTabCount = 0,
   onOpenSnippets,
   onNewSession,
   newSessionWindowHref,
   onSessionsChange,
+  currentWorkspaceTabs = [],
+  activeSession = null,
+  activeWorkspaceId = null,
+  onOpenSavedWorkspace,
+  onSavedWorkspaceDeleted,
 }: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [route, setRoute] = useState<SessionDashboardRouteState>(initialDashboardRoute);
@@ -335,12 +403,13 @@ export function SessionDashboard({
     group: groupMode,
     sort: sortCriteria,
   } = route;
-  const resolvedNewSessionWindowHref = newSessionWindowHref
-    ?? `${BASE_PATH}/sessions/new${searchWithWorkspaceTabs(window.location.search, [])}`;
+  const resolvedNewSessionWindowHref = isolatedWorkspaceHref(
+    newSessionWindowHref ?? `${BASE_PATH}/sessions/new${window.location.search}`,
+  );
 
   useEffect(() => {
-    onSessionsChange?.(sessions);
-  }, [onSessionsChange, sessions]);
+    if (!loading) onSessionsChange?.(sessions);
+  }, [loading, onSessionsChange, sessions]);
 
   const updateRoute = useCallback((next: SessionDashboardRouteState) => {
     setRoute(next);
@@ -638,7 +707,25 @@ export function SessionDashboard({
         <p className="section-index">01 / SELECT</p>
         <h2>Pick up where<br />the agents left off.</h2>
         <div className="intro-copy">
-          <p>Open any running Claude, Codex, or shell session. Output stays live; input goes straight to its tmux client.</p>
+          <p>Open any running Claude, Codex, Cursor, Grok, or shell session. Output stays live; input goes straight to its tmux client.</p>
+          {onResumeWorkspace && workspaceReturnSession && workspaceTabCount > 0 && (
+            <button
+              type="button"
+              className="secondary-button dashboard-workspace-resume"
+              onClick={onResumeWorkspace}
+              aria-label={`Resume workspace at ${workspaceReturnSession}, ${workspaceTabCount} open ${workspaceTabCount === 1 ? "tab" : "tabs"}`}
+            >
+              <span className="dashboard-workspace-resume-icon"><TerminalIcon /></span>
+              <span className="dashboard-workspace-resume-copy">
+                <strong>Resume workspace</strong>
+                <small title={workspaceReturnSession}>Resume at · {workspaceReturnSession}</small>
+              </span>
+              <span className="dashboard-workspace-resume-count" aria-hidden="true">
+                {workspaceTabCount} {workspaceTabCount === 1 ? "tab" : "tabs"}
+              </span>
+              <ChevronRightIcon />
+            </button>
+          )}
           <div className="dashboard-new-session-actions" role="group" aria-label="New session actions">
             <button
               type="button"
@@ -659,6 +746,14 @@ export function SessionDashboard({
           </div>
         </div>
       </section>
+
+      <SavedWorkspaceList
+        currentTabs={currentWorkspaceTabs}
+        activeSession={activeSession}
+        activeWorkspaceId={activeWorkspaceId}
+        onOpen={(workspace) => onOpenSavedWorkspace?.(workspace)}
+        onDeleted={onSavedWorkspaceDeleted}
+      />
 
       <section className="session-controls" aria-label="Session filters">
         <label className="search-field">
@@ -721,7 +816,7 @@ export function SessionDashboard({
         <>
           <div className="results-toolbar">
             <div>
-              <p className="eyebrow">02 / SESSIONS</p>
+              <p className="eyebrow">03 / SESSIONS</p>
               <p className="results-summary">
                 {starredSessions.length} starred / {regularSessions.length} filtered / {ignoredSessions.length} ignored
               </p>
@@ -905,6 +1000,13 @@ export function SessionDashboard({
           sessionName={messageSession.name}
           sessionTitle={messageSession.customTitle}
           onClose={closeMessages}
+          onCountsChange={({ total, queued }) => {
+            setSessions((current) => current.map((session) => (
+              session.name === messageSession.name
+                ? { ...session, memorandumCount: total, queuedMessageCount: queued }
+                : session
+            )));
+          }}
         />
       )}
       {snippetSessionName && (
@@ -921,7 +1023,7 @@ export function SessionDashboard({
             if (result === "invalid") {
               throw new Error("This snippet does not fit in the staged input.");
             }
-            onOpen(snippetSessionName);
+            (onOpenInput ?? onOpen)(snippetSessionName);
           }}
         />
       )}

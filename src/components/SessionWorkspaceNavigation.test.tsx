@@ -1,9 +1,12 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
 import type { Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
-import { SessionWorkspaceNavigation } from "./SessionWorkspaceNavigation";
+import {
+  MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
+  SessionWorkspaceNavigation,
+} from "./SessionWorkspaceNavigation";
 
 function pane(overrides: Partial<Pane> = {}): Pane {
   return {
@@ -110,6 +113,28 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it("labels Grok panes in the session switcher", () => {
+    const grokSession = session({
+      name: "grok-work",
+      agentState: "waiting_human",
+      panes: [pane({ command: "grok" })],
+    });
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          activeSession: "grok-work",
+          openSessions: ["grok-work"],
+          recentSessions: ["grok-work"],
+          sessions: [grokSession],
+          recentsOpen: true,
+        })}
+      />,
+    );
+
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    expect(within(openGroup).getByText("Grok")).toBeVisible();
+  });
+
   it("provides roving keyboard focus, tab activation, closing, and a recent count", () => {
     const props = navigationProps({
       openSessions: ["alpha", "beta", "zulu"],
@@ -217,11 +242,13 @@ describe("SessionWorkspaceNavigation", () => {
     const availableGroup = screen.getByRole("region", { name: "Other live sessions" });
 
     expect(within(openGroup).getByText("Alpha control")).toBeVisible();
+    expect(within(openGroup).getByText("Active \u00b7 Needs input")).toBeVisible();
     expect(within(openGroup).getByText("beta")).toBeVisible();
     fireEvent.click(within(openGroup).getByRole("button", { name: "Close beta quick tab" }));
     expect(props.onCloseTab).toHaveBeenCalledWith("beta");
 
     expect(within(recentGroup).getByText("Archived deploy")).toBeVisible();
+    expect(within(recentGroup).getByText("Background work")).toBeVisible();
     const unavailable = within(recentGroup).getByRole("button", {
       name: /ended tmux session ended Unavailable/i,
     });
@@ -242,6 +269,22 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onOpenDashboard).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Close session switcher" }));
     expect(props.onCloseRecents).toHaveBeenCalledOnce();
+  });
+
+  it("shows queued memo attention on the mobile Overview session row", () => {
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          recentsOpen: true,
+          sessions: sessions.map((item) => item.name === "alpha"
+            ? { ...item, memorandumCount: 4, queuedMessageCount: 2 }
+            : item),
+        })}
+      />,
+    );
+
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    expect(within(openGroup).getByLabelText("2 queued memo items")).toHaveTextContent("Q 2");
   });
 
   it("keeps ignored live sessions discoverable but sorts them after active work", () => {
@@ -374,5 +417,199 @@ describe("SessionWorkspaceNavigation", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(props.onCloseRecents).toHaveBeenCalledOnce();
+  });
+
+  it("names, validates, and retries saving an unsaved workspace", async () => {
+    const onSaveWorkspace = vi.fn()
+      .mockRejectedValueOnce(new Error("workspace storage is temporarily unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const view = render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({ onSaveWorkspace })}
+      />,
+    );
+
+    const openSave = screen.getByRole("button", { name: "Save workspace" });
+    expect(openSave).toHaveAttribute("aria-haspopup", "dialog");
+    expect(openSave).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(openSave);
+
+    const dialog = screen.getByRole("dialog", { name: "Save this workspace" });
+    expect(view.container).not.toContainElement(dialog);
+    expect(dialog.closest(".workspace-save-backdrop")?.parentElement).toBe(document.body);
+    const name = within(dialog).getByRole("textbox", { name: "Workspace name" });
+    const submit = within(dialog).getByRole("button", { name: "Save workspace" });
+    expect(openSave).toHaveAttribute("aria-expanded", "true");
+    expect(name).toHaveFocus();
+    expect(dialog).toHaveTextContent(
+      "Save 2 open tabs in their current order. Future tab and active-session changes will sync automatically.",
+    );
+    expect(dialog).toHaveTextContent("Resume tab: alpha");
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(name, { target: { value: "   " } });
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(dialog).toHaveTextContent("Enter a workspace name.");
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(name, { target: { value: "  Release room  " } });
+    expect(name).not.toHaveAttribute("aria-invalid");
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "workspace storage is temporarily unavailable",
+    );
+    expect(onSaveWorkspace).toHaveBeenLastCalledWith("Release room");
+    expect(name).toHaveFocus();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save workspace" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Save this workspace" }))
+        .not.toBeInTheDocument();
+    });
+    expect(onSaveWorkspace).toHaveBeenCalledTimes(2);
+    expect(onSaveWorkspace).toHaveBeenLastCalledWith("Release room");
+  });
+
+  it.each([
+    ["saved", "Workspace saved automatically", "Saved"],
+    ["loading", "Opening saved workspace", "Opening"],
+    ["error", "Workspace sync issue", "Sync issue"],
+  ] as const)(
+    "shows the %s persistence status without another save action",
+    (workspacePersistenceState, accessibleLabel, visibleLabel) => {
+      const onSaveWorkspace = vi.fn().mockResolvedValue(undefined);
+      render(
+        <SessionWorkspaceNavigation
+          {...navigationProps({
+            recentsOpen: true,
+            workspacePersistenceState,
+            onSaveWorkspace,
+          })}
+        />,
+      );
+
+      const statuses = screen.getAllByRole("status", { name: accessibleLabel });
+      expect(statuses).toHaveLength(2);
+      for (const status of statuses) {
+        expect(status).toHaveTextContent(visibleLabel);
+        expect(status).toHaveAttribute("tabindex", "-1");
+      }
+      expect(screen.queryByRole("button", { name: "Save workspace" }))
+        .not.toBeInTheDocument();
+      expect(within(screen.getByRole("dialog", { name: "Switch sessions" }))
+        .queryByRole("button", { name: "Save" }))
+        .not.toBeInTheDocument();
+      expect(onSaveWorkspace).not.toHaveBeenCalled();
+    },
+  );
+
+  it("focuses the replacement status after a successful save", async () => {
+    function SaveHarness() {
+      const [workspacePersistenceState, setWorkspacePersistenceState] = useState<
+        "unsaved" | "saved"
+      >("unsaved");
+      return (
+        <SessionWorkspaceNavigation
+          {...navigationProps({
+            workspacePersistenceState,
+            onSaveWorkspace: async () => {
+              setWorkspacePersistenceState("saved");
+            },
+          })}
+        />
+      );
+    }
+
+    render(<SaveHarness />);
+    const openSave = screen.getByRole("button", { name: "Save workspace" });
+    openSave.focus();
+    fireEvent.click(openSave);
+    const dialog = screen.getByRole("dialog", { name: "Save this workspace" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Workspace name" }), {
+      target: { value: "Release room" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save workspace" }));
+
+    const savedStatus = await screen.findByRole("status", {
+      name: "Workspace saved automatically",
+    });
+    await waitFor(() => expect(savedStatus).toHaveFocus());
+    expect(screen.queryByRole("dialog", { name: "Save this workspace" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("focuses the visible Overview control after a successful compact save", async () => {
+    vi.stubGlobal("visualViewport", { width: 390, height: 664 });
+
+    function CompactSaveHarness() {
+      const [workspacePersistenceState, setWorkspacePersistenceState] = useState<
+        "unsaved" | "saved"
+      >("unsaved");
+      return (
+        <>
+          <button id={MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID} type="button">
+            Mobile Overview
+          </button>
+          <SessionWorkspaceNavigation
+            {...navigationProps({
+              workspacePersistenceState,
+              onSaveWorkspace: async () => {
+                setWorkspacePersistenceState("saved");
+              },
+            })}
+          />
+        </>
+      );
+    }
+
+    render(<CompactSaveHarness />);
+    const openSave = screen.getByRole("button", { name: "Save workspace" });
+    openSave.focus();
+    fireEvent.click(openSave);
+    const dialog = screen.getByRole("dialog", { name: "Save this workspace" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Workspace name" }), {
+      target: { value: "Mobile release room" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save workspace" }));
+
+    const overview = screen.getByRole("button", { name: "Mobile Overview" });
+    await waitFor(() => expect(overview).toHaveFocus());
+    expect(screen.getByRole("status", {
+      name: "Workspace saved automatically",
+    })).not.toHaveFocus();
+  });
+
+  it("closes the Overview Recents sheet before opening its save dialog", () => {
+    const onCloseRecents = vi.fn();
+    const onSaveWorkspace = vi.fn().mockResolvedValue(undefined);
+
+    function OverviewHarness() {
+      const [recentsOpen, setRecentsOpen] = useState(true);
+      return (
+        <SessionWorkspaceNavigation
+          {...navigationProps({
+            recentsOpen,
+            onCloseRecents: () => {
+              onCloseRecents();
+              setRecentsOpen(false);
+            },
+            onSaveWorkspace,
+          })}
+        />
+      );
+    }
+
+    render(<OverviewHarness />);
+    const overview = screen.getByRole("dialog", { name: "Switch sessions" });
+    fireEvent.click(within(overview).getByRole("button", { name: "Save" }));
+
+    expect(onCloseRecents).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "Switch sessions" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Save this workspace" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Workspace name" })).toHaveFocus();
+    expect(onSaveWorkspace).not.toHaveBeenCalled();
   });
 });

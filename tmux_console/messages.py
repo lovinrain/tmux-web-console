@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 LOGGER = logging.getLogger("muxdeck.messages")
 MAX_SESSION_NAME_LENGTH = 256
 MAX_MESSAGE_LENGTH = 65_536
+MESSAGE_STATES = frozenset({"note", "queued"})
 
 
 def default_messages_path() -> Path:
@@ -49,10 +49,19 @@ def validate_message_text(value: str) -> str:
     return value
 
 
+def validate_message_state(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("message state must be a string")
+    if value not in MESSAGE_STATES:
+        raise ValueError("message state must be note or queued")
+    return value
+
+
 @dataclass(frozen=True)
 class QueuedMessage:
     id: str
     text: str
+    state: str
     created_at: int
     updated_at: int
 
@@ -60,6 +69,7 @@ class QueuedMessage:
         return {
             "id": self.id,
             "text": self.text,
+            "state": self.state,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
             "position": position,
@@ -94,9 +104,20 @@ class SessionMessageStore:
         with self._lock:
             return len(self._queues.get(session_name, ()))
 
-    def add_message(self, session_name: str, text: str) -> dict[str, Any]:
+    def count_queued_messages(self, session_name: str) -> int:
+        session_name = validate_session_name(session_name)
+        with self._lock:
+            return sum(
+                message.state == "queued"
+                for message in self._queues.get(session_name, ())
+            )
+
+    def add_message(
+        self, session_name: str, text: str, *, state: str = "queued"
+    ) -> dict[str, Any]:
         session_name = validate_session_name(session_name)
         text = validate_message_text(text)
+        state = validate_message_state(state)
         with self._lock:
             queue = list(self._queues.get(session_name, ()))
             existing_ids = {message.id for message in queue}
@@ -107,6 +128,7 @@ class SessionMessageStore:
             message = QueuedMessage(
                 id=message_id,
                 text=text,
+                state=state,
                 created_at=timestamp,
                 updated_at=timestamp,
             )
@@ -121,10 +143,13 @@ class SessionMessageStore:
         *,
         text: str | None = None,
         position: int | None = None,
+        state: str | None = None,
     ) -> dict[str, Any]:
         session_name = validate_session_name(session_name)
         if text is not None:
             text = validate_message_text(text)
+        if state is not None:
+            state = validate_message_state(state)
 
         with self._lock:
             queue = list(self._queues.get(session_name, ()))
@@ -137,6 +162,7 @@ class SessionMessageStore:
             updated = QueuedMessage(
                 id=current.id,
                 text=current.text if text is None else text,
+                state=current.state if state is None else state,
                 created_at=current.created_at,
                 updated_at=max(self._timestamp(), current.updated_at + 1),
             )
@@ -183,7 +209,7 @@ class SessionMessageStore:
         for position, message in enumerate(queue):
             if message.id == message_id:
                 return position
-        raise MessageNotFoundError(f"queued message not found: {message_id}")
+        raise MessageNotFoundError(f"memo entry not found: {message_id}")
 
     def _timestamp(self) -> int:
         return int(self._clock() * 1000)
@@ -194,7 +220,7 @@ class SessionMessageStore:
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError) as error:
-            LOGGER.warning("Unable to read queued messages from %s: %s", self.path, error)
+            LOGGER.warning("Unable to read memo entries from %s: %s", self.path, error)
             return {}
 
         sessions = payload.get("sessions", {}) if isinstance(payload, dict) else {}
@@ -233,6 +259,7 @@ class SessionMessageStore:
             return None
         message_id = record.get("id")
         text = record.get("text")
+        state = record.get("state", "queued")
         created_at = record.get("createdAt")
         updated_at = record.get("updatedAt")
         if not isinstance(message_id, str) or not message_id:
@@ -250,11 +277,13 @@ class SessionMessageStore:
             return None
         try:
             validate_message_text(text)
-        except ValueError:
+            state = validate_message_state(state)
+        except (TypeError, ValueError):
             return None
         return QueuedMessage(
             id=message_id,
             text=text,
+            state=state,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -278,7 +307,7 @@ class SessionMessageStore:
                 temporary = Path(handle.name)
                 json.dump(
                     {
-                        "version": 1,
+                        "version": 2,
                         "sessions": {
                             session_name: self._serialize(messages)
                             for session_name, messages in sorted(queues.items())

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import re
 import secrets
+import shlex
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -34,7 +38,14 @@ PANE_FORMAT_FIELDS = (
     "pane_dead",
 )
 PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT_FIELDS)
+CREATED_SESSION_FORMAT = "#{session_name}\t#{session_id}"
+CLIENT_IDENTITY_FORMAT = "#{client_pid}\t#{client_name}\t#{session_id}"
 MAX_SESSION_NAME_LENGTH = 256
+TERMINAL_HISTORY_ACTIONS = frozenset({"page-up", "page-down", "exit"})
+HISTORY_USER_KEY_PATTERN = re.compile(r"\bUser(\d{1,3})\b")
+HISTORY_USER_OPTION_PATTERN = re.compile(r"^user-keys\[(\d{1,3})\]")
+CLIENT_ATTACH_RETRY_ATTEMPTS = 20
+CLIENT_ATTACH_RETRY_DELAY = 0.01
 
 
 class TmuxError(RuntimeError):
@@ -50,6 +61,12 @@ class TmuxRenameUnverifiedError(TmuxError):
         self.verification_error = verification_error
 
 
+@dataclass(frozen=True)
+class CreatedSession:
+    name: str
+    id: str
+
+
 def validate_tmux_session_name(value: str) -> str:
     if not value.strip():
         raise ValueError("session name is required")
@@ -57,8 +74,13 @@ def validate_tmux_session_name(value: str) -> str:
         raise ValueError(
             f"session name must be {MAX_SESSION_NAME_LENGTH} characters or fewer"
         )
-    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+    if any(unicodedata.category(character) == "Cc" for character in value):
         raise ValueError("session name cannot contain control characters")
+    if "\u2028" in value or "\u2029" in value:
+        raise ValueError("session name cannot contain Unicode line separators")
+    if "\\" in value:
+        # tmux doubles backslashes in format output, breaking exact inventory names.
+        raise ValueError("session name cannot contain '\\'")
     if ":" in value or "." in value:
         raise ValueError("session name cannot contain ':' or '.'")
     if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
@@ -72,6 +94,11 @@ def validate_tmux_new_session_name(value: str) -> str:
         # tmux parses a final semicolon as a command separator even with exec argv.
         raise ValueError("session name cannot end with ';'")
     return value
+
+
+def _escape_tmux_format(value: str) -> str:
+    # tmux expands formats and shell substitutions in command arguments.
+    return value.replace("#", "##")
 
 
 @dataclass(frozen=True)
@@ -205,6 +232,7 @@ class TmuxClient:
             if socket_name is not None
             else os.environ.get("MUXDECK_TMUX_SOCKET")
         )
+        self._history_dispatch_lock = asyncio.Lock()
 
     @property
     def command_prefix(self) -> list[str]:
@@ -252,27 +280,36 @@ class TmuxClient:
             raise
         return parse_sessions(output)
 
-    async def create_session(self) -> str:
-        requested_name = f"muxdeck-{secrets.token_hex(6)}"
+    async def create_session(self, requested_name: str | None = None) -> CreatedSession:
+        requested_name = (
+            f"muxdeck-{secrets.token_hex(6)}"
+            if requested_name is None
+            else validate_tmux_new_session_name(requested_name)
+        )
         output = await self.run(
             [
                 "new-session",
                 "-d",
                 "-P",
                 "-F",
-                "#{session_name}",
+                CREATED_SESSION_FORMAT,
                 "-s",
-                requested_name,
+                _escape_tmux_format(requested_name),
                 "-c",
                 str(Path.home()),
             ]
         )
-        session_names = output.strip().splitlines()
-        if len(session_names) != 1 or not session_names[0]:
+        # Tabs and line separators are invalid in names, so this preserves spaces.
+        rows = output.splitlines()
+        fields = rows[0].split("\t") if len(rows) == 1 else []
+        if len(fields) != 2 or not fields[0]:
             raise TmuxError("tmux did not return the created session name")
-        if session_names[0] != requested_name:
+        actual_name, session_id = fields
+        if actual_name != requested_name:
             raise TmuxError("tmux returned an unexpected created session name")
-        return requested_name
+        if not session_id.startswith("$") or not session_id[1:].isdigit():
+            raise TmuxError("tmux did not return the created session id")
+        return CreatedSession(name=requested_name, id=session_id)
 
     async def rename_session(
         self,
@@ -291,7 +328,15 @@ class TmuxClient:
             raise ValueError("invalid tmux session id")
 
         try:
-            await self.run(["rename-session", "-t", session_id, "--", new_name])
+            await self.run(
+                [
+                    "rename-session",
+                    "-t",
+                    session_id,
+                    "--",
+                    _escape_tmux_format(new_name),
+                ]
+            )
         except TmuxError:
             # A timed-out client can still leave the tmux server-side rename committed.
             try:
@@ -322,6 +367,191 @@ class TmuxClient:
             if session.name == name:
                 return session
         raise TmuxError(f"tmux session not found: {name}")
+
+    async def navigate_history(
+        self,
+        client_pid: int,
+        session_id: str,
+        action: str,
+    ) -> str:
+        if (
+            isinstance(client_pid, bool)
+            or not isinstance(client_pid, int)
+            or client_pid <= 0
+        ):
+            raise ValueError("invalid tmux client pid")
+        if not session_id.startswith("$") or not session_id[1:].isdigit():
+            raise ValueError("invalid tmux session id")
+        if not isinstance(action, str) or action not in TERMINAL_HISTORY_ACTIONS:
+            raise ValueError("invalid terminal history action")
+
+        async with self._history_dispatch_lock:
+            return await self._navigate_history(client_pid, session_id, action)
+
+    async def _navigate_history(
+        self,
+        client_pid: int,
+        session_id: str,
+        action: str,
+    ) -> str:
+        matching_rows: list[list[str]] = []
+        for attempt in range(CLIENT_ATTACH_RETRY_ATTEMPTS):
+            output = await self.run(["list-clients", "-F", CLIENT_IDENTITY_FORMAT])
+            matching_rows = []
+            for row in output.splitlines():
+                fields = row.split("\t")
+                if len(fields) == 3 and fields[0] == str(client_pid):
+                    matching_rows.append(fields)
+            if matching_rows:
+                break
+            if attempt + 1 < CLIENT_ATTACH_RETRY_ATTEMPTS:
+                await asyncio.sleep(CLIENT_ATTACH_RETRY_DELAY)
+        if len(matching_rows) != 1 or matching_rows[0][2] != session_id:
+            raise TmuxError("tmux client is not attached to the expected session")
+
+        client_name = matching_rows[0][1]
+        key_bindings = await self.run(["list-keys", "-a"])
+        user_keys = await self.run(["show-options", "-s", "user-keys"])
+        guarded_tables = {"copy-mode", "copy-mode-vi", "prefix", "root"}
+        for line in key_bindings.splitlines():
+            try:
+                fields = shlex.split(line)
+            except ValueError:
+                continue
+            if "-T" in fields:
+                table_index = fields.index("-T") + 1
+                if table_index < len(fields):
+                    guarded_tables.add(fields[table_index])
+        reserved_user_keys = {
+            int(match) for match in HISTORY_USER_KEY_PATTERN.findall(key_bindings)
+        }
+        for line in user_keys.splitlines():
+            match = HISTORY_USER_OPTION_PATTERN.match(line)
+            if match is not None:
+                reserved_user_keys.add(int(match.group(1)))
+        dispatch_key = next(
+            (
+                f"User{index}"
+                for index in range(999, -1, -1)
+                if index not in reserved_user_keys
+            ),
+            None,
+        )
+        if dispatch_key is None:
+            raise TmuxError("tmux has no unused user key for terminal history")
+
+        token = secrets.token_hex(12)
+        table_name = f"muxdeck-history-{token}"
+        result_option = f"@muxdeck-history-{token}"
+        wait_channel = f"muxdeck-history-{token}"
+
+        identity_condition = (
+            "#{&&:"
+            f"#{{==:#{{client_pid}},{client_pid}}},"
+            f"#{{==:#{{session_id}},{session_id}}}"
+            "}"
+        )
+        commands = {
+            "page-up": "copy-mode -u",
+            "page-down": "send-keys -X page-down",
+            "exit": "send-keys -X cancel",
+        }
+        if action == "page-up":
+            mode_condition = "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}"
+        else:
+            mode_condition = "#{==:#{pane_mode},copy-mode}"
+        dispatch_condition = f"#{{&&:{identity_condition},{mode_condition}}}"
+        success_commands = (
+            f"{commands[action]} ; "
+            f"set-option -gF {result_option} "
+            "'ok:#{client_pid}:#{session_id}:#{pane_id}' ; "
+            f"wait-for -S {wait_channel}"
+        )
+        rejected_commands = (
+            f"set-option -gF {result_option} "
+            "'rejected:#{client_pid}:#{session_id}:#{pane_id}' ; "
+            f"wait-for -S {wait_channel}"
+        )
+
+        installed_guards: list[str] = []
+        try:
+            for guarded_table in sorted(guarded_tables):
+                # A timed-out tmux client may have committed the binding server-side.
+                installed_guards.append(guarded_table)
+                await self.run(
+                    [
+                        "bind-key",
+                        "-T",
+                        guarded_table,
+                        dispatch_key,
+                        rejected_commands,
+                    ]
+                )
+            await self.run(
+                [
+                    "bind-key",
+                    "-T",
+                    table_name,
+                    dispatch_key,
+                    "if-shell",
+                    "-F",
+                    dispatch_condition,
+                    success_commands,
+                    rejected_commands,
+                ]
+            )
+            await self.run(
+                [
+                    "bind-key",
+                    "-T",
+                    table_name,
+                    "Any",
+                    f"send-keys ; switch-client -T {table_name}",
+                ]
+            )
+            # -K makes tmux dispatch the private binding in this exact client's
+            # command context, where active-pane resolves its independent pane.
+            await self.run(
+                [
+                    "switch-client",
+                    "-c",
+                    client_name,
+                    "-T",
+                    table_name,
+                    ";",
+                    "send-keys",
+                    "-K",
+                    "-c",
+                    client_name,
+                    dispatch_key,
+                    ";",
+                    "wait-for",
+                    wait_channel,
+                ]
+            )
+            result = await self.run(["show-options", "-gv", result_option])
+        finally:
+            with contextlib.suppress(TmuxError):
+                await self.run(["unbind-key", "-a", "-T", table_name])
+            for guarded_table in reversed(installed_guards):
+                with contextlib.suppress(TmuxError):
+                    await self.run(["unbind-key", "-T", guarded_table, dispatch_key])
+            with contextlib.suppress(TmuxError):
+                await self.run(["set-option", "-gu", result_option])
+
+        rows = result.splitlines()
+        fields = rows[0].split(":") if len(rows) == 1 else []
+        if (
+            len(fields) != 4
+            or fields[0] != "ok"
+            or fields[1] != str(client_pid)
+            or fields[2] != session_id
+        ):
+            raise TmuxError("tmux client rejected the terminal history action")
+        pane_id = fields[3]
+        if not pane_id.startswith("%") or not pane_id[1:].isdigit():
+            raise TmuxError("tmux did not return the attached client pane")
+        return pane_id
 
     async def get_pane(self, pane_id: str) -> Pane:
         if not pane_id.startswith("%") or not pane_id[1:].isdigit():

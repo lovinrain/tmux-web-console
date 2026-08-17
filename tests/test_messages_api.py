@@ -59,17 +59,21 @@ async def test_messages_api_crud_order_persistence_and_absent_session(tmp_path):
         assert response.status == 201
         first = (await response.json())["message"]
         assert first["text"] == "  first\n"
+        assert first["state"] == "queued"
         assert first["position"] == 0
         assert first["createdAt"] == first["updatedAt"]
 
-        response = await client.post(collection, json={"text": "second"})
+        response = await client.post(
+            collection, json={"text": "second", "state": "note"}
+        )
         assert response.status == 201
         second = (await response.json())["message"]
+        assert second["state"] == "note"
         assert second["position"] == 1
 
         response = await client.patch(
             f"{collection}/{first['id']}",
-            json={"text": "edited first", "position": 1},
+            json={"text": "edited first", "position": 1, "state": "note"},
         )
         assert response.status == 200
         edited = (await response.json())["message"]
@@ -77,6 +81,7 @@ async def test_messages_api_crud_order_persistence_and_absent_session(tmp_path):
         assert edited["createdAt"] == first["createdAt"]
         assert edited["updatedAt"] > first["updatedAt"]
         assert edited["position"] == 1
+        assert edited["state"] == "note"
 
         listed = await (await client.get(collection)).json()
         assert [item["id"] for item in listed["messages"]] == [
@@ -96,6 +101,7 @@ async def test_messages_api_crud_order_persistence_and_absent_session(tmp_path):
     assert [item["id"] for item in persisted] == [first["id"]]
     assert persisted[0]["position"] == 0
     assert persisted[0]["text"] == "edited first"
+    assert persisted[0]["state"] == "note"
 
 
 @pytest.mark.asyncio
@@ -121,6 +127,11 @@ async def test_messages_api_validation_and_not_found_responses(tmp_path):
             ([], "request body must be an object"),
             ({}, "text must be a string"),
             ({"text": None}, "text must be a string"),
+            ({"text": "valid", "state": None}, "state must be a string"),
+            (
+                {"text": "valid", "state": "draft"},
+                "message state must be note or queued",
+            ),
             ({"text": " \n\t"}, "message text cannot be blank"),
             (
                 {"text": "x" * (MAX_MESSAGE_LENGTH + 1)},
@@ -134,9 +145,11 @@ async def test_messages_api_validation_and_not_found_responses(tmp_path):
         created = await (await client.post(collection, json={"text": "valid"})).json()
         message_id = created["message"]["id"]
         for payload, error in (
-            ({}, "text or position is required"),
+            ({}, "text, position, or state is required"),
             ({"text": None}, "text must be a string"),
             ({"position": True}, "position must be an integer"),
+            ({"state": None}, "state must be a string"),
+            ({"state": "draft"}, "message state must be note or queued"),
             ({"position": 1}, "position must be between 0 and 0"),
         ):
             response = await client.patch(f"{collection}/{message_id}", json=payload)
@@ -147,7 +160,7 @@ async def test_messages_api_validation_and_not_found_responses(tmp_path):
             f"{collection}/missing", json={"text": "still missing"}
         )
         assert response.status == 404
-        assert (await response.json())["error"] == "queued message not found: missing"
+        assert (await response.json())["error"] == "memo entry not found: missing"
         response = await client.delete(f"{collection}/missing")
         assert response.status == 404
 
@@ -180,7 +193,9 @@ async def test_messages_api_has_no_cross_session_leakage_and_reports_count(tmp_p
             await (await client.post(alpha, json={"text": "alpha only"})).json()
         )["message"]
         beta_message = (
-            await (await client.post(beta, json={"text": "beta only"})).json()
+            await (
+                await client.post(beta, json={"text": "beta only", "state": "note"})
+            ).json()
         )["message"]
 
         assert (await (await client.get(alpha)).json())["messages"] == [alpha_message]
@@ -192,6 +207,10 @@ async def test_messages_api_has_no_cross_session_leakage_and_reports_count(tmp_p
 
         sessions = (await (await client.get("/api/sessions")).json())["sessions"]
         assert sessions[0]["name"] == "alpha"
+        assert sessions[0]["memorandumCount"] == 1
         assert sessions[0]["queuedMessageCount"] == 1
+        assert sessions[1]["name"] == "beta"
+        assert sessions[1]["memorandumCount"] == 1
+        assert sessions[1]["queuedMessageCount"] == 0
     finally:
         await client.close()

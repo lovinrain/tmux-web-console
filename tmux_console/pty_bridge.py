@@ -35,6 +35,10 @@ class PtyBridge:
         self._poll_task = asyncio.create_task(self._poll_process())
         self.loop.add_reader(self.master_fd, self._read_ready)
 
+    @property
+    def client_pid(self) -> int:
+        return self.process.pid
+
     @classmethod
     async def attach(
         cls,

@@ -8,10 +8,13 @@ import pytest
 
 from tmux_console.status import AgentStateDetector, classify_agent_state
 from tmux_console.tmux import (
+    CLIENT_IDENTITY_FORMAT,
+    CREATED_SESSION_FORMAT,
     MAX_SESSION_NAME_LENGTH,
     OUTPUT_FIELD_SEPARATOR,
     PANE_FORMAT,
     PANE_FORMAT_FIELDS,
+    CreatedSession,
     Pane,
     Session,
     TmuxClient,
@@ -110,24 +113,55 @@ async def test_create_session_uses_collision_resistant_name_default_shell_and_ho
     monkeypatch,
 ):
     monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
-    tmux = RecordingRunTmux("  muxdeck-abc123def456\n")
+    tmux = RecordingRunTmux("muxdeck-abc123def456\t$9\n")
 
-    session_name = await tmux.create_session()
+    created = await tmux.create_session()
 
-    assert session_name == "muxdeck-abc123def456"
+    assert created == CreatedSession(name="muxdeck-abc123def456", id="$9")
     assert tmux.calls == [
         [
             "new-session",
             "-d",
             "-P",
             "-F",
-            "#{session_name}",
+            CREATED_SESSION_FORMAT,
             "-s",
             "muxdeck-abc123def456",
             "-c",
             str(Path.home()),
         ]
     ]
+
+
+async def test_create_session_preserves_a_requested_name_exactly():
+    requested_name = "  work/name #1  "
+    tmux = RecordingRunTmux(f"{requested_name}\t$12\n")
+
+    created = await tmux.create_session(requested_name)
+
+    assert created == CreatedSession(name=requested_name, id="$12")
+    assert tmux.calls == [
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "  work/name ##1  ",
+            "-c",
+            str(Path.home()),
+        ]
+    ]
+
+
+async def test_create_session_validates_a_requested_name_before_running_tmux():
+    tmux = RecordingRunTmux("")
+
+    with pytest.raises(ValueError, match="cannot contain"):
+        await tmux.create_session("invalid.name")
+
+    assert tmux.calls == []
 
 
 @pytest.mark.parametrize("output", ["", "\n", "0\n1\n"])
@@ -140,10 +174,202 @@ async def test_create_session_rejects_missing_or_ambiguous_name(output: str):
 
 async def test_create_session_rejects_an_unexpected_returned_name(monkeypatch):
     monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
-    tmux = RecordingRunTmux("some-other-session\n")
+    tmux = RecordingRunTmux("some-other-session\t$1\n")
 
     with pytest.raises(TmuxError, match="unexpected created session name"):
         await tmux.create_session()
+
+
+async def test_create_session_rejects_an_invalid_returned_id(monkeypatch):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
+    tmux = RecordingRunTmux("muxdeck-abc123def456\tnot-an-id\n")
+
+    with pytest.raises(TmuxError, match="created session id"):
+        await tmux.create_session()
+
+
+@pytest.mark.parametrize(
+    ("action", "command", "mode_condition"),
+    [
+        (
+            "page-up",
+            "copy-mode -u",
+            "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}",
+        ),
+        ("page-down", "send-keys -X page-down", "#{==:#{pane_mode},copy-mode}"),
+        ("exit", "send-keys -X cancel", "#{==:#{pane_mode},copy-mode}"),
+    ],
+)
+async def test_navigate_history_dispatches_in_the_exact_client_context(
+    monkeypatch,
+    action: str,
+    command: str,
+    mode_condition: str,
+):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123")
+    tmux = RecordingRunTmux(
+        [
+            "12\t/dev/pts/2\t$2\n4321\t/dev/pts/7\t$7\n",
+            *([""] * 9),
+            "ok:4321:$7:%12\n",
+            *([""] * 6),
+        ]
+    )
+
+    pane_id = await tmux.navigate_history(4321, "$7", action)
+
+    assert pane_id == "%12"
+    table_name = "muxdeck-history-abc123"
+    result_option = "@muxdeck-history-abc123"
+    identity_condition = "#{&&:#{==:#{client_pid},4321},#{==:#{session_id},$7}}"
+    rejected_commands = (
+        f"set-option -gF {result_option} "
+        "'rejected:#{client_pid}:#{session_id}:#{pane_id}' ; "
+        f"wait-for -S {table_name}"
+    )
+    assert tmux.calls == [
+        ["list-clients", "-F", CLIENT_IDENTITY_FORMAT],
+        ["list-keys", "-a"],
+        ["show-options", "-s", "user-keys"],
+        *[
+            ["bind-key", "-T", guarded_table, "User999", rejected_commands]
+            for guarded_table in ("copy-mode", "copy-mode-vi", "prefix", "root")
+        ],
+        [
+            "bind-key",
+            "-T",
+            table_name,
+            "User999",
+            "if-shell",
+            "-F",
+            f"#{{&&:{identity_condition},{mode_condition}}}",
+            (
+                f"{command} ; set-option -gF {result_option} "
+                "'ok:#{client_pid}:#{session_id}:#{pane_id}' ; "
+                f"wait-for -S {table_name}"
+            ),
+            rejected_commands,
+        ],
+        [
+            "bind-key",
+            "-T",
+            table_name,
+            "Any",
+            f"send-keys ; switch-client -T {table_name}",
+        ],
+        [
+            "switch-client",
+            "-c",
+            "/dev/pts/7",
+            "-T",
+            table_name,
+            ";",
+            "send-keys",
+            "-K",
+            "-c",
+            "/dev/pts/7",
+            "User999",
+            ";",
+            "wait-for",
+            table_name,
+        ],
+        ["show-options", "-gv", result_option],
+        ["unbind-key", "-a", "-T", table_name],
+        *[
+            ["unbind-key", "-T", guarded_table, "User999"]
+            for guarded_table in ("root", "prefix", "copy-mode-vi", "copy-mode")
+        ],
+        ["set-option", "-gu", result_option],
+    ]
+
+
+async def test_navigate_history_rejects_a_client_context_mismatch_and_cleans_up(
+    monkeypatch,
+):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123")
+    tmux = RecordingRunTmux(
+        [
+            "4321\t/dev/pts/7\t$7\n",
+            *([""] * 9),
+            "rejected:4321:$7:%12\n",
+            *([""] * 6),
+        ]
+    )
+
+    with pytest.raises(TmuxError, match="rejected"):
+        await tmux.navigate_history(4321, "$7", "exit")
+
+    assert tmux.calls[-6:] == [
+        ["unbind-key", "-a", "-T", "muxdeck-history-abc123"],
+        ["unbind-key", "-T", "root", "User999"],
+        ["unbind-key", "-T", "prefix", "User999"],
+        ["unbind-key", "-T", "copy-mode-vi", "User999"],
+        ["unbind-key", "-T", "copy-mode", "User999"],
+        ["set-option", "-gu", "@muxdeck-history-abc123"],
+    ]
+
+
+async def test_navigate_history_cleans_a_guard_after_bind_reports_failure(
+    monkeypatch,
+):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123")
+    bind_failure = TmuxError("tmux command timed out")
+    tmux = RecordingRunTmux(
+        [
+            "4321\t/dev/pts/7\t$7\n",
+            "",
+            "",
+            bind_failure,
+            "",
+            "",
+            "",
+        ]
+    )
+
+    with pytest.raises(TmuxError, match="timed out") as raised:
+        await tmux.navigate_history(4321, "$7", "page-up")
+
+    assert raised.value is bind_failure
+    assert tmux.calls[-3:] == [
+        ["unbind-key", "-a", "-T", "muxdeck-history-abc123"],
+        ["unbind-key", "-T", "copy-mode", "User999"],
+        ["set-option", "-gu", "@muxdeck-history-abc123"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "output",
+    ["4321\t/dev/pts/7\t$8\n", "12\t/dev/pts/7\t$7\n", ""],
+)
+async def test_navigate_history_rejects_wrong_or_missing_client(output: str):
+    tmux = RecordingRunTmux(output)
+
+    with pytest.raises(TmuxError):
+        await tmux.navigate_history(4321, "$7", "page-up")
+
+
+@pytest.mark.parametrize(
+    ("client_pid", "session_id", "action", "message"),
+    [
+        (0, "$7", "page-up", "invalid tmux client pid"),
+        (True, "$7", "page-up", "invalid tmux client pid"),
+        (4321, "agent", "page-up", "invalid tmux session id"),
+        (4321, "$7", "PAGE-UP", "invalid terminal history action"),
+        (4321, "$7", " page-up", "invalid terminal history action"),
+    ],
+)
+async def test_navigate_history_rejects_invalid_targets_and_actions_without_tmux(
+    client_pid: int,
+    session_id: str,
+    action: str,
+    message: str,
+):
+    tmux = RecordingRunTmux("")
+
+    with pytest.raises(ValueError, match=message):
+        await tmux.navigate_history(client_pid, session_id, action)
+
+    assert tmux.calls == []
 
 
 async def test_rename_session_uses_exact_target_and_safe_argv_separator():
@@ -169,13 +395,29 @@ async def test_rename_session_uses_exact_target_and_safe_argv_separator():
 
 
 async def test_rename_session_returns_verified_native_name():
-    tmux = RecordingRunTmux(
-        ["", pane_row(session_name="tmux-result", session_id="$7")]
-    )
+    tmux = RecordingRunTmux(["", pane_row(session_name="tmux-result", session_id="$7")])
 
     renamed = await tmux.rename_session("work", "requested", session_id="$7")
 
     assert renamed == "tmux-result"
+
+
+async def test_rename_session_escapes_tmux_format_expansion_in_the_name():
+    requested_name = "literal-#{pid}-#(not-a-command)"
+    tmux = RecordingRunTmux(
+        ["", pane_row(session_name=requested_name, session_id="$7")]
+    )
+
+    renamed = await tmux.rename_session("work", requested_name, session_id="$7")
+
+    assert renamed == requested_name
+    assert tmux.calls[0] == [
+        "rename-session",
+        "-t",
+        "$7",
+        "--",
+        "literal-##{pid}-##(not-a-command)",
+    ]
 
 
 async def test_rename_session_reports_success_when_result_verification_fails():
@@ -203,9 +445,7 @@ async def test_rename_session_recovers_a_committed_timeout():
 
 async def test_rename_session_preserves_a_definite_command_failure():
     failure = TmuxError("rename denied", returncode=1)
-    tmux = RecordingRunTmux(
-        [failure, pane_row(session_name="work", session_id="$7")]
-    )
+    tmux = RecordingRunTmux([failure, pane_row(session_name="work", session_id="$7")])
 
     with pytest.raises(TmuxError, match="rename denied") as raised:
         await tmux.rename_session("work", "renamed", session_id="$7")
@@ -219,6 +459,10 @@ async def test_rename_session_preserves_a_definite_command_failure():
         ("", "required"),
         ("   ", "required"),
         ("line\nbreak", "control"),
+        ("next\x85line", "control"),
+        ("left\u2028right", "line separators"),
+        ("left\u2029right", "line separators"),
+        (r"path\name", "cannot contain"),
         ("has:colon", "cannot contain"),
         ("has.period", "cannot contain"),
         ("\ud800", "invalid Unicode"),
@@ -291,6 +535,172 @@ def test_agent_state_distinguishes_work_input_and_command_waits():
     )
 
 
+def test_claude_circle_spinner_titles_are_working_signals():
+    for title in (
+        "\u25d0 Implement the sample dashboard",
+        "\u25d3 Claude Code",
+        "\u25d1 Claude Code",
+        "\u25d2 Claude Code",
+    ):
+        assert (
+            classify_agent_state(
+                agent_pane(command="claude", title=title), now=1000
+            ).name
+            == "working"
+        )
+
+    working = agent_pane(command="claude", title="\u25d0 Claude Code")
+    assert (
+        classify_agent_state(
+            working,
+            visible_screen="\u273b Waiting for background terminal",
+            now=1000,
+        ).name
+        == "waiting_command"
+    )
+    assert (
+        classify_agent_state(replace(working, activity=900), now=1000).name == "unknown"
+    )
+    assert (
+        classify_agent_state(
+            agent_pane(command="bash", title="\u25d0 Claude Code"), now=1000
+        ).name
+        == "other"
+    )
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "\u273b Waiting for 1 background agent to finish",
+        "\u273d Waiting for 4 background agents to finish",
+        "\u2736 Waiting for 1 dynamic workflow to finish",
+        "\u2733 Waiting for 3 dynamic workflows to finish",
+        "\u273b Waiting for 2 background agents and 1 dynamic workflow to finish",
+    ],
+)
+def test_claude_background_work_banners_are_distinct_from_active_work(
+    headline: str,
+):
+    working = agent_pane(command="claude", title="\u25d0 Claude Code")
+    screen = (
+        "\u25cf Phase 2 agents started\n\n"
+        f"{headline}\n\n"
+        "  5 tasks (0 done, 1 in progress, 4 open)\n"
+        "  \u25fc Foundation build"
+    )
+
+    state = classify_agent_state(working, visible_screen=screen, now=1000)
+
+    assert state.name == "waiting_command"
+    assert state.reason == "Agent is waiting for background work"
+    assert (
+        classify_agent_state(
+            replace(working, activity=900), visible_screen=screen, now=1000
+        ).name
+        == "waiting_command"
+    )
+
+
+def test_claude_background_work_banner_can_wrap_across_terminal_lines():
+    screen = (
+        "\u273b Waiting for 2 background agents and 3 dynamic\n"
+        "  workflows to finish\n\n"
+        "  5 tasks (0 done, 1 in progress, 4 open)"
+    )
+
+    assert (
+        classify_agent_state(
+            agent_pane(command="claude", title="\u25d1 Claude Code"),
+            visible_screen=screen,
+            now=1000,
+        ).name
+        == "waiting_command"
+    )
+
+
+def test_claude_background_work_banner_survives_a_dense_visible_task_panel():
+    working = agent_pane(command="claude", title="\u25d1 Claude Code")
+    screen = "\u273b Waiting for 1 dynamic workflow to finish\n\n" + "\n".join(
+        f"  task or agent row {index}" for index in range(24)
+    )
+
+    for pane in (working, replace(working, activity=900)):
+        assert (
+            classify_agent_state(pane, visible_screen=screen, now=1000).name
+            == "waiting_command"
+        )
+
+
+def test_claude_uses_only_the_latest_activity_headline_for_background_work():
+    working = agent_pane(command="claude", title="\u25d1 Claude Code")
+    resumed = (
+        "\u273b Waiting for 1 dynamic workflow to finish\n\n"
+        "\u25cf Workflow returned successfully\n\n"
+        "\u273d Writing integration tests"
+    )
+    waiting_again = (
+        f"{resumed}\n\n"
+        "\u273b Waiting for 2 dynamic workflows to finish\n\n"
+        "  3 tasks (1 done, 2 in progress)"
+    )
+
+    assert (
+        classify_agent_state(working, visible_screen=resumed, now=1000).name
+        == "working"
+    )
+    assert (
+        classify_agent_state(working, visible_screen=waiting_again, now=1000).name
+        == "waiting_command"
+    )
+
+
+def test_claude_ignores_indented_headline_glyphs_in_nested_output():
+    working = agent_pane(command="claude", title="\u25d1 Claude Code")
+
+    assert (
+        classify_agent_state(
+            working,
+            visible_screen=(
+                "\u25cf Implementing parser\n\n"
+                "  \u273b Waiting for 1 dynamic workflow to finish"
+            ),
+            now=1000,
+        ).name
+        == "working"
+    )
+    assert (
+        classify_agent_state(
+            working,
+            visible_screen=(
+                "\u273b Waiting for 1 dynamic workflow to finish\n\n"
+                "  \u25cf fixture output"
+            ),
+            now=1000,
+        ).name
+        == "waiting_command"
+    )
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        "The docs quote: Waiting for 1 dynamic workflow to finish",
+        "\u273b Waiting for 0 dynamic workflows to finish",
+        "\u273b Waiting for 1 dynamic workflow",
+    ],
+)
+def test_claude_does_not_guess_background_work_from_non_current_prose(screen: str):
+    assert (
+        classify_agent_state(
+            agent_pane(command="claude", title="\u25d0 Claude Code"),
+            visible_screen=screen,
+            now=1000,
+        ).name
+        == "working"
+    )
+
+
 def test_agent_state_is_conservative_for_stale_or_unknown_signals():
     assert (
         classify_agent_state(
@@ -304,6 +714,42 @@ def test_agent_state_is_conservative_for_stale_or_unknown_signals():
     )
     assert classify_agent_state(agent_pane(dead=True), now=1000).name == "unknown"
     assert classify_agent_state(agent_pane(command="bash"), now=1000).name == "other"
+
+
+def test_grok_agent_state_follows_its_tmux_title_signals():
+    working = agent_pane(
+        command="grok", title="\u2839 - Waiting for response\u2026 - grok"
+    )
+
+    assert classify_agent_state(working, now=1000).name == "working"
+    assert (
+        classify_agent_state(
+            working,
+            visible_screen="Waiting for background terminal",
+            now=1000,
+        ).name
+        == "waiting_command"
+    )
+    assert (
+        classify_agent_state(replace(working, activity=900), now=1000).name == "unknown"
+    )
+    for idle_title in ("grok", "Review Grok support - grok"):
+        assert (
+            classify_agent_state(
+                agent_pane(command="grok", title=idle_title), now=1000
+            ).name
+            == "waiting_human"
+        )
+    assert (
+        classify_agent_state(
+            agent_pane(command="grok", title="root@host: ~/repo"), now=1000
+        ).name
+        == "unknown"
+    )
+    assert (
+        classify_agent_state(agent_pane(command="grok", title=""), now=1000).name
+        == "unknown"
+    )
 
 
 CURSOR_RUNNING_SCREEN = "\n".join(
@@ -459,3 +905,75 @@ async def test_detect_sessions_captures_the_screen_for_cursor_panes():
     assert states["cursor-one"].name == "working"
     assert states["codex-one"].name == "waiting_human"
     assert tmux.captured == [cursor.id]
+
+
+async def test_detect_sessions_captures_claude_background_waits_after_activity_stales():
+    claude = agent_pane(
+        id="%44",
+        command="claude",
+        title="\u25d1 Claude Code",
+        activity=int(time.time()) - 120,
+    )
+    tmux = RecordingTmux(
+        {
+            claude.id: (
+                "\u25cf Phase 2 agents started\n\n"
+                "\u273b Waiting for 1 dynamic workflow to finish\n\n"
+                "  5 tasks (0 done, 1 in progress, 4 open)"
+            )
+        }
+    )
+    sessions = [
+        Session(
+            name="claude-working",
+            id="$3",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[claude],
+        )
+    ]
+
+    states = await AgentStateDetector().detect_sessions(
+        cast(TmuxClient, tmux), sessions
+    )
+
+    assert states["claude-working"].name == "waiting_command"
+    assert tmux.captured == [claude.id]
+
+
+async def test_detect_sessions_captures_only_working_grok_panes():
+    working = agent_pane(
+        id="%45",
+        command="grok",
+        title="\u2839 - Waiting for response\u2026 - grok",
+        activity=int(time.time()),
+    )
+    idle = agent_pane(id="%46", command="grok", title="Grok task - grok")
+    tmux = RecordingTmux({working.id: "Waiting for background terminal"})
+    sessions = [
+        Session(
+            name="grok-working",
+            id="$3",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[working],
+        ),
+        Session(
+            name="grok-idle",
+            id="$4",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[idle],
+        ),
+    ]
+
+    states = await AgentStateDetector().detect_sessions(
+        cast(TmuxClient, tmux), sessions
+    )
+
+    assert states["grok-working"].name == "waiting_command"
+    assert states["grok-idle"].name == "waiting_human"
+    assert tmux.captured == [working.id]

@@ -15,6 +15,7 @@ const props = {
   enabled: true,
   onSend: vi.fn(() => true),
   onSubmit: vi.fn(async () => true),
+  onAddToMemo: vi.fn(async () => {}),
   onFocus: vi.fn(),
 };
 
@@ -93,8 +94,12 @@ describe("InputBar", () => {
 
     const startButton = screen.getByRole("button", { name: "Ctrl+A - move to start of input" });
     const endButton = screen.getByRole("button", { name: "Ctrl+E - move to end of input" });
+    const deleteToEndButton = screen.getByRole("button", {
+      name: "Ctrl+K - delete to end of input",
+    });
     expect(startButton).toHaveTextContent(/^\^A$/);
     expect(endButton).toHaveTextContent(/^\^E$/);
+    expect(deleteToEndButton).toHaveTextContent(/^\^K$/);
     expect(screen.getByRole("button", { name: "Raw terminal keyboard" })).toHaveAttribute(
       "title",
       expect.stringContaining("directly to tmux"),
@@ -104,6 +109,7 @@ describe("InputBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tmux Page Down" }));
     fireEvent.click(startButton);
     fireEvent.click(endButton);
+    fireEvent.click(deleteToEndButton);
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
     fireEvent.click(screen.getByRole("button", { name: "PgDn" }));
     fireEvent.click(screen.getByRole("button", { name: "Esc" }));
@@ -120,6 +126,7 @@ describe("InputBar", () => {
       ["\x1b[6~"],
       ["\x01"],
       ["\x05"],
+      ["\x0b"],
       ["\x1b[5~"],
       ["\x1b[6~"],
       ["\x1b"],
@@ -136,7 +143,7 @@ describe("InputBar", () => {
     const showOtherKeys = screen.getByRole("button", { name: "Show other keys" });
     const textarea = screen.getByRole("textbox", { name: "Staged input" });
 
-    expect(showOtherKeys).toHaveTextContent("Other Keys");
+    expect(showOtherKeys).toHaveTextContent("More Keys");
     expect(showOtherKeys).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("group", { name: "Other keys" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Up" })).not.toBeInTheDocument();
@@ -155,7 +162,9 @@ describe("InputBar", () => {
     const upButton = within(otherKeys).getByRole("button", { name: "Up" });
     const inputDock = screen.getByRole("region", { name: "Terminal input" });
     const buttonsInDomOrder = within(inputDock).getAllByRole("button");
-    expect(buttonsInDomOrder[buttonsInDomOrder.indexOf(showOtherKeys) + 1]).toBe(upButton);
+    expect(buttonsInDomOrder.indexOf(upButton)).toBeGreaterThan(
+      buttonsInDomOrder.indexOf(showOtherKeys),
+    );
     expect(fireEvent.mouseDown(upButton)).toBe(false);
     expect(textarea).toHaveFocus();
 
@@ -173,10 +182,13 @@ describe("InputBar", () => {
 
     expect(textarea).toBeEnabled();
     expect(textarea).toHaveValue("prepare this offline");
+    expect(screen.getByRole("button", { name: "Queue in memo" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send + Enter" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Esc" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Tmux Page Up" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }))
+      .toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ctrl+K - delete to end of input" }))
       .toBeDisabled();
     const showOtherKeys = screen.getByRole("button", { name: "Show other keys" });
     expect(showOtherKeys).toBeEnabled();
@@ -204,6 +216,152 @@ describe("InputBar", () => {
     expect(onSend).toHaveBeenCalledWith("\x01");
   });
 
+  it("inserts a literal Tab at the staged selection without sending to tmux", () => {
+    const onSend = vi.fn(() => true);
+    const onSubmit = vi.fn(async () => true);
+    render(<InputBar {...props} onSend={onSend} onSubmit={onSubmit} />);
+    const textarea = screen.getByRole("textbox", {
+      name: "Staged input",
+    }) as HTMLTextAreaElement;
+    const insertTab = screen.getByRole("button", {
+      name: "Insert Tab into staged input",
+    });
+    fireEvent.input(textarea, { target: { value: "alpha omega" } });
+    textarea.focus();
+    textarea.setSelectionRange(6, 11);
+
+    expect(fireEvent.mouseDown(insertTab)).toBe(false);
+    fireEvent.click(insertTab);
+
+    expect(textarea).toHaveValue("alpha \t");
+    expect(textarea.selectionStart).toBe(7);
+    expect(textarea.selectionEnd).toBe(7);
+    expect(textarea).toHaveFocus();
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
+      .toBe("alpha \t");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps one ordered action set with stable names and responsive labels", () => {
+    render(<InputBar {...props} />);
+    const actions = document.querySelector<HTMLElement>(".composer-actions-primary")!;
+    const actionButtons = within(actions).getAllByRole("button");
+
+    expect(actionButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Clear",
+      "Send",
+      "Send + Enter",
+      "Queue in memo",
+      "Insert Tab into staged input",
+    ]);
+    expect(Array.from(actions.querySelectorAll(".composer-action-label-full"), (label) => (
+      label.textContent
+    ))).toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Tab"]);
+    expect(Array.from(actions.querySelectorAll(".composer-action-label-compact"), (label) => (
+      label.textContent
+    ))).toEqual(["C", "S", "S+E", "M", "T"]);
+    expect(screen.getAllByRole("button", { name: "Insert Tab into staged input" }))
+      .toHaveLength(1);
+    expect(within(screen.getByRole("group", { name: "Mobile staged input controls" }))
+      .queryByRole("button", { name: "Insert Tab into staged input" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("exposes controlled mobile input distraction-free toggle semantics", () => {
+    const onToggleMobileDistractionFree = vi.fn();
+    const view = render(
+      <InputBar
+        {...props}
+        mobileDistractionFree={false}
+        onToggleMobileDistractionFree={onToggleMobileDistractionFree}
+      />,
+    );
+    const enterFocus = screen.getByRole("button", {
+      name: "Enter distraction-free input",
+    });
+
+    expect(enterFocus).toHaveAttribute("aria-pressed", "false");
+    expect(enterFocus).toHaveTextContent("Focus");
+    fireEvent.click(enterFocus);
+    expect(onToggleMobileDistractionFree).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <InputBar
+        {...props}
+        mobileDistractionFree
+        onToggleMobileDistractionFree={onToggleMobileDistractionFree}
+      />,
+    );
+    const exitFocus = screen.getByRole("button", {
+      name: "Exit distraction-free input",
+    });
+    expect(exitFocus).toBe(enterFocus);
+    expect(exitFocus).toHaveAttribute("aria-pressed", "true");
+    expect(exitFocus).toHaveTextContent("Exit");
+    fireEvent.click(exitFocus);
+    expect(onToggleMobileDistractionFree).toHaveBeenCalledTimes(2);
+  });
+
+  it("makes queued memo work visible and directly reachable from mobile input", () => {
+    const onOpenMessages = vi.fn();
+    render(
+      <InputBar
+        {...props}
+        messageCount={4}
+        queuedMessageCount={2}
+        onOpenMessages={onOpenMessages}
+      />,
+    );
+
+    const mobileMemo = within(screen.getByRole("group", {
+      name: "Mobile staged input controls",
+    })).getByRole("button", { name: "Open memo, 2 queued" });
+    expect(mobileMemo).toHaveTextContent("Memo");
+    expect(mobileMemo).toHaveTextContent("Q 2");
+    fireEvent.click(mobileMemo);
+    expect(onOpenMessages).toHaveBeenCalledOnce();
+
+    const shortcuts = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const shortcutMemo = within(shortcuts).getByRole("button", {
+      name: "Open memoranda, 2 queued",
+    });
+    expect(within(shortcuts).getAllByRole("button")[0]).toBe(shortcutMemo);
+    expect(shortcutMemo).toHaveClass("has-queued");
+  });
+
+  it("signals queued work inside the compact M action in distraction-free input", () => {
+    const view = render(
+      <InputBar
+        {...props}
+        mobileDistractionFree={false}
+        queuedMessageCount={3}
+      />,
+    );
+    const actions = document.querySelector<HTMLElement>(".composer-actions-primary")!;
+    const queueAction = within(actions).getByRole("button", { name: "Queue in memo" });
+
+    expect(within(actions).getAllByRole("button")).toHaveLength(5);
+    expect(queueAction).toHaveClass("has-queued");
+    expect(queueAction.querySelector(".composer-memo-queued-count")).toBeNull();
+
+    view.rerender(
+      <InputBar
+        {...props}
+        mobileDistractionFree
+        queuedMessageCount={3}
+      />,
+    );
+
+    const badge = queueAction.querySelector(".composer-memo-queued-count");
+    expect(queueAction).toHaveAccessibleName("Queue in memo");
+    expect(queueAction.querySelector(".composer-action-label-compact"))
+      .toHaveTextContent("M");
+    expect(badge).toHaveTextContent("Q 3");
+    expect(badge).toHaveAttribute("aria-hidden", "true");
+    expect(within(actions).getAllByRole("button")).toHaveLength(5);
+  });
+
   it("submits the final replacement value once and clears only after success", async () => {
     const onSubmit = vi.fn(async () => true);
     render(<InputBar {...props} onSubmit={onSubmit} />);
@@ -220,6 +378,69 @@ describe("InputBar", () => {
     await waitFor(() => expect(textarea).toHaveValue(""));
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBeNull();
     expect(screen.getByText(/Written once/)).toBeVisible();
+  });
+
+  it("adds one exact snapshot to the memorandum and clears only after persistence", async () => {
+    let resolveAdd: (() => void) | undefined;
+    const onAddToMemo = vi.fn(() => new Promise<void>((resolve) => {
+      resolveAdd = resolve;
+    }));
+    render(<InputBar {...props} enabled={false} onAddToMemo={onAddToMemo} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const addButton = screen.getByRole("button", { name: "Queue in memo" });
+    const exactDraft = "  review both traces\nthen choose  ";
+
+    fireEvent.input(textarea, { target: { value: exactDraft } });
+    fireEvent.click(addButton);
+    fireEvent.click(addButton);
+
+    expect(onAddToMemo).toHaveBeenCalledOnce();
+    expect(onAddToMemo).toHaveBeenCalledWith(exactDraft);
+    expect(textarea).toHaveValue(exactDraft);
+    expect(textarea).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Queue in memo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Queue in memo" })
+      .querySelector(".composer-action-label-full")).toHaveTextContent("Queueing...");
+    expect(screen.getByRole("button", { name: "Clear" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    await act(async () => resolveAdd?.());
+
+    await waitFor(() => expect(textarea).toHaveValue(""));
+    expect(textarea).not.toHaveAttribute("readonly");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBeNull();
+    expect(screen.getByText(/Queued in this session's memo/)).toBeVisible();
+  });
+
+  it("retains the exact draft when the memorandum cannot be updated", async () => {
+    const onAddToMemo = vi.fn(async () => {
+      throw new Error("queue unavailable");
+    });
+    render(<InputBar {...props} onAddToMemo={onAddToMemo} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const exactDraft = "  do not lose this\n";
+    fireEvent.input(textarea, { target: { value: exactDraft } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Queue in memo" }));
+
+    await waitFor(() => expect(onAddToMemo).toHaveBeenCalledWith(exactDraft));
+    expect(textarea).toHaveValue(exactDraft);
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
+      .toBe(exactDraft);
+    expect(screen.getByText(/memo was not updated/)).toBeVisible();
+  });
+
+  it("does not offer whitespace-only staged input to the memorandum API", () => {
+    const onAddToMemo = vi.fn(async () => {});
+    render(<InputBar {...props} onAddToMemo={onAddToMemo} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const addButton = screen.getByRole("button", { name: "Queue in memo" });
+
+    fireEvent.input(textarea, { target: { value: " \n\t " } });
+
+    expect(addButton).toBeDisabled();
+    fireEvent.click(addButton);
+    expect(onAddToMemo).not.toHaveBeenCalled();
   });
 
   it("uses Shift+Enter for Send + Enter while leaving plain Enter multiline", async () => {
@@ -325,6 +546,30 @@ describe("InputBar", () => {
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("queued instruction");
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBe("queued instruction");
     expect(screen.getByText(/Memorandum loaded locally/)).toBeVisible();
+  });
+
+  it("rejects an astral memo that exceeds the UTF-16 draft limit without truncating", () => {
+    const ref = createRef<InputBarHandle>();
+    render(<InputBar {...props} ref={ref} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const existingDraft = "keep this draft intact";
+    const memoSizedByCodePoints = "\u{1F680}".repeat(MAX_DRAFT_LENGTH);
+    const confirm = vi.spyOn(window, "confirm");
+    fireEvent.input(textarea, { target: { value: existingDraft } });
+
+    expect(Array.from(memoSizedByCodePoints)).toHaveLength(MAX_DRAFT_LENGTH);
+    expect(memoSizedByCodePoints.length).toBeGreaterThan(MAX_DRAFT_LENGTH);
+
+    let loaded = true;
+    act(() => {
+      loaded = ref.current?.loadDraft(memoSizedByCodePoints) ?? false;
+    });
+
+    expect(loaded).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue(existingDraft);
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
+      .toBe(existingDraft);
   });
 
   it("inserts a snippet at the current selection and persists the exact draft", () => {

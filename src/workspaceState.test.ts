@@ -5,6 +5,8 @@ import {
   createSessionWorkspace,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
+  savedWorkspaceIdFromSearch,
+  searchWithSavedWorkspaceId,
   searchWithoutWorkspaceTabs,
   searchWithWorkspaceTabs,
   sessionAfterClose,
@@ -76,6 +78,17 @@ describe("workspace tab URL state", () => {
     expect(searchWithoutWorkspaceTabs(search)).toBe("?kind=codex&flag&empty=");
     expect(searchWithWorkspaceTabs(search, [])).toBe("?kind=codex&flag&empty=");
     expect(searchWithoutWorkspaceTabs("?tab=only")).toBe("");
+  });
+
+  it("round-trips one saved workspace binding without disturbing tabs or filters", () => {
+    const original = "?kind=codex&workspace=old&tab=alpha&%77orkspace=duplicate";
+
+    const bound = searchWithSavedWorkspaceId(original, "work/id #1");
+
+    expect(bound).toBe("?kind=codex&tab=alpha&workspace=work%2Fid%20%231");
+    expect(savedWorkspaceIdFromSearch(bound)).toBe("work/id #1");
+    expect(searchWithSavedWorkspaceId(bound, null)).toBe("?kind=codex&tab=alpha");
+    expect(savedWorkspaceIdFromSearch("?workspace=&workspace=ignored")).toBeNull();
   });
 
   it("restores dashboard tabs without requiring or inventing an active session", () => {

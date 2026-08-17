@@ -7,7 +7,15 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { EditIcon, KeyboardIcon, MemoIcon, SnippetIcon, TerminalIcon } from "../icons";
+import {
+  ContractIcon,
+  EditIcon,
+  ExpandIcon,
+  KeyboardIcon,
+  MemoIcon,
+  SnippetIcon,
+  TerminalIcon,
+} from "../icons";
 
 export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
@@ -18,8 +26,11 @@ interface InputBarProps {
   enabled: boolean;
   composerVisible?: boolean;
   shortcutsVisible?: boolean;
+  mobileDistractionFree?: boolean;
+  onToggleMobileDistractionFree?: () => void;
   onSend: (data: string) => boolean;
   onSubmit: (data: string, withEnter: boolean) => Promise<boolean>;
+  onAddToMemo?: (data: string) => Promise<void>;
   onFocus: () => void;
   onRevealComposer?: () => void;
   onEditSessionTitle?: () => void;
@@ -27,6 +38,7 @@ interface InputBarProps {
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
   messageCount?: number;
+  queuedMessageCount?: number;
 }
 
 export interface InputBarHandle {
@@ -34,6 +46,7 @@ export interface InputBarHandle {
   insertText: (text: string) => boolean;
   getDraft: () => string;
   focus: () => void;
+  blur: () => void;
 }
 
 interface TerminalKey {
@@ -46,6 +59,19 @@ interface TerminalKey {
 
 const PAGE_UP_SEQUENCE = "\x1b[5~";
 const PAGE_DOWN_SEQUENCE = "\x1b[6~";
+
+const ESSENTIAL_KEYS: TerminalKey[] = [
+  { label: "Esc", data: "\x1b" },
+  { label: "Tab", data: "\t" },
+  { label: "^C", data: "\x03", title: "Send Ctrl+C or leave tmux copy mode" },
+  { label: "Enter", data: "\r" },
+  {
+    label: "^K",
+    data: "\x0b",
+    ariaLabel: "Ctrl+K - delete to end of input",
+    title: "Delete from the cursor to the end of input in supported shells and agents (Ctrl+K)",
+  },
+];
 
 const KEYS: TerminalKey[] = [
   {
@@ -85,10 +111,6 @@ const KEYS: TerminalKey[] = [
     data: PAGE_DOWN_SEQUENCE,
     title: "Page down in the foreground application or tmux copy mode",
   },
-  { label: "Esc", data: "\x1b" },
-  { label: "Tab", data: "\t" },
-  { label: "^C", data: "\x03", title: "Send Ctrl+C or leave tmux copy mode" },
-  { label: "Enter", data: "\r" },
 ];
 
 const OTHER_KEYS: TerminalKey[] = [
@@ -125,7 +147,18 @@ function TerminalKeyButton({ terminalKey, enabled, onSend }: TerminalKeyButtonPr
   );
 }
 
-type DraftStatus = "idle" | "saved" | "loaded" | "sending" | "sent" | "unconfirmed" | "clipboard-error" | "storage-error";
+type DraftStatus =
+  | "idle"
+  | "saved"
+  | "loaded"
+  | "sending"
+  | "sent"
+  | "unconfirmed"
+  | "queueing"
+  | "queued"
+  | "queue-error"
+  | "clipboard-error"
+  | "storage-error";
 
 export type StageSessionDraftResult = "staged" | "cancelled" | "storage-error" | "invalid";
 export type RenameSessionDraftResult = "migrated" | "swapped" | "unchanged" | "storage-error";
@@ -245,8 +278,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   enabled,
   composerVisible = true,
   shortcutsVisible = true,
+  mobileDistractionFree = false,
+  onToggleMobileDistractionFree,
   onSend,
   onSubmit,
+  onAddToMemo,
   onFocus,
   onRevealComposer,
   onEditSessionTitle,
@@ -254,6 +290,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onOpenMessages,
   onOpenSnippets,
   messageCount = 0,
+  queuedMessageCount = 0,
 }, ref) {
   const [initialDraftState] = useState(() => {
     const pendingHandoff = renamedSessionDraftHandoffs.get(sessionName);
@@ -268,32 +305,39 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
-  const sendingRef = useRef(false);
+  const actionPendingRef = useRef(false);
   const [draftLength, setDraftLength] = useState(initialDraft.length);
+  const [draftHasContent, setDraftHasContent] = useState(Boolean(initialDraft.trim()));
   const [status, setStatus] = useState<DraftStatus>(
     initialDraftState.handoff?.storageError
       ? "storage-error"
       : initialDraft ? "saved" : "idle",
   );
-  const [sending, setSending] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
   const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
 
   const recordDraft = (value: string, nextStatus: DraftStatus = "saved") => {
     const persisted = writeDraft(sessionName, value);
     setDraftLength(value.length);
+    setDraftHasContent(Boolean(value.trim()));
     setStatus(persisted ? (value ? nextStatus : "idle") : "storage-error");
     return persisted;
   };
 
   const loadDraft = (text: string): boolean => {
     const textarea = textareaRef.current;
-    if (!textarea || composingRef.current || sendingRef.current) return false;
+    if (
+      !textarea
+      || text.length > MAX_DRAFT_LENGTH
+      || composingRef.current
+      || actionPendingRef.current
+    ) return false;
     if (
       textarea.value
       && textarea.value !== text
       && !window.confirm("Replace the staged input that is already here?")
     ) return false;
-    textarea.value = text.slice(0, MAX_DRAFT_LENGTH);
+    textarea.value = text;
     recordDraft(textarea.value, "loaded");
     resizeTextarea(textarea);
     textarea.focus();
@@ -303,7 +347,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const insertText = (text: string): boolean => {
     const textarea = textareaRef.current;
-    if (!textarea || !text || composingRef.current || sendingRef.current) return false;
+    if (!textarea || !text || composingRef.current || actionPendingRef.current) return false;
     const start = textarea.selectionStart ?? textarea.value.length;
     const end = textarea.selectionEnd ?? start;
     const nextLength = textarea.value.length - (end - start) + text.length;
@@ -320,6 +364,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     insertText,
     getDraft: () => textareaRef.current?.value ?? initialDraft,
     focus: () => textareaRef.current?.focus(),
+    blur: () => textareaRef.current?.blur(),
   }), [initialDraft]);
 
   useEffect(() => {
@@ -342,6 +387,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (textarea && textarea.value === initialDraft) {
       textarea.value = handoff.draft;
       setDraftLength(handoff.draft.length);
+      setDraftHasContent(Boolean(handoff.draft.trim()));
       setStatus(handoff.storageError ? "storage-error" : handoff.draft ? "saved" : "idle");
       resizeTextarea(textarea);
     }
@@ -361,15 +407,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const sendDraft = async (withEnter: boolean) => {
     const textarea = textareaRef.current;
-    if (!textarea || !textarea.value || !enabled || sendingRef.current) return;
+    if (!textarea || !textarea.value || !enabled || actionPendingRef.current) return;
     if (composingRef.current) {
       textarea.blur();
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     }
     const submitted = textarea.value;
     if (!submitted) return;
-    sendingRef.current = true;
-    setSending(true);
+    actionPendingRef.current = true;
+    setActionPending(true);
     setStatus("sending");
     textarea.readOnly = true;
     let accepted = false;
@@ -379,8 +425,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       accepted = false;
     } finally {
       textarea.readOnly = false;
-      sendingRef.current = false;
-      setSending(false);
+      actionPendingRef.current = false;
+      setActionPending(false);
     }
     if (!accepted) {
       setStatus("unconfirmed");
@@ -389,6 +435,41 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     textarea.value = "";
     if (recordDraft("", "sent")) setStatus("sent");
+    resizeTextarea(textarea);
+    textarea.focus();
+  };
+
+  const addDraftToMemo = async () => {
+    const textarea = textareaRef.current;
+    if (!textarea || !onAddToMemo || actionPendingRef.current) return;
+    if (composingRef.current) {
+      textarea.blur();
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    const submitted = textarea.value;
+    if (!submitted.trim()) return;
+    actionPendingRef.current = true;
+    setActionPending(true);
+    setStatus("queueing");
+    textarea.readOnly = true;
+    let queued = false;
+    try {
+      await onAddToMemo(submitted);
+      queued = true;
+    } catch {
+      queued = false;
+    } finally {
+      textarea.readOnly = false;
+      actionPendingRef.current = false;
+      setActionPending(false);
+    }
+    if (!queued) {
+      setStatus("queue-error");
+      textarea.focus();
+      return;
+    }
+    textarea.value = "";
+    if (recordDraft("", "queued")) setStatus("queued");
     resizeTextarea(textarea);
     textarea.focus();
   };
@@ -407,7 +488,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       || event.nativeEvent.isComposing
       || event.nativeEvent.keyCode === 229
     ) return;
-    if (!enabled || !event.currentTarget.value || sendingRef.current) return;
+    if (!enabled || !event.currentTarget.value || actionPendingRef.current) return;
 
     event.preventDefault();
     if (!event.repeat) void sendDraft(true);
@@ -451,6 +532,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     statusText = "Memorandum loaded locally. Snippets are inserted here too; edit or send when ready.";
   } else if (status === "unconfirmed") {
     statusText = "Delivery was not confirmed. The draft is retained; check the terminal before retrying.";
+  } else if (status === "queued") {
+    statusText = "Queued in this session's memo; the local draft was cleared.";
+  } else if (status === "queueing") {
+    statusText = "Queueing this staged snapshot in the session memo...";
+  } else if (status === "queue-error") {
+    statusText = "The memo was not updated. The draft is retained; retry when ready.";
   } else if (status === "clipboard-error") {
     statusText = "Clipboard access was unavailable. Use the keyboard paste command here.";
   } else if (status === "storage-error") {
@@ -459,8 +546,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     statusText = "Saved on this device. Terminal-side edits do not rewrite this draft.";
   } else {
     statusText = enabled
-      ? "Nothing is sent until you choose Send."
-      : "Compose now; sending unlocks when the terminal reconnects.";
+      ? "Nothing goes to tmux or memoranda until you choose an action."
+      : "Compose now; memoranda remain available while terminal sending reconnects.";
   }
 
   return (
@@ -476,6 +563,52 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       >
         <div className="composer-heading">
           <label htmlFor="terminal-staged-input">Staged input</label>
+          <div
+            className="composer-mobile-controls"
+            role="group"
+            aria-label="Mobile staged input controls"
+          >
+            <button
+              type="button"
+              className={queuedMessageCount > 0
+                ? "composer-mobile-control composer-memo-open has-queued"
+                : "composer-mobile-control composer-memo-open"}
+              aria-label={queuedMessageCount > 0
+                ? `Open memo, ${queuedMessageCount} queued`
+                : messageCount > 0
+                  ? `Open memo, ${messageCount} saved`
+                  : "Open memo"}
+              aria-haspopup="dialog"
+              disabled={!onOpenMessages}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onOpenMessages}
+            >
+              <MemoIcon />
+              <span>Memo</span>
+              {queuedMessageCount > 0 ? (
+                <strong className="memo-count queued" aria-hidden="true">
+                  Q {queuedMessageCount}
+                </strong>
+              ) : messageCount > 0 ? (
+                <strong className="memo-count" aria-hidden="true">{messageCount}</strong>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              className="composer-mobile-control composer-distraction-toggle"
+              aria-label={mobileDistractionFree
+                ? "Exit distraction-free input"
+                : "Enter distraction-free input"}
+              aria-controls="muxdeck-staged-input"
+              aria-pressed={mobileDistractionFree}
+              disabled={!onToggleMobileDistractionFree}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onToggleMobileDistractionFree}
+            >
+              {mobileDistractionFree ? <ContractIcon /> : <ExpandIcon />}
+              <span>{mobileDistractionFree ? "Exit" : "Focus"}</span>
+            </button>
+          </div>
           <span>{draftLength.toLocaleString()} / {MAX_DRAFT_LENGTH.toLocaleString()}</span>
         </div>
         <div className="composer-body">
@@ -506,25 +639,77 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             onBlur={(event) => recordDraft(event.currentTarget.value)}
           />
           <div className="composer-actions-primary">
-            <button type="button" className="secondary-button composer-clear" disabled={!draftLength || sending} onClick={clearDraft}>Clear</button>
-            <button type="button" className="secondary-button" disabled={!enabled || !draftLength || sending} onClick={() => void sendDraft(false)}>Send</button>
+            <button
+              type="button"
+              className="secondary-button composer-clear"
+              aria-label="Clear"
+              disabled={!draftLength || actionPending}
+              onClick={clearDraft}
+            >
+              <span className="composer-action-label-full" aria-hidden="true">Clear</span>
+              <span className="composer-action-label-compact" aria-hidden="true">C</span>
+            </button>
+            <button
+              type="button"
+              className="secondary-button composer-send"
+              aria-label="Send"
+              disabled={!enabled || !draftLength || actionPending}
+              onClick={() => void sendDraft(false)}
+            >
+              <span className="composer-action-label-full" aria-hidden="true">Send</span>
+              <span className="composer-action-label-compact" aria-hidden="true">S</span>
+            </button>
             <button
               type="button"
               className="primary-button composer-send-enter"
-              disabled={!enabled || !draftLength || sending}
+              disabled={!enabled || !draftLength || actionPending}
+              aria-label="Send + Enter"
               aria-keyshortcuts="Shift+Enter"
               title="Send staged input followed by Enter (Shift+Enter)"
               onClick={() => void sendDraft(true)}
             >
-              <span>Send + Enter</span>
+              <span className="composer-action-label-full" aria-hidden="true">Send + Enter</span>
+              <span className="composer-action-label-compact" aria-hidden="true">S+E</span>
               <span className="composer-shortcut-hint" aria-hidden="true">
                 <kbd>Shift</kbd><span>+</span><kbd>Enter</kbd>
               </span>
             </button>
+            <button
+              type="button"
+              className={queuedMessageCount > 0
+                ? "secondary-button composer-memo has-queued"
+                : "secondary-button composer-memo"}
+              aria-label="Queue in memo"
+              disabled={!onAddToMemo || !draftHasContent || actionPending}
+              onClick={() => void addDraftToMemo()}
+            >
+              <span className="composer-action-label-full" aria-hidden="true">
+                {status === "queueing" ? "Queueing..." : "Queue in memo"}
+              </span>
+              <span className="composer-action-label-compact" aria-hidden="true">M</span>
+              {mobileDistractionFree && queuedMessageCount > 0 && (
+                <span className="composer-memo-queued-count" aria-hidden="true">
+                  Q {queuedMessageCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              className="secondary-button composer-insert-tab"
+              aria-label="Insert Tab into staged input"
+              aria-controls="terminal-staged-input"
+              title="Insert a literal Tab at the staged-input selection"
+              disabled={actionPending}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => insertText("\t")}
+            >
+              <span className="composer-action-label-full" aria-hidden="true">Tab</span>
+              <span className="composer-action-label-compact" aria-hidden="true">T</span>
+            </button>
           </div>
         </div>
         <p className={`composer-status ${status}`} aria-live="polite">
-          <span className={enabled ? "ready" : ""} />{statusText}
+          <span className={enabled || status === "queued" ? "ready" : ""} />{statusText}
         </p>
       </div>
 
@@ -535,6 +720,69 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         aria-label="Terminal input shortcuts"
         hidden={!shortcutsVisible}
       >
+        <button
+          type="button"
+          className={queuedMessageCount > 0 ? "key-button memo-key has-queued" : "key-button memo-key"}
+          onClick={onOpenMessages}
+          disabled={!onOpenMessages}
+          aria-label={queuedMessageCount > 0
+            ? `Open memoranda, ${queuedMessageCount} queued`
+            : messageCount > 0
+              ? `Open memoranda, ${messageCount} saved`
+              : "Open memoranda"}
+          aria-haspopup="dialog"
+        >
+          <MemoIcon />
+          <span>Memo</span>
+          {queuedMessageCount > 0 ? (
+            <strong className="memo-count queued" aria-hidden="true">
+              Q {queuedMessageCount}
+            </strong>
+          ) : messageCount > 0 ? (
+            <strong className="memo-count" aria-hidden="true">{messageCount}</strong>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          className="key-button keyboard-key"
+          onClick={onFocus}
+          disabled={!enabled}
+          aria-label="Raw terminal keyboard"
+          title="Focus the live terminal so keyboard input goes directly to tmux"
+        >
+          <KeyboardIcon /> <span>Raw keys</span>
+        </button>
+        {ESSENTIAL_KEYS.map((terminalKey) => (
+          <TerminalKeyButton
+            key={terminalKey.label}
+            terminalKey={terminalKey}
+            enabled={enabled}
+            onSend={onSend}
+          />
+        ))}
+        <button
+          type="button"
+          className="key-button other-keys-toggle"
+          aria-expanded={otherKeyPanelOpen}
+          aria-controls={otherKeyPanelId}
+          aria-label={otherKeyPanelOpen ? "Hide other keys" : "Show other keys"}
+          title={otherKeyPanelOpen ? "Hide additional key controls" : "Show additional key controls"}
+          onMouseDown={(event) => {
+            // Preserve terminal/draft focus unless focus must leave the tray before collapse.
+            if (!otherKeyPanelRef.current?.contains(document.activeElement)) event.preventDefault();
+          }}
+          onClick={() => setOtherKeyPanelOpen((open) => !open)}
+        >
+          <span>More Keys</span>
+        </button>
+        {KEYS.map((terminalKey) => (
+          <TerminalKeyButton
+            key={terminalKey.label}
+            terminalKey={terminalKey}
+            enabled={enabled}
+            onSend={onSend}
+          />
+        ))}
         <button
           type="button"
           className="key-button session-title-key"
@@ -556,15 +804,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         </button>
         <button
           type="button"
-          className="key-button memo-key"
-          onClick={onOpenMessages}
-          disabled={!onOpenMessages}
-          aria-label="Open memoranda"
-        >
-          <MemoIcon /> <span>Memo{messageCount > 0 ? ` ${messageCount}` : ""}</span>
-        </button>
-        <button
-          type="button"
           className="key-button snippet-key"
           onClick={onOpenSnippets}
           disabled={!onOpenSnippets}
@@ -572,40 +811,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         >
           <SnippetIcon /> <span>Snippets</span>
         </button>
-        <button
-          type="button"
-          className="key-button keyboard-key"
-          onClick={onFocus}
-          disabled={!enabled}
-          aria-label="Raw terminal keyboard"
-          title="Focus the live terminal so keyboard input goes directly to tmux"
-        >
-          <KeyboardIcon /> <span>Raw keys</span>
-        </button>
-        {KEYS.map((terminalKey) => (
-          <TerminalKeyButton
-            key={terminalKey.label}
-            terminalKey={terminalKey}
-            enabled={enabled}
-            onSend={onSend}
-          />
-        ))}
         <button type="button" className="key-button action-key" onClick={() => void pasteClipboard()}>Paste to draft</button>
-        <button
-          type="button"
-          className="key-button other-keys-toggle"
-          aria-expanded={otherKeyPanelOpen}
-          aria-controls={otherKeyPanelId}
-          aria-label={otherKeyPanelOpen ? "Hide other keys" : "Show other keys"}
-          title={otherKeyPanelOpen ? "Hide additional key controls" : "Show additional key controls"}
-          onMouseDown={(event) => {
-            // Preserve terminal/draft focus unless focus must leave the tray before collapse.
-            if (!otherKeyPanelRef.current?.contains(document.activeElement)) event.preventDefault();
-          }}
-          onClick={() => setOtherKeyPanelOpen((open) => !open)}
-        >
-          <span>Other Keys</span>
-        </button>
       </div>
 
       {shortcutsVisible && otherKeyPanelOpen && (

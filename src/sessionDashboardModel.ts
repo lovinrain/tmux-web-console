@@ -1,7 +1,14 @@
 import type { AgentState, Pane, Session } from "./types";
 
-export type SessionKindFilter = "all" | "agents" | "claude" | "codex" | "cursor" | "shells";
-type SessionKind = "claude" | "codex" | "cursor" | "shells" | "other";
+export type SessionKindFilter =
+  | "all"
+  | "agents"
+  | "claude"
+  | "codex"
+  | "cursor"
+  | "grok"
+  | "shells";
+type SessionKind = "claude" | "codex" | "cursor" | "grok" | "shells" | "other";
 export type SessionStateFilter = "any" | AgentState;
 export type SessionViewMode = "cards" | "list";
 export type SessionGroupMode = "none" | "state";
@@ -49,9 +56,10 @@ const KIND_FILTERS = new Set<SessionKindFilter>([
   "claude",
   "codex",
   "cursor",
+  "grok",
   "shells",
 ]);
-const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "cursor"]);
+const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "cursor", "grok"]);
 /** The Cursor CLI installs as `cursor-agent` plus a bare `agent` symlink. */
 const CURSOR_PANE_COMMANDS = new Set(["agent", "cursor", "cursor-agent"]);
 const SHELL_PANE_COMMANDS = new Set(["bash", "zsh", "fish", "sh"]);
@@ -117,6 +125,7 @@ function parseState(value: string | null): SessionStateFilter {
   const aliases: Record<string, SessionStateFilter> = {
     "needs-input": "waiting_human",
     "command-wait": "waiting_command",
+    "background-work": "waiting_command",
     unclear: "unknown",
   };
   const canonical = aliases[normalized] || normalized;
@@ -311,6 +320,7 @@ export function paneCommandKind(command: string): SessionKind {
   if (normalized.includes("claude")) return "claude";
   if (normalized.includes("codex")) return "codex";
   if (CURSOR_PANE_COMMANDS.has(normalized)) return "cursor";
+  if (normalized === "grok") return "grok";
   if (SHELL_PANE_COMMANDS.has(normalized)) return "shells";
   return "other";
 }

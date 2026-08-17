@@ -15,6 +15,7 @@ from .history import SnapshotStore
 from .messages import (
     MessageNotFoundError,
     SessionMessageStore,
+    validate_message_state,
     validate_message_text,
     validate_session_name,
 )
@@ -27,11 +28,18 @@ from .snippets import (
 )
 from .status import AgentStateDetector
 from .tmux import (
+    TERMINAL_HISTORY_ACTIONS,
     TmuxClient,
     TmuxError,
     TmuxRenameUnverifiedError,
     validate_tmux_new_session_name,
     validate_tmux_session_name,
+)
+from .workspaces import (
+    WorkspaceNotFoundError,
+    WorkspaceSessionRevisionConflict,
+    WorkspaceStore,
+    WorkspaceStoreUnavailable,
 )
 
 LOGGER = logging.getLogger("muxdeck")
@@ -43,6 +51,7 @@ SNAPSHOTS_KEY = web.AppKey("snapshots", SnapshotStore)
 TITLES_KEY = web.AppKey("titles", SessionTitleStore)
 MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
 SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
+WORKSPACES_KEY = web.AppKey("workspaces", WorkspaceStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
@@ -96,8 +105,13 @@ class SessionSnapshotBuilder:
                         "customTitle": self._titles.get_title(item.name),
                         "starred": self._titles.is_starred(item.name),
                         "ignored": self._titles.is_ignored(item.name),
-                        "queuedMessageCount": (
+                        "memorandumCount": (
                             self._messages.count_messages(item.name)
+                            if self._messages is not None
+                            else 0
+                        ),
+                        "queuedMessageCount": (
+                            self._messages.count_queued_messages(item.name)
                             if self._messages is not None
                             else 0
                         ),
@@ -228,9 +242,7 @@ def parse_int(value: str | None, default: int) -> int:
         return default
 
 
-async def _close_terminal_bridge(
-    sender: asyncio.Task[None], bridge: PtyBridge
-) -> None:
+async def _close_terminal_bridge(sender: asyncio.Task[None], bridge: PtyBridge) -> None:
     sender.cancel()
     try:
         (outcome,) = await asyncio.gather(sender, return_exceptions=True)
@@ -252,6 +264,7 @@ def create_app(
     base_path: str | None = None,
     messages: SessionMessageStore | None = None,
     snippets: SnippetStore | None = None,
+    workspaces: WorkspaceStore | None = None,
 ) -> web.Application:
     app = web.Application(client_max_size=MAX_INPUT_BYTES)
     app[TMUX_KEY] = tmux or TmuxClient()
@@ -259,6 +272,7 @@ def create_app(
     app[TITLES_KEY] = titles or SessionTitleStore()
     app[MESSAGES_KEY] = messages or SessionMessageStore()
     app[SNIPPETS_KEY] = snippets or SnippetStore()
+    app[WORKSPACES_KEY] = workspaces or WorkspaceStore()
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
@@ -272,7 +286,9 @@ def create_app(
         sample_seconds=SESSION_STREAM_SAMPLE_SECONDS,
     )
     app[BASE_PATH_KEY] = normalize_base_path(
-        base_path if base_path is not None else os.environ.get("MUXDECK_BASE_PATH", "/mux")
+        base_path
+        if base_path is not None
+        else os.environ.get("MUXDECK_BASE_PATH", "/mux")
     )
     prefix = app[BASE_PATH_KEY]
 
@@ -302,15 +318,31 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        unknown_fields = sorted(payload)
+        unknown_fields = sorted(set(payload) - {"name"})
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
 
+        requested_name = payload.get("name")
+        if "name" in payload:
+            if not isinstance(requested_name, str):
+                return json_error("name must be a string", 400)
+            try:
+                requested_name = validate_tmux_new_session_name(requested_name)
+            except ValueError as error:
+                return json_error(str(error), 400)
+
         try:
-            session_name = await app[TMUX_KEY].create_session()
+            created_session = await app[TMUX_KEY].create_session(requested_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
         except TmuxError as error:
-            return json_error(str(error), 503)
-        return web.json_response({"session": session_name}, status=201)
+            message = str(error)
+            status = 409 if "duplicate session" in message.lower() else 503
+            return json_error(message, status)
+        return web.json_response(
+            {"session": created_session.name, "sessionId": created_session.id},
+            status=201,
+        )
 
     async def rename_session(request: web.Request) -> web.Response:
         try:
@@ -419,11 +451,21 @@ def create_app(
                 app[MESSAGES_KEY].rename_session(current_name, renamed_session)
             except Exception:
                 LOGGER.exception(
-                    "Unable to migrate queued messages after renaming tmux session %s to %s",
+                    "Unable to migrate memo entries after renaming tmux session %s to %s",
                     current_name,
                     renamed_session,
                 )
-                warnings.append("unable to migrate queued messages")
+                warnings.append("unable to migrate memo entries")
+            try:
+                app[WORKSPACES_KEY].rename_session(current_name, renamed_session)
+            except Exception:
+                LOGGER.exception(
+                    "Unable to migrate saved workspaces after renaming tmux session "
+                    "%s to %s",
+                    current_name,
+                    renamed_session,
+                )
+                warnings.append("unable to migrate saved workspaces")
 
             response: dict[str, Any] = {
                 "previousSession": current_name,
@@ -614,24 +656,28 @@ def create_app(
         text = payload.get("text")
         if not isinstance(text, str):
             return json_error("text must be a string", 400)
+        state = payload.get("state", "queued")
+        if not isinstance(state, str):
+            return json_error("state must be a string", 400)
         try:
             session_name = validate_session_name(session_name)
             text = validate_message_text(text)
+            state = validate_message_state(state)
         except ValueError as error:
             return json_error(str(error), 400)
         try:
             async with app[SESSION_RENAME_LOCK_KEY]:
                 await app[TMUX_KEY].get_session(session_name)
-                message = app[MESSAGES_KEY].add_message(session_name, text)
+                message = app[MESSAGES_KEY].add_message(session_name, text, state=state)
         except TmuxError as error:
             return json_error(str(error), 404)
         except ValueError as error:
             return json_error(str(error), 400)
         except OSError:
             LOGGER.exception(
-                "Unable to add queued message for tmux session %s", session_name
+                "Unable to add memo entry for tmux session %s", session_name
             )
-            return json_error("unable to save queued message", 500)
+            return json_error("unable to save memo", 500)
         return web.json_response(
             {"session": session_name, "message": message}, status=201
         )
@@ -648,8 +694,9 @@ def create_app(
 
         has_text = "text" in payload
         has_position = "position" in payload
-        if not has_text and not has_position:
-            return json_error("text or position is required", 400)
+        has_state = "state" in payload
+        if not has_text and not has_position and not has_state:
+            return json_error("text, position, or state is required", 400)
         text: str | None = None
         if has_text:
             candidate_text = payload.get("text")
@@ -657,13 +704,23 @@ def create_app(
                 return json_error("text must be a string", 400)
             text = candidate_text
         position = payload.get("position")
-        if has_position and (isinstance(position, bool) or not isinstance(position, int)):
+        if has_position and (
+            isinstance(position, bool) or not isinstance(position, int)
+        ):
             return json_error("position must be an integer", 400)
+        state: str | None = None
+        if has_state:
+            candidate_state = payload.get("state")
+            if not isinstance(candidate_state, str):
+                return json_error("state must be a string", 400)
+            state = candidate_state
 
         try:
             session_name = validate_session_name(session_name)
             if text is not None:
                 text = validate_message_text(text)
+            if state is not None:
+                state = validate_message_state(state)
         except ValueError as error:
             return json_error(str(error), 400)
         try:
@@ -674,6 +731,7 @@ def create_app(
                     message_id,
                     text=text,
                     position=position if has_position else None,
+                    state=state,
                 )
         except TmuxError as error:
             return json_error(str(error), 404)
@@ -683,9 +741,9 @@ def create_app(
             return json_error(str(error), 400)
         except OSError:
             LOGGER.exception(
-                "Unable to update queued message for tmux session %s", session_name
+                "Unable to update memo entry for tmux session %s", session_name
             )
-            return json_error("unable to save queued message", 500)
+            return json_error("unable to save memo", 500)
         return web.json_response({"session": session_name, "message": message})
 
     async def delete_session_message(request: web.Request) -> web.Response:
@@ -707,9 +765,9 @@ def create_app(
             return json_error(str(error), 400)
         except OSError:
             LOGGER.exception(
-                "Unable to delete queued message for tmux session %s", session_name
+                "Unable to delete memo entry for tmux session %s", session_name
             )
-            return json_error("unable to save queued messages", 500)
+            return json_error("unable to save memo", 500)
         return web.Response(status=204)
 
     async def list_snippets(_: web.Request) -> web.Response:
@@ -756,6 +814,163 @@ def create_app(
             return json_error("unable to save snippets", 500)
         return web.json_response(snapshot)
 
+    async def list_workspaces(_: web.Request) -> web.Response:
+        try:
+            workspaces = app[WORKSPACES_KEY].list_workspaces()
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        return web.json_response({"workspaces": workspaces})
+
+    async def get_workspace(request: web.Request) -> web.Response:
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        return web.json_response({"workspace": workspace})
+
+    async def create_workspace(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        required = {"name", "tabs", "activeSession"}
+        missing = sorted(required - set(payload))
+        if missing:
+            return json_error(f"{missing[0]} is required", 400)
+        unknown = sorted(str(field) for field in set(payload) - required)
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        try:
+            workspace = app[WORKSPACES_KEY].create_workspace(
+                name=payload["name"],
+                tabs=payload["tabs"],
+                active_session=payload["activeSession"],
+            )
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception("Unable to create saved workspace")
+            return json_error("unable to save workspace", 500)
+        except RuntimeError:
+            LOGGER.exception("Unable to generate a saved workspace id")
+            return json_error("unable to create workspace", 500)
+        return web.json_response({"workspace": workspace}, status=201)
+
+    async def update_workspace(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        allowed = {"name", "tabs", "activeSession", "sessionRevision"}
+        unknown = sorted(str(field) for field in set(payload) - allowed)
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+        if not set(payload) & {"name", "tabs", "activeSession"}:
+            return json_error("name, tabs, or activeSession is required", 400)
+        if (
+            set(payload) & {"tabs", "activeSession"}
+            and "sessionRevision" not in payload
+        ):
+            return json_error("sessionRevision is required", 400)
+
+        try:
+            workspace = app[WORKSPACES_KEY].update_workspace(
+                request.match_info["workspace_id"],
+                name=payload.get("name"),
+                tabs=payload.get("tabs"),
+                active_session=payload.get("activeSession"),
+                update_name="name" in payload,
+                update_tabs="tabs" in payload,
+                update_active_session="activeSession" in payload,
+                session_revision=payload.get("sessionRevision"),
+            )
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except WorkspaceSessionRevisionConflict as error:
+            return json_error(str(error), 409)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to update saved workspace %s",
+                request.match_info["workspace_id"],
+            )
+            return json_error("unable to save workspace", 500)
+        return web.json_response({"workspace": workspace})
+
+    async def record_workspace_activity(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        required = {"tabs", "activeSession", "sessionRevision"}
+        missing = sorted(required - set(payload))
+        if missing:
+            return json_error(f"{missing[0]} is required", 400)
+        unknown = sorted(str(field) for field in set(payload) - required)
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        try:
+            workspace = app[WORKSPACES_KEY].record_activity(
+                request.match_info["workspace_id"],
+                tabs=payload["tabs"],
+                active_session=payload["activeSession"],
+                session_revision=payload["sessionRevision"],
+            )
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except WorkspaceSessionRevisionConflict as error:
+            return json_error(str(error), 409)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to record saved workspace activity for %s",
+                request.match_info["workspace_id"],
+            )
+            return json_error("unable to save workspace", 500)
+        return web.json_response({"workspace": workspace})
+
+    async def delete_workspace(request: web.Request) -> web.Response:
+        try:
+            app[WORKSPACES_KEY].delete_workspace(request.match_info["workspace_id"])
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to delete saved workspace %s",
+                request.match_info["workspace_id"],
+            )
+            return json_error("unable to save workspace", 500)
+        return web.Response(status=204)
+
     async def create_history(request: web.Request) -> web.Response:
         pane_id = request.match_info["pane_id"]
         limit = max(20, min(parse_int(request.query.get("limit"), 250), 1000))
@@ -799,7 +1014,9 @@ def create_app(
             )
         except Exception as error:
             LOGGER.exception("Failed to attach to tmux session %s", session.name)
-            await websocket.send_str(json.dumps({"type": "error", "message": str(error)}))
+            await websocket.send_str(
+                json.dumps({"type": "error", "message": str(error)})
+            )
             await websocket.close(code=1011)
             return websocket
 
@@ -877,6 +1094,44 @@ def create_app(
                                 )
                             except (ConnectionError, RuntimeError):
                                 break
+                    elif payload.get("type") == "history":
+                        action = payload.get("action")
+                        accepted = False
+                        if (
+                            isinstance(action, str)
+                            and action in TERMINAL_HISTORY_ACTIONS
+                        ):
+                            try:
+                                await app[TMUX_KEY].navigate_history(
+                                    bridge.client_pid,
+                                    session.id,
+                                    action,
+                                )
+                            except (TmuxError, ValueError) as error:
+                                LOGGER.debug(
+                                    "Terminal history action %r failed for client %s: %s",
+                                    action,
+                                    bridge.client_pid,
+                                    error,
+                                )
+                            else:
+                                accepted = True
+                        if not websocket.closed:
+                            try:
+                                await websocket.send_str(
+                                    json.dumps(
+                                        {
+                                            "type": (
+                                                "historyAck"
+                                                if accepted
+                                                else "historyNack"
+                                            ),
+                                            "action": action,
+                                        }
+                                    )
+                                )
+                            except (ConnectionError, RuntimeError):
+                                break
                 elif message.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                     break
         finally:
@@ -913,6 +1168,15 @@ def create_app(
     )
     app.router.add_get(f"{prefix}/api/snippets", list_snippets)
     app.router.add_put(f"{prefix}/api/snippets", replace_snippets)
+    app.router.add_get(f"{prefix}/api/workspaces", list_workspaces)
+    app.router.add_post(f"{prefix}/api/workspaces", create_workspace)
+    app.router.add_get(f"{prefix}/api/workspaces/{{workspace_id}}", get_workspace)
+    app.router.add_patch(f"{prefix}/api/workspaces/{{workspace_id}}", update_workspace)
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/activity",
+        record_workspace_activity,
+    )
+    app.router.add_delete(f"{prefix}/api/workspaces/{{workspace_id}}", delete_workspace)
     app.router.add_put(f"{prefix}/api/session-title", update_session_title)
     app.router.add_put(f"{prefix}/api/session-star", update_session_star)
     app.router.add_put(f"{prefix}/api/session-ignored", update_session_ignored)

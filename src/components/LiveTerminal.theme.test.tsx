@@ -1,10 +1,14 @@
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
+import { createRef, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DARK_TERMINAL_THEME, LIGHT_TERMINAL_THEME } from "../terminalTheme";
-import { LiveTerminal } from "./LiveTerminal";
+import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
 
 interface MockTerminalInstance {
   options: Record<string, unknown>;
+  cols: number;
+  rows: number;
+  refresh: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
 }
@@ -34,6 +38,7 @@ vi.mock("@xterm/xterm", () => ({
     paste() {}
     focus() {}
     scrollToBottom() {}
+    refresh = vi.fn();
     dispose = vi.fn();
     onData() { return { dispose: vi.fn() }; }
     onScroll() { return { dispose: vi.fn() }; }
@@ -86,19 +91,45 @@ const socketMocks = {
 };
 
 class MockResizeObserver {
-  observe() {}
-  disconnect() {}
+  constructor(private readonly callback: ResizeObserverCallback) {
+    resizeObserverMocks.instances.push(this);
+  }
+
+  observe = vi.fn();
+  disconnect = vi.fn();
+
+  emit() {
+    this.callback([], this as unknown as ResizeObserver);
+  }
 }
+
+const resizeObserverMocks = {
+  instances: [] as MockResizeObserver[],
+};
 
 const callbacks = {
   onStateChange: vi.fn(),
   onPaneChange: vi.fn(),
 };
 
+function LayoutPhaseProbe({
+  active,
+  onLayout,
+}: {
+  active: boolean;
+  onLayout: () => void;
+}) {
+  useLayoutEffect(() => {
+    if (active) onLayout();
+  }, [active, onLayout]);
+  return null;
+}
+
 beforeEach(() => {
   terminalMocks.instances.length = 0;
   terminalMocks.fit.mockClear();
   socketMocks.instances.length = 0;
+  resizeObserverMocks.instances.length = 0;
   callbacks.onStateChange.mockClear();
   callbacks.onPaneChange.mockClear();
   vi.stubGlobal("WebSocket", MockWebSocket);
@@ -110,10 +141,164 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("LiveTerminal themes", () => {
+  it("refits and repaints an expanded layout without recreating the terminal or socket", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    const resizeObserver = resizeObserverMocks.instances[0];
+    socket.emit("open");
+    terminalMocks.fit.mockClear();
+    terminal.refresh.mockClear();
+    socket.send.mockClear();
+    terminalMocks.fit.mockImplementationOnce(() => {
+      terminal.cols = 100;
+      terminal.rows = 40;
+    });
+
+    act(() => {
+      resizeObserver.emit();
+      vi.advanceTimersByTime(80);
+    });
+
+    expect(terminalMocks.fit).toHaveBeenCalledOnce();
+    expect(terminal.refresh).toHaveBeenCalledOnce();
+    expect(terminal.refresh).toHaveBeenCalledWith(0, 39);
+    expect(terminalMocks.fit.mock.invocationCallOrder[0])
+      .toBeLessThan(terminal.refresh.mock.invocationCallOrder[0]);
+    expect(socket.send).toHaveBeenCalledOnce();
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: "resize",
+      cols: 100,
+      rows: 40,
+    }));
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+
+    terminalMocks.fit.mockClear();
+    terminal.refresh.mockClear();
+    socket.send.mockClear();
+    act(() => {
+      resizeObserver.emit();
+      vi.advanceTimersByTime(80);
+    });
+
+    expect(terminalMocks.fit).toHaveBeenCalledOnce();
+    expect(terminal.refresh).toHaveBeenCalledWith(0, 39);
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
+  it("suspends layout fitting without recreating the terminal or socket and fits on resume", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const visualViewport = new EventTarget();
+    vi.stubGlobal("visualViewport", visualViewport);
+    let resizeObserver: MockResizeObserver | undefined;
+    const runSuspendedLayoutPhase = vi.fn(() => {
+      resizeObserver?.emit();
+      vi.advanceTimersByTime(80);
+    });
+    const terminalView = (layoutSuspended: boolean) => (
+      <>
+        <LiveTerminal
+          session="agent"
+          ignoreSize={false}
+          layoutSuspended={layoutSuspended}
+          theme="dark"
+          {...callbacks}
+        />
+        <LayoutPhaseProbe
+          active={layoutSuspended}
+          onLayout={runSuspendedLayoutPhase}
+        />
+      </>
+    );
+    const view = render(terminalView(false));
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    resizeObserver = resizeObserverMocks.instances[0];
+    socket.emit("open");
+    terminalMocks.fit.mockClear();
+    socket.send.mockClear();
+
+    resizeObserver.emit();
+    view.rerender(terminalView(true));
+    terminal.cols = 100;
+    visualViewport.dispatchEvent(new Event("resize"));
+    visualViewport.dispatchEvent(new Event("scroll"));
+    act(() => vi.advanceTimersByTime(80));
+
+    expect(runSuspendedLayoutPhase).toHaveBeenCalledOnce();
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(terminalMocks.fit).not.toHaveBeenCalled();
+    expect(socket.send).not.toHaveBeenCalled();
+
+    view.rerender(terminalView(false));
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(terminalMocks.fit).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(80));
+
+    expect(terminalMocks.fit).toHaveBeenCalledOnce();
+    expect(socket.send).toHaveBeenCalledOnce();
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: "resize",
+      cols: 100,
+      rows: 24,
+    }));
+  });
+
+  it("sends typed terminal-history controls only while the socket is live", () => {
+    const ref = createRef<LiveTerminalHandle>();
+    render(
+      <LiveTerminal
+        ref={ref}
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const socket = socketMocks.instances[0];
+    expect(ref.current?.navigateHistory("page-up")).toBe(false);
+    expect(socket.send).not.toHaveBeenCalled();
+    socket.emit("open");
+    socket.send.mockClear();
+
+    const accepted: boolean[] = [];
+    act(() => {
+      accepted.push(ref.current?.navigateHistory("page-up") ?? false);
+      accepted.push(ref.current?.navigateHistory("page-down") ?? false);
+      accepted.push(ref.current?.navigateHistory("exit") ?? false);
+    });
+
+    expect(accepted).toEqual([true, true, true]);
+    expect(socket.send.mock.calls).toEqual([
+      [JSON.stringify({ type: "history", action: "page-up" })],
+      [JSON.stringify({ type: "history", action: "page-down" })],
+      [JSON.stringify({ type: "history", action: "exit" })],
+    ]);
+  });
+
   it("constructs xterm with the requested initial palette", () => {
     render(
       <LiveTerminal
