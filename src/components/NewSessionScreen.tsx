@@ -8,6 +8,7 @@ import {
 import { createSession, type CreatedSession } from "../api";
 import { TerminalIcon } from "../icons";
 import { useTheme } from "../theme";
+import type { WorkspaceTabOrientation } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
 
 export const NEW_SESSION_PANEL_ID = "muxdeck-new-session";
@@ -37,12 +38,16 @@ export interface NewSessionScreenProps {
   onCreated: (name: string, sessionId: string) => void;
   onCancel: () => void;
   sessionNavigation?: ReactNode;
+  workspaceLoading?: boolean;
+  desktopTabOrientation?: WorkspaceTabOrientation;
 }
 
 export function NewSessionScreen({
   onCreated,
   onCancel,
   sessionNavigation,
+  workspaceLoading = false,
+  desktopTabOrientation = "horizontal",
 }: NewSessionScreenProps) {
   const { theme } = useTheme();
   const [draftName, setDraftName] = useState("");
@@ -74,7 +79,7 @@ export function NewSessionScreen({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (creatingRef.current || nameError) return;
+    if (creatingRef.current || workspaceLoading || nameError) return;
 
     creatingRef.current = true;
     setCreating(true);
@@ -108,6 +113,7 @@ export function NewSessionScreen({
     <main className={sessionNavigation
       ? "new-session-screen has-session-navigation"
       : "new-session-screen"}
+      data-desktop-tabs={desktopTabOrientation}
     >
       {sessionNavigation && (
         <div className="console-session-navigation">{sessionNavigation}</div>
@@ -136,7 +142,7 @@ export function NewSessionScreen({
 
           <form
             className="new-session-form"
-            aria-busy={creating}
+            aria-busy={creating || workspaceLoading}
             onSubmit={(event) => void submit(event)}
           >
             <div className="new-session-default">
@@ -185,6 +191,11 @@ export function NewSessionScreen({
               </p>
             )}
             {error && <p className="new-session-error" role="alert">{error}</p>}
+            {workspaceLoading && (
+              <p className="new-session-waiting" role="status">
+                Opening the saved workspace. Create becomes available when its tabs are ready.
+              </p>
+            )}
 
             <div className="new-session-actions">
               <button
@@ -198,7 +209,7 @@ export function NewSessionScreen({
               <button
                 type="submit"
                 className="primary-button"
-                disabled={creating || Boolean(nameError)}
+                disabled={creating || workspaceLoading || Boolean(nameError)}
               >
                 <TerminalIcon />
                 {creating ? "Creating..." : "Create session"}

@@ -33,6 +33,7 @@ describe("NewSessionScreen", () => {
         onCreated={onCreated}
         onCancel={onCancel}
         sessionNavigation={<nav aria-label="Test workspace tabs">Tabs</nav>}
+        desktopTabOrientation="vertical"
       />,
     );
 
@@ -40,6 +41,7 @@ describe("NewSessionScreen", () => {
     expect(document.title).toBe("New session - Muxdeck");
     expect(screen.getByRole("heading", { name: "Start a new session." })).toHaveFocus();
     expect(screen.getByRole("navigation", { name: "Test workspace tabs" })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-desktop-tabs", "vertical");
     expect(screen.getByRole("tabpanel", { name: "Start a new session." })).toHaveAttribute(
       "id",
       NEW_SESSION_PANEL_ID,
@@ -53,6 +55,31 @@ describe("NewSessionScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("blocks creation while a saved workspace is still opening", () => {
+    const { container } = renderWithTheme(
+      <NewSessionScreen
+        onCreated={vi.fn()}
+        onCancel={vi.fn()}
+        workspaceLoading
+      />,
+    );
+    const form = container.querySelector<HTMLFormElement>(".new-session-form")!;
+    const input = screen.getByRole("textbox", { name: /tmux session name/i });
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Create becomes available when its tabs are ready.",
+    );
+    expect(screen.getByRole("button", { name: "Create session" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(input).toBeEnabled();
+    expect(form).toHaveAttribute("aria-busy", "true");
+
+    fireEvent.change(input, { target: { value: "draft-while-opening" } });
+    fireEvent.submit(form);
+    expect(createSession).not.toHaveBeenCalled();
+    expect(input).toHaveValue("draft-while-opening");
   });
 
   it("creates exactly once while busy and reports the assigned session name", async () => {

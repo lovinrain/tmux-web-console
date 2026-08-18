@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import { CloseIcon, TrashIcon } from "../icons";
 
@@ -7,6 +7,7 @@ interface SessionTerminateDialogProps {
   sessionTitle: string | null;
   onClose: () => void;
   onTerminate: () => Promise<void>;
+  onFallbackFocus?: () => void;
 }
 
 export function SessionTerminateDialog({
@@ -14,12 +15,15 @@ export function SessionTerminateDialog({
   sessionTitle,
   onClose,
   onTerminate,
+  onFallbackFocus,
 }: SessionTerminateDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
+  const fallbackFocusRef = useRef(onFallbackFocus);
+  fallbackFocusRef.current = onFallbackFocus;
   const [terminating, setTerminating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +41,16 @@ export function SessionTerminateDialog({
     return () => {
       document.removeEventListener("focusin", containFocus);
       releaseBodyScroll();
-      if (restoreFocusRef.current?.isConnected) restoreFocusRef.current.focus();
+      const restoreTarget = restoreFocusRef.current;
+      let usedFallback = false;
+      if (restoreTarget?.isConnected) restoreTarget.focus();
+      else {
+        fallbackFocusRef.current?.();
+        usedFallback = true;
+      }
+      window.requestAnimationFrame(() => {
+        if (!usedFallback && !restoreTarget?.isConnected) fallbackFocusRef.current?.();
+      });
     };
   }, []);
 
@@ -96,8 +109,9 @@ export function SessionTerminateDialog({
   };
 
   const displayTitle = sessionTitle || sessionName;
-  const headingId = "session-terminate-heading";
-  const descriptionId = "session-terminate-description";
+  const dialogId = useId();
+  const headingId = `${dialogId}-heading`;
+  const descriptionId = `${dialogId}-description`;
 
   return (
     <div
@@ -146,8 +160,8 @@ export function SessionTerminateDialog({
             programs running in them. Unsaved terminal work can be lost.
           </p>
           <p>
-            Muxdeck closes this quick tab after success. Memoranda and display metadata
-            remain saved, and other saved workspaces are not silently rewritten.
+            Muxdeck removes its quick tab if it is open. Memoranda and display metadata
+            remain saved, and references in other saved workspaces are not silently rewritten.
           </p>
           {error && <p className="title-error" role="alert">{error}</p>}
         </div>

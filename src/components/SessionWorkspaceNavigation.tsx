@@ -2,25 +2,33 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
+  ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowUpIcon,
   CheckIcon,
   CloseIcon,
   GridIcon,
   HistoryIcon,
+  PlusIcon,
   SaveIcon,
   SearchIcon,
   TerminalIcon,
+  TrashIcon,
 } from "../icons";
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
 import type { AgentState, Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
+import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 
 export interface SessionWorkspaceNavigationProps {
@@ -29,6 +37,9 @@ export interface SessionWorkspaceNavigationProps {
   recentSessions: string[];
   sessions: Session[];
   recentsOpen: boolean;
+  orientation?: WorkspaceTabOrientation;
+  desktopTabRailWidth?: number;
+  onDesktopTabRailWidthChange?: (width: number) => void;
   tabsVisible?: boolean;
   newSessionActive?: boolean;
   onSelect: (sessionName: string) => void;
@@ -39,9 +50,37 @@ export interface SessionWorkspaceNavigationProps {
   onCloseRecents: () => void;
   onClearRecents: () => void;
   onOpenDashboard: () => void;
+  onNewSession?: () => void;
   onOpenTabSearch?: () => void;
   workspacePersistenceState?: WorkspacePersistenceState;
+  workspaceName?: string | null;
   onSaveWorkspace?: (name: string) => Promise<void>;
+  onSessionTerminated?: (
+    sessionName: string,
+    sessionId: string,
+    sessionCreated: number,
+    serverStarted: number,
+    serverPid: number,
+  ) => Promise<void>;
+}
+
+export type WorkspaceTabOrientation = "horizontal" | "vertical";
+
+export const MIN_DESKTOP_TAB_RAIL_WIDTH = 72;
+export const MAX_DESKTOP_TAB_RAIL_WIDTH = 480;
+export const DEFAULT_DESKTOP_TAB_RAIL_WIDTH = 288;
+export const COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH = 176;
+
+const DESKTOP_TAB_RAIL_MAIN_CONTENT_MIN_WIDTH = 360;
+const DESKTOP_TAB_RAIL_KEYBOARD_STEP = 8;
+const DESKTOP_TAB_RAIL_KEYBOARD_LARGE_STEP = 32;
+
+export function clampDesktopTabRailWidth(width: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_DESKTOP_TAB_RAIL_WIDTH;
+  return Math.min(
+    MAX_DESKTOP_TAB_RAIL_WIDTH,
+    Math.max(MIN_DESKTOP_TAB_RAIL_WIDTH, Math.round(width)),
+  );
 }
 
 export type WorkspacePersistenceState = "unsaved" | "loading" | "saved" | "error";
@@ -61,6 +100,62 @@ export function isCompactWorkspaceViewport(): boolean {
   const coarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
   return viewportWidth <= 640
     || (viewportWidth <= 1024 && (coarsePointer || viewportHeight <= 500));
+}
+
+function useWorkspaceTabOrientation(
+  preferredOrientation: WorkspaceTabOrientation,
+): WorkspaceTabOrientation {
+  const [compactViewport, setCompactViewport] = useState(isCompactWorkspaceViewport);
+
+  useEffect(() => {
+    const syncViewport = () => setCompactViewport(isCompactWorkspaceViewport());
+    const viewport = window.visualViewport;
+    const coarsePointer = window.matchMedia?.("(pointer: coarse)");
+    syncViewport();
+    window.addEventListener("resize", syncViewport);
+    viewport?.addEventListener?.("resize", syncViewport);
+    coarsePointer?.addEventListener?.("change", syncViewport);
+    return () => {
+      window.removeEventListener("resize", syncViewport);
+      viewport?.removeEventListener?.("resize", syncViewport);
+      coarsePointer?.removeEventListener?.("change", syncViewport);
+    };
+  }, []);
+
+  return compactViewport ? "horizontal" : preferredOrientation;
+}
+
+function desktopTabRailMaxWidth(): number {
+  const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+  return Math.max(
+    MIN_DESKTOP_TAB_RAIL_WIDTH,
+    Math.min(
+      MAX_DESKTOP_TAB_RAIL_WIDTH,
+      Math.floor(viewportWidth - DESKTOP_TAB_RAIL_MAIN_CONTENT_MIN_WIDTH),
+    ),
+  );
+}
+
+function useDesktopTabRailMaxWidth(): number {
+  const [maxWidth, setMaxWidth] = useState(desktopTabRailMaxWidth);
+
+  useEffect(() => {
+    const syncViewport = () => setMaxWidth(desktopTabRailMaxWidth());
+    const viewport = window.visualViewport;
+    syncViewport();
+    window.addEventListener("resize", syncViewport);
+    viewport?.addEventListener?.("resize", syncViewport);
+    return () => {
+      window.removeEventListener("resize", syncViewport);
+      viewport?.removeEventListener?.("resize", syncViewport);
+    };
+  }, []);
+
+  return maxWidth;
+}
+
+function clampDesktopTabRailWidthForViewport(width: number, maxWidth: number): number {
+  return Math.min(maxWidth, clampDesktopTabRailWidth(width));
 }
 
 const STATE_LABELS: Record<AgentState, string> = {
@@ -91,6 +186,24 @@ const WORKSPACE_PERSISTENCE_COPY: Record<
     description: "This saved workspace has a sync issue.",
   },
 };
+
+function workspaceIdentityName(
+  workspacePersistenceState: WorkspacePersistenceState,
+  workspaceName?: string | null,
+): string {
+  if (workspacePersistenceState === "unsaved") return "Temporary workspace";
+  const normalizedName = workspaceName?.trim();
+  if (normalizedName) return normalizedName;
+  return workspacePersistenceState === "loading" ? "Opening workspace" : "Saved workspace";
+}
+
+function workspaceIdentityStateLabel(
+  workspacePersistenceState: WorkspacePersistenceState,
+): string {
+  return workspacePersistenceState === "unsaved"
+    ? "Not saved"
+    : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState].label;
+}
 
 function activePane(session: Session): Pane | undefined {
   return session.panes.find((pane) => pane.id === session.activePaneId) || session.panes[0];
@@ -381,8 +494,13 @@ export function WorkspaceTabSearchDialog({
 }
 
 function tabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const tabList = event.currentTarget.closest("[role='tablist']");
+  const orientation = tabList?.getAttribute("aria-orientation") === "vertical"
+    ? "vertical"
+    : "horizontal";
+  const previousKey = orientation === "vertical" ? "ArrowUp" : "ArrowLeft";
+  const nextKey = orientation === "vertical" ? "ArrowDown" : "ArrowRight";
+  if (![previousKey, nextKey, "Home", "End"].includes(event.key)) return;
   const tabs = tabList
     ? Array.from(tabList.querySelectorAll<HTMLButtonElement>("[role='tab']"))
     : [];
@@ -393,8 +511,8 @@ function tabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
   let nextIndex = currentIndex;
   if (event.key === "Home") nextIndex = 0;
   if (event.key === "End") nextIndex = tabs.length - 1;
-  if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-  if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+  if (event.key === previousKey) nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  if (event.key === nextKey) nextIndex = (currentIndex + 1) % tabs.length;
   tabs[nextIndex]?.focus();
 }
 
@@ -408,6 +526,7 @@ interface WorkspaceSessionRowProps {
   openCount?: number;
   onMoveTab?: (targetIndex: number) => void;
   onClose?: () => void;
+  onTerminate?: () => void;
 }
 
 function WorkspaceSessionRow({
@@ -420,6 +539,7 @@ function WorkspaceSessionRow({
   openCount,
   onMoveTab,
   onClose,
+  onTerminate,
 }: WorkspaceSessionRowProps) {
   const pane = session ? activePane(session) : undefined;
   const displayTitle = session ? sessionDisplayTitle(session) : sessionName;
@@ -434,7 +554,7 @@ function WorkspaceSessionRow({
 
   return (
     <div
-      className={active ? "workspace-session-row active" : "workspace-session-row"}
+      className={`workspace-session-row${active ? " active" : ""}${open && onTerminate ? " stacked-actions" : ""}`}
       data-workspace-session-name={sessionName}
     >
       <button
@@ -468,7 +588,7 @@ function WorkspaceSessionRow({
           )}
         </span>
       </button>
-      {open && (canReorder || onClose) && (
+      {(canReorder || onClose || onTerminate) && (
         <span className="workspace-session-actions">
           {canReorder && (
             <span
@@ -498,6 +618,18 @@ function WorkspaceSessionRow({
               </button>
             </span>
           )}
+          {onTerminate && (
+            <button
+              type="button"
+              className="workspace-session-terminate"
+              onClick={onTerminate}
+              aria-label={`Terminate ${displayTitle} tmux session`}
+              aria-haspopup="dialog"
+              title="Terminate tmux session"
+            >
+              <TrashIcon />
+            </button>
+          )}
           {onClose && (
             <button
               type="button"
@@ -517,7 +649,12 @@ function WorkspaceSessionRow({
 
 interface WorkspaceRecentsDialogProps extends SessionWorkspaceNavigationProps {
   sessionsByName: Map<string, Session>;
+  query: string;
+  initialScrollTop: number;
+  onQueryChange: (query: string) => void;
+  onScrollPositionChange: (scrollTop: number) => void;
   onRequestSaveWorkspace: () => void;
+  onRequestTerminateSession: (session: Session) => void;
 }
 
 function WorkspaceRecentsDialog({
@@ -526,6 +663,10 @@ function WorkspaceRecentsDialog({
   recentSessions,
   sessions,
   sessionsByName,
+  query,
+  initialScrollTop,
+  onQueryChange,
+  onScrollPositionChange,
   onSelect,
   onCloseTab,
   onMoveTab,
@@ -533,13 +674,16 @@ function WorkspaceRecentsDialog({
   onClearRecents,
   onOpenDashboard,
   workspacePersistenceState = "unsaved",
+  workspaceName,
   onSaveWorkspace,
   onRequestSaveWorkspace,
+  onRequestTerminateSession,
+  onSessionTerminated,
 }: WorkspaceRecentsDialogProps) {
-  const [query, setQuery] = useState("");
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const reorderFocusIntent = useRef<{
     sessionName: string;
     direction: "up" | "down";
@@ -550,6 +694,8 @@ function WorkspaceRecentsDialog({
   const persistenceCopy = workspacePersistenceState === "unsaved"
     ? null
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
+  const identityName = workspaceIdentityName(workspacePersistenceState, workspaceName);
+  const identityStateLabel = workspaceIdentityStateLabel(workspacePersistenceState);
 
   const matchesQuery = (sessionName: string): boolean => {
     if (!normalizedQuery) return true;
@@ -613,6 +759,10 @@ function WorkspaceRecentsDialog({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [openSessions, reorderAnnouncement]);
+
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = initialScrollTop;
+  }, [initialScrollTop]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement
@@ -679,9 +829,20 @@ function WorkspaceRecentsDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="workspace-recents-header">
-          <div>
+          <div className="workspace-recents-heading">
             <p className="eyebrow">THIS BROWSER PAGE / WORKSPACE</p>
             <h2 id="workspace-recents-title">Switch sessions</h2>
+            <div
+              className={`workspace-recents-identity ${workspacePersistenceState}`}
+              role="group"
+              aria-label={`Workspace: ${identityName}. ${identityStateLabel}`}
+              title={identityName}
+            >
+              <span className="workspace-recents-identity-name">{identityName}</span>
+              <span className="workspace-recents-identity-state" aria-hidden="true">
+                {identityStateLabel}
+              </span>
+            </div>
           </div>
           <button type="button" className="icon-button" onClick={onCloseRecents} aria-label="Close session switcher">
             <CloseIcon />
@@ -694,12 +855,12 @@ function WorkspaceRecentsDialog({
             ref={searchRef}
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => onQueryChange(event.target.value)}
             placeholder="Find an open, recent, or live session"
             aria-label="Find a workspace session"
           />
           {query && (
-            <button type="button" onClick={() => setQuery("")} aria-label="Clear workspace search">
+            <button type="button" onClick={() => onQueryChange("")} aria-label="Clear workspace search">
               Clear
             </button>
           )}
@@ -714,7 +875,11 @@ function WorkspaceRecentsDialog({
           </p>
         )}
 
-        <div className="workspace-recents-scroll">
+        <div
+          ref={scrollRef}
+          className="workspace-recents-scroll"
+          onScroll={(event) => onScrollPositionChange(event.currentTarget.scrollTop)}
+        >
           {filteredOpen.length > 0 && (
             <section className="workspace-session-group" aria-labelledby="workspace-open-heading">
               <header>
@@ -727,11 +892,12 @@ function WorkspaceRecentsDialog({
               <div className="workspace-session-list">
                 {filteredOpen.map((sessionName) => {
                   const openIndex = openSessions.indexOf(sessionName);
+                  const session = sessionsByName.get(sessionName);
                   return (
                     <WorkspaceSessionRow
                       key={sessionName}
                       sessionName={sessionName}
-                      session={sessionsByName.get(sessionName)}
+                      session={session}
                       active={sessionName === activeSession}
                       open
                       openIndex={openIndex}
@@ -741,6 +907,9 @@ function WorkspaceRecentsDialog({
                         ? (targetIndex) => moveDialogTab(sessionName, targetIndex)
                         : undefined}
                       onClose={() => closeDialogTab(sessionName)}
+                      onTerminate={session && onSessionTerminated
+                        ? () => onRequestTerminateSession(session)
+                        : undefined}
                     />
                   );
                 })}
@@ -760,16 +929,22 @@ function WorkspaceRecentsDialog({
                 </button>
               </header>
               <div className="workspace-session-list">
-                {filteredRecent.map((sessionName) => (
-                  <WorkspaceSessionRow
-                    key={sessionName}
-                    sessionName={sessionName}
-                    session={sessionsByName.get(sessionName)}
-                    active={false}
-                    open={false}
-                    onSelect={() => onSelect(sessionName)}
-                  />
-                ))}
+                {filteredRecent.map((sessionName) => {
+                  const session = sessionsByName.get(sessionName);
+                  return (
+                    <WorkspaceSessionRow
+                      key={sessionName}
+                      sessionName={sessionName}
+                      session={session}
+                      active={false}
+                      open={false}
+                      onSelect={() => onSelect(sessionName)}
+                      onTerminate={session && onSessionTerminated
+                        ? () => onRequestTerminateSession(session)
+                        : undefined}
+                    />
+                  );
+                })}
               </div>
             </section>
           )}
@@ -784,16 +959,22 @@ function WorkspaceRecentsDialog({
                 <span>{filteredAvailable.length}</span>
               </header>
               <div className="workspace-session-list">
-                {filteredAvailable.map((sessionName) => (
-                  <WorkspaceSessionRow
-                    key={sessionName}
-                    sessionName={sessionName}
-                    session={sessionsByName.get(sessionName)}
-                    active={false}
-                    open={false}
-                    onSelect={() => onSelect(sessionName)}
-                  />
-                ))}
+                {filteredAvailable.map((sessionName) => {
+                  const session = sessionsByName.get(sessionName);
+                  return (
+                    <WorkspaceSessionRow
+                      key={sessionName}
+                      sessionName={sessionName}
+                      session={session}
+                      active={false}
+                      open={false}
+                      onSelect={() => onSelect(sessionName)}
+                      onTerminate={session && onSessionTerminated
+                        ? () => onRequestTerminateSession(session)
+                        : undefined}
+                    />
+                  );
+                })}
               </div>
             </section>
           )}
@@ -856,6 +1037,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     recentSessions,
     sessions,
     recentsOpen,
+    orientation: preferredOrientation = "horizontal",
+    desktopTabRailWidth,
+    onDesktopTabRailWidthChange,
     tabsVisible = true,
     newSessionActive = false,
     onSelect,
@@ -865,21 +1049,53 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onOpenRecents,
     onCloseRecents,
     onOpenDashboard,
+    onNewSession,
     onOpenTabSearch,
     workspacePersistenceState = "unsaved",
+    workspaceName,
     onSaveWorkspace,
+    onSessionTerminated,
   } = props;
+  const orientation = useWorkspaceTabOrientation(preferredOrientation);
+  const desktopTabRailMaxWidth = useDesktopTabRailMaxWidth();
+  const [internalDesktopTabRailWidth, setInternalDesktopTabRailWidth] = useState(() => (
+    clampDesktopTabRailWidth(desktopTabRailWidth ?? DEFAULT_DESKTOP_TAB_RAIL_WIDTH)
+  ));
+  const committedDesktopTabRailWidth = clampDesktopTabRailWidthForViewport(
+    desktopTabRailWidth ?? internalDesktopTabRailWidth,
+    desktopTabRailMaxWidth,
+  );
+  const [liveDesktopTabRailWidth, setLiveDesktopTabRailWidth] = useState(
+    committedDesktopTabRailWidth,
+  );
+  const liveDesktopTabRailWidthRef = useRef(liveDesktopTabRailWidth);
+  const desktopTabRailDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const visibleDesktopTabRailWidth = clampDesktopTabRailWidthForViewport(
+    liveDesktopTabRailWidth,
+    desktopTabRailMaxWidth,
+  );
+  liveDesktopTabRailWidthRef.current = visibleDesktopTabRailWidth;
   const activeTabRef = useRef<HTMLButtonElement>(null);
   const navigationRef = useRef<HTMLElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const persistenceStatusRef = useRef<HTMLSpanElement>(null);
+  const recentsOpenRef = useRef(recentsOpen);
+  recentsOpenRef.current = recentsOpen;
+  const recentsScrollTopRef = useRef(0);
+  const completedTerminationRef = useRef<Session | null>(null);
   const focusActiveTabAfterClose = useRef(false);
   const reorderFocusIntent = useRef<{
     sessionName: string;
-    direction: "left" | "right";
+    direction: "previous" | "next";
   } | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
+  const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
+  const [recentsQuery, setRecentsQuery] = useState("");
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
@@ -889,6 +1105,147 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const persistenceCopy = workspacePersistenceState === "unsaved"
     ? null
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
+  const identityName = workspaceIdentityName(workspacePersistenceState, workspaceName);
+  const newSessionDisabled = newSessionActive || workspacePersistenceState === "loading";
+
+  const previewDesktopTabRailWidth = useCallback((width: number) => {
+    const nextWidth = clampDesktopTabRailWidthForViewport(width, desktopTabRailMaxWidth);
+    liveDesktopTabRailWidthRef.current = nextWidth;
+    setLiveDesktopTabRailWidth(nextWidth);
+    return nextWidth;
+  }, [desktopTabRailMaxWidth]);
+
+  const commitDesktopTabRailWidth = useCallback((width: number) => {
+    const nextWidth = previewDesktopTabRailWidth(width);
+    if (desktopTabRailWidth === undefined) setInternalDesktopTabRailWidth(nextWidth);
+    if (nextWidth !== committedDesktopTabRailWidth) {
+      onDesktopTabRailWidthChange?.(nextWidth);
+    }
+  }, [
+    committedDesktopTabRailWidth,
+    desktopTabRailWidth,
+    onDesktopTabRailWidthChange,
+    previewDesktopTabRailWidth,
+  ]);
+
+  const stopDesktopTabRailDrag = useCallback(() => {
+    desktopTabRailDragRef.current = null;
+    document.documentElement.classList.remove("workspace-tab-rail-resizing");
+  }, []);
+
+  const commitDesktopTabRailDrag = useCallback((pointerId: number) => {
+    const drag = desktopTabRailDragRef.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+    const nextWidth = liveDesktopTabRailWidthRef.current;
+    stopDesktopTabRailDrag();
+    commitDesktopTabRailWidth(nextWidth);
+  }, [commitDesktopTabRailWidth, stopDesktopTabRailDrag]);
+
+  useEffect(() => {
+    if (desktopTabRailDragRef.current) return;
+    previewDesktopTabRailWidth(committedDesktopTabRailWidth);
+  }, [committedDesktopTabRailWidth, previewDesktopTabRailWidth]);
+
+  useEffect(() => {
+    const pointerMove = (event: PointerEvent) => {
+      const drag = desktopTabRailDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      previewDesktopTabRailWidth(drag.startWidth + event.clientX - drag.startX);
+    };
+    const pointerUp = (event: PointerEvent) => {
+      commitDesktopTabRailDrag(event.pointerId);
+    };
+    const pointerCancel = (event: PointerEvent) => {
+      const drag = desktopTabRailDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      stopDesktopTabRailDrag();
+      previewDesktopTabRailWidth(committedDesktopTabRailWidth);
+    };
+
+    window.addEventListener("pointermove", pointerMove);
+    window.addEventListener("pointerup", pointerUp);
+    window.addEventListener("pointercancel", pointerCancel);
+    return () => {
+      window.removeEventListener("pointermove", pointerMove);
+      window.removeEventListener("pointerup", pointerUp);
+      window.removeEventListener("pointercancel", pointerCancel);
+    };
+  }, [
+    commitDesktopTabRailDrag,
+    committedDesktopTabRailWidth,
+    previewDesktopTabRailWidth,
+    stopDesktopTabRailDrag,
+  ]);
+
+  useEffect(() => {
+    if (orientation === "vertical") return;
+    stopDesktopTabRailDrag();
+    previewDesktopTabRailWidth(committedDesktopTabRailWidth);
+  }, [
+    committedDesktopTabRailWidth,
+    orientation,
+    previewDesktopTabRailWidth,
+    stopDesktopTabRailDrag,
+  ]);
+
+  useEffect(() => () => {
+    document.documentElement.classList.remove("workspace-tab-rail-resizing");
+  }, []);
+
+  const startDesktopTabRailDrag = useCallback((
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (
+      desktopTabRailDragRef.current
+      || event.button !== 0
+      || event.isPrimary === false
+    ) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    desktopTabRailDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: liveDesktopTabRailWidthRef.current,
+    };
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Window-level listeners still keep the drag usable without pointer capture.
+    }
+    document.documentElement.classList.add("workspace-tab-rail-resizing");
+  }, []);
+
+  const desktopTabRailKeyDown = useCallback((
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const step = event.shiftKey
+      ? DESKTOP_TAB_RAIL_KEYBOARD_LARGE_STEP
+      : DESKTOP_TAB_RAIL_KEYBOARD_STEP;
+    let nextWidth: number | null = null;
+    if (event.key === "ArrowLeft") nextWidth = visibleDesktopTabRailWidth - step;
+    if (event.key === "ArrowRight") nextWidth = visibleDesktopTabRailWidth + step;
+    if (event.key === "Home") nextWidth = MIN_DESKTOP_TAB_RAIL_WIDTH;
+    if (event.key === "End") nextWidth = desktopTabRailMaxWidth;
+    if (event.key === "Enter") nextWidth = DEFAULT_DESKTOP_TAB_RAIL_WIDTH;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    commitDesktopTabRailWidth(nextWidth);
+  }, [
+    commitDesktopTabRailWidth,
+    desktopTabRailMaxWidth,
+    visibleDesktopTabRailWidth,
+  ]);
+
+  const navigationStyle = orientation === "vertical"
+    ? {
+      position: "relative",
+      width: `${visibleDesktopTabRailWidth}px`,
+      "--desktop-tab-rail-width": `${visibleDesktopTabRailWidth}px`,
+    } as CSSProperties
+    : undefined;
+  const compactDesktopTabRail = orientation === "vertical"
+    && visibleDesktopTabRailWidth <= COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH;
 
   const focusSaveReplacement = useCallback(() => {
     if (isCompactWorkspaceViewport()) {
@@ -901,6 +1258,56 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const target = persistenceStatusRef.current || saveButtonRef.current;
     target?.focus();
   }, []);
+
+  const focusTerminateDestination = useCallback((): boolean => {
+    const focusAvailable = (target: HTMLElement | null | undefined): boolean => {
+      if (!target?.isConnected || target.hasAttribute("disabled")) return false;
+      for (let element: HTMLElement | null = target; element; element = element.parentElement) {
+        if (element.hidden || element.getAttribute("aria-hidden") === "true") return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+      }
+      target.focus();
+      return document.activeElement === target;
+    };
+
+    if (recentsOpenRef.current) {
+      const overview = document.querySelector<HTMLElement>(".workspace-recents-sheet");
+      if (overview) {
+        const search = overview.querySelector<HTMLInputElement>(
+          "input[aria-label='Find a workspace session']",
+        );
+        const preferred = isCompactWorkspaceViewport() ? overview : search;
+        if (focusAvailable(preferred) || focusAvailable(overview)) return true;
+      }
+    }
+
+    const candidates: Array<HTMLElement | null | undefined> = [
+      activeTabRef.current,
+      navigationRef.current?.querySelector<HTMLButtonElement>("[role='tab']"),
+      document.querySelector<HTMLButtonElement>(".mobile-console-focus-button.terminal"),
+      document.querySelector<HTMLButtonElement>(".console-header .back-button"),
+      document.querySelector<HTMLButtonElement>(".console-bar-toggle"),
+      document.querySelector<HTMLTextAreaElement>(".terminal-host .xterm-helper-textarea"),
+      navigationRef.current?.querySelector<HTMLButtonElement>(".workspace-dashboard-button"),
+      document.querySelector<HTMLInputElement>(".search-field input"),
+    ];
+    return candidates.some(focusAvailable);
+  }, []);
+
+  const focusTerminateReplacement = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      focusTerminateDestination();
+      // Route-driven session switches can remove the first target one frame later.
+      window.requestAnimationFrame(focusTerminateDestination);
+    });
+  }, [focusTerminateDestination]);
+
+  useEffect(() => {
+    if (recentsOpen) return;
+    setRecentsQuery("");
+    recentsScrollTopRef.current = 0;
+  }, [recentsOpen]);
 
   useEffect(() => {
     if (workspacePersistenceState === "unsaved") return;
@@ -922,7 +1329,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const activeTab = activeTabRef.current;
-      activeTab?.scrollIntoView?.({ block: "nearest", inline: "center" });
+      activeTab?.scrollIntoView?.(orientation === "vertical"
+        ? { block: "center", inline: "nearest" }
+        : { block: "nearest", inline: "center" });
       if (focusActiveTabAfterClose.current && activeTab) {
         focusActiveTabAfterClose.current = false;
         activeTab.focus();
@@ -935,7 +1344,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         const controls = Array.from(
           tab?.querySelectorAll<HTMLButtonElement>(".workspace-tab-move") ?? [],
         );
-        const preferred = controls[intent.direction === "left" ? 0 : 1];
+        const preferred = controls[intent.direction === "previous" ? 0 : 1];
         const target = preferred && !preferred.disabled
           ? preferred
           : controls.find((control) => !control.disabled)
@@ -945,7 +1354,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeSession, newSessionActive, openSessions, reorderAnnouncement, tabsVisible]);
+  }, [
+    activeSession,
+    newSessionActive,
+    openSessions,
+    orientation,
+    reorderAnnouncement,
+    tabsVisible,
+  ]);
 
   const closeQuickTab = (sessionName: string) => {
     focusActiveTabAfterClose.current = true;
@@ -953,7 +1369,6 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   };
 
   const closeNewSession = () => {
-    focusActiveTabAfterClose.current = true;
     onCloseNewSession?.();
   };
 
@@ -961,7 +1376,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
     reorderFocusIntent.current = {
       sessionName,
-      direction: targetIndex < openSessions.indexOf(sessionName) ? "left" : "right",
+      direction: targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next",
     };
     onMoveTab(sessionName, targetIndex);
     setReorderAnnouncement(
@@ -975,12 +1390,66 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseRecents();
   };
 
+  const terminateSelectedSession = useCallback(async () => {
+    if (!terminateTarget || !onSessionTerminated) {
+      throw new Error("This tmux session is no longer available.");
+    }
+    const completedTarget = terminateTarget;
+    await onSessionTerminated(
+      completedTarget.name,
+      completedTarget.id,
+      completedTarget.created,
+      completedTarget.serverStarted,
+      completedTarget.serverPid,
+    );
+    completedTerminationRef.current = completedTarget;
+  }, [onSessionTerminated, terminateTarget]);
+
+  useLayoutEffect(() => {
+    const completedTarget = completedTerminationRef.current;
+    if (!completedTarget || terminateTarget) return;
+    const currentSession = sessionsByName.get(completedTarget.name);
+    if (
+      currentSession
+      && currentSession.id === completedTarget.id
+      && currentSession.created === completedTarget.created
+      && currentSession.serverStarted === completedTarget.serverStarted
+      && currentSession.serverPid === completedTarget.serverPid
+    ) return;
+
+    let followupFrame = 0;
+    const frame = window.requestAnimationFrame(() => {
+      if (focusTerminateDestination()) {
+        completedTerminationRef.current = null;
+        return;
+      }
+      followupFrame = window.requestAnimationFrame(() => {
+        if (focusTerminateDestination()) completedTerminationRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (followupFrame) window.cancelAnimationFrame(followupFrame);
+    };
+  }, [
+    activeSession,
+    focusTerminateDestination,
+    openSessions,
+    recentsOpen,
+    sessionsByName,
+    tabsVisible,
+    terminateTarget,
+  ]);
+
   return (
     <>
       <nav
         ref={navigationRef}
         id="muxdeck-session-tabs"
-        className="workspace-navigation"
+        className={`workspace-navigation workspace-navigation-${orientation}`}
+        data-orientation={orientation}
+        data-compact={compactDesktopTabRail ? "true" : undefined}
+        style={navigationStyle}
         aria-label="Session workspace"
         hidden={!tabsVisible}
       >
@@ -995,7 +1464,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <span>Sessions</span>
           </button>
           <div className="workspace-tab-viewport">
-            <div className="workspace-tab-list" role="tablist" aria-label="Session workspace tabs">
+            <div
+              className="workspace-tab-list"
+              role="tablist"
+              aria-label="Session workspace tabs"
+              aria-orientation={orientation}
+            >
               {openSessions.map((sessionName, index) => {
                 const session = sessionsByName.get(sessionName);
                 const title = tabTitle(sessionName, sessionsByName);
@@ -1020,7 +1494,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       onClick={() => onSelect(sessionName)}
                     >
                       <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
-                      <span>{title}</span>
+                      <span
+                        className="workspace-tab-compact-index"
+                        data-index={index + 1}
+                        aria-hidden="true"
+                      />
+                      <span className="workspace-tab-title">{title}</span>
                     </button>
                     {onMoveTab && openSessions.length > 1 && (
                       <span
@@ -1030,25 +1509,37 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       >
                         <button
                           type="button"
-                          className="workspace-tab-move"
+                          className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "up" : "left"}`}
                           onClick={() => moveQuickTab(sessionName, title, index - 1)}
                           disabled={index === 0}
-                          aria-label={`Move ${title} tab left`}
-                          title="Move tab left"
+                          aria-label={`Move ${title} tab ${orientation === "vertical" ? "up" : "left"}`}
+                          title={`Move tab ${orientation === "vertical" ? "up" : "left"}`}
                         >
-                          <ArrowLeftIcon />
+                          {orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}
                         </button>
                         <button
                           type="button"
-                          className="workspace-tab-move workspace-tab-move-right"
+                          className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "down" : "right"}`}
                           onClick={() => moveQuickTab(sessionName, title, index + 1)}
                           disabled={index === openSessions.length - 1}
-                          aria-label={`Move ${title} tab right`}
-                          title="Move tab right"
+                          aria-label={`Move ${title} tab ${orientation === "vertical" ? "down" : "right"}`}
+                          title={`Move tab ${orientation === "vertical" ? "down" : "right"}`}
                         >
-                          <ArrowLeftIcon />
+                          {orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}
                         </button>
                       </span>
+                    )}
+                    {session && onSessionTerminated && (
+                      <button
+                        type="button"
+                        className="workspace-tab-terminate"
+                        onClick={() => setTerminateTarget(session)}
+                        aria-label={`Terminate ${title} tmux session`}
+                        aria-haspopup="dialog"
+                        title="Terminate tmux session"
+                      >
+                        <TrashIcon />
+                      </button>
                     )}
                     <button
                       type="button"
@@ -1075,7 +1566,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     onKeyDown={tabKeyDown}
                   >
                     <span className="workspace-state-dot new-session" aria-hidden="true" />
-                    <span>New session</span>
+                    <span
+                      className="workspace-tab-compact-index"
+                      data-index="+"
+                      aria-hidden="true"
+                    />
+                    <span className="workspace-tab-title">New session</span>
                   </button>
                   {onCloseNewSession && (
                     <button
@@ -1092,6 +1588,26 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           </div>
+          {onNewSession && (
+            <button
+              type="button"
+              className={newSessionActive
+                ? "workspace-new-session-button active"
+                : "workspace-new-session-button"}
+              onClick={onNewSession}
+              disabled={newSessionDisabled}
+              aria-label="New session"
+              aria-current={newSessionActive ? "page" : undefined}
+              title={newSessionActive
+                ? "New session is already open"
+                : workspacePersistenceState === "loading"
+                  ? "Wait for workspace to finish opening"
+                  : "New session"}
+            >
+              <PlusIcon />
+              <span>New session</span>
+            </button>
+          )}
           {workspacePersistenceState === "unsaved" ? onSaveWorkspace && (
             <button
               ref={saveButtonRef}
@@ -1102,11 +1618,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               aria-controls="workspace-save-dialog"
               aria-expanded={saveDialogOpen}
               aria-label="Save workspace"
-              title="Save workspace"
+              aria-description={`Workspace: ${identityName}`}
+              title={`${identityName} - Save workspace`}
             >
               <SaveIcon />
-              <span className="workspace-save-label-full">Save workspace</span>
-              <span className="workspace-save-label-compact">Save</span>
+              <span className="workspace-identity-copy">
+                <span className="workspace-identity-name" title={identityName}>
+                  {identityName}
+                </span>
+                <span className="workspace-identity-state">Save</span>
+              </span>
             </button>
           ) : persistenceCopy && (
             <span
@@ -1115,14 +1636,20 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               role="status"
               tabIndex={-1}
               aria-label={persistenceCopy.accessibleLabel}
-              title={persistenceCopy.accessibleLabel}
+              aria-description={`Workspace: ${identityName}`}
+              title={`${identityName} - ${persistenceCopy.label}`}
             >
               {workspacePersistenceState === "saved"
                 ? <CheckIcon />
                 : workspacePersistenceState === "loading"
                   ? <HistoryIcon />
                   : <SaveIcon />}
-              <span>{persistenceCopy.label}</span>
+              <span className="workspace-identity-copy">
+                <span className="workspace-identity-name" title={identityName}>
+                  {identityName}
+                </span>
+                <span className="workspace-identity-state">{persistenceCopy.label}</span>
+              </span>
             </span>
           )}
           {onOpenTabSearch && openSessions.length > 0 && (
@@ -1151,6 +1678,26 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <span>Recents</span>
             {closedRecentCount > 0 && <strong>{closedRecentCount}</strong>}
           </button>
+          {orientation === "vertical" && (
+            <div
+              className="workspace-tab-rail-resize-handle"
+              role="separator"
+              tabIndex={0}
+              aria-label="Resize vertical session tabs"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_DESKTOP_TAB_RAIL_WIDTH}
+              aria-valuemax={desktopTabRailMaxWidth}
+              aria-valuenow={visibleDesktopTabRailWidth}
+              aria-valuetext={`${visibleDesktopTabRailWidth} pixels`}
+              title="Drag to resize. Use Left/Right, Shift for larger steps, Home/End, or Enter to reset."
+              onPointerDown={startDesktopTabRailDrag}
+              onLostPointerCapture={(event) => commitDesktopTabRailDrag(event.pointerId)}
+              onDoubleClick={() => commitDesktopTabRailWidth(DEFAULT_DESKTOP_TAB_RAIL_WIDTH)}
+              onKeyDown={desktopTabRailKeyDown}
+            >
+              <span className="workspace-tab-rail-resize-grip" aria-hidden="true" />
+            </div>
+          )}
       </nav>
 
       <p className="workspace-sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -1167,11 +1714,28 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         </p>
       )}
 
-      {recentsOpen && (
+      {recentsOpen && !terminateTarget && (
         <WorkspaceRecentsDialog
           {...props}
           sessionsByName={sessionsByName}
+          query={recentsQuery}
+          initialScrollTop={recentsScrollTopRef.current}
+          onQueryChange={setRecentsQuery}
+          onScrollPositionChange={(scrollTop) => {
+            recentsScrollTopRef.current = scrollTop;
+          }}
           onRequestSaveWorkspace={requestSaveFromRecents}
+          onRequestTerminateSession={setTerminateTarget}
+        />
+      )}
+
+      {terminateTarget && onSessionTerminated && (
+        <SessionTerminateDialog
+          sessionName={terminateTarget.name}
+          sessionTitle={terminateTarget.customTitle}
+          onClose={() => setTerminateTarget(null)}
+          onTerminate={terminateSelectedSession}
+          onFallbackFocus={focusTerminateReplacement}
         />
       )}
 

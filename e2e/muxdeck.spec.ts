@@ -585,6 +585,35 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
   }
 });
 
+test("tab bar opens and cancels New session without a dashboard round trip", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(
+    `/mux/session/${encodeURIComponent(sessionName)}?kind=shells&tab=${encodeURIComponent(sessionName)}`,
+  );
+  await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], { kind: "shells" });
+
+  const historyLength = await page.evaluate(() => window.history.length);
+  const newSessionButton = page.getByRole("button", { name: "New session", exact: true });
+  await expect(newSessionButton).toBeVisible();
+  await expect(newSessionButton).toBeEnabled();
+  await newSessionButton.click();
+
+  await expectRoute(page, "/mux/sessions/new", [sessionName], { kind: "shells" });
+  await expect(newSessionButton).toBeDisabled();
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], { kind: "shells" });
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+  await expect(page.getByRole("tab", { name: new RegExp(sessionName) })).toBeFocused();
+
+  await newSessionButton.click();
+  await page.getByRole("button", { name: "Close New session tab" }).click();
+  await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], { kind: "shells" });
+  await expect(page.getByRole("tab", { name: new RegExp(sessionName) })).toBeFocused();
+});
+
 test("desktop scrollback width is adjustable for the current browser tab", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/mux/session/${sessionName}`);
@@ -690,10 +719,15 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   const terminalStage = page.locator(".terminal-stage");
   const terminalElement = page.locator(".terminal-host .xterm");
   const stagedInput = page.getByRole("textbox", { name: "Staged input" });
-  const enterFocus = page.getByRole("button", {
+  const consoleBars = page.getByRole("group", { name: "Console bars" });
+  const terminalShortcuts = page.getByRole("group", { name: "Terminal input shortcuts" });
+  const enterFocus = consoleBars.getByRole("button", {
     name: "Enter desktop terminal focus",
   });
   await expect(enterFocus).toBeVisible();
+  await expect(terminalShortcuts.getByRole("button", {
+    name: "Enter desktop terminal focus",
+  })).toHaveCount(0);
   await stagedInput.fill("desktop focus keeps this draft");
 
   const standardStageHeight = (await terminalStage.boundingBox())!.height;
@@ -806,6 +840,238 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   expect(page.url()).toBe(urlBeforeFocus);
 });
 
+test("desktop tabs switch to a persistent vertical rail without reconnecting", async ({
+  page,
+}) => {
+  test.setTimeout(45_000);
+  const railSession = `${sessionName}-vertical-tabs`;
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    railSession,
+    "bash",
+    "--noprofile",
+    "--norc",
+  ]);
+
+  let terminalSocketCount = 0;
+  page.on("websocket", (socket) => {
+    if (socket.url().includes("/ws/terminal")) terminalSocketCount += 1;
+  });
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(railSession)}`,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await expect.poll(() => terminalSocketCount).toBe(1);
+
+    const shell = page.locator(".console-shell");
+    const navigation = page.getByRole("navigation", { name: "Session workspace" });
+    const tabList = page.getByRole("tablist", { name: "Session workspace tabs" });
+    const terminal = page.locator(".terminal-host .xterm");
+    const orientationToggle = page.getByRole("group", { name: "Console bars" })
+      .getByRole("button", { name: "Vertical session tabs" });
+    await terminal.evaluate((element) => {
+      Object.defineProperty(window, "__muxdeckVerticalTabsTerminal", { value: element });
+    });
+
+    await expect(shell).toHaveAttribute("data-desktop-tabs", "horizontal");
+    await expect(page.locator("#muxdeck-session-tabs"))
+      .toHaveAttribute("data-orientation", "horizontal");
+    await expect(page.locator("#muxdeck-session-tabs .workspace-tab-list"))
+      .toHaveAttribute("aria-orientation", "horizontal");
+    await expect(orientationToggle).toHaveAttribute("aria-pressed", "false");
+    const horizontalNavigationBox = await navigation.boundingBox();
+    expect(horizontalNavigationBox).not.toBeNull();
+    expect(horizontalNavigationBox!.width).toBeGreaterThan(1200);
+    expect(horizontalNavigationBox!.height).toBeLessThan(70);
+
+    const socketCountBeforeLayoutChange = terminalSocketCount;
+    await orientationToggle.click();
+    await expect(shell).toHaveAttribute("data-desktop-tabs", "vertical");
+    await expect(navigation).toHaveAttribute("data-orientation", "vertical");
+    await expect(tabList).toHaveAttribute("aria-orientation", "vertical");
+    await expect(orientationToggle).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-orientation")
+    ))).toBe("vertical");
+
+    const verticalNavigationBox = await navigation.boundingBox();
+    const terminalViewBox = await page.locator(".terminal-view").boundingBox();
+    const toolbarBox = await page.locator(".console-bar-toolbar").boundingBox();
+    const resizeHandle = page.getByRole("separator", {
+      name: "Resize vertical session tabs",
+    });
+    expect(verticalNavigationBox).not.toBeNull();
+    expect(terminalViewBox).not.toBeNull();
+    expect(toolbarBox).not.toBeNull();
+    expect(verticalNavigationBox!.width).toBeGreaterThanOrEqual(232);
+    expect(verticalNavigationBox!.width).toBeLessThanOrEqual(321);
+    expect(verticalNavigationBox!.height).toBeGreaterThan(700);
+    expect(verticalNavigationBox!.y).toBeGreaterThanOrEqual(toolbarBox!.height - 1);
+    expect(terminalViewBox!.x).toBeGreaterThanOrEqual(
+      verticalNavigationBox!.x + verticalNavigationBox!.width - 1,
+    );
+    expect(await terminal.evaluate((element) => (
+      element === (window as Window & { __muxdeckVerticalTabsTerminal: Element })
+        .__muxdeckVerticalTabsTerminal
+    ))).toBe(true);
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
+
+    await expect(resizeHandle).toBeVisible();
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
+    const resizeHandleBox = await resizeHandle.boundingBox();
+    expect(resizeHandleBox).not.toBeNull();
+    expect(resizeHandleBox!.width).toBeGreaterThanOrEqual(44);
+
+    const resizeStartX = resizeHandleBox!.x + resizeHandleBox!.width / 2;
+    const resizeY = resizeHandleBox!.y + resizeHandleBox!.height / 2;
+    await page.mouse.move(resizeStartX, resizeY);
+    await page.mouse.down();
+    await page.mouse.move(resizeStartX - 400, resizeY, { steps: 4 });
+    await expect.poll(async () => (await navigation.boundingBox())?.width).toBe(72);
+    await expect(navigation).toHaveAttribute("data-compact", "true");
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "72");
+    expect(await page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
+    ))).toBeNull();
+
+    const firstCompactTab = page.locator(".workspace-tab").first();
+    await expect(firstCompactTab.getByRole("tab")).toBeVisible();
+    await expect(firstCompactTab.locator(".workspace-tab-title")).toBeHidden();
+    await expect(firstCompactTab.locator(".workspace-tab-compact-index"))
+      .toHaveAttribute("data-index", "1");
+    await expect(firstCompactTab.locator(".workspace-tab-compact-index")).toBeVisible();
+    await expect(firstCompactTab.locator(".workspace-tab-reorder")).toBeHidden();
+    await expect(firstCompactTab.locator(".workspace-tab-terminate")).toBeHidden();
+    await expect(firstCompactTab.locator(".workspace-tab-close")).toBeHidden();
+    await expect(page.locator(".workspace-dashboard-button > span")).toBeHidden();
+    await expect(page.locator(".workspace-dashboard-button svg")).toBeVisible();
+    await expect(page.locator(".workspace-new-session-button > span")).toBeHidden();
+    await expect(page.locator(".workspace-save-button .workspace-identity-copy")).toBeHidden();
+    await expect(page.locator(".workspace-tab-search-button > span")).toBeHidden();
+    await expect(page.locator(".workspace-recents-button > span")).toBeHidden();
+    expect(await terminal.evaluate((element) => (
+      element === (window as Window & { __muxdeckVerticalTabsTerminal: Element })
+        .__muxdeckVerticalTabsTerminal
+    ))).toBe(true);
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
+    await page.screenshot({ path: "artifacts/workspace-vertical-tabs-compact.png" });
+
+    await page.mouse.up();
+    await expect.poll(() => page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
+    ))).toBe("72");
+
+    await resizeHandle.press("Enter");
+    await expect(navigation).not.toHaveAttribute("data-compact");
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
+    await expect(page.locator(".workspace-dashboard-button > span")).toBeVisible();
+    await expect(firstCompactTab.locator(".workspace-tab-title")).toBeVisible();
+    await expect(firstCompactTab.locator(".workspace-tab-compact-index")).toBeHidden();
+    await expect.poll(() => page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
+    ))).toBe("288");
+
+    await page.mouse.move(resizeStartX, resizeY);
+    await page.mouse.down();
+    await page.mouse.move(resizeStartX + 72, resizeY, { steps: 4 });
+    await expect.poll(async () => (await navigation.boundingBox())?.width).toBe(360);
+    expect(await page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
+    ))).toBe("288");
+    await page.mouse.up();
+    await expect.poll(() => page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
+    ))).toBe("360");
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+    expect(await terminal.evaluate((element) => (
+      element === (window as Window & { __muxdeckVerticalTabsTerminal: Element })
+        .__muxdeckVerticalTabsTerminal
+    ))).toBe(true);
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
+
+    await resizeHandle.press("Shift+ArrowRight");
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "392");
+    await expect.poll(() => page.evaluate(() => (
+      window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
+    ))).toBe("392");
+    await expect.poll(async () => (await navigation.boundingBox())?.width).toBe(392);
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
+    await page.screenshot({ path: "artifacts/workspace-vertical-tabs.png" });
+
+    const activeTab = page.getByRole("tab", { name: new RegExp(`^${sessionName},`) });
+    const railTab = page.getByRole("tab", { name: new RegExp(`^${railSession},`) });
+    await activeTab.focus();
+    await activeTab.press("ArrowDown");
+    await expect(railTab).toBeFocused();
+    await railTab.press("ArrowRight");
+    await expect(railTab).toBeFocused();
+
+    await page.getByRole("button", { name: `Move ${railSession} tab up` }).click();
+    await expectRoute(page, `/mux/session/${sessionName}`, [railSession, sessionName]);
+    await expect(page.getByRole("button", {
+      name: `Move ${railSession} tab down`,
+    })).toBeFocused();
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await expect(shell).toHaveAttribute("data-desktop-tabs", "vertical");
+    await expect(navigation).toHaveAttribute("data-orientation", "vertical");
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "392");
+    await expect.poll(async () => (await navigation.boundingBox())?.width).toBe(392);
+    await expectRoute(page, `/mux/session/${sessionName}`, [railSession, sessionName]);
+
+    await page.getByRole("button", { name: "New session", exact: true }).click();
+    const newSessionScreen = page.locator(".new-session-screen");
+    await expect(newSessionScreen).toHaveAttribute("data-desktop-tabs", "vertical");
+    await expect(navigation).toHaveAttribute("data-orientation", "vertical");
+    const newSessionRailBox = await navigation.boundingBox();
+    const newSessionPanelBox = await page.locator(".new-session-panel").boundingBox();
+    expect(newSessionRailBox).not.toBeNull();
+    expect(newSessionPanelBox).not.toBeNull();
+    expect(newSessionRailBox!.width).toBe(392);
+    expect(newSessionPanelBox!.x).toBeGreaterThanOrEqual(
+      newSessionRailBox!.x + newSessionRailBox!.width - 1,
+    );
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expectRoute(page, `/mux/session/${sessionName}`, [railSession, sessionName]);
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+
+    await page.setViewportSize({ width: 390, height: 700 });
+    await expect(page.getByRole("navigation", { name: "Mobile console focus" })).toBeVisible();
+    await expect(page.locator("#muxdeck-session-tabs"))
+      .toHaveAttribute("data-orientation", "horizontal");
+    await expect(page.locator("#muxdeck-session-tabs .workspace-tab-list"))
+      .toHaveAttribute("aria-orientation", "horizontal");
+    await expect(resizeHandle).toBeHidden();
+    await expect(page.getByRole("button", {
+      name: "Enter distraction-free terminal",
+    })).toBeVisible();
+    await expect(page.locator(".console-bar-toolbar")).toBeHidden();
+  } finally {
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${railSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the disposable test tmux server.
+    }
+  }
+});
+
 test("desktop workspace shortcuts cycle, jump by number, and search tabs", async ({
   page,
   request,
@@ -881,7 +1147,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     const desktopLiveButton = desktopShortcutStrip.getByRole("button", {
       name: "Focus live terminal input",
     });
-    const desktopFocusButton = desktopShortcutStrip.getByRole("button", {
+    const desktopFocusButton = page.getByRole("group", { name: "Console bars" }).getByRole("button", {
       name: "Enter desktop terminal focus",
     });
     await expect(desktopLiveButton).toBeVisible();
@@ -1239,7 +1505,9 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     const focusBox = await mobileFocus.boundingBox();
     expect(switcherBox!.y).toBeGreaterThanOrEqual(focusBox!.y + focusBox!.height - 1);
 
-    await switcher.getByRole("button", { name: new RegExp(alternateSessionName) }).click();
+    await switcher.locator(".workspace-session-select")
+      .filter({ hasText: alternateSessionName })
+      .click();
     await expectRoute(
       page,
       `/mux/session/${alternateSessionName}`,
@@ -1614,7 +1882,8 @@ test("saved workspace survives reload and device handoff without touching tmux p
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
     await page.getByRole("button", { name: /Open session switcher/ }).click();
     await page.getByRole("dialog", { name: "Switch sessions" })
-      .getByRole("button", { name: new RegExp(sharedSession) })
+      .locator(".workspace-session-select")
+      .filter({ hasText: sharedSession })
       .click();
     await expectRoute(
       page,

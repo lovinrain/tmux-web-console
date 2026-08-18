@@ -106,4 +106,25 @@ describe("SessionTerminateDialog", () => {
       .toBeEnabled());
     expect(screen.getByRole("alertdialog")).toBeVisible();
   });
+
+  it("uses fallback focus when successful termination removes its trigger", () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    trigger.focus();
+    const onFallbackFocus = vi.fn();
+    const view = renderWithTheme(
+      <SessionTerminateDialog
+        sessionName="work"
+        sessionTitle={null}
+        onClose={vi.fn()}
+        onTerminate={vi.fn(async () => {})}
+        onFallbackFocus={onFallbackFocus}
+      />,
+    );
+
+    trigger.remove();
+    view.unmount();
+
+    expect(onFallbackFocus).toHaveBeenCalledOnce();
+  });
 });

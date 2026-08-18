@@ -97,7 +97,41 @@ describe("SavedWorkspaceList", () => {
     expect(onOpen).toHaveBeenCalledWith(newer);
   });
 
-  it("creates and immediately opens a workspace with current tabs in order", async () => {
+  it("starts fresh by default even when the browser workspace has open tabs", async () => {
+    vi.mocked(listWorkspaces).mockResolvedValue([]);
+    const created = workspace({
+      id: "fresh",
+      name: "Blank slate",
+      tabs: [],
+      activeSession: null,
+    });
+    vi.mocked(createWorkspace).mockResolvedValue(created);
+
+    renderWithTheme(
+      <SavedWorkspaceList
+        currentTabs={["web", "api"]}
+        activeSession="api"
+        onOpen={vi.fn()}
+      />,
+    );
+    await screen.findByText("No saved workspaces yet.");
+
+    fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
+    expect(screen.getByRole("radio", { name: /Start fresh/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Copy current tabs/ })).not.toBeChecked();
+    fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
+      target: { value: "Blank slate" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create & open" }));
+
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
+      name: "Blank slate",
+      tabs: [],
+      activeSession: null,
+    }));
+  });
+
+  it("can copy and immediately open a workspace with current tabs in order", async () => {
     vi.mocked(listWorkspaces).mockResolvedValue([]);
     const created = workspace({
       id: "created",
@@ -120,8 +154,10 @@ describe("SavedWorkspaceList", () => {
     fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
     const input = screen.getByRole("textbox", { name: "Workspace name" });
     expect(input).toHaveFocus();
-    expect(screen.getByText("Save the 2 currently open tabs in this order.")).toBeVisible();
+    expect(screen.getByText("Copy 2 open tabs in the current order.")).toBeVisible();
     fireEvent.change(input, { target: { value: "  Cross device  " } });
+    fireEvent.click(screen.getByRole("radio", { name: /Copy current tabs/ }));
+    expect(input).toHaveValue("  Cross device  ");
     fireEvent.click(screen.getByRole("button", { name: "Create & open" }));
 
     await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
@@ -145,16 +181,89 @@ describe("SavedWorkspaceList", () => {
 
     renderWithTheme(<SavedWorkspaceList onOpen={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
-    expect(screen.getByText(/Start empty, then add sessions/)).toBeVisible();
+    expect(screen.getByRole("radio", { name: /Start fresh/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Copy current tabs/ })).toBeDisabled();
+    expect(screen.getByText("No tabs are open to copy.")).toBeVisible();
     fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
       target: { value: "Fresh room" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create & open" }));
     expect(await screen.findByRole("heading", { name: "Fresh room" })).toBeVisible();
+    expect(createWorkspace).toHaveBeenCalledWith({
+      name: "Fresh room",
+      tabs: [],
+      activeSession: null,
+    });
 
     await act(async () => pendingList.resolve([]));
     expect(screen.getByRole("heading", { name: "Fresh room" })).toBeVisible();
     expect(screen.getByText("No sessions yet")).toBeVisible();
+  });
+
+  it("keeps fresh creation available when there are too many tabs to copy", async () => {
+    const currentTabs = Array.from(
+      { length: 33 },
+      (_, index) => `session-${String(index + 1).padStart(2, "0")}`,
+    );
+    vi.mocked(listWorkspaces).mockResolvedValue([]);
+    vi.mocked(createWorkspace).mockResolvedValue(workspace({
+      id: "over-limit-fresh",
+      name: "Fresh despite tabs",
+      tabs: [],
+      activeSession: null,
+    }));
+
+    renderWithTheme(
+      <SavedWorkspaceList
+        currentTabs={currentTabs}
+        activeSession="session-33"
+        onOpen={vi.fn()}
+      />,
+    );
+    await screen.findByText("No saved workspaces yet.");
+    fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
+
+    expect(screen.getByRole("radio", { name: /Copy current tabs/ })).toBeDisabled();
+    expect(screen.getByText(
+      "33 tabs are open; saved workspaces support up to 32.",
+    )).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
+      target: { value: "Fresh despite tabs" },
+    });
+    expect(screen.getByRole("button", { name: "Create & open" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Create & open" }));
+
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
+      name: "Fresh despite tabs",
+      tabs: [],
+      activeSession: null,
+    }));
+  });
+
+  it("keeps the entered name and copy choice after a creation failure", async () => {
+    vi.mocked(listWorkspaces).mockResolvedValue([]);
+    vi.mocked(createWorkspace).mockRejectedValue(new Error("server unavailable"));
+
+    renderWithTheme(
+      <SavedWorkspaceList
+        currentTabs={["web"]}
+        activeSession="web"
+        onOpen={vi.fn()}
+      />,
+    );
+    await screen.findByText("No saved workspaces yet.");
+    fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
+      target: { value: "Retry room" },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /Copy current tabs/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create & open" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("server unavailable");
+    expect(screen.getByRole("textbox", { name: "Workspace name" }))
+      .toHaveValue("Retry room");
+    expect(screen.getByRole("radio", { name: /Copy current tabs/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Create & open" })).toBeEnabled();
   });
 
   it("renames and confirmation-deletes without touching tmux sessions", async () => {

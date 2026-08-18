@@ -29,7 +29,7 @@ and output, and captures retained tmux scrollback only when requested.
 - Confirmed whole-session termination targeted by stable tmux identity
 - Separate new-window links while card clicks keep same-window navigation
 - A routed, confirm-before-create flow for starting a fresh default-shell session
-- Named server-backed workspaces, ordered quick tabs, desktop shortcuts, and title search
+- Named server-backed workspaces, ordered horizontal/vertical tabs, desktop shortcuts, and title search
 - Always-available controls to hide session tabs, staged input, and shortcut keys
 - Explicit warning when a full-screen alternate-screen app has no tmux history
 - Responsive phone, tablet, and desktop layouts
@@ -180,8 +180,8 @@ not crowd the main shortcut strip.
 send a control sequence; subsequent keyboard input goes directly to the
 application attached through tmux instead of into the staged draft.
 
-On desktop, the adjacent `Focus` shortcut expands the live terminal to the full
-browser viewport and leaves only a floating `Exit` control. It does not invoke
+On desktop, `Focus` in the top `VIEW` toolbar expands the live terminal to the
+full browser viewport and leaves only a floating `Exit` control. It does not invoke
 the browser Fullscreen API, remount xterm, reconnect the WebSocket, change the
 URL, or discard the staged draft. Entering and leaving refits the existing PTY
 attachment so tmux receives the new dimensions. The choice is session-local and
@@ -336,16 +336,21 @@ Back action returns to the same filters, view, grouping, and sort priority. A
 new window starts with only the selected session in its quick-tab workspace.
 
 The landing page lists named saved workspaces in rough last-active order. `New
-workspace` saves the currently open tabs in their existing order, or creates an
-empty workspace when no tabs are open. A saved workspace can be resumed,
-renamed, or deleted from that list. Deleting one removes only the saved tab
-group; it never stops, renames, or sends input to any tmux session.
+workspace` starts with an empty tab set by default; choose `Copy current tabs`
+when the new workspace should instead inherit this browser page's open tabs and
+their order. Creating either kind writes a separate server record before opening
+it, so the workspace you came from is unchanged. A saved workspace can be
+resumed, renamed, or deleted from that list. Deleting one removes only the saved
+tab group; none of these workspace actions stops, renames, or sends input to a
+tmux session.
 
-An unsaved multi-tab console also exposes `Save workspace` directly in its tab
-bar. On phone layouts, the same action is available in the `Overview` footer.
-After naming the workspace, the current console stays open and its URL gains the
-stable workspace identifier. The action then becomes a `Saved` indicator because
-later tab-order and active-session changes synchronize automatically.
+An unsaved multi-tab console identifies itself as `Temporary workspace` and
+exposes `Save workspace` directly in its tab bar. On phone layouts, the identity
+and save action are repeated in `Overview`. After naming the workspace, the
+current console stays open, its saved name replaces the temporary label, and its
+URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
+or `Sync issue` state reports whether later tab-order and active-session changes
+are synchronizing automatically.
 
 Each saved workspace keeps its name, ordered open tabs, active session, and
 server-generated creation, update, and last-active times in
@@ -378,19 +383,26 @@ never by a fake `tab=` value. A successfully created tmux session remains alive
 until it is ended through tmux itself, independently of whether its quick tab is
 saved in a named workspace.
 
-The console's bottom controls expose `End` as a direct whole-session action.
-Unlike closing a quick tab, confirming this action runs tmux session termination,
-which closes every pane and disconnects every client attached to that session.
+Whole-session termination is available from the console's bottom `End` control,
+the trash action on each landing-page session in both Cards and List views, every
+live session row in workspace Overview, and the trash icon on each live workspace
+quick tab. Each entry point opens the same explicit confirmation before changing
+tmux. The `X` on a quick tab is intentionally different: it only removes that tab
+from the current browser workspace, while the tmux session and its programs keep
+running. Confirming `End` or a trash action terminates the tmux session itself,
+closing every pane and disconnecting every client attached to it.
+
 The confirmation names both the display alias and native tmux name when they
 differ, starts focus on `Cancel`, and remains open with an error if tmux rejects
 the request. Muxdeck binds the confirmation to the native name, tmux session ID,
 creation time, and tmux server generation, then rechecks that identity atomically
 with the kill. A stale page therefore cannot terminate a replacement after name
-or ID reuse. Retrying after a lost success response is safe and idempotent.
-After success, the current quick tab closes and routing selects its neighbor or
-returns to the landing page. The current saved workspace synchronizes that tab
-removal; memoranda, display metadata, recent history, and references from other
-saved workspaces are retained rather than silently deleted.
+or ID reuse. Retrying after a lost success response is safe and idempotent. After
+success, Muxdeck removes the session's quick tab if it is open; when that tab was
+active, routing selects its neighbor or returns to the landing page. The current
+saved workspace synchronizes that tab removal; memoranda, display metadata,
+recent history, and references from other saved workspaces are retained rather
+than silently deleted.
 
 On phones, the top purpose switcher gives the console three mutually exclusive
 layouts. `Overview` opens the routed, status-labelled workspace session list;
@@ -418,18 +430,40 @@ controls. The console also follows `visualViewport` height and offset on iOS so
 the composer and send actions remain inside the visible area while the software
 keyboard moves.
 
-Below the console header, a horizontally scrollable quick-tab strip selects
-another session by replacing the active `/session/:name` URL without adding a
-browser-history entry, so browser Back still returns to the filtered dashboard.
+Below the console header, the quick-tab strip selects another session by replacing
+the active `/session/:name` URL without adding a browser-history entry, so browser
+Back still returns to the filtered dashboard. `Side tabs` in the desktop `VIEW`
+toolbar moves that strip into a vertically scrolling left rail; pressing it again
+returns the tabs to the top. This orientation is a browser-local display preference
+that survives reloads and session/New-session navigation, but it is not written to
+the workspace record or URL. Compact mobile layouts keep their horizontal/Overview
+navigation regardless of the desktop preference.
+
+The side rail's right-edge grip resizes it from a 72px numbered icon rail to a
+480px wide title view. As the rail narrows, text and secondary tab controls collapse
+in stages instead of forcing a wide minimum; the same reorder, close, and terminate
+actions remain available from Recents. Left/Right resize by 8px, Shift uses 32px,
+Home/End jump to the limits, and Enter or double-click restores the 288px default.
+Width is browser-local and follows console and New-session navigation.
+
 The URL includes one ordered `tab=` query parameter per open session; the active
 session remains in the path. Only the selected terminal is attached: inactive
 quick tabs are lightweight navigation records and cannot resize tmux or consume
 background PTY connections.
 
-Each desktop quick tab has left/right move controls. Reordering keeps the active
-session selected and immediately rewrites the ordered `tab=` parameters in the
-current history entry. In the compact mobile layout, open rows in Overview expose
-the same action as up/down controls, including while the session list is filtered.
+The fixed `+` button at the end of the tab strip opens `New session` in that
+workspace without a dashboard round trip. Opening or canceling the form does not
+change saved tabs: Cancel or the synthetic tab's `X` returns to the console it
+replaced. A successful creation appends the real session tab and synchronizes it
+when the workspace is saved. If a saved workspace is still opening, creation
+waits until its authoritative tab list has loaded rather than racing that state.
+
+Each desktop quick tab has directional move controls: left/right in the top strip
+and up/down in the side rail. Reordering keeps the active session selected and
+immediately rewrites the ordered `tab=` parameters in the current history entry.
+The tablist uses the matching arrow-key axis for keyboard focus. In the compact
+mobile layout, open rows in Overview expose the same reorder action as up/down
+controls, including while the session list is filtered.
 
 On desktop, `Ctrl+Shift+,` and `Ctrl+Shift+.` select the previous or next open
 tab and wrap at either end. `Ctrl+Shift+1` through `Ctrl+Shift+9` select that

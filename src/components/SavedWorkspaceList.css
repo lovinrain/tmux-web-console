@@ -93,6 +93,10 @@
   gap: 12px;
 }
 
+.saved-workspace-create-copy > div {
+  min-width: 0;
+}
+
 .saved-workspace-form-index {
   color: var(--acid);
   font-family: "JetBrains Mono Variable", monospace;
@@ -114,6 +118,73 @@
   color: #828d7f;
   font-size: 11px;
   line-height: 1.45;
+}
+
+.saved-workspace-create-modes {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  margin: 15px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.saved-workspace-create-modes legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: #798575;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.saved-workspace-create-modes > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 9px 10px;
+  background: #111510;
+  border: 1px solid #333d30;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.saved-workspace-create-modes > label.selected {
+  background: rgba(187, 244, 81, 0.055);
+  border-color: #718c50;
+  box-shadow: inset 3px 0 0 var(--acid);
+}
+
+.saved-workspace-create-modes > label[data-unavailable="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.saved-workspace-create-modes input {
+  margin: 3px 0 0;
+  accent-color: var(--acid);
+}
+
+.saved-workspace-create-modes span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.saved-workspace-create-modes strong {
+  color: #dfe6dc;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.saved-workspace-create-modes small {
+  color: #7e897b;
+  font-size: 9px;
+  font-weight: 450;
+  line-height: 1.4;
 }
 
 .saved-workspace-create-fields {
@@ -622,6 +693,25 @@ html[data-theme="light"] .saved-workspaces-load-error {
 
 html[data-theme="light"] .saved-workspace-create-form {
   border-left-color: #557c1d;
+}
+
+html[data-theme="light"] .saved-workspace-create-modes > label {
+  background: #fffdf8;
+  border-color: var(--light-line);
+}
+
+html[data-theme="light"] .saved-workspace-create-modes > label.selected {
+  background: var(--light-green-wash);
+  border-color: #7f9d5b;
+  box-shadow: inset 3px 0 0 #557c1d;
+}
+
+html[data-theme="light"] .saved-workspace-create-modes strong {
+  color: var(--light-text);
+}
+
+html[data-theme="light"] .saved-workspace-create-modes small {
+  color: var(--light-muted);
 }
 
 html[data-theme="light"] .saved-workspace-card.active {

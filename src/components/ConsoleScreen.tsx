@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   createQueuedMessage,
   deleteQueuedMessage,
@@ -15,6 +22,7 @@ import {
   GridIcon,
   HistoryIcon,
   KeyboardIcon,
+  ListIcon,
   TerminalIcon,
   TrashIcon,
 } from "../icons";
@@ -34,7 +42,12 @@ import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
-import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
+import {
+  DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
+  MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
+  clampDesktopTabRailWidth,
+  type WorkspaceTabOrientation,
+} from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
 
 interface ConsoleScreenProps {
@@ -48,6 +61,10 @@ interface ConsoleScreenProps {
   onCloseWorkspaceOverview?: () => void;
   barVisibility?: ConsoleBarVisibility;
   onBarVisibilityChange?: (bar: ConsoleBar, visible: boolean) => void;
+  desktopTabOrientation?: WorkspaceTabOrientation;
+  onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
+  desktopTabRailWidth?: number;
+  onDesktopTabRailWidthChange?: (width: number) => void;
   historyPanelWidth?: number;
   onHistoryPanelWidthChange?: (width: number) => void;
   onSessionsChange?: (sessions: Session[]) => void;
@@ -112,6 +129,9 @@ interface ConsoleBarToolbarProps {
   visibility: ConsoleBarVisibility;
   availability?: Partial<Record<ConsoleBar, boolean>>;
   onChange: (bar: ConsoleBar, visible: boolean) => void;
+  onEnterDesktopFocus?: () => void;
+  desktopTabOrientation?: WorkspaceTabOrientation;
+  onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
 }
 
 const CONSOLE_BARS: Array<{
@@ -144,6 +164,9 @@ function ConsoleBarToolbar({
   visibility,
   availability,
   onChange,
+  onEnterDesktopFocus,
+  desktopTabOrientation = "horizontal",
+  onDesktopTabOrientationChange,
 }: ConsoleBarToolbarProps) {
   return (
     <div className="console-bar-toolbar" role="group" aria-label="Console bars">
@@ -171,6 +194,38 @@ function ConsoleBarToolbar({
           );
         })}
       </div>
+      {onDesktopTabOrientationChange && (availability?.sessionTabs ?? true) && (
+        <button
+          type="button"
+          className="console-bar-toggle desktop-tab-orientation-toggle"
+          aria-label="Vertical session tabs"
+          aria-controls="muxdeck-session-tabs"
+          aria-pressed={desktopTabOrientation === "vertical"}
+          title={desktopTabOrientation === "vertical"
+            ? "Move session tabs back to the top"
+            : "Move session tabs to the left side"}
+          onClick={() => onDesktopTabOrientationChange(
+            desktopTabOrientation === "vertical" ? "horizontal" : "vertical",
+          )}
+        >
+          <ListIcon />
+          <span>Side tabs</span>
+        </button>
+      )}
+      {onEnterDesktopFocus && (
+        <button
+          type="button"
+          className="console-bar-toggle desktop-terminal-focus-key"
+          onClick={onEnterDesktopFocus}
+          aria-label="Enter desktop terminal focus"
+          aria-controls="muxdeck-active-console"
+          aria-pressed="false"
+          title="Fill the browser viewport with this live terminal"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <ExpandIcon /> <span>Focus</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -186,6 +241,9 @@ export function ConsoleScreen({
   onCloseWorkspaceOverview,
   barVisibility,
   onBarVisibilityChange,
+  desktopTabOrientation = "horizontal",
+  onDesktopTabOrientationChange,
+  desktopTabRailWidth = DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
   historyPanelWidth,
   onHistoryPanelWidthChange,
   onSessionsChange,
@@ -234,6 +292,10 @@ export function ConsoleScreen({
     sessionName: string;
     message: string;
   } | null>(null);
+  const clampedDesktopTabRailWidth = clampDesktopTabRailWidth(desktopTabRailWidth);
+  const consoleShellStyle = {
+    "--desktop-tab-rail-width": `${clampedDesktopTabRailWidth}px`,
+  } as CSSProperties;
 
   const session = loadedSession?.name === sessionName ? loadedSession : null;
   const visibleRenameWarning = renameWarning?.sessionName === sessionName
@@ -575,6 +637,10 @@ export function ConsoleScreen({
       <main className={sessionNavigation
         ? "workspace-missing-session has-session-navigation"
         : "workspace-missing-session"}
+        style={consoleShellStyle}
+        data-desktop-tabs={desktopTabOrientation}
+        data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
+        data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
       >
         <ConsoleBarToolbar
           visibility={visibleBars}
@@ -584,6 +650,10 @@ export function ConsoleScreen({
             shortcuts: false,
           }}
           onChange={setBarVisible}
+          desktopTabOrientation={desktopTabOrientation}
+          onDesktopTabOrientationChange={sessionNavigation
+            ? onDesktopTabOrientationChange
+            : undefined}
         />
         {sessionNavigation && (
           <div className="console-session-navigation">{sessionNavigation}</div>
@@ -609,16 +679,25 @@ export function ConsoleScreen({
     <main
       ref={consoleShellRef}
       className={sessionNavigation ? "console-shell has-session-navigation" : "console-shell"}
+      style={consoleShellStyle}
       data-composer-visible={visibleBars.stagedInput || visibleMobileMode === "input"}
       data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
       data-mobile-focus={activeMobileFocus}
       data-mobile-distraction-free={mobileDistractionFree ? "true" : "false"}
       data-desktop-focus={desktopTerminalFocus ? "true" : "false"}
+      data-desktop-tabs={desktopTabOrientation}
+      data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
+      data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
     >
       <ConsoleBarToolbar
         visibility={visibleBars}
         availability={{ sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
+        desktopTabOrientation={desktopTabOrientation}
+        onDesktopTabOrientationChange={sessionNavigation
+          ? onDesktopTabOrientationChange
+          : undefined}
+        onEnterDesktopFocus={enterDesktopTerminalFocus}
       />
       <nav className="mobile-console-focus" aria-label="Mobile console focus">
         <button
@@ -739,6 +818,8 @@ export function ConsoleScreen({
             activeMobileFocus,
             mobileDistractionFree ? "focus" : "standard",
             desktopTerminalFocus ? "desktop-focus" : "desktop-standard",
+            `desktop-tabs-${desktopTabOrientation}`,
+            `desktop-tab-rail-${clampedDesktopTabRailWidth}`,
           ].join(":")}
           theme={theme}
           onStateChange={stateChange}
@@ -870,7 +951,6 @@ export function ConsoleScreen({
         onAddToMemo={session ? addDraftToMemo : undefined}
         onConsumeMemo={session ? consumeStagedMemo : undefined}
         onReturnToLive={returnToLiveTerminal}
-        onEnterDesktopFocus={enterDesktopTerminalFocus}
         mobileDistractionFree={mobileInputDistractionFree}
         onToggleMobileDistractionFree={toggleMobileInputDistractionFree}
         onFocus={() => terminalRef.current?.focus()}

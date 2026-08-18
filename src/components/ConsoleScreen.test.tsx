@@ -261,15 +261,25 @@ describe("ConsoleScreen session identity", () => {
     const shell = screen.getByRole("main");
     const terminal = screen.getByTestId("live-terminal");
     const draft = screen.getByRole("textbox", { name: "Staged input" });
-    const enterFocus = screen.getByRole("button", {
+    const consoleBars = screen.getByRole("group", { name: "Console bars" });
+    const terminalShortcuts = screen.getByRole("group", {
+      name: "Terminal input shortcuts",
+    });
+    const enterFocus = within(consoleBars).getByRole("button", {
       name: "Enter desktop terminal focus",
     });
+    expect(within(terminalShortcuts).queryByRole("button", {
+      name: "Enter desktop terminal focus",
+    })).not.toBeInTheDocument();
+    expect(enterFocus).toHaveTextContent("Focus");
+    expect(enterFocus).toHaveAttribute("aria-controls", "muxdeck-active-console");
+    expect(enterFocus).not.toBePressed();
     fireEvent.input(draft, { target: { value: "keep this desktop draft" } });
 
     expect(shell).toHaveAttribute("data-desktop-focus", "false");
     expect(terminal).toHaveAttribute(
       "data-layout-refresh-token",
-      "terminal:standard:desktop-standard",
+      "terminal:standard:desktop-standard:desktop-tabs-horizontal:desktop-tab-rail-288",
     );
     expect(fireEvent.mouseDown(enterFocus)).toBe(false);
     fireEvent.click(enterFocus);
@@ -279,7 +289,7 @@ describe("ConsoleScreen session identity", () => {
     expect(draft).toHaveValue("keep this desktop draft");
     expect(terminal).toHaveAttribute(
       "data-layout-refresh-token",
-      "terminal:standard:desktop-focus",
+      "terminal:standard:desktop-focus:desktop-tabs-horizontal:desktop-tab-rail-288",
     );
     const exitFocus = screen.getByRole("button", {
       name: "Exit desktop terminal focus",
@@ -295,7 +305,7 @@ describe("ConsoleScreen session identity", () => {
     expect(draft).toHaveValue("keep this desktop draft");
     expect(terminal).toHaveAttribute(
       "data-layout-refresh-token",
-      "terminal:standard:desktop-standard",
+      "terminal:standard:desktop-standard:desktop-tabs-horizontal:desktop-tab-rail-288",
     );
     await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(2));
 
@@ -339,6 +349,60 @@ describe("ConsoleScreen session identity", () => {
       </ThemeProvider>,
     );
     await waitFor(() => expect(shell).toHaveAttribute("data-desktop-focus", "false"));
+  });
+
+  it("switches the desktop tab rail without remounting the terminal", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onDesktopTabOrientationChange = vi.fn();
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+        desktopTabOrientation="horizontal"
+        onDesktopTabOrientationChange={onDesktopTabOrientationChange}
+        desktopTabRailWidth={344}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const terminal = screen.getByTestId("live-terminal");
+    const orientationToggle = within(screen.getByRole("group", {
+      name: "Console bars",
+    })).getByRole("button", { name: "Vertical session tabs" });
+
+    expect(shell).toHaveAttribute("data-desktop-tabs", "horizontal");
+    expect(shell).toHaveAttribute("data-desktop-tab-rail-width", "344");
+    expect(shell.style.getPropertyValue("--desktop-tab-rail-width")).toBe("344px");
+    expect(shell).toHaveAttribute("data-session-tabs-visible", "true");
+    expect(orientationToggle).not.toBePressed();
+    expect(orientationToggle).toHaveAttribute("aria-controls", "muxdeck-session-tabs");
+    fireEvent.click(orientationToggle);
+    expect(onDesktopTabOrientationChange).toHaveBeenCalledWith("vertical");
+
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="test"
+          onBack={vi.fn()}
+          sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+          desktopTabOrientation="vertical"
+          onDesktopTabOrientationChange={onDesktopTabOrientationChange}
+          desktopTabRailWidth={999}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(shell).toHaveAttribute("data-desktop-tabs", "vertical");
+    expect(shell).toHaveAttribute("data-desktop-tab-rail-width", "480");
+    expect(shell.style.getPropertyValue("--desktop-tab-rail-width")).toBe("480px");
+    expect(orientationToggle).toBePressed();
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(terminal).toHaveAttribute(
+      "data-layout-refresh-token",
+      "terminal:standard:desktop-standard:desktop-tabs-vertical:desktop-tab-rail-480",
+    );
   });
 
   it("uses raw and tmux history controls and exits distraction-free mode for input", async () => {
@@ -545,7 +609,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabs).not.toBePressed();
     expect(tabs).toHaveAttribute("title", "Show session tabs");
     expect(within(screen.getByRole("group", { name: "Console bars" }))
-      .getAllByRole("button")).toHaveLength(3);
+      .getAllByRole("button")).toHaveLength(4);
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
@@ -586,6 +650,9 @@ describe("ConsoleScreen session identity", () => {
     expect(await screen.findByText("This tmux session no longer exists.")).toBeVisible();
     const toolbar = screen.getByRole("group", { name: "Console bars" });
     expect(within(toolbar).getByRole("button", { name: "Session tabs" })).toBePressed();
+    expect(within(toolbar).queryByRole("button", {
+      name: "Enter desktop terminal focus",
+    })).not.toBeInTheDocument();
     const inputToggle = within(toolbar).getByRole("button", { name: "Staged input" });
     const shortcutsToggle = within(toolbar).getByRole("button", {
       name: "Terminal shortcut buttons",

@@ -233,7 +233,9 @@ describe("session classification", () => {
     expect(screen.getByText("03 / SESSIONS")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
-    expect(screen.getByText("Save the 2 currently open tabs in this order.")).toBeVisible();
+    expect(screen.getByRole("radio", { name: /Start fresh/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Copy current tabs/ })).not.toBeChecked();
+    expect(screen.getByText("Copy 2 open tabs in the current order.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Resume workspace Release room" }));
@@ -359,6 +361,93 @@ describe("session classification", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
     fireEvent.click(screen.getByRole("button", { name: "Insert" }));
     await waitFor(() => expect(onOpen).toHaveBeenCalledTimes(2));
+  });
+
+  it("confirms the exact session identity from card and List terminate controls", async () => {
+    const target = session({
+      id: "$19",
+      created: 19,
+      serverStarted: 20,
+      serverPid: 21,
+      customTitle: "Release worker",
+    });
+    const hiddenIgnored = session({ name: "ignored", id: "$ignored", ignored: true });
+    vi.mocked(listSessions).mockResolvedValue([target, hiddenIgnored]);
+    const onOpen = vi.fn();
+    const onSessionTerminated = vi.fn(async () => {});
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={onOpen}
+        onSessionTerminated={onSessionTerminated}
+      />,
+    );
+
+    const cardTerminate = await screen.findByRole("button", {
+      name: "Terminate Release worker tmux session",
+    });
+    expect(cardTerminate).toHaveAttribute("aria-haspopup", "dialog");
+    cardTerminate.focus();
+    fireEvent.click(cardTerminate);
+    expect(screen.getByRole("alertdialog", { name: "Terminate tmux session?" }))
+      .toHaveTextContent("Release worker");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(cardTerminate).toHaveFocus();
+    expect(onOpen).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    const rowTerminate = screen.getByRole("button", {
+      name: "Terminate Release worker tmux session",
+    });
+    expect(rowTerminate.closest(".session-row")).not.toBeNull();
+    fireEvent.click(rowTerminate);
+    fireEvent.click(screen.getByRole("button", { name: "Terminate session" }));
+
+    await waitFor(() => expect(onSessionTerminated).toHaveBeenCalledWith(
+      "test",
+      "$19",
+      19,
+      20,
+      21,
+    ));
+    await waitFor(() => expect(screen.queryByRole("button", {
+      name: "Open Release worker",
+    })).not.toBeInTheDocument());
+    expect(onOpen).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole("textbox", {
+      name: "Find a session",
+    })).toHaveFocus());
+  });
+
+  it("ignores stale updates for a terminated identity but accepts a same-name replacement", async () => {
+    const target = session({ id: "$old", created: 19, customTitle: "Old worker" });
+    const replacement = session({ id: "$new", created: 20, customTitle: "New worker" });
+    let publishSessions = (_sessions: Session[]) => {};
+    vi.mocked(listSessions).mockResolvedValue([target]);
+    vi.mocked(subscribeToSessions).mockImplementation(({ onSessions }) => {
+      publishSessions = onSessions;
+      return vi.fn();
+    });
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        onSessionTerminated={vi.fn(async () => {})}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Terminate Old worker tmux session",
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Terminate session" }));
+    await waitFor(() => expect(screen.queryByRole("button", {
+      name: "Open Old worker",
+    })).not.toBeInTheDocument());
+
+    act(() => publishSessions([target]));
+    expect(screen.queryByRole("button", { name: "Open Old worker" }))
+      .not.toBeInTheDocument();
+
+    act(() => publishSessions([replacement]));
+    expect(screen.getByRole("button", { name: "Open New worker" })).toBeVisible();
   });
 
   it("keeps the snippet picker open when browser draft storage is unavailable", async () => {

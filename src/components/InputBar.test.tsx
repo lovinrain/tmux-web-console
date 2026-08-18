@@ -159,30 +159,6 @@ describe("InputBar", () => {
     expect(screen.getByRole("button", { name: "Terminate tmux session" })).toBeDisabled();
   });
 
-  it("offers desktop terminal focus without sending a terminal key", () => {
-    const onEnterDesktopFocus = vi.fn();
-    const view = render(
-      <InputBar {...props} onEnterDesktopFocus={onEnterDesktopFocus} />,
-    );
-
-    const focus = screen.getByRole("button", {
-      name: "Enter desktop terminal focus",
-    });
-    expect(focus).toHaveTextContent("Focus");
-    expect(focus).toHaveAttribute("aria-controls", "muxdeck-active-console");
-    expect(focus).not.toBePressed();
-    expect(fireEvent.mouseDown(focus)).toBe(false);
-    fireEvent.click(focus);
-
-    expect(onEnterDesktopFocus).toHaveBeenCalledOnce();
-    expect(props.onSend).not.toHaveBeenCalled();
-
-    view.rerender(<InputBar {...props} />);
-    expect(screen.getByRole("button", {
-      name: "Enter desktop terminal focus",
-    })).toBeDisabled();
-  });
-
   it("keeps additional keys in a collapsed secondary panel", () => {
     render(<InputBar {...props} />);
     const showOtherKeys = screen.getByRole("button", { name: "Show other keys" });

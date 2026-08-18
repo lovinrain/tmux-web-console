@@ -34,7 +34,10 @@ export interface SavedWorkspaceListProps {
   activeWorkspaceId?: string | null;
   onOpen: (workspace: SavedWorkspace) => void;
   onDeleted?: (workspaceId: string) => void;
+  onUpdated?: (workspace: SavedWorkspace) => void;
 }
+
+type WorkspaceCreationMode = "fresh" | "copy";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -74,6 +77,7 @@ export function SavedWorkspaceList({
   activeWorkspaceId = null,
   onOpen,
   onDeleted,
+  onUpdated,
 }: SavedWorkspaceListProps) {
   const [workspaces, setWorkspaces] = useState<SavedWorkspace[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,6 +86,7 @@ export function SavedWorkspaceList({
   const [reloadKey, setReloadKey] = useState(0);
   const [creating, setCreating] = useState(false);
   const [createDraft, setCreateDraft] = useState("");
+  const [createMode, setCreateMode] = useState<WorkspaceCreationMode>("fresh");
   const [createSaving, setCreateSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -98,6 +103,7 @@ export function SavedWorkspaceList({
     ? activeSession
     : null;
   const tooManyTabs = tabsToSave.length > MAX_WORKSPACE_TABS;
+  const copyUnavailable = tabsToSave.length === 0 || tooManyTabs;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -146,19 +152,20 @@ export function SavedWorkspaceList({
   const submitCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nameError = workspaceNameError(createDraft);
-    if (nameError || tooManyTabs || createSaving) return;
+    if (nameError || (createMode === "copy" && copyUnavailable) || createSaving) return;
 
     setCreateSaving(true);
     setActionError(null);
     try {
       const created = await createWorkspace({
         name: createDraft.trim(),
-        tabs: tabsToSave,
-        activeSession: validActiveSession,
+        tabs: createMode === "copy" ? tabsToSave : [],
+        activeSession: createMode === "copy" ? validActiveSession : null,
       });
       mutationVersionRef.current += 1;
       setWorkspaces((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       setCreateDraft("");
+      setCreateMode("fresh");
       setCreating(false);
       setCreateSaving(false);
       onOpen(created);
@@ -187,6 +194,7 @@ export function SavedWorkspaceList({
       )));
       setEditingId(null);
       setRenameDraft("");
+      onUpdated?.(updated);
     } catch (error) {
       setActionError(errorMessage(error, "Unable to rename the workspace"));
     } finally {
@@ -262,10 +270,55 @@ export function SavedWorkspaceList({
             <div>
               <label htmlFor="saved-workspace-name">Workspace name</label>
               <p>
-                {tabsToSave.length === 0
-                  ? "Start empty, then add sessions as you move through the dashboard."
-                  : `Save the ${tabsToSave.length} currently open ${tabsToSave.length === 1 ? "tab" : "tabs"} in this order.`}
+                Start empty or carry over the tabs open in this browser. Running tmux
+                sessions stay exactly where they are.
               </p>
+              <fieldset className="saved-workspace-create-modes">
+                <legend>Starting tabs</legend>
+                <label className={createMode === "fresh" ? "selected" : undefined}>
+                  <input
+                    type="radio"
+                    name="saved-workspace-starting-tabs"
+                    value="fresh"
+                    checked={createMode === "fresh"}
+                    disabled={createSaving}
+                    onChange={() => {
+                      setCreateMode("fresh");
+                      setActionError(null);
+                    }}
+                  />
+                  <span>
+                    <strong>Start fresh</strong>
+                    <small>Begin with an empty workspace and add sessions after opening it.</small>
+                  </span>
+                </label>
+                <label
+                  className={createMode === "copy" ? "selected" : undefined}
+                  data-unavailable={copyUnavailable || undefined}
+                >
+                  <input
+                    type="radio"
+                    name="saved-workspace-starting-tabs"
+                    value="copy"
+                    checked={createMode === "copy"}
+                    disabled={createSaving || copyUnavailable}
+                    onChange={() => {
+                      setCreateMode("copy");
+                      setActionError(null);
+                    }}
+                  />
+                  <span>
+                    <strong>Copy current tabs</strong>
+                    <small>
+                      {tabsToSave.length === 0
+                        ? "No tabs are open to copy."
+                        : tooManyTabs
+                          ? `${tabsToSave.length} tabs are open; saved workspaces support up to ${MAX_WORKSPACE_TABS}.`
+                          : `Copy ${tabsToSave.length} open ${tabsToSave.length === 1 ? "tab" : "tabs"} in the current order.`}
+                    </small>
+                  </span>
+                </label>
+              </fieldset>
             </div>
           </div>
           <div className="saved-workspace-create-fields">
@@ -277,7 +330,7 @@ export function SavedWorkspaceList({
               autoComplete="off"
               disabled={createSaving}
               placeholder="Release room"
-              aria-invalid={Boolean(createError) || tooManyTabs || undefined}
+              aria-invalid={Boolean(createError) || undefined}
               aria-describedby="saved-workspace-create-hint"
               onChange={(event) => {
                 setCreateDraft(event.target.value);
@@ -287,19 +340,19 @@ export function SavedWorkspaceList({
             <button
               type="submit"
               className="saved-workspace-submit"
-              disabled={Boolean(createValidationError) || tooManyTabs || createSaving}
+              disabled={Boolean(createValidationError)
+                || (createMode === "copy" && copyUnavailable)
+                || createSaving}
             >
               {createSaving ? "Creating..." : "Create & open"}
             </button>
           </div>
           <p
             id="saved-workspace-create-hint"
-            className={createError || tooManyTabs ? "saved-workspace-field-error" : "saved-workspace-field-hint"}
-            role={createError || tooManyTabs ? "alert" : undefined}
+            className={createError ? "saved-workspace-field-error" : "saved-workspace-field-hint"}
+            role={createError ? "alert" : undefined}
           >
-            {tooManyTabs
-              ? `A saved workspace can contain up to ${MAX_WORKSPACE_TABS} tabs.`
-              : createError || `${createDraft.trim().length} / ${MAX_WORKSPACE_NAME_LENGTH} characters`}
+            {createError || `${createDraft.trim().length} / ${MAX_WORKSPACE_NAME_LENGTH} characters`}
           </p>
         </form>
       )}

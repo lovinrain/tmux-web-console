@@ -29,6 +29,7 @@ import {
   SnippetIcon,
   StarIcon,
   TerminalIcon,
+  TrashIcon,
 } from "../icons";
 import {
   DEFAULT_SESSION_SORT,
@@ -56,6 +57,7 @@ import { stageSessionDraft } from "./InputBar";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { SavedWorkspaceList } from "./SavedWorkspaceList";
 import { SessionSortControls } from "./SessionSortControls";
+import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { ThemeToggle } from "./ThemeToggle";
@@ -75,6 +77,14 @@ interface SessionDashboardProps {
   activeWorkspaceId?: string | null;
   onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
   onSavedWorkspaceDeleted?: (workspaceId: string) => void;
+  onSavedWorkspaceUpdated?: (workspace: SavedWorkspace) => void;
+  onSessionTerminated?: (
+    sessionName: string,
+    sessionId: string,
+    sessionCreated: number,
+    serverStarted: number,
+    serverPid: number,
+  ) => Promise<void>;
 }
 
 type UpdateMode = "connecting" | "live" | "polling";
@@ -134,6 +144,13 @@ export function classifyPane(pane?: Pane): { label: string; tone: string } {
 
 export function activePane(session: Session): Pane | undefined {
   return session.panes.find((pane) => pane.id === session.activePaneId) || session.panes[0];
+}
+
+function hasSameSessionIdentity(left: Session, right: Session): boolean {
+  return left.id === right.id
+    && left.created === right.created
+    && left.serverStarted === right.serverStarted
+    && left.serverPid === right.serverPid;
 }
 
 function relativeTime(timestamp: number): string {
@@ -218,6 +235,7 @@ interface SessionItemProps {
   onEdit: (name: string, trigger: HTMLButtonElement) => void;
   onMessages: (name: string, trigger: HTMLButtonElement) => void;
   onSnippets: (name: string, trigger: HTMLButtonElement) => void;
+  onTerminate?: (session: Session) => void;
   onToggleStar: (session: Session) => void;
   onToggleIgnored: (session: Session) => void;
 }
@@ -232,6 +250,7 @@ function SessionItem({
   onEdit,
   onMessages,
   onSnippets,
+  onTerminate,
   onToggleStar,
   onToggleIgnored,
 }: SessionItemProps) {
@@ -250,7 +269,7 @@ function SessionItem({
 
   return (
     <article
-      className={viewMode === "list" ? "session-card session-row" : "session-card"}
+      className={`session-card${viewMode === "list" ? " session-row" : ""}${onTerminate ? " has-terminate" : ""}`}
       style={cardStyle}
     >
       <button
@@ -299,6 +318,18 @@ function SessionItem({
         <ExternalLinkIcon />
         <span>New window</span>
       </a>
+      {onTerminate && (
+        <button
+          type="button"
+          className="session-terminate-toggle"
+          aria-label={`Terminate ${displayName} tmux session`}
+          aria-haspopup="dialog"
+          title="Terminate tmux session"
+          onClick={() => onTerminate(session)}
+        >
+          <TrashIcon />
+        </button>
+      )}
       <div className="session-card-actions">
         <button
           type="button"
@@ -382,6 +413,8 @@ export function SessionDashboard({
   activeWorkspaceId = null,
   onOpenSavedWorkspace,
   onSavedWorkspaceDeleted,
+  onSavedWorkspaceUpdated,
+  onSessionTerminated,
 }: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [route, setRoute] = useState<SessionDashboardRouteState>(initialDashboardRoute);
@@ -394,7 +427,9 @@ export function SessionDashboard({
   const [editingSessionName, setEditingSessionName] = useState<string | null>(null);
   const [messageSessionName, setMessageSessionName] = useState<string | null>(null);
   const [snippetSessionName, setSnippetSessionName] = useState<string | null>(null);
+  const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [attentionBusyNames, setAttentionBusyNames] = useState<Set<string>>(() => new Set());
+  const terminatedSessionsRef = useRef<Session[]>([]);
   const editTriggerRef = useRef<HTMLButtonElement | null>(null);
   const messageTriggerRef = useRef<HTMLButtonElement | null>(null);
   const snippetTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -409,6 +444,13 @@ export function SessionDashboard({
   const resolvedNewSessionWindowHref = isolatedWorkspaceHref(
     newSessionWindowHref ?? `${BASE_PATH}/sessions/new${window.location.search}`,
   );
+
+  const withoutTerminatedSessions = useCallback((next: Session[]) => {
+    if (terminatedSessionsRef.current.length === 0) return next;
+    return next.filter((session) => !terminatedSessionsRef.current.some(
+      (terminated) => hasSameSessionIdentity(session, terminated),
+    ));
+  }, []);
 
   useEffect(() => {
     if (!loading) onSessionsChange?.(sessions);
@@ -461,7 +503,7 @@ export function SessionDashboard({
           || requestId !== pollRequestId
           || streamVersionAtStart !== streamVersion
         ) return;
-        setSessions(next);
+        setSessions(withoutTerminatedSessions(next));
         setError(null);
       } catch (requestError) {
         if (
@@ -496,7 +538,7 @@ export function SessionDashboard({
           if (stopped) return;
           streamVersion += 1;
           stopPolling();
-          setSessions(next);
+          setSessions(withoutTerminatedSessions(next));
           setError(null);
           setLoading(false);
           setUpdateMode("live");
@@ -526,7 +568,7 @@ export function SessionDashboard({
       stopPolling();
       unsubscribe();
     };
-  }, [refreshKey]);
+  }, [refreshKey, withoutTerminatedSessions]);
 
   const visibleSessions = useMemo(
     () => filterSessions(sessions, route),
@@ -608,6 +650,33 @@ export function SessionDashboard({
   const closeSnippets = useCallback(() => {
     setSnippetSessionName(null);
     window.requestAnimationFrame(() => snippetTriggerRef.current?.focus());
+  }, []);
+
+  const terminateSelectedSession = useCallback(async () => {
+    if (!terminateTarget || !onSessionTerminated) {
+      throw new Error("This tmux session is no longer available.");
+    }
+    await onSessionTerminated(
+      terminateTarget.name,
+      terminateTarget.id,
+      terminateTarget.created,
+      terminateTarget.serverStarted,
+      terminateTarget.serverPid,
+    );
+    terminatedSessionsRef.current.push(terminateTarget);
+    setSessions((current) => current.filter((session) => (
+      !hasSameSessionIdentity(session, terminateTarget)
+    )));
+  }, [onSessionTerminated, terminateTarget]);
+
+  const focusAfterTermination = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const nextSession = Array.from(document.querySelectorAll<HTMLButtonElement>(
+        ".session-card-main",
+      )).find((button) => !button.closest("details:not([open])"));
+      const search = document.querySelector<HTMLInputElement>(".search-field input");
+      (nextSession ?? search)?.focus();
+    });
   }, []);
 
   const chooseViewMode = (next: SessionViewMode) => updateRoute({ ...route, view: next });
@@ -756,6 +825,7 @@ export function SessionDashboard({
         activeWorkspaceId={activeWorkspaceId}
         onOpen={(workspace) => onOpenSavedWorkspace?.(workspace)}
         onDeleted={onSavedWorkspaceDeleted}
+        onUpdated={onSavedWorkspaceUpdated}
       />
 
       <section className="session-controls" aria-label="Session filters">
@@ -868,6 +938,7 @@ export function SessionDashboard({
                     }}
                     onMessages={openMessages}
                     onSnippets={openSnippets}
+                    onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                     onToggleStar={(item) => void toggleStar(item)}
                     onToggleIgnored={(item) => void toggleIgnored(item)}
                   />
@@ -908,6 +979,7 @@ export function SessionDashboard({
                           }}
                           onMessages={openMessages}
                           onSnippets={openSnippets}
+                          onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                           onToggleStar={(item) => void toggleStar(item)}
                           onToggleIgnored={(item) => void toggleIgnored(item)}
                         />
@@ -933,6 +1005,7 @@ export function SessionDashboard({
                     }}
                     onMessages={openMessages}
                     onSnippets={openSnippets}
+                    onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                     onToggleStar={(item) => void toggleStar(item)}
                     onToggleIgnored={(item) => void toggleIgnored(item)}
                   />
@@ -968,6 +1041,7 @@ export function SessionDashboard({
                   }}
                   onMessages={openMessages}
                   onSnippets={openSnippets}
+                  onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                   onToggleStar={(item) => void toggleStar(item)}
                   onToggleIgnored={(item) => void toggleIgnored(item)}
                 />
@@ -1028,6 +1102,15 @@ export function SessionDashboard({
             }
             (onOpenInput ?? onOpen)(snippetSessionName);
           }}
+        />
+      )}
+      {terminateTarget && onSessionTerminated && (
+        <SessionTerminateDialog
+          sessionName={terminateTarget.name}
+          sessionTitle={terminateTarget.customTitle}
+          onClose={() => setTerminateTarget(null)}
+          onTerminate={terminateSelectedSession}
+          onFallbackFocus={focusAfterTermination}
         />
       )}
     </main>

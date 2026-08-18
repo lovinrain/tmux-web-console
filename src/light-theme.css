@@ -550,6 +550,7 @@ html[data-theme="light"] .session-card:hover .session-name-row svg {
 }
 
 html[data-theme="light"] .session-open-new,
+html[data-theme="light"] .session-terminate-toggle,
 html[data-theme="light"] .session-title-edit,
 html[data-theme="light"] .session-ignore-toggle,
 html[data-theme="light"] .session-star-toggle,
@@ -558,6 +559,18 @@ html[data-theme="light"] .session-snippets-toggle {
   color: #596458;
   background: #f3efe7;
   border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .session-terminate-toggle {
+  color: #a55b53;
+  background: #f7ebe7;
+}
+
+html[data-theme="light"] .session-terminate-toggle:hover,
+html[data-theme="light"] .session-terminate-toggle:focus-visible {
+  color: #9f3129;
+  background: #f8ddd8;
+  border-color: #c26c62;
 }
 
 html[data-theme="light"] .session-open-new:hover {
@@ -786,7 +799,36 @@ html[data-theme="light"] .workspace-navigation {
   box-shadow: 0 6px 18px rgba(65, 55, 38, 0.08);
 }
 
+html[data-theme="light"] [data-desktop-tabs="vertical"] .workspace-navigation-vertical {
+  box-shadow: 7px 0 18px rgba(65, 55, 38, 0.08);
+}
+
+html[data-theme="light"] [data-desktop-tabs="vertical"]
+  .workspace-navigation-vertical .workspace-tab-rail-resize-grip {
+  background: #d8d4ca;
+  border-color: #918b80;
+  box-shadow: 0 5px 18px rgba(65, 55, 38, 0.16);
+}
+
+html[data-theme="light"] [data-desktop-tabs="vertical"]
+  .workspace-navigation-vertical
+  .workspace-tab-rail-resize-handle:hover .workspace-tab-rail-resize-grip {
+  background: #b9b5aa;
+  border-color: #6f786a;
+}
+
+html[data-theme="light"] [data-desktop-tabs="vertical"]
+  .workspace-navigation-vertical
+  .workspace-tab-rail-resize-handle:focus-visible .workspace-tab-rail-resize-grip,
+html[data-theme="light"].workspace-tab-rail-resizing [data-desktop-tabs="vertical"]
+  .workspace-navigation-vertical .workspace-tab-rail-resize-grip {
+  background: #557c1d;
+  border-color: #395d0a;
+  box-shadow: 0 0 0 3px rgba(85, 124, 29, 0.2), 0 5px 18px rgba(65, 55, 38, 0.2);
+}
+
 html[data-theme="light"] .workspace-dashboard-button,
+html[data-theme="light"] .workspace-new-session-button,
 html[data-theme="light"] .workspace-save-button,
 html[data-theme="light"] .workspace-saved-indicator,
 html[data-theme="light"] .workspace-tab-search-button,
@@ -798,6 +840,8 @@ html[data-theme="light"] .workspace-recents-button {
 
 html[data-theme="light"] .workspace-dashboard-button:hover,
 html[data-theme="light"] .workspace-dashboard-button:focus-visible,
+html[data-theme="light"] .workspace-new-session-button:hover:not(:disabled),
+html[data-theme="light"] .workspace-new-session-button:focus-visible,
 html[data-theme="light"] .workspace-save-button:hover,
 html[data-theme="light"] .workspace-save-button:focus-visible,
 html[data-theme="light"] .workspace-tab-search-button:hover,
@@ -810,6 +854,18 @@ html[data-theme="light"] .workspace-recents-button.active {
 }
 
 html[data-theme="light"] .workspace-recents-button.active {
+  color: #426d0b;
+}
+
+html[data-theme="light"] .workspace-new-session-button {
+  color: #176b61;
+  background:
+    linear-gradient(135deg, rgba(23, 107, 97, 0.08), transparent 70%),
+    #e5e5dc;
+}
+
+html[data-theme="light"] .workspace-new-session-button.active,
+html[data-theme="light"] .workspace-new-session-button:disabled {
   color: #426d0b;
 }
 
@@ -832,6 +888,35 @@ html[data-theme="light"] .workspace-saved-indicator.error {
   background:
     linear-gradient(135deg, rgba(162, 54, 46, 0.1), transparent 68%),
     #f3e2df;
+}
+
+html[data-theme="light"] .workspace-identity-name,
+html[data-theme="light"] .workspace-recents-identity-name {
+  color: #30382e;
+}
+
+html[data-theme="light"] .workspace-recents-identity-state {
+  color: #596356;
+  background: rgba(89, 99, 86, 0.06);
+  border-color: rgba(89, 99, 86, 0.22);
+}
+
+html[data-theme="light"] .workspace-recents-identity.saved .workspace-recents-identity-state {
+  color: #426d0b;
+  background: #edf3e4;
+  border-color: #a6b78c;
+}
+
+html[data-theme="light"] .workspace-recents-identity.loading .workspace-recents-identity-state {
+  color: #8b5005;
+  background: #f7ead5;
+  border-color: #c99a52;
+}
+
+html[data-theme="light"] .workspace-recents-identity.error .workspace-recents-identity-state {
+  color: #a2362e;
+  background: #f8e2df;
+  border-color: #d9a39e;
 }
 
 html[data-theme="light"] .workspace-recents-saved-status {
@@ -892,6 +977,11 @@ html[data-theme="light"] .workspace-tab.active::after {
   box-shadow: 0 -2px 8px rgba(85, 124, 29, 0.2);
 }
 
+html[data-theme="light"] [data-desktop-tabs="vertical"]
+  .workspace-navigation-vertical .workspace-tab.active::after {
+  box-shadow: 2px 0 8px rgba(85, 124, 29, 0.2);
+}
+
 html[data-theme="light"] .workspace-new-session-tab.active {
   border-color: #4b978c;
 }
@@ -935,10 +1025,25 @@ html[data-theme="light"] .workspace-tab-close {
   color: #7c8478;
 }
 
-html[data-theme="light"] .workspace-tab-close:hover,
-html[data-theme="light"] .workspace-tab-close:focus-visible {
+html[data-theme="light"] .workspace-tab-terminate {
+  color: #a55b53;
+  border-color: #c8c1b5;
+}
+
+html[data-theme="light"] .workspace-tab-terminate + .workspace-tab-close {
+  border-color: rgba(200, 193, 181, 0.85);
+}
+
+html[data-theme="light"] .workspace-tab-terminate:hover,
+html[data-theme="light"] .workspace-tab-terminate:focus-visible {
   color: #9f3129;
   background: #f8e4e0;
+}
+
+html[data-theme="light"] .workspace-tab-close:hover,
+html[data-theme="light"] .workspace-tab-close:focus-visible {
+  color: #394339;
+  background: #e7e4dc;
 }
 
 html[data-theme="light"] .workspace-tab-search-backdrop {
@@ -1133,6 +1238,12 @@ html[data-theme="light"] .workspace-session-close {
   border-color: #ccc5b9;
 }
 
+html[data-theme="light"] .workspace-session-terminate {
+  color: #a55b53;
+  background: #f7ebe7;
+  border-color: #ccc5b9;
+}
+
 html[data-theme="light"] .workspace-session-reorder {
   border-color: #ccc5b9;
 }
@@ -1158,8 +1269,18 @@ html[data-theme="light"] .workspace-session-move:disabled {
 
 html[data-theme="light"] .workspace-session-close:hover,
 html[data-theme="light"] .workspace-session-close:focus-visible {
+  color: #394339;
+  background: #e7e4dc;
+}
+
+html[data-theme="light"] .workspace-session-terminate:hover,
+html[data-theme="light"] .workspace-session-terminate:focus-visible {
   color: #9f3129;
-  background: #f8e4e0;
+  background: #f8ddd8;
+}
+
+html[data-theme="light"] .workspace-session-row.stacked-actions .workspace-session-actions {
+  border-color: #ccc5b9;
 }
 
 html[data-theme="light"] .workspace-recents-empty,
@@ -1271,6 +1392,12 @@ html[data-theme="light"] .new-session-error {
   color: #9f3129;
   background: #f8e4e0;
   border-color: #dfafa8;
+}
+
+html[data-theme="light"] .new-session-waiting {
+  color: #7c4a08;
+  background: #f8ead4;
+  border-color: #d8b77f;
 }
 
 html[data-theme="light"] .icon-button {
