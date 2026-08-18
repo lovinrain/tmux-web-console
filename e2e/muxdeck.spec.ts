@@ -85,6 +85,15 @@ function workspaceTmuxContentSnapshot(name: string): string {
   return `${workspaceTmuxIdentity(name)}\n${content}`;
 }
 
+function workspacePaneHeight(name: string): number {
+  const height = execFileSync(
+    "tmux",
+    [...tmux, "list-panes", "-t", `=${name}`, "-F", "#{pane_height}"],
+    { encoding: "utf8" },
+  ).trim().split("\n", 1)[0];
+  return Number(height);
+}
+
 if (!titlesFile || !messagesFile || !snippetsFile || !workspacesFile) {
   throw new Error("Playwright state paths were not configured");
 }
@@ -629,6 +638,174 @@ test("desktop scrollback width is adjustable for the current browser tab", async
   await expect(panel).toHaveCSS("width", "680px");
 });
 
+test("desktop terminal focus fills the viewport without replacing the live session", async ({
+  page,
+}) => {
+  test.setTimeout(45_000);
+  let terminalSocketCount = 0;
+  page.on("websocket", (socket) => {
+    if (socket.url().includes("/ws/terminal")) terminalSocketCount += 1;
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live", {
+    timeout: 10_000,
+  });
+  await expect.poll(() => terminalSocketCount).toBe(1);
+
+  await page.evaluate(() => {
+    const terminalFramesSentDuringKeydown: string[] = [];
+    let handlingKeydown = false;
+    const nativeSend = WebSocket.prototype.send;
+    window.addEventListener("keydown", () => {
+      handlingKeydown = true;
+      window.queueMicrotask(() => {
+        handlingKeydown = false;
+      });
+    }, { capture: true });
+    WebSocket.prototype.send = function send(data) {
+      let isResize = false;
+      if (typeof data === "string") {
+        try {
+          isResize = JSON.parse(data).type === "resize";
+        } catch {
+          // A non-JSON string is terminal input.
+        }
+      }
+      if (handlingKeydown && this.url.includes("/ws/terminal") && !isResize) {
+        terminalFramesSentDuringKeydown.push(this.url);
+      }
+      return nativeSend.call(this, data);
+    };
+    Object.defineProperty(window, "__muxdeckDesktopFocusTerminalFrames", {
+      value: terminalFramesSentDuringKeydown,
+    });
+  });
+  const terminalKeydownFrameCount = () => page.evaluate(() => (
+    window as Window & { __muxdeckDesktopFocusTerminalFrames: string[] }
+  ).__muxdeckDesktopFocusTerminalFrames.length);
+
+  const shell = page.locator(".console-shell");
+  const terminalStage = page.locator(".terminal-stage");
+  const terminalElement = page.locator(".terminal-host .xterm");
+  const stagedInput = page.getByRole("textbox", { name: "Staged input" });
+  const enterFocus = page.getByRole("button", {
+    name: "Enter desktop terminal focus",
+  });
+  await expect(enterFocus).toBeVisible();
+  await stagedInput.fill("desktop focus keeps this draft");
+
+  const standardStageHeight = (await terminalStage.boundingBox())!.height;
+  const standardPaneHeight = workspacePaneHeight(sessionName);
+  const sessionIdentity = workspaceTmuxIdentity(sessionName);
+  const socketCountBeforeFocus = terminalSocketCount;
+  const urlBeforeFocus = page.url();
+  const historyLengthBeforeFocus = await page.evaluate(() => window.history.length);
+  await terminalElement.evaluate((element) => {
+    Object.defineProperty(window, "__muxdeckDesktopFocusTerminal", { value: element });
+  });
+
+  await enterFocus.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  const exitFocus = page.getByRole("button", {
+    name: "Exit desktop terminal focus",
+  });
+  await expect(exitFocus).toBeVisible();
+  await expect(exitFocus).toBeInViewport();
+  await expect(exitFocus).toHaveAttribute("aria-pressed", "true");
+  await expect(exitFocus).toHaveAttribute("aria-keyshortcuts", "Control+Shift+F");
+  const exitBox = await exitFocus.boundingBox();
+  expect(exitBox).not.toBeNull();
+  expect(exitBox!.width).toBeGreaterThanOrEqual(64);
+  expect(exitBox!.height).toBeGreaterThanOrEqual(36);
+  await expect(page.locator("button:visible")).toHaveCount(1);
+  await expect(page.locator(".console-bar-toolbar")).toBeHidden();
+  await expect(page.locator(".console-header")).toBeHidden();
+  await expect(page.locator(".console-session-navigation")).toBeHidden();
+  await expect(page.locator(".terminal-coordinate")).toBeHidden();
+  await expect(page.locator(".input-dock")).toBeHidden();
+  await expect(page.locator(".terminal-view-controls")).toBeHidden();
+
+  expect((await terminalStage.boundingBox())!.height).toBeGreaterThan(standardStageHeight);
+  await expect.poll(() => workspacePaneHeight(sessionName)).toBeGreaterThan(standardPaneHeight);
+  const focusedPaneHeight = workspacePaneHeight(sessionName);
+  const focusedGeometry = await page.evaluate(() => {
+    const rect = (selector: string) => document.querySelector<HTMLElement>(selector)!
+      .getBoundingClientRect();
+    const shellRect = rect(".console-shell");
+    const viewRect = rect(".terminal-view");
+    const stageRect = rect(".terminal-stage");
+    const hostRect = rect(".terminal-host");
+    return {
+      shell: [shellRect.left, shellRect.top, shellRect.right, shellRect.bottom],
+      view: [viewRect.left, viewRect.top, viewRect.right, viewRect.bottom],
+      stage: [stageRect.left, stageRect.top, stageRect.right, stageRect.bottom],
+      host: [hostRect.left, hostRect.top, hostRect.right, hostRect.bottom],
+      stagePadding: getComputedStyle(document.querySelector(".terminal-stage")!).padding,
+      hostPadding: getComputedStyle(document.querySelector(".terminal-host")!).padding,
+      viewport: [0, 0, window.innerWidth, window.innerHeight],
+      overflowFree: document.documentElement.scrollWidth <= window.innerWidth
+        && document.documentElement.scrollHeight <= window.innerHeight,
+    };
+  });
+  expect(focusedGeometry).toEqual({
+    shell: [0, 0, 1440, 900],
+    view: [0, 0, 1440, 900],
+    stage: [0, 0, 1440, 900],
+    host: [0, 0, 1440, 900],
+    stagePadding: "0px",
+    hostPadding: "0px",
+    viewport: [0, 0, 1440, 900],
+    overflowFree: true,
+  });
+  expect(await terminalElement.evaluate((element) => (
+    element === (window as Window & { __muxdeckDesktopFocusTerminal: Element })
+      .__muxdeckDesktopFocusTerminal
+  ))).toBe(true);
+  expect(terminalSocketCount).toBe(socketCountBeforeFocus);
+  expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
+  expect(page.url()).toBe(urlBeforeFocus);
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLengthBeforeFocus);
+  await page.screenshot({ path: "artifacts/terminal-desktop-focus.png" });
+
+  await exitFocus.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  await expect(enterFocus).toBeVisible();
+  await expect(page.locator(".console-header")).toBeVisible();
+  await expect(stagedInput).toHaveValue("desktop focus keeps this draft");
+  await expect.poll(() => workspacePaneHeight(sessionName)).toBeLessThan(focusedPaneHeight);
+  expect(await terminalElement.evaluate((element) => (
+    element === (window as Window & { __muxdeckDesktopFocusTerminal: Element })
+      .__muxdeckDesktopFocusTerminal
+  ))).toBe(true);
+  expect(terminalSocketCount).toBe(socketCountBeforeFocus);
+  expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
+  expect(page.url()).toBe(urlBeforeFocus);
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLengthBeforeFocus);
+
+  await enterFocus.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  const keydownFrameCountBeforeExit = await terminalKeydownFrameCount();
+  await page.keyboard.press("Control+Shift+F");
+  await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  expect(await terminalKeydownFrameCount()).toBe(keydownFrameCountBeforeExit);
+
+  await enterFocus.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+  await page.setViewportSize({ width: 390, height: 700 });
+  await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+  await expect(exitFocus).toBeHidden();
+  await expect(page.getByRole("navigation", { name: "Mobile console focus" })).toBeVisible();
+  expect(terminalSocketCount).toBe(socketCountBeforeFocus);
+  expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
+  expect(page.url()).toBe(urlBeforeFocus);
+});
+
 test("desktop workspace shortcuts cycle, jump by number, and search tabs", async ({
   page,
   request,
@@ -704,7 +881,11 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     const desktopLiveButton = desktopShortcutStrip.getByRole("button", {
       name: "Focus live terminal input",
     });
+    const desktopFocusButton = desktopShortcutStrip.getByRole("button", {
+      name: "Enter desktop terminal focus",
+    });
     await expect(desktopLiveButton).toBeVisible();
+    await expect(desktopFocusButton).toBeVisible();
     await expect(desktopLiveButton).toHaveText("Live");
     await page.getByRole("textbox", { name: "Staged input" }).focus();
     await desktopLiveButton.click();
@@ -830,6 +1011,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     await page.setViewportSize({ width: 390, height: 700 });
     await expect(tabSearchButton).toBeHidden();
     await expect(desktopLiveButton).toBeHidden();
+    await expect(desktopFocusButton).toBeHidden();
     await page.keyboard.press("Control+Shift+.");
     await expectRoute(
       page,

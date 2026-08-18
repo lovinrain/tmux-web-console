@@ -46,10 +46,12 @@ vi.mock("./LiveTerminal", async () => {
     LiveTerminal: forwardRef(function MockLiveTerminal(
       {
         layoutSuspended,
+        layoutRefreshToken,
         theme,
         onStateChange,
       }: {
         layoutSuspended?: boolean;
+        layoutRefreshToken?: string;
         theme: Theme;
         onStateChange: (state: "live") => void;
       },
@@ -61,6 +63,7 @@ vi.mock("./LiveTerminal", async () => {
         <div
           data-testid="live-terminal"
           data-layout-suspended={layoutSuspended ? "true" : "false"}
+          data-layout-refresh-token={layoutRefreshToken}
           data-terminal-theme={theme}
         />
       );
@@ -239,6 +242,103 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledWith("exit");
     expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
     expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
+  });
+
+  it("fills the desktop viewport without remounting the terminal or losing its draft", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session(),
+      session(null, "next-session"),
+    ]);
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const terminal = screen.getByTestId("live-terminal");
+    const draft = screen.getByRole("textbox", { name: "Staged input" });
+    const enterFocus = screen.getByRole("button", {
+      name: "Enter desktop terminal focus",
+    });
+    fireEvent.input(draft, { target: { value: "keep this desktop draft" } });
+
+    expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    expect(terminal).toHaveAttribute(
+      "data-layout-refresh-token",
+      "terminal:standard:desktop-standard",
+    );
+    expect(fireEvent.mouseDown(enterFocus)).toBe(false);
+    fireEvent.click(enterFocus);
+
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(draft).toHaveValue("keep this desktop draft");
+    expect(terminal).toHaveAttribute(
+      "data-layout-refresh-token",
+      "terminal:standard:desktop-focus",
+    );
+    const exitFocus = screen.getByRole("button", {
+      name: "Exit desktop terminal focus",
+    });
+    expect(exitFocus).toHaveTextContent("Exit");
+    expect(exitFocus).toBePressed();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    fireEvent.click(exitFocus);
+
+    expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(draft).toHaveValue("keep this desktop draft");
+    expect(terminal).toHaveAttribute(
+      "data-layout-refresh-token",
+      "terminal:standard:desktop-standard",
+    );
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(enterFocus);
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(screen.getByRole("button", {
+      name: "Exit desktop terminal focus",
+    })).toHaveAttribute("aria-keyshortcuts", "Control+Shift+F");
+    expect(fireEvent.keyDown(window, {
+      code: "KeyF",
+      key: "f",
+      ctrlKey: true,
+    })).toBe(true);
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(fireEvent.keyDown(window, {
+      altKey: true,
+      code: "KeyF",
+      key: "F",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(true);
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(fireEvent.keyDown(window, {
+      code: "KeyF",
+      key: "F",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(4));
+
+    fireEvent.click(enterFocus);
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="next-session"
+          onBack={vi.fn()}
+          sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+        />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(shell).toHaveAttribute("data-desktop-focus", "false"));
   });
 
   it("uses raw and tmux history controls and exits distraction-free mode for input", async () => {

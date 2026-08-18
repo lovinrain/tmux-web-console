@@ -165,6 +165,16 @@ not crowd the main shortcut strip.
 send a control sequence; subsequent keyboard input goes directly to the
 application attached through tmux instead of into the staged draft.
 
+On desktop, the adjacent `Focus` shortcut expands the live terminal to the full
+browser viewport and leaves only a floating `Exit` control. It does not invoke
+the browser Fullscreen API, remount xterm, reconnect the WebSocket, change the
+URL, or discard the staged draft. Entering and leaving refits the existing PTY
+attachment so tmux receives the new dimensions. The choice is session-local and
+resets when the active session changes, the workspace overview opens, the layout
+switches to mobile, the console is left, or the page reloads. Escape remains raw
+terminal input rather than an exit shortcut; `Ctrl+Shift+F` exits Focus even
+while xterm owns keyboard focus.
+
 The sticky `Alias` shortcut in the terminal's bottom bar opens the same optional
 display-title editor used by the dashboard. It changes only the label shown by
 Muxdeck; the native tmux session name and attach target do not change.

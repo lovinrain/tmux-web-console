@@ -102,6 +102,11 @@ const STATE_LABEL: Record<ConnectionState, string> = {
 
 const RAW_PAGE_UP_SEQUENCE = "\x1b[5~";
 const RAW_PAGE_DOWN_SEQUENCE = "\x1b[6~";
+const MOBILE_CONSOLE_LAYOUT_QUERY = [
+  "(max-width: 640px)",
+  "(max-width: 1024px) and (pointer: coarse)",
+  "(max-width: 1024px) and (max-height: 500px)",
+].join(", ");
 
 interface ConsoleBarToolbarProps {
   visibility: ConsoleBarVisibility;
@@ -221,6 +226,7 @@ export function ConsoleScreen({
   const [mobileDistractionFreeMode, setMobileDistractionFreeMode] = useState<
     MobileConsoleMode | null
   >(null);
+  const [desktopTerminalFocus, setDesktopTerminalFocus] = useState(false);
   const [localHistoryPanelWidth, setLocalHistoryPanelWidth] = useState(
     DEFAULT_HISTORY_PANEL_WIDTH,
   );
@@ -370,6 +376,7 @@ export function ConsoleScreen({
   useEffect(() => {
     setPaneId(null);
     setMobileDistractionFreeMode(null);
+    setDesktopTerminalFocus(false);
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
@@ -381,6 +388,7 @@ export function ConsoleScreen({
   useEffect(() => {
     if (!workspaceOverlayOpen) return;
     setMobileDistractionFreeMode(null);
+    setDesktopTerminalFocus(false);
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
@@ -395,6 +403,17 @@ export function ConsoleScreen({
       && activeMobileFocus !== mobileDistractionFreeMode
     ) setMobileDistractionFreeMode(null);
   }, [activeMobileFocus, mobileDistractionFreeMode]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mobileLayout = window.matchMedia(MOBILE_CONSOLE_LAYOUT_QUERY);
+    const leaveDesktopFocus = () => {
+      if (mobileLayout.matches) setDesktopTerminalFocus(false);
+    };
+    leaveDesktopFocus();
+    mobileLayout.addEventListener("change", leaveDesktopFocus);
+    return () => mobileLayout.removeEventListener("change", leaveDesktopFocus);
+  }, []);
 
   useEffect(() => {
     const title = session?.name === sessionName ? session.customTitle || sessionName : sessionName;
@@ -438,6 +457,45 @@ export function ConsoleScreen({
     setMobileDistractionFreeMode(next ? "input" : null);
     window.requestAnimationFrame(() => inputBarRef.current?.focus());
   }, [mobileDistractionFreeMode]);
+  const enterDesktopTerminalFocus = useCallback(() => {
+    inputBarRef.current?.blur();
+    setMobileDistractionFreeMode(null);
+    setHistoryOpen(false);
+    setTitleEditorOpen(false);
+    setRenameEditorOpen(false);
+    setTerminateTarget(null);
+    setMessagesOpen(false);
+    setSnippetsOpen(false);
+    setDesktopTerminalFocus(true);
+    window.requestAnimationFrame(() => terminalRef.current?.focus());
+  }, []);
+  const exitDesktopTerminalFocus = useCallback(() => {
+    setDesktopTerminalFocus(false);
+    window.requestAnimationFrame(() => terminalRef.current?.focus());
+  }, []);
+  useEffect(() => {
+    if (!desktopTerminalFocus) return;
+
+    const handleDesktopFocusShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented
+        || event.isComposing
+        || event.keyCode === 229
+        || event.code !== "KeyF"
+        || !event.ctrlKey
+        || !event.shiftKey
+        || event.altKey
+        || event.metaKey
+      ) return;
+      event.preventDefault();
+      event.stopPropagation();
+      exitDesktopTerminalFocus();
+    };
+
+    // Capture the chord before xterm turns it into terminal input.
+    window.addEventListener("keydown", handleDesktopFocusShortcut, true);
+    return () => window.removeEventListener("keydown", handleDesktopFocusShortcut, true);
+  }, [desktopTerminalFocus, exitDesktopTerminalFocus]);
   const saveSessionTitle = useCallback(async (title: string) => {
     const customTitle = await updateSessionTitle(sessionName, title);
     if (session) onSessionUpdate?.({ ...session, customTitle });
@@ -555,6 +613,7 @@ export function ConsoleScreen({
       data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
       data-mobile-focus={activeMobileFocus}
       data-mobile-distraction-free={mobileDistractionFree ? "true" : "false"}
+      data-desktop-focus={desktopTerminalFocus ? "true" : "false"}
     >
       <ConsoleBarToolbar
         visibility={visibleBars}
@@ -676,7 +735,11 @@ export function ConsoleScreen({
           session={sessionName}
           ignoreSize={ignoreSize}
           layoutSuspended={mobileInputDistractionFree}
-          layoutRefreshToken={`${activeMobileFocus}:${mobileDistractionFree ? "focus" : "standard"}`}
+          layoutRefreshToken={[
+            activeMobileFocus,
+            mobileDistractionFree ? "focus" : "standard",
+            desktopTerminalFocus ? "desktop-focus" : "desktop-standard",
+          ].join(":")}
           theme={theme}
           onStateChange={stateChange}
           onPaneChange={paneChange}
@@ -775,6 +838,22 @@ export function ConsoleScreen({
             <span>{mobileTerminalDistractionFree ? "Exit" : "Focus"}</span>
           </button>
         </nav>
+        {desktopTerminalFocus && (
+          <button
+            type="button"
+            className="desktop-terminal-focus-exit"
+            aria-label="Exit desktop terminal focus"
+            aria-controls="muxdeck-active-console"
+            aria-pressed="true"
+            aria-keyshortcuts="Control+Shift+F"
+            title="Return to the full console (Ctrl+Shift+F)"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={exitDesktopTerminalFocus}
+          >
+            <ContractIcon />
+            <span>Exit</span>
+          </button>
+        )}
       </div>
       <InputBar
         key={sessionName}
@@ -791,6 +870,7 @@ export function ConsoleScreen({
         onAddToMemo={session ? addDraftToMemo : undefined}
         onConsumeMemo={session ? consumeStagedMemo : undefined}
         onReturnToLive={returnToLiveTerminal}
+        onEnterDesktopFocus={enterDesktopTerminalFocus}
         mobileDistractionFree={mobileInputDistractionFree}
         onToggleMobileDistractionFree={toggleMobileInputDistractionFree}
         onFocus={() => terminalRef.current?.focus()}

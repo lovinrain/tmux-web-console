@@ -3606,6 +3606,11 @@ a:focus-visible {
   display: none;
 }
 
+.desktop-terminal-focus-key,
+.desktop-terminal-focus-exit {
+  display: none;
+}
+
 .terminal-stage {
   position: relative;
   min-width: 0;
@@ -3783,12 +3788,93 @@ a:focus-visible {
 
 .keyboard-key svg,
 .live-key svg,
+.desktop-terminal-focus-key svg,
 .session-title-key svg,
 .session-rename-key svg,
 .terminate-session-key svg,
 .memo-key svg,
 .snippet-key svg {
   width: 17px;
+}
+
+@media (min-width: 1025px),
+  (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  .desktop-terminal-focus-key {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--cyan);
+    background: rgba(104, 223, 208, 0.055);
+    border-color: rgba(104, 223, 208, 0.32);
+  }
+
+  .console-shell[data-desktop-focus="true"] {
+    grid-template-rows: minmax(0, 1fr);
+    padding: 0;
+  }
+
+  .console-shell[data-desktop-focus="true"] > .console-bar-toolbar,
+  .console-shell[data-desktop-focus="true"] > .mobile-console-focus,
+  .console-shell[data-desktop-focus="true"] > .console-header,
+  .console-shell[data-desktop-focus="true"] > .console-session-navigation,
+  .console-shell[data-desktop-focus="true"] > .console-rename-warning,
+  .console-shell[data-desktop-focus="true"] > .terminal-coordinate,
+  .console-shell[data-desktop-focus="true"] > .input-dock {
+    display: none !important;
+  }
+
+  .console-shell[data-desktop-focus="true"] > .terminal-view {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .console-shell[data-desktop-focus="true"] .terminal-stage,
+  .console-shell[data-desktop-focus="true"] .terminal-host {
+    padding: 0;
+  }
+
+  .console-shell[data-desktop-focus="true"] .terminal-view-controls,
+  .console-shell[data-desktop-focus="true"] .jump-live {
+    display: none !important;
+  }
+
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit {
+    position: absolute;
+    z-index: 8;
+    top: max(10px, env(safe-area-inset-top, 0px));
+    right: max(10px, env(safe-area-inset-right, 0px));
+    display: inline-flex;
+    height: 38px;
+    align-items: center;
+    gap: 7px;
+    padding: 0 12px;
+    color: #d9e2d6;
+    background: rgba(16, 20, 15, 0.9);
+    border: 1px solid rgba(134, 151, 128, 0.62);
+    border-radius: 4px;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.38);
+    backdrop-filter: blur(10px);
+    cursor: pointer;
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit:hover,
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit:focus-visible {
+    color: var(--ink);
+    background: var(--acid);
+    border-color: var(--acid);
+  }
+
+  .desktop-terminal-focus-exit svg {
+    width: 15px;
+    height: 15px;
+  }
 }
 
 .session-title-key,

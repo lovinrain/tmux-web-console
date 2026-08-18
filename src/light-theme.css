@@ -1345,6 +1345,20 @@ html[data-theme="light"] .jump-live {
   box-shadow: 0 8px 24px rgba(65, 55, 38, 0.24);
 }
 
+html[data-theme="light"] .desktop-terminal-focus-exit {
+  color: #354132;
+  background: rgba(255, 253, 248, 0.92);
+  border-color: #9eaa99;
+  box-shadow: 0 8px 26px rgba(65, 55, 38, 0.24);
+}
+
+html[data-theme="light"] .desktop-terminal-focus-exit:hover,
+html[data-theme="light"] .desktop-terminal-focus-exit:focus-visible {
+  color: #fff;
+  background: #557c1d;
+  border-color: #557c1d;
+}
+
 html[data-theme="light"] .terminal-view-controls {
   background:
     linear-gradient(90deg, rgba(8, 122, 112, 0.07), transparent 36%),
@@ -1518,6 +1532,12 @@ html[data-theme="light"] .live-key,
 html[data-theme="light"] .session-rename-key,
 html[data-theme="light"] .snippet-key {
   color: #426d0b;
+}
+
+html[data-theme="light"] .desktop-terminal-focus-key {
+  color: #087a70;
+  background: #e7f2ef;
+  border-color: #8ebcb6;
 }
 
 html[data-theme="light"] .session-title-key,

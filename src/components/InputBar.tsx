@@ -34,6 +34,7 @@ interface InputBarProps {
   onAddToMemo?: (data: string) => Promise<void>;
   onConsumeMemo?: (source: MemoDraftSource) => Promise<void>;
   onReturnToLive: () => void;
+  onEnterDesktopFocus?: () => void;
   onFocus: () => void;
   onRevealComposer?: () => void;
   onEditSessionTitle?: () => void;
@@ -295,6 +296,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onAddToMemo,
   onConsumeMemo,
   onReturnToLive,
+  onEnterDesktopFocus,
   onFocus,
   onRevealComposer,
   onEditSessionTitle,
@@ -803,6 +805,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onMouseDown={(event) => event.preventDefault()}
         >
           <TerminalIcon /> <span>Live</span>
+        </button>
+        <button
+          type="button"
+          className="key-button desktop-terminal-focus-key"
+          onClick={onEnterDesktopFocus}
+          disabled={!onEnterDesktopFocus}
+          aria-label="Enter desktop terminal focus"
+          aria-controls="muxdeck-active-console"
+          aria-pressed="false"
+          title="Fill the browser viewport with this live terminal"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <ExpandIcon /> <span>Focus</span>
         </button>
         <button
           type="button"
