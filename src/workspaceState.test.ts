@@ -3,6 +3,7 @@ import {
   clearClosedWorkspaceHistory,
   closeWorkspaceSession,
   createSessionWorkspace,
+  moveWorkspaceSession,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
   savedWorkspaceIdFromSearch,
@@ -193,6 +194,61 @@ describe("session workspace state", () => {
       openSessions: ["beta", "alpha"],
       recentSessions: ["alpha", "beta", "ended"],
     });
+  });
+
+  it("moves an open tab to an exact target index without changing visit history", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma", "delta"],
+      recentSessions: ["gamma", "closed", "beta", "alpha"],
+    };
+
+    const movedLeft = moveWorkspaceSession(workspace, "gamma", 0);
+    expect(movedLeft).toEqual({
+      openSessions: ["gamma", "alpha", "beta", "delta"],
+      recentSessions: ["gamma", "closed", "beta", "alpha"],
+    });
+    expect(movedLeft).not.toBe(workspace);
+    expect(movedLeft.openSessions).not.toBe(workspace.openSessions);
+    expect(movedLeft.recentSessions).toBe(workspace.recentSessions);
+    expect(workspace.openSessions).toEqual(["alpha", "beta", "gamma", "delta"]);
+
+    expect(moveWorkspaceSession(workspace, "beta", 3)).toEqual({
+      openSessions: ["alpha", "gamma", "delta", "beta"],
+      recentSessions: workspace.recentSessions,
+    });
+  });
+
+  it("clamps out-of-range target indices to the first and last tab", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma"],
+      recentSessions: ["beta", "ended", "alpha"],
+    };
+
+    expect(moveWorkspaceSession(workspace, "gamma", -100).openSessions).toEqual([
+      "gamma",
+      "alpha",
+      "beta",
+    ]);
+    expect(moveWorkspaceSession(workspace, "alpha", 100).openSessions).toEqual([
+      "beta",
+      "gamma",
+      "alpha",
+    ]);
+  });
+
+  it("returns the original workspace for missing tabs, no-ops, and invalid indices", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma"],
+      recentSessions: ["gamma", "beta", "alpha", "closed"],
+    };
+
+    expect(moveWorkspaceSession(workspace, "missing", 0)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "beta", 1)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "alpha", -1)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "gamma", 99)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "beta", 1.5)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "beta", Number.NaN)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "beta", Number.POSITIVE_INFINITY)).toBe(workspace);
   });
 
   it("renames a real session everywhere without changing tab or visit order", () => {

@@ -23,6 +23,8 @@ export interface Session {
   windows: number;
   attached: number;
   created: number;
+  serverStarted: number;
+  serverPid: number;
   activity: number;
   activePaneId: string | null;
   agentState: AgentState;

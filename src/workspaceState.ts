@@ -156,6 +156,26 @@ export function closeWorkspaceSession(
   };
 }
 
+export function moveWorkspaceSession(
+  workspace: SessionWorkspaceState,
+  sessionName: string,
+  targetIndex: number,
+): SessionWorkspaceState {
+  const currentIndex = workspace.openSessions.indexOf(sessionName);
+  if (currentIndex < 0 || !Number.isInteger(targetIndex)) return workspace;
+
+  const boundedTargetIndex = Math.max(
+    0,
+    Math.min(targetIndex, workspace.openSessions.length - 1),
+  );
+  if (currentIndex === boundedTargetIndex) return workspace;
+
+  const openSessions = [...workspace.openSessions];
+  const [movedSession] = openSessions.splice(currentIndex, 1);
+  openSessions.splice(boundedTargetIndex, 0, movedSession);
+  return { ...workspace, openSessions };
+}
+
 export function renameWorkspaceSession(
   workspace: SessionWorkspaceState,
   previousName: string,

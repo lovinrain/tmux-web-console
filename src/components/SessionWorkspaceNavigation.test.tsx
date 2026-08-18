@@ -36,6 +36,8 @@ function session(overrides: Partial<Session> & Pick<Session, "name">): Session {
     windows: 1,
     attached: 0,
     created: 1,
+    serverStarted: 10,
+    serverPid: 100,
     activity: 1,
     activePaneId: "%1",
     agentState: "other",
@@ -135,6 +137,33 @@ describe("SessionWorkspaceNavigation", () => {
     expect(within(openGroup).getByText("Grok")).toBeVisible();
   });
 
+  it("labels the Copilot npm wrapper without accepting deceptive Node titles", () => {
+    const copilotSession = session({
+      name: "copilot-work",
+      agentState: "unknown",
+      panes: [pane({ command: "node", title: "~/repo - GitHub Copilot" })],
+    });
+    const deceptiveNodeSession = session({
+      name: "node-work",
+      panes: [pane({ command: "node", title: "GitHub Copilot dashboard" })],
+    });
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          activeSession: "copilot-work",
+          openSessions: ["copilot-work", "node-work"],
+          recentSessions: ["copilot-work", "node-work"],
+          sessions: [copilotSession, deceptiveNodeSession],
+          recentsOpen: true,
+        })}
+      />,
+    );
+
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    expect(within(openGroup).getByText("Copilot")).toBeVisible();
+    expect(within(openGroup).getByText("node")).toBeVisible();
+  });
+
   it("provides roving keyboard focus, tab activation, closing, and a recent count", () => {
     const props = navigationProps({
       openSessions: ["alpha", "beta", "zulu"],
@@ -186,6 +215,127 @@ describe("SessionWorkspaceNavigation", () => {
     expect(recents).toHaveTextContent("3");
     fireEvent.click(recents);
     expect(props.onOpenRecents).toHaveBeenCalledOnce();
+  });
+
+  it("reorders tabs with explicit controls without selecting or closing them", () => {
+    const onMoveTab = vi.fn();
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "zulu"],
+    });
+
+    function ReorderHarness() {
+      const [openSessions, setOpenSessions] = useState(props.openSessions);
+      return (
+        <SessionWorkspaceNavigation
+          {...props}
+          openSessions={openSessions}
+          onMoveTab={(sessionName, targetIndex) => {
+            onMoveTab(sessionName, targetIndex);
+            setOpenSessions((current) => {
+              const sourceIndex = current.indexOf(sessionName);
+              const next = [...current];
+              next.splice(sourceIndex, 1);
+              next.splice(targetIndex, 0, sessionName);
+              return next;
+            });
+          }}
+        />
+      );
+    }
+
+    render(<ReorderHarness />);
+
+    expect(screen.getByRole("button", { name: "Move Alpha control tab left" }))
+      .toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move Zulu shell tab right" }))
+      .toBeDisabled();
+    const moveBetaLeft = screen.getByRole("button", { name: "Move beta tab left" });
+    moveBetaLeft.focus();
+    fireEvent.click(moveBetaLeft);
+
+    expect(onMoveTab).toHaveBeenCalledWith("beta", 0);
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onCloseTab).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Move beta tab right" })).toHaveFocus();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "beta",
+      "Alpha control",
+      "Zulu shell",
+    ]);
+    expect(screen.getByRole("tab", { name: "beta, Working" }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+1");
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+2");
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("beta moved to position 1 of 3.", { selector: "[role='status']" }))
+      .toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: "Move beta tab left" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Move beta tab left" }));
+    expect(onMoveTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits reorder controls when reordering is unavailable or only one tab is open", () => {
+    const view = render(<SessionWorkspaceNavigation {...navigationProps()} />);
+    expect(screen.queryByRole("group", { name: /Reorder .* tab/ })).not.toBeInTheDocument();
+
+    view.rerender(
+      <SessionWorkspaceNavigation
+        {...navigationProps({ openSessions: ["alpha"], onMoveTab: vi.fn() })}
+      />,
+    );
+    expect(screen.queryByRole("group", { name: /Reorder .* tab/ })).not.toBeInTheDocument();
+  });
+
+  it("reorders the full tab order from Overview even when its list is filtered", () => {
+    const onMoveTab = vi.fn();
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "zulu"],
+      recentSessions: ["alpha", "beta", "zulu"],
+      recentsOpen: true,
+    });
+
+    function OverviewReorderHarness() {
+      const [openSessions, setOpenSessions] = useState(props.openSessions);
+      return (
+        <SessionWorkspaceNavigation
+          {...props}
+          openSessions={openSessions}
+          onMoveTab={(sessionName, targetIndex) => {
+            onMoveTab(sessionName, targetIndex);
+            setOpenSessions((current) => {
+              const next = [...current];
+              next.splice(current.indexOf(sessionName), 1);
+              next.splice(targetIndex, 0, sessionName);
+              return next;
+            });
+          }}
+        />
+      );
+    }
+
+    render(<OverviewReorderHarness />);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Find a workspace session" }), {
+      target: { value: "beta" },
+    });
+
+    const moveBetaUp = screen.getByRole("button", { name: "Move beta tab up" });
+    moveBetaUp.focus();
+    fireEvent.click(moveBetaUp);
+
+    expect(onMoveTab).toHaveBeenCalledWith("beta", 0);
+    expect(moveBetaUp).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move beta tab down" })).toHaveFocus();
+    expect(screen.getByText("beta moved to position 1 of 3.", { selector: "[role='status']" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear workspace search" }));
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    expect([...openGroup.querySelectorAll(".workspace-session-copy strong")]
+      .map((title) => title.textContent)).toEqual(["beta", "Alpha control", "Zulu shell"]);
+    expect(within(openGroup).getByRole("button", { name: "Move Zulu shell tab down" }))
+      .toBeDisabled();
   });
 
   it("hides only the tab navigation while keeping status and Recents mounted", () => {

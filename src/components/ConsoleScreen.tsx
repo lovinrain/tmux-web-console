@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   createQueuedMessage,
+  deleteQueuedMessage,
   listSessions,
   renameSession,
   updateSessionTitle,
@@ -15,6 +16,7 @@ import {
   HistoryIcon,
   KeyboardIcon,
   TerminalIcon,
+  TrashIcon,
 } from "../icons";
 import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session } from "../types";
@@ -23,6 +25,7 @@ import {
   handoffRenamedSessionDraft,
   InputBar,
   type InputBarHandle,
+  type MemoDraftSource,
 } from "./InputBar";
 import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
 import { MessageQueueDialog } from "./MessageQueueDialog";
@@ -30,6 +33,7 @@ import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
+import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -54,6 +58,13 @@ interface ConsoleScreenProps {
     sessionId: string,
     warnings?: readonly string[],
   ) => void;
+  onSessionTerminated?: (
+    sessionName: string,
+    sessionId: string,
+    sessionCreated: number,
+    serverStarted: number,
+    serverPid: number,
+  ) => Promise<void>;
   renameWarning?: SessionRenameWarning | null;
   onDismissRenameWarning?: (sessionId: string) => void;
 }
@@ -175,6 +186,7 @@ export function ConsoleScreen({
   onSessionsChange,
   onSessionUpdate,
   onSessionRenamed,
+  onSessionTerminated,
   renameWarning,
   onDismissRenameWarning,
 }: ConsoleScreenProps) {
@@ -191,6 +203,14 @@ export function ConsoleScreen({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [titleEditorOpen, setTitleEditorOpen] = useState(false);
   const [renameEditorOpen, setRenameEditorOpen] = useState(false);
+  const [terminateTarget, setTerminateTarget] = useState<{
+    name: string;
+    id: string;
+    created: number;
+    serverStarted: number;
+    serverPid: number;
+    title: string | null;
+  } | null>(null);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [ignoreSize, setIgnoreSize] = useState(false);
@@ -321,6 +341,7 @@ export function ConsoleScreen({
           setHistoryOpen(false);
           setTitleEditorOpen(false);
           setRenameEditorOpen(false);
+          setTerminateTarget(null);
           setMessagesOpen(false);
           setSnippetsOpen(false);
           setLookupError({
@@ -352,6 +373,7 @@ export function ConsoleScreen({
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
+    setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
   }, [sessionName]);
@@ -362,6 +384,7 @@ export function ConsoleScreen({
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
+    setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
   }, [workspaceOverlayOpen]);
@@ -384,6 +407,11 @@ export function ConsoleScreen({
     setConnectionSnapshot({ sessionName, state });
   }, [sessionName]);
   const paneChange = useCallback((nextPaneId: string | null) => setPaneId(nextPaneId), []);
+  const returnToLiveTerminal = useCallback(() => {
+    terminalRef.current?.navigateHistory("exit");
+    terminalRef.current?.jumpToLive();
+    terminalRef.current?.focus();
+  }, []);
   const toggleMobileTerminalDistractionFree = useCallback(() => {
     const next = mobileDistractionFreeMode !== "terminal";
     if (next) {
@@ -391,6 +419,7 @@ export function ConsoleScreen({
       setHistoryOpen(false);
       setTitleEditorOpen(false);
       setRenameEditorOpen(false);
+      setTerminateTarget(null);
       setMessagesOpen(false);
       setSnippetsOpen(false);
     }
@@ -402,6 +431,7 @@ export function ConsoleScreen({
       setHistoryOpen(false);
       setTitleEditorOpen(false);
       setRenameEditorOpen(false);
+      setTerminateTarget(null);
       setMessagesOpen(false);
       setSnippetsOpen(false);
     }
@@ -433,6 +463,23 @@ export function ConsoleScreen({
       queued: queuedMemorandumCount + 1,
     });
   }, [memorandumCount, queuedMemorandumCount, session, updateMemorandumCounts]);
+  const consumeStagedMemo = useCallback(async (source: MemoDraftSource) => {
+    if (!session) throw new Error("This tmux session is no longer available.");
+    try {
+      await deleteQueuedMessage(session.name, source.messageId);
+    } catch (error) {
+      const wasAlreadyRemoved = typeof error === "object"
+        && error !== null
+        && "status" in error
+        && error.status === 404;
+      if (!wasAlreadyRemoved) throw error;
+    }
+    const total = Math.max(0, memorandumCount - 1);
+    updateMemorandumCounts({
+      total,
+      queued: Math.min(queuedMemorandumCount, total),
+    });
+  }, [memorandumCount, queuedMemorandumCount, session, updateMemorandumCounts]);
   const saveSessionName = useCallback(async (name: string) => {
     if (!session) throw new Error("This tmux session is no longer available.");
     const visibleDraft = inputBarRef.current?.getDraft() ?? "";
@@ -441,6 +488,29 @@ export function ConsoleScreen({
     setRenameEditorOpen(false);
     onSessionRenamed?.(sessionName, result.session, session.id, result.warnings);
   }, [onSessionRenamed, session, sessionName]);
+  const openTerminateEditor = useCallback(() => {
+    if (!session) return;
+    setTerminateTarget({
+      name: session.name,
+      id: session.id,
+      created: session.created,
+      serverStarted: session.serverStarted,
+      serverPid: session.serverPid,
+      title: session.customTitle,
+    });
+  }, [session]);
+  const terminateCurrentSession = useCallback(async () => {
+    if (!terminateTarget || !onSessionTerminated) {
+      throw new Error("This tmux session is no longer available.");
+    }
+    await onSessionTerminated(
+      terminateTarget.name,
+      terminateTarget.id,
+      terminateTarget.created,
+      terminateTarget.serverStarted,
+      terminateTarget.serverPid,
+    );
+  }, [onSessionTerminated, terminateTarget]);
 
   if (currentLookupError && !session) {
     return (
@@ -606,6 +676,7 @@ export function ConsoleScreen({
           session={sessionName}
           ignoreSize={ignoreSize}
           layoutSuspended={mobileInputDistractionFree}
+          layoutRefreshToken={`${activeMobileFocus}:${mobileDistractionFree ? "focus" : "standard"}`}
           theme={theme}
           onStateChange={stateChange}
           onPaneChange={paneChange}
@@ -671,13 +742,23 @@ export function ConsoleScreen({
             title="Leave tmux copy mode and return to live output"
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              terminalRef.current?.navigateHistory("exit");
-              terminalRef.current?.jumpToLive();
-            }}
+            onClick={returnToLiveTerminal}
           >
             <TerminalIcon />
             <span>Live</span>
+          </button>
+          <button
+            type="button"
+            className="terminal-view-control terminate-session-control"
+            aria-label="Terminate tmux session"
+            aria-haspopup="dialog"
+            title="End this entire tmux session and all of its panes"
+            disabled={!session || !onSessionTerminated}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={openTerminateEditor}
+          >
+            <TrashIcon />
+            <span>End</span>
           </button>
           <button
             type="button"
@@ -708,6 +789,8 @@ export function ConsoleScreen({
           terminalRef.current?.submit(data, withEnter) ?? Promise.resolve(false)
         )}
         onAddToMemo={session ? addDraftToMemo : undefined}
+        onConsumeMemo={session ? consumeStagedMemo : undefined}
+        onReturnToLive={returnToLiveTerminal}
         mobileDistractionFree={mobileInputDistractionFree}
         onToggleMobileDistractionFree={toggleMobileInputDistractionFree}
         onFocus={() => terminalRef.current?.focus()}
@@ -715,6 +798,9 @@ export function ConsoleScreen({
         onEditSessionTitle={session ? () => setTitleEditorOpen(true) : undefined}
         onRenameSession={session && onSessionRenamed
           ? () => setRenameEditorOpen(true)
+          : undefined}
+        onTerminateSession={session && onSessionTerminated
+          ? openTerminateEditor
           : undefined}
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
         onOpenSnippets={() => setSnippetsOpen(true)}
@@ -743,6 +829,14 @@ export function ConsoleScreen({
           onRename={saveSessionName}
         />
       )}
+      {!workspaceOverlayOpen && terminateTarget && (
+        <SessionTerminateDialog
+          sessionName={terminateTarget.name}
+          sessionTitle={terminateTarget.title}
+          onClose={() => setTerminateTarget(null)}
+          onTerminate={terminateCurrentSession}
+        />
+      )}
       {!workspaceOverlayOpen && messagesOpen && session && (
         <MessageQueueDialog
           sessionName={session.name}
@@ -750,7 +844,10 @@ export function ConsoleScreen({
           onClose={() => setMessagesOpen(false)}
           onCountsChange={updateMemorandumCounts}
           onChoose={(message) => {
-            if (!inputBarRef.current?.loadDraft(message.text)) {
+            if (!inputBarRef.current?.loadDraft(message.text, {
+              messageId: message.id,
+              text: message.text,
+            })) {
               throw new Error("The current staged draft was left unchanged.");
             }
             revealAndFocusComposer();

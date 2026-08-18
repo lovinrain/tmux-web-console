@@ -88,6 +88,7 @@ const KIND_FILTERS: SessionKindFilter[] = [
   "agents",
   "claude",
   "codex",
+  "copilot",
   "cursor",
   "grok",
   "shells",
@@ -113,11 +114,13 @@ const STATE_FILTERS: SessionStateFilter[] = [
 ];
 
 export function classifyPane(pane?: Pane): { label: string; tone: string } {
-  switch (paneCommandKind(pane?.command || "")) {
+  switch (paneCommandKind(pane?.command || "", pane?.title || "")) {
     case "claude":
       return { label: "Claude", tone: "claude" };
     case "codex":
       return { label: "Codex", tone: "codex" };
+    case "copilot":
+      return { label: "Copilot", tone: "copilot" };
     case "cursor":
       return { label: "Cursor", tone: "cursor" };
     case "grok":
@@ -707,7 +710,7 @@ export function SessionDashboard({
         <p className="section-index">01 / SELECT</p>
         <h2>Pick up where<br />the agents left off.</h2>
         <div className="intro-copy">
-          <p>Open any running Claude, Codex, Cursor, Grok, or shell session. Output stays live; input goes straight to its tmux client.</p>
+          <p>Open any running Claude, Codex, Copilot, Cursor, Grok, or shell session. Output stays live; input goes straight to its tmux client.</p>
           {onResumeWorkspace && workspaceReturnSession && workspaceTabCount > 0 && (
             <button
               type="button"

@@ -193,10 +193,11 @@ describe("MessageQueueDialog", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("sends a queued memo and retains it as a reusable note", async () => {
+  it("removes a queued memo only after terminal delivery is acknowledged", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const onCountsChange = vi.fn();
     vi.mocked(updateQueuedMessage).mockResolvedValue({ ...firstMessage, state: "note" });
+    vi.mocked(deleteQueuedMessage).mockResolvedValue(undefined);
     render(
       <MessageQueueDialog
         sessionName="work"
@@ -210,15 +211,51 @@ describe("MessageQueueDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send now" }));
 
     await waitFor(() => expect(onSend).toHaveBeenCalledWith(firstMessage));
+    await waitFor(() => expect(deleteQueuedMessage).toHaveBeenCalledWith(
+      "work",
+      firstMessage.id,
+    ));
     expect(updateQueuedMessage).toHaveBeenCalledWith("work", firstMessage.id, { state: "note" });
     expect(vi.mocked(updateQueuedMessage).mock.invocationCallOrder[0])
       .toBeLessThan(onSend.mock.invocationCallOrder[0]);
-    expect(await screen.findByText(/sent and kept here as a note/i)).toBeVisible();
-    expect(screen.getByText("Note")).toBeVisible();
-    const memoItem = screen.getByText(firstMessage.text).closest("li")!;
-    expect(within(memoItem).getByRole("button", { name: "Queue next" }))
-      .toHaveAttribute("aria-pressed", "false");
-    expect(onCountsChange).toHaveBeenLastCalledWith({ total: 1, queued: 0 });
+    expect(onSend.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deleteQueuedMessage).mock.invocationCallOrder[0]);
+    expect(await screen.findByText(/memo sent and removed/i)).toBeVisible();
+    expect(screen.queryByText(firstMessage.text)).not.toBeInTheDocument();
+    expect(screen.getByText("Your memo is empty.")).toBeVisible();
+    expect(onCountsChange).toHaveBeenLastCalledWith({ total: 0, queued: 0 });
+  });
+
+  it("removes a note after terminal delivery is acknowledged without reclassifying it", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const onCountsChange = vi.fn();
+    vi.mocked(listQueuedMessages).mockResolvedValue({
+      session: "work",
+      messages: [secondMessage],
+    });
+    vi.mocked(deleteQueuedMessage).mockResolvedValue(undefined);
+    render(
+      <MessageQueueDialog
+        sessionName="work"
+        onClose={vi.fn()}
+        onSend={onSend}
+        onCountsChange={onCountsChange}
+      />,
+    );
+    await screen.findByText(secondMessage.text);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    await waitFor(() => expect(deleteQueuedMessage).toHaveBeenCalledWith(
+      "work",
+      secondMessage.id,
+    ));
+    expect(updateQueuedMessage).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledWith(secondMessage);
+    expect(onSend.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deleteQueuedMessage).mock.invocationCallOrder[0]);
+    expect(screen.queryByText(secondMessage.text)).not.toBeInTheDocument();
+    expect(onCountsChange).toHaveBeenLastCalledWith({ total: 0, queued: 0 });
   });
 
   it("does not send a queued memo when it cannot first persist the move to notes", async () => {
@@ -245,6 +282,7 @@ describe("MessageQueueDialog", () => {
     expect(alert).toHaveTextContent("Memo storage is unavailable");
     expect(screen.getByText("Queued · 01")).toBeVisible();
     expect(onSend).not.toHaveBeenCalled();
+    expect(deleteQueuedMessage).not.toHaveBeenCalled();
     expect(onCountsChange).toHaveBeenLastCalledWith({ total: 1, queued: 1 });
   });
 
@@ -271,11 +309,55 @@ describe("MessageQueueDialog", () => {
     expect(alert).toHaveTextContent("Terminal acknowledgement timed out");
     expect(updateQueuedMessage).toHaveBeenCalledOnce();
     expect(onSend).toHaveBeenCalledOnce();
+    expect(deleteQueuedMessage).not.toHaveBeenCalled();
     expect(screen.getByText("Note")).toBeVisible();
     const memoItem = screen.getByText(firstMessage.text).closest("li")!;
     expect(within(memoItem).getByRole("button", { name: "Queue next" }))
       .toHaveAttribute("aria-pressed", "false");
     expect(onCountsChange).toHaveBeenLastCalledWith({ total: 1, queued: 0 });
+  });
+
+  it("keeps an acknowledged memo for manual deletion when automatic cleanup fails", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const onCountsChange = vi.fn();
+    vi.mocked(updateQueuedMessage).mockResolvedValue({ ...firstMessage, state: "note" });
+    vi.mocked(deleteQueuedMessage)
+      .mockRejectedValueOnce(new Error("Memo storage is unavailable."))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <MessageQueueDialog
+        sessionName="work"
+        onClose={vi.fn()}
+        onSend={onSend}
+        onCountsChange={onCountsChange}
+      />,
+    );
+    await screen.findByText(firstMessage.text);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("was sent, but it could not be removed automatically");
+    expect(alert).toHaveTextContent("Delete it manually; do not send it again");
+    expect(alert).toHaveTextContent("Memo storage is unavailable");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(deleteQueuedMessage).toHaveBeenCalledOnce();
+    expect(screen.getByText("Note")).toBeVisible();
+    const memoItem = screen.getByText(firstMessage.text).closest("li")!;
+    expect(within(memoItem).getByRole("button", { name: "Sent" })).toBeDisabled();
+    expect(within(memoItem).getByRole("button", { name: "Queue next" })).toBeDisabled();
+    expect(within(memoItem).getByRole("button", { name: "Edit" })).toBeDisabled();
+    expect(within(memoItem).getByRole("button", { name: "Delete" })).toBeEnabled();
+    expect(onCountsChange).toHaveBeenLastCalledWith({ total: 1, queued: 0 });
+
+    fireEvent.click(within(memoItem).getByRole("button", { name: "Sent" }));
+    expect(onSend).toHaveBeenCalledOnce();
+    fireEvent.click(within(memoItem).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(memoItem).getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(deleteQueuedMessage).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(firstMessage.text)).not.toBeInTheDocument();
+    expect(onCountsChange).toHaveBeenLastCalledWith({ total: 0, queued: 0 });
   });
 
   it("edits and deletes a memo while reporting counts after each mutation", async () => {

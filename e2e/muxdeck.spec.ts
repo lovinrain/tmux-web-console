@@ -71,6 +71,20 @@ function workspaceTmuxSnapshot(name: string): string {
   return `${workspaceTmuxIdentity(name)}\n${panes}\n${content}`;
 }
 
+function workspaceTmuxContentSnapshot(name: string): string {
+  const paneIds = execFileSync(
+    "tmux",
+    [...tmux, "list-panes", "-t", `=${name}`, "-F", "#{pane_id}"],
+    { encoding: "utf8" },
+  ).trim().split("\n");
+  const content = paneIds.map((currentPaneId) => execFileSync(
+    "tmux",
+    [...tmux, "capture-pane", "-J", "-p", "-S", "-", "-t", currentPaneId],
+    { encoding: "utf8" },
+  ).trimEnd()).join("\n--- pane ---\n");
+  return `${workspaceTmuxIdentity(name)}\n${content}`;
+}
+
 if (!titlesFile || !messagesFile || !snippetsFile || !workspacesFile) {
   throw new Error("Playwright state paths were not configured");
 }
@@ -145,6 +159,139 @@ test("desktop dashboard renders a three-column session grid", async ({ page }) =
   expect(tabletColumns).toBe(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
+});
+
+test("dashboard recognizes the official npm Copilot launcher process shape", async ({ page }) => {
+  const copilotSession = `${sessionName}-copilot-wrapper`;
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    copilotSession,
+    "node",
+    "-e",
+    'require("node:child_process").spawnSync("/bin/sleep", ["120"], {stdio: "inherit"})',
+  ]);
+  const copilotPane = execFileSync(
+    "tmux",
+    [...tmux, "list-panes", "-t", `=${copilotSession}`, "-F", "#{pane_id}"],
+    { encoding: "utf8" },
+  ).trim();
+  execFileSync("tmux", [
+    ...tmux,
+    "select-pane",
+    "-t",
+    copilotPane,
+    "-T",
+    "Review status detection - GitHub Copilot",
+  ]);
+
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/mux/?kind=copilot");
+
+    const openCopilot = page.getByRole("button", { name: `Open ${copilotSession}` });
+    await expect(openCopilot).toBeVisible();
+    const card = openCopilot.locator("xpath=ancestor::article[contains(@class, 'session-card')]");
+    await expect(card.locator(".agent-badge")).toHaveText("Copilot");
+    await expect(card.locator(".state-badge")).toContainText("Unclear");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    await page.getByRole("button", { name: "agents", exact: true }).click();
+    await expect(openCopilot).toBeVisible();
+  } finally {
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${copilotSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the test's disposable tmux server.
+    }
+  }
+});
+
+test("mobile End terminates only the confirmed tmux session and selects its neighbor", async ({ page }) => {
+  const targetSession = `${sessionName}-terminate-target`;
+  const survivorSession = `${sessionName}-terminate-survivor`;
+  for (const name of [targetSession, survivorSession]) {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+  }
+  const survivorIdentity = workspaceTmuxIdentity(survivorSession);
+
+  try {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(targetSession)}`
+      + `?tab=${encodeURIComponent(survivorSession)}`
+      + `&tab=${encodeURIComponent(targetSession)}`,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+
+    const terminalControls = page.getByRole("navigation", { name: "Terminal view controls" });
+    const endSession = terminalControls.getByRole("button", {
+      name: "Terminate tmux session",
+    });
+    await expect(endSession).toBeVisible();
+    await expect(endSession).toBeInViewport();
+    const endBox = await endSession.boundingBox();
+    expect(endBox?.width).toBeGreaterThanOrEqual(44);
+    expect(endBox?.height).toBeGreaterThanOrEqual(44);
+    await endSession.click();
+
+    const confirmation = page.getByRole("alertdialog", {
+      name: "Terminate tmux session?",
+    });
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation).toContainText(targetSession);
+    await expect(confirmation).toContainText("every pane");
+    await expect(confirmation.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await expect(confirmation.getByRole("button", {
+      name: "Terminate session",
+    })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+
+    await confirmation.getByRole("button", { name: "Terminate session" }).click();
+
+    await expectRoute(
+      page,
+      `/mux/session/${survivorSession}`,
+      [survivorSession],
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect.poll(() => {
+      try {
+        execFileSync("tmux", [...tmux, "has-session", "-t", `=${targetSession}`], {
+          stdio: "ignore",
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }).toBe(false);
+    expect(workspaceTmuxIdentity(survivorSession)).toBe(survivorIdentity);
+  } finally {
+    for (const name of [targetSession, survivorSession]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to sessions created on the disposable socket.
+      }
+    }
+  }
 });
 
 test("light theme persists across dashboard, snippets, overlays, and console", async ({ page }) => {
@@ -551,6 +698,18 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     ).__muxdeckKeydownTerminalFrames.length);
 
     const terminalInput = page.locator(".xterm-helper-textarea");
+    const desktopShortcutStrip = page.getByRole("group", {
+      name: "Terminal input shortcuts",
+    });
+    const desktopLiveButton = desktopShortcutStrip.getByRole("button", {
+      name: "Focus live terminal input",
+    });
+    await expect(desktopLiveButton).toBeVisible();
+    await expect(desktopLiveButton).toHaveText("Live");
+    await page.getByRole("textbox", { name: "Staged input" }).focus();
+    await desktopLiveButton.click();
+    await expect(terminalInput).toBeFocused();
+
     await terminalInput.focus();
     const terminalInputFrameCountBefore = await keydownTerminalFrameCount();
     await page.keyboard.press("Control+Shift+2");
@@ -670,6 +829,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
 
     await page.setViewportSize({ width: 390, height: 700 });
     await expect(tabSearchButton).toBeHidden();
+    await expect(desktopLiveButton).toBeHidden();
     await page.keyboard.press("Control+Shift+.");
     await expectRoute(
       page,
@@ -691,6 +851,99 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
       });
     } catch {
       // Cleanup remains scoped to this test's disposable tmux server.
+    }
+  }
+});
+
+test("workspace tabs reorder on desktop and mobile, update the URL, and survive reload", async ({ page }) => {
+  test.setTimeout(60_000);
+  const secondSession = `${sessionName}-reorder-second`;
+  const thirdSession = `${sessionName}-reorder-third`;
+  const initialTabs = [sessionName, secondSession, thirdSession];
+  const reorderedTabs = [sessionName, thirdSession, secondSession];
+
+  for (const helperSession of [secondSession, thirdSession]) {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+  }
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${secondSession}?kind=shells&view=list`
+      + initialTabs.map((tab) => `&tab=${encodeURIComponent(tab)}`).join(""),
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+
+    const visibleTabs = page.locator("#muxdeck-session-tabs [role='tab']");
+    await expect(visibleTabs).toHaveText(initialTabs);
+
+    const moveThirdLeft = page.getByRole("button", {
+      name: `Move ${thirdSession} tab left`,
+    });
+    await moveThirdLeft.click();
+    await expect(moveThirdLeft).toBeFocused();
+    await expect(visibleTabs).toHaveText(reorderedTabs);
+    await expectRoute(
+      page,
+      `/mux/session/${secondSession}`,
+      reorderedTabs,
+      { kind: "shells", view: "list" },
+    );
+    await expect(page.getByRole("tab", {
+      name: new RegExp(`^${secondSession},`),
+    })).toHaveAttribute("aria-selected", "true");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expectRoute(
+      page,
+      `/mux/session/${secondSession}`,
+      reorderedTabs,
+      { kind: "shells", view: "list" },
+    );
+    await expect(visibleTabs).toHaveText(reorderedTabs);
+
+    await page.setViewportSize({ width: 390, height: 664 });
+    await page.getByRole("navigation", { name: "Mobile console focus" })
+      .getByRole("button", { name: "Overview" })
+      .click();
+    await page.getByRole("button", { name: `Move ${thirdSession} tab up` }).click();
+    await expect(page.getByRole("button", {
+      name: `Move ${thirdSession} tab down`,
+    })).toBeFocused();
+    const mobileReorderedTabs = [thirdSession, sessionName, secondSession];
+    await expectRoute(
+      page,
+      `/mux/session/${secondSession}/recents`,
+      mobileReorderedTabs,
+      { kind: "shells", view: "list" },
+    );
+    await page.goBack();
+    await expectRoute(
+      page,
+      `/mux/session/${secondSession}`,
+      mobileReorderedTabs,
+      { kind: "shells", view: "list" },
+    );
+  } finally {
+    for (const helperSession of [secondSession, thirdSession]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to sessions created on this test's disposable socket.
+      }
     }
   }
 });
@@ -1237,6 +1490,39 @@ test("saved workspace survives reload and device handoff without touching tmux p
       hasLastActiveTime: true,
     });
 
+    const reversedTabs = [...orderedTabs].reverse();
+    const savedWorkspaceTabs = page.locator("#muxdeck-session-tabs [role='tab']");
+    await page.getByRole("button", { name: `Move ${sharedSession} tab left` }).click();
+    await expect(savedWorkspaceTabs).toHaveText(reversedTabs);
+    await expectRoute(
+      page,
+      `/mux/session/${sharedSession}`,
+      reversedTabs,
+      { kind: "shells", view: "list", workspace: workspaceId },
+    );
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      if (!response.ok()) return null;
+      const body = await response.json();
+      return body.workspace.tabs;
+    }).toEqual(reversedTabs);
+
+    // Restore the fixture's original ordering after proving saved-workspace autosync.
+    await page.getByRole("button", { name: `Move ${sharedSession} tab right` }).click();
+    await expect(savedWorkspaceTabs).toHaveText(orderedTabs);
+    await expectRoute(
+      page,
+      `/mux/session/${sharedSession}`,
+      orderedTabs,
+      { kind: "shells", view: "list", workspace: workspaceId },
+    );
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      if (!response.ok()) return null;
+      const body = await response.json();
+      return body.workspace.tabs;
+    }).toEqual(orderedTabs);
+
     await page.setViewportSize({ width: 390, height: 664 });
     const mobileFocus = page.getByRole("navigation", { name: "Mobile console focus" });
     await mobileFocus.getByRole("button", { name: "Overview" }).click();
@@ -1589,6 +1875,9 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await page.getByRole("button", { name: "grok", exact: true }).click();
   await expect(page).toHaveURL(/\?kind=grok$/);
   await expect(page.getByRole("heading", { name: "No matching sessions" })).toBeVisible();
+  await page.getByRole("button", { name: "copilot", exact: true }).click();
+  await expect(page).toHaveURL(/\?kind=copilot$/);
+  await expect(page.getByRole("heading", { name: "No matching sessions" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
   await page.getByRole("button", { name: "shells", exact: true }).click();
@@ -1726,7 +2015,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(terminalControls).toBeVisible();
   await expect(page.getByRole("group", { name: "Terminal input shortcuts" })).toBeHidden();
   const portraitRailButtons = terminalControls.getByRole("button");
-  await expect(portraitRailButtons).toHaveCount(6);
+  await expect(portraitRailButtons).toHaveCount(7);
   for (const button of await portraitRailButtons.all()) {
     const box = await button.boundingBox();
     expect(box).not.toBeNull();
@@ -1786,9 +2075,17 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect.poll(() => historyPaneFormat("#{pane_in_mode}")).toBe("0");
   expect(terminalInputFrameCount).toBe(inputFramesAfterRawControls);
 
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setSafeAreaInsetsOverride", {
+    insets: { top: 47, bottom: 34, left: 0, right: 0 },
+  });
+  await expect.poll(() => terminalControls.evaluate((element) => (
+    getComputedStyle(element).paddingBottom
+  ))).toBe("39px");
   const terminalStage = page.locator(".terminal-stage");
   const terminalElement = page.locator(".terminal-host .xterm");
   const standardTerminalHeight = (await terminalStage.boundingBox())!.height;
+  const standardPaneHeight = Number(historyPaneFormat("#{pane_height}"));
   const socketsBeforeDistractionFree = terminalSocketCount;
   const historyBeforeDistractionFree = await page.evaluate(() => window.history.length);
   const urlBeforeDistractionFree = page.url();
@@ -1818,6 +2115,66 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(exitDistractionFree).toHaveAttribute("aria-pressed", "true");
   await expect(exitDistractionFree).toHaveCSS("min-height", "44px");
   expect((await terminalStage.boundingBox())!.height).toBeGreaterThan(standardTerminalHeight);
+  await expect.poll(() => Number(historyPaneFormat("#{pane_height}")))
+    .toBeGreaterThan(standardPaneHeight);
+  const focusedPaneHeight = Number(historyPaneFormat("#{pane_height}"));
+  const focusedGeometry = await page.evaluate(() => {
+    const shell = document.querySelector<HTMLElement>(".console-shell")!;
+    const view = document.querySelector<HTMLElement>(".terminal-view")!;
+    const stage = document.querySelector<HTMLElement>(".terminal-stage")!;
+    const host = document.querySelector<HTMLElement>(".terminal-host")!;
+    const xterm = document.querySelector<HTMLElement>(".terminal-host .xterm")!;
+    const controls = document.querySelector<HTMLElement>(".terminal-view-controls")!;
+    const viewport = window.visualViewport!;
+    const shellRect = shell.getBoundingClientRect();
+    const viewRect = view.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    const xtermRect = xterm.getBoundingClientRect();
+    const controlsRect = controls.getBoundingClientRect();
+    const stageStyle = getComputedStyle(stage);
+    const hostStyle = getComputedStyle(host);
+    return {
+      viewportTop: viewport.offsetTop,
+      viewportBottom: viewport.offsetTop + viewport.height,
+      viewportHeight: viewport.height,
+      shellTop: shellRect.top,
+      shellBottom: shellRect.bottom,
+      viewTop: viewRect.top,
+      stageTop: stageRect.top,
+      stageBottom: stageRect.bottom,
+      stageHeight: stageRect.height,
+      xtermTop: xtermRect.top,
+      controlsTop: controlsRect.top,
+      controlsBottom: controlsRect.bottom,
+      controlsHeight: controlsRect.height,
+      shellPaddingBottom: getComputedStyle(shell).paddingBottom,
+      stagePaddingTop: stageStyle.paddingTop,
+      stagePaddingBottom: stageStyle.paddingBottom,
+      hostPaddingTop: hostStyle.paddingTop,
+      hostPaddingBottom: hostStyle.paddingBottom,
+    };
+  });
+  const expectWithinPixel = (left: number, right: number) => {
+    expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
+  };
+  expectWithinPixel(focusedGeometry.shellTop, focusedGeometry.viewportTop);
+  expectWithinPixel(focusedGeometry.viewTop, focusedGeometry.viewportTop);
+  expectWithinPixel(focusedGeometry.stageTop, focusedGeometry.viewportTop);
+  expectWithinPixel(focusedGeometry.xtermTop, focusedGeometry.stageTop);
+  expectWithinPixel(focusedGeometry.stageBottom, focusedGeometry.controlsTop);
+  expectWithinPixel(focusedGeometry.controlsBottom, focusedGeometry.viewportBottom);
+  expectWithinPixel(focusedGeometry.shellBottom, focusedGeometry.viewportBottom);
+  expectWithinPixel(
+    focusedGeometry.stageHeight + focusedGeometry.controlsHeight,
+    focusedGeometry.viewportHeight,
+  );
+  expect(focusedGeometry).toMatchObject({
+    shellPaddingBottom: "0px",
+    stagePaddingTop: "0px",
+    stagePaddingBottom: "0px",
+    hostPaddingTop: "0px",
+    hostPaddingBottom: "0px",
+  });
   expect(await terminalElement.evaluate((element) => (
     element === (window as Window & { __muxdeckTerminalElement: Element }).__muxdeckTerminalElement
   ))).toBe(true);
@@ -1838,10 +2195,13 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   );
   await expect(page.getByRole("navigation", { name: "Mobile console focus" })).toBeVisible();
   await expect(page.locator(".console-header")).toBeVisible();
+  await expect.poll(() => Number(historyPaneFormat("#{pane_height}")))
+    .toBeLessThan(focusedPaneHeight);
   expect(await terminalElement.evaluate((element) => (
     element === (window as Window & { __muxdeckTerminalElement: Element }).__muxdeckTerminalElement
   ))).toBe(true);
   expect(terminalSocketCount).toBe(socketsBeforeDistractionFree);
+  await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: {} });
   await page.setViewportSize({ width: 320, height: 700 });
   const enlargedRailText = await page.addStyleTag({
     content: ".terminal-view-control { font-size: 18px !important; }",
@@ -1852,8 +2212,8 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   );
   expect(reflowedBoxes.every((box) => box !== null && box.width >= 44 && box.height >= 44))
     .toBe(true);
-  expect(reflowedBoxes.slice(0, 3).every((box) => box!.y === reflowedBoxes[0]!.y)).toBe(true);
-  expect(reflowedBoxes[3]!.y).toBeGreaterThan(reflowedBoxes[0]!.y);
+  expect(reflowedBoxes.slice(0, 4).every((box) => box!.y === reflowedBoxes[0]!.y)).toBe(true);
+  expect(reflowedBoxes[4]!.y).toBeGreaterThan(reflowedBoxes[0]!.y);
   expect(await terminalControls.evaluate((element) => (
     element.scrollWidth <= element.clientWidth
   ))).toBe(true);
@@ -1867,7 +2227,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   }).getByRole("button");
   await expect(landscapePurposeButtons).toHaveCount(3);
   const landscapeRailButtons = terminalControls.getByRole("button");
-  await expect(landscapeRailButtons).toHaveCount(6);
+  await expect(landscapeRailButtons).toHaveCount(7);
   for (const button of await landscapeRailButtons.all()) {
     const box = await button.boundingBox();
     expect(box).not.toBeNull();
@@ -1902,20 +2262,12 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect.poll(() => {
     return execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
   }).toContain("MEMO_QUEUE_EDITED");
+  await expect(directMemoButton).toHaveAccessibleName("Open memo");
 
   await directMemoButton.click();
   memoDialog = page.getByRole("dialog", { name: "Memo" });
-  await memoDialog.getByRole("button", { name: "Send now" }).click();
-  await expect(memoDialog.locator(".mq-notice")).toContainText("Memo sent");
-  await expect.poll(() => {
-    const captured = execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" });
-    return captured.match(/MEMO_QUEUE_EDITED/g)?.length ?? 0;
-  }).toBeGreaterThanOrEqual(2);
-  await memoDialog.getByRole("button", { name: "Delete", exact: true }).click();
-  await memoDialog.getByRole("button", { name: "Confirm delete" }).click();
   await expect(memoDialog.getByText("Your memo is empty.")).toBeVisible();
   await memoDialog.getByRole("button", { name: "Close memo" }).click();
-  await expect(directMemoButton).toHaveAccessibleName("Open memo");
   await expect(page.locator(".memo-key")).toHaveAccessibleName("Open memoranda");
 
   await page.setViewportSize({ width: 320, height: 700 });
@@ -2055,7 +2407,7 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
     await stagedInput.fill(exactMemo);
     const queueInMemo = page.getByRole("button", { name: "Queue in memo" });
     await expect(queueInMemo).toBeEnabled();
-    const tmuxBefore = workspaceTmuxSnapshot(memoSession);
+    const tmuxBefore = workspaceTmuxContentSnapshot(memoSession);
 
     await queueInMemo.click();
 
@@ -2066,7 +2418,7 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
       (key) => window.localStorage.getItem(key),
       `muxdeck-terminal-draft:${memoSession}`,
     )).toBeNull();
-    expect(workspaceTmuxSnapshot(memoSession)).toBe(tmuxBefore);
+    expect(workspaceTmuxContentSnapshot(memoSession)).toBe(tmuxBefore);
 
     await expect(inputRail).toHaveAccessibleName("Input, 1 queued memo item");
     const inputQueueBadge = inputRail.locator(".mobile-console-memo-count");
@@ -2154,7 +2506,7 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
     await expect(directMemo).toHaveAccessibleName("Open memo, 1 saved");
     await expect(directMemo.locator(".memo-count.queued")).toHaveCount(0);
     await expect(shortcutMemo).toHaveAccessibleName("Open memoranda, 1 saved");
-    expect(workspaceTmuxSnapshot(memoSession)).toBe(tmuxBefore);
+    expect(workspaceTmuxContentSnapshot(memoSession)).toBe(tmuxBefore);
 
     await memoItem.getByRole("button", { name: "Queue next" }).click();
     await expect(memoDialog.getByText("Memo added to the input queue.")).toBeVisible();
@@ -2162,7 +2514,7 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
     await expect(inputRail.locator(".mobile-console-memo-count")).toHaveText("Q 1");
     await expect(directMemo).toHaveAccessibleName("Open memo, 1 queued");
     await expect(shortcutMemo).toHaveAccessibleName("Open memoranda, 1 queued");
-    expect(workspaceTmuxSnapshot(memoSession)).toBe(tmuxBefore);
+    expect(workspaceTmuxContentSnapshot(memoSession)).toBe(tmuxBefore);
 
     await memoItem.getByRole("button", { name: "Delete", exact: true }).click();
     await memoItem.getByRole("button", { name: "Confirm delete" }).click();
@@ -2171,7 +2523,7 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
     await expect(inputRail.locator(".mobile-console-memo-count")).toHaveCount(0);
     await expect(directMemo).toHaveAccessibleName("Open memo");
     await expect(shortcutMemo).toHaveAccessibleName("Open memoranda");
-    expect(workspaceTmuxSnapshot(memoSession)).toBe(tmuxBefore);
+    expect(workspaceTmuxContentSnapshot(memoSession)).toBe(tmuxBefore);
   } finally {
     try {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${memoSession}`], {

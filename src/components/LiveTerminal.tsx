@@ -27,6 +27,7 @@ interface LiveTerminalProps {
   session: string;
   ignoreSize: boolean;
   layoutSuspended?: boolean;
+  layoutRefreshToken?: string;
   theme: TerminalThemeMode;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
@@ -47,6 +48,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     session,
     ignoreSize,
     layoutSuspended = false,
+    layoutRefreshToken = "default",
     theme,
     onStateChange,
     onPaneChange,
@@ -66,6 +68,13 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       layoutSuspendedRef.current = layoutSuspended;
       if (wasSuspended && !layoutSuspended) scheduleFitAndResizeRef.current?.();
     }, [layoutSuspended]);
+
+    useLayoutEffect(() => {
+      const frame = window.requestAnimationFrame(() => {
+        scheduleFitAndResizeRef.current?.();
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }, [layoutRefreshToken]);
 
     useImperativeHandle(ref, () => ({
       send(data: string) {

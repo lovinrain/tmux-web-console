@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from typing import Literal
+from urllib.parse import quote
 
 import pytest
 from aiohttp import ClientResponse
@@ -26,8 +27,27 @@ from tmux_console.tmux import (
     TmuxClient,
     TmuxError,
     TmuxRenameUnverifiedError,
+    TmuxSessionIdentityChangedError,
 )
 from tmux_console.workspaces import WorkspaceStore
+
+SESSION_CREATED = 1_700_000_000
+SERVER_STARTED = 1_699_999_900
+SERVER_PID = 4242
+
+
+def termination_payload(
+    session_id: object = "$1",
+    session_created: object = SESSION_CREATED,
+    server_started: object = SERVER_STARTED,
+    server_pid: object = SERVER_PID,
+) -> dict[str, object]:
+    return {
+        "sessionId": session_id,
+        "sessionCreated": session_created,
+        "serverStarted": server_started,
+        "serverPid": server_pid,
+    }
 
 
 def make_session(name: str = "agent-one") -> Session:
@@ -36,7 +56,9 @@ def make_session(name: str = "agent-one") -> Session:
         id="$1",
         windows=1,
         attached=0,
-        created=1_700_000_000,
+        created=SESSION_CREATED,
+        server_started=SERVER_STARTED,
+        server_pid=SERVER_PID,
         activity=1_700_000_100,
     )
 
@@ -89,6 +111,30 @@ class CreatingFakeTmux(FakeTmux):
         if isinstance(self.result, TmuxError):
             raise self.result
         return self.result
+
+
+class TerminatingFakeTmux(FakeTmux):
+    def __init__(
+        self,
+        sessions: list[Session] | TmuxError,
+        result: TmuxError | None = None,
+    ) -> None:
+        super().__init__([sessions])
+        self.result = result
+        self.terminate_calls: list[tuple[str, int, int, int]] = []
+
+    async def terminate_session(
+        self,
+        session_id: str,
+        session_created: int,
+        server_started: int,
+        server_pid: int,
+    ) -> None:
+        self.terminate_calls.append(
+            (session_id, session_created, server_started, server_pid)
+        )
+        if self.result is not None:
+            raise self.result
 
 
 class RenamingFakeTmux(FakeTmux):
@@ -323,6 +369,348 @@ async def test_create_session_api_reports_an_atomic_name_conflict():
         assert response.status == 409
         assert await response.json() == {"error": "duplicate session: existing"}
         assert tmux.create_calls == ["existing"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_uses_the_exact_stable_id():
+    session_name = "agent one"
+    tmux = TerminatingFakeTmux([make_session(session_name)])
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            f"/api/sessions/{quote(session_name, safe='')}",
+            json=termination_payload(),
+        )
+
+        assert response.status == 204
+        assert await response.read() == b""
+        assert tmux.terminate_calls == [
+            ("$1", SESSION_CREATED, SERVER_STARTED, SERVER_PID)
+        ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_validates_the_exact_payload_and_path():
+    tmux = TerminatingFakeTmux([make_session("agent-one")])
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        malformed = await client.delete(
+            "/api/sessions/agent-one",
+            data="{",
+            headers={"Content-Type": "application/json"},
+        )
+        assert malformed.status == 400
+        assert await malformed.json() == {"error": "request body must be JSON"}
+
+        invalid_payloads = [
+            ([], "request body must be an object"),
+            ({}, "sessionId is required"),
+            ({"sessionId": "$1"}, "sessionCreated is required"),
+            (
+                {"sessionId": "$1", "sessionCreated": SESSION_CREATED},
+                "serverStarted is required",
+            ),
+            (
+                {
+                    "sessionId": "$1",
+                    "sessionCreated": SESSION_CREATED,
+                    "serverStarted": SERVER_STARTED,
+                },
+                "serverPid is required",
+            ),
+            (
+                {
+                    **termination_payload(),
+                    "force": True,
+                },
+                "unknown field: force",
+            ),
+            (
+                termination_payload(session_id=1),
+                "sessionId must be a string",
+            ),
+        ]
+        for payload, message in invalid_payloads:
+            response = await client.delete(
+                "/api/sessions/agent-one", json=payload
+            )
+            assert response.status == 400
+            assert await response.json() == {"error": message}
+
+        for session_id in ("", "7", "$", "$7x", " $$7"):
+            response = await client.delete(
+                "/api/sessions/agent-one",
+                json=termination_payload(session_id=session_id),
+            )
+            assert response.status == 400
+            assert await response.json() == {"error": "invalid tmux session id"}
+
+        for session_created in (None, True, 0, -1, 1.5, "1700000000"):
+            response = await client.delete(
+                "/api/sessions/agent-one",
+                json=termination_payload(session_created=session_created),
+            )
+            assert response.status == 400
+            assert await response.json() == {
+                "error": "sessionCreated must be a positive integer"
+            }
+
+        for server_started in (None, True, 0, -1, 1.5, "1699999900"):
+            response = await client.delete(
+                "/api/sessions/agent-one",
+                json=termination_payload(server_started=server_started),
+            )
+            assert response.status == 400
+            assert await response.json() == {
+                "error": "serverStarted must be a positive integer"
+            }
+
+        for server_pid in (None, True, 0, -1, 1.5, "4242"):
+            response = await client.delete(
+                "/api/sessions/agent-one",
+                json=termination_payload(server_pid=server_pid),
+            )
+            assert response.status == 400
+            assert await response.json() == {
+                "error": "serverPid must be a positive integer"
+            }
+
+        invalid_path = await client.delete(
+            "/api/sessions/invalid.name",
+            json=termination_payload(),
+        )
+        assert invalid_path.status == 400
+        assert await invalid_path.json() == {
+            "error": "session name cannot contain ':' or '.'"
+        }
+        assert tmux.terminate_calls == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_accepts_an_already_absent_target():
+    tmux = TerminatingFakeTmux([make_recreated_session("other")])
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/missing",
+            json=termination_payload(),
+        )
+
+        assert response.status == 204
+        assert await response.read() == b""
+        assert tmux.terminate_calls == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_rejects_the_exact_identity_under_a_new_name():
+    tmux = TerminatingFakeTmux([make_session("renamed-agent")])
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/old-name",
+            json=termination_payload(),
+        )
+
+        assert response.status == 409
+        assert await response.json() == {
+            "error": "tmux session identity changed; refresh before terminating it"
+        }
+        assert tmux.terminate_calls == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_rejects_a_recreated_same_name_session():
+    tmux = TerminatingFakeTmux([make_recreated_session("agent-one")])
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/agent-one",
+            json=termination_payload(),
+        )
+
+        assert response.status == 409
+        assert await response.json() == {
+            "error": (
+                "tmux session identity changed; refresh before terminating it"
+            )
+        }
+        assert tmux.terminate_calls == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("created", SESSION_CREATED + 1),
+        ("server_started", SERVER_STARTED + 1),
+        ("server_pid", SERVER_PID + 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_terminate_session_api_rejects_each_reused_identity_component(
+    field: str,
+    replacement: int,
+):
+    recreated = make_session("agent-one")
+    setattr(recreated, field, replacement)
+    tmux = TerminatingFakeTmux([recreated])
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/agent-one",
+            json=termination_payload(),
+        )
+
+        assert response.status == 409
+        assert await response.json() == {
+            "error": "tmux session identity changed; refresh before terminating it"
+        }
+        assert tmux.terminate_calls == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    ("sessions", "terminate_error", "message", "expected_calls"),
+    [
+        (TmuxError("inventory unavailable"), None, "inventory unavailable", []),
+        (
+            [make_session("agent-one")],
+            TmuxError("kill denied", returncode=1),
+            "kill denied",
+            [("$1", SESSION_CREATED, SERVER_STARTED, SERVER_PID)],
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_terminate_session_api_reports_tmux_failures_as_unavailable(
+    sessions: list[Session] | TmuxError,
+    terminate_error: TmuxError | None,
+    message: str,
+    expected_calls: list[tuple[str, int, int, int]],
+):
+    tmux = TerminatingFakeTmux(sessions, terminate_error)
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/agent-one", json=termination_payload()
+        )
+
+        assert response.status == 503
+        assert await response.json() == {"error": message}
+        assert tmux.terminate_calls == expected_calls
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_reports_an_atomic_identity_race_as_conflict():
+    tmux = TerminatingFakeTmux(
+        [make_session("agent-one")],
+        TmuxSessionIdentityChangedError(
+            "tmux session identity changed; refresh before terminating it"
+        ),
+    )
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/agent-one",
+            json=termination_payload(),
+        )
+
+        assert response.status == 409
+        assert await response.json() == {
+            "error": "tmux session identity changed; refresh before terminating it"
+        }
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    ("starred", "ignored"),
+    [(True, False), (False, True)],
+)
+@pytest.mark.asyncio
+async def test_terminate_session_api_preserves_persistent_session_state(
+    tmp_path, starred: bool, ignored: bool
+):
+    session_name = "agent-one"
+    tmux = TerminatingFakeTmux([make_session(session_name)])
+    titles_path = tmp_path / "titles.json"
+    messages_path = tmp_path / "messages.json"
+    workspaces_path = tmp_path / "workspaces.json"
+    titles = SessionTitleStore(titles_path)
+    messages = SessionMessageStore(
+        messages_path,
+        clock=lambda: 1_700_000_000,
+        id_factory=lambda: "message-id",
+    )
+    workspaces = WorkspaceStore(
+        workspaces_path,
+        clock=lambda: 1_700_000_000,
+        id_factory=lambda: "workspace-id",
+    )
+    titles.set_title(session_name, "Human alias")
+    titles.set_starred(session_name, starred)
+    titles.set_ignored(session_name, ignored)
+    memo = messages.add_message(session_name, "Keep this scratch", state="note")
+    workspace = workspaces.create_workspace(
+        name="Release room",
+        tabs=[session_name],
+        active_session=session_name,
+    )
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=tmux,
+                titles=titles,
+                messages=messages,
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            f"/api/sessions/{session_name}", json=termination_payload()
+        )
+
+        assert response.status == 204
+        reloaded_titles = SessionTitleStore(titles_path)
+        assert reloaded_titles.get_title(session_name) == "Human alias"
+        assert reloaded_titles.is_starred(session_name) is starred
+        assert reloaded_titles.is_ignored(session_name) is ignored
+        assert SessionMessageStore(messages_path).list_messages(session_name) == [memo]
+        assert WorkspaceStore(workspaces_path).get_workspace("workspace-id") == workspace
     finally:
         await client.close()
 

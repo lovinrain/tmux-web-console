@@ -63,6 +63,8 @@ function session(overrides: Partial<Session> = {}): Session {
     windows: 1,
     attached: 0,
     created: 1,
+    serverStarted: 10,
+    serverPid: 100,
     activity: 1,
     activePaneId: "%1",
     agentState: "other",
@@ -109,9 +111,24 @@ afterEach(() => {
 });
 
 describe("session classification", () => {
-  it("recognizes Claude, Codex, Cursor, and Grok panes", () => {
+  it("recognizes Claude, Codex, Copilot, Cursor, and Grok panes", () => {
     expect(classifyPane(pane({ command: "claude" })).tone).toBe("claude");
     expect(classifyPane(pane({ command: "codex" })).tone).toBe("codex");
+    expect(classifyPane(pane({ command: "copilot" }))).toEqual({
+      label: "Copilot",
+      tone: "copilot",
+    });
+    expect(classifyPane(pane({ command: "node", title: "GitHub Copilot" }))).toEqual({
+      label: "Copilot",
+      tone: "copilot",
+    });
+    expect(classifyPane(pane({ command: "NODE", title: "project - github copilot" })))
+      .toEqual({ label: "Copilot", tone: "copilot" });
+    expect(classifyPane(pane({ command: "copilot-agent" })).tone).toBe("process");
+    expect(classifyPane(pane({ command: "node", title: "GitHub Copilot preview" })).tone)
+      .toBe("process");
+    expect(classifyPane(pane({ command: "bash", title: "GitHub Copilot" })).tone)
+      .toBe("shell");
     expect(classifyPane(pane({ command: "agent" })).label).toBe("Cursor");
     expect(classifyPane(pane({ command: "cursor-agent" })).tone).toBe("cursor");
     expect(classifyPane(pane({ command: "grok" }))).toEqual({
@@ -550,28 +567,51 @@ describe("session classification", () => {
     expect(container.querySelector(".session-list")).not.toBeInTheDocument();
   });
 
-  it("keeps Cursor and Grok sessions under their own and the Agents chips", async () => {
+  it("keeps Cursor, Copilot, and Grok sessions under their own and the Agents chips", async () => {
     vi.mocked(listSessions).mockResolvedValue([
       session({ name: "cursor-one", id: "$1", panes: [pane({ command: "agent" })] }),
-      session({ name: "grok-one", id: "$2", panes: [pane({ command: "grok" })] }),
-      session({ name: "codex-one", id: "$3", panes: [pane({ command: "codex" })] }),
+      session({
+        name: "copilot-one",
+        id: "$2",
+        panes: [pane({ command: "node", title: "~/work - GitHub Copilot" })],
+      }),
+      session({ name: "grok-one", id: "$3", panes: [pane({ command: "grok" })] }),
+      session({ name: "codex-one", id: "$4", panes: [pane({ command: "codex" })] }),
+      session({
+        name: "node-lookalike",
+        id: "$5",
+        panes: [pane({ command: "node", title: "GitHub Copilot dashboard" })],
+      }),
     ]);
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
     await screen.findByRole("button", { name: "Open cursor-one" });
     fireEvent.click(screen.getByRole("button", { name: /^agents$/i }));
     expect(screen.getByRole("button", { name: "Open cursor-one" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open copilot-one" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open grok-one" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open codex-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open node-lookalike" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^cursor$/i }));
     expect(screen.getByRole("button", { name: "Open cursor-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open copilot-one" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open grok-one" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open codex-one" })).not.toBeInTheDocument();
+
+    const copilotFilter = screen.getByRole("button", { name: /^copilot$/i });
+    fireEvent.click(copilotFilter);
+    expect(copilotFilter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Open copilot-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open cursor-one" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open node-lookalike" })).not.toBeInTheDocument();
+    const copilotBadge = screen.getByText("Copilot", { selector: ".agent-badge" });
+    expect(copilotBadge).toHaveClass("agent-badge", "copilot");
 
     fireEvent.click(screen.getByRole("button", { name: /^grok$/i }));
     expect(screen.getByRole("button", { name: "Open grok-one" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Open cursor-one" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open copilot-one" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open codex-one" })).not.toBeInTheDocument();
   });
 

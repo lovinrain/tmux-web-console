@@ -46,6 +46,20 @@ def test_terminal_size_is_clamped():
     assert clamp_size(120, 40) == (120, 40)
 
 
+def test_resize_updates_the_pty_and_notifies_the_tmux_client(monkeypatch):
+    bridge, _finish = make_bare_bridge()
+    bridge.process = Mock(pid=456)
+    set_window_size = Mock()
+    killpg = Mock()
+    monkeypatch.setattr(pty_bridge_module, "set_window_size", set_window_size)
+    monkeypatch.setattr(pty_bridge_module.os, "killpg", killpg)
+
+    bridge.resize(120, 48)
+
+    set_window_size.assert_called_once_with(123, 120, 48)
+    killpg.assert_called_once_with(456, pty_bridge_module.signal.SIGWINCH)
+
+
 @pytest.mark.asyncio
 async def test_write_retries_interrupts_and_backpressure_until_complete(monkeypatch):
     bridge, finish = make_bare_bridge()

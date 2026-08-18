@@ -146,6 +146,10 @@ class PtyBridge:
     def resize(self, cols: int, rows: int) -> None:
         if not self.closed:
             set_window_size(self.master_fd, cols, rows)
+            # The inherited slave is not the attach client's controlling terminal,
+            # so the ioctl alone does not reliably notify tmux of the new size.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.process.pid, signal.SIGWINCH)
 
     async def close(self) -> None:
         if not self.closed:

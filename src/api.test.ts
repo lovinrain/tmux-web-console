@@ -13,6 +13,7 @@ import {
   renameSession,
   saveSnippetTree,
   subscribeToSessions,
+  terminateSession,
   updateSessionIgnored,
   updateSessionStar,
   updateQueuedMessage,
@@ -58,6 +59,8 @@ function session(): Session {
     windows: 1,
     attached: 0,
     created: 1,
+    serverStarted: 10,
+    serverPid: 100,
     activity: 2,
     activePaneId: null,
     agentState: "working",
@@ -143,6 +146,51 @@ describe("session creation API", () => {
     expect(error).toBeInstanceOf(ApiRequestError);
     expect(error).toMatchObject({
       message: "duplicate session: existing",
+      status: 409,
+    });
+  });
+});
+
+describe("session termination API", () => {
+  it("terminates the encoded native session by stable id and accepts an empty response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(terminateSession(
+      "work/name #1",
+      "$17",
+      1_700_000_000,
+      1_699_999_900,
+      4321,
+    )).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231`,
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({
+          sessionId: "$17",
+          sessionCreated: 1_700_000_000,
+          serverStarted: 1_699_999_900,
+          serverPid: 4321,
+        }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+  });
+
+  it("preserves the server error and status when termination fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "tmux session identity changed",
+    }), { status: 409, headers: { "Content-Type": "application/json" } })));
+
+    const error = await terminateSession("work", "$1", 1, 10, 100)
+      .catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      message: "tmux session identity changed",
       status: 409,
     });
   });

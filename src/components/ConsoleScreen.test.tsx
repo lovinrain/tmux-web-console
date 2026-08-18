@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createQueuedMessage,
+  deleteQueuedMessage,
   getSnippetTree,
   listQueuedMessages,
   listSessions,
@@ -95,6 +96,8 @@ function session(customTitle: string | null = null, name = "test"): Session {
     windows: 1,
     attached: 0,
     created: 1,
+    serverStarted: 10,
+    serverPid: 100,
     activity: 1,
     activePaneId: "%1",
     agentState: "other",
@@ -217,6 +220,27 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
   });
 
+  it("returns desktop keyboard focus to the live terminal", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    const liveButton = screen.getByRole("button", {
+      name: "Focus live terminal input",
+    });
+    expect(liveButton).toBeDisabled();
+
+    act(() => liveTerminalState.onStateChange?.("live"));
+    expect(liveButton).toBeEnabled();
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    expect(liveButton.dispatchEvent(mouseDown)).toBe(false);
+    fireEvent.click(liveButton);
+
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledWith("exit");
+    expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
+    expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
+  });
+
   it("uses raw and tmux history controls and exits distraction-free mode for input", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(
@@ -297,6 +321,7 @@ describe("ConsoleScreen session identity", () => {
       ["exit"],
     ]);
     expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
+    expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
 
     fireEvent.click(enterDistractionFree);
 
@@ -700,6 +725,88 @@ describe("ConsoleScreen session identity", () => {
       .not.toBeInTheDocument();
   });
 
+  it("offers guarded termination from the bottom controls without requiring a live PTY", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session("Display alias")]);
+    const onSessionTerminated = vi.fn(async () => {});
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionTerminated={onSessionTerminated}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Display alias" });
+    const shortcuts = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const endButton = within(shortcuts).getByRole("button", {
+      name: "Terminate tmux session",
+    });
+    expect(endButton).toBeEnabled();
+    expect(endButton).toHaveTextContent("End");
+    expect(within(screen.getByRole("navigation", { name: "Terminal view controls" }))
+      .getByRole("button", { name: "Terminate tmux session" })).toBeEnabled();
+
+    fireEvent.click(endButton);
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Terminate tmux session?",
+    });
+    expect(confirmation).toHaveTextContent("Display alias");
+    expect(confirmation).toHaveTextContent("test");
+    expect(onSessionTerminated).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", {
+      name: "Terminate session",
+    }));
+
+    await waitFor(() => expect(onSessionTerminated)
+      .toHaveBeenCalledWith("test", "$1", 1, 10, 100));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("keeps an open termination confirmation bound to its original tmux ID", async () => {
+    vi.useFakeTimers();
+    try {
+      const replacement = { ...session("Replacement alias"), serverStarted: 20 };
+      vi.mocked(listSessions)
+        .mockResolvedValueOnce([session("Original alias")])
+        .mockResolvedValue([replacement]);
+      const onSessionTerminated = vi.fn(async () => {});
+      renderWithTheme(
+        <ConsoleScreen
+          sessionName="test"
+          onBack={vi.fn()}
+          onSessionTerminated={onSessionTerminated}
+        />,
+      );
+
+      await act(async () => { await Promise.resolve(); });
+      fireEvent.click(within(screen.getByRole("group", {
+        name: "Terminal input shortcuts",
+      })).getByRole("button", { name: "Terminate tmux session" }));
+      const confirmation = screen.getByRole("alertdialog", {
+        name: "Terminate tmux session?",
+      });
+      expect(confirmation).toHaveTextContent("Original alias");
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+      expect(screen.getByRole("heading", { name: "Replacement alias" })).toBeVisible();
+      expect(confirmation).toHaveTextContent("Original alias");
+      expect(confirmation).not.toHaveTextContent("Replacement alias");
+      await act(async () => {
+        fireEvent.click(within(confirmation).getByRole("button", {
+          name: "Terminate session",
+        }));
+        await Promise.resolve();
+      });
+
+      expect(onSessionTerminated).toHaveBeenCalledWith("test", "$1", 1, 10, 100);
+      expect(onSessionTerminated)
+        .not.toHaveBeenCalledWith("test", "$1", 1, 20, 100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("captures the staged draft before a slow rename can switch to another session", async () => {
     const pendingRename = deferred<Awaited<ReturnType<typeof renameSession>>>();
     vi.mocked(listSessions).mockResolvedValue([session()]);
@@ -875,7 +982,7 @@ describe("ConsoleScreen session identity", () => {
     expect(updateSessionTitle).not.toHaveBeenCalled();
   });
 
-  it("loads a queued memorandum into the permanent staged input", async () => {
+  it("removes a queued memorandum after its unchanged staged input is acknowledged", async () => {
     const queuedMemo = {
       id: "memo-1",
       text: "Review the latest test failure",
@@ -884,22 +991,47 @@ describe("ConsoleScreen session identity", () => {
       updatedAt: 1_700_000_000_000,
       position: 0,
     };
-    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const loadedSession = { ...session(), memorandumCount: 1, queuedMessageCount: 1 };
+    const onSessionUpdate = vi.fn();
+    vi.mocked(listSessions).mockResolvedValue([loadedSession]);
     vi.mocked(listQueuedMessages).mockResolvedValue({
       session: "test",
       messages: [queuedMemo],
     });
     vi.mocked(updateQueuedMessage).mockResolvedValue({ ...queuedMemo, state: "note" });
-    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    vi.mocked(deleteQueuedMessage).mockResolvedValue(undefined);
+    liveTerminalHandle.submit.mockResolvedValue(true);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionUpdate={onSessionUpdate}
+      />,
+    );
 
     await screen.findByRole("heading", { name: "test" });
-    fireEvent.click(screen.getByRole("button", { name: "Open memoranda" }));
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getByRole("button", { name: "Open memoranda, 1 queued" }));
     expect(await screen.findByText("Review the latest test failure")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Stage" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Memo" })).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("Review the latest test failure");
     expect(updateQueuedMessage).toHaveBeenCalledWith("test", "memo-1", { state: "note" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send + Enter" }));
+
+    await waitFor(() => expect(liveTerminalHandle.submit).toHaveBeenCalledWith(
+      queuedMemo.text,
+      true,
+    ));
+    await waitFor(() => expect(deleteQueuedMessage).toHaveBeenCalledWith("test", "memo-1"));
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+    expect(onSessionUpdate).toHaveBeenLastCalledWith({
+      ...loadedSession,
+      memorandumCount: 0,
+      queuedMessageCount: 0,
+    });
   });
 
   it("queues staged input without a live PTY and updates the memo count immediately", async () => {

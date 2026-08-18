@@ -14,12 +14,14 @@ from tmux_console.tmux import (
     OUTPUT_FIELD_SEPARATOR,
     PANE_FORMAT,
     PANE_FORMAT_FIELDS,
+    TERMINATE_IDENTITY_MISMATCH,
     CreatedSession,
     Pane,
     Session,
     TmuxClient,
     TmuxError,
     TmuxRenameUnverifiedError,
+    TmuxSessionIdentityChangedError,
     parse_sessions,
     validate_tmux_new_session_name,
     validate_tmux_session_name,
@@ -28,6 +30,8 @@ from tmux_console.tmux import (
 
 def pane_row(**overrides: str) -> str:
     values = {
+        "pid": "4242",
+        "start_time": "1699999900",
         "session_name": "agent-one",
         "session_id": "$7",
         "session_windows": "1",
@@ -109,6 +113,27 @@ class RecordingRunTmux(TmuxClient):
         return result
 
 
+def guarded_terminate_call(
+    session_id: str = "$7",
+    session_created: int = 1_700_000_000,
+    server_started: int = 1_699_999_900,
+    server_pid: int = 4242,
+) -> list[str]:
+    return [
+        "if-shell",
+        "-F",
+        "-t",
+        session_id,
+        (
+            f"#{{&&:#{{==:#{{session_created}},{session_created}}},"
+            f"#{{&&:#{{==:#{{start_time}},{server_started}}},"
+            f"#{{==:#{{pid}},{server_pid}}}}}}}"
+        ),
+        f"kill-session -t {session_id}",
+        f"display-message -p {TERMINATE_IDENTITY_MISMATCH}",
+    ]
+
+
 async def test_create_session_uses_collision_resistant_name_default_shell_and_home(
     monkeypatch,
 ):
@@ -186,6 +211,122 @@ async def test_create_session_rejects_an_invalid_returned_id(monkeypatch):
 
     with pytest.raises(TmuxError, match="created session id"):
         await tmux.create_session()
+
+
+async def test_terminate_session_targets_the_exact_stable_id():
+    tmux = RecordingRunTmux("")
+
+    await tmux.terminate_session("$7", 1_700_000_000, 1_699_999_900, 4242)
+
+    assert tmux.calls == [guarded_terminate_call()]
+
+
+@pytest.mark.parametrize("session_id", ["", "7", "$", "$7x", " $$7"])
+async def test_terminate_session_rejects_invalid_ids_without_running_tmux(
+    session_id: str,
+):
+    tmux = RecordingRunTmux("")
+
+    with pytest.raises(ValueError, match="invalid tmux session id"):
+        await tmux.terminate_session(session_id, 1_700_000_000, 1_699_999_900, 4242)
+
+    assert tmux.calls == []
+
+
+@pytest.mark.parametrize(
+    ("session_created", "server_started", "server_pid", "message"),
+    [
+        (0, 1_699_999_900, 4242, "session_created"),
+        (True, 1_699_999_900, 4242, "session_created"),
+        (1_700_000_000, 0, 4242, "server_started"),
+        (1_700_000_000, True, 4242, "server_started"),
+        (1_700_000_000, 1_699_999_900, 0, "server_pid"),
+        (1_700_000_000, 1_699_999_900, True, "server_pid"),
+    ],
+)
+async def test_terminate_session_rejects_invalid_identity_numbers_without_tmux(
+    session_created: int,
+    server_started: int,
+    server_pid: int,
+    message: str,
+):
+    tmux = RecordingRunTmux("")
+
+    with pytest.raises(ValueError, match=message):
+        await tmux.terminate_session(
+            "$7", session_created, server_started, server_pid
+        )
+
+    assert tmux.calls == []
+
+
+async def test_terminate_session_rejects_an_atomic_identity_mismatch():
+    tmux = RecordingRunTmux(f"{TERMINATE_IDENTITY_MISMATCH}\n")
+
+    with pytest.raises(TmuxSessionIdentityChangedError, match="identity changed"):
+        await tmux.terminate_session("$7", 1_700_000_000, 1_699_999_900, 4242)
+
+    assert tmux.calls == [guarded_terminate_call()]
+
+
+async def test_terminate_session_recovers_when_a_timed_out_kill_was_committed():
+    tmux = RecordingRunTmux(
+        [
+            TmuxError("tmux command timed out"),
+            pane_row(session_name="other", session_id="$8"),
+        ]
+    )
+
+    await tmux.terminate_session("$7", 1_700_000_000, 1_699_999_900, 4242)
+
+    assert tmux.calls == [
+        guarded_terminate_call(),
+        ["list-panes", "-a", "-F", PANE_FORMAT],
+    ]
+
+
+async def test_terminate_session_does_not_mistake_a_reused_id_for_the_target():
+    tmux = RecordingRunTmux(
+        [
+            TmuxError("tmux command timed out"),
+            pane_row(session_id="$7", pid="9999"),
+        ]
+    )
+
+    await tmux.terminate_session("$7", 1_700_000_000, 1_699_999_900, 4242)
+
+    assert tmux.calls == [
+        guarded_terminate_call(),
+        ["list-panes", "-a", "-F", PANE_FORMAT],
+    ]
+
+
+async def test_terminate_session_reraises_the_kill_error_when_verification_fails():
+    kill_error = TmuxError("tmux command timed out")
+    tmux = RecordingRunTmux([kill_error, TmuxError("inventory unavailable")])
+
+    with pytest.raises(TmuxError) as raised:
+        await tmux.terminate_session("$7", 1_700_000_000, 1_699_999_900, 4242)
+
+    assert raised.value is kill_error
+    assert tmux.calls == [
+        guarded_terminate_call(),
+        ["list-panes", "-a", "-F", PANE_FORMAT],
+    ]
+
+
+async def test_terminate_session_reraises_the_kill_error_when_target_remains():
+    kill_error = TmuxError("kill denied", returncode=1)
+    tmux = RecordingRunTmux([kill_error, pane_row(session_id="$7")])
+
+    with pytest.raises(TmuxError) as raised:
+        await tmux.terminate_session("$7", 1_700_000_000, 1_699_999_900, 4242)
+
+    assert raised.value is kill_error
+    assert tmux.calls == [
+        guarded_terminate_call(),
+        ["list-panes", "-a", "-F", PANE_FORMAT],
+    ]
 
 
 @pytest.mark.parametrize(
@@ -752,6 +893,87 @@ def test_grok_agent_state_follows_its_tmux_title_signals():
     )
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "GitHub Copilot",
+        "Review status detection - GitHub Copilot",
+        "\u2839 Working - GitHub Copilot",
+    ],
+)
+def test_copilot_is_recognized_without_guessing_its_live_state(title: str):
+    state = classify_agent_state(
+        agent_pane(command="copilot", title=title),
+        visible_screen="Thinking... Esc to interrupt",
+        now=1000,
+    )
+
+    assert state.name == "unknown"
+    assert (
+        state.reason
+        == "No reliable GitHub Copilot CLI activity signal is available through tmux"
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "GitHub Copilot",
+        "Review status detection - GitHub Copilot",
+        "Repository - Investigate tests - GitHub Copilot",
+        "repository - github copilot",
+    ],
+)
+def test_npm_copilot_is_recognized_from_its_exact_node_title_suffix(title: str):
+    state = classify_agent_state(
+        agent_pane(command="node", title=title),
+        visible_screen="Thinking... Esc to interrupt",
+        now=1000,
+    )
+
+    assert state.name == "unknown"
+    assert (
+        state.reason
+        == "No reliable GitHub Copilot CLI activity signal is available through tmux"
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "",
+        "api server",
+        "Not GitHub Copilot",
+        "Repository-GitHub Copilot",
+        "Repository - GitHub Copilot CLI",
+        "Repository - GitHub Copilot!",
+        "GitHub Copilot ",
+    ],
+)
+def test_arbitrary_node_and_deceptive_copilot_titles_are_not_agents(title: str):
+    state = classify_agent_state(agent_pane(command="node", title=title), now=1000)
+
+    assert state.name == "other"
+
+
+def test_copilot_recognition_requires_the_exact_foreground_command():
+    for command in ("copilot-cli", "github-copilot", "my-copilot"):
+        state = classify_agent_state(agent_pane(command=command), now=1000)
+
+        assert state.name == "other"
+
+
+def test_dead_copilot_pane_keeps_the_existing_exited_state():
+    state = classify_agent_state(
+        agent_pane(command="copilot", dead=True),
+        visible_screen="Thinking... Esc to interrupt",
+        now=1000,
+    )
+
+    assert state.name == "unknown"
+    assert state.reason == "The active pane has exited"
+
+
 CURSOR_RUNNING_SCREEN = "\n".join(
     [
         '    Grepped "sample_module" in .',
@@ -977,3 +1199,43 @@ async def test_detect_sessions_captures_only_working_grok_panes():
     assert states["grok-working"].name == "waiting_command"
     assert states["grok-idle"].name == "waiting_human"
     assert tmux.captured == [working.id]
+
+
+@pytest.mark.parametrize(
+    ("command", "title"),
+    [
+        ("copilot", "Review status detection - GitHub Copilot"),
+        ("node", "Review status detection - GitHub Copilot"),
+    ],
+)
+async def test_detect_sessions_does_not_capture_unverified_copilot_panes(
+    command: str, title: str
+):
+    copilot = agent_pane(
+        id="%47",
+        command=command,
+        title=title,
+        activity=int(time.time()),
+    )
+    tmux = RecordingTmux({copilot.id: "Thinking... Esc to interrupt"})
+    sessions = [
+        Session(
+            name="copilot-work",
+            id="$5",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[copilot],
+        )
+    ]
+
+    states = await AgentStateDetector().detect_sessions(
+        cast(TmuxClient, tmux), sessions
+    )
+
+    assert states["copilot-work"].name == "unknown"
+    assert (
+        states["copilot-work"].reason
+        == "No reliable GitHub Copilot CLI activity signal is available through tmux"
+    )
+    assert tmux.captured == []

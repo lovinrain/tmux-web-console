@@ -12,6 +12,7 @@ import {
   createWorkspace,
   getWorkspace,
   listSessions,
+  terminateSession,
   updateWorkspaceActivity,
   type SavedWorkspace,
 } from "./api";
@@ -38,6 +39,7 @@ import {
   clearClosedWorkspaceHistory,
   closeWorkspaceSession,
   createSessionWorkspace,
+  moveWorkspaceSession,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
   savedWorkspaceIdFromSearch,
@@ -540,6 +542,7 @@ function AppRoutes() {
   const activeNewSessionView = useRef<NewSessionViewToken | null>(null);
   const sessionRenames = useRef<SessionRenameAliases>(new Map());
   const knownSessionsRef = useRef<Session[]>([]);
+  const locationRef = useRef(location);
   const workspaceRef = useRef(workspace);
   const hydratedWorkspaceIdRef = useRef<string | null>(null);
   const workspaceHydrationRequest = useRef(0);
@@ -560,6 +563,7 @@ function AppRoutes() {
   const navigationGeneration = useRef(0);
   const appMounted = useRef(true);
 
+  locationRef.current = location;
   workspaceRef.current = workspace;
 
   const setHydratedWorkspaceBinding = useCallback((workspaceId: string | null) => {
@@ -915,26 +919,29 @@ function AppRoutes() {
           restoredSearch,
           overrides,
         );
-      } else if (pendingTabs) {
-        const openSessions = pendingTabs;
-        pendingLocationTabs.current = null;
+      } else {
         const restored = currentLocation();
+        const restoredWorkspaceId = savedWorkspaceIdFromSearch(restored.search);
+        const previousWorkspaceId = savedWorkspaceIdFromSearch(locationRef.current.search);
+        const sameWorkspace = restoredWorkspaceId === previousWorkspaceId;
+        const openSessions = pendingTabs
+          ?? (sameWorkspace ? workspaceRef.current.openSessions : null);
+        if (!openSessions) {
+          const savedWorkspaceId = savedWorkspaceIdFromSearch(restored.search);
+          if (savedWorkspaceId) {
+            setLocation(restored);
+            void hydrateSavedWorkspace(savedWorkspaceId);
+            return;
+          }
+          syncLocation();
+          return;
+        }
+        pendingLocationTabs.current = null;
         replaceLocation(
           window.history.state,
           restored.path,
           searchWithWorkspaceTabs(restored.search, openSessions),
         );
-      }
-      if (pending || pendingTabs) {
-        syncLocation();
-        return;
-      }
-      const restored = currentLocation();
-      const savedWorkspaceId = savedWorkspaceIdFromSearch(restored.search);
-      if (savedWorkspaceId) {
-        setLocation(restored);
-        void hydrateSavedWorkspace(savedWorkspaceId);
-        return;
       }
       syncLocation();
     };
@@ -1392,6 +1399,28 @@ function AppRoutes() {
     finishSessionSwitch(sessionName, nextWorkspace);
   }, [finishSessionSwitch, workspace]);
 
+  const moveSessionTab = useCallback((sessionName: string, targetIndex: number) => {
+    const nextWorkspace = moveWorkspaceSession(
+      workspaceRef.current,
+      sessionName,
+      targetIndex,
+    );
+    if (nextWorkspace === workspaceRef.current) return;
+
+    workspaceRef.current = nextWorkspace;
+    if (pendingLocationTabs.current) {
+      pendingLocationTabs.current = [...nextWorkspace.openSessions];
+    }
+    setWorkspace(nextWorkspace);
+    const current = currentLocation();
+    replaceLocation(
+      window.history.state,
+      current.path,
+      searchWithWorkspaceTabs(current.search, nextWorkspace.openSessions),
+    );
+    syncLocation();
+  }, [replaceLocation, syncLocation]);
+
   const openTabSearch = useCallback(() => {
     if (
       workspaceRef.current.openSessions.length === 0
@@ -1549,8 +1578,9 @@ function AppRoutes() {
 
   const closeSessionTab = useCallback((sessionName: string) => {
     const route = parseSessionRoute(currentLocation().path);
-    const nextSession = sessionAfterClose(workspace.openSessions, sessionName);
-    const closedWorkspace = closeWorkspaceSession(workspace, sessionName);
+    const currentWorkspace = workspaceRef.current;
+    const nextSession = sessionAfterClose(currentWorkspace.openSessions, sessionName);
+    const closedWorkspace = closeWorkspaceSession(currentWorkspace, sessionName);
     if (route?.sessionName !== sessionName) {
       workspaceRef.current = closedWorkspace;
       setWorkspace(closedWorkspace);
@@ -1573,7 +1603,56 @@ function AppRoutes() {
       setWorkspace(closedWorkspace);
       navigateToDashboard(closedWorkspace.openSessions);
     }
-  }, [finishSessionSwitch, navigateToDashboard, replaceLocation, syncLocation, workspace]);
+  }, [finishSessionSwitch, navigateToDashboard, replaceLocation, syncLocation]);
+
+  const terminateOpenSession = useCallback(async (
+    sessionName: string,
+    sessionId: string,
+    sessionCreated: number,
+    serverStarted: number,
+    serverPid: number,
+  ) => {
+    await terminateSession(
+      sessionName,
+      sessionId,
+      sessionCreated,
+      serverStarted,
+      serverPid,
+    );
+    if (!appMounted.current) return;
+
+    const currentNamedSession = knownSessionsRef.current.find(
+      (session) => session.name === sessionName,
+    );
+    const stillRepresentsTerminatedSession = (
+      !currentNamedSession
+      || (
+        currentNamedSession.id === sessionId
+        && currentNamedSession.created === sessionCreated
+        && currentNamedSession.serverStarted === serverStarted
+        && currentNamedSession.serverPid === serverPid
+      )
+    );
+    const remainingSessions = knownSessionsRef.current.filter(
+      (session) => (
+        session.id !== sessionId
+        || session.created !== sessionCreated
+        || session.serverStarted !== serverStarted
+        || session.serverPid !== serverPid
+      ),
+    );
+    knownSessionsRef.current = remainingSessions;
+    setKnownSessions(remainingSessions);
+    setRenameWarnings((current) => {
+      if (!current.has(sessionId)) return current;
+      const next = new Map(current);
+      next.delete(sessionId);
+      return next;
+    });
+
+    // A same-name session created after the kill owns the route and quick tab now.
+    if (stillRepresentsTerminatedSession) closeSessionTab(sessionName);
+  }, [closeSessionTab]);
 
   const clearRecents = useCallback(() => {
     setWorkspace(clearClosedWorkspaceHistory);
@@ -1908,6 +1987,7 @@ function AppRoutes() {
         onSessionsChange={replaceKnownSessions}
         onSessionUpdate={updateKnownSession}
         onSessionRenamed={renameOpenSession}
+        onSessionTerminated={terminateOpenSession}
         renameWarning={renameWarning}
         onDismissRenameWarning={dismissRenameWarning}
         sessionNavigation={(
@@ -1919,6 +1999,7 @@ function AppRoutes() {
             recentsOpen={recentsOpen}
             tabsVisible={consoleBars.sessionTabs}
             onSelect={switchSession}
+            onMoveTab={moveSessionTab}
             onCloseTab={closeSessionTab}
             onOpenRecents={openRecents}
             onCloseRecents={closeRecents}
@@ -1948,6 +2029,7 @@ function AppRoutes() {
             recentsOpen={newSessionRoute.recentsOpen}
             newSessionActive
             onSelect={switchSession}
+            onMoveTab={moveSessionTab}
             onCloseTab={closeSessionTab}
             onCloseNewSession={returnToDashboard}
             onOpenRecents={openRecents}

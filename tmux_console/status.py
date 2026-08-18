@@ -36,7 +36,12 @@ CLAUDE_LEGACY_WAIT_PATTERN = re.compile(
 CLAUDE_HEADLINE_WRAP_LINES = 4
 # The Cursor CLI installs as ``cursor-agent`` plus a bare ``agent`` symlink.
 CURSOR_COMMANDS = frozenset({"agent", "cursor-agent"})
-AGENT_COMMANDS = frozenset({"claude", "codex", "grok"}) | CURSOR_COMMANDS
+COPILOT_COMMAND = "copilot"
+COPILOT_NODE_COMMAND = "node"
+COPILOT_TITLE = "github copilot"
+AGENT_COMMANDS = (
+    frozenset({"claude", "codex", "grok", COPILOT_COMMAND}) | CURSOR_COMMANDS
+)
 # Claude Code 2.1.233 uses the circle-halves spinner in tmux titles. Older
 # Claude, Codex, and Grok versions use braille frames instead.
 CLAUDE_WORKING_TITLE_FRAMES = frozenset({"\u25d0", "\u25d3", "\u25d1", "\u25d2"})
@@ -127,6 +132,16 @@ def _title_has_live_activity(command: str, title: str) -> bool:
     )
 
 
+def _is_copilot_pane(command: str, title: str) -> bool:
+    if command == COPILOT_COMMAND:
+        return True
+    normalized_title = title.casefold()
+    return command == COPILOT_NODE_COMMAND and (
+        normalized_title == COPILOT_TITLE
+        or normalized_title.endswith(f" - {COPILOT_TITLE}")
+    )
+
+
 def _cursor_prompt_index(footer: list[str]) -> int:
     for index in reversed(range(len(footer))):
         if CURSOR_PROMPT_MARKER in footer[index]:
@@ -172,10 +187,20 @@ def classify_agent_state(
         return AgentState("unknown", "The active pane has exited")
 
     command = pane.command.lower()
-    if command not in AGENT_COMMANDS:
-        return AgentState("other", "No Claude, Codex, Cursor, or Grok activity signal")
+    copilot_pane = _is_copilot_pane(command, pane.title)
+    if command not in AGENT_COMMANDS and not copilot_pane:
+        return AgentState(
+            "other", "No Claude, Codex, Copilot, Cursor, or Grok activity signal"
+        )
     if command in CURSOR_COMMANDS:
         return _classify_cursor_state(pane, visible_screen, now)
+    if copilot_pane:
+        # Copilot's active and idle terminal signals cannot be distinguished
+        # safely through this tmux inventory. Do not infer state from prose.
+        return AgentState(
+            "unknown",
+            "No reliable GitHub Copilot CLI activity signal is available through tmux",
+        )
 
     title = pane.title.strip()
     if _title_has_live_activity(command, title):

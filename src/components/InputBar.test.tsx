@@ -16,6 +16,7 @@ const props = {
   onSend: vi.fn(() => true),
   onSubmit: vi.fn(async () => true),
   onAddToMemo: vi.fn(async () => {}),
+  onReturnToLive: vi.fn(),
   onFocus: vi.fn(),
 };
 
@@ -104,6 +105,11 @@ describe("InputBar", () => {
       "title",
       expect.stringContaining("directly to tmux"),
     );
+    const liveButton = screen.getByRole("button", { name: "Focus live terminal input" });
+    expect(liveButton).toHaveTextContent("Live");
+    expect(liveButton).toHaveAttribute("title", expect.stringContaining("Exit scrollback"));
+    fireEvent.click(liveButton);
+    expect(props.onReturnToLive).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "Tmux Page Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Tmux Page Down" }));
@@ -136,6 +142,21 @@ describe("InputBar", () => {
       ["\x1b[D"],
       ["\x1b[C"],
     ]);
+  });
+
+  it("keeps session termination separate from terminal key delivery", () => {
+    const onTerminateSession = vi.fn();
+    const view = render(<InputBar {...props} onTerminateSession={onTerminateSession} />);
+
+    const terminate = screen.getByRole("button", { name: "Terminate tmux session" });
+    expect(terminate).toHaveTextContent("End");
+    expect(terminate).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(terminate);
+    expect(onTerminateSession).toHaveBeenCalledOnce();
+    expect(props.onSend).not.toHaveBeenCalled();
+
+    view.rerender(<InputBar {...props} />);
+    expect(screen.getByRole("button", { name: "Terminate tmux session" })).toBeDisabled();
   });
 
   it("keeps additional keys in a collapsed secondary panel", () => {
@@ -184,6 +205,7 @@ describe("InputBar", () => {
     expect(textarea).toHaveValue("prepare this offline");
     expect(screen.getByRole("button", { name: "Queue in memo" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send + Enter" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Focus live terminal input" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Esc" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Tmux Page Up" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }))
@@ -546,6 +568,108 @@ describe("InputBar", () => {
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("queued instruction");
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBe("queued instruction");
     expect(screen.getByText(/Memorandum loaded locally/)).toBeVisible();
+  });
+
+  it("removes the exact staged memo source after acknowledged delivery", async () => {
+    const ref = createRef<InputBarHandle>();
+    const onSubmit = vi.fn(async () => true);
+    const onConsumeMemo = vi.fn(async () => {});
+    const source = { messageId: "memo-1", text: "queued instruction" };
+    render(
+      <InputBar
+        {...props}
+        ref={ref}
+        onSubmit={onSubmit}
+        onConsumeMemo={onConsumeMemo}
+      />,
+    );
+    act(() => {
+      ref.current?.loadDraft(source.text, source);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send + Enter" }));
+
+    await waitFor(() => expect(onConsumeMemo).toHaveBeenCalledWith(source));
+    expect(onSubmit.mock.invocationCallOrder[0])
+      .toBeLessThan(onConsumeMemo.mock.invocationCallOrder[0]);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+    expect(screen.getByText(/Written once/)).toBeVisible();
+  });
+
+  it("keeps a staged memo source after unconfirmed delivery and consumes it after a retry", async () => {
+    const ref = createRef<InputBarHandle>();
+    const onSubmit = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const onConsumeMemo = vi.fn(async () => {});
+    const source = { messageId: "memo-1", text: "retry only after checking" };
+    render(
+      <InputBar
+        {...props}
+        ref={ref}
+        onSubmit={onSubmit}
+        onConsumeMemo={onConsumeMemo}
+      />,
+    );
+    act(() => {
+      ref.current?.loadDraft(source.text, source);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByText(/Delivery was not confirmed/);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue(source.text);
+    expect(onConsumeMemo).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onConsumeMemo).toHaveBeenCalledWith(source));
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+  });
+
+  it("does not consume a memo after the staged text is edited", async () => {
+    const ref = createRef<InputBarHandle>();
+    const onSubmit = vi.fn(async () => true);
+    const onConsumeMemo = vi.fn(async () => {});
+    const source = { messageId: "memo-1", text: "original memo text" };
+    render(
+      <InputBar
+        {...props}
+        ref={ref}
+        onSubmit={onSubmit}
+        onConsumeMemo={onConsumeMemo}
+      />,
+    );
+    act(() => {
+      ref.current?.loadDraft(source.text, source);
+    });
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(textarea, { target: { value: `${source.text} with an edit` } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    await waitFor(() => expect(textarea).toHaveValue(""));
+    expect(onConsumeMemo).not.toHaveBeenCalled();
+  });
+
+  it("clears an acknowledged draft but asks for manual memo cleanup when deletion fails", async () => {
+    const ref = createRef<InputBarHandle>();
+    const onConsumeMemo = vi.fn(async () => {
+      throw new Error("memo storage unavailable");
+    });
+    const source = { messageId: "memo-1", text: "deliver exactly once" };
+    render(<InputBar {...props} ref={ref} onConsumeMemo={onConsumeMemo} />);
+    act(() => {
+      ref.current?.loadDraft(source.text, source);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send + Enter" }));
+
+    await waitFor(() => expect(onConsumeMemo).toHaveBeenCalledWith(source));
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+    expect(screen.getByText(/Delivered, but its memo entry could not be removed/)).toBeVisible();
+    expect(screen.getByText(/do not send it again/)).toBeVisible();
   });
 
   it("rejects an astral memo that exceeds the UTF-16 draft limit without truncating", () => {

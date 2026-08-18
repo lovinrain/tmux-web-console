@@ -15,6 +15,8 @@ from pathlib import Path
 FORMAT_FIELD_SEPARATOR = "\x1f"
 OUTPUT_FIELD_SEPARATOR = r"\037"
 PANE_FORMAT_FIELDS = (
+    "pid",
+    "start_time",
     "session_name",
     "session_id",
     "session_windows",
@@ -41,6 +43,8 @@ PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT
 CREATED_SESSION_FORMAT = "#{session_name}\t#{session_id}"
 CLIENT_IDENTITY_FORMAT = "#{client_pid}\t#{client_name}\t#{session_id}"
 MAX_SESSION_NAME_LENGTH = 256
+TMUX_SESSION_ID_PATTERN = re.compile(r"^\$\d+$")
+TERMINATE_IDENTITY_MISMATCH = "MUXDECK_SESSION_IDENTITY_CHANGED"
 TERMINAL_HISTORY_ACTIONS = frozenset({"page-up", "page-down", "exit"})
 HISTORY_USER_KEY_PATTERN = re.compile(r"\bUser(\d{1,3})\b")
 HISTORY_USER_OPTION_PATTERN = re.compile(r"^user-keys\[(\d{1,3})\]")
@@ -59,6 +63,10 @@ class TmuxRenameUnverifiedError(TmuxError):
         super().__init__("tmux rename succeeded but its result could not be verified")
         self.requested_name = requested_name
         self.verification_error = verification_error
+
+
+class TmuxSessionIdentityChangedError(TmuxError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -93,6 +101,12 @@ def validate_tmux_new_session_name(value: str) -> str:
     if value.endswith(";"):
         # tmux parses a final semicolon as a command separator even with exec argv.
         raise ValueError("session name cannot end with ';'")
+    return value
+
+
+def validate_tmux_session_id(value: str) -> str:
+    if not TMUX_SESSION_ID_PATTERN.fullmatch(value):
+        raise ValueError("invalid tmux session id")
     return value
 
 
@@ -131,6 +145,8 @@ class Session:
     windows: int
     attached: int
     created: int
+    server_started: int = 0
+    server_pid: int = 0
     activity: int = 0
     panes: list[Pane] = field(default_factory=list)
 
@@ -151,6 +167,8 @@ class Session:
             "windows": self.windows,
             "attached": self.attached,
             "created": self.created,
+            "serverStarted": self.server_started,
+            "serverPid": self.server_pid,
             "activity": self.activity,
             "activePaneId": self.active_pane.id if self.active_pane else None,
             "panes": [pane.to_dict() for pane in self.panes],
@@ -189,6 +207,8 @@ def parse_sessions(output: str) -> list[Session]:
                 windows=_as_int(row["session_windows"]),
                 attached=_as_int(row["session_attached"]),
                 created=_as_int(row["session_created"]),
+                server_started=_as_int(row["start_time"]),
+                server_pid=_as_int(row["pid"]),
             )
             sessions[name] = session
 
@@ -311,6 +331,75 @@ class TmuxClient:
             raise TmuxError("tmux did not return the created session id")
         return CreatedSession(name=requested_name, id=session_id)
 
+    async def terminate_session(
+        self,
+        session_id: str,
+        session_created: int,
+        server_started: int,
+        server_pid: int,
+    ) -> None:
+        session_id = validate_tmux_session_id(session_id)
+        if (
+            isinstance(session_created, bool)
+            or not isinstance(session_created, int)
+            or session_created <= 0
+        ):
+            raise ValueError("session_created must be a positive integer")
+        if (
+            isinstance(server_started, bool)
+            or not isinstance(server_started, int)
+            or server_started <= 0
+        ):
+            raise ValueError("server_started must be a positive integer")
+        if (
+            isinstance(server_pid, bool)
+            or not isinstance(server_pid, int)
+            or server_pid <= 0
+        ):
+            raise ValueError("server_pid must be a positive integer")
+
+        identity_condition = (
+            f"#{{&&:#{{==:#{{session_created}},{session_created}}},"
+            f"#{{&&:#{{==:#{{start_time}},{server_started}}},"
+            f"#{{==:#{{pid}},{server_pid}}}}}}}"
+        )
+        try:
+            output = await self.run(
+                [
+                    "if-shell",
+                    "-F",
+                    "-t",
+                    session_id,
+                    identity_condition,
+                    f"kill-session -t {session_id}",
+                    f"display-message -p {TERMINATE_IDENTITY_MISMATCH}",
+                ]
+            )
+            if output.strip() == TERMINATE_IDENTITY_MISMATCH:
+                raise TmuxSessionIdentityChangedError(
+                    "tmux session identity changed; refresh before terminating it"
+                )
+        except TmuxSessionIdentityChangedError:
+            raise
+        except TmuxError as error:
+            kill_error = error
+        else:
+            return
+
+        # A timed-out client may still have committed the kill server-side.
+        try:
+            sessions = await self.list_sessions()
+        except TmuxError:
+            sessions = None
+        if sessions is None or any(
+            session.id == session_id
+            and session.created == session_created
+            and session.server_started == server_started
+            and session.server_pid == server_pid
+            for session in sessions
+        ):
+            raise kill_error
+
     async def rename_session(
         self,
         current_name: str,
@@ -324,8 +413,7 @@ class TmuxClient:
             raise ValueError("new session name must differ from current session name")
         if session_id is None:
             session_id = (await self.get_session(current_name)).id
-        if not session_id.startswith("$") or not session_id[1:].isdigit():
-            raise ValueError("invalid tmux session id")
+        session_id = validate_tmux_session_id(session_id)
 
         try:
             await self.run(
@@ -380,8 +468,7 @@ class TmuxClient:
             or client_pid <= 0
         ):
             raise ValueError("invalid tmux client pid")
-        if not session_id.startswith("$") or not session_id[1:].isdigit():
-            raise ValueError("invalid tmux session id")
+        session_id = validate_tmux_session_id(session_id)
         if not isinstance(action, str) or action not in TERMINAL_HISTORY_ACTIONS:
             raise ValueError("invalid terminal history action")
 

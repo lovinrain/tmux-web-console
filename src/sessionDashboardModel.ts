@@ -5,10 +5,11 @@ export type SessionKindFilter =
   | "agents"
   | "claude"
   | "codex"
+  | "copilot"
   | "cursor"
   | "grok"
   | "shells";
-type SessionKind = "claude" | "codex" | "cursor" | "grok" | "shells" | "other";
+type SessionKind = "claude" | "codex" | "copilot" | "cursor" | "grok" | "shells" | "other";
 export type SessionStateFilter = "any" | AgentState;
 export type SessionViewMode = "cards" | "list";
 export type SessionGroupMode = "none" | "state";
@@ -55,11 +56,12 @@ const KIND_FILTERS = new Set<SessionKindFilter>([
   "agents",
   "claude",
   "codex",
+  "copilot",
   "cursor",
   "grok",
   "shells",
 ]);
-const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "cursor", "grok"]);
+const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "copilot", "cursor", "grok"]);
 /** The Cursor CLI installs as `cursor-agent` plus a bare `agent` symlink. */
 const CURSOR_PANE_COMMANDS = new Set(["agent", "cursor", "cursor-agent"]);
 const SHELL_PANE_COMMANDS = new Set(["bash", "zsh", "fish", "sh"]);
@@ -315,10 +317,22 @@ function activePane(session: Session): Pane | undefined {
   return session.panes.find((pane) => pane.id === session.activePaneId) || session.panes[0];
 }
 
-export function paneCommandKind(command: string): SessionKind {
+export function paneCommandKind(command: string, title = ""): SessionKind {
   const normalized = command.toLowerCase();
+  const normalizedTitle = title.toLowerCase();
   if (normalized.includes("claude")) return "claude";
   if (normalized.includes("codex")) return "codex";
+  // The official npm launcher keeps `node` in tmux while branding the pane title.
+  if (
+    normalized === "copilot"
+    || (
+      normalized === "node"
+      && (
+        normalizedTitle === "github copilot"
+        || normalizedTitle.endsWith(" - github copilot")
+      )
+    )
+  ) return "copilot";
   if (CURSOR_PANE_COMMANDS.has(normalized)) return "cursor";
   if (normalized === "grok") return "grok";
   if (SHELL_PANE_COMMANDS.has(normalized)) return "shells";
@@ -326,7 +340,8 @@ export function paneCommandKind(command: string): SessionKind {
 }
 
 function sessionKind(session: Session): SessionKind {
-  return paneCommandKind(activePane(session)?.command || "");
+  const pane = activePane(session);
+  return paneCommandKind(pane?.command || "", pane?.title || "");
 }
 
 /** Apply the shareable query, kind, and state controls using dashboard semantics. */

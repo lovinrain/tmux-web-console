@@ -32,7 +32,9 @@ from .tmux import (
     TmuxClient,
     TmuxError,
     TmuxRenameUnverifiedError,
+    TmuxSessionIdentityChangedError,
     validate_tmux_new_session_name,
+    validate_tmux_session_id,
     validate_tmux_session_name,
 )
 from .workspaces import (
@@ -343,6 +345,116 @@ def create_app(
             {"session": created_session.name, "sessionId": created_session.id},
             status=201,
         )
+
+    async def terminate_session(request: web.Request) -> web.Response:
+        session_name = request.match_info["session"]
+        try:
+            session_name = validate_tmux_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        if "sessionId" not in payload:
+            return json_error("sessionId is required", 400)
+        if "sessionCreated" not in payload:
+            return json_error("sessionCreated is required", 400)
+        if "serverStarted" not in payload:
+            return json_error("serverStarted is required", 400)
+        if "serverPid" not in payload:
+            return json_error("serverPid is required", 400)
+        unknown_fields = sorted(
+            set(payload)
+            - {"sessionId", "sessionCreated", "serverStarted", "serverPid"}
+        )
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+
+        session_id = payload["sessionId"]
+        if not isinstance(session_id, str):
+            return json_error("sessionId must be a string", 400)
+        try:
+            session_id = validate_tmux_session_id(session_id)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        session_created = payload["sessionCreated"]
+        if (
+            isinstance(session_created, bool)
+            or not isinstance(session_created, int)
+            or session_created <= 0
+        ):
+            return json_error("sessionCreated must be a positive integer", 400)
+
+        server_started = payload["serverStarted"]
+        if (
+            isinstance(server_started, bool)
+            or not isinstance(server_started, int)
+            or server_started <= 0
+        ):
+            return json_error("serverStarted must be a positive integer", 400)
+
+        server_pid = payload["serverPid"]
+        if (
+            isinstance(server_pid, bool)
+            or not isinstance(server_pid, int)
+            or server_pid <= 0
+        ):
+            return json_error("serverPid must be a positive integer", 400)
+
+        async with app[SESSION_RENAME_LOCK_KEY]:
+            try:
+                current_sessions = await app[TMUX_KEY].list_sessions()
+            except TmuxError as error:
+                return json_error(str(error), 503)
+            target = next(
+                (session for session in current_sessions if session.name == session_name),
+                None,
+            )
+            if target is None:
+                target_was_renamed = any(
+                    session.id == session_id
+                    and session.created == session_created
+                    and session.server_started == server_started
+                    and session.server_pid == server_pid
+                    for session in current_sessions
+                )
+                if target_was_renamed:
+                    return json_error(
+                        "tmux session identity changed; refresh before terminating it", 409
+                    )
+                # Retrying a committed termination should preserve the successful
+                # postcondition without risking a same-name replacement.
+                return web.Response(status=204)
+            if (
+                target.id != session_id
+                or target.created != session_created
+                or target.server_started != server_started
+                or target.server_pid != server_pid
+            ):
+                return json_error(
+                    "tmux session identity changed; refresh before terminating it", 409
+                )
+
+            try:
+                await app[TMUX_KEY].terminate_session(
+                    session_id,
+                    session_created,
+                    server_started,
+                    server_pid,
+                )
+            except ValueError as error:
+                return json_error(str(error), 400)
+            except TmuxSessionIdentityChangedError as error:
+                return json_error(str(error), 409)
+            except TmuxError as error:
+                return json_error(str(error), 503)
+
+        return web.Response(status=204)
 
     async def rename_session(request: web.Request) -> web.Response:
         try:
@@ -1150,6 +1262,7 @@ def create_app(
     app.router.add_get(f"{prefix}/api/health", health)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
+    app.router.add_delete(f"{prefix}/api/sessions/{{session}}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
     app.router.add_get(

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
+  ArrowLeftIcon,
   CheckIcon,
   CloseIcon,
   GridIcon,
@@ -32,6 +33,7 @@ export interface SessionWorkspaceNavigationProps {
   newSessionActive?: boolean;
   onSelect: (sessionName: string) => void;
   onCloseTab: (sessionName: string) => void;
+  onMoveTab?: (sessionName: string, targetIndex: number) => void;
   onCloseNewSession?: () => void;
   onOpenRecents: () => void;
   onCloseRecents: () => void;
@@ -95,9 +97,10 @@ function activePane(session: Session): Pane | undefined {
 }
 
 function paneLabel(pane?: Pane): string {
-  switch (paneCommandKind(pane?.command || "")) {
+  switch (paneCommandKind(pane?.command || "", pane?.title || "")) {
     case "claude": return "Claude";
     case "codex": return "Codex";
+    case "copilot": return "Copilot";
     case "cursor": return "Cursor";
     case "grok": return "Grok";
     case "shells": return "Shell";
@@ -401,6 +404,9 @@ interface WorkspaceSessionRowProps {
   active: boolean;
   open: boolean;
   onSelect: () => void;
+  openIndex?: number;
+  openCount?: number;
+  onMoveTab?: (targetIndex: number) => void;
   onClose?: () => void;
 }
 
@@ -410,14 +416,27 @@ function WorkspaceSessionRow({
   active,
   open,
   onSelect,
+  openIndex,
+  openCount,
+  onMoveTab,
   onClose,
 }: WorkspaceSessionRowProps) {
   const pane = session ? activePane(session) : undefined;
   const displayTitle = session ? sessionDisplayTitle(session) : sessionName;
   const stateLabel = session ? STATE_LABELS[session.agentState] : "Unavailable";
+  const canReorder = (
+    open
+    && onMoveTab
+    && openIndex !== undefined
+    && openCount !== undefined
+    && openCount > 1
+  );
 
   return (
-    <div className={active ? "workspace-session-row active" : "workspace-session-row"}>
+    <div
+      className={active ? "workspace-session-row active" : "workspace-session-row"}
+      data-workspace-session-name={sessionName}
+    >
       <button
         type="button"
         className="workspace-session-select"
@@ -449,16 +468,48 @@ function WorkspaceSessionRow({
           )}
         </span>
       </button>
-      {open && onClose && (
-        <button
-          type="button"
-          className="workspace-session-close"
-          onClick={onClose}
-          aria-label={`Close ${displayTitle} quick tab`}
-          title="Close quick tab"
-        >
-          <CloseIcon />
-        </button>
+      {open && (canReorder || onClose) && (
+        <span className="workspace-session-actions">
+          {canReorder && (
+            <span
+              className="workspace-session-reorder"
+              role="group"
+              aria-label={`Reorder ${displayTitle} tab`}
+            >
+              <button
+                type="button"
+                className="workspace-session-move workspace-session-move-up"
+                onClick={() => onMoveTab(openIndex - 1)}
+                disabled={openIndex === 0}
+                aria-label={`Move ${displayTitle} tab up`}
+                title="Move tab up"
+              >
+                <ArrowLeftIcon />
+              </button>
+              <button
+                type="button"
+                className="workspace-session-move workspace-session-move-down"
+                onClick={() => onMoveTab(openIndex + 1)}
+                disabled={openIndex === openCount - 1}
+                aria-label={`Move ${displayTitle} tab down`}
+                title="Move tab down"
+              >
+                <ArrowLeftIcon />
+              </button>
+            </span>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              className="workspace-session-close"
+              onClick={onClose}
+              aria-label={`Close ${displayTitle} quick tab`}
+              title="Close quick tab"
+            >
+              <CloseIcon />
+            </button>
+          )}
+        </span>
       )}
     </div>
   );
@@ -477,6 +528,7 @@ function WorkspaceRecentsDialog({
   sessionsByName,
   onSelect,
   onCloseTab,
+  onMoveTab,
   onCloseRecents,
   onClearRecents,
   onOpenDashboard,
@@ -485,8 +537,13 @@ function WorkspaceRecentsDialog({
   onRequestSaveWorkspace,
 }: WorkspaceRecentsDialogProps) {
   const [query, setQuery] = useState("");
+  const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const reorderFocusIntent = useRef<{
+    sessionName: string;
+    direction: "up" | "down";
+  } | null>(null);
   const openSet = useMemo(() => new Set(openSessions), [openSessions]);
   const recentSet = useMemo(() => new Set(recentSessions), [recentSessions]);
   const normalizedQuery = query.trim().toLowerCase();
@@ -523,6 +580,39 @@ function WorkspaceRecentsDialog({
       }
     });
   };
+
+  const moveDialogTab = (sessionName: string, targetIndex: number) => {
+    if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
+    reorderFocusIntent.current = {
+      sessionName,
+      direction: targetIndex < openSessions.indexOf(sessionName) ? "up" : "down",
+    };
+    onMoveTab(sessionName, targetIndex);
+    setReorderAnnouncement(
+      `${tabTitle(sessionName, sessionsByName)} moved to position ${targetIndex + 1} of ${openSessions.length}.`,
+    );
+  };
+
+  useEffect(() => {
+    const intent = reorderFocusIntent.current;
+    if (!intent) return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(".workspace-session-row") ?? [],
+      ).find((item) => item.dataset.workspaceSessionName === intent.sessionName);
+      const controls = Array.from(
+        row?.querySelectorAll<HTMLButtonElement>(".workspace-session-move") ?? [],
+      );
+      const preferred = controls[intent.direction === "up" ? 0 : 1];
+      const target = preferred && !preferred.disabled
+        ? preferred
+        : controls.find((control) => !control.disabled)
+          ?? row?.querySelector<HTMLButtonElement>(".workspace-session-select");
+      target?.focus();
+      reorderFocusIntent.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [openSessions, reorderAnnouncement]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement
@@ -618,6 +708,11 @@ function WorkspaceRecentsDialog({
         <p className="workspace-sr-only" role="status" aria-live="polite">
           {resultCount} {resultCount === 1 ? "session" : "sessions"} found
         </p>
+        {reorderAnnouncement && (
+          <p className="workspace-sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {reorderAnnouncement}
+          </p>
+        )}
 
         <div className="workspace-recents-scroll">
           {filteredOpen.length > 0 && (
@@ -630,17 +725,25 @@ function WorkspaceRecentsDialog({
                 <span>{filteredOpen.length}</span>
               </header>
               <div className="workspace-session-list">
-                {filteredOpen.map((sessionName) => (
-                  <WorkspaceSessionRow
-                    key={sessionName}
-                    sessionName={sessionName}
-                    session={sessionsByName.get(sessionName)}
-                    active={sessionName === activeSession}
-                    open
-                    onSelect={() => onSelect(sessionName)}
-                    onClose={() => closeDialogTab(sessionName)}
-                  />
-                ))}
+                {filteredOpen.map((sessionName) => {
+                  const openIndex = openSessions.indexOf(sessionName);
+                  return (
+                    <WorkspaceSessionRow
+                      key={sessionName}
+                      sessionName={sessionName}
+                      session={sessionsByName.get(sessionName)}
+                      active={sessionName === activeSession}
+                      open
+                      openIndex={openIndex}
+                      openCount={openSessions.length}
+                      onSelect={() => onSelect(sessionName)}
+                      onMoveTab={onMoveTab
+                        ? (targetIndex) => moveDialogTab(sessionName, targetIndex)
+                        : undefined}
+                      onClose={() => closeDialogTab(sessionName)}
+                    />
+                  );
+                })}
               </div>
             </section>
           )}
@@ -757,6 +860,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     newSessionActive = false,
     onSelect,
     onCloseTab,
+    onMoveTab,
     onCloseNewSession,
     onOpenRecents,
     onCloseRecents,
@@ -766,11 +870,17 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onSaveWorkspace,
   } = props;
   const activeTabRef = useRef<HTMLButtonElement>(null);
+  const navigationRef = useRef<HTMLElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const persistenceStatusRef = useRef<HTMLSpanElement>(null);
   const focusActiveTabAfterClose = useRef(false);
+  const reorderFocusIntent = useRef<{
+    sessionName: string;
+    direction: "left" | "right";
+  } | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
+  const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
     [sessions],
@@ -817,9 +927,25 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         focusActiveTabAfterClose.current = false;
         activeTab.focus();
       }
+      const intent = reorderFocusIntent.current;
+      if (intent) {
+        const tab = Array.from(
+          navigationRef.current?.querySelectorAll<HTMLElement>(".workspace-tab") ?? [],
+        ).find((item) => item.dataset.workspaceSessionName === intent.sessionName);
+        const controls = Array.from(
+          tab?.querySelectorAll<HTMLButtonElement>(".workspace-tab-move") ?? [],
+        );
+        const preferred = controls[intent.direction === "left" ? 0 : 1];
+        const target = preferred && !preferred.disabled
+          ? preferred
+          : controls.find((control) => !control.disabled)
+            ?? tab?.querySelector<HTMLButtonElement>("[role='tab']");
+        target?.focus();
+        reorderFocusIntent.current = null;
+      }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeSession, newSessionActive, openSessions, tabsVisible]);
+  }, [activeSession, newSessionActive, openSessions, reorderAnnouncement, tabsVisible]);
 
   const closeQuickTab = (sessionName: string) => {
     focusActiveTabAfterClose.current = true;
@@ -831,6 +957,18 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseNewSession?.();
   };
 
+  const moveQuickTab = (sessionName: string, title: string, targetIndex: number) => {
+    if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
+    reorderFocusIntent.current = {
+      sessionName,
+      direction: targetIndex < openSessions.indexOf(sessionName) ? "left" : "right",
+    };
+    onMoveTab(sessionName, targetIndex);
+    setReorderAnnouncement(
+      `${title} moved to position ${targetIndex + 1} of ${openSessions.length}.`,
+    );
+  };
+
   const requestSaveFromRecents = () => {
     if (!onSaveWorkspace || workspacePersistenceState !== "unsaved") return;
     setSaveAfterRecents(true);
@@ -840,6 +978,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   return (
     <>
       <nav
+        ref={navigationRef}
         id="muxdeck-session-tabs"
         className="workspace-navigation"
         aria-label="Session workspace"
@@ -862,7 +1001,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 const title = tabTitle(sessionName, sessionsByName);
                 const active = !newSessionActive && sessionName === activeSession;
                 return (
-                  <div className={active ? "workspace-tab active" : "workspace-tab"} key={sessionName}>
+                  <div
+                    className={active ? "workspace-tab active" : "workspace-tab"}
+                    data-workspace-session-name={sessionName}
+                    key={sessionName}
+                  >
                     <button
                       ref={active ? activeTabRef : undefined}
                       type="button"
@@ -879,6 +1022,34 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
                       <span>{title}</span>
                     </button>
+                    {onMoveTab && openSessions.length > 1 && (
+                      <span
+                        className="workspace-tab-reorder"
+                        role="group"
+                        aria-label={`Reorder ${title} tab`}
+                      >
+                        <button
+                          type="button"
+                          className="workspace-tab-move"
+                          onClick={() => moveQuickTab(sessionName, title, index - 1)}
+                          disabled={index === 0}
+                          aria-label={`Move ${title} tab left`}
+                          title="Move tab left"
+                        >
+                          <ArrowLeftIcon />
+                        </button>
+                        <button
+                          type="button"
+                          className="workspace-tab-move workspace-tab-move-right"
+                          onClick={() => moveQuickTab(sessionName, title, index + 1)}
+                          disabled={index === openSessions.length - 1}
+                          aria-label={`Move ${title} tab right`}
+                          title="Move tab right"
+                        >
+                          <ArrowLeftIcon />
+                        </button>
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="workspace-tab-close"
@@ -989,6 +1160,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             ? tabTitle(activeSession, sessionsByName)
             : "None"}`}
       </p>
+
+      {reorderAnnouncement && (
+        <p className="workspace-sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {reorderAnnouncement}
+        </p>
+      )}
 
       {recentsOpen && (
         <WorkspaceRecentsDialog

@@ -7,6 +7,7 @@ import {
   createWorkspace,
   getWorkspace,
   listSessions,
+  terminateSession,
   updateWorkspaceActivity,
   type SavedWorkspace,
 } from "./api";
@@ -21,6 +22,7 @@ vi.mock("./api", async (importOriginal) => {
     createWorkspace: vi.fn(),
     getWorkspace: vi.fn(),
     listSessions: vi.fn(),
+    terminateSession: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
   };
 });
@@ -28,6 +30,7 @@ vi.mock("./api", async (importOriginal) => {
 const createWorkspaceMock = vi.mocked(createWorkspace);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const listSessionsMock = vi.mocked(listSessions);
+const terminateSessionMock = vi.mocked(terminateSession);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
 
 let pendingNewSessionCompletion: ((session: string, sessionId?: string) => void) | null = null;
@@ -38,6 +41,15 @@ let reportSessionRename: (
     sessionId: string,
     warnings?: readonly string[],
   ) => void
+) | null = null;
+let reportSessionTerminate: (
+  ((
+    sessionName: string,
+    sessionId: string,
+    sessionCreated: number,
+    serverStarted: number,
+    serverPid: number,
+  ) => Promise<void>)
 ) | null = null;
 let reportKnownSessions: ((sessions: Session[]) => void) | null = null;
 let openSessionFromDashboard: ((sessionName: string) => void) | null = null;
@@ -146,6 +158,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onBarVisibilityChange,
     onSessionsChange,
     onSessionRenamed,
+    onSessionTerminated,
     renameWarning,
     onDismissRenameWarning,
   }: {
@@ -173,6 +186,13 @@ vi.mock("./components/ConsoleScreen", () => ({
       sessionId: string,
       warnings?: readonly string[],
     ) => void;
+    onSessionTerminated?: (
+      sessionName: string,
+      sessionId: string,
+      sessionCreated: number,
+      serverStarted: number,
+      serverPid: number,
+    ) => Promise<void>;
     renameWarning?: {
       sessionId: string;
       sessionName: string;
@@ -182,6 +202,7 @@ vi.mock("./components/ConsoleScreen", () => ({
   }) => {
     reportKnownSessions = onSessionsChange ?? null;
     reportSessionRename = onSessionRenamed ?? null;
+    reportSessionTerminate = onSessionTerminated ?? null;
     const bars = [
       ["sessionTabs", "Session tabs", "muxdeck-session-tabs"],
       ["stagedInput", "Staged input", "muxdeck-staged-input"],
@@ -302,13 +323,21 @@ function historySessionBindings(): {
   } | null)?.muxdeckSessionBindings;
 }
 
-function session(name: string, id: string): Session {
+function session(
+  name: string,
+  id: string,
+  created = 1,
+  serverStarted = 10,
+  serverPid = 100,
+): Session {
   return {
     name,
     id,
     windows: 1,
     attached: 0,
-    created: 1,
+    created,
+    serverStarted,
+    serverPid,
     activity: 1,
     activePaneId: null,
     agentState: "other",
@@ -367,13 +396,16 @@ describe("App routing", () => {
     createWorkspaceMock.mockReset();
     getWorkspaceMock.mockReset();
     listSessionsMock.mockReset();
+    terminateSessionMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     getWorkspaceMock.mockResolvedValue(savedWorkspace());
     listSessionsMock.mockResolvedValue([]);
+    terminateSessionMock.mockResolvedValue(undefined);
     updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace());
     pendingNewSessionCompletion = null;
     reportSessionRename = null;
+    reportSessionTerminate = null;
     reportKnownSessions = null;
     openSessionFromDashboard = null;
     openSavedWorkspaceFromDashboard = null;
@@ -1444,6 +1476,81 @@ describe("App routing", () => {
     composer.remove();
   });
 
+  it("reorders tabs in the URL without changing the active route and remaps direct shortcuts", () => {
+    const search = "?kind=agents&flag";
+    replaceUrl(sessionUrl(
+      "beta",
+      `${search}&tab=alpha&tab=beta&tab=gamma`,
+    ));
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move beta tab left" }));
+
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "beta",
+    );
+    expectWorkspaceSearch(search, ["beta", "alpha", "gamma"]);
+    expect(renderedTabs()).toEqual(["beta", "alpha", "gamma"]);
+    expect(historySessionBindings()?.tabs.map((binding) => binding.name)).toEqual([
+      "beta",
+      "alpha",
+      "gamma",
+    ]);
+    expect(screen.getByRole("tab", { name: /beta/ }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+1");
+    expect(screen.getByRole("tab", { name: /alpha/ }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+2");
+
+    fireEvent.keyDown(window, {
+      key: "@",
+      code: "Digit2",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "alpha",
+    );
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+    expectWorkspaceSearch(search, ["beta", "alpha", "gamma"]);
+  });
+
+  it("keeps a reordered workspace through native Back from Overview and the console", async () => {
+    replaceUrl(dashboardUrl("?kind=agents&tab=alpha&tab=beta&tab=gamma"));
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Resume workspace at gamma, 3 open tabs",
+    }));
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma`);
+
+    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma/recents`);
+    expect(screen.getByRole("dialog", { name: "Switch sessions" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move beta tab up" }));
+    expectWorkspaceSearch("?kind=agents", ["beta", "alpha", "gamma"]);
+
+    act(() => window.history.back());
+    await waitFor(() => {
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma`);
+      expect(screen.queryByRole("dialog", { name: "Switch sessions" }))
+        .not.toBeInTheDocument();
+    });
+    expectWorkspaceSearch("?kind=agents", ["beta", "alpha", "gamma"]);
+    expect(renderedTabs()).toEqual(["beta", "alpha", "gamma"]);
+
+    act(() => window.history.back());
+    await waitFor(() => {
+      expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+      expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+    });
+    expectWorkspaceSearch("?kind=agents", ["beta", "alpha", "gamma"]);
+  });
+
   it("searches only open tabs by display title or tmux name and jumps directly", () => {
     replaceUrl(sessionUrl(
       "alpha-native",
@@ -1701,6 +1808,70 @@ describe("App routing", () => {
     await waitFor(() => expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible());
     expect(window.location.pathname).toBe(`${BASE_PATH}/`);
     expectWorkspaceSearch("", []);
+  });
+
+  it("terminates the exact active session and routes to the neighboring quick tab", async () => {
+    replaceUrl(sessionUrl(
+      "second%20work",
+      "?kind=agents&tab=work%2Fname%20%231&tab=second%20work",
+    ));
+    render(<App />);
+    act(() => reportKnownSessions?.([
+      session("work/name #1", "$1"),
+      session("second work", "$2"),
+    ]));
+    const terminate = reportSessionTerminate;
+    expect(terminate).not.toBeNull();
+
+    await act(async () => {
+      await terminate?.("second work", "$2", 1, 10, 100);
+    });
+
+    expect(terminateSessionMock)
+      .toHaveBeenCalledWith("second work", "$2", 1, 10, 100);
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "work/name #1",
+    );
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/work%2Fname%20%231`);
+    expectWorkspaceSearch("?kind=agents", ["work/name #1"]);
+  });
+
+  it("returns to the dashboard after terminating the last open quick tab", async () => {
+    replaceUrl(sessionUrl("work%2Fname%20%231", "?q=review&tab=work%2Fname%20%231"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("work/name #1", "$1")]));
+    const terminate = reportSessionTerminate;
+
+    await act(async () => {
+      await terminate?.("work/name #1", "$1", 1, 10, 100);
+    });
+
+    expect(terminateSessionMock)
+      .toHaveBeenCalledWith("work/name #1", "$1", 1, 10, 100);
+    expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+    expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+    expectWorkspaceSearch("?q=review", []);
+  });
+
+  it("keeps the route when a same-name replacement appears during termination", async () => {
+    const request = deferred<void>();
+    terminateSessionMock.mockReturnValue(request.promise);
+    replaceUrl(sessionUrl("alpha", "?tab=alpha"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("alpha", "$old")]));
+    const terminate = reportSessionTerminate;
+    const completion = terminate?.("alpha", "$old", 1, 10, 100);
+
+    act(() => reportKnownSessions?.([session("alpha", "$old", 1, 20)]));
+    await act(async () => {
+      request.resolve();
+      await completion;
+    });
+
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+    expectWorkspaceSearch("", ["alpha"]);
+    expect(historySessionBindings()?.route?.name).toBe("alpha");
   });
 
   it("restores every ordered open tab from the URL after remount", async () => {
@@ -1982,6 +2153,57 @@ describe("App routing", () => {
         .not.toBeInTheDocument();
     });
 
+    it("persists the remaining ordered tabs after terminating the active saved-workspace session", async () => {
+      vi.useFakeTimers();
+      const loaded = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "beta",
+        sessionRevision: 4,
+      });
+      getWorkspaceMock.mockResolvedValue(loaded);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace({
+        tabs: ["alpha"],
+        activeSession: "alpha",
+        sessionRevision: 4,
+      }));
+      replaceUrl(sessionUrl(
+        "beta",
+        "?workspace=workspace-one&tab=alpha&tab=beta",
+      ));
+
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      updateWorkspaceActivityMock.mockClear();
+      const terminate = reportSessionTerminate;
+      expect(terminate).not.toBeNull();
+
+      await act(async () => {
+        await terminate?.("beta", "$beta", 1, 10, 100);
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      expectWorkspaceSearch("?workspace=workspace-one", ["alpha"]);
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["alpha"],
+        "alpha",
+        4,
+      );
+    });
+
     it("reports a hydration failure as a workspace persistence error", async () => {
       getWorkspaceMock.mockRejectedValueOnce(new Error("workspace disk is unavailable"));
       listSessionsMock.mockResolvedValue([session("alpha", "$alpha")]);
@@ -2248,6 +2470,59 @@ describe("App routing", () => {
       expect(screen.queryByRole("button", { name: /Resume workspace/ })).not.toBeInTheDocument();
       expect(new URLSearchParams(window.location.search).get("workspace")).toBe(
         "workspace-one",
+      );
+    });
+
+    it("autosyncs reordered saved tabs with the current workspace revision", async () => {
+      vi.useFakeTimers();
+      const serverWorkspace = savedWorkspace({
+        tabs: ["alpha", "beta", "gamma"],
+        activeSession: "beta",
+        sessionRevision: 7,
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+        session("gamma", "$gamma"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue(serverWorkspace);
+      replaceUrl(sessionUrl(
+        "beta",
+        "?kind=codex&flag&workspace=workspace-one&tab=stale",
+      ));
+
+      render(<App />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("status", {
+        name: "Workspace saved automatically",
+      })).toBeVisible();
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Move beta tab left" }));
+
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+      expect(window.location.search).toBe(
+        "?kind=codex&flag&workspace=workspace-one&tab=beta&tab=alpha&tab=gamma",
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(399);
+        await Promise.resolve();
+      });
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+        await Promise.resolve();
+      });
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["beta", "alpha", "gamma"],
+        "beta",
+        7,
       );
     });
 

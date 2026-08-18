@@ -138,6 +138,7 @@ beforeEach(() => {
     callback(0);
     return 1;
   });
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
 });
 
 afterEach(() => {
@@ -200,6 +201,47 @@ describe("LiveTerminal themes", () => {
     expect(terminalMocks.fit).toHaveBeenCalledOnce();
     expect(terminal.refresh).toHaveBeenCalledWith(0, 39);
     expect(socket.send).not.toHaveBeenCalled();
+  });
+
+  it("refits after a committed layout-mode change without recreating the terminal or socket", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const terminalView = (layoutRefreshToken: string) => (
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        layoutRefreshToken={layoutRefreshToken}
+        theme="dark"
+        {...callbacks}
+      />
+    );
+    const view = render(terminalView("standard"));
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    socket.emit("open");
+    terminalMocks.fit.mockClear();
+    terminal.refresh.mockClear();
+    socket.send.mockClear();
+    terminalMocks.fit.mockImplementationOnce(() => {
+      terminal.cols = 100;
+      terminal.rows = 40;
+    });
+
+    view.rerender(terminalView("terminal-focus"));
+    expect(terminalMocks.fit).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(80));
+
+    expect(terminalMocks.fit).toHaveBeenCalledOnce();
+    expect(terminal.refresh).toHaveBeenCalledWith(0, 39);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: "resize",
+      cols: 100,
+      rows: 40,
+    }));
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("suspends layout fitting without recreating the terminal or socket and fits on resume", () => {

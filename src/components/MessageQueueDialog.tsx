@@ -82,7 +82,7 @@ export function MessageQueueDialog({
   const [addLength, setAddLength] = useState(0);
   const [addQueued, setAddQueued] = useState(false);
   const [snippetTarget, setSnippetTarget] = useState<"add" | "edit" | null>(null);
-  const [completedActions, setCompletedActions] = useState<Record<string, "staged">>({});
+  const [completedActions, setCompletedActions] = useState<Record<string, "staged" | "sent">>({});
   const addTextareaRef = useRef<HTMLTextAreaElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -435,10 +435,38 @@ export function MessageQueueDialog({
         }
         return;
       }
+
+      try {
+        await deleteQueuedMessage(requestedSession, message.id);
+      } catch (error) {
+        const wasAlreadyRemoved = typeof error === "object"
+          && error !== null
+          && "status" in error
+          && error.status === 404;
+        if (!wasAlreadyRemoved) {
+          if (sessionNameRef.current === requestedSession) {
+            setCompletedActions((current) => ({ ...current, [message.id]: "sent" }));
+            setActionError(
+              `This memo was sent, but it could not be removed automatically. Delete it manually; do not send it again. ${errorMessage(
+                error,
+                "Memo cleanup failed.",
+              )}`,
+            );
+          }
+          return;
+        }
+      }
+
       if (sessionNameRef.current !== requestedSession) return;
-      setNotice(message.state === "queued"
-        ? "Memo sent and kept here as a note."
-        : "Memo sent. The note remains available for reuse.");
+      publishMessages(messagesRef.current
+        .filter((candidate) => candidate.id !== message.id)
+        .map((candidate, position) => ({ ...candidate, position })));
+      setCompletedActions((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+      setNotice("Memo sent and removed.");
     } finally {
       if (sessionNameRef.current === requestedSession) setPending(null);
     }
@@ -664,7 +692,9 @@ export function MessageQueueDialog({
                             )}
                             {onSend && (
                               <button type="button" className="mq-button mq-button-send" onClick={() => void sendMessage(message)} disabled={refreshing || Boolean(pending) || Boolean(completedAction)}>
-                                {pending === `send:${message.id}` ? "Sending..." : "Send now"}
+                                {pending === `send:${message.id}`
+                                  ? "Sending..."
+                                  : completedAction === "sent" ? "Sent" : "Send now"}
                               </button>
                             )}
                             <button
@@ -672,13 +702,13 @@ export function MessageQueueDialog({
                               className={isQueued ? "mq-button mq-button-queue active" : "mq-button mq-button-queue"}
                               aria-pressed={isQueued}
                               onClick={() => void reclassifyMessage(message, isQueued ? "note" : "queued")}
-                              disabled={refreshing || Boolean(pending)}
+                              disabled={refreshing || Boolean(pending) || completedAction === "sent"}
                             >
                               {pending === `state:${message.id}`
                                 ? "Updating..."
                                 : isQueued ? "Move to notes" : "Queue next"}
                             </button>
-                            <button type="button" className="mq-button" onClick={() => startEditing(message)} disabled={refreshing || Boolean(pending)}>Edit</button>
+                            <button type="button" className="mq-button" onClick={() => startEditing(message)} disabled={refreshing || Boolean(pending) || completedAction === "sent"}>Edit</button>
                             <button type="button" className="mq-button mq-button-quiet-danger" onClick={() => setConfirmDeleteId(message.id)} disabled={refreshing || Boolean(pending)}>Delete</button>
                           </div>
                         )}

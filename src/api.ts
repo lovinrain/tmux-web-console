@@ -48,6 +48,20 @@ export async function createSession(name?: string): Promise<CreatedSession> {
   return { name: result.session, id: result.sessionId };
 }
 
+export async function terminateSession(
+  session: string,
+  sessionId: string,
+  sessionCreated: number,
+  serverStarted: number,
+  serverPid: number,
+): Promise<void> {
+  await jsonRequest<unknown>(`/api/sessions/${encodeURIComponent(session)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, sessionCreated, serverStarted, serverPid }),
+  });
+}
+
 export interface SessionRenameResult {
   previousSession: string;
   session: string;

@@ -15,6 +15,7 @@ import {
   MemoIcon,
   SnippetIcon,
   TerminalIcon,
+  TrashIcon,
 } from "../icons";
 
 export const MAX_DRAFT_LENGTH = 65_536;
@@ -31,18 +32,26 @@ interface InputBarProps {
   onSend: (data: string) => boolean;
   onSubmit: (data: string, withEnter: boolean) => Promise<boolean>;
   onAddToMemo?: (data: string) => Promise<void>;
+  onConsumeMemo?: (source: MemoDraftSource) => Promise<void>;
+  onReturnToLive: () => void;
   onFocus: () => void;
   onRevealComposer?: () => void;
   onEditSessionTitle?: () => void;
   onRenameSession?: () => void;
+  onTerminateSession?: () => void;
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
   messageCount?: number;
   queuedMessageCount?: number;
 }
 
+export interface MemoDraftSource {
+  messageId: string;
+  text: string;
+}
+
 export interface InputBarHandle {
-  loadDraft: (text: string) => boolean;
+  loadDraft: (text: string, source?: MemoDraftSource) => boolean;
   insertText: (text: string) => boolean;
   getDraft: () => string;
   focus: () => void;
@@ -153,6 +162,7 @@ type DraftStatus =
   | "loaded"
   | "sending"
   | "sent"
+  | "sent-memo-cleanup-error"
   | "unconfirmed"
   | "queueing"
   | "queued"
@@ -283,10 +293,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onSend,
   onSubmit,
   onAddToMemo,
+  onConsumeMemo,
+  onReturnToLive,
   onFocus,
   onRevealComposer,
   onEditSessionTitle,
   onRenameSession,
+  onTerminateSession,
   onOpenMessages,
   onOpenSnippets,
   messageCount = 0,
@@ -306,6 +319,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const actionPendingRef = useRef(false);
+  const memoSourceRef = useRef<MemoDraftSource | null>(null);
   const [draftLength, setDraftLength] = useState(initialDraft.length);
   const [draftHasContent, setDraftHasContent] = useState(Boolean(initialDraft.trim()));
   const [status, setStatus] = useState<DraftStatus>(
@@ -324,7 +338,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     return persisted;
   };
 
-  const loadDraft = (text: string): boolean => {
+  const loadDraft = (text: string, source?: MemoDraftSource): boolean => {
     const textarea = textareaRef.current;
     if (
       !textarea
@@ -338,6 +352,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       && !window.confirm("Replace the staged input that is already here?")
     ) return false;
     textarea.value = text;
+    memoSourceRef.current = source?.text === text ? source : null;
     recordDraft(textarea.value, "loaded");
     resizeTextarea(textarea);
     textarea.focus();
@@ -353,6 +368,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const nextLength = textarea.value.length - (end - start) + text.length;
     if (nextLength > MAX_DRAFT_LENGTH) return false;
     textarea.setRangeText(text, start, end, "end");
+    memoSourceRef.current = null;
     recordDraft(textarea.value, "loaded");
     resizeTextarea(textarea);
     textarea.focus();
@@ -423,18 +439,35 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       accepted = await onSubmit(submitted, withEnter);
     } catch {
       accepted = false;
-    } finally {
+    }
+    if (!accepted) {
       textarea.readOnly = false;
       actionPendingRef.current = false;
       setActionPending(false);
-    }
-    if (!accepted) {
       setStatus("unconfirmed");
       textarea.focus();
       return;
     }
+
+    const memoSource = memoSourceRef.current?.text === submitted
+      ? memoSourceRef.current
+      : null;
     textarea.value = "";
-    if (recordDraft("", "sent")) setStatus("sent");
+    memoSourceRef.current = null;
+    const draftCleared = recordDraft("", "sent");
+    let memoCleanupFailed = false;
+    if (memoSource && onConsumeMemo) {
+      try {
+        await onConsumeMemo(memoSource);
+      } catch {
+        memoCleanupFailed = true;
+      }
+    }
+    textarea.readOnly = false;
+    actionPendingRef.current = false;
+    setActionPending(false);
+    if (memoCleanupFailed) setStatus("sent-memo-cleanup-error");
+    else if (draftCleared) setStatus("sent");
     resizeTextarea(textarea);
     textarea.focus();
   };
@@ -469,6 +502,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return;
     }
     textarea.value = "";
+    memoSourceRef.current = null;
     if (recordDraft("", "queued")) setStatus("queued");
     resizeTextarea(textarea);
     textarea.focus();
@@ -499,6 +533,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (!textarea || !textarea.value) return;
     if (!window.confirm("Discard this staged input?")) return;
     textarea.value = "";
+    memoSourceRef.current = null;
     recordDraft("");
     resizeTextarea(textarea);
     textarea.focus();
@@ -513,6 +548,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       const room = MAX_DRAFT_LENGTH - textarea.value.length + (textarea.selectionEnd - textarea.selectionStart);
       const insertion = text.slice(0, Math.max(0, room));
       textarea.setRangeText(insertion, textarea.selectionStart, textarea.selectionEnd, "end");
+      memoSourceRef.current = null;
       recordDraft(textarea.value);
       resizeTextarea(textarea);
       onRevealComposer?.();
@@ -526,6 +562,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   let statusText: string;
   if (status === "sent") {
     statusText = "Written once to the attached tmux PTY; the local draft was cleared.";
+  } else if (status === "sent-memo-cleanup-error") {
+    statusText = "Delivered, but its memo entry could not be removed. Delete that entry manually; do not send it again.";
   } else if (status === "sending") {
     statusText = "Writing this staged snapshot to the attached tmux PTY...";
   } else if (status === "loaded") {
@@ -628,11 +666,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={(event) => {
               composingRef.current = false;
+              memoSourceRef.current = null;
               recordDraft(event.currentTarget.value);
               resizeTextarea(event.currentTarget);
             }}
             onInput={(event) => {
               // Never write value back: iOS owns its replacement range during dictation.
+              memoSourceRef.current = null;
               recordDraft(event.currentTarget.value);
               resizeTextarea(event.currentTarget);
             }}
@@ -751,6 +791,29 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           title="Focus the live terminal so keyboard input goes directly to tmux"
         >
           <KeyboardIcon /> <span>Raw keys</span>
+        </button>
+        <button
+          type="button"
+          className="key-button live-key"
+          onClick={onReturnToLive}
+          disabled={!enabled}
+          aria-label="Focus live terminal input"
+          aria-controls="muxdeck-active-console"
+          title="Exit scrollback and focus raw terminal input"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <TerminalIcon /> <span>Live</span>
+        </button>
+        <button
+          type="button"
+          className="key-button terminate-session-key"
+          onClick={onTerminateSession}
+          disabled={!onTerminateSession}
+          aria-label="Terminate tmux session"
+          aria-haspopup="dialog"
+          title="End this entire tmux session and all of its panes"
+        >
+          <TrashIcon /> <span>End</span>
         </button>
         {ESSENTIAL_KEYS.map((terminalKey) => (
           <TerminalKeyButton

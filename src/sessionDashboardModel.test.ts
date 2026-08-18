@@ -40,6 +40,8 @@ function session(overrides: Partial<Session> = {}): Session {
     windows: 1,
     attached: 0,
     created: 1,
+    serverStarted: 10,
+    serverPid: 100,
     activity: 1,
     activePaneId: "%1",
     agentState: "other",
@@ -91,6 +93,7 @@ describe("session dashboard URL state", () => {
       "?group=state&sort=state-change,tmux-name",
     );
     expect(canonicalizeSessionDashboardSearch("?kind=GROK")).toBe("?kind=grok");
+    expect(canonicalizeSessionDashboardSearch("?kind=COPILOT")).toBe("?kind=copilot");
     for (const state of ["waiting_command", "command-wait", "background-work"]) {
       expect(canonicalizeSessionDashboardSearch(`?state=${state}`)).toBe(
         "?state=waiting_command",
@@ -199,14 +202,36 @@ describe("session dashboard filters", () => {
     expect(filterSessions(sessions, route).map((item) => item.name)).toEqual(["one"]);
   });
 
-  it("treats Cursor and Grok panes as agents under their own chips and Agents", () => {
+  it("treats Cursor, Copilot, and Grok panes as agents under their own chips and Agents", () => {
     const sessions = [
       session({ name: "cursor-one", panes: [pane({ command: "agent" })] }),
       session({ name: "cursor-two", id: "$2", panes: [pane({ command: "cursor-agent" })] }),
       session({ name: "codex-one", id: "$3", panes: [pane({ command: "codex" })] }),
-      session({ name: "grok-one", id: "$4", panes: [pane({ command: "grok" })] }),
-      session({ name: "tunnel", id: "$5", panes: [pane({ command: "ngrok" })] }),
-      session({ name: "shell-one", id: "$6", panes: [pane({ command: "bash" })] }),
+      session({ name: "copilot-one", id: "$4", panes: [pane({ command: "copilot" })] }),
+      session({
+        name: "copilot-node-exact",
+        id: "$5",
+        panes: [pane({ command: "node", title: "GitHub Copilot" })],
+      }),
+      session({
+        name: "copilot-node-suffix",
+        id: "$6",
+        panes: [pane({ command: "NODE", title: "~/repo - gItHuB CoPiLoT" })],
+      }),
+      session({ name: "not-copilot", id: "$7", panes: [pane({ command: "copilot-agent" })] }),
+      session({
+        name: "deceptive-node",
+        id: "$8",
+        panes: [pane({ command: "node", title: "GitHub Copilot - dashboard" })],
+      }),
+      session({
+        name: "wrong-command",
+        id: "$9",
+        panes: [pane({ command: "bash", title: "GitHub Copilot" })],
+      }),
+      session({ name: "grok-one", id: "$10", panes: [pane({ command: "grok" })] }),
+      session({ name: "tunnel", id: "$11", panes: [pane({ command: "ngrok" })] }),
+      session({ name: "shell-one", id: "$12", panes: [pane({ command: "bash" })] }),
     ];
     const names = (search: string) =>
       filterSessions(sessions, parseSessionDashboardSearch(search)).map((item) => item.name);
@@ -217,10 +242,18 @@ describe("session dashboard filters", () => {
       "cursor-one",
       "cursor-two",
       "codex-one",
+      "copilot-one",
+      "copilot-node-exact",
+      "copilot-node-suffix",
       "grok-one",
     ]);
     expect(names("?kind=codex")).toEqual(["codex-one"]);
+    expect(names("?kind=copilot")).toEqual([
+      "copilot-one",
+      "copilot-node-exact",
+      "copilot-node-suffix",
+    ]);
     expect(names("?kind=grok")).toEqual(["grok-one"]);
-    expect(names("?kind=shells")).toEqual(["shell-one"]);
+    expect(names("?kind=shells")).toEqual(["wrong-command", "shell-one"]);
   });
 });
