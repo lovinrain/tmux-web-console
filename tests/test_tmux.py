@@ -27,6 +27,15 @@ from tmux_console.tmux import (
     validate_tmux_session_name,
 )
 
+TMUX_WITH_SESSION_ENV_USAGE = (
+    "usage: new-session [-AdDEPX] [-c start-directory] [-e environment] "
+    "[-F format] [-s session-name]\n"
+)
+TMUX_WITHOUT_SESSION_ENV_USAGE = (
+    "usage: new-session [-AdDEPX] [-c start-directory] [-F format] "
+    "[-s session-name]\n"
+)
+
 
 def pane_row(**overrides: str) -> str:
     values = {
@@ -154,7 +163,7 @@ async def test_create_session_uses_collision_resistant_name_default_shell_and_ho
             "muxdeck-abc123def456",
             "-c",
             str(Path.home()),
-        ]
+        ],
     ]
 
 
@@ -178,6 +187,165 @@ async def test_create_session_preserves_a_requested_name_exactly():
             str(Path.home()),
         ]
     ]
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+async def test_create_session_sets_a_grok_appearance_hint(theme: str):
+    tmux = RecordingRunTmux(
+        [
+            TmuxError(TMUX_WITH_SESSION_ENV_USAGE, returncode=1),
+            "themed-work\t$13\n",
+        ]
+    )
+
+    created = await tmux.create_session("themed-work", theme=theme)
+
+    assert created == CreatedSession(name="themed-work", id="$13")
+    assert tmux.calls == [
+        ["new-session", "-?"],
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "themed-work",
+            "-e",
+            "GROK_THEME=auto",
+            "-e",
+            f"GROK_APPEARANCE={theme}",
+            "-c",
+            str(Path.home()),
+        ],
+    ]
+
+
+async def test_create_session_falls_back_without_an_appearance_hint_before_tmux_3_2(
+    caplog,
+):
+    tmux = RecordingRunTmux(
+        [
+            TmuxError(TMUX_WITHOUT_SESSION_ENV_USAGE, returncode=1),
+            "legacy-work\t$14\n",
+        ]
+    )
+
+    created = await tmux.create_session("legacy-work", theme="light")
+
+    assert created == CreatedSession(name="legacy-work", id="$14")
+    assert tmux.calls == [
+        ["new-session", "-?"],
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "legacy-work",
+            "-c",
+            str(Path.home()),
+        ],
+    ]
+    assert "without a Grok appearance hint" in caplog.text
+
+
+async def test_create_session_caches_the_new_session_environment_capability():
+    tmux = RecordingRunTmux(
+        [
+            TmuxError(TMUX_WITH_SESSION_ENV_USAGE, returncode=1),
+            "first\t$14\n",
+            "second\t$15\n",
+        ]
+    )
+
+    await tmux.create_session("first", theme="dark")
+    await tmux.create_session("second", theme="light")
+
+    assert [call for call in tmux.calls if call == ["new-session", "-?"]] == [
+        ["new-session", "-?"]
+    ]
+
+
+async def test_create_session_probes_binary_when_explicit_socket_has_no_server(
+    monkeypatch,
+):
+    tmux = RecordingRunTmux(
+        [
+            TmuxError("error connecting to isolated socket", returncode=1),
+            "themed-work\t$13\n",
+        ]
+    )
+    binary_probe_calls: list[list[str]] = []
+
+    async def run_binary(args: Sequence[str]) -> str:
+        binary_probe_calls.append(list(args))
+        raise TmuxError(TMUX_WITH_SESSION_ENV_USAGE, returncode=1)
+
+    monkeypatch.setattr(tmux, "_run_binary", run_binary)
+
+    created = await tmux.create_session("themed-work", theme="dark")
+
+    assert created == CreatedSession(name="themed-work", id="$13")
+    assert binary_probe_calls == [["new-session", "-?"]]
+    assert tmux.calls == [
+        ["new-session", "-?"],
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "themed-work",
+            "-e",
+            "GROK_THEME=auto",
+            "-e",
+            "GROK_APPEARANCE=dark",
+            "-c",
+            str(Path.home()),
+        ],
+    ]
+
+
+async def test_create_session_falls_back_when_tmux_capabilities_cannot_be_detected(
+    caplog,
+):
+    tmux = RecordingRunTmux(
+        [
+            TmuxError("permission denied", returncode=1),
+            "work\t$16\n",
+        ]
+    )
+
+    created = await tmux.create_session("work", theme="dark")
+
+    assert created == CreatedSession(name="work", id="$16")
+    assert tmux.calls == [
+        ["new-session", "-?"],
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "work",
+            "-c",
+            str(Path.home()),
+        ],
+    ]
+    assert "could not be detected" in caplog.text
+
+
+async def test_create_session_rejects_an_unknown_theme_before_running_tmux():
+    tmux = RecordingRunTmux("")
+
+    with pytest.raises(ValueError, match="theme must be dark or light"):
+        await tmux.create_session(theme="auto")
+
+    assert tmux.calls == []
 
 
 async def test_create_session_validates_a_requested_name_before_running_tmux():

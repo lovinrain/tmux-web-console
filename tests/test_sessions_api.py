@@ -105,9 +105,13 @@ class CreatingFakeTmux(FakeTmux):
         super().__init__([[]])
         self.result = result
         self.create_calls: list[str | None] = []
+        self.create_theme_calls: list[str | None] = []
 
-    async def create_session(self, requested_name: str | None = None) -> CreatedSession:
+    async def create_session(
+        self, requested_name: str | None = None, theme: str | None = None
+    ) -> CreatedSession:
         self.create_calls.append(requested_name)
+        self.create_theme_calls.append(theme)
         if isinstance(self.result, TmuxError):
             raise self.result
         return self.result
@@ -264,6 +268,7 @@ async def test_create_session_api_returns_created_native_name():
             "sessionId": "$12",
         }
         assert tmux.create_calls == [None]
+        assert tmux.create_theme_calls == [None]
     finally:
         await client.close()
 
@@ -284,6 +289,32 @@ async def test_create_session_api_preserves_a_requested_native_name():
             "sessionId": "$13",
         }
         assert tmux.create_calls == [requested_name]
+        assert tmux.create_theme_calls == [None]
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(("theme", "session_id"), [("dark", "$14"), ("light", "$15")])
+@pytest.mark.asyncio
+async def test_create_session_api_passes_the_requested_theme(
+    theme: str, session_id: str
+):
+    tmux = CreatingFakeTmux(CreatedSession("themed-work", session_id))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/sessions", json={"name": "themed-work", "theme": theme}
+        )
+
+        assert response.status == 201
+        assert await response.json() == {
+            "session": "themed-work",
+            "sessionId": session_id,
+        }
+        assert tmux.create_calls == ["themed-work"]
+        assert tmux.create_theme_calls == [theme]
     finally:
         await client.close()
 
@@ -319,6 +350,18 @@ async def test_create_session_api_rejects_invalid_bodies_and_fields():
             assert wrong_type.status == 400
             assert await wrong_type.json() == {"error": "name must be a string"}
 
+        for value in (None, 7, True, []):
+            wrong_type = await client.post("/api/sessions", json={"theme": value})
+            assert wrong_type.status == 400
+            assert await wrong_type.json() == {"error": "theme must be a string"}
+
+        for theme in ("", "auto", "Dark", "groknight"):
+            invalid_theme = await client.post("/api/sessions", json={"theme": theme})
+            assert invalid_theme.status == 400
+            assert await invalid_theme.json() == {
+                "error": "theme must be dark or light"
+            }
+
         invalid_names = {
             "": "session name is required",
             "   ": "session name is required",
@@ -337,6 +380,7 @@ async def test_create_session_api_rejects_invalid_bodies_and_fields():
             assert await invalid.json() == {"error": message}
 
         assert tmux.create_calls == []
+        assert tmux.create_theme_calls == []
     finally:
         await client.close()
 
@@ -353,6 +397,7 @@ async def test_create_session_api_reports_tmux_failures_as_unavailable():
         assert response.status == 503
         assert await response.json() == {"error": "permission denied"}
         assert tmux.create_calls == [None]
+        assert tmux.create_theme_calls == [None]
     finally:
         await client.close()
 
@@ -369,6 +414,7 @@ async def test_create_session_api_reports_an_atomic_name_conflict():
         assert response.status == 409
         assert await response.json() == {"error": "duplicate session: existing"}
         assert tmux.create_calls == ["existing"]
+        assert tmux.create_theme_calls == [None]
     finally:
         await client.close()
 

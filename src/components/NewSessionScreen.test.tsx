@@ -20,6 +20,7 @@ function deferredSession() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  window.localStorage.clear();
   document.title = "Muxdeck";
 });
 
@@ -67,7 +68,7 @@ describe("NewSessionScreen", () => {
     fireEvent.submit(form);
 
     expect(createSession).toHaveBeenCalledOnce();
-    expect(createSession).toHaveBeenCalledWith();
+    expect(createSession).toHaveBeenCalledWith(undefined, "dark");
     expect(form).toHaveAttribute("aria-busy", "true");
     expect(screen.getByRole("button", { name: "Creating..." })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
@@ -98,7 +99,7 @@ describe("NewSessionScreen", () => {
     fireEvent.submit(form);
 
     expect(createSession).toHaveBeenCalledOnce();
-    expect(createSession).toHaveBeenCalledWith("  work/session #1  ");
+    expect(createSession).toHaveBeenCalledWith("  work/session #1  ", "dark");
     expect(input).toBeDisabled();
 
     await act(async () => {
@@ -158,8 +159,21 @@ describe("NewSessionScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create session" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("try-another-name", "$44"));
     expect(createSession).toHaveBeenCalledTimes(2);
-    expect(createSession).toHaveBeenNthCalledWith(1, "existing");
-    expect(createSession).toHaveBeenNthCalledWith(2, "try-another-name");
+    expect(createSession).toHaveBeenNthCalledWith(1, "existing", "dark");
+    expect(createSession).toHaveBeenNthCalledWith(2, "try-another-name", "dark");
+  });
+
+  it("uses the selected light appearance for Grok processes launched later", async () => {
+    window.localStorage.setItem("muxdeck-theme", "light");
+    vi.mocked(createSession).mockResolvedValue({ name: "light-session", id: "$46" });
+    renderWithTheme(<NewSessionScreen onCreated={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.getByText(
+      /on tmux 3\.2\+, Grok Build launched here follows the current light appearance/i,
+    )).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Create session" }));
+
+    await waitFor(() => expect(createSession).toHaveBeenCalledWith(undefined, "light"));
   });
 
   it("delivers a successful result after SPA navigation unmounts the view", async () => {

@@ -7,6 +7,7 @@ import {
 } from "react";
 import { createSession, type CreatedSession } from "../api";
 import { TerminalIcon } from "../icons";
+import { useTheme } from "../theme";
 import { ThemeToggle } from "./ThemeToggle";
 
 export const NEW_SESSION_PANEL_ID = "muxdeck-new-session";
@@ -43,6 +44,7 @@ export function NewSessionScreen({
   onCancel,
   sessionNavigation,
 }: NewSessionScreenProps) {
+  const { theme } = useTheme();
   const [draftName, setDraftName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,8 +83,8 @@ export function NewSessionScreen({
     let createdSession: CreatedSession;
     try {
       createdSession = draftName === ""
-        ? await createSession()
-        : await createSession(draftName);
+        ? await createSession(undefined, theme)
+        : await createSession(draftName, theme);
     } catch (creationError) {
       if (!mountedRef.current) return;
       creatingRef.current = false;
@@ -140,7 +142,10 @@ export function NewSessionScreen({
             <div className="new-session-default">
               <span>DEFAULT SESSION</span>
               <strong>Fresh shell</strong>
-              <p>Name it below or let the server assign a unique tmux name.</p>
+              <p>
+                Name it below or let the server assign one. On tmux 3.2+, Grok
+                Build launched here follows the current {theme} appearance.
+              </p>
             </div>
 
             <div className="new-session-name-field">

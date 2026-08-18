@@ -560,10 +560,11 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
 async def test_real_tmux_create_session_api_is_immediately_attachable():
     socket_name = f"muxdeck-create-pytest-{os.getpid()}-{time.time_ns()}"
     tmux_command = ["tmux", "-L", socket_name]
+    tmux_client = TmuxClient(socket_name=socket_name)
     client = TestClient(
         TestServer(
             create_app(
-                tmux=TmuxClient(socket_name=socket_name),
+                tmux=tmux_client,
                 base_path="/mux",
             )
         )
@@ -609,6 +610,33 @@ async def test_real_tmux_create_session_api_is_immediately_attachable():
         assert named_payload["session"] == requested_name
         assert named_payload["sessionId"].startswith("$")
 
+        themed_name = "grok-light"
+        themed_response = await client.post(
+            "/mux/api/sessions", json={"name": themed_name, "theme": "light"}
+        )
+        assert themed_response.status == 201
+        if await tmux_client._supports_new_session_environment():
+            assert (
+                await tmux_client.run(
+                    [
+                        "show-environment",
+                        "-t",
+                        f"={themed_name}",
+                        "GROK_THEME",
+                    ]
+                )
+            ).strip() == "GROK_THEME=auto"
+            assert (
+                await tmux_client.run(
+                    [
+                        "show-environment",
+                        "-t",
+                        f"={themed_name}",
+                        "GROK_APPEARANCE",
+                    ]
+                )
+            ).strip() == "GROK_APPEARANCE=light"
+
         conflict = await client.post("/mux/api/sessions", json={"name": requested_name})
         assert conflict.status == 409
         assert "duplicate session" in (await conflict.json())["error"].lower()
@@ -617,6 +645,7 @@ async def test_real_tmux_create_session_api_is_immediately_attachable():
         assert {session["name"] for session in listed["sessions"]} == {
             session_name,
             requested_name,
+            themed_name,
         }
     finally:
         await client.close()

@@ -128,8 +128,23 @@ Tmux cannot render the same pane at two independent responsive sizes.
 
 The `Theme` control switches the full browser UI and xterm ANSI palette together.
 Dark remains the default, and the selected appearance is stored only in that
-browser. Changing it never sends terminal input, resizes tmux, or reconnects the
-PTY client.
+browser. The Theme toggle never sends terminal input, resizes tmux, or reconnects
+the PTY client.
+
+When Muxdeck creates a session with tmux 3.2 or newer, it gives the new shell
+`GROK_THEME=auto` and the browser's current `GROK_APPEARANCE=dark|light` value.
+Grok Build launched from that shell therefore follows the selected appearance
+without requiring `/theme`, while Grok's `auto_dark_theme` and
+`auto_light_theme` settings still choose the concrete color schemes. Muxdeck
+does not rewrite Grok's saved configuration or type into the terminal.
+
+The startup appearance is fixed when tmux creates the shell. Changing the
+browser theme later does not alter an already-running session. To override the
+inherited behavior for one launch, use an explicit value such as
+`GROK_THEME=tokyonight grok`; unset `GROK_THEME` before launching to use Grok's
+saved theme preference instead. tmux 3.0 and 3.1 cannot set a per-session
+environment during creation, so Muxdeck still creates the session, logs a
+warning, and omits both Grok startup hints.
 
 The shortcut strip in `Input` mode sends terminal input. Its `PgUp` and `PgDn`
 controls send real Page Up/Page Down key sequences to the foreground application,

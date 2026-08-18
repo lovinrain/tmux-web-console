@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import re
 import secrets
@@ -50,6 +51,14 @@ HISTORY_USER_KEY_PATTERN = re.compile(r"\bUser(\d{1,3})\b")
 HISTORY_USER_OPTION_PATTERN = re.compile(r"^user-keys\[(\d{1,3})\]")
 CLIENT_ATTACH_RETRY_ATTEMPTS = 20
 CLIENT_ATTACH_RETRY_DELAY = 0.01
+NEW_SESSION_USAGE_MARKER = "usage: new-session"
+TMUX_CONNECTION_ERROR_MARKERS = (
+    "no server running",
+    "failed to connect",
+    "error connecting",
+)
+
+LOGGER = logging.getLogger("muxdeck")
 
 
 class TmuxError(RuntimeError):
@@ -253,6 +262,8 @@ class TmuxClient:
             else os.environ.get("MUXDECK_TMUX_SOCKET")
         )
         self._history_dispatch_lock = asyncio.Lock()
+        self._capability_probe_lock = asyncio.Lock()
+        self._new_session_environment_supported: bool | None = None
 
     @property
     def command_prefix(self) -> list[str]:
@@ -261,10 +272,15 @@ class TmuxClient:
         return [self.binary]
 
     async def run(self, args: Sequence[str]) -> str:
+        return await self._run_command([*self.command_prefix, *args])
+
+    async def _run_binary(self, args: Sequence[str]) -> str:
+        return await self._run_command([self.binary, *args])
+
+    async def _run_command(self, command: Sequence[str]) -> str:
         try:
             process = await asyncio.create_subprocess_exec(
-                *self.command_prefix,
-                *args,
+                *command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -300,25 +316,49 @@ class TmuxClient:
             raise
         return parse_sessions(output)
 
-    async def create_session(self, requested_name: str | None = None) -> CreatedSession:
+    async def create_session(
+        self, requested_name: str | None = None, theme: str | None = None
+    ) -> CreatedSession:
         requested_name = (
             f"muxdeck-{secrets.token_hex(6)}"
             if requested_name is None
             else validate_tmux_new_session_name(requested_name)
         )
-        output = await self.run(
-            [
-                "new-session",
-                "-d",
-                "-P",
-                "-F",
-                CREATED_SESSION_FORMAT,
-                "-s",
-                _escape_tmux_format(requested_name),
-                "-c",
-                str(Path.home()),
-            ]
-        )
+        grok_appearance = None
+        if theme is not None:
+            if theme not in {"dark", "light"}:
+                raise ValueError("theme must be dark or light")
+            grok_appearance = theme
+
+        args = [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            _escape_tmux_format(requested_name),
+        ]
+        if (
+            grok_appearance is not None
+            and await self._supports_new_session_environment()
+        ):
+            args.extend(
+                [
+                    "-e",
+                    "GROK_THEME=auto",
+                    "-e",
+                    f"GROK_APPEARANCE={grok_appearance}",
+                ]
+            )
+        elif grok_appearance is not None:
+            LOGGER.warning(
+                "tmux new-session -e is unavailable or could not be detected; "
+                "creating %r without a Grok appearance hint",
+                requested_name,
+            )
+        args.extend(["-c", str(Path.home())])
+        output = await self.run(args)
         # Tabs and line separators are invalid in names, so this preserves spaces.
         rows = output.splitlines()
         fields = rows[0].split("\t") if len(rows) == 1 else []
@@ -330,6 +370,48 @@ class TmuxClient:
         if not session_id.startswith("$") or not session_id[1:].isdigit():
             raise TmuxError("tmux did not return the created session id")
         return CreatedSession(name=requested_name, id=session_id)
+
+    async def _supports_new_session_environment(self) -> bool:
+        if self._new_session_environment_supported is not None:
+            return self._new_session_environment_supported
+
+        async with self._capability_probe_lock:
+            if self._new_session_environment_supported is not None:
+                return self._new_session_environment_supported
+            try:
+                usage = await self._probe_command_usage(
+                    "new-session", NEW_SESSION_USAGE_MARKER
+                )
+            except TmuxError:
+                self._new_session_environment_supported = False
+            else:
+                self._new_session_environment_supported = bool(
+                    re.search(r"\[-e\s+environment\]", usage)
+                )
+        return self._new_session_environment_supported
+
+    async def _probe_command_usage(self, command: str, usage_marker: str) -> str:
+        try:
+            usage = await self.run([command, "-?"])
+        except TmuxError as error:
+            usage = str(error)
+        if (
+            usage_marker not in usage.lower()
+            and self.socket_name is not None
+            and any(
+                marker in usage.lower()
+                for marker in TMUX_CONNECTION_ERROR_MARKERS
+            )
+        ):
+            # An explicit -L socket is consulted before tmux prints command usage.
+            # Capabilities belong to the binary, so retry without selecting a server.
+            try:
+                usage = await self._run_binary([command, "-?"])
+            except TmuxError as error:
+                usage = str(error)
+        if usage_marker not in usage.lower():
+            raise TmuxError(f"tmux did not report {command} capabilities")
+        return usage
 
     async def terminate_session(
         self,

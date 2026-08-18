@@ -124,6 +124,26 @@ describe("session creation API", () => {
     );
   });
 
+  it("passes the browser theme for deterministic Grok startup", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "grok-work",
+      sessionId: "$14",
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createSession("grok-work", "light")).resolves.toEqual({
+      name: "grok-work",
+      id: "$14",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "grok-work", theme: "light" }),
+      }),
+    );
+  });
+
   it("preserves the server error and status when creation fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       error: "unable to create tmux session",

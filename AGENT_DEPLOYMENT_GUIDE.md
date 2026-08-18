@@ -126,7 +126,7 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | Run user/group | target tmux owner | Must list the intended sessions using the same tmux command/socket. |
 | Python | 3.11+ | Needs venv/pip support. |
 | Node | `^20.19.0` or `>=22.12.0` | Node is needed to build, not to run after build. |
-| tmux | 3.x | `xterm-256color` terminfo must exist. |
+| tmux | 3.x | 3.2+ enables Grok startup appearance hints; `xterm-256color` terminfo must exist. |
 | Base path | `/mux` | No trailing slash at runtime; build value is `/mux/`. |
 | Loopback port | `7683` | Must not conflict with an unrelated service. |
 | State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user. |

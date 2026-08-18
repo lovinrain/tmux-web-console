@@ -320,7 +320,7 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        unknown_fields = sorted(set(payload) - {"name"})
+        unknown_fields = sorted(set(payload) - {"name", "theme"})
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
 
@@ -333,8 +333,17 @@ def create_app(
             except ValueError as error:
                 return json_error(str(error), 400)
 
+        requested_theme = payload.get("theme")
+        if "theme" in payload:
+            if not isinstance(requested_theme, str):
+                return json_error("theme must be a string", 400)
+            if requested_theme not in {"dark", "light"}:
+                return json_error("theme must be dark or light", 400)
+
         try:
-            created_session = await app[TMUX_KEY].create_session(requested_name)
+            created_session = await app[TMUX_KEY].create_session(
+                requested_name, theme=requested_theme
+            )
         except ValueError as error:
             return json_error(str(error), 400)
         except TmuxError as error:

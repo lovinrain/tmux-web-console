@@ -7,6 +7,7 @@ import type {
   SnippetNode,
   SnippetTree,
 } from "./types";
+import type { Theme } from "./theme";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -39,11 +40,15 @@ export interface CreatedSession {
   id: string;
 }
 
-export async function createSession(name?: string): Promise<CreatedSession> {
+export async function createSession(name?: string, theme?: Theme): Promise<CreatedSession> {
+  const body = {
+    ...(name === undefined ? {} : { name }),
+    ...(theme === undefined ? {} : { theme }),
+  };
   const result = await jsonRequest<{ session: string; sessionId: string }>("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(name === undefined ? {} : { name }),
+    body: JSON.stringify(body),
   });
   return { name: result.session, id: result.sessionId };
 }
