@@ -358,6 +358,18 @@ describe("ConsoleScreen session identity", () => {
     const exitFocus = screen.getByRole("button", {
       name: "Exit desktop terminal focus",
     });
+    const focusControls = screen.getByRole("group", {
+      name: "Desktop terminal focus controls",
+    });
+    const focusRedraw = within(focusControls).getByRole("button", {
+      name: "Redraw terminal display",
+    });
+    expect(within(focusControls).getAllByRole("button")).toHaveLength(2);
+    expect(focusRedraw).toHaveTextContent("Redraw");
+    expect(fireEvent.mouseDown(focusRedraw)).toBe(false);
+    fireEvent.click(focusRedraw);
+    expect(liveTerminalHandle.redraw).toHaveBeenCalledOnce();
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
     expect(exitFocus).toHaveTextContent("Exit");
     expect(exitFocus).toBePressed();
     fireEvent.keyDown(document, { key: "Escape" });
@@ -365,6 +377,9 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.click(exitFocus);
 
     expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    expect(screen.queryByRole("group", {
+      name: "Desktop terminal focus controls",
+    })).not.toBeInTheDocument();
     expect(screen.getByTestId("live-terminal")).toBe(terminal);
     expect(draft).toHaveValue("keep this desktop draft");
     expect(terminal).toHaveAttribute(

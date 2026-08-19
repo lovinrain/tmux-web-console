@@ -1556,6 +1556,7 @@ html[data-theme="light"] .jump-live {
   box-shadow: 0 8px 24px rgba(65, 55, 38, 0.24);
 }
 
+html[data-theme="light"] .desktop-terminal-focus-redraw,
 html[data-theme="light"] .desktop-terminal-focus-exit {
   color: #354132;
   background: rgba(255, 253, 248, 0.92);
@@ -1563,6 +1564,8 @@ html[data-theme="light"] .desktop-terminal-focus-exit {
   box-shadow: 0 8px 26px rgba(65, 55, 38, 0.24);
 }
 
+html[data-theme="light"] .desktop-terminal-focus-redraw:hover,
+html[data-theme="light"] .desktop-terminal-focus-redraw:focus-visible,
 html[data-theme="light"] .desktop-terminal-focus-exit:hover,
 html[data-theme="light"] .desktop-terminal-focus-exit:focus-visible {
   color: #fff;

@@ -4095,6 +4095,8 @@ a:focus-visible {
 
 .desktop-tab-orientation-toggle,
 .desktop-terminal-focus-key,
+.desktop-terminal-focus-actions,
+.desktop-terminal-focus-redraw,
 .desktop-terminal-focus-exit {
   display: none;
 }
@@ -4673,11 +4675,17 @@ a:focus-visible {
     display: none !important;
   }
 
-  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit {
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-actions {
     position: absolute;
     z-index: 8;
     top: max(10px, env(safe-area-inset-top, 0px));
     right: max(10px, env(safe-area-inset-right, 0px));
+    display: flex;
+    gap: 8px;
+  }
+
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw,
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit {
     display: inline-flex;
     height: 38px;
     align-items: center;
@@ -4697,6 +4705,8 @@ a:focus-visible {
     text-transform: uppercase;
   }
 
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:hover,
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:focus-visible,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit:hover,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit:focus-visible {
     color: var(--ink);
@@ -4704,6 +4714,7 @@ a:focus-visible {
     border-color: var(--acid);
   }
 
+  .desktop-terminal-focus-redraw svg,
   .desktop-terminal-focus-exit svg {
     width: 15px;
     height: 15px;

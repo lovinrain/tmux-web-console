@@ -182,7 +182,7 @@ send a control sequence; subsequent keyboard input goes directly to the
 application attached through tmux instead of into the staged draft.
 
 On desktop, `Focus` in the top `VIEW` toolbar expands the live terminal to the
-full browser viewport and leaves only a floating `Exit` control. It does not invoke
+full browser viewport and leaves only floating `Redraw` and `Exit` controls. It does not invoke
 the browser Fullscreen API, remount xterm, reconnect the WebSocket, change the
 URL, or discard the staged draft. Entering and leaving refits the existing PTY
 attachment so tmux receives the new dimensions. The choice is session-local and
@@ -196,8 +196,9 @@ and tag editor used by the dashboard. The optional display title changes only
 the label shown by Muxdeck; the native tmux session name and attach target do not
 change. Tags are predefined Muxdeck metadata and never send terminal input.
 
-The desktop bottom bar's `Redraw` shortcut asks xterm to rebuild its renderer and
-repaint the buffered terminal when glyphs or colors become visually corrupted.
+The desktop bottom bar and full-screen focus overlay provide a `Redraw` shortcut
+that asks xterm to rebuild its renderer and repaint the buffered terminal when
+glyphs or colors become visually corrupted.
 It does not reconnect, reset terminal state, send input, or resize the tmux pane.
 
 The adjacent `Tmux` shortcut renames the real session, equivalent to tmux's

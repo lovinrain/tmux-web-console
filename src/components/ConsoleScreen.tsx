@@ -25,6 +25,7 @@ import {
   HistoryIcon,
   KeyboardIcon,
   ListIcon,
+  RefreshIcon,
   TerminalIcon,
   TrashIcon,
 } from "../icons";
@@ -502,6 +503,9 @@ export function ConsoleScreen({
     terminalRef.current?.jumpToLive();
     terminalRef.current?.focus();
   }, []);
+  const redrawTerminal = useCallback(() => {
+    terminalRef.current?.redraw();
+  }, []);
   const toggleMobileTerminalDistractionFree = useCallback(() => {
     const next = mobileDistractionFreeMode !== "terminal";
     if (next) {
@@ -952,20 +956,38 @@ export function ConsoleScreen({
           </button>
         </nav>
         {desktopTerminalFocus && (
-          <button
-            type="button"
-            className="desktop-terminal-focus-exit"
-            aria-label="Exit desktop terminal focus"
-            aria-controls="muxdeck-active-console"
-            aria-pressed="true"
-            aria-keyshortcuts="Control+Shift+F"
-            title="Return to the full console (Ctrl+Shift+F)"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={exitDesktopTerminalFocus}
+          <div
+            className="desktop-terminal-focus-actions"
+            role="group"
+            aria-label="Desktop terminal focus controls"
           >
-            <ContractIcon />
-            <span>Exit</span>
-          </button>
+            <button
+              type="button"
+              className="desktop-terminal-focus-redraw"
+              aria-label="Redraw terminal display"
+              aria-controls="muxdeck-active-console"
+              title="Repaint the local terminal display without reconnecting or changing the tmux session"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={redrawTerminal}
+            >
+              <RefreshIcon />
+              <span>Redraw</span>
+            </button>
+            <button
+              type="button"
+              className="desktop-terminal-focus-exit"
+              aria-label="Exit desktop terminal focus"
+              aria-controls="muxdeck-active-console"
+              aria-pressed="true"
+              aria-keyshortcuts="Control+Shift+F"
+              title="Return to the full console (Ctrl+Shift+F)"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={exitDesktopTerminalFocus}
+            >
+              <ContractIcon />
+              <span>Exit</span>
+            </button>
+          </div>
         )}
       </div>
       <InputBar
@@ -986,7 +1008,7 @@ export function ConsoleScreen({
         mobileDistractionFree={mobileInputDistractionFree}
         onToggleMobileDistractionFree={toggleMobileInputDistractionFree}
         onFocus={() => terminalRef.current?.focus()}
-        onRedraw={() => terminalRef.current?.redraw()}
+        onRedraw={redrawTerminal}
         onRevealComposer={showComposer}
         onEditSessionTitle={session ? () => setTitleEditorOpen(true) : undefined}
         onRenameSession={session && onSessionRenamed

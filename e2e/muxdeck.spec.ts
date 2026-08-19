@@ -868,6 +868,15 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   const exitFocus = page.getByRole("button", {
     name: "Exit desktop terminal focus",
   });
+  const focusControls = page.getByRole("group", {
+    name: "Desktop terminal focus controls",
+  });
+  const focusRedraw = focusControls.getByRole("button", {
+    name: "Redraw terminal display",
+  });
+  await expect(focusControls.getByRole("button")).toHaveCount(2);
+  await expect(focusRedraw).toBeVisible();
+  await expect(focusRedraw).toBeInViewport();
   await expect(exitFocus).toBeVisible();
   await expect(exitFocus).toBeInViewport();
   await expect(exitFocus).toHaveAttribute("aria-pressed", "true");
@@ -876,7 +885,12 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   expect(exitBox).not.toBeNull();
   expect(exitBox!.width).toBeGreaterThanOrEqual(64);
   expect(exitBox!.height).toBeGreaterThanOrEqual(36);
-  await expect(page.locator("button:visible")).toHaveCount(1);
+  await focusRedraw.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  expect(terminalSocketCount).toBe(socketCountBeforeFocus);
+  expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
+  await expect(page.locator("button:visible")).toHaveCount(2);
   await expect(page.locator(".console-bar-toolbar")).toBeHidden();
   await expect(page.locator(".console-header")).toBeHidden();
   await expect(page.locator(".console-session-navigation")).toBeHidden();
