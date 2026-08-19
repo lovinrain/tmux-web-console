@@ -882,9 +882,9 @@ describe("InputBar", () => {
       />,
     );
 
-    const aliasButton = screen.getByRole("button", { name: "Edit display title" });
+    const aliasButton = screen.getByRole("button", { name: "Edit title and tags" });
     const renameButton = screen.getByRole("button", { name: "Rename tmux session" });
-    expect(aliasButton).toHaveTextContent("Alias");
+    expect(aliasButton).toHaveTextContent("Details");
     expect(renameButton).toHaveTextContent("Tmux");
     expect(renameButton).toHaveAttribute(
       "title",
@@ -910,12 +910,12 @@ describe("InputBar", () => {
     const onRenameSession = vi.fn();
     const view = render(<InputBar {...props} onRenameSession={onRenameSession} />);
 
-    expect(screen.getByRole("button", { name: "Edit display title" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit title and tags" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Rename tmux session" })).toBeEnabled();
 
     view.rerender(<InputBar {...props} onEditSessionTitle={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Edit display title" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Edit title and tags" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Rename tmux session" })).toBeDisabled();
   });
 });

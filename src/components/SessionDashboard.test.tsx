@@ -7,8 +7,10 @@ import {
   listSessions,
   listWorkspaces,
   subscribeToSessions,
+  updateSessionDetails,
   updateSessionIgnored,
   updateSessionStar,
+  updateSessionTags,
   updateSessionTitle,
   type SavedWorkspace,
 } from "../api";
@@ -29,8 +31,10 @@ vi.mock("../api", () => ({
   deleteWorkspace: vi.fn(),
   getSnippetTree: vi.fn(),
   subscribeToSessions: vi.fn(),
+  updateSessionDetails: vi.fn(),
   updateSessionIgnored: vi.fn(),
   updateSessionStar: vi.fn(),
+  updateSessionTags: vi.fn(),
   updateSessionTitle: vi.fn(),
 }));
 
@@ -75,6 +79,7 @@ function session(overrides: Partial<Session> = {}): Session {
     ignored: false,
     panes: [pane()],
     ...overrides,
+    tags: overrides.tags ?? [],
     queuedMessageCount: overrides.queuedMessageCount ?? 0,
   };
 }
@@ -613,14 +618,31 @@ describe("session classification", () => {
     vi.mocked(updateSessionTitle).mockResolvedValue("Muxdeck work");
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit title for test" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit title and tags for test" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Human title" }), {
       target: { value: "Muxdeck work" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
 
     await waitFor(() => expect(updateSessionTitle).toHaveBeenCalledWith("test", "Muxdeck work"));
     expect(await screen.findByRole("button", { name: "Open Muxdeck work" })).toBeVisible();
+  });
+
+  it("keeps keyboard focus inside the session details dialog", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session({ customTitle: "Existing" })]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Edit title and tags for test",
+    }));
+    const close = screen.getByRole("button", { name: "Close session details" });
+    const save = screen.getByRole("button", { name: "Save details" });
+
+    save.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(save).toHaveFocus();
   });
 
   it("clears a human title and falls back to the tmux session name", async () => {
@@ -628,12 +650,167 @@ describe("session classification", () => {
     vi.mocked(updateSessionTitle).mockResolvedValue(null);
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit title for test" }));
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit title and tags for test" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear title" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
 
     await waitFor(() => expect(updateSessionTitle).toHaveBeenCalledWith("test", ""));
     expect(await screen.findByRole("button", { name: "Open test" })).toBeVisible();
+  });
+
+  it("edits predefined tags with the title and renders compact badges", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session({ tags: ["work"] })]);
+    vi.mocked(updateSessionTags).mockResolvedValue(["work", "urgent"]);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open test" });
+    expect(screen.getByRole("button", { name: "Open test" }))
+      .toHaveAccessibleDescription(/Tags: Work/);
+    expect(container.querySelector(".session-tag.tag-work")).toHaveTextContent("Work");
+    fireEvent.click(screen.getByRole("button", { name: "Edit title and tags for test" }));
+    expect(screen.getByRole("checkbox", { name: "Work" })).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Urgent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+
+    await waitFor(() => expect(updateSessionTags).toHaveBeenCalledWith(
+      "test",
+      ["work", "urgent"],
+    ));
+    expect(updateSessionTitle).not.toHaveBeenCalled();
+    expect(container.querySelector(".session-tag.tag-urgent")).toHaveTextContent("Urgent");
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(container.querySelector(".session-row .session-tag.tag-work")).toBeVisible();
+    expect(container.querySelector(".session-row .session-tag.tag-urgent")).toBeVisible();
+  });
+
+  it("persists simultaneous title and tag edits atomically", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session({ tags: ["work"] })]);
+    vi.mocked(updateSessionDetails).mockResolvedValue({
+      customTitle: "Release review",
+      tags: ["work", "urgent"],
+    });
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Edit title and tags for test",
+    }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Human title" }), {
+      target: { value: "Release review" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Urgent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+
+    await waitFor(() => expect(updateSessionDetails).toHaveBeenCalledWith(
+      "test",
+      "Release review",
+      ["work", "urgent"],
+    ));
+    expect(updateSessionTitle).not.toHaveBeenCalled();
+    expect(updateSessionTags).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open Release review" })).toBeVisible();
+  });
+
+  it("returns focus to search when a tag edit filters out its card", async () => {
+    window.history.replaceState({}, "", "/mux/?tag=work");
+    vi.mocked(listSessions).mockResolvedValue([session({ tags: ["work"] })]);
+    vi.mocked(updateSessionTags).mockResolvedValue([]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Edit title and tags for test",
+    }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open test" }))
+      .not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Find a session" }))
+      .toHaveFocus());
+  });
+
+  it("keeps the tag editor open and existing badges intact when persistence fails", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session({ tags: ["review"] })]);
+    vi.mocked(updateSessionTags).mockRejectedValue(new Error("metadata disk is unavailable"));
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Edit title and tags for test",
+    }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("metadata disk is unavailable");
+    expect(screen.getByRole("dialog", { name: "Edit title and tags" })).toBeVisible();
+    expect(container.querySelector(".session-tag.tag-review")).toBeVisible();
+    expect(container.querySelector(".session-tag.tag-work")).not.toBeInTheDocument();
+  });
+
+  it("includes any selected tag and hard-excludes reverse matches from every section", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: "work", id: "$work", tags: ["work"] }),
+      session({ name: "review", id: "$review", tags: ["review"] }),
+      session({ name: "pinned", id: "$pinned", starred: true, tags: ["work", "urgent"] }),
+      session({ name: "ignored", id: "$ignored", ignored: true, tags: ["blocked"] }),
+    ]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open work" });
+    fireEvent.click(screen.getByRole("button", { name: /^Add Work include filter,/ }));
+    expect(window.location.search).toBe("?tag=work");
+    expect(screen.getByRole("button", { name: "Open work" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open pinned" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open ignored", hidden: true }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add Review include filter,/ }));
+    expect(window.location.search).toBe("?tag=work&tag=review");
+    expect(screen.getByRole("button", { name: "Open review" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Exclude matches" }));
+    expect(window.location.search).toBe("?not-tag=work&not-tag=review");
+    expect(screen.queryByRole("button", { name: "Open work" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open pinned" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review" })).not.toBeInTheDocument();
+
+    const includeMode = screen.getByRole("button", { name: "Include matches" });
+    expect(includeMode).not.toHaveAttribute("aria-pressed");
+    fireEvent.click(includeMode);
+    expect(window.location.search).toBe("?tag=work&tag=review");
+    expect(screen.getByRole("button", { name: "Open work" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open pinned" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open review" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Exclude matches" }));
+    expect(window.location.search).toBe("?not-tag=work&not-tag=review");
+    fireEvent.click(screen.getByRole("button", { name: /^Remove Review exclude filter,/ }));
+    expect(window.location.search).toBe("?not-tag=work");
+    expect(screen.getByRole("button", { name: "Open review" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear tag filters" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Add Blocked exclude filter,/ }));
+    expect(window.location.search).toBe("?not-tag=blocked");
+    expect(screen.queryByRole("button", { name: "Open ignored", hidden: true }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("1 starred / 2 filtered / 0 ignored")).toBeVisible();
+  });
+
+  it("groups by every assigned tag while keeping the result count unique", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: "multi", tags: ["work", "urgent"] }),
+      session({ name: "plain", id: "$plain" }),
+    ]);
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open multi" });
+    fireEvent.click(screen.getByRole("button", { name: /Group Tags \/ labels/ }));
+
+    expect(window.location.search).toBe("?group=tag");
+    expect([...container.querySelectorAll(".tag-session-group .state-group-header h3")]
+      .map((heading) => heading.textContent)).toEqual(["Work", "Urgent", "Untagged"]);
+    expect(screen.getAllByRole("button", { name: "Open multi" })).toHaveLength(2);
+    expect(screen.getByText("0 starred / 2 filtered / 0 ignored")).toBeVisible();
   });
 
   it("filters Claude and Codex independently and switches view modes", async () => {
@@ -839,6 +1016,47 @@ describe("session classification", () => {
     expect(screen.getByRole("textbox", { name: "Find a session" })).toHaveValue("beta");
     expect(screen.getByRole("button", { name: "Open Beta task" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Open Alpha task" })).not.toBeInTheDocument();
+    expect(listSessions).toHaveBeenCalledOnce();
+  });
+
+  it("restores included and excluded tags from browser history without refetching", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: "work", tags: ["work"] }),
+      session({ name: "blocked", id: "$2", tags: ["blocked"] }),
+    ]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open work" });
+    act(() => {
+      window.history.pushState({}, "", "/mux/?not-tag=work&tag=blocked");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(screen.queryByRole("button", { name: "Open work" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open blocked" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^Change Blocked to exclude filter,/ }))
+      .not.toHaveAttribute("aria-pressed");
+    expect(screen.getByRole("button", { name: /^Remove Work exclude filter,/ }))
+      .not.toHaveAttribute("aria-pressed");
+    expect(listSessions).toHaveBeenCalledOnce();
+  });
+
+  it("canonicalizes tag aliases and conflicts restored from browser history", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session({ tags: ["work"] })]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Open test" });
+    act(() => {
+      window.history.pushState(
+        {},
+        "",
+        "/mux/?tag=URGENT,work&tag=work&not-tag=urgent&not-tag=unknown&tab=test",
+      );
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(window.location.search).toBe("?tag=work&not-tag=urgent&tab=test");
+    expect(screen.getByRole("button", { name: "Open test" })).toBeVisible();
     expect(listSessions).toHaveBeenCalledOnce();
   });
 

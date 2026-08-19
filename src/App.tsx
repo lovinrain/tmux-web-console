@@ -2197,6 +2197,7 @@ function AppRoutes() {
     return withWorkspaceSyncNotice(
       <ConsoleScreen
         sessionName={sessionName}
+        workspaceName={workspaceName}
         onBack={returnToDashboard}
         workspaceOverlayOpen={recentsOpen}
         mobileMode={mobileConsoleMode}
@@ -2305,7 +2306,6 @@ function AppRoutes() {
 
   return withWorkspaceSyncNotice(
     <SessionDashboard
-      key={location.search}
       onOpen={openSession}
       onOpenInput={openSessionInput}
       onResumeWorkspace={workspaceReturnSession ? resumeWorkspace : undefined}

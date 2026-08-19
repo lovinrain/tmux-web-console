@@ -1,4 +1,10 @@
-import type { AgentState, Pane, Session } from "./types";
+import {
+  SESSION_TAGS,
+  type AgentState,
+  type Pane,
+  type Session,
+  type SessionTag,
+} from "./types";
 
 export type SessionKindFilter =
   | "all"
@@ -12,13 +18,15 @@ export type SessionKindFilter =
 type SessionKind = "claude" | "codex" | "copilot" | "cursor" | "grok" | "shells" | "other";
 export type SessionStateFilter = "any" | AgentState;
 export type SessionViewMode = "cards" | "list";
-export type SessionGroupMode = "none" | "state";
+export type SessionGroupMode = "none" | "state" | "tag";
 export type SessionSortKey = "activity" | "state" | "state-change" | "title" | "tmux-name";
 
 export interface SessionDashboardRouteState {
   query: string;
   kind: SessionKindFilter;
   state: SessionStateFilter;
+  includedTags: SessionTag[];
+  excludedTags: SessionTag[];
   view: SessionViewMode;
   group: SessionGroupMode;
   sort: SessionSortKey[];
@@ -46,6 +54,8 @@ export const DEFAULT_SESSION_DASHBOARD_ROUTE: Readonly<SessionDashboardRouteStat
   query: "",
   kind: "all",
   state: "any",
+  includedTags: [],
+  excludedTags: [],
   view: "cards",
   group: "none",
   sort: [...DEFAULT_SESSION_SORT],
@@ -67,7 +77,7 @@ const CURSOR_PANE_COMMANDS = new Set(["agent", "cursor", "cursor-agent"]);
 const SHELL_PANE_COMMANDS = new Set(["bash", "zsh", "fish", "sh"]);
 const STATE_FILTERS = new Set<SessionStateFilter>(["any", ...SESSION_STATE_ORDER]);
 const VIEW_MODES = new Set<SessionViewMode>(["cards", "list"]);
-const GROUP_MODES = new Set<SessionGroupMode>(["none", "state"]);
+const GROUP_MODES = new Set<SessionGroupMode>(["none", "state", "tag"]);
 const SORT_KEYS = new Set<SessionSortKey>([
   "activity",
   "state",
@@ -75,7 +85,17 @@ const SORT_KEYS = new Set<SessionSortKey>([
   "title",
   "tmux-name",
 ]);
-const OWNED_SEARCH_KEYS = ["q", "kind", "filter", "state", "view", "group", "sort"];
+const OWNED_SEARCH_KEYS = [
+  "q",
+  "kind",
+  "filter",
+  "state",
+  "tag",
+  "not-tag",
+  "view",
+  "group",
+  "sort",
+];
 const STATE_PRIORITY = new Map(SESSION_STATE_ORDER.map((state, index) => [state, index]));
 const NATURAL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -99,6 +119,8 @@ function copySort(criteria: readonly SessionSortKey[]): SessionSortKey[] {
 function defaultRouteState(): SessionDashboardRouteState {
   return {
     ...DEFAULT_SESSION_DASHBOARD_ROUTE,
+    includedTags: [...DEFAULT_SESSION_DASHBOARD_ROUTE.includedTags],
+    excludedTags: [...DEFAULT_SESSION_DASHBOARD_ROUTE.excludedTags],
     sort: copySort(DEFAULT_SESSION_SORT),
   };
 }
@@ -145,9 +167,17 @@ function parseView(value: string | null): SessionViewMode {
 function parseGroup(value: string | null): SessionGroupMode {
   const normalized = value?.toLowerCase();
   if (normalized === "states" || normalized === "state-groups") return "state";
+  if (normalized === "tags" || normalized === "tag-groups") return "tag";
   return normalized && GROUP_MODES.has(normalized as SessionGroupMode)
     ? normalized as SessionGroupMode
     : "none";
+}
+
+function parseTags(values: readonly string[]): SessionTag[] {
+  const requested = new Set(values
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim().toLowerCase()));
+  return SESSION_TAGS.filter((tag) => requested.has(tag));
 }
 
 interface ParsedSortToken {
@@ -199,11 +229,17 @@ export function parseSessionDashboardSearch(
   const params = searchParams(input);
   const parsedSort = parseSort(params);
   const explicitKind = params.get("kind");
+  const excludedTags = parseTags(params.getAll("not-tag"));
+  const excludedTagSet = new Set(excludedTags);
+  const includedTags = parseTags(params.getAll("tag"))
+    .filter((tag) => !excludedTagSet.has(tag));
 
   return {
     query: params.get("q") || "",
     kind: parseKind(explicitKind === null ? params.get("filter") : explicitKind),
     state: parseState(params.get("state")),
+    includedTags,
+    excludedTags,
     view: parseView(params.get("view")),
     group: parsedSort.legacyStateGroups ? "state" : parseGroup(params.get("group")),
     sort: parsedSort.criteria,
@@ -232,6 +268,14 @@ export function serializeSessionDashboardSearch(
   if (state.query) params.set("q", state.query);
   if (state.kind !== "all") params.set("kind", state.kind);
   if (state.state !== "any") params.set("state", state.state);
+  for (const tag of SESSION_TAGS) {
+    if (state.includedTags.includes(tag) && !state.excludedTags.includes(tag)) {
+      params.append("tag", tag);
+    }
+  }
+  for (const tag of SESSION_TAGS) {
+    if (state.excludedTags.includes(tag)) params.append("not-tag", tag);
+  }
   if (state.view !== "cards") params.set("view", state.view);
   if (state.group !== "none") params.set("group", state.group);
 
@@ -344,10 +388,24 @@ function sessionKind(session: Session): SessionKind {
   return paneCommandKind(pane?.command || "", pane?.title || "");
 }
 
-/** Apply the shareable query, kind, and state controls using dashboard semantics. */
+export function sessionMatchesTagFilters(
+  session: Session,
+  filters: Pick<SessionDashboardRouteState, "includedTags" | "excludedTags">,
+): boolean {
+  const includedTags = new Set(filters.includedTags);
+  const excludedTags = new Set(filters.excludedTags);
+  const sessionTags = session.tags ?? [];
+  return (includedTags.size === 0 || sessionTags.some((tag) => includedTags.has(tag)))
+    && !sessionTags.some((tag) => excludedTags.has(tag));
+}
+
+/** Apply shareable dashboard facets; tag values are ORed within include/exclude sets. */
 export function filterSessions(
   sessions: readonly Session[],
-  filters: Pick<SessionDashboardRouteState, "query" | "kind" | "state">,
+  filters: Pick<
+    SessionDashboardRouteState,
+    "query" | "kind" | "state" | "includedTags" | "excludedTags"
+  >,
 ): Session[] {
   const needle = filters.query.trim().toLowerCase();
   return sessions.filter((session) => {
@@ -359,13 +417,35 @@ export function filterSessions(
       pane?.path,
       pane?.title,
       pane?.command,
+      ...(session.tags ?? []),
     ].filter(Boolean).some((value) => value!.toLowerCase().includes(needle));
     const matchesKind = filters.kind === "all"
       || (filters.kind === "agents" && AGENT_KINDS.has(kind))
       || filters.kind === kind;
     const matchesState = filters.state === "any" || filters.state === session.agentState;
-    return matchesQuery && matchesKind && matchesState;
+    return matchesQuery
+      && matchesKind
+      && matchesState
+      && sessionMatchesTagFilters(session, filters);
   });
+}
+
+export interface SessionTagGroup {
+  tag: SessionTag | null;
+  sessions: Session[];
+}
+
+/** Multi-tag sessions appear in every matching group; untagged sessions remain discoverable. */
+export function groupSessionsByTag(sessions: readonly Session[]): SessionTagGroup[] {
+  const groups: SessionTagGroup[] = SESSION_TAGS
+    .map((tag) => ({
+      tag,
+      sessions: sessions.filter((session) => (session.tags ?? []).includes(tag)),
+    }))
+    .filter((group) => group.sessions.length > 0);
+  const untagged = sessions.filter((session) => (session.tags ?? []).length === 0);
+  if (untagged.length > 0) groups.push({ tag: null, sessions: untagged });
+  return groups;
 }
 
 /** Useful when callers need a fresh default object for React state. */

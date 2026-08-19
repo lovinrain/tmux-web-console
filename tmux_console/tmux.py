@@ -67,6 +67,10 @@ class TmuxError(RuntimeError):
         self.returncode = returncode
 
 
+class TmuxSessionNotFoundError(TmuxError):
+    pass
+
+
 class TmuxRenameUnverifiedError(TmuxError):
     def __init__(self, requested_name: str, verification_error: TmuxError):
         super().__init__("tmux rename succeeded but its result could not be verified")
@@ -536,7 +540,7 @@ class TmuxClient:
         for session in await self.list_sessions():
             if session.name == name:
                 return session
-        raise TmuxError(f"tmux session not found: {name}")
+        raise TmuxSessionNotFoundError(f"tmux session not found: {name}")
 
     async def navigate_history(
         self,

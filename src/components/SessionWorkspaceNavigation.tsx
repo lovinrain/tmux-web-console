@@ -1463,6 +1463,26 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <GridIcon />
             <span>Sessions</span>
           </button>
+          {onNewSession && (
+            <button
+              type="button"
+              className={newSessionActive
+                ? "workspace-new-session-button active"
+                : "workspace-new-session-button"}
+              onClick={onNewSession}
+              disabled={newSessionDisabled}
+              aria-label="New session"
+              aria-current={newSessionActive ? "page" : undefined}
+              title={newSessionActive
+                ? "New session is already open"
+                : workspacePersistenceState === "loading"
+                  ? "Wait for workspace to finish opening"
+                  : "New session"}
+            >
+              <PlusIcon />
+              <span>New session</span>
+            </button>
+          )}
           <div className="workspace-tab-viewport">
             <div
               className="workspace-tab-list"
@@ -1588,26 +1608,6 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           </div>
-          {onNewSession && (
-            <button
-              type="button"
-              className={newSessionActive
-                ? "workspace-new-session-button active"
-                : "workspace-new-session-button"}
-              onClick={onNewSession}
-              disabled={newSessionDisabled}
-              aria-label="New session"
-              aria-current={newSessionActive ? "page" : undefined}
-              title={newSessionActive
-                ? "New session is already open"
-                : workspacePersistenceState === "loading"
-                  ? "Wait for workspace to finish opening"
-                  : "New session"}
-            >
-              <PlusIcon />
-              <span>New session</span>
-            </button>
-          )}
           {workspacePersistenceState === "unsaved" ? onSaveWorkspace && (
             <button
               ref={saveButtonRef}

@@ -4,6 +4,7 @@ import {
   canonicalizeSessionDashboardSearch,
   createDefaultSessionDashboardRoute,
   filterSessions,
+  groupSessionsByTag,
   parseSessionDashboardSearch,
   serializeSessionDashboardSearch,
   sessionDisplayTitle,
@@ -53,6 +54,7 @@ function session(overrides: Partial<Session> = {}): Session {
     queuedMessageCount: 0,
     panes: [pane()],
     ...overrides,
+    tags: overrides.tags ?? [],
   };
 }
 
@@ -74,6 +76,8 @@ describe("session dashboard URL state", () => {
       query: "deploy",
       kind: "codex",
       state: "waiting_human",
+      includedTags: [],
+      excludedTags: [],
       view: "list",
       group: "state",
       sort: ["state", "title", "state-change"],
@@ -116,6 +120,20 @@ describe("session dashboard URL state", () => {
     const state = createDefaultSessionDashboardRoute();
     state.sort = ["activity", "state"];
     expect(serializeSessionDashboardSearch(state)).toBe("?sort=activity,state");
+  });
+
+  it("canonicalizes included and excluded tags in predefined order", () => {
+    const input = "?tab=alpha&workspace=saved-one&tag=URGENT&tag=work,review&tag=work"
+      + "&not-tag=blocked&not-tag=urgent&not-tag=unknown&group=tags";
+    const route = parseSessionDashboardSearch(input);
+
+    expect(route.includedTags).toEqual(["work", "review"]);
+    expect(route.excludedTags).toEqual(["urgent", "blocked"]);
+    expect(route.group).toBe("tag");
+    expect(canonicalizeSessionDashboardSearch(input)).toBe(
+      "?tab=alpha&workspace=saved-one&tag=work&tag=review"
+      + "&not-tag=urgent&not-tag=blocked&group=tag",
+    );
   });
 });
 
@@ -255,5 +273,42 @@ describe("session dashboard filters", () => {
     ]);
     expect(names("?kind=grok")).toEqual(["grok-one"]);
     expect(names("?kind=shells")).toEqual(["wrong-command", "shell-one"]);
+  });
+
+  it("includes any selected tag, then removes every excluded match", () => {
+    const sessions = [
+      session({ name: "work", tags: ["work"] }),
+      session({ name: "review", id: "$2", tags: ["review"] }),
+      session({ name: "urgent-review", id: "$3", tags: ["review", "urgent"] }),
+      session({ name: "untagged", id: "$4" }),
+    ];
+    const route = parseSessionDashboardSearch(
+      "?tag=work&tag=review&not-tag=urgent",
+    );
+
+    expect(filterSessions(sessions, route).map((item) => item.name)).toEqual([
+      "work",
+      "review",
+    ]);
+  });
+
+  it("finds sessions by tag name and groups multi-tag sessions without losing labels", () => {
+    const sessions = [
+      session({ name: "one", tags: ["work", "urgent"] }),
+      session({ name: "two", id: "$2", tags: ["review"] }),
+      session({ name: "three", id: "$3" }),
+    ];
+
+    expect(filterSessions(sessions, parseSessionDashboardSearch("?q=urgent"))
+      .map((item) => item.name)).toEqual(["one"]);
+    expect(groupSessionsByTag(sessions).map((group) => ({
+      tag: group.tag,
+      names: group.sessions.map((item) => item.name),
+    }))).toEqual([
+      { tag: "work", names: ["one"] },
+      { tag: "review", names: ["two"] },
+      { tag: "urgent", names: ["one"] },
+      { tag: null, names: ["three"] },
+    ]);
   });
 });

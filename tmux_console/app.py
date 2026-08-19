@@ -6,8 +6,9 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from aiohttp import WSMsgType, web
 
@@ -19,7 +20,7 @@ from .messages import (
     validate_message_text,
     validate_session_name,
 )
-from .metadata import SessionTitleStore, normalize_title
+from .metadata import SessionTitleStore, normalize_tags, normalize_title
 from .pty_bridge import PtyBridge, clamp_size
 from .snippets import (
     SnippetRevisionConflict,
@@ -33,6 +34,7 @@ from .tmux import (
     TmuxError,
     TmuxRenameUnverifiedError,
     TmuxSessionIdentityChangedError,
+    TmuxSessionNotFoundError,
     validate_tmux_new_session_name,
     validate_tmux_session_id,
     validate_tmux_session_name,
@@ -69,61 +71,70 @@ class SessionSnapshotBuilder:
         agent_states: AgentStateDetector,
         clock: Callable[[], float] = time.time,
         messages: SessionMessageStore | None = None,
+        mutation_lock: asyncio.Lock | None = None,
     ) -> None:
         self._tmux = tmux
         self._titles = titles
         self._agent_states = agent_states
         self._messages = messages
+        self._mutation_lock = mutation_lock
         self._clock = clock
         self._lock = asyncio.Lock()
         self._state_history: dict[str, tuple[str, str, int]] = {}
 
     async def build(self) -> dict[str, list[dict[str, Any]]]:
         async with self._lock:
-            items = await self._tmux.list_sessions()
-            states = await self._agent_states.detect_sessions(self._tmux, items)
-            observed_at = int(self._clock())
-            next_state_history: dict[str, tuple[str, str, int]] = {}
-            payload: list[dict[str, Any]] = []
+            if self._mutation_lock is not None:
+                async with self._mutation_lock:
+                    return await self._build_unlocked()
+            return await self._build_unlocked()
 
-            for item in items:
-                state = states[item.name]
-                previous = self._state_history.get(item.name)
-                changed_at = (
-                    previous[2]
-                    if previous is not None
-                    and previous[0] == item.id
-                    and previous[1] == state.name
-                    else observed_at
-                )
-                next_state_history[item.name] = (item.id, state.name, changed_at)
+    async def _build_unlocked(self) -> dict[str, list[dict[str, Any]]]:
+        items = await self._tmux.list_sessions()
+        states = await self._agent_states.detect_sessions(self._tmux, items)
+        observed_at = int(self._clock())
+        next_state_history: dict[str, tuple[str, str, int]] = {}
+        payload: list[dict[str, Any]] = []
 
-                record = item.to_dict()
-                record.update(
-                    {
-                        "agentState": state.name,
-                        "agentStateReason": state.reason,
-                        "agentStateChangedAt": changed_at,
-                        "customTitle": self._titles.get_title(item.name),
-                        "starred": self._titles.is_starred(item.name),
-                        "ignored": self._titles.is_ignored(item.name),
-                        "memorandumCount": (
-                            self._messages.count_messages(item.name)
-                            if self._messages is not None
-                            else 0
-                        ),
-                        "queuedMessageCount": (
-                            self._messages.count_queued_messages(item.name)
-                            if self._messages is not None
-                            else 0
-                        ),
-                    }
-                )
-                payload.append(record)
+        for item in items:
+            state = states[item.name]
+            previous = self._state_history.get(item.name)
+            changed_at = (
+                previous[2]
+                if previous is not None
+                and previous[0] == item.id
+                and previous[1] == state.name
+                else observed_at
+            )
+            next_state_history[item.name] = (item.id, state.name, changed_at)
 
-            # Dropping absent names makes a later reappearance a fresh observation.
-            self._state_history = next_state_history
-            return {"sessions": payload}
+            record = item.to_dict()
+            record.update(
+                {
+                    "agentState": state.name,
+                    "agentStateReason": state.reason,
+                    "agentStateChangedAt": changed_at,
+                    "customTitle": self._titles.get_title(item.name),
+                    "starred": self._titles.is_starred(item.name),
+                    "ignored": self._titles.is_ignored(item.name),
+                    "tags": self._titles.get_tags(item.name),
+                    "memorandumCount": (
+                        self._messages.count_messages(item.name)
+                        if self._messages is not None
+                        else 0
+                    ),
+                    "queuedMessageCount": (
+                        self._messages.count_queued_messages(item.name)
+                        if self._messages is not None
+                        else 0
+                    ),
+                }
+            )
+            payload.append(record)
+
+        # Dropping absent names makes a later reappearance a fresh observation.
+        self._state_history = next_state_history
+        return {"sessions": payload}
 
 
 SESSION_SNAPSHOTS_KEY = web.AppKey("session_snapshots", SessionSnapshotBuilder)
@@ -282,6 +293,7 @@ def create_app(
         app[TITLES_KEY],
         app[AGENT_STATES_KEY],
         messages=app[MESSAGES_KEY],
+        mutation_lock=app[SESSION_RENAME_LOCK_KEY],
     )
     app[SESSION_STREAM_BROKER_KEY] = SessionStreamBroker(
         app[SESSION_SNAPSHOTS_KEY],
@@ -631,7 +643,7 @@ def create_app(
                     break
                 if serialized:
                     await response.write(
-                        f"event: sessions\ndata: {serialized}\n\n".encode("utf-8")
+                        f"event: sessions\ndata: {serialized}\n\n".encode()
                     )
 
                 now = loop.time()
@@ -754,6 +766,92 @@ def create_app(
                 "session": session_name,
                 "starred": saved_starred,
                 "ignored": saved_ignored,
+            }
+        )
+
+    async def update_session_tags(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        missing_fields = sorted({"session", "tags"} - set(payload))
+        if missing_fields:
+            return json_error(f"{missing_fields[0]} is required", 400)
+        unknown_fields = sorted(set(payload) - {"session", "tags"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+
+        session_name = payload["session"]
+        if not isinstance(session_name, str):
+            return json_error("session must be a string", 400)
+        try:
+            session_name = validate_session_name(session_name)
+            tags = normalize_tags(payload["tags"])
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                saved_tags = app[TITLES_KEY].set_tags(session_name, tags)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        except OSError:
+            LOGGER.exception("Unable to save tags for tmux session %s", session_name)
+            return json_error("unable to save session tags", 500)
+        return web.json_response({"session": session_name, "tags": saved_tags})
+
+    async def update_session_details(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        missing_fields = sorted({"session", "title", "tags"} - set(payload))
+        if missing_fields:
+            return json_error(f"{missing_fields[0]} is required", 400)
+        unknown_fields = sorted(set(payload) - {"session", "title", "tags"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+
+        session_name = payload["session"]
+        title = payload["title"]
+        if not isinstance(session_name, str):
+            return json_error("session must be a string", 400)
+        if not isinstance(title, str):
+            return json_error("title must be a string", 400)
+        try:
+            session_name = validate_session_name(session_name)
+            normalize_title(title)
+            tags = normalize_tags(payload["tags"])
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                saved_title, saved_tags = app[TITLES_KEY].set_details(
+                    session_name, title, tags
+                )
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        except OSError:
+            LOGGER.exception("Unable to save details for tmux session %s", session_name)
+            return json_error("unable to save session details", 500)
+        return web.json_response(
+            {
+                "session": session_name,
+                "customTitle": saved_title,
+                "tags": saved_tags,
             }
         )
 
@@ -1302,6 +1400,8 @@ def create_app(
     app.router.add_put(f"{prefix}/api/session-title", update_session_title)
     app.router.add_put(f"{prefix}/api/session-star", update_session_star)
     app.router.add_put(f"{prefix}/api/session-ignored", update_session_ignored)
+    app.router.add_put(f"{prefix}/api/session-tags", update_session_tags)
+    app.router.add_put(f"{prefix}/api/session-details", update_session_details)
     app.router.add_post(f"{prefix}/api/panes/{{pane_id}}/history", create_history)
     app.router.add_get(f"{prefix}/api/history/{{snapshot_id}}", history_page)
     app.router.add_get(f"{prefix}/ws/terminal", terminal)

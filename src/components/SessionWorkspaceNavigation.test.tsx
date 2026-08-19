@@ -54,6 +54,7 @@ function session(overrides: Partial<Session> & Pick<Session, "name">): Session {
     queuedMessageCount: 0,
     panes: [pane()],
     ...overrides,
+    tags: overrides.tags ?? [],
   };
 }
 
@@ -508,6 +509,23 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.queryByRole("separator", { name: "Resize vertical session tabs" }))
       .not.toBeInTheDocument();
   });
+
+  it.each(["horizontal", "vertical"] as const)(
+    "keeps the New session action beside Sessions in the %s tab layout",
+    (orientation) => {
+      render(
+        <SessionWorkspaceNavigation
+          {...navigationProps({ onNewSession: vi.fn() })}
+          orientation={orientation}
+        />,
+      );
+
+      const sessionsButton = screen.getByRole("button", { name: "All sessions" });
+      const newSessionButton = screen.getByRole("button", { name: "New session" });
+      expect(sessionsButton.nextElementSibling).toBe(newSessionButton);
+      expect(newSessionButton.nextElementSibling).toHaveClass("workspace-tab-viewport");
+    },
+  );
 
   it("opens a synthetic New session tab from the fixed tab-bar action", () => {
     const onNewSession = vi.fn();

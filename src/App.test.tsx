@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
@@ -57,6 +57,7 @@ let openSavedWorkspaceFromDashboard: ((workspace: SavedWorkspace) => void) | nul
 let reportSavedWorkspaceDeleted: ((workspaceId: string) => void) | null = null;
 let reportSavedWorkspaceUpdated: ((workspace: SavedWorkspace) => void) | null = null;
 let dashboardActiveWorkspaceId: string | null = null;
+let dashboardMountCount = 0;
 const originalSendBeaconDescriptor = Object.getOwnPropertyDescriptor(
   window.navigator,
   "sendBeacon",
@@ -97,6 +98,9 @@ vi.mock("./components/SessionDashboard", () => ({
     ) => Promise<void>;
     activeWorkspaceId?: string | null;
   }) => {
+    useEffect(() => {
+      dashboardMountCount += 1;
+    }, []);
     reportKnownSessions = onSessionsChange ?? null;
     openSessionFromDashboard = onOpen;
     openSavedWorkspaceFromDashboard = onOpenSavedWorkspace ?? null;
@@ -180,6 +184,7 @@ vi.mock("./components/ConsoleScreen", () => ({
   },
   ConsoleScreen: ({
     sessionName,
+    workspaceName,
     onBack,
     sessionNavigation,
     workspaceOverlayOpen,
@@ -200,6 +205,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onDismissRenameWarning,
   }: {
     sessionName: string;
+    workspaceName?: string | null;
     onBack: () => void;
     sessionNavigation?: ReactNode;
     workspaceOverlayOpen?: boolean;
@@ -253,6 +259,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       <main
         aria-label="Console"
         data-session={sessionName}
+        data-workspace-name={workspaceName ?? ""}
         data-tab-orientation={desktopTabOrientation}
         data-tab-rail-width={desktopTabRailWidth}
       >
@@ -416,6 +423,7 @@ function session(
     agentStateReason: "Test session",
     agentStateChangedAt: 1,
     customTitle: null,
+    tags: [],
     starred: false,
     ignored: false,
     queuedMessageCount: 0,
@@ -484,6 +492,7 @@ describe("App routing", () => {
     reportSavedWorkspaceDeleted = null;
     reportSavedWorkspaceUpdated = null;
     dashboardActiveWorkspaceId = null;
+    dashboardMountCount = 0;
     sendBeaconMock.mockReset();
     sendBeaconMock.mockReturnValue(true);
     Object.defineProperty(window.navigator, "sendBeacon", {
@@ -1444,6 +1453,19 @@ describe("App routing", () => {
       expect(screen.getByRole("main", { name: "Console" })).toBeVisible();
     });
     expectWorkspaceSearch(codexSearch, ["work/name #1"]);
+  });
+
+  it("does not remount the dashboard when its local filters update the URL", () => {
+    render(<App />);
+    expect(dashboardMountCount).toBe(1);
+
+    act(() => {
+      window.history.replaceState({}, "", dashboardUrl("?view=list"));
+      reportKnownSessions?.([session("alpha", "$alpha")]);
+    });
+
+    expect(window.location.search).toBe("?view=list");
+    expect(dashboardMountCount).toBe(1);
   });
 
   it("routes to snippets without leaking dashboard query keys and restores them on return", async () => {
@@ -2641,6 +2663,8 @@ describe("App routing", () => {
       await waitFor(() => {
         expect(screen.getByTitle("Incident response - Saved")).toBeVisible();
       });
+      expect(screen.getByRole("main", { name: "Console" }))
+        .toHaveAttribute("data-workspace-name", "Incident response");
     });
 
     it("updates the active workspace identity after a landing-page rename", async () => {
@@ -2660,17 +2684,20 @@ describe("App routing", () => {
       fireEvent.click(screen.getByRole("button", {
         name: "Resume workspace at alpha, 2 open tabs",
       }));
-      await screen.findByRole("main", { name: "Console" });
+      const console = await screen.findByRole("main", { name: "Console" });
+      expect(console).toHaveAttribute("data-workspace-name", "Workspace one");
       expect(screen.getByTitle("Workspace one - Saved")).toBeVisible();
       expect(reportSavedWorkspaceUpdated).not.toBeNull();
 
       act(() => reportSavedWorkspaceUpdated?.(savedWorkspace({ name: "Release train" })));
+      expect(console).toHaveAttribute("data-workspace-name", "Release train");
       expect(screen.getByTitle("Release train - Saved")).toBeVisible();
 
       act(() => reportSavedWorkspaceUpdated?.(savedWorkspace({
         id: "workspace-two",
         name: "Other workspace",
       })));
+      expect(console).toHaveAttribute("data-workspace-name", "Release train");
       expect(screen.getByTitle("Release train - Saved")).toBeVisible();
     });
 
@@ -3492,7 +3519,8 @@ describe("App routing", () => {
       fireEvent.click(screen.getByRole("button", {
         name: "Resume workspace at ended-two, 2 open tabs",
       }));
-      await screen.findByRole("main", { name: "Console" });
+      const console = await screen.findByRole("main", { name: "Console" });
+      expect(console).toHaveAttribute("data-workspace-name", "");
       expect(screen.getByTitle("Temporary workspace - Save workspace")).toBeVisible();
     });
 

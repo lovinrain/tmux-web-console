@@ -4,6 +4,7 @@ import type {
   MessageQueue,
   QueuedMessage,
   Session,
+  SessionTag,
   SnippetNode,
   SnippetTree,
 } from "./types";
@@ -40,17 +41,35 @@ export interface CreatedSession {
   id: string;
 }
 
-export async function createSession(name?: string, theme?: Theme): Promise<CreatedSession> {
-  const body = {
-    ...(name === undefined ? {} : { name }),
-    ...(theme === undefined ? {} : { theme }),
-  };
+async function requestSessionCreation(body: Record<string, string>): Promise<CreatedSession> {
   const result = await jsonRequest<{ session: string; sessionId: string }>("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return { name: result.session, id: result.sessionId };
+}
+
+export async function createSession(name?: string, theme?: Theme): Promise<CreatedSession> {
+  const body = {
+    ...(name === undefined ? {} : { name }),
+    ...(theme === undefined ? {} : { theme }),
+  };
+  try {
+    return await requestSessionCreation(body);
+  } catch (error) {
+    if (
+      theme !== undefined
+      && error instanceof ApiRequestError
+      && error.status === 400
+      && error.message === "unknown field: theme"
+    ) {
+      // An older backend rejects the field before creating anything, so one
+      // theme-less retry safely bridges an in-place frontend/backend rollout.
+      return requestSessionCreation(name === undefined ? {} : { name });
+    }
+    throw error;
+  }
 }
 
 export async function terminateSession(
@@ -164,6 +183,41 @@ export async function updateSessionTitle(
     },
   );
   return result.customTitle;
+}
+
+export async function updateSessionTags(
+  session: string,
+  tags: readonly SessionTag[],
+): Promise<SessionTag[]> {
+  const result = await jsonRequest<{ session: string; tags: SessionTag[] }>(
+    "/api/session-tags",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, tags }),
+    },
+  );
+  return result.tags;
+}
+
+export async function updateSessionDetails(
+  session: string,
+  title: string,
+  tags: readonly SessionTag[],
+): Promise<Pick<Session, "customTitle" | "tags">> {
+  const result = await jsonRequest<{
+    session: string;
+    customTitle: string | null;
+    tags: SessionTag[];
+  }>(
+    "/api/session-details",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, title, tags }),
+    },
+  );
+  return { customTitle: result.customTitle, tags: result.tags };
 }
 
 export async function updateSessionStar(

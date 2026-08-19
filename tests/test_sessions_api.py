@@ -726,6 +726,7 @@ async def test_terminate_session_api_preserves_persistent_session_state(
     titles.set_title(session_name, "Human alias")
     titles.set_starred(session_name, starred)
     titles.set_ignored(session_name, ignored)
+    titles.set_tags(session_name, ["work", "background"])
     memo = messages.add_message(session_name, "Keep this scratch", state="note")
     workspace = workspaces.create_workspace(
         name="Release room",
@@ -755,6 +756,7 @@ async def test_terminate_session_api_preserves_persistent_session_state(
         assert reloaded_titles.get_title(session_name) == "Human alias"
         assert reloaded_titles.is_starred(session_name) is starred
         assert reloaded_titles.is_ignored(session_name) is ignored
+        assert reloaded_titles.get_tags(session_name) == ["work", "background"]
         assert SessionMessageStore(messages_path).list_messages(session_name) == [memo]
         assert WorkspaceStore(workspaces_path).get_workspace("workspace-id") == workspace
     finally:
@@ -773,8 +775,10 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
     messages = SessionMessageStore(messages_path, id_factory=lambda: "message-id")
     titles.set_title(old_name, "Human alias")
     titles.set_ignored(old_name, True)
+    titles.set_tags(old_name, ["work", "urgent"])
     titles.set_title(new_name, "Stale alias")
     titles.set_starred(new_name, True)
+    titles.set_tags(new_name, ["blocked"])
     old_message = messages.add_message(old_name, "Continue the task")
     messages.add_message(new_name, "Stale queue")
     workspaces = WorkspaceStore(
@@ -819,6 +823,8 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
         assert reloaded_titles.get_title(new_name) == "Human alias"
         assert reloaded_titles.is_ignored(new_name) is True
         assert reloaded_titles.is_starred(new_name) is False
+        assert reloaded_titles.get_tags(old_name) == []
+        assert reloaded_titles.get_tags(new_name) == ["work", "urgent"]
         reloaded_messages = SessionMessageStore(messages_path)
         assert reloaded_messages.list_messages(old_name) == []
         assert reloaded_messages.list_messages(new_name) == [old_message]
@@ -1103,6 +1109,16 @@ async def test_overlapping_session_renames_keep_each_sessions_persistent_state(t
             "/api/session-ignored",
             {"session": "A", "ignored": False},
         ),
+        (
+            "tags",
+            "/api/session-tags",
+            {"session": "A", "tags": ["urgent"]},
+        ),
+        (
+            "details",
+            "/api/session-details",
+            {"session": "A", "title": "Stale alias", "tags": ["urgent"]},
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -1116,8 +1132,12 @@ async def test_session_metadata_writes_wait_for_rename_and_reject_stale_name(
         titles.set_title("A", "Alias A")
     elif mutation == "starred":
         titles.set_starred("A", True)
-    else:
+    elif mutation == "ignored":
         titles.set_ignored("A", True)
+    elif mutation == "details":
+        titles.set_details("A", "Alias A", ["work"])
+    else:
+        titles.set_tags("A", ["work"])
 
     application = create_app(tmux=tmux, titles=titles, base_path="")
     rename_lock = ObservableLock()
@@ -1141,11 +1161,17 @@ async def test_session_metadata_writes_wait_for_rename_and_reject_stale_name(
             assert titles.get_title("A") == "Alias A"
         elif mutation == "starred":
             assert titles.is_starred("A") is True
-        else:
+        elif mutation == "ignored":
             assert titles.is_ignored("A") is True
+        elif mutation == "details":
+            assert titles.get_title("A") == "Alias A"
+            assert titles.get_tags("A") == ["work"]
+        else:
+            assert titles.get_tags("A") == ["work"]
         assert titles.get_title("B") is None
         assert titles.is_starred("B") is False
         assert titles.is_ignored("B") is False
+        assert titles.get_tags("B") == []
 
         tmux.release_first_rename.set()
         rename_response, writer_response = await asyncio.gather(
@@ -1166,13 +1192,68 @@ async def test_session_metadata_writes_wait_for_rename_and_reject_stale_name(
             assert reloaded.get_title("B") == "Alias A"
         elif mutation == "starred":
             assert reloaded.is_starred("B") is True
-        else:
+        elif mutation == "ignored":
             assert reloaded.is_ignored("B") is True
+        elif mutation == "details":
+            assert reloaded.get_title("B") == "Alias A"
+            assert reloaded.get_tags("B") == ["work"]
+        else:
+            assert reloaded.get_tags("B") == ["work"]
     finally:
         tmux.release_first_rename.set()
         pending_requests = [
             request
             for request in (rename_request, writer_request)
+            if request is not None and not request.done()
+        ]
+        if pending_requests:
+            await asyncio.gather(*pending_requests, return_exceptions=True)
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_snapshot_waits_for_metadata_migration_during_rename(tmp_path):
+    tmux = OverlappingRenamingFakeTmux([make_session("A")])
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    titles.set_tags("A", ["work", "urgent"])
+    application = create_app(
+        tmux=tmux,
+        titles=titles,
+        agent_states=FakeAgentStateDetector(
+            [{"B": AgentState("working", "renamed session is active")}]
+        ),
+        base_path="",
+    )
+    client = TestClient(TestServer(application))
+    rename_request: asyncio.Task[ClientResponse] | None = None
+    snapshot_request: asyncio.Task[ClientResponse] | None = None
+
+    try:
+        await client.start_server()
+        rename_request = asyncio.create_task(
+            client.put("/api/session-name", json={"session": "A", "name": "B"})
+        )
+        await asyncio.wait_for(tmux.first_tmux_mutated.wait(), timeout=1)
+
+        snapshot_request = asyncio.create_task(client.get("/api/sessions"))
+        await asyncio.sleep(0.01)
+        assert snapshot_request.done() is False
+
+        tmux.release_first_rename.set()
+        rename_response, snapshot_response = await asyncio.gather(
+            rename_request, snapshot_request
+        )
+
+        assert rename_response.status == 200
+        assert snapshot_response.status == 200
+        snapshot = await snapshot_response.json()
+        assert snapshot["sessions"][0]["name"] == "B"
+        assert snapshot["sessions"][0]["tags"] == ["work", "urgent"]
+    finally:
+        tmux.release_first_rename.set()
+        pending_requests = [
+            request
+            for request in (rename_request, snapshot_request)
             if request is not None and not request.done()
         ]
         if pending_requests:
@@ -1757,6 +1838,221 @@ async def test_session_ignored_api_validates_payload_and_existing_session(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_session_tags_api_replaces_persistent_tags_and_updates_session_payload(
+    tmp_path,
+):
+    session = make_session("tagged-work")
+    metadata_path = tmp_path / "titles.json"
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[session]]),
+                titles=SessionTitleStore(metadata_path),
+                agent_states=FakeAgentStateDetector(
+                    [{session.name: AgentState("working", "active")}]
+                ),
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        listed = await (await client.get("/api/sessions")).json()
+        assert listed["sessions"][0]["tags"] == []
+
+        response = await client.put(
+            "/api/session-tags",
+            json={
+                "session": session.name,
+                "tags": ["background", "work", "review", "work"],
+            },
+        )
+        assert response.status == 200
+        assert await response.json() == {
+            "session": session.name,
+            "tags": ["work", "review", "background"],
+        }
+        assert SessionTitleStore(metadata_path).get_tags(session.name) == [
+            "work",
+            "review",
+            "background",
+        ]
+
+        listed = await (await client.get("/api/sessions")).json()
+        assert listed["sessions"][0]["tags"] == [
+            "work",
+            "review",
+            "background",
+        ]
+
+        response = await client.put(
+            "/api/session-tags", json={"session": session.name, "tags": []}
+        )
+        assert response.status == 200
+        assert await response.json() == {"session": session.name, "tags": []}
+        assert SessionTitleStore(metadata_path).get_tags(session.name) == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_details_api_updates_title_and_tags_in_one_persist(tmp_path):
+    session = make_session("details-work")
+    metadata_path = tmp_path / "titles.json"
+    titles = SessionTitleStore(metadata_path)
+    client = TestClient(
+        TestServer(
+            create_app(tmux=FakeTmux([[session]]), titles=titles, base_path="")
+        )
+    )
+
+    try:
+        await client.start_server()
+        response = await client.put(
+            "/api/session-details",
+            json={
+                "session": session.name,
+                "title": "  Release review  ",
+                "tags": ["urgent", "work", "urgent"],
+            },
+        )
+
+        assert response.status == 200
+        assert await response.json() == {
+            "session": session.name,
+            "customTitle": "Release review",
+            "tags": ["work", "urgent"],
+        }
+        reloaded = SessionTitleStore(metadata_path)
+        assert reloaded.get_title(session.name) == "Release review"
+        assert reloaded.get_tags(session.name) == ["work", "urgent"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"tags": []}, "session is required"),
+        ({"session": "agent-one"}, "tags is required"),
+        ({"session": 7, "tags": []}, "session must be a string"),
+        ({"session": "agent-one", "tags": "work"}, "tags must be an array"),
+        (
+            {"session": "agent-one", "tags": ["work", 7]},
+            "tags must contain only strings",
+        ),
+        (
+            {"session": "agent-one", "tags": ["invented"]},
+            "unknown session tag: invented",
+        ),
+        (
+            {"session": "agent-one", "tags": [], "extra": True},
+            "unknown field: extra",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_session_tags_api_validates_exact_payload(
+    tmp_path, payload: object, message: str
+):
+    session = make_session()
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    client = TestClient(
+        TestServer(create_app(tmux=FakeTmux([[session]]), titles=titles, base_path=""))
+    )
+
+    try:
+        await client.start_server()
+        response = await client.put("/api/session-tags", json=payload)
+        assert response.status == 400
+        assert await response.json() == {"error": message}
+        assert titles.get_tags(session.name) == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_tags_api_rejects_missing_session_without_persisting(tmp_path):
+    metadata_path = tmp_path / "titles.json"
+    titles = SessionTitleStore(metadata_path)
+    client = TestClient(
+        TestServer(create_app(tmux=FakeTmux([[]]), titles=titles, base_path=""))
+    )
+
+    try:
+        await client.start_server()
+        response = await client.put(
+            "/api/session-tags",
+            json={"session": "missing", "tags": ["work"]},
+        )
+        assert response.status == 404
+        assert await response.json() == {"error": "tmux session not found: missing"}
+        assert titles.get_tags("missing") == []
+        assert metadata_path.exists() is False
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_tags_api_reports_tmux_inventory_failure_as_unavailable(tmp_path):
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([TmuxError("tmux inventory unavailable")]),
+                titles=titles,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        response = await client.put(
+            "/api/session-tags",
+            json={"session": "agent-one", "tags": ["work"]},
+        )
+
+        assert response.status == 503
+        assert await response.json() == {"error": "tmux inventory unavailable"}
+        assert titles.get_tags("agent-one") == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_tags_api_reports_storage_failure_without_mutating_state(
+    tmp_path, monkeypatch
+):
+    session = make_session()
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    titles.set_tags(session.name, ["work"])
+
+    def fail_persist(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(titles, "_persist", fail_persist)
+    client = TestClient(
+        TestServer(
+            create_app(tmux=FakeTmux([[session]]), titles=titles, base_path="")
+        )
+    )
+
+    try:
+        await client.start_server()
+        response = await client.put(
+            "/api/session-tags",
+            json={"session": session.name, "tags": ["urgent"]},
+        )
+        assert response.status == 500
+        assert await response.json() == {"error": "unable to save session tags"}
+        assert titles.get_tags(session.name) == ["work"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_sessions_stream_shares_one_sampler_across_clients_and_stops_last(
     tmp_path, monkeypatch
 ):
@@ -1890,11 +2186,13 @@ async def test_sessions_stream_sends_initial_and_changed_snapshots(
             {session.name: AgentState("waiting_human", "needs input")},
         ]
     )
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    titles.set_tags(session.name, ["review", "urgent"])
     client = TestClient(
         TestServer(
             create_app(
                 tmux=tmux,
-                titles=SessionTitleStore(tmp_path / "titles.json"),
+                titles=titles,
                 agent_states=detector,
                 base_path="",
             )
@@ -1913,7 +2211,9 @@ async def test_sessions_stream_sends_initial_and_changed_snapshots(
         initial = event_payload(await read_sse_record(response))
         changed = event_payload(await read_sse_record(response))
         assert initial["sessions"][0]["agentState"] == "working"
+        assert initial["sessions"][0]["tags"] == ["review", "urgent"]
         assert changed["sessions"][0]["agentState"] == "waiting_human"
+        assert changed["sessions"][0]["tags"] == ["review", "urgent"]
         assert (
             changed["sessions"][0]["agentStateChangedAt"]
             >= initial["sessions"][0]["agentStateChangedAt"]

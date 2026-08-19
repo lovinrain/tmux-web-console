@@ -11,8 +11,10 @@ import {
   BASE_PATH,
   listSessions,
   subscribeToSessions,
+  updateSessionDetails,
   updateSessionIgnored,
   updateSessionStar,
+  updateSessionTags,
   updateSessionTitle,
   type SavedWorkspace,
 } from "../api";
@@ -35,10 +37,12 @@ import {
   DEFAULT_SESSION_SORT,
   SESSION_STATE_ORDER,
   filterSessions,
+  groupSessionsByTag,
   paneCommandKind,
   parseSessionDashboardSearch,
   sessionStateChangedAt,
   serializeSessionDashboardSearch,
+  sessionMatchesTagFilters,
   sortSessions,
   type SessionDashboardRouteState,
   type SessionKindFilter,
@@ -46,7 +50,14 @@ import {
   type SessionStateFilter,
   type SessionViewMode,
 } from "../sessionDashboardModel";
-import type { AgentState, Pane, Session } from "../types";
+import {
+  SESSION_TAG_LABELS,
+  SESSION_TAGS,
+  type AgentState,
+  type Pane,
+  type Session,
+  type SessionTag,
+} from "../types";
 import {
   searchWithSavedWorkspaceId,
   searchWithWorkspaceTabs,
@@ -104,7 +115,17 @@ const KIND_FILTERS: SessionKindFilter[] = [
   "shells",
 ];
 const STATE_GROUP_ORDER = [...SESSION_STATE_ORDER];
-const DASHBOARD_QUERY_KEYS = ["q", "kind", "filter", "state", "view", "group", "sort"];
+const DASHBOARD_QUERY_KEYS = [
+  "q",
+  "kind",
+  "filter",
+  "state",
+  "tag",
+  "not-tag",
+  "view",
+  "group",
+  "sort",
+];
 
 const STATE_LABELS: Record<AgentState, string> = {
   working: "Working",
@@ -184,7 +205,8 @@ function initialDashboardRoute(): SessionDashboardRouteState {
       parsed.sort = ["state-change", "tmux-name"];
     }
 
-    if (window.localStorage.getItem(GROUP_MODE_KEY) === "state") parsed.group = "state";
+    const savedGroup = window.localStorage.getItem(GROUP_MODE_KEY);
+    if (savedGroup === "state" || savedGroup === "tag") parsed.group = savedGroup;
   } catch {
     // URL and product defaults remain authoritative when storage is unavailable.
   }
@@ -255,8 +277,11 @@ function SessionItem({
   onToggleIgnored,
 }: SessionItemProps) {
   const stateDescriptionId = useId();
+  const tagsDescriptionId = useId();
   const pane = activePane(session);
   const classification = classifyPane(pane);
+  const tags = session.tags ?? [];
+  const hiddenTags = tags.slice(3);
   const cardStyle = { "--i": Math.min(index, 14) } as CSSProperties;
   const displayName = session.customTitle || session.name;
   const memorandumCount = session.memorandumCount ?? session.queuedMessageCount;
@@ -269,7 +294,7 @@ function SessionItem({
 
   return (
     <article
-      className={`session-card${viewMode === "list" ? " session-row" : ""}${onTerminate ? " has-terminate" : ""}`}
+      className={`session-card${viewMode === "list" ? " session-row" : ""}${onTerminate ? " has-terminate" : ""}${tags.length > 0 ? " has-tags" : ""}`}
       style={cardStyle}
     >
       <button
@@ -277,7 +302,7 @@ function SessionItem({
         className="session-card-main"
         onClick={() => onOpen(session.name)}
         aria-label={`Open ${displayName}`}
-        aria-describedby={stateDescriptionId}
+        aria-describedby={`${stateDescriptionId}${tags.length > 0 ? ` ${tagsDescriptionId}` : ""}`}
       >
         <div className="session-card-top">
           <span className="session-badges">
@@ -300,6 +325,25 @@ function SessionItem({
         </div>
         {session.customTitle && <p className="session-tmux-name">tmux / {session.name}</p>}
         <p className="session-title">{pane?.title || pane?.command || "Idle tmux pane"}</p>
+        {tags.length > 0 && (
+          <span className="session-tag-list" aria-hidden="true">
+            {tags.slice(0, 3).map((tag) => (
+              <span className={`session-tag tag-${tag}`} key={tag}>
+                {SESSION_TAG_LABELS[tag]}
+              </span>
+            ))}
+            {hiddenTags.length > 0 && (
+              <span className="session-tag-overflow">
+                +{hiddenTags.length}
+              </span>
+            )}
+          </span>
+        )}
+        {tags.length > 0 && (
+          <span id={tagsDescriptionId} className="session-sr-only">
+            Tags: {tags.map((tag) => SESSION_TAG_LABELS[tag]).join(", ")}
+          </span>
+        )}
         <p className="session-path">{pane?.path || "-"}</p>
         <div className="session-meta">
           <span>{session.windows} win / {session.panes.length} pane</span>
@@ -387,8 +431,8 @@ function SessionItem({
         <button
           type="button"
           className="session-title-edit"
-          aria-label={`Edit title for ${session.name}`}
-          title="Edit human title"
+          aria-label={`Edit title and tags for ${session.name}`}
+          title="Edit title and tags"
           onClick={(event) => onEdit(session.name, event.currentTarget)}
         >
           <EditIcon />
@@ -424,11 +468,15 @@ export function SessionDashboard({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [tagFilterMode, setTagFilterMode] = useState<"include" | "exclude">(
+    () => route.excludedTags.length > 0 ? "exclude" : "include",
+  );
   const [editingSessionName, setEditingSessionName] = useState<string | null>(null);
   const [messageSessionName, setMessageSessionName] = useState<string | null>(null);
   const [snippetSessionName, setSnippetSessionName] = useState<string | null>(null);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [attentionBusyNames, setAttentionBusyNames] = useState<Set<string>>(() => new Set());
+  const tagFilterModeDescriptionId = useId();
   const terminatedSessionsRef = useRef<Session[]>([]);
   const editTriggerRef = useRef<HTMLButtonElement | null>(null);
   const messageTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -437,6 +485,8 @@ export function SessionDashboard({
     query,
     kind: filter,
     state: stateFilter,
+    includedTags,
+    excludedTags,
     view: viewMode,
     group: groupMode,
     sort: sortCriteria,
@@ -469,7 +519,9 @@ export function SessionDashboard({
     const restoreFromHistory = () => {
       const restored = parseSessionDashboardSearch(window.location.search);
       setRoute(restored);
+      setTagFilterMode(restored.excludedTags.length > 0 ? "exclude" : "include");
       persistDashboardPreferences(restored);
+      replaceDashboardUrl(restored);
     };
     window.addEventListener("popstate", restoreFromHistory);
     return () => window.removeEventListener("popstate", restoreFromHistory);
@@ -575,10 +627,23 @@ export function SessionDashboard({
     [route, sessions],
   );
 
-  const activeSessions = useMemo(
-    () => sessions.filter((session) => !session.ignored || session.starred),
-    [sessions],
+  const tagVisibleSessions = useMemo(
+    () => sessions.filter((session) => sessionMatchesTagFilters(session, route)),
+    [route, sessions],
   );
+
+  const activeSessions = useMemo(
+    () => tagVisibleSessions.filter((session) => !session.ignored || session.starred),
+    [tagVisibleSessions],
+  );
+
+  const tagCounts = useMemo(() => sessions.reduce<Record<SessionTag, number>>(
+    (counts, session) => {
+      for (const tag of session.tags ?? []) counts[tag] += 1;
+      return counts;
+    },
+    { work: 0, review: 0, research: 0, urgent: 0, blocked: 0, background: 0 },
+  ), [sessions]);
 
   const stateCounts = useMemo(() => activeSessions.reduce<Record<AgentState, number>>(
     (counts, session) => ({ ...counts, [session.agentState]: counts[session.agentState] + 1 }),
@@ -591,12 +656,14 @@ export function SessionDashboard({
   );
 
   const starredSessions = useMemo(
-    () => sortVisibleSessions(sessions.filter((session) => session.starred)),
-    [sessions, sortVisibleSessions],
+    () => sortVisibleSessions(tagVisibleSessions.filter((session) => session.starred)),
+    [sortVisibleSessions, tagVisibleSessions],
   );
   const ignoredSessions = useMemo(
-    () => sortVisibleSessions(sessions.filter((session) => session.ignored && !session.starred)),
-    [sessions, sortVisibleSessions],
+    () => sortVisibleSessions(tagVisibleSessions.filter(
+      (session) => session.ignored && !session.starred,
+    )),
+    [sortVisibleSessions, tagVisibleSessions],
   );
   const regularSessions = useMemo(
     () => sortVisibleSessions(visibleSessions.filter(
@@ -607,7 +674,9 @@ export function SessionDashboard({
   const regularStateGroups = useMemo(() => STATE_GROUP_ORDER
     .map((state) => ({ state, sessions: regularSessions.filter((session) => session.agentState === state) }))
     .filter((group) => group.sessions.length > 0), [regularSessions]);
+  const regularTagGroups = useMemo(() => groupSessionsByTag(regularSessions), [regularSessions]);
   const groupByState = groupMode === "state";
+  const groupByTag = groupMode === "tag";
   const showStateChangeTime = groupByState || sortCriteria.includes("state-change");
 
   useEffect(() => {
@@ -620,17 +689,60 @@ export function SessionDashboard({
   const messageSession = sessions.find((session) => session.name === messageSessionName) || null;
   const closeTitleEditor = useCallback(() => {
     setEditingSessionName(null);
-    window.requestAnimationFrame(() => editTriggerRef.current?.focus());
+    window.requestAnimationFrame(() => {
+      const trigger = editTriggerRef.current;
+      if (trigger?.isConnected) {
+        trigger.focus();
+        return;
+      }
+      document.querySelector<HTMLInputElement>(".search-field input")?.focus();
+    });
   }, []);
 
-  const saveTitle = useCallback(async (title: string) => {
+  const saveDetails = useCallback(async (title: string, tags: SessionTag[]) => {
     if (!editingSession) return;
-    const customTitle = await updateSessionTitle(editingSession.name, title);
-    setSessions((current) => current.map((session) => (
-      session.name === editingSession.name ? { ...session, customTitle } : session
-    )));
+    const titleChanged = (editingSession.customTitle ?? "") !== title.trim();
+    const tagsChanged = (editingSession.tags ?? []).join("\0") !== tags.join("\0");
+    if (titleChanged && tagsChanged) {
+      const details = await updateSessionDetails(editingSession.name, title, tags);
+      setSessions((current) => current.map((session) => (
+        session.name === editingSession.name ? { ...session, ...details } : session
+      )));
+    } else if (titleChanged) {
+      const customTitle = await updateSessionTitle(editingSession.name, title);
+      setSessions((current) => current.map((session) => (
+        session.name === editingSession.name ? { ...session, customTitle } : session
+      )));
+    } else if (tagsChanged) {
+      const savedTags = await updateSessionTags(editingSession.name, tags);
+      setSessions((current) => current.map((session) => (
+        session.name === editingSession.name ? { ...session, tags: savedTags } : session
+      )));
+    }
     closeTitleEditor();
   }, [closeTitleEditor, editingSession]);
+
+  const toggleTagFilter = useCallback((tag: SessionTag) => {
+    const targetKey = tagFilterMode === "include" ? "includedTags" : "excludedTags";
+    const oppositeKey = tagFilterMode === "include" ? "excludedTags" : "includedTags";
+    const selected = route[targetKey].includes(tag);
+    updateRoute({
+      ...route,
+      [targetKey]: selected
+        ? route[targetKey].filter((item) => item !== tag)
+        : SESSION_TAGS.filter((item) => item === tag || route[targetKey].includes(item)),
+      [oppositeKey]: route[oppositeKey].filter((item) => item !== tag),
+    });
+  }, [route, tagFilterMode, updateRoute]);
+
+  const reverseTagFilters = useCallback(() => {
+    setTagFilterMode(tagFilterMode === "include" ? "exclude" : "include");
+    updateRoute({
+      ...route,
+      includedTags: [...route.excludedTags],
+      excludedTags: [...route.includedTags],
+    });
+  }, [route, tagFilterMode, updateRoute]);
 
   const openMessages = useCallback((name: string, trigger: HTMLButtonElement) => {
     messageTriggerRef.current = trigger;
@@ -834,7 +946,7 @@ export function SessionDashboard({
           <input
             value={query}
             onChange={(event) => updateRoute({ ...route, query: event.target.value })}
-            placeholder="Find a session, command, or path"
+            placeholder="Find a session, tag, command, or path"
             aria-label="Find a session"
           />
           {query && <button type="button" onClick={() => updateRoute({ ...route, query: "" })} aria-label="Clear search">Clear</button>}
@@ -876,6 +988,70 @@ export function SessionDashboard({
             </button>
           </div>
         </div>
+        <fieldset className="tag-filter-panel">
+          <legend>Tags</legend>
+          <div className="tag-filter-header">
+            <p id={tagFilterModeDescriptionId} aria-live="polite">
+              {tagFilterMode === "include"
+                ? "Tag clicks include matches; included tags match any."
+                : "Tag clicks exclude matches; excluded sessions never appear."}
+            </p>
+            <div className="tag-filter-actions" role="group" aria-label="Tag filter mode">
+              <button
+                type="button"
+                className={tagFilterMode === "exclude" ? "tag-filter-mode active" : "tag-filter-mode"}
+                aria-describedby={tagFilterModeDescriptionId}
+                onClick={reverseTagFilters}
+              >
+                <EyeOffIcon /> {tagFilterMode === "include" ? "Exclude matches" : "Include matches"}
+              </button>
+              <button
+                type="button"
+                className="tag-filter-clear"
+                aria-label="Clear tag filters"
+                disabled={includedTags.length === 0 && excludedTags.length === 0}
+                onClick={() => updateRoute({
+                  ...route,
+                  includedTags: [],
+                  excludedTags: [],
+                })}
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <div className="tag-filter-options">
+            {SESSION_TAGS.map((tag) => {
+              const included = includedTags.includes(tag);
+              const excluded = excludedTags.includes(tag);
+              const selectedInMode = tagFilterMode === "include" ? included : excluded;
+              const selectedInOtherMode = tagFilterMode === "include" ? excluded : included;
+              const action = tagFilterMode === "include" ? "Include" : "Exclude";
+              const label = SESSION_TAG_LABELS[tag];
+              const countLabel = `${tagCounts[tag]} ${tagCounts[tag] === 1 ? "session" : "sessions"}`;
+              const ariaLabel = selectedInMode
+                ? `Remove ${label} ${tagFilterMode} filter, ${countLabel}`
+                : selectedInOtherMode
+                  ? `Change ${label} to ${tagFilterMode} filter, ${countLabel}`
+                  : `Add ${label} ${tagFilterMode} filter, ${countLabel}`;
+              return (
+                <button
+                  type="button"
+                  key={tag}
+                  className={`tag-filter-chip tag-${tag}${included ? " included" : ""}${excluded ? " excluded" : ""}`}
+                  aria-label={ariaLabel}
+                  onClick={() => toggleTagFilter(tag)}
+                >
+                  {(included || excluded) && (
+                    <span className="tag-filter-sign" aria-hidden="true">{included ? "+" : "-"}</span>
+                  )}
+                  <span>{label}</span>
+                  <small>{tagCounts[tag]}</small>
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
       </section>
 
       {error && <div className="dashboard-error" role="alert">{error}</div>}
@@ -890,7 +1066,7 @@ export function SessionDashboard({
           <div className="results-toolbar">
             <div>
               <p className="eyebrow">03 / SESSIONS</p>
-              <p className="results-summary">
+              <p className="results-summary" aria-live="polite">
                 {starredSessions.length} starred / {regularSessions.length} filtered / {ignoredSessions.length} ignored
               </p>
             </div>
@@ -988,6 +1164,47 @@ export function SessionDashboard({
                   </section>
                 ))}
               </div>
+            ) : groupByTag ? (
+              <div className="state-session-groups tag-session-groups" aria-busy={loading}>
+                {regularTagGroups.map((group) => {
+                  const groupName = group.tag ?? "untagged";
+                  const groupLabel = group.tag ? SESSION_TAG_LABELS[group.tag] : "Untagged";
+                  return (
+                    <section
+                      className={`state-session-group tag-session-group tag-${groupName}`}
+                      key={groupName}
+                      aria-labelledby={`tag-group-${groupName}`}
+                    >
+                      <header className="state-group-header">
+                        <h3 id={`tag-group-${groupName}`}><span />{groupLabel}</h3>
+                        <span>{group.sessions.length}</span>
+                      </header>
+                      <div className={viewMode === "list" ? "session-grid session-list" : "session-grid"}>
+                        {group.sessions.map((session, index) => (
+                          <SessionItem
+                            key={session.id}
+                            session={session}
+                            index={index}
+                            viewMode={viewMode}
+                            showStateChangeTime={showStateChangeTime}
+                            attentionBusy={attentionBusyNames.has(session.name)}
+                            onOpen={onOpen}
+                            onEdit={(name, trigger) => {
+                              editTriggerRef.current = trigger;
+                              setEditingSessionName(name);
+                            }}
+                            onMessages={openMessages}
+                            onSnippets={openSnippets}
+                            onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
+                            onToggleStar={(item) => void toggleStar(item)}
+                            onToggleIgnored={(item) => void toggleIgnored(item)}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
             ) : (
               <div className={viewMode === "list" ? "session-grid session-list" : "session-grid"} aria-busy={loading}>
                 {regularSessions.map((session, index) => (
@@ -1069,7 +1286,7 @@ export function SessionDashboard({
         <SessionTitleDialog
           session={editingSession}
           onClose={closeTitleEditor}
-          onSave={saveTitle}
+          onSave={saveDetails}
         />
       )}
       {messageSession && (

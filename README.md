@@ -21,6 +21,7 @@ and output, and captures retained tmux scrollback only when requested.
 - Conservative activity states for supported agent CLIs
 - Card dashboard by default, with a compact list view and shareable view preferences
 - Visible, ordered multi-criterion sorting and optional attention-first state groups
+- Persistent predefined session tags with tag search, grouping, and include/exclude filters
 - One-tap, persistent stars that pin frequently used sessions above the rest
 - A persistent ignored bucket for long-running background sessions
 - Quick filters for All, Agents, Claude, Codex, Copilot, Cursor, Grok, and Shells
@@ -190,15 +191,16 @@ switches to mobile, the console is left, or the page reloads. Escape remains raw
 terminal input rather than an exit shortcut; `Ctrl+Shift+F` exits Focus even
 while xterm owns keyboard focus.
 
-The sticky `Alias` shortcut in the terminal's bottom bar opens the same optional
-display-title editor used by the dashboard. It changes only the label shown by
-Muxdeck; the native tmux session name and attach target do not change.
+The sticky `Details` shortcut in the terminal's bottom bar opens the same title
+and tag editor used by the dashboard. The optional display title changes only
+the label shown by Muxdeck; the native tmux session name and attach target do not
+change. Tags are predefined Muxdeck metadata and never send terminal input.
 
 The adjacent `Tmux` shortcut renames the real session, equivalent to tmux's
 default `Ctrl+B`, then `$` command. A successful rename updates the active route,
 all ordered `tab=` values, page-local Recents, and the staged-draft key without
 adding a browser-history entry. Muxdeck also migrates the server-side display
-alias, star/ignored status, and memoranda. Browser Back and Forward entries that
+alias, tags, star/ignored status, and memoranda. Browser Back and Forward entries that
 still contain the old name are canonicalized for the lifetime of the page. As in
 tmux itself, names cannot contain a colon or period. Muxdeck also rejects
 backslashes, unsafe line separators, and names ending in a semicolon because they
@@ -279,9 +281,13 @@ the service starts a fresh observation timeline.
 
 ## Session organization
 
-Use the pencil on a session card to add an optional Muxdeck display alias. The
-native tmux session name remains visible underneath it. Saving an empty alias
-clears it; renaming the native session from its console preserves the alias.
+Use the pencil on a session card to edit its optional Muxdeck display alias and
+tags. The native tmux session name remains visible underneath it. Saving an empty
+alias clears it; changing the alias and tags together commits both in one metadata
+write. Renaming the native session from its console preserves the alias and tags.
+Tags use a fixed vocabulary: `Work`, `Review`, `Research`, `Urgent`,
+`Blocked`, and `Background`. They are shared across browsers, survive server
+restarts, and appear as compact badges in both card and list views.
 
 Cards are the default dashboard view. Use the Cards/List control to switch to a
 compact list. Sorting applies identically to both views and is shown as a
@@ -295,7 +301,9 @@ time use newest first; titles and tmux names use natural A-Z order (`cx2` before
 `cx10`); state uses Needs input, Working, Background work, Unclear, then Other.
 Grouping is independent of sorting. Enabling Group / State splits regular
 results into that attention-first state order, then applies the badge criteria
-inside each group.
+inside each group. Group / Tags uses the fixed tag order followed by `Untagged`.
+A session with several tags appears in every matching tag group; the summary
+count remains the number of unique filtered sessions.
 
 Dashboard controls are encoded in the URL, so a bookmark or shared link restores
 the same search, filters, card/list view, grouping, and comparator priority:
@@ -303,6 +311,25 @@ the same search, filters, card/list view, grouping, and comparator priority:
 ```text
 /mux/?q=deploy&kind=codex&state=waiting_human&view=list&group=state&sort=state,title
 ```
+
+Tag filters use repeated parameters. Included tags are ORed with each other and
+then ANDed with search, agent type, and state; excluded tags always subtract a
+match. For example, this shows Work or Review sessions except anything also
+marked Blocked:
+
+```text
+/mux/?tag=work&tag=review&not-tag=blocked
+```
+
+The visible `Exclude matches` control reverses every active tag filter in one
+step and changes subsequent tag clicks to exclusions; `Include matches` swaps
+them back. Included chips show `+`; excluded chips show `-` plus a red hatched
+treatment. The URL keeps both sets independently, removes invalid or duplicate
+values, and serializes them in the predefined order. If a malformed URL contains
+the same tag in both sets, exclusion wins. Tag names also participate in text
+search. Unlike the kind/state/search facets, tag inclusion and exclusion applies
+before the Starred, filtered, and Ignored sections are partitioned, so a
+reverse-filtered session cannot remain visible elsewhere.
 
 The canonical background-work filter is `state=waiting_command`. Muxdeck also
 accepts the more readable `state=background-work` and the older
@@ -318,7 +345,8 @@ saved view/sort preferences and then writes them into the URL.
 Use the star beside a session title to add or remove it from the pinned section
 with one tap. Stars persist across server restarts. Pinned sessions remain
 visible above the regular results independently of the active All, Agents,
-Claude, Codex, Copilot, Cursor, Grok, or Shells quick filter.
+Claude, Codex, Copilot, Cursor, Grok, or Shells quick filter. The tag facet still
+applies, including hard exclusions.
 
 Use the eye-off action to move a long-running background session into the
 collapsed `Ignored` section below the filtered results. Ignored sessions do not
@@ -451,7 +479,7 @@ session remains in the path. Only the selected terminal is attached: inactive
 quick tabs are lightweight navigation records and cannot resize tmux or consume
 background PTY connections.
 
-The fixed `+` button at the end of the tab strip opens `New session` in that
+The fixed `+` button beside `Sessions` opens `New session` in that
 workspace without a dashboard round trip. Opening or canceling the form does not
 change saved tabs: Cancel or the synthetic tab's `X` returns to the console it
 replaced. A successful creation appends the real session tab and synchronizes it
@@ -488,23 +516,26 @@ When `workspace=` is present, Muxdeck also synchronizes the ordered tabs and
 active session to the server so another device can resume them. The
 closed-session visit trail remains page-local and clears on reload; it is not
 part of a saved workspace. Existing appearance, dashboard preference,
-staged-draft, title, star, ignored-session, memorandum, and snippet storage keep
+staged-draft, title, tag, star, ignored-session, memorandum, and snippet storage keep
 their documented behavior.
 
-`MUXDECK_TITLES_FILE` stores optional display aliases plus starred and ignored
-session names in the server-side `session-titles.json` file, keyed by the
-current native tmux name. The metadata is shared across browsers and reloaded
-when Muxdeck starts. A Muxdeck native rename moves the key to the new name.
+`MUXDECK_TITLES_FILE` stores optional display aliases, predefined tags, and
+starred and ignored session names in the server-side `session-titles.json` file,
+keyed by the current native tmux name. The metadata is shared across browsers
+and reloaded when Muxdeck starts. A Muxdeck native rename moves the key to the
+new name.
 Entries for sessions that disappear outside Muxdeck remain dormant; a future
 tmux session that reuses such a name inherits its saved alias and organization
 status.
 
-The current metadata schema is version 3. Existing version 1 and 2 files load
-without migration work and initially have no ignored sessions; the next title,
-star, or ignored-status write atomically rewrites the file as version 3. Keep a
-pre-upgrade copy when rollback is possible. Older releases that only write
-version 1 or 2 ignore the version 3 ignored list and will discard it on their
-next title or star write.
+The current metadata schema is version 4. Existing version 1 through 3 files
+load without a separate migration command and initially have no tags; the next
+title, tag, star, or ignored-status write atomically rewrites the file as version
+4. Keep a pre-upgrade copy when rollback is possible. A release that only knows
+version 3 will discard tags on its next metadata write; releases that only know
+version 1 or 2 can additionally discard ignored status. An unreadable,
+malformed, or unsupported future metadata document disables metadata writes
+instead of being replaced; repair the configured file and restart Muxdeck.
 
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
@@ -549,7 +580,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
-| `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles plus starred and ignored session names |
+| `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles, predefined tags, and starred/ignored session names |
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session notes and queued memo input |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, and activity times |

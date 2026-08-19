@@ -7,7 +7,9 @@ import {
   listQueuedMessages,
   listSessions,
   renameSession,
+  updateSessionDetails,
   updateQueuedMessage,
+  updateSessionTags,
   updateSessionTitle,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
@@ -36,7 +38,9 @@ vi.mock("../api", () => ({
   deleteQueuedMessage: vi.fn(),
   getSnippetTree: vi.fn(),
   renameSession: vi.fn(),
+  updateSessionDetails: vi.fn(),
   updateSessionStar: vi.fn(),
+  updateSessionTags: vi.fn(),
   updateSessionTitle: vi.fn(),
 }));
 
@@ -107,6 +111,7 @@ function session(customTitle: string | null = null, name = "test"): Session {
     agentStateReason: "No agent",
     agentStateChangedAt: 1,
     customTitle,
+    tags: [],
     starred: false,
     ignored: false,
     queuedMessageCount: 0,
@@ -134,6 +139,44 @@ beforeEach(() => {
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("uses the saved workspace and display names in the browser tab title", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session("Release review")]);
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        workspaceName="Incident room"
+        onBack={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Release review" });
+    await waitFor(() => {
+      expect(document.title).toBe("Incident room - Release review");
+    });
+
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="test"
+          workspaceName="Release train"
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+    await waitFor(() => {
+      expect(document.title).toBe("Release train - Release review");
+    });
+
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen sessionName="test" onBack={vi.fn()} />
+      </ThemeProvider>,
+    );
+    await waitFor(() => {
+      expect(document.title).toBe("Release review - Muxdeck");
+    });
+  });
+
   it("offers exclusive mobile purposes without remounting the terminal or losing a draft", async () => {
     const needsInputSession = {
       ...session(),
@@ -684,21 +727,21 @@ describe("ConsoleScreen session identity", () => {
 
       await act(async () => { await Promise.resolve(); });
       expect(screen.getByTestId("live-terminal")).toBeVisible();
-      fireEvent.click(screen.getByRole("button", { name: "Edit display title" }));
-      expect(screen.getByRole("dialog", { name: "Edit display title" })).toBeVisible();
+      fireEvent.click(screen.getByRole("button", { name: "Edit title and tags" }));
+      expect(screen.getByRole("dialog", { name: "Edit title and tags" })).toBeVisible();
 
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
       expect(screen.getByText("This tmux session no longer exists.")).toBeVisible();
       expect(screen.queryByTestId("live-terminal")).not.toBeInTheDocument();
-      expect(screen.queryByRole("dialog", { name: "Edit display title" }))
+      expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
         .not.toBeInTheDocument();
       expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
 
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
       expect(screen.getByTestId("live-terminal")).toBeVisible();
-      expect(screen.queryByRole("dialog", { name: "Edit display title" }))
+      expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
         .not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -715,17 +758,17 @@ describe("ConsoleScreen session identity", () => {
       />,
     );
 
-    const titleButton = screen.getByRole("button", { name: "Edit display title" });
+    const titleButton = screen.getByRole("button", { name: "Edit title and tags" });
     await waitFor(() => expect(titleButton).toBeEnabled());
     fireEvent.click(titleButton);
-    expect(screen.getByRole("dialog", { name: "Edit display title" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Edit title and tags" })).toBeVisible();
 
     view.rerender(
       <ThemeProvider>
         <ConsoleScreen sessionName="test" onBack={vi.fn()} workspaceOverlayOpen />
       </ThemeProvider>,
     );
-    expect(screen.queryByRole("dialog", { name: "Edit display title" }))
+    expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
       .not.toBeInTheDocument();
 
     view.rerender(
@@ -737,7 +780,7 @@ describe("ConsoleScreen session identity", () => {
         />
       </ThemeProvider>,
     );
-    expect(screen.queryByRole("dialog", { name: "Edit display title" }))
+    expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
       .not.toBeInTheDocument();
   });
 
@@ -809,11 +852,11 @@ describe("ConsoleScreen session identity", () => {
     );
 
     await screen.findByRole("heading", { name: "test" });
-    fireEvent.click(screen.getByRole("button", { name: "Edit display title" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit title and tags" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Human title" }), {
       target: { value: "Mobile work" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
 
     await waitFor(() => expect(updateSessionTitle).toHaveBeenCalledWith("test", "Mobile work"));
     expect(onSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
@@ -823,9 +866,74 @@ describe("ConsoleScreen session identity", () => {
     expect(await screen.findByRole("heading", { name: "Mobile work" })).toBeVisible();
     expect(screen.getByText("test / /work")).toBeVisible();
     expect(document.title).toBe("Mobile work - Muxdeck");
-    expect(screen.queryByRole("dialog", { name: "Edit display title" }))
+    expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
       .not.toBeInTheDocument();
     expect(renameSession).not.toHaveBeenCalled();
+  });
+
+  it("updates session tags from the bottom details control", async () => {
+    vi.mocked(listSessions).mockResolvedValue([{ ...session(), tags: ["review"] }]);
+    vi.mocked(updateSessionTags).mockResolvedValue(["review", "urgent"]);
+    const onSessionUpdate = vi.fn();
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionUpdate={onSessionUpdate}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit title and tags" }));
+    expect(screen.getByRole("checkbox", { name: "Review" })).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Urgent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+
+    await waitFor(() => expect(updateSessionTags).toHaveBeenCalledWith(
+      "test",
+      ["review", "urgent"],
+    ));
+    expect(updateSessionTitle).not.toHaveBeenCalled();
+    expect(onSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      name: "test",
+      tags: ["review", "urgent"],
+    }));
+  });
+
+  it("atomically updates title and tags from the details control", async () => {
+    vi.mocked(listSessions).mockResolvedValue([{ ...session(), tags: ["review"] }]);
+    vi.mocked(updateSessionDetails).mockResolvedValue({
+      customTitle: "Release review",
+      tags: ["review", "urgent"],
+    });
+    const onSessionUpdate = vi.fn();
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionUpdate={onSessionUpdate}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit title and tags" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Human title" }), {
+      target: { value: "Release review" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Urgent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
+
+    await waitFor(() => expect(updateSessionDetails).toHaveBeenCalledWith(
+      "test",
+      "Release review",
+      ["review", "urgent"],
+    ));
+    expect(updateSessionTitle).not.toHaveBeenCalled();
+    expect(updateSessionTags).not.toHaveBeenCalled();
+    expect(onSessionUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      customTitle: "Release review",
+      tags: ["review", "urgent"],
+    }));
   });
 
   it("clears the human title without renaming the tmux session", async () => {
@@ -834,10 +942,10 @@ describe("ConsoleScreen session identity", () => {
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "Old label" });
-    fireEvent.click(screen.getByRole("button", { name: "Edit display title" }));
-    const titleDialog = screen.getByRole("dialog", { name: "Edit display title" });
-    fireEvent.click(within(titleDialog).getByRole("button", { name: "Clear" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save title" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit title and tags" }));
+    const titleDialog = screen.getByRole("dialog", { name: "Edit title and tags" });
+    fireEvent.click(within(titleDialog).getByRole("button", { name: "Clear title" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save details" }));
 
     await waitFor(() => expect(updateSessionTitle).toHaveBeenCalledWith("test", ""));
     expect(await screen.findByRole("heading", { name: "test" })).toBeVisible();
@@ -864,7 +972,7 @@ describe("ConsoleScreen session identity", () => {
     );
 
     await screen.findByRole("heading", { name: "Display alias" });
-    const aliasButton = screen.getByRole("button", { name: "Edit display title" });
+    const aliasButton = screen.getByRole("button", { name: "Edit title and tags" });
     const renameButton = screen.getByRole("button", { name: "Rename tmux session" });
     await waitFor(() => expect(renameButton).toBeEnabled());
     expect(aliasButton).toBeEnabled();
@@ -874,7 +982,7 @@ describe("ConsoleScreen session identity", () => {
     expect(within(dialog).getByRole("textbox", { name: "Native tmux name" }))
       .toHaveValue("test");
     expect(dialog).toHaveTextContent("display title is preserved");
-    expect(screen.queryByRole("dialog", { name: "Edit display title" }))
+    expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
       .not.toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Native tmux name" }), {

@@ -16,6 +16,8 @@ import {
   terminateSession,
   updateSessionIgnored,
   updateSessionStar,
+  updateSessionDetails,
+  updateSessionTags,
   updateQueuedMessage,
   updateWorkspace,
   updateWorkspaceActivity,
@@ -67,6 +69,7 @@ function session(): Session {
     agentStateReason: "Agent is running",
     agentStateChangedAt: 3,
     customTitle: null,
+    tags: [],
     starred: false,
     ignored: false,
     queuedMessageCount: 0,
@@ -140,6 +143,37 @@ describe("session creation API", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ name: "grok-work", theme: "light" }),
+      }),
+    );
+  });
+
+  it("retries without a theme when an older backend rejects that field", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "unknown field: theme",
+      }), { status: 400, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        session: "mixed-release-work",
+        sessionId: "$15",
+      }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createSession("mixed-release-work", "dark")).resolves.toEqual({
+      name: "mixed-release-work",
+      id: "$15",
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE_PATH}/api/sessions`,
+      expect.objectContaining({
+        body: JSON.stringify({ name: "mixed-release-work", theme: "dark" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${BASE_PATH}/api/sessions`,
+      expect.objectContaining({
+        body: JSON.stringify({ name: "mixed-release-work" }),
       }),
     );
   });
@@ -295,6 +329,55 @@ describe("session attention API", () => {
         body: JSON.stringify({ session: "work/name", ignored: true }),
       }),
     ]);
+  });
+});
+
+describe("session tags API", () => {
+  it("replaces the predefined tag set and returns canonical server order", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "work/name",
+      tags: ["work", "urgent"],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateSessionTags("work/name", ["urgent", "work"]))
+      .resolves.toEqual(["work", "urgent"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/session-tags`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ session: "work/name", tags: ["urgent", "work"] }),
+      }),
+    );
+  });
+
+  it("updates title and tags atomically when both details changed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "work/name",
+      customTitle: "Release review",
+      tags: ["work", "urgent"],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateSessionDetails(
+      "work/name",
+      "Release review",
+      ["urgent", "work"],
+    )).resolves.toEqual({
+      customTitle: "Release review",
+      tags: ["work", "urgent"],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/session-details`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          session: "work/name",
+          title: "Release review",
+          tags: ["urgent", "work"],
+        }),
+      }),
+    );
   });
 });
 

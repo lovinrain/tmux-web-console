@@ -57,18 +57,31 @@ export function SessionSortControls({
           <p>
             {group === "state"
               ? "State groups use attention order. These criteria sort inside each group."
+              : group === "tag"
+                ? "Sessions with several tags appear in each matching group."
               : "Sessions are compared from priority 1 onward."}
           </p>
         </div>
-        <button
-          type="button"
-          className={group === "state" ? "group-state-toggle active" : "group-state-toggle"}
-          aria-pressed={group === "state"}
-          onClick={() => onGroupChange(group === "state" ? "none" : "state")}
-        >
-          <span>Group</span>
-          <strong>{group === "state" ? "State / attention" : "None"}</strong>
-        </button>
+        <div className="group-mode-controls" role="group" aria-label="Group sessions">
+          <button
+            type="button"
+            className={group === "state" ? "group-state-toggle active" : "group-state-toggle"}
+            aria-pressed={group === "state"}
+            onClick={() => onGroupChange(group === "state" ? "none" : "state")}
+          >
+            <span>Group</span>
+            <strong>State / attention</strong>
+          </button>
+          <button
+            type="button"
+            className={group === "tag" ? "group-state-toggle group-tag-toggle active" : "group-state-toggle group-tag-toggle"}
+            aria-pressed={group === "tag"}
+            onClick={() => onGroupChange(group === "tag" ? "none" : "tag")}
+          >
+            <span>Group</span>
+            <strong>Tags / labels</strong>
+          </button>
+        </div>
       </header>
 
       <div className="sort-priority-track">

@@ -416,6 +416,124 @@ test("shareable dashboard URL restores ordered sorting and fits narrow screens",
   expect(sortBuilderFits).toBe(true);
 });
 
+test("session tags persist, search, group, include, and reverse-filter through the URL", async ({
+  page,
+  request,
+}) => {
+  const reviewSession = `${sessionName}-tag-review`;
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    reviewSession,
+    "bash",
+    "--noprofile",
+    "--norc",
+  ]);
+  const primaryBefore = workspaceTmuxContentSnapshot(sessionName);
+  const reviewBefore = workspaceTmuxContentSnapshot(reviewSession);
+
+  try {
+    const reviewTags = await request.put("/mux/api/session-tags", {
+      data: { session: reviewSession, tags: ["review"] },
+    });
+    expect(reviewTags.ok()).toBe(true);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/mux/");
+    await expect(page.getByRole("button", {
+      name: `Open ${sessionName}`,
+      exact: true,
+    })).toBeVisible();
+    await page.getByRole("button", {
+      name: `Edit title and tags for ${sessionName}`,
+      exact: true,
+    }).click();
+    const detailsDialog = page.getByRole("dialog", { name: "Edit title and tags" });
+    await detailsDialog.getByText("Work", { exact: true }).click();
+    await detailsDialog.getByText("Urgent", { exact: true }).click();
+    await page.getByRole("button", { name: "Save details" }).click();
+    await expect(page.getByRole("dialog", { name: "Edit title and tags" })).toBeHidden();
+    const primaryCard = page.getByRole("button", {
+      name: `Open ${sessionName}`,
+      exact: true,
+    });
+    await expect(primaryCard.locator(".session-tag-list")).toContainText("Work");
+    await expect(primaryCard.locator(".session-tag-list")).toContainText("Urgent");
+
+    await page.reload();
+    await expect(primaryCard.locator(".session-tag-list")).toContainText("Work");
+    await page.getByRole("button", { name: /^Add Work include filter,/ }).click();
+    await expect(page).toHaveURL("/mux/?tag=work");
+    await expect(primaryCard).toBeVisible();
+    await expect(page.getByRole("button", {
+      name: `Open ${reviewSession}`,
+      exact: true,
+    })).toBeHidden();
+
+    const excludeMode = page.getByRole("button", { name: "Exclude matches" });
+    const excludeBox = await excludeMode.boundingBox();
+    expect(excludeBox?.height).toBeGreaterThanOrEqual(44 - CSS_PIXEL_TOLERANCE);
+    await excludeMode.click();
+    await expect(page).toHaveURL("/mux/?not-tag=work");
+    await expect(primaryCard).toBeHidden();
+    const reviewCard = page.getByRole("button", {
+      name: `Open ${reviewSession}`,
+      exact: true,
+    });
+    await expect(reviewCard).toBeVisible();
+
+    await reviewCard.click();
+    await expectRoute(page, `/mux/session/${reviewSession}`, [reviewSession], {
+      "not-tag": "work",
+    });
+    await page.goBack();
+    await expectRoute(page, "/mux/", [reviewSession], { "not-tag": "work" });
+    await expect(reviewCard).toBeVisible();
+    await page.goForward();
+    await expectRoute(page, `/mux/session/${reviewSession}`, [reviewSession], {
+      "not-tag": "work",
+    });
+    await page.goBack();
+    await expectRoute(page, "/mux/", [reviewSession], { "not-tag": "work" });
+
+    await page.getByRole("button", { name: "Clear tag filters" }).click();
+    await page.getByLabel("Find a session").fill("urgent");
+    await expect(page).toHaveURL("/mux/?q=urgent&tab=" + encodeURIComponent(reviewSession));
+    await expect(primaryCard).toBeVisible();
+    await expect(reviewCard).toBeHidden();
+    await page.getByRole("button", { name: "Clear search" }).click();
+    await page.getByRole("button", { name: "Group Tags / labels" }).click();
+    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Review", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Urgent", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", {
+      name: `Open ${sessionName}`,
+      exact: true,
+    })).toHaveCount(2);
+
+    await page.setViewportSize({ width: 320, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(primaryBefore);
+    expect(workspaceTmuxContentSnapshot(reviewSession)).toBe(reviewBefore);
+  } finally {
+    for (const name of [sessionName, reviewSession]) {
+      await request.put("/mux/api/session-tags", {
+        data: { session: name, tags: [] },
+      }).catch(() => undefined);
+    }
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${reviewSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the test's disposable tmux server.
+    }
+  }
+});
+
 test("dashboard query survives new-window and same-window console navigation", async ({ page }) => {
   const dashboardUrl = `/mux/?q=${encodeURIComponent(sessionName)}&kind=shells&state=other&view=list&group=state&sort=state,tmux-name`;
   const dashboardQuery = {
@@ -427,13 +545,17 @@ test("dashboard query survives new-window and same-window console navigation", a
     sort: "state,tmux-name",
   };
   await page.goto(dashboardUrl);
-  await expect(page.getByRole("button", { name: `Open ${sessionName}` })).toBeVisible();
+  await expect(page.getByRole("button", {
+    name: `Open ${sessionName}`,
+    exact: true,
+  })).toBeVisible();
   await expect(page.getByLabel("Find a session")).toHaveValue(sessionName);
   await expect(page.getByRole("button", { name: "shells", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Other/ })).toHaveAttribute("aria-pressed", "true");
 
   const newWindowLink = page.getByRole("link", {
     name: `Open ${sessionName} in new window`,
+    exact: true,
   });
   await expect(newWindowLink).toHaveAttribute("target", "_blank");
   const [newWindow] = await Promise.all([
@@ -450,7 +572,7 @@ test("dashboard query survives new-window and same-window console navigation", a
   await expect(page).toHaveURL(dashboardUrl);
   await newWindow.close();
 
-  await page.getByRole("button", { name: `Open ${sessionName}` }).click();
+  await page.getByRole("button", { name: `Open ${sessionName}`, exact: true }).click();
   await expectRoute(page, `/mux/session/${sessionName}`, [sessionName], dashboardQuery);
   await page.goBack();
   await expectRoute(page, "/mux/", [sessionName], dashboardQuery);
@@ -1921,6 +2043,7 @@ test("saved workspace survives reload and device handoff without touching tmux p
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
     await expect(page.getByRole("status", { name: "Workspace saved automatically" }))
       .toBeVisible();
+    await expect(page).toHaveTitle(`${workspaceName} - ${sharedSession}`);
     expect(orderedTabs.map(workspaceTmuxSnapshot)).toEqual(beforeSaveTmuxSnapshots);
     expect(orderedTabs.map(workspaceTmuxIdentity)).toEqual(originalTmuxIdentities);
 
@@ -2038,6 +2161,7 @@ test("saved workspace survives reload and device handoff without touching tmux p
     await expect(secondPage.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
     });
+    await expect(secondPage).toHaveTitle(`${workspaceName} - ${sharedSession}`);
     const activityResponse = await activityResponsePromise;
     const activityBody = await activityResponse.json();
     expect(activityBody.workspace.lastActiveAt)
@@ -2069,6 +2193,7 @@ test("saved workspace survives reload and device handoff without touching tmux p
     await expect(secondPage.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
     });
+    await expect(secondPage).toHaveTitle(`${workspaceName} - ${sharedSession}`);
 
     await secondPage.getByRole("button", { name: "Back to sessions" }).click();
     const secondDeviceCard = secondPage.locator(".saved-workspace-card").filter({
@@ -2356,14 +2481,11 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(queuedCardMemoButton.locator("span")).toHaveText("Q1", { timeout: 10_000 });
   expect(workspaceTmuxSnapshot(sessionName)).toBe(memoOnlyTmuxBefore);
 
-  const listRouteRefresh = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return response.request().method() === "GET"
-      && url.pathname === "/mux/api/sessions"
-      && response.ok();
-  });
   await page.getByRole("button", { name: "List" }).click();
-  await listRouteRefresh;
+  await expect(page.getByRole("button", { name: "List" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(page.locator(".session-row")).toHaveCount(1);
   const rowMemoButton = page.getByRole("button", {
     name: `Manage memoranda for ${sessionName}, 1 queued`,
@@ -2383,7 +2505,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await memoDialog.getByRole("button", { name: "Close memo" }).click();
   expect(workspaceTmuxSnapshot(sessionName)).toBe(memoOnlyTmuxBefore);
   await page.screenshot({ path: "artifacts/dashboard-mobile-list.png", fullPage: true });
-  await page.getByRole("button", { name: "Group None" }).click();
+  await page.getByRole("button", { name: "Group State / attention" }).click();
   await expect(page.locator(".state-group-header").getByRole("heading", { name: "Other" })).toBeVisible();
   await page.screenshot({ path: "artifacts/dashboard-mobile-state-groups.png", fullPage: true });
   await page.getByRole("button", { name: "Cards" }).click();
@@ -2395,9 +2517,9 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(page.getByRole("heading", { name: "Starred" })).toBeHidden();
   await page.getByRole("button", { name: `Add ${sessionName} to starred` }).click();
   await expect(page.getByRole("heading", { name: "Starred" })).toBeVisible();
-  await page.getByRole("button", { name: `Edit title for ${sessionName}` }).click();
+  await page.getByRole("button", { name: `Edit title and tags for ${sessionName}` }).click();
   await page.getByRole("textbox", { name: "Human title" }).fill("Browser E2E");
-  await page.getByRole("button", { name: "Save title" }).click();
+  await page.getByRole("button", { name: "Save details" }).click();
   await expect(page.getByRole("button", { name: "Open Browser E2E" })).toBeVisible();
   await page.getByRole("button", { name: "Open Browser E2E" }).click();
   await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
@@ -2412,9 +2534,9 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(stagedInput).toBeVisible();
   await expect(stagedInput).toHaveCSS("font-size", "16px");
 
-  await page.getByRole("button", { name: "Edit display title" }).click();
+  await page.getByRole("button", { name: "Edit title and tags" }).click();
   await page.getByRole("textbox", { name: "Human title" }).fill("Console E2E");
-  await page.getByRole("button", { name: "Save title" }).click();
+  await page.getByRole("button", { name: "Save details" }).click();
   await mobileTerminalMode.click();
   await expect(page.getByRole("heading", { name: "Console E2E" })).toBeVisible();
   await mobileInputMode.click();
@@ -2727,7 +2849,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   const terminalShortcuts = page.getByRole("group", { name: "Terminal input shortcuts" });
   expect(await terminalShortcuts.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
   const primaryShortcuts = [
-    page.getByRole("button", { name: "Edit display title" }),
+    page.getByRole("button", { name: "Edit title and tags" }),
     page.getByRole("button", { name: "Rename tmux session" }),
     page.locator(".memo-key"),
     page.getByRole("button", { name: "Open snippets" }),
@@ -3084,7 +3206,7 @@ test("native tmux rename preserves alias, workspace order, draft, and metadata",
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
       .toBe(true);
 
-    const aliasButton = page.getByRole("button", { name: "Edit display title" });
+    const aliasButton = page.getByRole("button", { name: "Edit title and tags" });
     const renameButton = page.getByRole("button", { name: "Rename tmux session" });
     await renameButton.scrollIntoViewIfNeeded();
     await expect(renameButton).toBeInViewport();

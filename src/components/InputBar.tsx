@@ -851,9 +851,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           className="key-button session-title-key"
           onClick={onEditSessionTitle}
           disabled={!onEditSessionTitle}
-          aria-label="Edit display title"
+          aria-label="Edit title and tags"
+          title="Set a display title and organize this session"
         >
-          <EditIcon /> <span>Alias</span>
+          <EditIcon /> <span>Details</span>
         </button>
         <button
           type="button"

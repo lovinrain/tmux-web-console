@@ -39,7 +39,10 @@ describe("SessionSortControls", () => {
     });
     expect(onChange).toHaveBeenCalledWith(["activity", "tmux-name", "state"]);
 
-    fireEvent.click(screen.getByRole("button", { name: /Group None/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Group State \/ attention/ }));
     expect(onGroupChange).toHaveBeenCalledWith("state");
+
+    fireEvent.click(screen.getByRole("button", { name: /Group Tags \/ labels/ }));
+    expect(onGroupChange).toHaveBeenCalledWith("tag");
   });
 });

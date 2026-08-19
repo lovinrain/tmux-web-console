@@ -11,6 +11,8 @@ import {
   deleteQueuedMessage,
   listSessions,
   renameSession,
+  updateSessionDetails,
+  updateSessionTags,
   updateSessionTitle,
 } from "../api";
 import {
@@ -27,7 +29,7 @@ import {
   TrashIcon,
 } from "../icons";
 import { useTheme } from "../theme";
-import type { ConnectionState, Pane, Session } from "../types";
+import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
 import {
   handoffRenamedSessionDraft,
@@ -52,6 +54,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 interface ConsoleScreenProps {
   sessionName: string;
+  workspaceName?: string | null;
   onBack: () => void;
   sessionNavigation?: ReactNode;
   workspaceOverlayOpen?: boolean;
@@ -232,6 +235,7 @@ function ConsoleBarToolbar({
 
 export function ConsoleScreen({
   sessionName,
+  workspaceName = null,
   onBack,
   sessionNavigation,
   workspaceOverlayOpen = false,
@@ -478,9 +482,14 @@ export function ConsoleScreen({
   }, []);
 
   useEffect(() => {
-    const title = session?.name === sessionName ? session.customTitle || sessionName : sessionName;
-    document.title = `${title} - Muxdeck`;
-  }, [session, sessionName]);
+    const sessionTitle = session?.name === sessionName
+      ? session.customTitle || sessionName
+      : sessionName;
+    const savedWorkspaceName = workspaceName?.trim();
+    document.title = savedWorkspaceName
+      ? `${savedWorkspaceName} - ${sessionTitle}`
+      : `${sessionTitle} - Muxdeck`;
+  }, [session, sessionName, workspaceName]);
 
   const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId) || (session ? activePane(session) : undefined);
   const classification = classifyPane(pane);
@@ -558,10 +567,33 @@ export function ConsoleScreen({
     window.addEventListener("keydown", handleDesktopFocusShortcut, true);
     return () => window.removeEventListener("keydown", handleDesktopFocusShortcut, true);
   }, [desktopTerminalFocus, exitDesktopTerminalFocus]);
-  const saveSessionTitle = useCallback(async (title: string) => {
-    const customTitle = await updateSessionTitle(sessionName, title);
-    if (session) onSessionUpdate?.({ ...session, customTitle });
-    setLoadedSession((current) => current?.name === sessionName ? { ...current, customTitle } : current);
+  const saveSessionDetails = useCallback(async (title: string, tags: SessionTag[]) => {
+    if (!session) return;
+    let updatedSession = session;
+    const titleChanged = (session.customTitle ?? "") !== title.trim();
+    const tagsChanged = (session.tags ?? []).join("\0") !== tags.join("\0");
+    if (titleChanged && tagsChanged) {
+      const details = await updateSessionDetails(sessionName, title, tags);
+      updatedSession = { ...updatedSession, ...details };
+      setLoadedSession((current) => current?.name === sessionName
+        ? { ...current, ...details }
+        : current);
+      onSessionUpdate?.(updatedSession);
+    } else if (titleChanged) {
+      const customTitle = await updateSessionTitle(sessionName, title);
+      updatedSession = { ...updatedSession, customTitle };
+      setLoadedSession((current) => current?.name === sessionName
+        ? { ...current, customTitle }
+        : current);
+      onSessionUpdate?.(updatedSession);
+    } else if (tagsChanged) {
+      const savedTags = await updateSessionTags(sessionName, tags);
+      updatedSession = { ...updatedSession, tags: savedTags };
+      setLoadedSession((current) => current?.name === sessionName
+        ? { ...current, tags: savedTags }
+        : current);
+      onSessionUpdate?.(updatedSession);
+    }
     setTitleEditorOpen(false);
   }, [onSessionUpdate, session, sessionName]);
   const updateMemorandumCounts = useCallback((counts: { total: number; queued: number }) => {
@@ -979,7 +1011,7 @@ export function ConsoleScreen({
         <SessionTitleDialog
           session={session}
           onClose={() => setTitleEditorOpen(false)}
-          onSave={saveSessionTitle}
+          onSave={saveSessionDetails}
         />
       )}
       {!workspaceOverlayOpen && renameEditorOpen && session && (

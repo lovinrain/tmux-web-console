@@ -17,6 +17,26 @@ export interface Pane {
   activity: number;
 }
 
+export const SESSION_TAGS = [
+  "work",
+  "review",
+  "research",
+  "urgent",
+  "blocked",
+  "background",
+] as const;
+
+export type SessionTag = typeof SESSION_TAGS[number];
+
+export const SESSION_TAG_LABELS: Readonly<Record<SessionTag, string>> = {
+  work: "Work",
+  review: "Review",
+  research: "Research",
+  urgent: "Urgent",
+  blocked: "Blocked",
+  background: "Background",
+};
+
 export interface Session {
   name: string;
   id: string;
@@ -31,6 +51,7 @@ export interface Session {
   agentStateReason: string;
   agentStateChangedAt: number;
   customTitle: string | null;
+  tags: SessionTag[];
   starred: boolean;
   ignored: boolean;
   queuedMessageCount: number;
