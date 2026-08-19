@@ -18,6 +18,7 @@ const props = {
   onAddToMemo: vi.fn(async () => {}),
   onReturnToLive: vi.fn(),
   onFocus: vi.fn(),
+  onRedraw: vi.fn(),
 };
 
 beforeEach(() => {
@@ -106,10 +107,17 @@ describe("InputBar", () => {
       expect.stringContaining("directly to tmux"),
     );
     const liveButton = screen.getByRole("button", { name: "Focus live terminal input" });
+    const redrawButton = screen.getByRole("button", { name: "Redraw terminal display" });
     expect(liveButton).toHaveTextContent("Live");
     expect(liveButton).toHaveAttribute("title", expect.stringContaining("Exit scrollback"));
+    expect(liveButton.nextElementSibling).toBe(redrawButton);
+    expect(redrawButton).toHaveTextContent("Redraw");
+    expect(redrawButton).toHaveAttribute("aria-controls", "muxdeck-active-console");
+    expect(redrawButton).toHaveAttribute("title", expect.stringContaining("without reconnecting"));
     fireEvent.click(liveButton);
     expect(props.onReturnToLive).toHaveBeenCalledOnce();
+    fireEvent.click(redrawButton);
+    expect(props.onRedraw).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "Tmux Page Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Tmux Page Down" }));
@@ -917,5 +925,19 @@ describe("InputBar", () => {
 
     expect(screen.getByRole("button", { name: "Edit title and tags" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Rename tmux session" })).toBeDisabled();
+  });
+
+  it("preserves the current focus when redrawing and disables the action without a handler", () => {
+    const view = render(<InputBar {...props} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const redraw = screen.getByRole("button", { name: "Redraw terminal display" });
+    textarea.focus();
+
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    expect(redraw.dispatchEvent(mouseDown)).toBe(false);
+    expect(textarea).toHaveFocus();
+
+    view.rerender(<InputBar {...props} onRedraw={undefined} />);
+    expect(redraw).toBeDisabled();
   });
 });

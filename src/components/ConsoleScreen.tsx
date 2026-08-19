@@ -986,6 +986,7 @@ export function ConsoleScreen({
         mobileDistractionFree={mobileInputDistractionFree}
         onToggleMobileDistractionFree={toggleMobileInputDistractionFree}
         onFocus={() => terminalRef.current?.focus()}
+        onRedraw={() => terminalRef.current?.redraw()}
         onRevealComposer={showComposer}
         onEditSessionTitle={session ? () => setTitleEditorOpen(true) : undefined}
         onRenameSession={session && onSessionRenamed

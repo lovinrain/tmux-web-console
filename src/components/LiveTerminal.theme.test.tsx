@@ -8,6 +8,7 @@ interface MockTerminalInstance {
   options: Record<string, unknown>;
   cols: number;
   rows: number;
+  clearTextureAtlas: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
@@ -38,6 +39,7 @@ vi.mock("@xterm/xterm", () => ({
     paste() {}
     focus() {}
     scrollToBottom() {}
+    clearTextureAtlas = vi.fn();
     refresh = vi.fn();
     dispose = vi.fn();
     onData() { return { dispose: vi.fn() }; }
@@ -147,6 +149,40 @@ afterEach(() => {
 });
 
 describe("LiveTerminal themes", () => {
+  it("redraws the renderer without fitting, reconnecting, or sending terminal data", () => {
+    const ref = createRef<LiveTerminalHandle>();
+    const view = render(
+      <LiveTerminal
+        ref={ref}
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    terminalMocks.fit.mockClear();
+    socket.send.mockClear();
+
+    let redrawn = false;
+    act(() => {
+      redrawn = ref.current?.redraw() ?? false;
+    });
+
+    expect(redrawn).toBe(true);
+    expect(terminal.clearTextureAtlas).toHaveBeenCalledOnce();
+    expect(terminalMocks.fit).not.toHaveBeenCalled();
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+  });
+
   it("refits and repaints an expanded layout without recreating the terminal or socket", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     render(

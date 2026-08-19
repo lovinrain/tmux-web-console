@@ -13,6 +13,7 @@ import {
   ExpandIcon,
   KeyboardIcon,
   MemoIcon,
+  RefreshIcon,
   SnippetIcon,
   TerminalIcon,
   TrashIcon,
@@ -35,6 +36,7 @@ interface InputBarProps {
   onConsumeMemo?: (source: MemoDraftSource) => Promise<void>;
   onReturnToLive: () => void;
   onFocus: () => void;
+  onRedraw?: () => void;
   onRevealComposer?: () => void;
   onEditSessionTitle?: () => void;
   onRenameSession?: () => void;
@@ -296,6 +298,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onConsumeMemo,
   onReturnToLive,
   onFocus,
+  onRedraw,
   onRevealComposer,
   onEditSessionTitle,
   onRenameSession,
@@ -803,6 +806,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onMouseDown={(event) => event.preventDefault()}
         >
           <TerminalIcon /> <span>Live</span>
+        </button>
+        <button
+          type="button"
+          className="key-button redraw-key"
+          onClick={onRedraw}
+          disabled={!onRedraw}
+          aria-label="Redraw terminal display"
+          aria-controls="muxdeck-active-console"
+          title="Repaint the local terminal display without reconnecting or changing the tmux session"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          <RefreshIcon /> <span>Redraw</span>
         </button>
         <button
           type="button"

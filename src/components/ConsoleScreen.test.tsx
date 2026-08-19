@@ -23,6 +23,7 @@ const liveTerminalHandle = vi.hoisted(() => ({
   paste: vi.fn((_data: string) => true),
   submit: vi.fn(async (_data: string, _withEnter: boolean) => true),
   focus: vi.fn(),
+  redraw: vi.fn(() => true),
   navigateHistory: vi.fn((_action: "page-up" | "page-down" | "exit") => true),
   jumpToLive: vi.fn(),
 }));
@@ -285,6 +286,26 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledWith("exit");
     expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
     expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
+  });
+
+  it("redraws the local terminal renderer from the desktop bottom controls", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    const redraw = screen.getByRole("button", { name: "Redraw terminal display" });
+    const stagedInput = screen.getByRole("textbox", { name: "Staged input" });
+    expect(redraw).toBeEnabled();
+    stagedInput.focus();
+
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    expect(redraw.dispatchEvent(mouseDown)).toBe(false);
+    fireEvent.click(redraw);
+
+    expect(liveTerminalHandle.redraw).toHaveBeenCalledOnce();
+    expect(liveTerminalHandle.focus).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(stagedInput).toHaveFocus();
   });
 
   it("fills the desktop viewport without remounting the terminal or losing its draft", async () => {

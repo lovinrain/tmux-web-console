@@ -19,6 +19,7 @@ export interface LiveTerminalHandle {
   paste: (data: string) => boolean;
   submit: (data: string, withEnter: boolean) => Promise<boolean>;
   focus: () => void;
+  redraw: () => boolean;
   navigateHistory: (action: "page-up" | "page-down" | "exit") => boolean;
   jumpToLive: () => void;
 }
@@ -58,6 +59,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const socketRef = useRef<WebSocket | null>(null);
     const layoutSuspendedRef = useRef(layoutSuspended);
     const scheduleFitAndResizeRef = useRef<(() => void) | null>(null);
+    const redrawRef = useRef<(() => boolean) | null>(null);
     const submitRef = useRef<(data: string, withEnter: boolean) => Promise<boolean>>(
       async () => false,
     );
@@ -106,6 +108,9 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       focus() {
         terminalRef.current?.focus();
       },
+      redraw() {
+        return redrawRef.current?.() ?? false;
+      },
       navigateHistory(action) {
         if (socketRef.current?.readyState !== WebSocket.OPEN) return false;
         try {
@@ -151,6 +156,17 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       terminal.loadAddon(fit);
       terminal.open(hostRef.current);
       terminalRef.current = terminal;
+      const redraw = () => {
+        if (cancelled || terminalRef.current !== terminal) return false;
+        try {
+          // xterm uses this public repair API to invalidate its renderer and repaint all rows.
+          terminal.clearTextureAtlas();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      redrawRef.current = redraw;
 
       const settleSubmission = (id: string, accepted: boolean) => {
         const pending = pendingSubmissions.get(id);
@@ -311,6 +327,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         if (scheduleFitAndResizeRef.current === scheduleFitAndResize) {
           scheduleFitAndResizeRef.current = null;
         }
+        if (redrawRef.current === redraw) redrawRef.current = null;
         resizeObserver.disconnect();
         window.visualViewport?.removeEventListener("resize", scheduleFitAndResize);
         window.visualViewport?.removeEventListener("scroll", scheduleFitAndResize);

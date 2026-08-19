@@ -196,6 +196,10 @@ and tag editor used by the dashboard. The optional display title changes only
 the label shown by Muxdeck; the native tmux session name and attach target do not
 change. Tags are predefined Muxdeck metadata and never send terminal input.
 
+The desktop bottom bar's `Redraw` shortcut asks xterm to rebuild its renderer and
+repaint the buffered terminal when glyphs or colors become visually corrupted.
+It does not reconnect, reset terminal state, send input, or resize the tmux pane.
+
 The adjacent `Tmux` shortcut renames the real session, equivalent to tmux's
 default `Ctrl+B`, then `$` command. A successful rename updates the active route,
 all ordered `tab=` values, page-local Recents, and the staged-draft key without

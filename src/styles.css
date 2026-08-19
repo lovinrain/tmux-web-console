@@ -4274,8 +4274,16 @@ a:focus-visible {
   border-color: rgba(187, 244, 81, 0.34);
 }
 
+.redraw-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cyan);
+}
+
 .keyboard-key svg,
 .live-key svg,
+.redraw-key svg,
 .desktop-tab-orientation-toggle svg,
 .desktop-terminal-focus-key svg,
 .session-title-key svg,
@@ -6221,7 +6229,8 @@ html.history-resizing * {
     display: none;
   }
 
-  .live-key {
+  .live-key,
+  .redraw-key {
     display: none;
   }
 

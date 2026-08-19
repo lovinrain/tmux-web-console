@@ -1740,6 +1740,7 @@ html[data-theme="light"] .other-keys-toggle[aria-expanded="true"]:hover:not(:dis
 
 html[data-theme="light"] .keyboard-key,
 html[data-theme="light"] .live-key,
+html[data-theme="light"] .redraw-key,
 html[data-theme="light"] .session-rename-key,
 html[data-theme="light"] .snippet-key {
   color: #426d0b;
