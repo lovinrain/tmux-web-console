@@ -45,6 +45,10 @@ AGENT_COMMANDS = (
 # Claude Code 2.1.233 uses the circle-halves spinner in tmux titles. Older
 # Claude, Codex, and Grok versions use braille frames instead.
 CLAUDE_WORKING_TITLE_FRAMES = frozenset({"\u25d0", "\u25d3", "\u25d1", "\u25d2"})
+# Claude also keeps this settled title frame while a long-running turn is still
+# active, so its rendered footer must disambiguate the state.
+CLAUDE_AMBIGUOUS_TITLE_FRAME = "\u2733"
+CLAUDE_ACTIVE_TURN_PATTERN = re.compile(r"\besc to interrupt\b", re.IGNORECASE)
 # Cursor's interrupt hint sits in the footer during a live turn, but it is drawn
 # as a placeholder, so typing a follow-up mid-turn hides it again.
 CURSOR_RUNNING_PATTERN = re.compile(
@@ -119,6 +123,12 @@ def _claude_is_waiting_for_background_work(screen: str) -> bool:
             or CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline)
         )
     return False
+
+
+def _claude_turn_is_live(screen: str) -> bool:
+    # capture_visible joins wrapped terminal rows, leaving Claude's status bar
+    # as the final rendered line. Do not match the same words in the transcript.
+    return bool(CLAUDE_ACTIVE_TURN_PATTERN.search(_tail(screen, 1)))
 
 
 def _title_has_live_activity(command: str, title: str) -> bool:
@@ -223,7 +233,13 @@ def classify_agent_state(
                 )
         return AgentState("working", "Live agent activity indicator")
 
-    if command == "claude" and title.startswith("\u2733"):
+    if command == "claude" and title.startswith(CLAUDE_AMBIGUOUS_TITLE_FRAME):
+        if visible_screen and _claude_is_waiting_for_background_work(visible_screen):
+            return AgentState("waiting_command", "Agent is waiting for background work")
+        if visible_screen and _claude_turn_is_live(visible_screen):
+            if _activity_is_stale(pane, now):
+                return AgentState("unknown", "Agent activity indicator is stale")
+            return AgentState("working", "Claude is running a turn")
         return AgentState("waiting_human", "Claude is paused at its input prompt")
     if command == "codex" and title:
         return AgentState("waiting_human", "Codex is paused at its input prompt")
@@ -243,6 +259,10 @@ def _needs_screen_capture(pane: Pane, state: AgentState) -> bool:
         state.name == "working"
         or command in CURSOR_COMMANDS
         or (command == "claude" and _title_has_live_activity(command, pane.title))
+        or (
+            command == "claude"
+            and pane.title.strip().startswith(CLAUDE_AMBIGUOUS_TITLE_FRAME)
+        )
     )
 
 

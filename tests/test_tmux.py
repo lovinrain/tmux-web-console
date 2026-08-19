@@ -878,6 +878,75 @@ def test_claude_circle_spinner_titles_are_working_signals():
     )
 
 
+CLAUDE_RUNNING_SCREEN = (
+    "\u2736 Effecting\u2026 (9m 10s \u00b7 \u2193 43.3k tokens)\n"
+    "\n"
+    "\u276f \n"
+    "\u23f5\u23f5 bypass permissions on (shift+tab to cycle) \u00b7 "
+    "esc to interrupt \u00b7 \u2190 4 agents"
+)
+
+
+def test_claude_ambiguous_title_uses_the_active_footer_signal():
+    pane = agent_pane(command="claude", title="\u2733 Active task")
+
+    state = classify_agent_state(pane, visible_screen=CLAUDE_RUNNING_SCREEN, now=1000)
+
+    assert state.name == "working"
+    assert state.reason == "Claude is running a turn"
+
+
+def test_claude_ambiguous_title_without_an_active_footer_is_waiting_for_input():
+    pane = agent_pane(command="claude", title="\u2733 Finished task")
+    idle_screen = (
+        "\u25cf Finished the requested update.\n"
+        "\n"
+        "\u276f \n"
+        "\u23f5\u23f5 bypass permissions on (shift+tab to cycle)"
+    )
+
+    state = classify_agent_state(pane, visible_screen=idle_screen, now=1000)
+
+    assert state.name == "waiting_human"
+
+
+def test_claude_ambiguous_title_preserves_background_wait_precedence():
+    pane = agent_pane(
+        command="claude", title="\u2733 Coordinating agents", activity=900
+    )
+    screen = (
+        "\u25cf Started a workflow\n\n"
+        "\u273b Waiting for 1 dynamic workflow to finish\n\n"
+        "\u276f \n"
+        "\u23f5\u23f5 bypass permissions on (shift+tab to cycle) \u00b7 "
+        "esc to interrupt"
+    )
+
+    state = classify_agent_state(pane, visible_screen=screen, now=1000)
+
+    assert state.name == "waiting_command"
+
+
+def test_claude_ambiguous_title_requires_fresh_activity_for_a_live_footer():
+    pane = agent_pane(command="claude", title="\u2733 Active task", activity=900)
+
+    state = classify_agent_state(pane, visible_screen=CLAUDE_RUNNING_SCREEN, now=1000)
+
+    assert state.name == "unknown"
+
+
+def test_claude_ambiguous_title_ignores_interrupt_text_outside_the_footer():
+    pane = agent_pane(command="claude", title="\u2733 Finished task")
+    screen = (
+        'The prompt quotes "esc to interrupt" during a turn.\n'
+        "\u23f5\u23f5 bypass permissions on (shift+tab to cycle)"
+    )
+
+    state = classify_agent_state(pane, visible_screen=screen, now=1000)
+
+    assert state.name == "waiting_human"
+
+
 @pytest.mark.parametrize(
     "headline",
     [
@@ -1332,6 +1401,33 @@ async def test_detect_sessions_captures_claude_background_waits_after_activity_s
     )
 
     assert states["claude-working"].name == "waiting_command"
+    assert tmux.captured == [claude.id]
+
+
+async def test_detect_sessions_captures_ambiguous_claude_titles():
+    claude = agent_pane(
+        id="%48",
+        command="claude",
+        title="\u2733 Active task",
+        activity=int(time.time()),
+    )
+    tmux = RecordingTmux({claude.id: CLAUDE_RUNNING_SCREEN})
+    sessions = [
+        Session(
+            name="claude-ambiguous",
+            id="$6",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[claude],
+        )
+    ]
+
+    states = await AgentStateDetector().detect_sessions(
+        cast(TmuxClient, tmux), sessions
+    )
+
+    assert states["claude-ambiguous"].name == "working"
     assert tmux.captured == [claude.id]
 
 
