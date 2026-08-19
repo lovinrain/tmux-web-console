@@ -4,7 +4,7 @@ import asyncio
 import json
 
 import pytest
-from aiohttp import WSMsgType
+from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.app import create_app
@@ -24,8 +24,10 @@ class FakeTerminalTmux(TmuxClient):
         )
         self.history_calls: list[tuple[int, str, str]] = []
         self.failing_history_actions: set[str] = set()
+        self.get_session_calls = 0
 
     async def get_session(self, name: str) -> Session:
+        self.get_session_calls += 1
         assert name == self.session.name
         return self.session
 
@@ -181,6 +183,57 @@ async def test_terminal_history_validates_actions_uses_stable_id_and_nacks_witho
         }
         assert bridge.writes == [b"accepted"]
         assert not websocket.closed
+        await websocket.close()
+    finally:
+        await client.close()
+
+    assert bridge.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_rejects_cross_site_origin_before_tmux_lookup():
+    tmux = FakeTerminalTmux()
+    client = TestClient(
+        TestServer(create_app(tmux=tmux, base_path="", trusted_origins=()))
+    )
+
+    try:
+        await client.start_server()
+        with pytest.raises(WSServerHandshakeError) as error:
+            await client.ws_connect(
+                "/ws/terminal?session=agent",
+                headers={"Origin": "https://attacker.example"},
+            )
+        assert error.value.status == 403
+        assert tmux.get_session_calls == 0
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_websocket_accepts_configured_reverse_proxy_origin(monkeypatch):
+    bridge = FakePtyBridge([])
+
+    async def fake_attach(cls, *_args, **_kwargs):
+        del cls
+        return bridge
+
+    monkeypatch.setattr(PtyBridge, "attach", classmethod(fake_attach))
+    monkeypatch.setenv(
+        "MUXDECK_TRUSTED_ORIGINS", "https://console.example.test"
+    )
+    client = TestClient(TestServer(create_app(tmux=FakeTerminalTmux(), base_path="")))
+
+    try:
+        await client.start_server()
+        websocket = await client.ws_connect(
+            "/ws/terminal?session=agent",
+            headers={
+                "Host": "console.example.test",
+                "Origin": "https://console.example.test",
+            },
+        )
+        assert (await websocket.receive_json())["type"] == "ready"
         await websocket.close()
     finally:
         await client.close()

@@ -1,10 +1,45 @@
 # Muxdeck
 
-Muxdeck is a small, mobile-friendly web console for tmux. It discovers existing
-sessions, attaches a real tmux client over a WebSocket, relays raw terminal input
-and output, and captures retained tmux scrollback only when requested.
+[![CI](https://github.com/lovinrain/tmux-web-console/actions/workflows/ci.yml/badge.svg)](https://github.com/lovinrain/tmux-web-console/actions/workflows/ci.yml)
+[![Secret scan](https://github.com/lovinrain/tmux-web-console/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/lovinrain/tmux-web-console/actions/workflows/secret-scan.yml)
 
-## MVP features
+Muxdeck is a mobile-friendly web console for monitoring and controlling tmux
+sessions from a browser. It combines real PTY terminals with persistent
+workspaces, session organization, and status detection for Claude Code, Codex,
+GitHub Copilot CLI, Cursor Agent, and Grok Build.
+
+> [!CAUTION]
+> Muxdeck has no application-level authentication. Anyone who can reach it can
+> control shells with the tmux owner's privileges. Keep it bound to loopback and
+> use only a private tunnel/network or an authenticated, access-controlled
+> reverse proxy. Do not publish its HTTP port directly to the internet.
+
+## Screenshots
+
+### Session dashboard
+
+See agent state, workspace activity, tags, and queued input across every tmux
+session.
+
+![Muxdeck dashboard showing grouped tmux sessions, status filters, tags, and saved workspaces](docs/images/muxdeck-dashboard.png)
+
+### Persistent workspace
+
+Keep related sessions in an ordered workspace, resume them on another device,
+and switch between live terminals without losing context.
+
+![Muxdeck desktop workspace with ordered tmux tabs and a live terminal](docs/images/muxdeck-workspace.png)
+
+### Mobile workspace
+
+Quick-switch between ordered tabs, inspect agent state, and move into dedicated
+Overview, Terminal, or Input views when space is tight.
+
+<p align="center">
+  <img src="docs/images/muxdeck-mobile-overview.png" width="390" alt="Muxdeck mobile workspace overview with ordered sessions and agent states">
+</p>
+
+## Features
 
 - Live inventory of every tmux session and pane
 - Claude, Codex, Copilot, Cursor, Grok, shell, and process labels
@@ -567,10 +602,10 @@ Opening Scrollback runs `tmux capture-pane` and stores the result in memory for 
 minutes. Older pages come from that immutable snapshot, so live output cannot
 cause duplicate or skipped lines while the user reads.
 
-Tmux on this host retains at most 2,000 normal-screen rows. Claude Code commonly
-uses the alternate screen, and Grok Build defaults to it, where tmux often retains
-no previous rows. Muxdeck can show the current screen but cannot reconstruct
-alternate-screen content that tmux never saved.
+Tmux retains normal-screen rows according to its `history-limit` option (2,000 by
+default). Claude Code commonly uses the alternate screen, and Grok Build defaults
+to it, where tmux often retains no previous rows. Muxdeck can show the current
+screen but cannot reconstruct alternate-screen content that tmux never saved.
 
 Scrollback follows the pane selected when the web client attaches. If you switch to
 another tmux pane or window from inside the live terminal, return to the session
@@ -583,6 +618,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_HOST` | `127.0.0.1` | HTTP listen address |
 | `MUXDECK_PORT` | `7683` | HTTP listen port |
 | `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
+| `MUXDECK_TRUSTED_ORIGINS` | unset | Comma-separated exact external browser origins allowed through a reverse proxy |
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
 | `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles, predefined tags, and starred/ignored session names |
@@ -591,6 +627,17 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, and activity times |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
-Muxdeck intentionally has no application-level authentication in this MVP. Keep
-it behind a trusted reverse proxy or private network until authentication and
-controller leases are added.
+Loopback Hosts are accepted by default. Every non-loopback Host must correspond
+to an exact `http://` or `https://` origin in `MUXDECK_TRUSTED_ORIGINS`; entries
+contain no path, query, credentials, or wildcard. For example, a console opened
+at `https://console.example.test/mux/` needs:
+
+```bash
+MUXDECK_TRUSTED_ORIGINS=https://console.example.test
+```
+
+The reverse proxy must preserve the browser's `Host` and `Origin` headers. These
+checks protect the local service from cross-site browser requests and DNS
+rebinding; they are not authentication. Muxdeck intentionally has no
+application-level authentication, so keep it behind a private
+network/tunnel or an authenticated, access-controlled reverse proxy.

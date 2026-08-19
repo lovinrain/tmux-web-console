@@ -89,30 +89,22 @@ must rebuild it on the target. An archive of this folder does not include:
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
-If creating the transfer archive on a source machine, exclude generated files:
+Create a transfer archive from a reviewed commit rather than archiving the
+working directory. `git archive` includes only tracked files from that commit,
+so ignored or untracked environment files, rendered configuration, runtime
+state, and credentials cannot slip into the archive:
 
 ```bash
 cd /absolute/path/to/tmux-web-console
-tar \
-  --exclude='./.git' \
-  --exclude='./.venv' \
-  --exclude='./node_modules' \
-  --exclude='./dist' \
-  --exclude='./*.egg-info' \
-  --exclude='./src/*.egg-info' \
-  --exclude='./__pycache__' \
-  --exclude='./.pytest_cache' \
-  --exclude='./.mypy_cache' \
-  --exclude='./.ruff_cache' \
-  --exclude='./.benchmarks' \
-  --exclude='./artifacts' \
-  --exclude='./test-results' \
-  --exclude='./playwright-report' \
-  -czf ../muxdeck-source.tar.gz .
+git status --short
+git archive --format=tar.gz --output=../muxdeck-source.tar.gz HEAD
+tar -tzf ../muxdeck-source.tar.gz
 sha256sum ../muxdeck-source.tar.gz > ../muxdeck-source.tar.gz.sha256
 ```
 
-Transfer the checksum with the archive and verify it before extraction.
+Review any status output before choosing the commit to archive. Inspect the
+archive listing, transfer the checksum with the archive, and verify it before
+extraction.
 
 ## 3. Deployment facts worksheet
 
@@ -133,6 +125,7 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | tmux socket | default or `-L NAME` | `MUXDECK_TMUX_SOCKET` is a name, never a filesystem path. |
 | `TMUX_TMPDIR` | usually unset | If the real server uses it, reproduce it in the service. |
 | Public host | optional | Must be protected by a VPN, trusted network, tunnel, or proxy access control. |
+| Browser origins | empty for loopback-only | Exact external `http://` or `https://` origins, comma-separated; required for a reverse proxy. |
 | Proxy | Caddy, existing proxy, or none | Proxy must preserve the base path and support WebSocket + streaming SSE. |
 | State migration | yes/no | Runtime JSON files are separate from the source archive. |
 
@@ -144,6 +137,7 @@ MUXDEPLOY_RUN_USER=replace_me
 MUXDEPLOY_RUN_GROUP=replace_me
 MUXDEPLOY_BASE_PATH=/mux
 MUXDEPLOY_PORT=7683
+MUXDEPLOY_TRUSTED_ORIGINS=
 MUXDEPLOY_STATE_DIR=/var/lib/muxdeck
 MUXDEPLOY_TMUX_BIN=/usr/bin/tmux
 MUXDEPLOY_TMUX_SOCKET_NAME=
@@ -153,6 +147,17 @@ Before using these variables in `sed` or a unit, ensure usernames contain only
 normal account characters and paths contain only letters, digits, `_`, `-`,
 `.`, and `/`. The base path must begin with `/`, must not end with `/`, and the
 provided Caddy template expects a non-root path such as `/mux`.
+
+`MUXDEPLOY_TRUSTED_ORIGINS` is not an authentication setting. It prevents
+cross-site browser requests and DNS rebinding by listing the exact public origins
+allowed to reach Muxdeck. Each entry is only a scheme and authority, with no path,
+query, fragment, credentials, or wildcard. For example, a Caddy deployment at
+`https://console.example.test/mux/` uses
+`https://console.example.test`. Multiple origins are comma-separated. Leave the
+value empty only when browsers connect through loopback (`localhost`, `127.0.0.1`,
+or `::1`); any non-loopback Host is rejected unless its origin is listed. Before
+rendering, reject origin values containing whitespace, newlines, `&`, `|`, or
+backslashes so they cannot alter the `sed` expression or systemd environment.
 
 ## 4. Read-only target preflight
 
@@ -434,6 +439,7 @@ sed \
   -e "s|@@APP_DIR@@|$MUXDEPLOY_APP_DIR|g" \
   -e "s|@@PORT@@|$MUXDEPLOY_PORT|g" \
   -e "s|@@BASE_PATH@@|$MUXDEPLOY_BASE_PATH|g" \
+  -e "s|@@TRUSTED_ORIGINS@@|$MUXDEPLOY_TRUSTED_ORIGINS|g" \
   -e "s|@@STATE_DIR@@|$MUXDEPLOY_STATE_DIR|g" \
   -e "s|@@TMUX_BIN@@|$MUXDEPLOY_TMUX_BIN|g" \
   deploy/muxdeck.service.template > "$MUXDEPLOY_RENDERED_UNIT"
@@ -497,6 +503,9 @@ systemctl show muxdeck.service \
 journalctl -u muxdeck.service -n 100 --no-pager
 curl -fsS \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health"
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H 'Host: untrusted.invalid' \
+  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health")" = 403
 curl -fsS \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/" >/dev/null
 curl -fsS \
@@ -513,6 +522,7 @@ Expected results:
 
 - service is `active`;
 - health returns `{"ok": true, "sessions": N}`;
+- a request with an untrusted Host returns `403`;
 - `N` matches the intended tmux server, not merely any tmux server;
 - dashboard and deep-link routes return the built SPA;
 - the workspace API returns a JSON workspace list rather than a storage `503`;
@@ -532,6 +542,10 @@ resolved.
 The provided template belongs inside an existing Caddy site block, before any
 generic fallback `handle`. It uses `handle`, not `handle_path`, because Muxdeck
 expects the prefix to reach the backend intact.
+
+Caddy preserves the browser's `Host` and `Origin` headers by default. Do not
+rewrite either header to bypass Muxdeck's request checks. The external browser
+origin must be present in `MUXDECK_TRUSTED_ORIGINS` in the rendered service.
 
 Render it:
 
@@ -594,7 +608,7 @@ The deployment agent should report:
 - target host and app directory;
 - run user/group and tmux socket selection;
 - Python, Node, npm, and tmux versions;
-- base path, port, and proxy/access-control choice;
+- base path, port, trusted browser origins, and proxy/access-control choice;
 - whether state was migrated and its target directory (not memorandum, snippet,
   workspace-name, or workspace-tab content);
 - source/unit/Caddy and state-file backups retained for rollback;
@@ -662,7 +676,8 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | 502 through Caddy | Service down, wrong port, or wrong loopback target | Check local health, unit environment, journal, and rendered proxy target. |
 | HTML loads but assets/API/WebSocket fail | Build/runtime/proxy base paths differ | Rebuild with `/prefix/`; use runtime `/prefix`; preserve prefix in Caddy. |
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
-| Console WebSocket fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
+| Console WebSocket returns 403 | External browser origin is absent from `MUXDECK_TRUSTED_ORIGINS`, or proxy rewrote `Host`/`Origin` | Configure the exact scheme and authority, preserve both headers, then retry without typing into a valuable pane. |
+| Console WebSocket otherwise fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
 | Titles/tags/starred/ignored organization, memoranda, snippets, or saved workspaces do not persist | State path or ownership/mode is wrong | Inspect all four configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Workspace API returns `503` | The configured workspace file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. Do not delete tmux sessions. |

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+from urllib.parse import SplitResult, urlsplit
 
 from aiohttp import WSMsgType, web
 
@@ -58,9 +60,14 @@ SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
 WORKSPACES_KEY = web.AppKey("workspaces", WorkspaceStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
+TRUSTED_ORIGINS_KEY = web.AppKey("trusted_origins", frozenset)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
+SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+DEFAULT_ORIGIN_PORTS = {"http": 80, "https": 443}
+NormalizedOrigin = tuple[str, str, int | None]
+NormalizedHost = tuple[str, int | None]
 
 
 class SessionSnapshotBuilder:
@@ -255,6 +262,189 @@ def parse_int(value: str | None, default: int) -> int:
         return default
 
 
+def _normalized_hostname(hostname: str | None) -> str | None:
+    if hostname is None:
+        return None
+    normalized = hostname.casefold().rstrip(".")
+    if not normalized or any(character.isspace() for character in normalized):
+        return None
+    return normalized
+
+
+def _split_origin(value: str, *, allow_path: bool = False) -> SplitResult | None:
+    if not value or value != value.strip():
+        return None
+    try:
+        parsed = urlsplit(value)
+        # Accessing these properties performs urllib's bracket and port validation.
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.casefold() not in DEFAULT_ORIGIN_PORTS
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or (parsed.path not in {"", "/"} and not allow_path)
+        or parsed.netloc.endswith(":")
+    ):
+        return None
+    return parsed
+
+
+def _normalize_origin(value: str, *, allow_path: bool = False) -> NormalizedOrigin | None:
+    parsed = _split_origin(value, allow_path=allow_path)
+    if parsed is None:
+        return None
+    scheme = parsed.scheme.casefold()
+    hostname = _normalized_hostname(parsed.hostname)
+    if hostname is None:
+        return None
+    port = parsed.port
+    if port == DEFAULT_ORIGIN_PORTS[scheme]:
+        port = None
+    return scheme, hostname, port
+
+
+def _normalize_host(value: str | None) -> NormalizedHost | None:
+    if value is None or not value or value != value.strip():
+        return None
+    try:
+        parsed = urlsplit(f"//{value}")
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.netloc.endswith(":")
+    ):
+        return None
+    normalized_hostname = _normalized_hostname(hostname)
+    if normalized_hostname is None:
+        return None
+    return normalized_hostname, port
+
+
+def _host_matches_origin(host: NormalizedHost, origin: NormalizedOrigin) -> bool:
+    scheme, origin_hostname, origin_port = origin
+    host_hostname, host_port = host
+    if host_hostname != origin_hostname:
+        return False
+    if host_port is None:
+        return origin_port is None
+    effective_origin_port = (
+        origin_port if origin_port is not None else DEFAULT_ORIGIN_PORTS[scheme]
+    )
+    return host_port == effective_origin_port
+
+
+def _is_loopback_host(host: NormalizedHost) -> bool:
+    hostname, _ = host
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname.split("%", 1)[0])
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    return bool(
+        address.version == 6
+        and address.ipv4_mapped
+        and address.ipv4_mapped.is_loopback
+    )
+
+
+def _parse_trusted_origins(values: Iterable[str]) -> frozenset[NormalizedOrigin]:
+    origins: set[NormalizedOrigin] = set()
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value:
+            continue
+        origin = _normalize_origin(value)
+        if origin is None:
+            raise ValueError(
+                "MUXDECK_TRUSTED_ORIGINS entries must be absolute http(s) origins"
+            )
+        origins.add(origin)
+    return frozenset(origins)
+
+
+def _is_trusted_host(
+    host: NormalizedHost,
+    trusted_origins: frozenset[NormalizedOrigin],
+) -> bool:
+    return _is_loopback_host(host) or any(
+        _host_matches_origin(host, origin) for origin in trusted_origins
+    )
+
+
+def _browser_origin_is_trusted(
+    request: web.Request,
+    host: NormalizedHost,
+    trusted_origins: frozenset[NormalizedOrigin],
+) -> bool:
+    origin_values = request.headers.getall("Origin", [])
+    if origin_values:
+        if len(origin_values) != 1:
+            return False
+        origin = _normalize_origin(origin_values[0])
+        if origin is None or not _host_matches_origin(host, origin):
+            return False
+        return _is_loopback_host(host) or origin in trusted_origins
+
+    # Non-browser clients may omit Origin. If a browser does so, Fetch Metadata
+    # still distinguishes same-origin navigation from a cross-site request.
+    referer_values = request.headers.getall("Referer", [])
+    if referer_values:
+        if len(referer_values) != 1:
+            return False
+        referer_origin = _normalize_origin(referer_values[0], allow_path=True)
+        if referer_origin is None or not _host_matches_origin(host, referer_origin):
+            return False
+        if not _is_loopback_host(host) and referer_origin not in trusted_origins:
+            return False
+
+    fetch_site = request.headers.get("Sec-Fetch-Site", "").casefold()
+    return not fetch_site or fetch_site in {"same-origin", "none"}
+
+
+@web.middleware
+async def request_security_middleware(
+    request: web.Request,
+    handler: Callable[[web.Request], Any],
+) -> web.StreamResponse:
+    host_values = request.headers.getall("Host", [])
+    host = _normalize_host(host_values[0]) if len(host_values) == 1 else None
+    trusted_origins = request.app[TRUSTED_ORIGINS_KEY]
+    if host is None or not _is_trusted_host(host, trusted_origins):
+        return json_error("request host is not trusted", 403)
+
+    is_websocket = request.headers.get("Upgrade", "").casefold() == "websocket"
+    if (is_websocket or request.method not in SAFE_HTTP_METHODS) and not (
+        _browser_origin_is_trusted(request, host, trusted_origins)
+    ):
+        return json_error("request origin is not trusted", 403)
+    return await handler(request)
+
+
+async def add_browser_security_headers(
+    _: web.Request,
+    response: web.StreamResponse,
+) -> None:
+    response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+
+
 async def _close_terminal_bridge(sender: asyncio.Task[None], bridge: PtyBridge) -> None:
     sender.cancel()
     try:
@@ -278,8 +468,21 @@ def create_app(
     messages: SessionMessageStore | None = None,
     snippets: SnippetStore | None = None,
     workspaces: WorkspaceStore | None = None,
+    trusted_origins: Iterable[str] | str | None = None,
 ) -> web.Application:
-    app = web.Application(client_max_size=MAX_INPUT_BYTES)
+    app = web.Application(
+        client_max_size=MAX_INPUT_BYTES,
+        middlewares=[request_security_middleware],
+    )
+    if trusted_origins is None:
+        configured_origins: Iterable[str] = os.environ.get(
+            "MUXDECK_TRUSTED_ORIGINS", ""
+        ).split(",")
+    elif isinstance(trusted_origins, str):
+        configured_origins = trusted_origins.split(",")
+    else:
+        configured_origins = trusted_origins
+    app[TRUSTED_ORIGINS_KEY] = _parse_trusted_origins(configured_origins)
     app[TMUX_KEY] = tmux or TmuxClient()
     app[SNAPSHOTS_KEY] = snapshots or SnapshotStore()
     app[TITLES_KEY] = titles or SessionTitleStore()
@@ -310,6 +513,7 @@ def create_app(
         await application[SESSION_STREAM_BROKER_KEY].close()
 
     app.on_cleanup.append(close_session_stream_broker)
+    app.on_response_prepare.append(add_browser_security_headers)
 
     async def health(_: web.Request) -> web.Response:
         try:

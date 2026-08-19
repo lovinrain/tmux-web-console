@@ -1166,7 +1166,10 @@ CURSOR_IDLE_SCREEN = "\n".join(
 
 
 def cursor_pane(**overrides: object) -> Pane:
-    defaults: dict[str, object] = {"command": "agent", "title": "Example conversation"}
+    defaults: dict[str, object] = {
+        "command": "agent",
+        "title": "Example conversation",
+    }
     return agent_pane(**{**defaults, **overrides})
 
 

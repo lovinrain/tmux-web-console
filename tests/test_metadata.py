@@ -72,7 +72,10 @@ def test_session_ignored_status_persists_and_preserves_existing_metadata(tmp_pat
     assert reloaded.get_title("ignored-session") == "Example worker"
     assert reloaded.is_starred("ignored-session") is False
 
-    assert reloaded.set_title("ignored-session", "Updated worker") == "Updated worker"
+    assert (
+        reloaded.set_title("ignored-session", "Updated worker")
+        == "Updated worker"
+    )
     assert SessionTitleStore(path).is_ignored("ignored-session") is True
     assert reloaded.set_starred("ignored-session", True) is True
     assert SessionTitleStore(path).is_starred("ignored-session") is True

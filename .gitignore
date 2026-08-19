@@ -19,3 +19,24 @@ build/
 playwright-report/
 test-results/
 artifacts/
+
+# Local runtime state can contain session names, notes, prompts, and commands.
+session-titles.json
+session-messages.json
+snippets.json
+workspaces.json
+.session-titles.json.*.tmp
+.session-messages.json.*.tmp
+.snippets.json.*.tmp
+.workspaces.json.*.tmp
+
+# Keep credentials and machine-local editor files out of commits.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+.DS_Store
+.idea/
+.vscode/

@@ -14,6 +14,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=MUXDECK_HOST=127.0.0.1
 Environment=MUXDECK_PORT=@@PORT@@
 Environment=MUXDECK_BASE_PATH=@@BASE_PATH@@
+Environment=MUXDECK_TRUSTED_ORIGINS=@@TRUSTED_ORIGINS@@
 Environment=MUXDECK_TITLES_FILE=@@STATE_DIR@@/session-titles.json
 Environment=MUXDECK_MESSAGES_FILE=@@STATE_DIR@@/session-messages.json
 Environment=MUXDECK_SNIPPETS_FILE=@@STATE_DIR@@/snippets.json

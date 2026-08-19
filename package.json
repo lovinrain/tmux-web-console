@@ -1,6 +1,7 @@
 {
   "name": "muxdeck",
   "version": "0.1.0",
+  "description": "Mobile-friendly tmux web console with persistent workspaces and coding-agent status",
   "private": true,
   "type": "module",
   "scripts": {
