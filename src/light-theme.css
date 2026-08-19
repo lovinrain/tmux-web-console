@@ -103,6 +103,20 @@ html[data-theme="light"] .theme-toggle:disabled {
   opacity: 0.48;
 }
 
+html[data-theme="light"] .grok-theme-stage {
+  color: #087a70;
+  background: #eef8f4;
+  border-color: #9bcfc7;
+  box-shadow: 0 2px 8px rgba(31, 102, 92, 0.08);
+}
+
+html[data-theme="light"] .grok-theme-stage:hover,
+html[data-theme="light"] .grok-theme-stage:focus-visible {
+  color: #075f57;
+  background: #def1eb;
+  border-color: #5faea2;
+}
+
 html[data-theme="light"] .app-tabs {
   background: rgba(255, 253, 248, 0.88);
   border-color: var(--light-line);

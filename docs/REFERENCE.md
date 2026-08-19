@@ -61,8 +61,15 @@ without requiring `/theme`, while Grok's `auto_dark_theme` and
 does not rewrite Grok's saved configuration or type into the terminal.
 
 The startup appearance is fixed when tmux creates the shell. Changing the
-browser theme later does not alter an already-running session. To override the
-inherited behavior for one launch, use an explicit value such as
+browser theme later does not alter an already-running session. When the active
+pane is Grok, the console therefore shows an `Apply to Grok` action beside the
+browser theme control. It loads the matching `/theme groknight` or
+`/theme grokday` command into staged input for review and sends no terminal
+bytes until `Send + Enter` is chosen. Grok saves a submitted `/theme` choice to
+its user configuration, so the command is never injected automatically. Grok's
+minimal mode already uses the terminal palette and does not support `/theme`.
+
+To override the inherited behavior for one launch, use an explicit value such as
 `GROK_THEME=tokyonight grok`; unset `GROK_THEME` before launching to use Grok's
 saved theme preference instead. tmux 3.0 and 3.1 cannot set a per-session
 environment during creation, so Muxdeck still creates the session, logs a

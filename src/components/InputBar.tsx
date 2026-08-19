@@ -570,7 +570,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   } else if (status === "sending") {
     statusText = "Writing this staged snapshot to the attached tmux PTY...";
   } else if (status === "loaded") {
-    statusText = "Memorandum loaded locally. Snippets are inserted here too; edit or send when ready.";
+    statusText = "Draft loaded locally. Memoranda, snippets, and console actions can stage text here; edit or send when ready.";
   } else if (status === "unconfirmed") {
     statusText = "Delivery was not confirmed. The draft is retained; check the terminal before retrying.";
   } else if (status === "queued") {

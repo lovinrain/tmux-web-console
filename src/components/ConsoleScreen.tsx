@@ -424,7 +424,9 @@ export function ConsoleScreen({
           return;
         }
         setLoadedSession(match);
-        setPaneId((current) => current || match.activePaneId);
+        // tmux pane/window switches can happen inside the attached terminal.
+        // Follow the inventory so header actions never target a stale pane.
+        setPaneId(match.activePaneId);
         setLookupError(null);
       } catch (error) {
         if (!cancelled) {
@@ -494,6 +496,12 @@ export function ConsoleScreen({
 
   const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId) || (session ? activePane(session) : undefined);
   const classification = classifyPane(pane);
+  const grokThemeName = theme === "light" ? "grokday" : "groknight";
+  const grokThemeCommand = `/theme ${grokThemeName}`;
+  const stageGrokTheme = useCallback(() => {
+    if (!inputBarRef.current?.loadDraft(grokThemeCommand)) return;
+    revealAndFocusComposer();
+  }, [grokThemeCommand, revealAndFocusComposer]);
   const stateChange = useCallback((state: ConnectionState) => {
     setConnectionSnapshot({ sessionName, state });
   }, [sessionName]);
@@ -810,6 +818,23 @@ export function ConsoleScreen({
             <HistoryIcon /><span>Scrollback</span>
           </button>
           <ThemeToggle />
+          {pane?.command === "grok" && !pane.dead && (
+            <button
+              type="button"
+              className="grok-theme-stage"
+              aria-label={`Stage ${grokThemeName} theme command for Grok`}
+              aria-controls="muxdeck-staged-input"
+              aria-describedby="muxdeck-grok-theme-help"
+              title={`Stage "${grokThemeCommand}" to match full-screen Grok to Muxdeck. Review it, then use Send + Enter; Grok saves this choice globally.`}
+              onClick={stageGrokTheme}
+            >
+              <RefreshIcon />
+              <span>Apply to Grok</span>
+              <span id="muxdeck-grok-theme-help" className="grok-theme-help">
+                Stages a command without sending it. Sending changes Grok's saved user theme globally; Grok minimal mode does not support this command.
+              </span>
+            </button>
+          )}
         </div>
       </header>
 

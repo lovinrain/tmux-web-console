@@ -140,6 +140,129 @@ beforeEach(() => {
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("stages the current browser theme for Grok without sending terminal input", async () => {
+    const grokSession = {
+      ...session(),
+      agentState: "waiting_human" as const,
+      agentStateReason: "Grok is waiting for input",
+      panes: [{ ...pane(), command: "grok", title: "grok" }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([grokSession]);
+    renderWithTheme(
+      <ConsoleScreen sessionName="test" onBack={vi.fn()} />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const stagedInput = screen.getByRole("textbox", { name: "Staged input" });
+    const grokThemeButton = screen.getByRole("button", {
+      name: "Stage groknight theme command for Grok",
+    });
+    expect(grokThemeButton).toHaveAccessibleDescription(
+      /Sending changes Grok's saved user theme globally/,
+    );
+    fireEvent.click(grokThemeButton);
+
+    expect(stagedInput).toHaveValue("/theme groknight");
+    expect(screen.getByRole("main")).toHaveAttribute("data-mobile-focus", "input");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Light theme" }));
+    expect(screen.getByTestId("live-terminal")).toHaveAttribute(
+      "data-terminal-theme",
+      "light",
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Stage grokday theme command for Grok",
+    }));
+
+    expect(stagedInput).toHaveValue("/theme grokday");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+  });
+
+  it("preserves an existing draft when Grok theme staging is declined", async () => {
+    const grokSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "grok", title: "grok" }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([grokSession]);
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderWithTheme(
+      <ConsoleScreen sessionName="test" onBack={vi.fn()} />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const stagedInput = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.change(stagedInput, { target: { value: "keep this draft" } });
+    fireEvent.click(screen.getByRole("button", {
+      name: "Stage groknight theme command for Grok",
+    }));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Replace the staged input that is already here?",
+    );
+    expect(stagedInput).toHaveValue("keep this draft");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+  });
+
+  it("does not offer Grok theme staging for another foreground process", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(
+      <ConsoleScreen sessionName="test" onBack={vi.fn()} />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    expect(screen.queryByRole("button", {
+      name: /theme command for Grok/i,
+    })).not.toBeInTheDocument();
+  });
+
+  it("follows an in-terminal pane switch before offering Grok theme staging", async () => {
+    vi.useFakeTimers();
+    try {
+      const shellPane = pane();
+      const grokPane = {
+        ...pane(),
+        id: "%2",
+        index: 1,
+        command: "grok",
+        title: "grok",
+      };
+      const shellSession = {
+        ...session(),
+        activePaneId: shellPane.id,
+        panes: [shellPane, { ...grokPane, active: false }],
+      };
+      const grokSession = {
+        ...shellSession,
+        activePaneId: grokPane.id,
+        panes: [{ ...shellPane, active: false }, grokPane],
+      };
+      vi.mocked(listSessions)
+        .mockResolvedValueOnce([shellSession])
+        .mockResolvedValue([grokSession]);
+      renderWithTheme(
+        <ConsoleScreen sessionName="test" onBack={vi.fn()} />,
+      );
+
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.queryByRole("button", {
+        name: /theme command for Grok/i,
+      })).not.toBeInTheDocument();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+      expect(screen.getByRole("button", {
+        name: "Stage groknight theme command for Grok",
+      })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the saved workspace and display names in the browser tab title", async () => {
     vi.mocked(listSessions).mockResolvedValue([session("Release review")]);
     const view = renderWithTheme(

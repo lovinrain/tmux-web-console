@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 
 const sessionName = `muxdeck-browser-${process.pid}`;
@@ -363,6 +363,57 @@ test("light theme persists across dashboard, snippets, overlays, and console", a
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#151914");
   expect(await page.evaluate(() => window.localStorage.getItem("muxdeck-theme"))).toBe("dark");
+});
+
+test("Grok theme matching stages a reviewed command before writing to tmux", async ({ page }) => {
+  const grokSession = `${sessionName}-grok-theme`;
+  const fakeGrokDir = `/tmp/${grokSession}-bin`;
+  const fakeGrok = `${fakeGrokDir}/grok`;
+  mkdirSync(fakeGrokDir, { recursive: true });
+  copyFileSync("/bin/cat", fakeGrok);
+  chmodSync(fakeGrok, 0o700);
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    grokSession,
+    fakeGrok,
+  ]);
+
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/mux/session/${encodeURIComponent(grokSession)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    const terminalBefore = workspaceTmuxContentSnapshot(grokSession);
+
+    await page.getByRole("button", { name: "Light theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    expect(workspaceTmuxContentSnapshot(grokSession)).toBe(terminalBefore);
+
+    await page.getByRole("button", {
+      name: "Stage grokday theme command for Grok",
+    }).click();
+    await expect(page.getByRole("textbox", { name: "Staged input" }))
+      .toHaveValue("/theme grokday");
+    await expect(page.getByRole("main")).toHaveAttribute("data-mobile-focus", "input");
+    expect(workspaceTmuxContentSnapshot(grokSession)).toBe(terminalBefore);
+
+    await page.getByRole("button", { name: "Send + Enter" }).click();
+    await expect.poll(() => workspaceTmuxContentSnapshot(grokSession))
+      .toContain("/theme grokday");
+  } finally {
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${grokSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the disposable Playwright tmux server.
+    }
+    rmSync(fakeGrokDir, { force: true, recursive: true });
+  }
 });
 
 test("shareable dashboard URL restores ordered sorting and fits narrow screens", async ({ page }) => {

@@ -575,7 +575,7 @@ describe("InputBar", () => {
 
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("queued instruction");
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBe("queued instruction");
-    expect(screen.getByText(/Memorandum loaded locally/)).toBeVisible();
+    expect(screen.getByText(/Draft loaded locally/)).toBeVisible();
   });
 
   it("removes the exact staged memo source after acknowledged delivery", async () => {
