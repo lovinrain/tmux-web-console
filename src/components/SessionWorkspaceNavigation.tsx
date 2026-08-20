@@ -51,6 +51,7 @@ export interface SessionWorkspaceNavigationProps {
   desktopTabRailWidth?: number;
   onDesktopTabRailWidthChange?: (width: number) => void;
   tabsVisible?: boolean;
+  tabActionsVisible?: boolean;
   newSessionActive?: boolean;
   onSelect: (sessionName: string) => void;
   onCloseTab: (sessionName: string) => void;
@@ -1364,6 +1365,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     desktopTabRailWidth,
     onDesktopTabRailWidthChange,
     tabsVisible = true,
+    tabActionsVisible = true,
     newSessionActive = false,
     onSelect,
     onCloseTab,
@@ -1921,7 +1923,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           />
           <span className="workspace-tab-title">{title}</span>
         </button>
-        {onMoveTab && openSessions.length > 1 && (
+        {tabActionsVisible && onMoveTab && openSessions.length > 1 && (
           <span
             className="workspace-tab-reorder"
             role="group"
@@ -1949,7 +1951,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             </button>
           </span>
         )}
-        {onOpenTabInNewWindow && (
+        {tabActionsVisible && onOpenTabInNewWindow && (
           <span
             className="workspace-tab-window-actions"
             role="group"
@@ -1979,7 +1981,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             </button>
           </span>
         )}
-        {session && onSessionTerminated && (
+        {tabActionsVisible && session && onSessionTerminated && (
           <button
             type="button"
             className="workspace-tab-terminate"
@@ -1991,15 +1993,17 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <TrashIcon />
           </button>
         )}
-        <button
-          type="button"
-          className="workspace-tab-close"
-          onClick={() => closeQuickTab(sessionName)}
-          aria-label={`Close ${title} quick tab`}
-          title="Close quick tab"
-        >
-          <CloseIcon />
-        </button>
+        {tabActionsVisible && (
+          <button
+            type="button"
+            className="workspace-tab-close"
+            onClick={() => closeQuickTab(sessionName)}
+            aria-label={`Close ${title} quick tab`}
+            title="Close quick tab"
+          >
+            <CloseIcon />
+          </button>
+        )}
       </div>
     );
   };
@@ -2012,6 +2016,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         className={`workspace-navigation workspace-navigation-${orientation}`}
         data-orientation={orientation}
         data-compact={compactDesktopTabRail ? "true" : undefined}
+        data-tab-actions-visible={tabActionsVisible ? "true" : "false"}
         style={navigationStyle}
         aria-label="Session workspace"
         hidden={!tabsVisible}
@@ -2180,7 +2185,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     />
                     <span className="workspace-tab-title">New session</span>
                   </button>
-                  {onCloseNewSession && (
+                  {tabActionsVisible && onCloseNewSession && (
                     <button
                       type="button"
                       className="workspace-tab-close"

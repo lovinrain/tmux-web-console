@@ -557,6 +557,7 @@ describe("ConsoleScreen session identity", () => {
   it("switches the desktop tab rail without remounting the terminal", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     const onDesktopTabOrientationChange = vi.fn();
+    const onTabActionsVisibilityChange = vi.fn();
     const view = renderWithTheme(
       <ConsoleScreen
         sessionName="test"
@@ -564,6 +565,8 @@ describe("ConsoleScreen session identity", () => {
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
         desktopTabOrientation="horizontal"
         onDesktopTabOrientationChange={onDesktopTabOrientationChange}
+        tabActionsVisible
+        onTabActionsVisibilityChange={onTabActionsVisibilityChange}
         desktopTabRailWidth={344}
       />,
     );
@@ -574,6 +577,9 @@ describe("ConsoleScreen session identity", () => {
     const orientationToggle = within(screen.getByRole("group", {
       name: "Console bars",
     })).getByRole("button", { name: "Vertical session tabs" });
+    const tabActionsToggle = within(screen.getByRole("group", {
+      name: "Console bars",
+    })).getByRole("button", { name: "Tab action buttons" });
 
     expect(shell).toHaveAttribute("data-desktop-tabs", "horizontal");
     expect(shell).toHaveAttribute("data-desktop-tab-rail-width", "344");
@@ -581,6 +587,15 @@ describe("ConsoleScreen session identity", () => {
     expect(shell).toHaveAttribute("data-session-tabs-visible", "true");
     expect(orientationToggle).not.toBePressed();
     expect(orientationToggle).toHaveAttribute("aria-controls", "muxdeck-session-tabs");
+    expect(tabActionsToggle).toBePressed();
+    expect(tabActionsToggle).toHaveTextContent("Actions");
+    expect(tabActionsToggle).toHaveAttribute("aria-controls", "muxdeck-session-tabs");
+    expect(tabActionsToggle).toHaveAttribute(
+      "title",
+      "Hide action buttons on every session tab",
+    );
+    fireEvent.click(tabActionsToggle);
+    expect(onTabActionsVisibilityChange).toHaveBeenCalledWith(false);
     fireEvent.click(orientationToggle);
     expect(onDesktopTabOrientationChange).toHaveBeenCalledWith("vertical");
 
@@ -592,6 +607,8 @@ describe("ConsoleScreen session identity", () => {
           sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
           desktopTabOrientation="vertical"
           onDesktopTabOrientationChange={onDesktopTabOrientationChange}
+          tabActionsVisible={false}
+          onTabActionsVisibilityChange={onTabActionsVisibilityChange}
           desktopTabRailWidth={999}
         />
       </ThemeProvider>,
@@ -601,6 +618,13 @@ describe("ConsoleScreen session identity", () => {
     expect(shell).toHaveAttribute("data-desktop-tab-rail-width", "480");
     expect(shell.style.getPropertyValue("--desktop-tab-rail-width")).toBe("480px");
     expect(orientationToggle).toBePressed();
+    expect(tabActionsToggle).not.toBePressed();
+    expect(tabActionsToggle).toHaveAttribute(
+      "title",
+      "Show action buttons on every session tab",
+    );
+    fireEvent.click(tabActionsToggle);
+    expect(onTabActionsVisibilityChange).toHaveBeenLastCalledWith(true);
     expect(screen.getByTestId("live-terminal")).toBe(terminal);
     expect(terminal).toHaveAttribute(
       "data-layout-refresh-token",

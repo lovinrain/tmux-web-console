@@ -67,6 +67,8 @@ interface ConsoleScreenProps {
   onBarVisibilityChange?: (bar: ConsoleBar, visible: boolean) => void;
   desktopTabOrientation?: WorkspaceTabOrientation;
   onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
+  tabActionsVisible?: boolean;
+  onTabActionsVisibilityChange?: (visible: boolean) => void;
   desktopTabRailWidth?: number;
   onDesktopTabRailWidthChange?: (width: number) => void;
   historyPanelWidth?: number;
@@ -136,6 +138,8 @@ interface ConsoleBarToolbarProps {
   onEnterDesktopFocus?: () => void;
   desktopTabOrientation?: WorkspaceTabOrientation;
   onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
+  tabActionsVisible?: boolean;
+  onTabActionsVisibilityChange?: (visible: boolean) => void;
 }
 
 const CONSOLE_BARS: Array<{
@@ -171,6 +175,8 @@ function ConsoleBarToolbar({
   onEnterDesktopFocus,
   desktopTabOrientation = "horizontal",
   onDesktopTabOrientationChange,
+  tabActionsVisible = true,
+  onTabActionsVisibilityChange,
 }: ConsoleBarToolbarProps) {
   return (
     <div className="console-bar-toolbar" role="group" aria-label="Console bars">
@@ -216,6 +222,21 @@ function ConsoleBarToolbar({
           <span>Side tabs</span>
         </button>
       )}
+      {onTabActionsVisibilityChange && (availability?.sessionTabs ?? true) && (
+        <button
+          type="button"
+          className="console-bar-toggle desktop-tab-actions-toggle"
+          aria-label="Tab action buttons"
+          aria-controls="muxdeck-session-tabs"
+          aria-pressed={tabActionsVisible}
+          title={tabActionsVisible
+            ? "Hide action buttons on every session tab"
+            : "Show action buttons on every session tab"}
+          onClick={() => onTabActionsVisibilityChange(!tabActionsVisible)}
+        >
+          <span>Actions</span>
+        </button>
+      )}
       {onEnterDesktopFocus && (
         <button
           type="button"
@@ -248,6 +269,8 @@ export function ConsoleScreen({
   onBarVisibilityChange,
   desktopTabOrientation = "horizontal",
   onDesktopTabOrientationChange,
+  tabActionsVisible = true,
+  onTabActionsVisibilityChange,
   desktopTabRailWidth = DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
   historyPanelWidth,
   onHistoryPanelWidthChange,
@@ -698,6 +721,10 @@ export function ConsoleScreen({
           onDesktopTabOrientationChange={sessionNavigation
             ? onDesktopTabOrientationChange
             : undefined}
+          tabActionsVisible={tabActionsVisible}
+          onTabActionsVisibilityChange={sessionNavigation
+            ? onTabActionsVisibilityChange
+            : undefined}
         />
         {sessionNavigation && (
           <div className="console-session-navigation">{sessionNavigation}</div>
@@ -740,6 +767,10 @@ export function ConsoleScreen({
         desktopTabOrientation={desktopTabOrientation}
         onDesktopTabOrientationChange={sessionNavigation
           ? onDesktopTabOrientationChange
+          : undefined}
+        tabActionsVisible={tabActionsVisible}
+        onTabActionsVisibilityChange={sessionNavigation
+          ? onTabActionsVisibilityChange
           : undefined}
         onEnterDesktopFocus={enterDesktopTerminalFocus}
       />

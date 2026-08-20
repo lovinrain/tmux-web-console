@@ -745,6 +745,82 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onMoveTab).toHaveBeenCalledWith("beta", 0);
   });
 
+  it("hides direct actions for every top or side tab while Overview keeps them", () => {
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "zulu"],
+      recentsOpen: true,
+      newSessionActive: true,
+      tabActionsVisible: false,
+      onMoveTab: vi.fn(),
+      onOpenTabInNewWindow: vi.fn().mockReturnValue("opened"),
+      onCloseNewSession: vi.fn(),
+      onSessionTerminated: vi.fn(),
+    });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const navigation = screen.getByRole("navigation", { name: "Session workspace" });
+    const directActionSelector = [
+      ".workspace-tab-reorder",
+      ".workspace-tab-window-actions",
+      ".workspace-tab-terminate",
+      ".workspace-tab-close",
+    ].join(", ");
+
+    expect(navigation).toHaveAttribute("data-tab-actions-visible", "false");
+    expect(within(navigation).getAllByRole("tab")).toHaveLength(4);
+    expect(navigation.querySelectorAll(directActionSelector)).toHaveLength(0);
+    expect(within(navigation).queryByRole("button", {
+      name: "Close New session tab",
+    })).not.toBeInTheDocument();
+
+    const overview = screen.getByRole("dialog", { name: "Switch sessions" });
+    expect(within(overview).getByRole("button", {
+      name: "Move beta tab up",
+    })).toBeVisible();
+    expect(within(overview).getByRole("button", {
+      name: "Copy beta tab to new window",
+    })).toBeVisible();
+    expect(within(overview).getByRole("button", {
+      name: "Terminate beta tmux session",
+    })).toBeVisible();
+    expect(within(overview).getByRole("button", {
+      name: "Close beta quick tab",
+    })).toBeVisible();
+
+    view.rerender(
+      <SessionWorkspaceNavigation
+        {...props}
+        recentsOpen={false}
+        newSessionActive={false}
+        orientation="vertical"
+      />,
+    );
+    expect(navigation).toHaveAttribute("data-orientation", "vertical");
+    expect(navigation).toHaveAttribute("data-tab-actions-visible", "false");
+    expect(navigation.querySelectorAll(directActionSelector)).toHaveLength(0);
+
+    view.rerender(
+      <SessionWorkspaceNavigation
+        {...props}
+        recentsOpen={false}
+        newSessionActive={false}
+        orientation="vertical"
+        tabActionsVisible
+      />,
+    );
+    expect(navigation).toHaveAttribute("data-tab-actions-visible", "true");
+    expect(within(navigation).getByRole("button", { name: "Move beta tab up" }))
+      .toBeVisible();
+    expect(within(navigation).getByRole("button", {
+      name: "Copy beta tab to new window",
+    })).toBeVisible();
+    expect(within(navigation).getByRole("button", {
+      name: "Terminate beta tmux session",
+    })).toBeVisible();
+    expect(within(navigation).getByRole("button", {
+      name: "Close beta quick tab",
+    })).toBeVisible();
+  });
+
   it("resizes vertical tabs by pointer and keyboard, committing only completed changes", () => {
     class TestPointerEvent extends MouseEvent {
       readonly pointerId: number;

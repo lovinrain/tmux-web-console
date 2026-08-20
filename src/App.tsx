@@ -143,6 +143,7 @@ const RECENTS_ENTRY_KEY = "muxdeckRecentsEntry";
 const SESSION_BINDINGS_KEY = "muxdeckSessionBindings";
 const DESKTOP_TAB_ORIENTATION_KEY = "muxdeck-desktop-tab-orientation";
 const DESKTOP_TAB_RAIL_WIDTH_KEY = "muxdeck-desktop-tab-rail-width";
+const DESKTOP_TAB_ACTIONS_VISIBLE_KEY = "muxdeck-desktop-tab-actions-visible";
 const NEW_SESSION_PATH = "/sessions/new";
 const WORKSPACE_ACTIVITY_DEBOUNCE_MS = 400;
 
@@ -167,6 +168,17 @@ function storedDesktopTabRailWidth(): number {
     // Storage can be unavailable in privacy-restricted browser contexts.
   }
   return DEFAULT_DESKTOP_TAB_RAIL_WIDTH;
+}
+
+function storedDesktopTabActionsVisible(): boolean {
+  try {
+    const stored = window.localStorage.getItem(DESKTOP_TAB_ACTIONS_VISIBLE_KEY);
+    if (stored === "false") return false;
+    if (stored === "true") return true;
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
+  return true;
 }
 
 function workspaceErrorMessage(error: unknown, fallback: string): string {
@@ -639,6 +651,8 @@ function AppRoutes() {
     useState<WorkspaceTabOrientation>(storedDesktopTabOrientation);
   const [desktopTabRailWidth, setDesktopTabRailWidthState] =
     useState(storedDesktopTabRailWidth);
+  const [desktopTabActionsVisible, setDesktopTabActionsVisibleState] =
+    useState(storedDesktopTabActionsVisible);
   const [mobileConsoleMode, setMobileConsoleMode] = useState<MobileConsoleMode>(
     "terminal",
   );
@@ -717,6 +731,15 @@ function AppRoutes() {
     setDesktopTabRailWidthState(clampedWidth);
     try {
       window.localStorage.setItem(DESKTOP_TAB_RAIL_WIDTH_KEY, String(clampedWidth));
+    } catch {
+      // Keep the in-memory choice when storage is unavailable.
+    }
+  }, []);
+
+  const setDesktopTabActionsVisible = useCallback((visible: boolean) => {
+    setDesktopTabActionsVisibleState(visible);
+    try {
+      window.localStorage.setItem(DESKTOP_TAB_ACTIONS_VISIBLE_KEY, String(visible));
     } catch {
       // Keep the in-memory choice when storage is unavailable.
     }
@@ -2548,6 +2571,8 @@ function AppRoutes() {
         onBarVisibilityChange={setConsoleBarVisibility}
         desktopTabOrientation={desktopTabOrientation}
         onDesktopTabOrientationChange={setDesktopTabOrientation}
+        tabActionsVisible={desktopTabActionsVisible}
+        onTabActionsVisibilityChange={setDesktopTabActionsVisible}
         desktopTabRailWidth={desktopTabRailWidth}
         onDesktopTabRailWidthChange={setDesktopTabRailWidth}
         historyPanelWidth={historyPanelWidth}
@@ -2567,6 +2592,7 @@ function AppRoutes() {
             sessions={knownSessions}
             recentsOpen={recentsOpen}
             tabsVisible={consoleBars.sessionTabs}
+            tabActionsVisible={desktopTabActionsVisible}
             orientation={desktopTabOrientation}
             desktopTabRailWidth={desktopTabRailWidth}
             onDesktopTabRailWidthChange={setDesktopTabRailWidth}
@@ -2611,6 +2637,7 @@ function AppRoutes() {
             sessions={knownSessions}
             recentsOpen={newSessionRoute.recentsOpen}
             newSessionActive
+            tabActionsVisible={desktopTabActionsVisible}
             orientation={desktopTabOrientation}
             desktopTabRailWidth={desktopTabRailWidth}
             onDesktopTabRailWidthChange={setDesktopTabRailWidth}

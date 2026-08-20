@@ -196,6 +196,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     onBarVisibilityChange,
     desktopTabOrientation,
     onDesktopTabOrientationChange,
+    tabActionsVisible,
+    onTabActionsVisibilityChange,
     desktopTabRailWidth,
     onDesktopTabRailWidthChange,
     onSessionsChange,
@@ -224,6 +226,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     ) => void;
     desktopTabOrientation: "horizontal" | "vertical";
     onDesktopTabOrientationChange: (orientation: "horizontal" | "vertical") => void;
+    tabActionsVisible: boolean;
+    onTabActionsVisibilityChange: (visible: boolean) => void;
     desktopTabRailWidth: number;
     onDesktopTabRailWidthChange: (width: number) => void;
     onSessionsChange?: (sessions: Session[]) => void;
@@ -261,6 +265,7 @@ vi.mock("./components/ConsoleScreen", () => ({
         data-session={sessionName}
         data-workspace-name={workspaceName ?? ""}
         data-tab-orientation={desktopTabOrientation}
+        data-tab-actions-visible={tabActionsVisible}
         data-tab-rail-width={desktopTabRailWidth}
       >
         <nav aria-label="Mobile console focus">
@@ -322,6 +327,14 @@ vi.mock("./components/ConsoleScreen", () => ({
             Vertical tabs
           </button>
         </div>
+        <button
+          type="button"
+          aria-label="Tab action buttons"
+          aria-pressed={tabActionsVisible}
+          onClick={() => onTabActionsVisibilityChange(!tabActionsVisible)}
+        >
+          Actions
+        </button>
         <label>
           Desktop tab rail width
           <input
@@ -2604,6 +2617,44 @@ describe("App routing", () => {
     expect(screen.getByRole("main", { name: "New session view" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: "Session workspace" }))
       .toHaveAttribute("data-orientation", "vertical");
+  });
+
+  it("persists one tab-action toggle across top tabs, side tabs, and remounts", () => {
+    const first = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Open test session" }));
+
+    const actionsToggle = screen.getByRole("button", { name: "Tab action buttons" });
+    const navigation = screen.getByRole("navigation", { name: "Session workspace" });
+    expect(actionsToggle).toBePressed();
+    expect(navigation).toHaveAttribute("data-tab-actions-visible", "true");
+    expect(screen.getByRole("button", { name: "Close work/name #1 quick tab" }))
+      .toBeVisible();
+
+    fireEvent.click(actionsToggle);
+    expect(actionsToggle).not.toBePressed();
+    expect(navigation).toHaveAttribute("data-tab-actions-visible", "false");
+    expect(screen.queryByRole("button", { name: "Close work/name #1 quick tab" }))
+      .not.toBeInTheDocument();
+    expect(window.localStorage.getItem("muxdeck-desktop-tab-actions-visible"))
+      .toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Vertical tabs" }));
+    expect(navigation).toHaveAttribute("data-orientation", "vertical");
+    expect(navigation).toHaveAttribute("data-tab-actions-visible", "false");
+    expect(screen.queryByRole("button", { name: "Close work/name #1 quick tab" }))
+      .not.toBeInTheDocument();
+
+    first.unmount();
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: "Tab action buttons" })).not.toBePressed();
+    expect(screen.getByRole("navigation", { name: "Session workspace" }))
+      .toHaveAttribute("data-tab-actions-visible", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Tab action buttons" }));
+    expect(screen.getByRole("button", { name: "Close work/name #1 quick tab" }))
+      .toBeVisible();
+    expect(window.localStorage.getItem("muxdeck-desktop-tab-actions-visible"))
+      .toBe("true");
   });
 
   it("defaults malformed desktop tab rail width and clamps stored numeric values", () => {

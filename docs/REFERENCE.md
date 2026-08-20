@@ -405,6 +405,13 @@ that survives reloads and session/New-session navigation, but it is not written 
 the workspace record or URL. Compact mobile layouts keep their horizontal/Overview
 navigation regardless of the desktop preference.
 
+`Actions` in the same desktop `VIEW` toolbar shows or hides the repeated controls
+on every quick tab. Turning it off removes the directional reorder, new-window,
+terminate, and close buttons from both the top strip and side rail while leaving
+each tab selector and tab-group controls available. Overview keeps the full action
+set as a fallback. The choice starts visible and persists as a browser-local display
+preference; it does not change the workspace record, URL, or any tmux session.
+
 The side rail's right-edge grip resizes it from a 72px numbered icon rail to a
 480px wide title view. As the rail narrows, text and secondary tab controls collapse
 in stages instead of forcing a wide minimum; the same reorder, close, and terminate
@@ -446,9 +453,10 @@ restoring the moved tab when the page exits. The non-mutating Copy action remain
 available throughout.
 
 The direct window buttons collapse with the other secondary controls in narrow
-side rails and compact horizontal layouts. Open-tab rows in `Overview` retain
-both actions as accessible 44px-or-larger controls, alongside reorder, terminate,
-and close, so the actions remain available on compact and touch layouts.
+side rails and compact horizontal layouts, and all direct tab controls disappear
+when `Actions` is off. Open-tab rows in `Overview` retain both window actions as
+accessible 44px-or-larger controls, alongside reorder, terminate, and close, so
+the actions remain available on compact and touch layouts.
 
 `New group` in the scrollable tab strip opens the group editor for a required
 name, one of nine colors, and one or more open tabs. A group stays contiguous and

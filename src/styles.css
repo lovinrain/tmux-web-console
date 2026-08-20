@@ -4625,6 +4625,7 @@ span.workspace-tab-group-toggle {
 }
 
 .desktop-tab-orientation-toggle,
+.desktop-tab-actions-toggle,
 .desktop-terminal-focus-key,
 .desktop-terminal-focus-actions,
 .desktop-terminal-focus-redraw,
@@ -4830,6 +4831,7 @@ span.workspace-tab-group-toggle {
 @media (min-width: 1025px),
   (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
   .desktop-tab-orientation-toggle,
+  .desktop-tab-actions-toggle,
   .desktop-terminal-focus-key {
     display: inline-flex;
     align-items: center;
