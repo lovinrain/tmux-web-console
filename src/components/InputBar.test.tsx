@@ -246,31 +246,39 @@ describe("InputBar", () => {
     expect(onSend).toHaveBeenCalledWith("\x01");
   });
 
-  it("inserts a literal Tab at the staged selection without sending to tmux", () => {
+  it("sends the staged snapshot followed by Tab and clears only after acknowledgement", async () => {
     const onSend = vi.fn(() => true);
-    const onSubmit = vi.fn(async () => true);
+    let resolveSubmission: ((accepted: boolean) => void) | undefined;
+    const onSubmit = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveSubmission = resolve;
+    }));
     render(<InputBar {...props} onSend={onSend} onSubmit={onSubmit} />);
     const textarea = screen.getByRole("textbox", {
       name: "Staged input",
     }) as HTMLTextAreaElement;
-    const insertTab = screen.getByRole("button", {
-      name: "Insert Tab into staged input",
+    const sendWithTab = screen.getByRole("button", {
+      name: "Send + Tab",
     });
-    fireEvent.input(textarea, { target: { value: "alpha omega" } });
+    fireEvent.input(textarea, { target: { value: "choose the next field" } });
     textarea.focus();
-    textarea.setSelectionRange(6, 11);
 
-    expect(fireEvent.mouseDown(insertTab)).toBe(false);
-    fireEvent.click(insertTab);
+    expect(fireEvent.mouseDown(sendWithTab)).toBe(false);
+    fireEvent.click(sendWithTab);
 
-    expect(textarea).toHaveValue("alpha \t");
-    expect(textarea.selectionStart).toBe(7);
-    expect(textarea.selectionEnd).toBe(7);
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit).toHaveBeenCalledWith("choose the next field", "tab");
+    expect(textarea).toHaveValue("choose the next field");
+    expect(textarea).toHaveAttribute("readonly");
     expect(textarea).toHaveFocus();
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
-      .toBe("alpha \t");
+      .toBe("choose the next field");
     expect(onSend).not.toHaveBeenCalled();
-    expect(onSubmit).not.toHaveBeenCalled();
+
+    await act(async () => resolveSubmission?.(true));
+
+    await waitFor(() => expect(textarea).toHaveValue(""));
+    expect(textarea).not.toHaveAttribute("readonly");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBeNull();
   });
 
   it("keeps one ordered action set with stable names and responsive labels", () => {
@@ -283,18 +291,18 @@ describe("InputBar", () => {
       "Send",
       "Send + Enter",
       "Queue in memo",
-      "Insert Tab into staged input",
+      "Send + Tab",
     ]);
     expect(Array.from(actions.querySelectorAll(".composer-action-label-full"), (label) => (
       label.textContent
-    ))).toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Tab"]);
+    ))).toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Send + Tab"]);
     expect(Array.from(actions.querySelectorAll(".composer-action-label-compact"), (label) => (
       label.textContent
-    ))).toEqual(["C", "S", "S+E", "M", "T"]);
-    expect(screen.getAllByRole("button", { name: "Insert Tab into staged input" }))
+    ))).toEqual(["C", "S", "S+E", "M", "S+T"]);
+    expect(screen.getAllByRole("button", { name: "Send + Tab" }))
       .toHaveLength(1);
     expect(within(screen.getByRole("group", { name: "Mobile staged input controls" }))
-      .queryByRole("button", { name: "Insert Tab into staged input" }))
+      .queryByRole("button", { name: "Send + Tab" }))
       .not.toBeInTheDocument();
   });
 
@@ -404,7 +412,7 @@ describe("InputBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send + Enter" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
-    expect(onSubmit).toHaveBeenCalledWith("open the diff viewer.", true);
+    expect(onSubmit).toHaveBeenCalledWith("open the diff viewer.", "enter");
     await waitFor(() => expect(textarea).toHaveValue(""));
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBeNull();
     expect(screen.getByText(/Written once/)).toBeVisible();
@@ -490,7 +498,7 @@ describe("InputBar", () => {
     expect(fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true })).toBe(false);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
       "run the checks\nthen summarize",
-      true,
+      "enter",
     ));
     await waitFor(() => expect(textarea).toHaveValue(""));
   });
@@ -549,7 +557,7 @@ describe("InputBar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("do not lose me", false));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("do not lose me", "none"));
     expect(textarea).toHaveValue("do not lose me");
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBe("do not lose me");
     expect(screen.getByText(/Delivery was not confirmed/)).toBeVisible();

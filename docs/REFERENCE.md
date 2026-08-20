@@ -23,8 +23,11 @@ which lets iOS dictation and replacement-style input methods finish composing in
 a normal textarea without xterm clearing their provisional text. Muxdeck never
 tries to merge terminal-side cursor edits back into that local draft.
 
-`Send` and `Send + Enter` take one snapshot of the staged text and wait for the
-server to confirm that the complete payload was written to the attached tmux PTY.
+`Send`, `Send + Enter`, and `Send + Tab` take one snapshot of the staged text and
+wait for the server to confirm that the complete payload was written to the
+attached tmux PTY. `Send + Enter` follows that snapshot with a terminal Enter;
+`Send + Tab` follows it with a terminal Tab, rather than inserting a tab into the
+local draft.
 With the staged textarea focused, `Shift+Enter` invokes `Send + Enter`; plain
 `Enter` remains available for multiline drafts.
 Only then is the local draft cleared. A timeout or reconnect leaves it intact and
@@ -302,7 +305,7 @@ when the new workspace should instead inherit this browser page's open tabs and
 their order. Creating either kind writes a separate server record before opening
 it, so the workspace you came from is unchanged. A saved workspace can be
 resumed, renamed, or deleted from that list. Deleting one removes only the saved
-tab group; none of these workspace actions stops, renames, or sends input to a
+workspace record; none of these workspace actions stops, renames, or sends input to a
 tmux session.
 
 An unsaved multi-tab console identifies itself as `Temporary workspace` and
@@ -313,8 +316,8 @@ URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
 or `Sync issue` state reports whether later tab-order and active-session changes
 are synchronizing automatically.
 
-Each saved workspace keeps its name, ordered open tabs, active session, and
-server-generated creation, update, and last-active times in
+Each saved workspace keeps its name, ordered open tabs, tab groups, active
+session, and server-generated creation, update, and last-active times in
 `MUXDECK_WORKSPACES_FILE`. Opening or changing a saved workspace refreshes its
 rough last-active time. Workspace names and tab membership are shared by every
 browser connected to the same Muxdeck instance, so a phone or another computer
@@ -327,10 +330,12 @@ restoring an obsolete tmux name.
 
 The stable `workspace=` query parameter identifies a saved workspace without
 putting its editable name in the route. Ordered `tab=` values remain in the URL
-for navigation and backward-compatible ad hoc workspaces. When a saved workspace
-is loaded, its server record is authoritative. A URL with `tab=` values but no
-`workspace=` remains an unsaved browser workspace; its `Resume workspace` action
-returns to the most recently active open tab without changing their order.
+for navigation and backward-compatible ad hoc workspaces. Each group is encoded
+as a repeated `tab-group=` JSON value so temporary workspaces, reloads, shared
+links, and browser Back/Forward preserve the same structure. When a saved
+workspace is loaded, its server record is authoritative. A URL with `tab=` values
+but no `workspace=` remains an unsaved browser workspace; its `Resume workspace`
+action returns to the most recently active open tab without changing their order.
 
 The landing-page `New session` action opens `/sessions/new` as a synthetic
 workspace tab and waits for explicit confirmation before changing tmux. On
@@ -426,16 +431,49 @@ The tablist uses the matching arrow-key axis for keyboard focus. In the compact
 mobile layout, open rows in Overview expose the same reorder action as up/down
 controls, including while the session list is filtered.
 
+Each real quick tab also has `Move tab to new window` and `Copy tab to new
+window` actions. Both open an isolated temporary workspace containing only that
+session, without stopping or otherwise changing its tmux session. Copy leaves
+the quick tab, order, and group unchanged in the current workspace. Move removes
+the quick tab here only after the browser successfully creates the new context;
+if a pop-up is blocked or child navigation fails, the source tab remains intact
+and Muxdeck shows a dismissible error. Moving from a saved workspace synchronizes
+the removal, while copying does not change the saved workspace. Move waits while
+a saved workspace is still opening or has a sync issue. If an earlier autosave is
+still pending, Muxdeck accelerates that save, keeps the source tab in place, and
+asks you to retry Move after it finishes; this prevents an older request from
+restoring the moved tab when the page exits. The non-mutating Copy action remains
+available throughout.
+
+The direct window buttons collapse with the other secondary controls in narrow
+side rails and compact horizontal layouts. Open-tab rows in `Overview` retain
+both actions as accessible 44px-or-larger controls, alongside reorder, terminate,
+and close, so the actions remain available on compact and touch layouts.
+
+`New group` in the scrollable tab strip opens the group editor for a required
+name, one of nine colors, and one or more open tabs. A group stays contiguous and
+moves as one block; member-tab arrows only reorder within that group, while an
+ungrouped tab moves across a neighboring group atomically. The group chip can
+collapse its members, but the active member remains visible. Editing membership
+can move tabs between groups, while `Ungroup tabs` removes only the grouping and
+never closes a tmux session. Mobile Overview repeats New/Edit group access, and
+adds whole-group up/down controls. Tab groups are a multi-tab-view concern: the
+landing page does not show group badges, counts, names, editors, or group-aware
+tab search results.
+
 On desktop, `Ctrl+Shift+,` and `Ctrl+Shift+.` select the previous or next open
 tab and wrap at either end. `Ctrl+Shift+1` through `Ctrl+Shift+9` select that
 numbered open tab directly; both the number row and numeric keypad work, and a
 position that is not open is a no-op. `Ctrl+Shift+;` opens the `Find tab`
 palette, which ranks matches against both the custom display title and native
-tmux name; arrow keys choose a result and Enter jumps directly to it. These
+tmux name, then the tab-group name; arrow keys choose a result and Enter jumps
+directly to it. These
 exact chords remain available while xterm or staged input owns focus, while
 unrelated browser/editor commands such as `Ctrl+/` pass through untouched. All
 workspace shortcuts pause behind a modal dialog and are disabled in the compact
-mobile layout, where Overview remains the session-switching surface.
+mobile layout, where Overview remains the session-switching surface. They are
+also inactive on the landing page, even when its URL retains a workspace
+snapshot for Back/Forward navigation.
 
 `Recents` opens the route `/session/:name/recents`. The sheet separates open
 quick tabs, closed recently visited sessions, and other sessions currently on
@@ -445,9 +483,15 @@ console, and selecting any row updates the canonical active-session URL.
 
 Open quick tabs and their order are URL-backed across console, dashboard, and
 Snippets routes. Reloading or sharing an ad hoc URL restores its ordered tabs.
-When `workspace=` is present, Muxdeck also synchronizes the ordered tabs and
-active session to the server so another device can resume them. The
-closed-session visit trail remains page-local and clears on reload; it is not
+When `workspace=` is present, Muxdeck also synchronizes the ordered tabs, groups,
+collapse state, and active session to the server so another device can resume
+them. During an in-place rollout, a newer browser retries workspace writes
+without `groups` if a pre-group backend rejects that field; tabs and activity
+continue saving without the generic sync-error banner. A workspace with local
+groups is labeled `Tabs saved` until the server can store them. Normal activity
+writes keep testing support, and refocusing a page checks again, so local groups
+are sent once an upgraded backend is available. The closed-session visit trail
+remains page-local and clears on reload; it is not
 part of a saved workspace. Existing appearance, dashboard preference,
 staged-draft, title, tag, star, ignored-session, memorandum, and snippet storage keep
 their documented behavior.
@@ -476,18 +520,19 @@ drafts, it lives on the server and is shared across browsers.
 `MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list. Tabs are keyed
 by native tmux session name. A native rename performed through Muxdeck migrates
 that name in every saved workspace; an out-of-band tmux rename cannot do so.
-Unavailable names remain visible in the saved group until the workspace is
+Unavailable names remain visible in the saved workspace until the workspace is
 updated or deleted. The file contains workspace names and tmux session names, so
 treat it as potentially sensitive runtime state.
 
-The workspace schema is version 2. Version 1 files load at rename revision zero
-and upgrade atomically on the next write. A workspace name is limited to 80
-characters and a workspace can contain at most 32 unique ordered tabs. Writes
-use an atomic file replacement. Keep a pre-upgrade copy when rollback is
-possible because a version-1-only release rejects the version 2 document. If an
-existing workspace file is unreadable, malformed, or uses an unsupported
-schema, the workspace API returns `503` and refuses to overwrite it until the
-file is repaired and Muxdeck is restarted.
+The workspace schema is version 3. Version 1 files load at rename revision zero;
+version 1 and 2 files load with no tab groups. Either upgrades atomically on the
+next write. A workspace name is limited to 80 characters and a workspace can
+contain at most 32 unique ordered tabs and 16 disjoint, contiguous groups. Group
+names are limited to 40 characters. Writes use an atomic file replacement. Keep
+a pre-upgrade copy when rollback is possible because a version-1-or-2 release
+rejects the version 3 document. If an existing workspace file is unreadable,
+malformed, or uses an unsupported schema, the workspace API returns `503` and
+refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
 ## Scrollback behavior
 

@@ -8,6 +8,7 @@ import {
   type SavedWorkspace,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
+import type { WorkspaceTabGroup } from "../workspaceState";
 import { approximateWorkspaceActivity, SavedWorkspaceList } from "./SavedWorkspaceList";
 
 vi.mock("../api", () => ({
@@ -22,11 +23,23 @@ function workspace(overrides: Partial<SavedWorkspace> = {}): SavedWorkspace {
     id: "workspace-1",
     name: "Release room",
     tabs: ["api", "web client"],
+    groups: [],
     activeSession: "web client",
     sessionRevision: 0,
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_010_000,
     lastActiveAt: Date.now() - 5 * 60_000,
+    ...overrides,
+  };
+}
+
+function group(overrides: Partial<WorkspaceTabGroup> = {}): WorkspaceTabGroup {
+  return {
+    id: "delivery-group",
+    name: "Delivery",
+    color: "cyan",
+    collapsed: false,
+    tabs: ["web", "api"],
     ...overrides,
   };
 }
@@ -65,7 +78,11 @@ describe("SavedWorkspaceList", () => {
       activeSession: "missing-session",
       lastActiveAt: Date.now() - 3_600_000,
     });
-    const newer = workspace({ id: "newer", lastActiveAt: Date.now() - 60_000 });
+    const newer = workspace({
+      id: "newer",
+      groups: [group({ name: "Release lane", tabs: ["api", "web client"] })],
+      lastActiveAt: Date.now() - 60_000,
+    });
     vi.mocked(listWorkspaces).mockResolvedValue([older, newer]);
     const onOpen = vi.fn();
 
@@ -84,6 +101,9 @@ describe("SavedWorkspaceList", () => {
       .toHaveTextContent("Release room");
     expect(within(workspaceCards[0]).getByText("Current")).toBeVisible();
     expect(within(workspaceCards[0]).getByText(/^Active /)).toHaveAttribute("title");
+    expect(within(workspaceCards[0]).queryByLabelText("1 tab group"))
+      .not.toBeInTheDocument();
+    expect(within(workspaceCards[0]).queryByText("1 group")).not.toBeInTheDocument();
 
     const olderCard = workspaceCards[1];
     const orderedSessions = within(olderCard).getByRole("list", {
@@ -110,6 +130,7 @@ describe("SavedWorkspaceList", () => {
     renderWithTheme(
       <SavedWorkspaceList
         currentTabs={["web", "api"]}
+        currentWorkspaceGroups={[group()]}
         activeSession="api"
         onOpen={vi.fn()}
       />,
@@ -127,6 +148,7 @@ describe("SavedWorkspaceList", () => {
     await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
       name: "Blank slate",
       tabs: [],
+      groups: [],
       activeSession: null,
     }));
   });
@@ -137,6 +159,7 @@ describe("SavedWorkspaceList", () => {
       id: "created",
       name: "Cross device",
       tabs: ["web", "api"],
+      groups: [group()],
       activeSession: "api",
     });
     vi.mocked(createWorkspace).mockResolvedValue(created);
@@ -145,6 +168,7 @@ describe("SavedWorkspaceList", () => {
     renderWithTheme(
       <SavedWorkspaceList
         currentTabs={["web", "api", "web"]}
+        currentWorkspaceGroups={[group()]}
         activeSession="api"
         onOpen={onOpen}
       />,
@@ -154,7 +178,8 @@ describe("SavedWorkspaceList", () => {
     fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
     const input = screen.getByRole("textbox", { name: "Workspace name" });
     expect(input).toHaveFocus();
-    expect(screen.getByText("Copy 2 open tabs in the current order.")).toBeVisible();
+    expect(screen.getByText("Copy 2 open tabs in the current order."))
+      .toBeVisible();
     fireEvent.change(input, { target: { value: "  Cross device  " } });
     fireEvent.click(screen.getByRole("radio", { name: /Copy current tabs/ }));
     expect(input).toHaveValue("  Cross device  ");
@@ -163,6 +188,7 @@ describe("SavedWorkspaceList", () => {
     await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
       name: "Cross device",
       tabs: ["web", "api"],
+      groups: [group()],
       activeSession: "api",
     }));
     expect(onOpen).toHaveBeenCalledWith(created);
@@ -175,6 +201,7 @@ describe("SavedWorkspaceList", () => {
       id: "empty",
       name: "Fresh room",
       tabs: [],
+      groups: [],
       activeSession: null,
     });
     vi.mocked(createWorkspace).mockResolvedValue(created);
@@ -192,6 +219,7 @@ describe("SavedWorkspaceList", () => {
     expect(createWorkspace).toHaveBeenCalledWith({
       name: "Fresh room",
       tabs: [],
+      groups: [],
       activeSession: null,
     });
 
@@ -210,6 +238,7 @@ describe("SavedWorkspaceList", () => {
       id: "over-limit-fresh",
       name: "Fresh despite tabs",
       tabs: [],
+      groups: [],
       activeSession: null,
     }));
 
@@ -236,6 +265,7 @@ describe("SavedWorkspaceList", () => {
     await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
       name: "Fresh despite tabs",
       tabs: [],
+      groups: [],
       activeSession: null,
     }));
   });

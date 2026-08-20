@@ -17,6 +17,8 @@ import {
   ArrowUpIcon,
   CheckIcon,
   CloseIcon,
+  EditIcon,
+  FolderIcon,
   GridIcon,
   HistoryIcon,
   PlusIcon,
@@ -24,17 +26,25 @@ import {
   SearchIcon,
   TerminalIcon,
   TrashIcon,
+  WindowCopyIcon,
+  WindowMoveIcon,
 } from "../icons";
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
 import type { AgentState, Pane, Session } from "../types";
+import {
+  MAX_WORKSPACE_TAB_GROUPS,
+  type WorkspaceTabGroup,
+} from "../workspaceState";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
+import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
   openSessions: string[];
   recentSessions: string[];
+  groups?: WorkspaceTabGroup[];
   sessions: Session[];
   recentsOpen: boolean;
   orientation?: WorkspaceTabOrientation;
@@ -45,6 +55,14 @@ export interface SessionWorkspaceNavigationProps {
   onSelect: (sessionName: string) => void;
   onCloseTab: (sessionName: string) => void;
   onMoveTab?: (sessionName: string, targetIndex: number) => void;
+  onOpenTabInNewWindow?: (
+    sessionName: string,
+    mode: OpenTabInNewWindowMode,
+  ) => OpenTabInNewWindowResult;
+  onSaveTabGroup?: (group: WorkspaceTabGroup) => void;
+  onDeleteTabGroup?: (groupId: string) => void;
+  onToggleTabGroup?: (groupId: string, collapsed: boolean) => void;
+  onMoveTabGroup?: (groupId: string, direction: -1 | 1) => void;
   onCloseNewSession?: () => void;
   onOpenRecents: () => void;
   onCloseRecents: () => void;
@@ -65,6 +83,12 @@ export interface SessionWorkspaceNavigationProps {
 }
 
 export type WorkspaceTabOrientation = "horizontal" | "vertical";
+export type OpenTabInNewWindowMode = "move" | "copy";
+export type OpenTabInNewWindowResult =
+  | "opened"
+  | "blocked"
+  | "failed"
+  | "workspace-sync-pending";
 
 export const MIN_DESKTOP_TAB_RAIL_WIDTH = 72;
 export const MAX_DESKTOP_TAB_RAIL_WIDTH = 480;
@@ -83,7 +107,12 @@ export function clampDesktopTabRailWidth(width: number): number {
   );
 }
 
-export type WorkspacePersistenceState = "unsaved" | "loading" | "saved" | "error";
+export type WorkspacePersistenceState =
+  | "unsaved"
+  | "loading"
+  | "saved"
+  | "limited"
+  | "error";
 
 export const WORKSPACE_TAB_SHORTCUTS = {
   previous: "Ctrl+Shift+,",
@@ -180,6 +209,11 @@ const WORKSPACE_PERSISTENCE_COPY: Record<
     accessibleLabel: "Opening saved workspace",
     description: "Opening this saved workspace from the server.",
   },
+  limited: {
+    label: "Tabs saved",
+    accessibleLabel: "Workspace tabs saved; tab groups are not stored by this server",
+    description: "Tabs and your active session save automatically. Tab groups are not stored by this server yet.",
+  },
   error: {
     label: "Sync issue",
     accessibleLabel: "Workspace sync issue",
@@ -205,6 +239,49 @@ function workspaceIdentityStateLabel(
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState].label;
 }
 
+function moveToNewWindowDisabledReason(
+  workspacePersistenceState: WorkspacePersistenceState,
+): string | null {
+  if (workspacePersistenceState === "loading") {
+    return "Move is unavailable until the saved workspace finishes opening.";
+  }
+  if (workspacePersistenceState === "error") {
+    return "Move is unavailable until the workspace sync issue is resolved.";
+  }
+  return null;
+}
+
+function newWindowFailureMessage(
+  result: Exclude<OpenTabInNewWindowResult, "opened">,
+  title: string,
+): string {
+  if (result === "workspace-sync-pending") {
+    return `Muxdeck is finishing an earlier workspace save before moving ${title}. The source tab is unchanged. Try Move again when the save finishes.`;
+  }
+  if (result === "blocked") {
+    return `The browser blocked a new window for ${title}. Allow pop-ups and try again.`;
+  }
+  return `Muxdeck could not open ${title} in a new window. The source tab is unchanged. Try again.`;
+}
+
+function WorkspaceWindowActionError({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  if (!message) return null;
+  return (
+    <div className="workspace-window-action-error" role="alert">
+      <span>{message}</span>
+      <button type="button" onClick={onDismiss} aria-label="Dismiss new window error">
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
 function activePane(session: Session): Pane | undefined {
   return session.panes.find((pane) => pane.id === session.activePaneId) || session.panes[0];
 }
@@ -226,9 +303,27 @@ function tabTitle(sessionName: string, sessionsByName: Map<string, Session>): st
   return session ? sessionDisplayTitle(session) : sessionName;
 }
 
+function tabMoveResultIndex(
+  openSessions: readonly string[],
+  groups: readonly WorkspaceTabGroup[],
+  sessionName: string,
+  targetIndex: number,
+): number {
+  const currentIndex = openSessions.indexOf(sessionName);
+  const targetSession = openSessions[targetIndex];
+  if (currentIndex < 0 || !targetSession) return targetIndex;
+  const sourceGroup = groups.find((group) => group.tabs.includes(sessionName));
+  const targetGroup = groups.find((group) => group.tabs.includes(targetSession));
+  if (sourceGroup || !targetGroup) return targetIndex;
+  return currentIndex < targetIndex
+    ? openSessions.indexOf(targetGroup.tabs.at(-1)!)
+    : openSessions.indexOf(targetGroup.tabs[0]);
+}
+
 interface WorkspaceTabSearchDialogProps {
   activeSession: string | null;
   openSessions: string[];
+  groups?: readonly WorkspaceTabGroup[];
   sessions: Session[];
   onSelect: (sessionName: string) => void;
   onClose: () => void;
@@ -238,26 +333,37 @@ interface TabSearchResult {
   sessionName: string;
   title: string;
   session: Session | undefined;
+  group: WorkspaceTabGroup | undefined;
   position: number;
   score: number;
 }
 
-function searchScore(title: string, sessionName: string, query: string): number | null {
+function searchScore(
+  title: string,
+  sessionName: string,
+  groupName: string | undefined,
+  query: string,
+): number | null {
   if (!query) return 0;
   const normalizedTitle = title.toLowerCase();
   const normalizedName = sessionName.toLowerCase();
+  const normalizedGroup = groupName?.toLowerCase() ?? "";
   if (normalizedTitle === query) return 0;
   if (normalizedName === query) return 1;
   if (normalizedTitle.startsWith(query)) return 2;
   if (normalizedName.startsWith(query)) return 3;
   if (normalizedTitle.includes(query)) return 4;
   if (normalizedName.includes(query)) return 5;
+  if (normalizedGroup === query) return 6;
+  if (normalizedGroup.startsWith(query)) return 7;
+  if (normalizedGroup.includes(query)) return 8;
   return null;
 }
 
 export function WorkspaceTabSearchDialog({
   activeSession,
   openSessions,
+  groups = [],
   sessions,
   onSelect,
   onClose,
@@ -271,18 +377,31 @@ export function WorkspaceTabSearchDialog({
     () => new Map(sessions.map((session) => [session.name, session])),
     [sessions],
   );
+  const groupsBySession = useMemo(() => {
+    const memberships = new Map<string, WorkspaceTabGroup>();
+    for (const group of groups) {
+      for (const sessionName of group.tabs) {
+        if (!memberships.has(sessionName)) memberships.set(sessionName, group);
+      }
+    }
+    return memberships;
+  }, [groups]);
   const normalizedQuery = query.trim().toLowerCase();
   const results = useMemo<TabSearchResult[]>(() => openSessions
     .map((sessionName, position) => {
       const session = sessionsByName.get(sessionName);
       const title = tabTitle(sessionName, sessionsByName);
-      const score = searchScore(title, sessionName, normalizedQuery);
-      return score === null ? null : { sessionName, title, session, position, score };
+      const group = groupsBySession.get(sessionName);
+      const score = searchScore(title, sessionName, group?.name, normalizedQuery);
+      return score === null
+        ? null
+        : { sessionName, title, session, group, position, score };
     })
     .filter((result): result is TabSearchResult => result !== null)
     .sort((left, right) => left.score - right.score || left.position - right.position), [
     normalizedQuery,
     openSessions,
+    groupsBySession,
     sessionsByName,
   ]);
   const resultNames = results.map((result) => result.sessionName).join("\u0000");
@@ -419,8 +538,9 @@ export function WorkspaceTabSearchDialog({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleSearchKeyDown}
-            placeholder="Type a title or tmux name"
+            placeholder="Type a title, tmux name, or group"
             aria-label="Search open tabs by title or tmux name"
+            aria-description="Search by title, tmux session name, or tab group name."
             role="combobox"
             aria-autocomplete="list"
             aria-expanded="true"
@@ -461,6 +581,20 @@ export function WorkspaceTabSearchDialog({
                 <span className="workspace-tab-search-result-copy">
                   <strong>{result.title}</strong>
                   <span>{result.title === result.sessionName ? "tmux session" : result.sessionName}</span>
+                  {result.group && (
+                    <span
+                      className="workspace-tab-search-result-group"
+                      data-tab-group-color={result.group.color}
+                      aria-label={`Tab group ${result.group.name}, color ${result.group.color}`}
+                    >
+                      <FolderIcon
+                        width="12"
+                        height="12"
+                        style={{ color: "var(--tab-group-color)" }}
+                      />
+                      {result.group.name}
+                    </span>
+                  )}
                 </span>
                 <span className={`workspace-tab-search-result-state ${state}`}>
                   {active ? "Current" : result.session ? STATE_LABELS[result.session.agentState] : "Unavailable"}
@@ -472,7 +606,7 @@ export function WorkspaceTabSearchDialog({
             <div className="workspace-tab-search-empty">
               <SearchIcon />
               <strong>No matching open tabs</strong>
-              <span>Search by custom title or tmux session name.</span>
+              <span>Search by custom title, tmux session name, or tab group name.</span>
             </div>
           )}
         </div>
@@ -519,12 +653,18 @@ function tabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
 interface WorkspaceSessionRowProps {
   sessionName: string;
   session?: Session;
+  group?: WorkspaceTabGroup;
   active: boolean;
   open: boolean;
   onSelect: () => void;
   openIndex?: number;
   openCount?: number;
+  reorderStartIndex?: number;
+  reorderEndIndex?: number;
   onMoveTab?: (targetIndex: number) => void;
+  onCopyToNewWindow?: () => void;
+  onMoveToNewWindow?: () => void;
+  moveToNewWindowDisabledReason?: string | null;
   onClose?: () => void;
   onTerminate?: () => void;
 }
@@ -532,12 +672,18 @@ interface WorkspaceSessionRowProps {
 function WorkspaceSessionRow({
   sessionName,
   session,
+  group,
   active,
   open,
   onSelect,
   openIndex,
   openCount,
+  reorderStartIndex = 0,
+  reorderEndIndex,
   onMoveTab,
+  onCopyToNewWindow,
+  onMoveToNewWindow,
+  moveToNewWindowDisabledReason = null,
   onClose,
   onTerminate,
 }: WorkspaceSessionRowProps) {
@@ -551,10 +697,12 @@ function WorkspaceSessionRow({
     && openCount !== undefined
     && openCount > 1
   );
+  const lastReorderIndex = reorderEndIndex ?? ((openCount ?? 1) - 1);
+  const hasWindowActions = Boolean(onCopyToNewWindow && onMoveToNewWindow);
 
   return (
     <div
-      className={`workspace-session-row${active ? " active" : ""}${open && onTerminate ? " stacked-actions" : ""}`}
+      className={`workspace-session-row${active ? " active" : ""}${open && (onTerminate || hasWindowActions) ? " stacked-actions" : ""}`}
       data-workspace-session-name={sessionName}
     >
       <button
@@ -573,6 +721,15 @@ function WorkspaceSessionRow({
             {displayTitle !== sessionName ? `${sessionName} / ` : ""}
             {session ? paneLabel(pane) : "tmux session ended"}
           </span>
+          {group && (
+            <span
+              className="workspace-session-group-label"
+              data-tab-group-color={group.color}
+            >
+              <span aria-hidden="true" />
+              Group: {group.name}
+            </span>
+          )}
         </span>
         <span className="workspace-session-indicators">
           <span className={`workspace-session-status ${session?.agentState || "unavailable"}`}>
@@ -588,7 +745,7 @@ function WorkspaceSessionRow({
           )}
         </span>
       </button>
-      {(canReorder || onClose || onTerminate) && (
+      {(canReorder || hasWindowActions || onClose || onTerminate) && (
         <span className="workspace-session-actions">
           {canReorder && (
             <span
@@ -600,7 +757,7 @@ function WorkspaceSessionRow({
                 type="button"
                 className="workspace-session-move workspace-session-move-up"
                 onClick={() => onMoveTab(openIndex - 1)}
-                disabled={openIndex === 0}
+                disabled={openIndex === reorderStartIndex}
                 aria-label={`Move ${displayTitle} tab up`}
                 title="Move tab up"
               >
@@ -610,11 +767,41 @@ function WorkspaceSessionRow({
                 type="button"
                 className="workspace-session-move workspace-session-move-down"
                 onClick={() => onMoveTab(openIndex + 1)}
-                disabled={openIndex === openCount - 1}
+                disabled={openIndex === lastReorderIndex}
                 aria-label={`Move ${displayTitle} tab down`}
                 title="Move tab down"
               >
                 <ArrowLeftIcon />
+              </button>
+            </span>
+          )}
+          {hasWindowActions && (
+            <span
+              className="workspace-session-window-actions"
+              role="group"
+              aria-label={`${displayTitle} tab window actions`}
+            >
+              <button
+                type="button"
+                className="workspace-session-window-move"
+                onClick={onMoveToNewWindow}
+                disabled={Boolean(moveToNewWindowDisabledReason)}
+                aria-label={`Move ${displayTitle} tab to new window`}
+                aria-description={moveToNewWindowDisabledReason
+                  ?? "Opens this session in a separate browser window and removes this quick tab here. The tmux session keeps running."}
+                title={moveToNewWindowDisabledReason ?? "Move tab to new window"}
+              >
+                <WindowMoveIcon />
+              </button>
+              <button
+                type="button"
+                className="workspace-session-window-copy"
+                onClick={onCopyToNewWindow}
+                aria-label={`Copy ${displayTitle} tab to new window`}
+                aria-description="Opens this session in a separate browser window and keeps this quick tab here."
+                title="Copy tab to new window"
+              >
+                <WindowCopyIcon />
               </button>
             </span>
           )}
@@ -655,12 +842,15 @@ interface WorkspaceRecentsDialogProps extends SessionWorkspaceNavigationProps {
   onScrollPositionChange: (scrollTop: number) => void;
   onRequestSaveWorkspace: () => void;
   onRequestTerminateSession: (session: Session) => void;
+  onRequestNewTabGroup: (initialSession?: string | null) => void;
+  onRequestEditTabGroup: (groupId: string) => void;
 }
 
 function WorkspaceRecentsDialog({
   activeSession,
   openSessions,
   recentSessions,
+  groups = [],
   sessions,
   sessionsByName,
   query,
@@ -670,6 +860,10 @@ function WorkspaceRecentsDialog({
   onSelect,
   onCloseTab,
   onMoveTab,
+  onOpenTabInNewWindow,
+  onSaveTabGroup,
+  onDeleteTabGroup,
+  onMoveTabGroup,
   onCloseRecents,
   onClearRecents,
   onOpenDashboard,
@@ -678,9 +872,12 @@ function WorkspaceRecentsDialog({
   onSaveWorkspace,
   onRequestSaveWorkspace,
   onRequestTerminateSession,
+  onRequestNewTabGroup,
+  onRequestEditTabGroup,
   onSessionTerminated,
 }: WorkspaceRecentsDialogProps) {
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
+  const [windowActionError, setWindowActionError] = useState("");
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -690,18 +887,35 @@ function WorkspaceRecentsDialog({
   } | null>(null);
   const openSet = useMemo(() => new Set(openSessions), [openSessions]);
   const recentSet = useMemo(() => new Set(recentSessions), [recentSessions]);
+  const groupsBySession = useMemo(() => {
+    const result = new Map<string, WorkspaceTabGroup>();
+    groups.forEach((group) => group.tabs.forEach((sessionName) => {
+      result.set(sessionName, group);
+    }));
+    return result;
+  }, [groups]);
   const normalizedQuery = query.trim().toLowerCase();
   const persistenceCopy = workspacePersistenceState === "unsaved"
     ? null
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
   const identityName = workspaceIdentityName(workspacePersistenceState, workspaceName);
   const identityStateLabel = workspaceIdentityStateLabel(workspacePersistenceState);
+  const windowMoveDisabledReason = moveToNewWindowDisabledReason(
+    workspacePersistenceState,
+  );
 
   const matchesQuery = (sessionName: string): boolean => {
     if (!normalizedQuery) return true;
     const session = sessionsByName.get(sessionName);
     const pane = session ? activePane(session) : undefined;
-    return [sessionName, session?.customTitle, pane?.command, pane?.path, pane?.title]
+    return [
+      sessionName,
+      session?.customTitle,
+      pane?.command,
+      pane?.path,
+      pane?.title,
+      groupsBySession.get(sessionName)?.name,
+    ]
       .filter(Boolean)
       .some((value) => value!.toLowerCase().includes(normalizedQuery));
   };
@@ -729,14 +943,36 @@ function WorkspaceRecentsDialog({
 
   const moveDialogTab = (sessionName: string, targetIndex: number) => {
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
+    const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex);
     reorderFocusIntent.current = {
       sessionName,
       direction: targetIndex < openSessions.indexOf(sessionName) ? "up" : "down",
     };
     onMoveTab(sessionName, targetIndex);
     setReorderAnnouncement(
-      `${tabTitle(sessionName, sessionsByName)} moved to position ${targetIndex + 1} of ${openSessions.length}.`,
+      `${tabTitle(sessionName, sessionsByName)} moved to position ${resultIndex + 1} of ${openSessions.length}.`,
     );
+  };
+
+  const openDialogTabInNewWindow = (
+    sessionName: string,
+    move: boolean,
+  ) => {
+    if (!onOpenTabInNewWindow) return;
+    const title = tabTitle(sessionName, sessionsByName);
+    const result = onOpenTabInNewWindow(sessionName, move ? "move" : "copy");
+    if (result !== "opened") {
+      setReorderAnnouncement("");
+      setWindowActionError(newWindowFailureMessage(result, title));
+      return;
+    }
+    setWindowActionError("");
+    setReorderAnnouncement(
+      move
+        ? `${title} moved to a new window. The tmux session keeps running.`
+        : `${title} copied to a new window and remains open here.`,
+    );
+    if (move) closeDialogTab(sessionName);
   };
 
   useEffect(() => {
@@ -866,6 +1102,11 @@ function WorkspaceRecentsDialog({
           )}
         </label>
 
+        <WorkspaceWindowActionError
+          message={windowActionError}
+          onDismiss={() => setWindowActionError("")}
+        />
+
         <p className="workspace-sr-only" role="status" aria-live="polite">
           {resultCount} {resultCount === 1 ? "session" : "sessions"} found
         </p>
@@ -889,23 +1130,104 @@ function WorkspaceRecentsDialog({
                 </div>
                 <span>{filteredOpen.length}</span>
               </header>
+              {onSaveTabGroup && (
+                (onDeleteTabGroup && groups.length > 0)
+                || (openSessions.length > 0 && groups.length < MAX_WORKSPACE_TAB_GROUPS)
+              ) && (
+                <div className="workspace-recents-tab-groups" aria-label="Workspace tab groups">
+                  {onDeleteTabGroup && groups.map((group) => {
+                    const groupStart = openSessions.indexOf(group.tabs[0]);
+                    const groupEnd = openSessions.indexOf(group.tabs.at(-1)!);
+                    return (
+                    <div
+                      className="workspace-recents-tab-group"
+                      data-tab-group-color={group.color}
+                      key={group.id}
+                    >
+                      <button
+                        type="button"
+                        className="workspace-recents-tab-group-edit"
+                        onClick={() => onRequestEditTabGroup(group.id)}
+                        aria-label={`Edit ${group.name} tab group`}
+                      >
+                        <span aria-hidden="true" />
+                        <strong>{group.name}</strong>
+                        <small>{group.tabs.length}</small>
+                        <EditIcon />
+                      </button>
+                      {onMoveTabGroup && (
+                        <span role="group" aria-label={`Move ${group.name} tab group`}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onMoveTabGroup(group.id, -1);
+                              setReorderAnnouncement(`${group.name} group moved up.`);
+                            }}
+                            disabled={groupStart === 0}
+                            aria-label={`Move ${group.name} group up`}
+                          >
+                            <ArrowUpIcon />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onMoveTabGroup(group.id, 1);
+                              setReorderAnnouncement(`${group.name} group moved down.`);
+                            }}
+                            disabled={groupEnd === openSessions.length - 1}
+                            aria-label={`Move ${group.name} group down`}
+                          >
+                            <ArrowDownIcon />
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                    );
+                  })}
+                  {openSessions.length > 0
+                    && groups.length < MAX_WORKSPACE_TAB_GROUPS && (
+                    <button
+                      type="button"
+                      className="workspace-recents-new-group"
+                      onClick={() => onRequestNewTabGroup(activeSession)}
+                    >
+                      <PlusIcon /> New group
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="workspace-session-list">
                 {filteredOpen.map((sessionName) => {
                   const openIndex = openSessions.indexOf(sessionName);
                   const session = sessionsByName.get(sessionName);
+                  const group = groupsBySession.get(sessionName);
                   return (
                     <WorkspaceSessionRow
                       key={sessionName}
                       sessionName={sessionName}
                       session={session}
+                      group={group}
                       active={sessionName === activeSession}
                       open
                       openIndex={openIndex}
                       openCount={openSessions.length}
+                      reorderStartIndex={group
+                        ? openSessions.indexOf(group.tabs[0])
+                        : undefined}
+                      reorderEndIndex={group
+                        ? openSessions.indexOf(group.tabs.at(-1)!)
+                        : undefined}
                       onSelect={() => onSelect(sessionName)}
                       onMoveTab={onMoveTab
                         ? (targetIndex) => moveDialogTab(sessionName, targetIndex)
                         : undefined}
+                      onMoveToNewWindow={onOpenTabInNewWindow
+                        ? () => openDialogTabInNewWindow(sessionName, true)
+                        : undefined}
+                      onCopyToNewWindow={onOpenTabInNewWindow
+                        ? () => openDialogTabInNewWindow(sessionName, false)
+                        : undefined}
+                      moveToNewWindowDisabledReason={windowMoveDisabledReason}
                       onClose={() => closeDialogTab(sessionName)}
                       onTerminate={session && onSessionTerminated
                         ? () => onRequestTerminateSession(session)
@@ -1035,6 +1357,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     activeSession,
     openSessions,
     recentSessions,
+    groups = [],
     sessions,
     recentsOpen,
     orientation: preferredOrientation = "horizontal",
@@ -1045,6 +1368,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onSelect,
     onCloseTab,
     onMoveTab,
+    onOpenTabInNewWindow,
+    onSaveTabGroup,
+    onDeleteTabGroup,
+    onToggleTabGroup,
+    onMoveTabGroup,
     onCloseNewSession,
     onOpenRecents,
     onCloseRecents,
@@ -1092,21 +1420,59 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     sessionName: string;
     direction: "previous" | "next";
   } | null>(null);
+  const groupReorderFocusIntent = useRef<{
+    groupId: string;
+    direction: "previous" | "next";
+  } | null>(null);
+  const groupDialogTriggerRef = useRef<HTMLElement | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [recentsQuery, setRecentsQuery] = useState("");
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
+  const [windowActionError, setWindowActionError] = useState("");
+  const [groupDialog, setGroupDialog] = useState<{
+    groupId: string | null;
+    initialSession: string | null;
+  } | null>(null);
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
     [sessions],
   );
+  const groupsBySession = useMemo(() => {
+    const result = new Map<string, WorkspaceTabGroup>();
+    groups.forEach((group) => group.tabs.forEach((sessionName) => {
+      result.set(sessionName, group);
+    }));
+    return result;
+  }, [groups]);
+  const workspaceTabItems = useMemo<Array<
+    { kind: "tab"; sessionName: string } | { kind: "group"; group: WorkspaceTabGroup }
+  >>(() => {
+    const items: Array<
+      { kind: "tab"; sessionName: string } | { kind: "group"; group: WorkspaceTabGroup }
+    > = [];
+    openSessions.forEach((sessionName) => {
+      const group = groupsBySession.get(sessionName);
+      if (!group) items.push({ kind: "tab", sessionName });
+      else if (group.tabs[0] === sessionName) items.push({ kind: "group", group });
+    });
+    return items;
+  }, [groupsBySession, openSessions]);
   const closedRecentCount = recentSessions.filter((name) => !openSessions.includes(name)).length;
   const persistenceCopy = workspacePersistenceState === "unsaved"
     ? null
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
   const identityName = workspaceIdentityName(workspacePersistenceState, workspaceName);
   const newSessionDisabled = newSessionActive || workspacePersistenceState === "loading";
+  const windowMoveDisabledReason = moveToNewWindowDisabledReason(
+    workspacePersistenceState,
+  );
+  const canCreateGroup = Boolean(
+    onSaveTabGroup
+    && openSessions.length > 0
+    && groups.length < MAX_WORKSPACE_TAB_GROUPS,
+  );
 
   const previewDesktopTabRailWidth = useCallback((width: number) => {
     const nextWidth = clampDesktopTabRailWidthForViewport(width, desktopTabRailMaxWidth);
@@ -1352,12 +1718,31 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         target?.focus();
         reorderFocusIntent.current = null;
       }
+      const groupIntent = groupReorderFocusIntent.current;
+      if (groupIntent) {
+        const groupElement = Array.from(
+          navigationRef.current?.querySelectorAll<HTMLElement>(
+            "[data-workspace-tab-group-id]",
+          ) ?? [],
+        ).find((element) => element.dataset.workspaceTabGroupId === groupIntent.groupId);
+        const controls = Array.from(
+          groupElement?.querySelectorAll<HTMLButtonElement>(".workspace-tab-group-move") ?? [],
+        );
+        const preferred = controls[groupIntent.direction === "previous" ? 0 : 1];
+        const target = preferred && !preferred.disabled
+          ? preferred
+          : controls.find((control) => !control.disabled)
+            ?? groupElement?.querySelector<HTMLButtonElement>(".workspace-tab-group-toggle");
+        target?.focus();
+        groupReorderFocusIntent.current = null;
+      }
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
     activeSession,
     newSessionActive,
     openSessions,
+    groups,
     orientation,
     reorderAnnouncement,
     tabsVisible,
@@ -1368,19 +1753,73 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseTab(sessionName);
   };
 
+  const openQuickTabInNewWindow = (
+    sessionName: string,
+    title: string,
+    move: boolean,
+  ) => {
+    if (!onOpenTabInNewWindow) return;
+    const result = onOpenTabInNewWindow(sessionName, move ? "move" : "copy");
+    if (result !== "opened") {
+      setReorderAnnouncement("");
+      setWindowActionError(newWindowFailureMessage(result, title));
+      return;
+    }
+    setWindowActionError("");
+    setReorderAnnouncement(
+      move
+        ? `${title} moved to a new window. The tmux session keeps running.`
+        : `${title} copied to a new window and remains open here.`,
+    );
+    if (move) closeQuickTab(sessionName);
+  };
+
   const closeNewSession = () => {
     onCloseNewSession?.();
   };
 
   const moveQuickTab = (sessionName: string, title: string, targetIndex: number) => {
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
+    const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex);
     reorderFocusIntent.current = {
       sessionName,
       direction: targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next",
     };
     onMoveTab(sessionName, targetIndex);
     setReorderAnnouncement(
-      `${title} moved to position ${targetIndex + 1} of ${openSessions.length}.`,
+      `${title} moved to position ${resultIndex + 1} of ${openSessions.length}.`,
+    );
+  };
+
+  const openGroupDialog = (
+    groupId: string | null,
+    initialSession: string | null,
+    trigger?: HTMLElement | null,
+  ) => {
+    if (!onSaveTabGroup) return;
+    groupDialogTriggerRef.current = trigger ?? null;
+    setGroupDialog({ groupId, initialSession });
+  };
+
+  const closeGroupDialog = () => {
+    setGroupDialog(null);
+    if (recentsOpen) return;
+    window.requestAnimationFrame(() => {
+      const trigger = groupDialogTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+      else activeTabRef.current?.focus();
+    });
+  };
+
+  const moveGroup = (group: WorkspaceTabGroup, direction: -1 | 1) => {
+    if (!onMoveTabGroup) return;
+    groupReorderFocusIntent.current = {
+      groupId: group.id,
+      direction: direction < 0 ? "previous" : "next",
+    };
+    onMoveTabGroup(group.id, direction);
+    setReorderAnnouncement(
+      `${group.name} group moved ${direction < 0 ? "back" : "forward"}.`,
     );
   };
 
@@ -1441,6 +1880,130 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     terminateTarget,
   ]);
 
+  const renderWorkspaceTab = (
+    sessionName: string,
+    group?: WorkspaceTabGroup,
+  ) => {
+    const index = openSessions.indexOf(sessionName);
+    const session = sessionsByName.get(sessionName);
+    const title = tabTitle(sessionName, sessionsByName);
+    const active = !newSessionActive && sessionName === activeSession;
+    const groupTabIndex = group?.tabs.indexOf(sessionName) ?? -1;
+    const canMovePrevious = group ? groupTabIndex > 0 : index > 0;
+    const canMoveNext = group
+      ? groupTabIndex >= 0 && groupTabIndex < group.tabs.length - 1
+      : index < openSessions.length - 1;
+    return (
+      <div
+        className={active ? "workspace-tab active" : "workspace-tab"}
+        data-workspace-session-name={sessionName}
+        data-tab-group-color={group?.color}
+        key={sessionName}
+      >
+        <button
+          ref={active ? activeTabRef : undefined}
+          type="button"
+          role="tab"
+          aria-selected={active}
+          aria-controls={active ? "muxdeck-active-console" : undefined}
+          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}`}
+          aria-keyshortcuts={index < 9 ? `Control+Shift+${index + 1}` : undefined}
+          title={index < 9 ? `${title} (Ctrl+Shift+${index + 1})` : title}
+          tabIndex={active ? 0 : -1}
+          onKeyDown={tabKeyDown}
+          onClick={() => onSelect(sessionName)}
+        >
+          <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
+          <span
+            className="workspace-tab-compact-index"
+            data-index={index + 1}
+            aria-hidden="true"
+          />
+          <span className="workspace-tab-title">{title}</span>
+        </button>
+        {onMoveTab && openSessions.length > 1 && (
+          <span
+            className="workspace-tab-reorder"
+            role="group"
+            aria-label={`Reorder ${title} tab${group ? ` inside ${group.name}` : ""}`}
+          >
+            <button
+              type="button"
+              className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "up" : "left"}`}
+              onClick={() => moveQuickTab(sessionName, title, index - 1)}
+              disabled={!canMovePrevious}
+              aria-label={`Move ${title} tab ${orientation === "vertical" ? "up" : "left"}`}
+              title={`Move tab ${orientation === "vertical" ? "up" : "left"}`}
+            >
+              {orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}
+            </button>
+            <button
+              type="button"
+              className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "down" : "right"}`}
+              onClick={() => moveQuickTab(sessionName, title, index + 1)}
+              disabled={!canMoveNext}
+              aria-label={`Move ${title} tab ${orientation === "vertical" ? "down" : "right"}`}
+              title={`Move tab ${orientation === "vertical" ? "down" : "right"}`}
+            >
+              {orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}
+            </button>
+          </span>
+        )}
+        {onOpenTabInNewWindow && (
+          <span
+            className="workspace-tab-window-actions"
+            role="group"
+            aria-label={`${title} tab window actions`}
+          >
+            <button
+              type="button"
+              className="workspace-tab-window-move"
+              onClick={() => openQuickTabInNewWindow(sessionName, title, true)}
+              disabled={Boolean(windowMoveDisabledReason)}
+              aria-label={`Move ${title} tab to new window`}
+              aria-description={windowMoveDisabledReason
+                ?? "Opens this session in a separate browser window and removes this quick tab here. The tmux session keeps running."}
+              title={windowMoveDisabledReason ?? "Move tab to new window"}
+            >
+              <WindowMoveIcon />
+            </button>
+            <button
+              type="button"
+              className="workspace-tab-window-copy"
+              onClick={() => openQuickTabInNewWindow(sessionName, title, false)}
+              aria-label={`Copy ${title} tab to new window`}
+              aria-description="Opens this session in a separate browser window and keeps this quick tab here."
+              title="Copy tab to new window"
+            >
+              <WindowCopyIcon />
+            </button>
+          </span>
+        )}
+        {session && onSessionTerminated && (
+          <button
+            type="button"
+            className="workspace-tab-terminate"
+            onClick={() => setTerminateTarget(session)}
+            aria-label={`Terminate ${title} tmux session`}
+            aria-haspopup="dialog"
+            title="Terminate tmux session"
+          >
+            <TrashIcon />
+          </button>
+        )}
+        <button
+          type="button"
+          className="workspace-tab-close"
+          onClick={() => closeQuickTab(sessionName)}
+          aria-label={`Close ${title} quick tab`}
+          title="Close quick tab"
+        >
+          <CloseIcon />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <>
       <nav
@@ -1490,89 +2053,113 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               aria-label="Session workspace tabs"
               aria-orientation={orientation}
             >
-              {openSessions.map((sessionName, index) => {
-                const session = sessionsByName.get(sessionName);
-                const title = tabTitle(sessionName, sessionsByName);
-                const active = !newSessionActive && sessionName === activeSession;
+              {workspaceTabItems.map((item) => {
+                if (item.kind === "tab") return renderWorkspaceTab(item.sessionName);
+                const { group } = item;
+                const groupStart = openSessions.indexOf(group.tabs[0]);
+                const groupEnd = groupStart + group.tabs.length - 1;
+                const visibleTabs = group.collapsed
+                  ? group.tabs.filter((sessionName) => sessionName === activeSession)
+                  : group.tabs;
                 return (
                   <div
-                    className={active ? "workspace-tab active" : "workspace-tab"}
-                    data-workspace-session-name={sessionName}
-                    key={sessionName}
+                    className={group.collapsed
+                      ? "workspace-tab-group collapsed"
+                      : "workspace-tab-group"}
+                    data-workspace-tab-group-id={group.id}
+                    data-tab-group-color={group.color}
+                    key={group.id}
                   >
-                    <button
-                      ref={active ? activeTabRef : undefined}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      aria-controls={active ? "muxdeck-active-console" : undefined}
-                      aria-label={`${title}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}`}
-                      aria-keyshortcuts={index < 9 ? `Control+Shift+${index + 1}` : undefined}
-                      title={index < 9 ? `${title} (Ctrl+Shift+${index + 1})` : title}
-                      tabIndex={active ? 0 : -1}
-                      onKeyDown={tabKeyDown}
-                      onClick={() => onSelect(sessionName)}
-                    >
-                      <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
-                      <span
-                        className="workspace-tab-compact-index"
-                        data-index={index + 1}
-                        aria-hidden="true"
-                      />
-                      <span className="workspace-tab-title">{title}</span>
-                    </button>
-                    {onMoveTab && openSessions.length > 1 && (
-                      <span
-                        className="workspace-tab-reorder"
-                        role="group"
-                        aria-label={`Reorder ${title} tab`}
-                      >
+                    <div className="workspace-tab-group-chip">
+                      {onToggleTabGroup ? (
                         <button
                           type="button"
-                          className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "up" : "left"}`}
-                          onClick={() => moveQuickTab(sessionName, title, index - 1)}
-                          disabled={index === 0}
-                          aria-label={`Move ${title} tab ${orientation === "vertical" ? "up" : "left"}`}
-                          title={`Move tab ${orientation === "vertical" ? "up" : "left"}`}
+                          className="workspace-tab-group-toggle"
+                          onClick={() => onToggleTabGroup(group.id, !group.collapsed)}
+                          aria-expanded={!group.collapsed}
+                          aria-controls={`workspace-tab-group-tabs-${group.id}`}
+                          aria-label={`${group.collapsed ? "Expand" : "Collapse"} ${group.name} tab group`}
+                          title={`${group.collapsed ? "Expand" : "Collapse"} ${group.name}`}
                         >
-                          {orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}
+                          <span className="workspace-tab-group-color" aria-hidden="true" />
+                          <FolderIcon />
+                          <strong>{group.name}</strong>
+                          <small>{group.tabs.length}</small>
+                          <ArrowDownIcon aria-hidden="true" />
                         </button>
+                      ) : (
+                        <span className="workspace-tab-group-toggle">
+                          <span className="workspace-tab-group-color" aria-hidden="true" />
+                          <FolderIcon />
+                          <strong>{group.name}</strong>
+                          <small>{group.tabs.length}</small>
+                        </span>
+                      )}
+                      {onMoveTabGroup && (
+                        <span className="workspace-tab-group-reorder" role="group" aria-label={`Move ${group.name} group`}>
+                          <button
+                            type="button"
+                            className="workspace-tab-group-move workspace-tab-group-move-previous"
+                            onClick={() => moveGroup(group, -1)}
+                            disabled={groupStart === 0}
+                            aria-label={`Move ${group.name} group ${orientation === "vertical" ? "up" : "left"}`}
+                            title={`Move group ${orientation === "vertical" ? "up" : "left"}`}
+                          >
+                            {orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}
+                          </button>
+                          <button
+                            type="button"
+                            className="workspace-tab-group-move workspace-tab-group-move-next"
+                            onClick={() => moveGroup(group, 1)}
+                            disabled={groupEnd === openSessions.length - 1}
+                            aria-label={`Move ${group.name} group ${orientation === "vertical" ? "down" : "right"}`}
+                            title={`Move group ${orientation === "vertical" ? "down" : "right"}`}
+                          >
+                            {orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}
+                          </button>
+                        </span>
+                      )}
+                      {onSaveTabGroup && onDeleteTabGroup && (
                         <button
                           type="button"
-                          className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "down" : "right"}`}
-                          onClick={() => moveQuickTab(sessionName, title, index + 1)}
-                          disabled={index === openSessions.length - 1}
-                          aria-label={`Move ${title} tab ${orientation === "vertical" ? "down" : "right"}`}
-                          title={`Move tab ${orientation === "vertical" ? "down" : "right"}`}
+                          className="workspace-tab-group-edit"
+                          onClick={(event) => openGroupDialog(
+                            group.id,
+                            null,
+                            event.currentTarget,
+                          )}
+                          aria-label={`Edit ${group.name} tab group`}
+                          title="Edit tab group"
                         >
-                          {orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}
+                          <EditIcon />
                         </button>
-                      </span>
-                    )}
-                    {session && onSessionTerminated && (
-                      <button
-                        type="button"
-                        className="workspace-tab-terminate"
-                        onClick={() => setTerminateTarget(session)}
-                        aria-label={`Terminate ${title} tmux session`}
-                        aria-haspopup="dialog"
-                        title="Terminate tmux session"
-                      >
-                        <TrashIcon />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="workspace-tab-close"
-                      onClick={() => closeQuickTab(sessionName)}
-                      aria-label={`Close ${title} quick tab`}
-                      title="Close quick tab"
+                      )}
+                    </div>
+                    <div
+                      id={`workspace-tab-group-tabs-${group.id}`}
+                      className="workspace-tab-group-tabs"
                     >
-                      <CloseIcon />
-                    </button>
+                      {visibleTabs.map((sessionName) => renderWorkspaceTab(sessionName, group))}
+                    </div>
                   </div>
                 );
               })}
+              {canCreateGroup && (
+                <button
+                  type="button"
+                  className="workspace-new-group-button"
+                  onClick={(event) => openGroupDialog(
+                    null,
+                    activeSession,
+                    event.currentTarget,
+                  )}
+                  aria-label="Create tab group"
+                  title="Create tab group"
+                >
+                  <PlusIcon />
+                  <span>New group</span>
+                </button>
+              )}
               {newSessionActive && (
                 <div className="workspace-tab workspace-new-session-tab active">
                   <button
@@ -1700,6 +2287,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           )}
       </nav>
 
+      <WorkspaceWindowActionError
+        message={windowActionError}
+        onDismiss={() => setWindowActionError("")}
+      />
+
       <p className="workspace-sr-only" role="status" aria-live="polite" aria-atomic="true">
         {newSessionActive
           ? "Active view: New session"
@@ -1714,7 +2306,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         </p>
       )}
 
-      {recentsOpen && !terminateTarget && (
+      {recentsOpen && !terminateTarget && !groupDialog && (
         <WorkspaceRecentsDialog
           {...props}
           sessionsByName={sessionsByName}
@@ -1726,6 +2318,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           }}
           onRequestSaveWorkspace={requestSaveFromRecents}
           onRequestTerminateSession={setTerminateTarget}
+          onRequestNewTabGroup={(initialSession) => openGroupDialog(
+            null,
+            initialSession ?? activeSession,
+            null,
+          )}
+          onRequestEditTabGroup={(groupId) => openGroupDialog(
+            groupId,
+            null,
+            null,
+          )}
         />
       )}
 
@@ -1746,6 +2348,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           onSave={onSaveWorkspace}
           onClose={() => setSaveDialogOpen(false)}
           onFallbackFocus={focusSaveReplacement}
+        />
+      )}
+
+      {groupDialog && onSaveTabGroup && (
+        <WorkspaceGroupDialog
+          groups={groups}
+          openSessions={openSessions}
+          sessions={sessions}
+          groupId={groupDialog.groupId}
+          initialSession={groupDialog.initialSession}
+          onSave={onSaveTabGroup}
+          onDelete={(groupId) => onDeleteTabGroup?.(groupId)}
+          onClose={closeGroupDialog}
         />
       )}
     </>

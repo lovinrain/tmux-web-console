@@ -1024,8 +1024,8 @@ export function ConsoleScreen({
         composerVisible={visibleBars.stagedInput || visibleMobileMode === "input"}
         shortcutsVisible={visibleBars.shortcuts || visibleMobileMode === "input"}
         onSend={(data) => terminalRef.current?.send(data) ?? false}
-        onSubmit={(data, withEnter) => (
-          terminalRef.current?.submit(data, withEnter) ?? Promise.resolve(false)
+        onSubmit={(data, terminator) => (
+          terminalRef.current?.submit(data, terminator) ?? Promise.resolve(false)
         )}
         onAddToMemo={session ? addDraftToMemo : undefined}
         onConsumeMemo={session ? consumeStagedMemo : undefined}
@@ -1093,7 +1093,7 @@ export function ConsoleScreen({
             revealAndFocusComposer();
           }}
           onSend={async (message) => {
-            const accepted = await terminalRef.current?.submit(message.text, true);
+            const accepted = await terminalRef.current?.submit(message.text, "enter");
             if (!accepted) {
               throw new Error("Delivery was not confirmed; check the terminal before retrying.");
             }

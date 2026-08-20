@@ -386,6 +386,7 @@ describe("saved workspace API", () => {
     id: "workspace/id",
     name: "Release train",
     tabs: ["api", "web client"],
+    groups: [],
     activeSession: "web client",
     sessionRevision: 7,
     createdAt: 1_700_000_000_000,
@@ -424,6 +425,7 @@ describe("saved workspace API", () => {
     const input = {
       name: "Release train",
       tabs: ["api", "web client"],
+      groups: [],
       activeSession: "web client",
     };
     await expect(createWorkspace(input)).resolves.toEqual(workspace);
@@ -434,6 +436,70 @@ describe("saved workspace API", () => {
         body: JSON.stringify(input),
       }),
     );
+  });
+
+  it("retries workspace creation without groups for a pre-group backend", async () => {
+    const legacyWorkspace = {
+      id: workspace.id,
+      name: workspace.name,
+      tabs: workspace.tabs,
+      activeSession: workspace.activeSession,
+      sessionRevision: workspace.sessionRevision,
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+      lastActiveAt: workspace.lastActiveAt,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "unknown field: groups",
+      }), { status: 400, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspace: legacyWorkspace }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const input = {
+      name: "Release train",
+      tabs: ["api", "web client"],
+      groups: [],
+      activeSession: "web client",
+    };
+    await expect(createWorkspace(input)).resolves.toEqual(legacyWorkspace);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE_PATH}/api/workspaces`,
+      expect.objectContaining({ body: JSON.stringify(input) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${BASE_PATH}/api/workspaces`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          name: "Release train",
+          tabs: ["api", "web client"],
+          activeSession: "web client",
+        }),
+      }),
+    );
+  });
+
+  it("does not retry unrelated workspace creation validation errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "groups[0].tabs cannot be empty",
+    }), { status: 400, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createWorkspace({
+      name: "Release train",
+      tabs: ["api"],
+      groups: [],
+      activeSession: "api",
+    })).rejects.toMatchObject({
+      status: 400,
+      message: "groups[0].tabs cannot be empty",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("separates metadata updates from last-active updates", async () => {
@@ -452,7 +518,7 @@ describe("saved workspace API", () => {
 
     await expect(updateWorkspace("workspace/id", { name: "Launch room" }))
       .resolves.toEqual(renamed);
-    await expect(updateWorkspaceActivity("workspace/id", ["api"], "api", 7))
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7))
       .resolves.toEqual(active);
 
     expect(fetchMock.mock.calls[0]).toEqual([
@@ -468,11 +534,112 @@ describe("saved workspace API", () => {
         method: "POST",
         body: JSON.stringify({
           tabs: ["api"],
+          groups: [],
           activeSession: "api",
           sessionRevision: 7,
         }),
       }),
     ]);
+  });
+
+  it("retries workspace activity without groups for a pre-group backend", async () => {
+    const legacyWorkspace = {
+      id: workspace.id,
+      name: workspace.name,
+      tabs: ["api"],
+      activeSession: "api",
+      sessionRevision: workspace.sessionRevision,
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+      lastActiveAt: workspace.lastActiveAt,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "unknown field: groups",
+      }), { status: 400, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspace: legacyWorkspace }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7))
+      .resolves.toEqual(legacyWorkspace);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/activity`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          tabs: ["api"],
+          groups: [],
+          activeSession: "api",
+          sessionRevision: 7,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/activity`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          tabs: ["api"],
+          activeSession: "api",
+          sessionRevision: 7,
+        }),
+      }),
+    );
+  });
+
+  it("propagates a failed legacy activity retry without issuing a third request", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "unknown field: groups",
+      }), { status: 400, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "workspace storage unavailable",
+      }), { status: 503, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7))
+      .rejects.toMatchObject({
+        status: 503,
+        message: "workspace storage unavailable",
+      });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits unsupported groups without retrying and preserves other activity errors", async () => {
+    const active = { ...workspace, tabs: ["api"], activeSession: "api" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ workspace: active }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "groups[0].tabs cannot be empty",
+      }), { status: 400, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], undefined, "api", 7))
+      .resolves.toEqual(active);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/activity`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          tabs: ["api"],
+          activeSession: "api",
+          sessionRevision: 7,
+        }),
+      }),
+    );
+
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7))
+      .rejects.toMatchObject({
+        status: 400,
+        message: "groups[0].tabs cannot be empty",
+      });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("deletes an encoded workspace id and accepts an empty response", async () => {

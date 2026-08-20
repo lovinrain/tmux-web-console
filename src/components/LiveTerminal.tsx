@@ -10,14 +10,17 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl } from "../api";
-import { prepareTerminalSubmission } from "../terminalInput";
+import {
+  prepareTerminalSubmission,
+  type TerminalSubmissionTerminator,
+} from "../terminalInput";
 import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import type { ConnectionState } from "../types";
 
 export interface LiveTerminalHandle {
   send: (data: string) => boolean;
   paste: (data: string) => boolean;
-  submit: (data: string, withEnter: boolean) => Promise<boolean>;
+  submit: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
   focus: () => void;
   redraw: () => boolean;
   navigateHistory: (action: "page-up" | "page-down" | "exit") => boolean;
@@ -60,7 +63,10 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const layoutSuspendedRef = useRef(layoutSuspended);
     const scheduleFitAndResizeRef = useRef<(() => void) | null>(null);
     const redrawRef = useRef<(() => boolean) | null>(null);
-    const submitRef = useRef<(data: string, withEnter: boolean) => Promise<boolean>>(
+    const submitRef = useRef<(
+      data: string,
+      terminator: TerminalSubmissionTerminator,
+    ) => Promise<boolean>>(
       async () => false,
     );
     const [awayFromLive, setAwayFromLive] = useState(false);
@@ -102,8 +108,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           return false;
         }
       },
-      submit(data: string, withEnter: boolean) {
-        return submitRef.current(data, withEnter);
+      submit(data: string, terminator: TerminalSubmissionTerminator) {
+        return submitRef.current(data, terminator);
       },
       focus() {
         terminalRef.current?.focus();
@@ -180,13 +186,13 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         for (const id of [...pendingSubmissions.keys()]) settleSubmission(id, false);
       };
 
-      submitRef.current = async (data: string, withEnter: boolean) => {
+      submitRef.current = async (data: string, terminator: TerminalSubmissionTerminator) => {
         const socket = socketRef.current;
         if (socket?.readyState !== WebSocket.OPEN || terminalRef.current !== terminal) return false;
         const id = nextSubmissionId();
         const prepared = prepareTerminalSubmission(
           data,
-          withEnter,
+          terminator,
           terminal.modes.bracketedPasteMode,
         );
         return new Promise<boolean>((resolve) => {

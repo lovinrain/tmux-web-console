@@ -54,8 +54,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   GitHub Copilot CLI, Cursor Agent, and Grok Build
 - Real xterm.js terminals with direct keyboard input and responsive desktop,
   tablet, and phone layouts
-- Persistent named workspaces with ordered top or side tabs and cross-device
-  resume
+- Persistent named workspaces with colored, collapsible tab groups, ordered top
+  or side tabs, and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
@@ -101,12 +101,15 @@ For frontend development, run `npm run dev`. Vite serves
 
 ## Workspace shortcuts
 
+These shortcuts are active in the desktop multi-tab view, not on the landing
+page or compact mobile layout.
+
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+Shift+,` | Previous tab |
 | `Ctrl+Shift+.` | Next tab |
 | `Ctrl+Shift+1...9` | Jump to a numbered tab |
-| `Ctrl+Shift+;` | Find a tab by title or tmux name |
+| `Ctrl+Shift+;` | Find a tab by title, tmux name, or group |
 
 ## Deployment and security
 

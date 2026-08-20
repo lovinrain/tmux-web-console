@@ -13,6 +13,7 @@ import {
   updateSessionTitle,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
+import type { TerminalSubmissionTerminator } from "../terminalInput";
 import { ThemeProvider, type Theme } from "../theme";
 import type { Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
@@ -21,7 +22,7 @@ import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigati
 const liveTerminalHandle = vi.hoisted(() => ({
   send: vi.fn((_data: string) => true),
   paste: vi.fn((_data: string) => true),
-  submit: vi.fn(async (_data: string, _withEnter: boolean) => true),
+  submit: vi.fn(async (_data: string, _terminator: TerminalSubmissionTerminator) => true),
   focus: vi.fn(),
   redraw: vi.fn(() => true),
   navigateHistory: vi.fn((_action: "page-up" | "page-down" | "exit") => true),
@@ -1457,7 +1458,7 @@ describe("ConsoleScreen session identity", () => {
 
     await waitFor(() => expect(liveTerminalHandle.submit).toHaveBeenCalledWith(
       queuedMemo.text,
-      true,
+      "enter",
     ));
     await waitFor(() => expect(deleteQueuedMessage).toHaveBeenCalledWith("test", "memo-1"));
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");

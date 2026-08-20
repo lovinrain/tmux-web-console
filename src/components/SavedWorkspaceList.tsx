@@ -26,10 +26,15 @@ import {
   uniqueWorkspaceTabs,
   workspaceNameError,
 } from "../workspaceValidation";
+import {
+  normalizeWorkspaceTabGroups,
+  type WorkspaceTabGroup,
+} from "../workspaceState";
 import "./SavedWorkspaceList.css";
 
 export interface SavedWorkspaceListProps {
   currentTabs?: readonly string[];
+  currentWorkspaceGroups?: readonly WorkspaceTabGroup[];
   activeSession?: string | null;
   activeWorkspaceId?: string | null;
   onOpen: (workspace: SavedWorkspace) => void;
@@ -73,6 +78,7 @@ function exactActivityTime(timestamp: number): string | undefined {
 
 export function SavedWorkspaceList({
   currentTabs = [],
+  currentWorkspaceGroups = [],
   activeSession = null,
   activeWorkspaceId = null,
   onOpen,
@@ -99,6 +105,10 @@ export function SavedWorkspaceList({
   const mutationVersionRef = useRef(0);
 
   const tabsToSave = useMemo(() => uniqueWorkspaceTabs(currentTabs), [currentTabs]);
+  const groupsToSave = useMemo(
+    () => normalizeWorkspaceTabGroups(currentWorkspaceGroups, tabsToSave),
+    [currentWorkspaceGroups, tabsToSave],
+  );
   const validActiveSession = activeSession && tabsToSave.includes(activeSession)
     ? activeSession
     : null;
@@ -160,6 +170,7 @@ export function SavedWorkspaceList({
       const created = await createWorkspace({
         name: createDraft.trim(),
         tabs: createMode === "copy" ? tabsToSave : [],
+        groups: createMode === "copy" ? groupsToSave : [],
         activeSession: createMode === "copy" ? validActiveSession : null,
       });
       mutationVersionRef.current += 1;
@@ -461,9 +472,16 @@ export function SavedWorkspaceList({
 
                   <div className="saved-workspace-tab-summary">
                     <div className="saved-workspace-tab-heading">
-                      <span>{workspace.tabs.length} {workspace.tabs.length === 1 ? "session" : "sessions"}</span>
+                      <span className="saved-workspace-tab-metrics">
+                        <span>{workspace.tabs.length} {workspace.tabs.length === 1 ? "session" : "sessions"}</span>
+                      </span>
                       {workspace.activeSession && (
-                        <span title={workspace.activeSession}>Resume / {workspace.activeSession}</span>
+                        <span
+                          className="saved-workspace-resume-target"
+                          title={workspace.activeSession}
+                        >
+                          Resume / {workspace.activeSession}
+                        </span>
                       )}
                     </div>
                     {workspace.tabs.length > 0 ? (

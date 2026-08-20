@@ -8,6 +8,7 @@ import type {
   SnippetNode,
   SnippetTree,
 } from "./types";
+import type { WorkspaceTabGroup } from "./workspaceState";
 import type { Theme } from "./theme";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -17,6 +18,12 @@ export class ApiRequestError extends Error {
     super(message);
     this.name = "ApiRequestError";
   }
+}
+
+function isUnknownFieldError(error: unknown, field: string): error is ApiRequestError {
+  return error instanceof ApiRequestError
+    && error.status === 400
+    && error.message === `unknown field: ${field}`;
 }
 
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -60,9 +67,7 @@ export async function createSession(name?: string, theme?: Theme): Promise<Creat
   } catch (error) {
     if (
       theme !== undefined
-      && error instanceof ApiRequestError
-      && error.status === 400
-      && error.message === "unknown field: theme"
+      && isUnknownFieldError(error, "theme")
     ) {
       // An older backend rejects the field before creating anything, so one
       // theme-less retry safely bridges an in-place frontend/backend rollout.
@@ -262,6 +267,7 @@ export interface SavedWorkspace {
   id: string;
   name: string;
   tabs: string[];
+  groups?: WorkspaceTabGroup[];
   activeSession: string | null;
   sessionRevision: number;
   createdAt: number;
@@ -272,6 +278,7 @@ export interface SavedWorkspace {
 export interface CreateWorkspaceInput {
   name: string;
   tabs: string[];
+  groups: WorkspaceTabGroup[];
   activeSession: string | null;
 }
 
@@ -306,12 +313,26 @@ export async function getWorkspace(
 export async function createWorkspace(
   workspace: CreateWorkspaceInput,
 ): Promise<SavedWorkspace> {
-  const result = await jsonRequest<{ workspace: SavedWorkspace }>("/api/workspaces", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(workspace),
-  });
-  return result.workspace;
+  const request = async (body: CreateWorkspaceInput | Omit<CreateWorkspaceInput, "groups">) => {
+    const result = await jsonRequest<{ workspace: SavedWorkspace }>("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return result.workspace;
+  };
+
+  try {
+    return await request(workspace);
+  } catch (error) {
+    if (!isUnknownFieldError(error, "groups")) throw error;
+    // Pre-group servers reject the request before creating anything, so retry is safe.
+    return request({
+      name: workspace.name,
+      tabs: workspace.tabs,
+      activeSession: workspace.activeSession,
+    });
+  }
 }
 
 export async function updateWorkspace(
@@ -332,18 +353,35 @@ export async function updateWorkspace(
 export async function updateWorkspaceActivity(
   workspaceId: string,
   tabs: string[],
+  groups: WorkspaceTabGroup[] | undefined,
   activeSession: string | null,
   sessionRevision: number,
 ): Promise<SavedWorkspace> {
-  const result = await jsonRequest<{ workspace: SavedWorkspace }>(
-    `${workspacePath(workspaceId)}/activity`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tabs, activeSession, sessionRevision }),
-    },
-  );
-  return result.workspace;
+  const request = async (includeGroups: boolean) => {
+    const result = await jsonRequest<{ workspace: SavedWorkspace }>(
+      `${workspacePath(workspaceId)}/activity`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tabs,
+          ...(includeGroups ? { groups } : {}),
+          activeSession,
+          sessionRevision,
+        }),
+      },
+    );
+    return result.workspace;
+  };
+
+  if (groups === undefined) return request(false);
+  try {
+    return await request(true);
+  } catch (error) {
+    if (!isUnknownFieldError(error, "groups")) throw error;
+    // The rejected request never mutated an older server.
+    return request(false);
+  }
 }
 
 export async function deleteWorkspace(workspaceId: string): Promise<void> {

@@ -1,9 +1,13 @@
+export type TerminalSubmissionTerminator = "none" | "enter" | "tab";
+
 export function prepareTerminalSubmission(
   data: string,
-  withEnter: boolean,
+  terminator: TerminalSubmissionTerminator,
   bracketedPasteMode: boolean,
 ): string {
   let prepared = data.replace(/\r?\n/g, "\r");
   if (bracketedPasteMode) prepared = `\x1b[200~${prepared}\x1b[201~`;
-  return withEnter ? `${prepared}\r` : prepared;
+  if (terminator === "enter") return `${prepared}\r`;
+  if (terminator === "tab") return `${prepared}\t`;
+  return prepared;
 }

@@ -205,6 +205,13 @@ describe("session classification", () => {
       id: "saved-id",
       name: "Release room",
       tabs: ["api", "web"],
+      groups: [{
+        id: "release-group",
+        name: "Release lane",
+        color: "green",
+        collapsed: false,
+        tabs: ["api", "web"],
+      }],
       activeSession: "web",
       sessionRevision: 0,
       createdAt: Date.now() - 3_600_000,
@@ -219,6 +226,13 @@ describe("session classification", () => {
       <SessionDashboard
         onOpen={vi.fn()}
         currentWorkspaceTabs={["current-api", "current-web"]}
+        currentWorkspaceGroups={[{
+          id: "current-group",
+          name: "Current lane",
+          color: "cyan",
+          collapsed: true,
+          tabs: ["current-api", "current-web"],
+        }]}
         activeSession="current-web"
         activeWorkspaceId="saved-id"
         onOpenSavedWorkspace={onOpenSavedWorkspace}
@@ -235,12 +249,15 @@ describe("session classification", () => {
     expect(workspaceSection?.compareDocumentPosition(controls)
       ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(within(workspaceSection as HTMLElement).getByText("Current")).toBeVisible();
+    expect(within(workspaceSection as HTMLElement).queryByLabelText("1 tab group"))
+      .not.toBeInTheDocument();
     expect(screen.getByText("03 / SESSIONS")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
     expect(screen.getByRole("radio", { name: /Start fresh/ })).toBeChecked();
     expect(screen.getByRole("radio", { name: /Copy current tabs/ })).not.toBeChecked();
-    expect(screen.getByText("Copy 2 open tabs in the current order.")).toBeVisible();
+    expect(screen.getByText("Copy 2 open tabs in the current order."))
+      .toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Resume workspace Release room" }));

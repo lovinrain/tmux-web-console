@@ -7,6 +7,9 @@ import pytest
 
 from tmux_console.workspaces import (
     MAX_SESSION_RENAME_REVISION,
+    MAX_WORKSPACE_GROUP_ID_LENGTH,
+    MAX_WORKSPACE_GROUP_NAME_LENGTH,
+    MAX_WORKSPACE_GROUPS,
     MAX_WORKSPACE_NAME_LENGTH,
     MAX_WORKSPACE_TABS,
     WORKSPACE_SCHEMA_VERSION,
@@ -23,6 +26,23 @@ from tmux_console.workspaces import (
 def sequence(values):
     iterator = iter(values)
     return lambda: next(iterator)
+
+
+def workspace_group(
+    group_id,
+    tabs,
+    *,
+    name="Focus",
+    color="blue",
+    collapsed=False,
+):
+    return {
+        "id": group_id,
+        "name": name,
+        "color": color,
+        "collapsed": collapsed,
+        "tabs": tabs,
+    }
 
 
 def test_workspace_crud_activity_order_and_persistence(tmp_path):
@@ -47,6 +67,7 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
         "id": "first-id",
         "name": "Project alpha",
         "tabs": ["agent-a", "agent-b"],
+        "groups": [],
         "activeSession": "agent-b",
         "createdAt": 10_000,
         "updatedAt": 10_000,
@@ -175,6 +196,42 @@ def test_version_one_workspace_defaults_session_revision_and_upgrades_on_write(t
     assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
     assert upgraded["sessionRenameRevision"] == 0
     assert "sessionRevision" not in upgraded["workspaces"][0]
+    assert upgraded["workspaces"][0]["groups"] == []
+
+
+def test_version_two_workspace_defaults_groups_and_upgrades_on_write(tmp_path):
+    path = tmp_path / "workspaces.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "sessionRenameRevision": 4,
+                "workspaces": [
+                    {
+                        "id": "legacy-id",
+                        "name": "Legacy workspace",
+                        "tabs": ["agent"],
+                        "activeSession": "agent",
+                        "createdAt": 1_000,
+                        "updatedAt": 1_000,
+                        "lastActiveAt": 1_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = WorkspaceStore(path, clock=lambda: 2)
+
+    legacy = store.get_workspace("legacy-id")
+    assert legacy["groups"] == []
+    assert legacy["sessionRevision"] == 4
+    store.update_workspace("legacy-id", name="Upgraded", update_name=True)
+
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
+    assert upgraded["sessionRenameRevision"] == 4
+    assert upgraded["workspaces"][0]["groups"] == []
 
 
 @pytest.mark.parametrize(
@@ -207,6 +264,217 @@ def test_workspace_create_validation_does_not_write(tmp_path, kwargs, message):
     assert not path.exists()
 
 
+def test_workspace_groups_persist_and_sync_as_ordered_activity_state(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(
+        path,
+        clock=sequence([10, 20, 30, 40, 50]),
+        id_factory=lambda: "workspace-id",
+    )
+    created = store.create_workspace(
+        name="Project",
+        tabs=["api", "web", "notes", "ops"],
+        groups=[
+            workspace_group("build", ["api", "web"], name="  Build  "),
+            workspace_group(
+                "deploy",
+                ["ops"],
+                name="Deploy",
+                color="orange",
+                collapsed=True,
+            ),
+        ],
+        active_session="web",
+    )
+
+    assert created["groups"] == [
+        workspace_group("build", ["api", "web"], name="Build"),
+        workspace_group(
+            "deploy",
+            ["ops"],
+            name="Deploy",
+            color="orange",
+            collapsed=True,
+        ),
+    ]
+    assert WorkspaceStore(path).get_workspace("workspace-id") == created
+
+    collapsed = store.update_workspace(
+        "workspace-id",
+        groups=[
+            workspace_group(
+                "build",
+                ["api", "web"],
+                name="Build",
+                collapsed=True,
+            ),
+            created["groups"][1],
+        ],
+        update_groups=True,
+        session_revision=0,
+    )
+    assert collapsed["groups"][0]["collapsed"] is True
+    assert collapsed["lastActiveAt"] == created["lastActiveAt"]
+
+    reordered = store.record_activity(
+        "workspace-id",
+        tabs=["ops", "notes", "api", "web"],
+        groups=[
+            collapsed["groups"][1],
+            collapsed["groups"][0],
+        ],
+        update_groups=True,
+        active_session="ops",
+        session_revision=0,
+    )
+    assert [group["id"] for group in reordered["groups"]] == ["deploy", "build"]
+    assert reordered["lastActiveAt"] > collapsed["lastActiveAt"]
+
+    legacy_client_update = store.record_activity(
+        "workspace-id",
+        tabs=["ops", "api", "web"],
+        active_session="api",
+        session_revision=0,
+    )
+    assert [group["id"] for group in legacy_client_update["groups"]] == [
+        "deploy",
+        "build",
+    ]
+    assert legacy_client_update["groups"][1]["tabs"] == ["api", "web"]
+
+    invalidated_by_legacy_reorder = store.record_activity(
+        "workspace-id",
+        tabs=["ops", "api", "outside", "web"],
+        active_session="outside",
+        session_revision=0,
+    )
+    assert [group["id"] for group in invalidated_by_legacy_reorder["groups"]] == [
+        "deploy"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("groups", "tabs", "message"),
+    [
+        (None, ["a"], "groups must be an array"),
+        (["group"], ["a"], r"groups\[0\] must be an object"),
+        (
+            [{"id": "one"}],
+            ["a"],
+            r"groups\[0\] is missing field",
+        ),
+        (
+            [{**workspace_group("one", ["a"]), "extra": True}],
+            ["a"],
+            r"groups\[0\] has unknown field: extra",
+        ),
+        (
+            [workspace_group("bad/id", ["a"])],
+            ["a"],
+            "can contain only ASCII",
+        ),
+        (
+            [workspace_group("x" * (MAX_WORKSPACE_GROUP_ID_LENGTH + 1), ["a"])],
+            ["a"],
+            f"must be {MAX_WORKSPACE_GROUP_ID_LENGTH} characters or fewer",
+        ),
+        (
+            [workspace_group("one", ["a"], name="x" * (MAX_WORKSPACE_GROUP_NAME_LENGTH + 1))],
+            ["a"],
+            f"must be {MAX_WORKSPACE_GROUP_NAME_LENGTH} characters or fewer",
+        ),
+        (
+            [workspace_group("one", ["a"], name="  ")],
+            ["a"],
+            "name cannot be blank",
+        ),
+        (
+            [workspace_group("one", ["a"], color="chartreuse")],
+            ["a"],
+            "color must be one of",
+        ),
+        (
+            [workspace_group("one", ["a"], collapsed=1)],
+            ["a"],
+            "collapsed must be a boolean",
+        ),
+        (
+            [workspace_group("one", [])],
+            ["a"],
+            "tabs cannot be empty",
+        ),
+        (
+            [workspace_group("one", ["a", "a"])],
+            ["a"],
+            "contains duplicate session",
+        ),
+        (
+            [workspace_group("one", ["missing"])],
+            ["a"],
+            "outside workspace tabs",
+        ),
+        (
+            [workspace_group("one", ["a", "c"])],
+            ["a", "b", "c"],
+            "must be contiguous",
+        ),
+        (
+            [workspace_group("one", ["b", "a"])],
+            ["a", "b"],
+            "must be contiguous",
+        ),
+        (
+            [
+                workspace_group("one", ["a"]),
+                workspace_group("two", ["a"]),
+            ],
+            ["a"],
+            "more than one group",
+        ),
+        (
+            [
+                workspace_group("same", ["a"]),
+                workspace_group("same", ["b"]),
+            ],
+            ["a", "b"],
+            "groups contains duplicate id: same",
+        ),
+        (
+            [
+                workspace_group("two", ["b"]),
+                workspace_group("one", ["a"]),
+            ],
+            ["a", "b"],
+            "groups must follow workspace tab order",
+        ),
+        (
+            [workspace_group(f"group-{index}", [f"s-{index}"]) for index in range(MAX_WORKSPACE_GROUPS + 1)],
+            [f"s-{index}" for index in range(MAX_WORKSPACE_GROUPS + 1)],
+            f"cannot contain more than {MAX_WORKSPACE_GROUPS} groups",
+        ),
+    ],
+)
+def test_workspace_group_validation_rejects_invalid_state(
+    tmp_path,
+    groups,
+    tabs,
+    message,
+):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        store.create_workspace(
+            name="Project",
+            tabs=tabs,
+            groups=groups,
+            active_session=None,
+        )
+
+    assert store.list_workspaces() == []
+    assert not path.exists()
+
+
 def test_workspace_session_rename_updates_every_reference_without_activity(tmp_path):
     path = tmp_path / "workspaces.json"
     ids = sequence(["one", "two", "unaffected"])
@@ -214,16 +482,19 @@ def test_workspace_session_rename_updates_every_reference_without_activity(tmp_p
     first = store.create_workspace(
         name="First",
         tabs=["old", "keep", "new"],
+        groups=[workspace_group("primary", ["old", "keep"])],
         active_session="old",
     )
     second = store.create_workspace(
         name="Second",
         tabs=["old"],
+        groups=[workspace_group("solo", ["old"], color="cyan")],
         active_session=None,
     )
     untouched = store.create_workspace(
         name="Untouched",
         tabs=["keep"],
+        groups=[workspace_group("keep", ["keep"], color="green")],
         active_session="keep",
     )
 
@@ -233,6 +504,8 @@ def test_workspace_session_rename_updates_every_reference_without_activity(tmp_p
     assert renamed_first["tabs"] == ["new", "keep"]
     assert renamed_first["activeSession"] == "new"
     assert renamed_second["tabs"] == ["new"]
+    assert renamed_first["groups"] == [workspace_group("primary", ["new", "keep"])]
+    assert renamed_second["groups"] == [workspace_group("solo", ["new"], color="cyan")]
     assert renamed_first["lastActiveAt"] == first["lastActiveAt"]
     assert renamed_second["lastActiveAt"] == second["lastActiveAt"]
     assert renamed_first["updatedAt"] > first["updatedAt"]
@@ -269,6 +542,32 @@ def test_workspace_session_rename_updates_every_reference_without_activity(tmp_p
     )
     assert latest["tabs"] == ["another-unavailable"]
     assert latest["sessionRevision"] == renamed_first["sessionRevision"]
+
+
+def test_workspace_session_rename_source_group_wins_inverse_collision(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, clock=lambda: 10, id_factory=lambda: "workspace-id")
+    store.create_workspace(
+        name="Collision",
+        tabs=["new", "middle", "old", "friend"],
+        groups=[
+            workspace_group("stale", ["new"], color="gray"),
+            workspace_group(
+                "source", ["old", "friend"], color="green", collapsed=True
+            ),
+        ],
+        active_session="old",
+    )
+
+    assert store.rename_session("old", "new") == 1
+    renamed = store.get_workspace("workspace-id")
+    assert renamed["tabs"] == ["middle", "new", "friend"]
+    assert renamed["activeSession"] == "new"
+    assert renamed["groups"] == [
+        workspace_group(
+            "source", ["new", "friend"], color="green", collapsed=True
+        )
+    ]
 
 
 def test_global_rename_revision_rejects_stale_tab_after_newer_device_removed_it(
@@ -389,6 +688,7 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
                         "id": "workspace-id",
                         "name": "Project",
                         "tabs": ["old"],
+                        "groups": [],
                         "activeSession": "old",
                         "createdAt": 1_000,
                         "updatedAt": 1_000,

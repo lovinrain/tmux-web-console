@@ -485,12 +485,20 @@
   color: #6f796c;
 }
 
-.saved-workspace-tab-heading span:last-child {
+.saved-workspace-resume-target {
   min-width: 0;
   overflow: hidden;
   color: #93a68b;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.saved-workspace-tab-metrics {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px 9px;
 }
 
 .saved-workspace-tab-summary > ol {

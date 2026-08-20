@@ -59,9 +59,11 @@ import {
   type SessionTag,
 } from "../types";
 import {
+  isolatedWorkspaceSearch,
   searchWithSavedWorkspaceId,
   searchWithWorkspaceTabs,
   workspaceTabsFromSearch,
+  type WorkspaceTabGroup,
 } from "../workspaceState";
 import { AppTabs } from "./AppTabs";
 import { stageSessionDraft } from "./InputBar";
@@ -84,6 +86,7 @@ interface SessionDashboardProps {
   newSessionWindowHref?: string;
   onSessionsChange?: (sessions: Session[]) => void;
   currentWorkspaceTabs?: readonly string[];
+  currentWorkspaceGroups?: readonly WorkspaceTabGroup[];
   activeSession?: string | null;
   activeWorkspaceId?: string | null;
   onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
@@ -229,10 +232,6 @@ function replaceDashboardUrl(route: SessionDashboardRouteState): void {
   const search = searchWithWorkspaceTabs(dashboardSearch, openSessions);
   const target = `${window.location.pathname}${search}${window.location.hash}`;
   window.history.replaceState(window.history.state, "", target);
-}
-
-function isolatedWorkspaceSearch(search: string): string {
-  return searchWithSavedWorkspaceId(searchWithWorkspaceTabs(search, []), null);
 }
 
 function isolatedWorkspaceHref(href: string): string {
@@ -453,6 +452,7 @@ export function SessionDashboard({
   newSessionWindowHref,
   onSessionsChange,
   currentWorkspaceTabs = [],
+  currentWorkspaceGroups = [],
   activeSession = null,
   activeWorkspaceId = null,
   onOpenSavedWorkspace,
@@ -933,6 +933,7 @@ export function SessionDashboard({
 
       <SavedWorkspaceList
         currentTabs={currentWorkspaceTabs}
+        currentWorkspaceGroups={currentWorkspaceGroups}
         activeSession={activeSession}
         activeWorkspaceId={activeWorkspaceId}
         onOpen={(workspace) => onOpenSavedWorkspace?.(workspace)}

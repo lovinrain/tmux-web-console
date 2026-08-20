@@ -8,6 +8,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from tmux_console.app import create_app
 from tmux_console.workspaces import (
     MAX_SESSION_RENAME_REVISION,
+    MAX_WORKSPACE_GROUPS,
     MAX_WORKSPACE_NAME_LENGTH,
     MAX_WORKSPACE_TABS,
     WORKSPACE_STORE_UNAVAILABLE_MESSAGE,
@@ -18,6 +19,23 @@ from tmux_console.workspaces import (
 def sequence(values):
     iterator = iter(values)
     return lambda: next(iterator)
+
+
+def workspace_group(
+    group_id,
+    tabs,
+    *,
+    name="Focus",
+    color="blue",
+    collapsed=False,
+):
+    return {
+        "id": group_id,
+        "name": name,
+        "color": color,
+        "collapsed": collapsed,
+        "tabs": tabs,
+    }
 
 
 @pytest.mark.asyncio
@@ -41,6 +59,7 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
             json={
                 "name": "  Main project  ",
                 "tabs": ["agent-a", "agent-b"],
+                "groups": [workspace_group("agents", ["agent-a", "agent-b"])],
                 "activeSession": "agent-a",
             },
         )
@@ -50,6 +69,7 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
             "id": "workspace-id",
             "name": "Main project",
             "tabs": ["agent-a", "agent-b"],
+            "groups": [workspace_group("agents", ["agent-a", "agent-b"])],
             "activeSession": "agent-a",
             "createdAt": 10_000,
             "updatedAt": 10_000,
@@ -82,6 +102,7 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
         assert response.status == 200
         active = (await response.json())["workspace"]
         assert active["tabs"] == ["agent-b", "offline"]
+        assert active["groups"] == [workspace_group("agents", ["agent-b"])]
         assert active["activeSession"] == "offline"
         assert active["updatedAt"] == 30_000
         assert active["lastActiveAt"] == 30_000
@@ -99,6 +120,80 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
         await client.close()
 
     assert WorkspaceStore(path).list_workspaces() == []
+
+
+@pytest.mark.asyncio
+async def test_workspaces_api_updates_groups_and_accepts_legacy_omission(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        clock=sequence([10, 20, 30, 40]),
+        id_factory=lambda: "workspace-id",
+    )
+    client = TestClient(TestServer(create_app(workspaces=store, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Project",
+                "tabs": ["a", "b", "c"],
+                "activeSession": "a",
+            },
+        )
+        assert response.status == 201
+        assert (await response.json())["workspace"]["groups"] == []
+
+        response = await client.patch(
+            "/api/workspaces/workspace-id",
+            json={
+                "groups": [workspace_group("pair", ["a", "b"])],
+                "sessionRevision": 0,
+            },
+        )
+        assert response.status == 200
+        grouped = (await response.json())["workspace"]
+        assert grouped["groups"] == [workspace_group("pair", ["a", "b"])]
+
+        response = await client.post(
+            "/api/workspaces/workspace-id/activity",
+            json={
+                "tabs": ["c", "a", "b"],
+                "groups": [
+                    workspace_group(
+                        "pair",
+                        ["a", "b"],
+                        color="cyan",
+                        collapsed=True,
+                    )
+                ],
+                "activeSession": "b",
+                "sessionRevision": 0,
+            },
+        )
+        assert response.status == 200
+        active = (await response.json())["workspace"]
+        assert active["groups"] == [
+            workspace_group(
+                "pair",
+                ["a", "b"],
+                color="cyan",
+                collapsed=True,
+            )
+        ]
+
+        response = await client.post(
+            "/api/workspaces/workspace-id/activity",
+            json={
+                "tabs": ["a", "c", "b"],
+                "activeSession": "c",
+                "sessionRevision": 0,
+            },
+        )
+        assert response.status == 200
+        assert (await response.json())["workspace"]["groups"] == []
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -170,6 +265,38 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
                 {"name": "Project", "tabs": [], "activeSession": "missing"},
                 "activeSession must be one of the workspace tabs",
             ),
+            (
+                {
+                    "name": "Project",
+                    "tabs": [],
+                    "groups": None,
+                    "activeSession": None,
+                },
+                "groups must be an array",
+            ),
+            (
+                {
+                    "name": "Project",
+                    "tabs": ["a"],
+                    "groups": [
+                        workspace_group("group", ["a"], collapsed="yes")
+                    ],
+                    "activeSession": "a",
+                },
+                "groups[0].collapsed must be a boolean",
+            ),
+            (
+                {
+                    "name": "Project",
+                    "tabs": [f"s-{index}" for index in range(MAX_WORKSPACE_GROUPS + 1)],
+                    "groups": [
+                        workspace_group(f"group-{index}", [f"s-{index}"])
+                        for index in range(MAX_WORKSPACE_GROUPS + 1)
+                    ],
+                    "activeSession": None,
+                },
+                f"groups cannot contain more than {MAX_WORKSPACE_GROUPS} groups",
+            ),
         ]
         for payload, error in create_cases:
             response = await client.post("/api/workspaces", json=payload)
@@ -183,7 +310,7 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
         assert created.status == 201
 
         update_cases = [
-            ({}, "name, tabs, or activeSession is required"),
+            ({}, "name, tabs, groups, or activeSession is required"),
             ({"extra": True}, "unknown field: extra"),
             ({"name": None}, "name must be a string"),
             (
@@ -195,6 +322,7 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
                 "activeSession must be one",
             ),
             ({"tabs": []}, "sessionRevision is required"),
+            ({"groups": []}, "sessionRevision is required"),
         ]
         for payload, error in update_cases:
             response = await client.patch("/api/workspaces/workspace-id", json=payload)

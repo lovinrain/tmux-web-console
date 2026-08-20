@@ -1,15 +1,43 @@
 export interface SessionWorkspaceState {
   openSessions: string[];
   recentSessions: string[];
+  groups: WorkspaceTabGroup[];
+}
+
+export const WORKSPACE_TAB_GROUP_COLORS = [
+  "gray",
+  "blue",
+  "cyan",
+  "green",
+  "yellow",
+  "orange",
+  "red",
+  "pink",
+  "purple",
+] as const;
+
+export type WorkspaceTabGroupColor = typeof WORKSPACE_TAB_GROUP_COLORS[number];
+
+export interface WorkspaceTabGroup {
+  id: string;
+  name: string;
+  color: WorkspaceTabGroupColor;
+  collapsed: boolean;
+  tabs: string[];
 }
 
 export const EMPTY_SESSION_WORKSPACE: Readonly<SessionWorkspaceState> = {
   openSessions: [],
   recentSessions: [],
+  groups: [],
 };
 
 const MAX_RECENT_SESSIONS = 30;
+export const MAX_WORKSPACE_TAB_GROUPS = 16;
+export const MAX_WORKSPACE_TAB_GROUP_ID_LENGTH = 64;
+export const MAX_WORKSPACE_TAB_GROUP_NAME_LENGTH = 40;
 export const WORKSPACE_TAB_SEARCH_PARAM = "tab";
+export const WORKSPACE_GROUPS_SEARCH_PARAM = "tab-group";
 export const SAVED_WORKSPACE_SEARCH_PARAM = "workspace";
 
 function uniqueSessionNames(sessionNames: readonly string[]): string[] {
@@ -26,6 +54,92 @@ function uniqueSessionNames(sessionNames: readonly string[]): string[] {
 function sameSessions(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length
     && left.every((sessionName, index) => sessionName === right[index]);
+}
+
+function sameGroups(
+  left: readonly WorkspaceTabGroup[],
+  right: readonly WorkspaceTabGroup[],
+): boolean {
+  return left.length === right.length && left.every((group, index) => {
+    const candidate = right[index];
+    return candidate !== undefined
+      && group.id === candidate.id
+      && group.name === candidate.name
+      && group.color === candidate.color
+      && group.collapsed === candidate.collapsed
+      && sameSessions(group.tabs, candidate.tabs);
+  });
+}
+
+function validWorkspaceTabGroupId(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= MAX_WORKSPACE_TAB_GROUP_ID_LENGTH
+    && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+export function workspaceTabGroupNameError(name: string): string | null {
+  const normalized = name.trim();
+  if (!normalized) return "Enter a group name.";
+  if (normalized.length > MAX_WORKSPACE_TAB_GROUP_NAME_LENGTH) {
+    return `Use ${MAX_WORKSPACE_TAB_GROUP_NAME_LENGTH} characters or fewer.`;
+  }
+  if (/\p{Cc}/u.test(normalized)) {
+    return "Group names cannot contain control characters.";
+  }
+  return null;
+}
+
+export function normalizeWorkspaceTabGroups(
+  value: unknown,
+  openSessions: readonly string[],
+): WorkspaceTabGroup[] {
+  if (!Array.isArray(value)) return [];
+  const openIndex = new Map(openSessions.map((sessionName, index) => [sessionName, index]));
+  const colors = new Set<string>(WORKSPACE_TAB_GROUP_COLORS);
+  const seenIds = new Set<string>();
+  const groupedSessions = new Set<string>();
+  const groups: WorkspaceTabGroup[] = [];
+
+  for (const candidate of value.slice(0, MAX_WORKSPACE_TAB_GROUPS)) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const raw = candidate as Record<string, unknown>;
+    if (
+      !validWorkspaceTabGroupId(raw.id)
+      || seenIds.has(raw.id)
+      || typeof raw.name !== "string"
+      || workspaceTabGroupNameError(raw.name)
+      || typeof raw.color !== "string"
+      || !colors.has(raw.color)
+      || typeof raw.collapsed !== "boolean"
+      || !Array.isArray(raw.tabs)
+    ) continue;
+
+    const tabs = uniqueSessionNames(
+      raw.tabs.filter((tab): tab is string => (
+        typeof tab === "string" && openIndex.has(tab) && !groupedSessions.has(tab)
+      )),
+    ).sort((left, right) => openIndex.get(left)! - openIndex.get(right)!);
+    if (tabs.length === 0) continue;
+    const indices = tabs.map((tab) => openIndex.get(tab)!);
+    if (indices.some((index, position) => position > 0 && index !== indices[0] + position)) {
+      continue;
+    }
+
+    seenIds.add(raw.id);
+    tabs.forEach((tab) => groupedSessions.add(tab));
+    groups.push({
+      id: raw.id,
+      name: raw.name.trim(),
+      color: raw.color as WorkspaceTabGroupColor,
+      collapsed: raw.collapsed,
+      tabs,
+    });
+  }
+
+  return groups.sort((left, right) => (
+    openIndex.get(left.tabs[0])! - openIndex.get(right.tabs[0])!
+  ));
 }
 
 function queryParts(search: string): string[] {
@@ -53,9 +167,28 @@ export function workspaceTabsFromSearch(
   return tabs;
 }
 
+export function workspaceGroupsFromSearch(
+  search: string,
+  openSessions: readonly string[],
+): WorkspaceTabGroup[] {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const groups: unknown[] = [];
+  for (const serialized of params.getAll(WORKSPACE_GROUPS_SEARCH_PARAM)) {
+    try {
+      groups.push(JSON.parse(serialized));
+    } catch {
+      // Malformed group entries are discarded during URL canonicalization.
+    }
+  }
+  return normalizeWorkspaceTabGroups(groups, openSessions);
+}
+
 export function searchWithoutWorkspaceTabs(search: string): string {
   const parts = queryParts(search).filter(
-    (part) => queryPartName(part) !== WORKSPACE_TAB_SEARCH_PARAM,
+    (part) => ![
+      WORKSPACE_TAB_SEARCH_PARAM,
+      WORKSPACE_GROUPS_SEARCH_PARAM,
+    ].includes(queryPartName(part)),
   );
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
@@ -82,18 +215,48 @@ export function searchWithWorkspaceTabs(
   search: string,
   openSessions: readonly string[],
 ): string {
-  const parts = queryParts(search).filter(
-    (part) => queryPartName(part) !== WORKSPACE_TAB_SEARCH_PARAM,
+  return searchWithWorkspaceState(
+    search,
+    openSessions,
+    workspaceGroupsFromSearch(search, openSessions),
   );
-  for (const sessionName of uniqueSessionNames(openSessions)) {
+}
+
+export function searchWithWorkspaceState(
+  search: string,
+  openSessions: readonly string[],
+  groups: readonly WorkspaceTabGroup[],
+): string {
+  const tabs = uniqueSessionNames(openSessions);
+  const parts = queryParts(search).filter((part) => ![
+    WORKSPACE_TAB_SEARCH_PARAM,
+    WORKSPACE_GROUPS_SEARCH_PARAM,
+  ].includes(queryPartName(part)));
+  for (const sessionName of tabs) {
     parts.push(`${WORKSPACE_TAB_SEARCH_PARAM}=${encodeURIComponent(sessionName)}`);
+  }
+  const normalizedGroups = normalizeWorkspaceTabGroups(groups, tabs);
+  for (const group of normalizedGroups) {
+    parts.push(
+      `${WORKSPACE_GROUPS_SEARCH_PARAM}=${encodeURIComponent(JSON.stringify(group))}`,
+    );
   }
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 
+export function isolatedWorkspaceSearch(
+  search: string,
+  openSessions: readonly string[] = [],
+): string {
+  return searchWithSavedWorkspaceId(
+    searchWithWorkspaceState(search, openSessions, []),
+    null,
+  );
+}
+
 export function createSessionWorkspace(activeSession?: string): SessionWorkspaceState {
-  if (!activeSession) return { openSessions: [], recentSessions: [] };
-  return { openSessions: [activeSession], recentSessions: [activeSession] };
+  if (!activeSession) return { openSessions: [], recentSessions: [], groups: [] };
+  return { openSessions: [activeSession], recentSessions: [activeSession], groups: [] };
 }
 
 export function visitWorkspaceSession(
@@ -107,20 +270,27 @@ export function visitWorkspaceSession(
     sessionName,
     ...workspace.recentSessions.filter((name) => name !== sessionName),
   ].slice(0, MAX_RECENT_SESSIONS);
+  const groups = workspace.groups.map((group) => (
+    group.collapsed && group.tabs.includes(sessionName)
+      ? { ...group, collapsed: false }
+      : group
+  ));
 
   if (
     openSessions === workspace.openSessions
     && recentSessions.length === workspace.recentSessions.length
     && recentSessions.every((name, index) => name === workspace.recentSessions[index])
+    && sameGroups(groups, workspace.groups)
   ) return workspace;
 
-  return { openSessions, recentSessions };
+  return { openSessions, recentSessions, groups };
 }
 
 export function restoreWorkspaceTabs(
   workspace: SessionWorkspaceState,
   activeSession: string | undefined,
   orderedTabs: readonly string[],
+  orderedGroups: readonly WorkspaceTabGroup[] = workspace.groups,
 ): SessionWorkspaceState {
   const openSessions = uniqueSessionNames(orderedTabs);
   if (activeSession && !openSessions.includes(activeSession)) openSessions.push(activeSession);
@@ -136,13 +306,15 @@ export function restoreWorkspaceTabs(
     ];
   }
   recentSessions = recentSessions.slice(0, MAX_RECENT_SESSIONS);
+  const groups = normalizeWorkspaceTabGroups(orderedGroups, openSessions);
 
   if (
     sameSessions(openSessions, workspace.openSessions)
     && sameSessions(recentSessions, workspace.recentSessions)
+    && sameGroups(groups, workspace.groups)
   ) return workspace;
 
-  return { openSessions, recentSessions };
+  return { openSessions, recentSessions, groups };
 }
 
 export function closeWorkspaceSession(
@@ -150,9 +322,11 @@ export function closeWorkspaceSession(
   sessionName: string,
 ): SessionWorkspaceState {
   if (!workspace.openSessions.includes(sessionName)) return workspace;
+  const openSessions = workspace.openSessions.filter((name) => name !== sessionName);
   return {
     ...workspace,
-    openSessions: workspace.openSessions.filter((name) => name !== sessionName),
+    openSessions,
+    groups: normalizeWorkspaceTabGroups(workspace.groups, openSessions),
   };
 }
 
@@ -171,9 +345,139 @@ export function moveWorkspaceSession(
   if (currentIndex === boundedTargetIndex) return workspace;
 
   const openSessions = [...workspace.openSessions];
+  const targetSession = openSessions[boundedTargetIndex];
+  const sourceGroup = workspace.groups.find((group) => group.tabs.includes(sessionName));
+  const targetGroup = workspace.groups.find((group) => group.tabs.includes(targetSession));
+  if (sourceGroup && sourceGroup.id !== targetGroup?.id) return workspace;
+  const adjustedTargetIndex = !sourceGroup && targetGroup
+    ? currentIndex < boundedTargetIndex
+      ? workspace.openSessions.indexOf(targetGroup.tabs.at(-1)!)
+      : workspace.openSessions.indexOf(targetGroup.tabs[0])
+    : boundedTargetIndex;
   const [movedSession] = openSessions.splice(currentIndex, 1);
-  openSessions.splice(boundedTargetIndex, 0, movedSession);
-  return { ...workspace, openSessions };
+  openSessions.splice(adjustedTargetIndex, 0, movedSession);
+  return {
+    ...workspace,
+    openSessions,
+    groups: normalizeWorkspaceTabGroups(workspace.groups, openSessions),
+  };
+}
+
+export function setWorkspaceTabGroup(
+  workspace: SessionWorkspaceState,
+  candidate: WorkspaceTabGroup,
+): SessionWorkspaceState {
+  if (
+    !validWorkspaceTabGroupId(candidate.id)
+    || workspaceTabGroupNameError(candidate.name)
+    || !WORKSPACE_TAB_GROUP_COLORS.includes(candidate.color)
+    || typeof candidate.collapsed !== "boolean"
+  ) return workspace;
+
+  const selected = new Set(candidate.tabs.filter((tab) => (
+    workspace.openSessions.includes(tab)
+  )));
+  if (selected.size === 0) return workspace;
+  const selectedTabs = workspace.openSessions.filter((tab) => selected.has(tab));
+  const currentGroup = workspace.groups.find((group) => group.id === candidate.id);
+  const anchor = currentGroup
+    ? workspace.openSessions.indexOf(currentGroup.tabs[0])
+    : Math.min(...selectedTabs.map((tab) => workspace.openSessions.indexOf(tab)));
+  let insertionIndex = workspace.openSessions
+    .slice(0, anchor)
+    .filter((tab) => !selected.has(tab)).length;
+  const openSessions = workspace.openSessions.filter((tab) => !selected.has(tab));
+  const groups = workspace.groups.flatMap((group) => {
+    if (group.id === candidate.id) return [];
+    const tabs = group.tabs.filter((tab) => !selected.has(tab));
+    return tabs.length > 0 ? [{ ...group, tabs }] : [];
+  });
+
+  // Moving a middle member out of another group must not insert the new block
+  // back between that group's remaining members.
+  for (const group of groups) {
+    const start = openSessions.indexOf(group.tabs[0]);
+    const end = start + group.tabs.length;
+    if (insertionIndex > start && insertionIndex < end) insertionIndex = end;
+  }
+  openSessions.splice(insertionIndex, 0, ...selectedTabs);
+
+  groups.push({
+    id: candidate.id,
+    name: candidate.name.trim(),
+    color: candidate.color,
+    collapsed: candidate.collapsed,
+    tabs: selectedTabs,
+  });
+
+  return {
+    ...workspace,
+    openSessions,
+    groups: normalizeWorkspaceTabGroups(groups, openSessions),
+  };
+}
+
+export function removeWorkspaceTabGroup(
+  workspace: SessionWorkspaceState,
+  groupId: string,
+): SessionWorkspaceState {
+  if (!workspace.groups.some((group) => group.id === groupId)) return workspace;
+  return {
+    ...workspace,
+    groups: workspace.groups.filter((group) => group.id !== groupId),
+  };
+}
+
+export function setWorkspaceTabGroupCollapsed(
+  workspace: SessionWorkspaceState,
+  groupId: string,
+  collapsed: boolean,
+): SessionWorkspaceState {
+  let changed = false;
+  const groups = workspace.groups.map((group) => {
+    if (group.id !== groupId || group.collapsed === collapsed) return group;
+    changed = true;
+    return { ...group, collapsed };
+  });
+  return changed ? { ...workspace, groups } : workspace;
+}
+
+export function moveWorkspaceTabGroup(
+  workspace: SessionWorkspaceState,
+  groupId: string,
+  direction: -1 | 1,
+): SessionWorkspaceState {
+  const group = workspace.groups.find((candidate) => candidate.id === groupId);
+  if (!group) return workspace;
+  const start = workspace.openSessions.indexOf(group.tabs[0]);
+  const end = start + group.tabs.length - 1;
+  if ((direction < 0 && start === 0) || (direction > 0 && end >= workspace.openSessions.length - 1)) {
+    return workspace;
+  }
+
+  const adjacentIndex = direction < 0 ? start - 1 : end + 1;
+  const adjacentSession = workspace.openSessions[adjacentIndex];
+  const adjacentGroup = workspace.groups.find((candidate) => (
+    candidate.tabs.includes(adjacentSession)
+  ));
+  const adjacentTabs = adjacentGroup?.tabs ?? [adjacentSession];
+  const blockStart = direction < 0 ? start - adjacentTabs.length : start;
+  const blockLength = group.tabs.length + adjacentTabs.length;
+  const openSessions = [...workspace.openSessions];
+  openSessions.splice(blockStart, blockLength);
+  openSessions.splice(
+    blockStart,
+    0,
+    ...(direction < 0
+      ? [...group.tabs, ...adjacentTabs]
+      : [...adjacentTabs, ...group.tabs]),
+  );
+  if (sameSessions(openSessions, workspace.openSessions)) return workspace;
+  return {
+    ...workspace,
+    openSessions,
+    groups: normalizeWorkspaceTabGroups(workspace.groups, openSessions),
+  };
 }
 
 export function renameWorkspaceSession(
@@ -183,18 +487,41 @@ export function renameWorkspaceSession(
 ): SessionWorkspaceState {
   if (!previousName || !nextName || previousName === nextName) return workspace;
 
-  const rename = (sessionNames: readonly string[]) => uniqueSessionNames(
-    sessionNames.map((sessionName) => (
-      sessionName === previousName ? nextName : sessionName
-    )),
-  );
+  const rename = (sessionNames: readonly string[]) => {
+    const sourcePresent = sessionNames.includes(previousName);
+    return uniqueSessionNames(
+      sessionNames
+        .filter((sessionName) => !sourcePresent || sessionName !== nextName)
+        .map((sessionName) => (
+          sessionName === previousName ? nextName : sessionName
+        )),
+    );
+  };
   const openSessions = rename(workspace.openSessions);
   const recentSessions = rename(workspace.recentSessions);
+  const sourcePresent = workspace.openSessions.includes(previousName);
+  const sourceGroupId = workspace.groups.find((group) => (
+    group.tabs.includes(previousName)
+  ))?.id;
+  const groups = normalizeWorkspaceTabGroups(
+    workspace.groups.map((group) => ({
+      ...group,
+      // A stale tab already using the target name must not steal the real
+      // renamed session's group membership during collision deduplication.
+      tabs: rename(group.tabs.filter((tab) => !(
+        sourcePresent
+        && tab === nextName
+        && group.id !== sourceGroupId
+      ))),
+    })),
+    openSessions,
+  );
   if (
     sameSessions(openSessions, workspace.openSessions)
     && sameSessions(recentSessions, workspace.recentSessions)
+    && sameGroups(groups, workspace.groups)
   ) return workspace;
-  return { openSessions, recentSessions };
+  return { openSessions, recentSessions, groups };
 }
 
 export function clearClosedWorkspaceHistory(

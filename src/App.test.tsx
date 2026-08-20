@@ -381,6 +381,12 @@ function openTabs(): string[] {
   return new URLSearchParams(window.location.search).getAll("tab");
 }
 
+function urlGroups(): unknown[] {
+  return new URLSearchParams(window.location.search)
+    .getAll("tab-group")
+    .map((value) => JSON.parse(value));
+}
+
 function expectWorkspaceSearch(baseSearch: string, tabs: string[]): void {
   expect(searchWithoutWorkspaceTabs(window.location.search)).toBe(baseSearch);
   expect(openTabs()).toEqual(tabs);
@@ -438,6 +444,7 @@ function savedWorkspace(
     id: "workspace-one",
     name: "Workspace one",
     tabs: ["alpha", "beta"],
+    groups: [],
     activeSession: "alpha",
     sessionRevision: 0,
     createdAt: 1_000,
@@ -446,6 +453,14 @@ function savedWorkspace(
     ...overrides,
   };
 }
+
+const coreGroup = {
+  id: "core",
+  name: "Core work",
+  color: "cyan" as const,
+  collapsed: false,
+  tabs: ["alpha", "beta"],
+};
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -709,6 +724,7 @@ describe("App routing", () => {
     expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
       "workspace-one",
       ["alpha", "beta"],
+      [],
       "alpha",
       5,
     );
@@ -729,6 +745,7 @@ describe("App routing", () => {
     expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
       "workspace-one",
       ["alpha", "beta", "fresh/session"],
+      [],
       "fresh/session",
       5,
     );
@@ -1758,6 +1775,47 @@ describe("App routing", () => {
     composer.remove();
   });
 
+  it("keeps workspace tab shortcuts and group details out of the landing page", () => {
+    const landingGroup = {
+      ...coreGroup,
+      name: "Hidden landing group",
+    };
+    replaceUrl(dashboardUrl(
+      `?tab=alpha&tab=beta&tab-group=${encodeURIComponent(JSON.stringify(landingGroup))}`,
+    ));
+    render(<App />);
+    act(() => reportKnownSessions?.([
+      session("alpha", "$alpha"),
+      session("beta", "$beta"),
+    ]));
+
+    const searchShortcut = new KeyboardEvent("keydown", {
+      key: ":",
+      code: "Semicolon",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(searchShortcut);
+    expect(searchShortcut.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "Jump to tab" }))
+      .not.toBeInTheDocument();
+
+    const directShortcut = new KeyboardEvent("keydown", {
+      key: "@",
+      code: "Digit2",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(directShortcut);
+    expect(directShortcut.defaultPrevented).toBe(false);
+    expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+    expect(screen.queryByText("Hidden landing group")).not.toBeInTheDocument();
+  });
+
   it("reorders tabs in the URL without changing the active route and remaps direct shortcuts", () => {
     const search = "?kind=agents&flag";
     replaceUrl(sessionUrl(
@@ -1798,6 +1856,166 @@ describe("App routing", () => {
     );
     expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
     expectWorkspaceSearch(search, ["beta", "alpha", "gamma"]);
+  });
+
+  it("copies a tab into an isolated browser workspace without changing the source", () => {
+    const sessionName = "work/name #1";
+    const sourceGroup = encodeURIComponent(JSON.stringify({
+      id: "source-group",
+      name: "Source group",
+      color: "cyan",
+      collapsed: false,
+      tabs: [sessionName, "second work"],
+    }));
+    replaceUrl(sessionUrl(
+      "work%2Fname%20%231",
+      `?kind=agents&flag&tab=work%2Fname%20%231&tab=second%20work&tab-group=${sourceGroup}`,
+    ));
+    const sourceUrl = window.location.href;
+    const replace = vi.fn();
+    const close = vi.fn();
+    const child = {
+      opener: window,
+      location: { replace },
+      close,
+    } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(child);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", {
+      name: `Copy ${sessionName} tab to new window`,
+    }));
+
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(child.opener).toBeNull();
+    expect(replace).toHaveBeenCalledOnce();
+    const destination = new URL(String(replace.mock.calls[0]?.[0]));
+    expect(destination.origin).toBe(window.location.origin);
+    expect(destination.pathname).toBe(`${BASE_PATH}/session/work%2Fname%20%231`);
+    expect(destination.searchParams.get("kind")).toBe("agents");
+    expect(destination.searchParams.has("flag")).toBe(true);
+    expect(destination.searchParams.getAll("tab")).toEqual([sessionName]);
+    expect(destination.searchParams.has("tab-group")).toBe(false);
+    expect(destination.searchParams.has("workspace")).toBe(false);
+    expect(window.location.href).toBe(sourceUrl);
+    expect(renderedTabs()).toEqual([sessionName, "second work"]);
+    expect(close).not.toHaveBeenCalled();
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+
+    open.mockRestore();
+  });
+
+  it("moves a tab only after its isolated browser workspace opens", () => {
+    replaceUrl(sessionUrl(
+      "alpha",
+      "?kind=agents&flag&tab=alpha&tab=beta",
+    ));
+    const replace = vi.fn();
+    const child = {
+      opener: window,
+      location: { replace },
+      close: vi.fn(),
+    } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(child);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Move alpha tab to new window",
+    }));
+
+    expect(replace).toHaveBeenCalledOnce();
+    const destination = new URL(String(replace.mock.calls[0]?.[0]));
+    expect(destination.pathname).toBe(`${BASE_PATH}/session/alpha`);
+    expect(destination.searchParams.getAll("tab")).toEqual(["alpha"]);
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+    expectWorkspaceSearch("?kind=agents&flag", ["beta"]);
+    expect(renderedTabs()).toEqual(["beta"]);
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+
+    open.mockRestore();
+  });
+
+  it("focuses the dashboard search after moving the final source tab", async () => {
+    replaceUrl(sessionUrl("alpha", "?kind=agents&tab=alpha"));
+    const open = vi.spyOn(window, "open").mockReturnValue({
+      opener: window,
+      location: { replace: vi.fn() },
+      close: vi.fn(),
+    } as unknown as Window);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Move alpha tab to new window",
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+    });
+    expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+    expectWorkspaceSearch("?kind=agents", []);
+    expect(screen.getByRole("textbox", { name: "Find a session" })).toHaveFocus();
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+
+    open.mockRestore();
+  });
+
+  it("keeps a moved tab in place when the browser blocks the new window", () => {
+    replaceUrl(sessionUrl(
+      "alpha",
+      "?kind=agents&tab=alpha&tab=beta",
+    ));
+    const sourceUrl = window.location.href;
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Move alpha tab to new window",
+    }));
+
+    expect(window.location.href).toBe(sourceUrl);
+    expect(renderedTabs()).toEqual(["alpha", "beta"]);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The browser blocked a new window for alpha. Allow pop-ups and try again.",
+    );
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+
+    open.mockRestore();
+  });
+
+  it("closes a partial child and keeps the source when child navigation fails", () => {
+    replaceUrl(sessionUrl(
+      "alpha",
+      "?kind=agents&tab=alpha&tab=beta",
+    ));
+    const sourceUrl = window.location.href;
+    const close = vi.fn();
+    const child = {
+      opener: window,
+      location: {
+        replace: vi.fn(() => {
+          throw new DOMException("Navigation denied", "SecurityError");
+        }),
+      },
+      close,
+    } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(child);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", {
+      name: "Move alpha tab to new window",
+    }));
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(window.location.href).toBe(sourceUrl);
+    expect(renderedTabs()).toEqual(["alpha", "beta"]);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Muxdeck could not open alpha in a new window. The source tab is unchanged. Try again.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss new window error" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+
+    open.mockRestore();
   });
 
   it("keeps a reordered workspace through native Back from Overview and the console", async () => {
@@ -2467,6 +2685,7 @@ describe("App routing", () => {
       expect(createWorkspaceMock).toHaveBeenCalledWith({
         name: "Release room",
         tabs: ["alpha", "beta"],
+        groups: [],
         activeSession: "beta",
       });
       expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
@@ -2484,6 +2703,49 @@ describe("App routing", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps groups local without a save loop when workspace creation uses a legacy backend", async () => {
+      vi.useFakeTimers();
+      const legacyCreated = savedWorkspace({
+        id: "legacy-room",
+        name: "Legacy room",
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+      });
+      Reflect.deleteProperty(legacyCreated, "groups");
+      createWorkspaceMock.mockResolvedValue(legacyCreated);
+      const encodedGroup = encodeURIComponent(JSON.stringify(coreGroup));
+      replaceUrl(sessionUrl(
+        "alpha",
+        `?tab=alpha&tab=beta&tab-group=${encodedGroup}`,
+      ));
+
+      render(<App />);
+      fireEvent.click(screen.getByRole("button", { name: "Save workspace" }));
+      const dialog = screen.getByRole("dialog", { name: "Save this workspace" });
+      fireEvent.change(within(dialog).getByRole("textbox", {
+        name: "Workspace name",
+      }), { target: { value: "Legacy room" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save workspace" }));
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(createWorkspaceMock).toHaveBeenCalledWith({
+        name: "Legacy room",
+        tabs: ["alpha", "beta"],
+        groups: [coreGroup],
+        activeSession: "alpha",
+      });
+      expect(urlGroups()).toEqual([coreGroup]);
+      expect(screen.getByRole("status", {
+        name: "Workspace tabs saved; tab groups are not stored by this server",
+      })).toHaveTextContent("Tabs saved");
+
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
       expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
     });
 
@@ -2574,6 +2836,14 @@ describe("App routing", () => {
         "title",
         "Wait for workspace to finish opening",
       );
+      const moveTabToWindow = screen.getByRole("button", {
+        name: "Move alpha tab to new window",
+      });
+      const copyTabToWindow = screen.getByRole("button", {
+        name: "Copy alpha tab to new window",
+      });
+      expect(moveTabToWindow).toBeDisabled();
+      expect(copyTabToWindow).toBeEnabled();
 
       await act(async () => {
         pendingWorkspace.resolve(savedWorkspace());
@@ -2589,8 +2859,41 @@ describe("App routing", () => {
       expect(screen.getByTitle("Workspace one - Saved")).toBeVisible();
       expect(newSessionButton).toBeEnabled();
       expect(newSessionButton).toHaveAttribute("title", "New session");
+      expect(moveTabToWindow).toBeEnabled();
+      expect(copyTabToWindow).toBeEnabled();
       expect(screen.queryByRole("status", { name: "Opening saved workspace" }))
         .not.toBeInTheDocument();
+    });
+
+    it("hydrates saved tab groups into the canonical workspace URL", async () => {
+      const collapsedCoreGroup = { ...coreGroup, collapsed: true };
+      getWorkspaceMock.mockResolvedValue(savedWorkspace({
+        groups: [collapsedCoreGroup],
+      }));
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(sessionUrl(
+        "alpha",
+        "?kind=codex&workspace=workspace-one&tab=stale-url-tab",
+      ));
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(openTabs()).toEqual(["alpha", "beta"]);
+        expect(urlGroups()).toEqual([collapsedCoreGroup]);
+      });
+      expect(new URLSearchParams(window.location.search).getAll("tab-group"))
+        .toHaveLength(1);
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      expect(screen.getByRole("status", {
+        name: "Workspace saved automatically",
+      })).toBeVisible();
+      expect(screen.getByRole("button", {
+        name: "Expand Core work tab group",
+      })).toBeVisible();
     });
 
     it("waits for saved-workspace hydration before direct creation can submit", async () => {
@@ -2747,9 +3050,188 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
         "workspace-one",
         ["alpha"],
+        [],
         "alpha",
         4,
       );
+    });
+
+    it("autosaves a moved tab but not a copied tab in a saved workspace", async () => {
+      vi.useFakeTimers();
+      const loaded = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+        sessionRevision: 4,
+      });
+      getWorkspaceMock.mockResolvedValue(loaded);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue(loaded);
+      replaceUrl(sessionUrl(
+        "alpha",
+        "?kind=agents&workspace=workspace-one&tab=stale",
+      ));
+      const replace = vi.fn();
+      const open = vi.spyOn(window, "open").mockReturnValue({
+        opener: window,
+        location: { replace },
+        close: vi.fn(),
+      } as unknown as Window);
+
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(updateWorkspaceActivityMock).toHaveBeenCalled();
+      updateWorkspaceActivityMock.mockClear();
+      updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace({
+        tabs: ["alpha"],
+        activeSession: "alpha",
+        sessionRevision: 5,
+      }));
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Copy beta tab to new window",
+      }));
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+      expectWorkspaceSearch("?kind=agents&workspace=workspace-one", ["alpha", "beta"]);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Move beta tab to new window",
+      }));
+      await act(async () => vi.advanceTimersByTimeAsync(500));
+
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      expectWorkspaceSearch("?kind=agents&workspace=workspace-one", ["alpha"]);
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["alpha"],
+        [],
+        "alpha",
+        4,
+      );
+      expect(replace).toHaveBeenCalledTimes(2);
+      for (const [destination] of replace.mock.calls) {
+        expect(new URL(String(destination)).searchParams.has("workspace")).toBe(false);
+      }
+      expect(terminateSessionMock).not.toHaveBeenCalled();
+
+      open.mockRestore();
+    });
+
+    it("waits for an older saved-workspace save before moving a tab", async () => {
+      vi.useFakeTimers();
+      const firstSave = deferred<SavedWorkspace>();
+      const secondSave = deferred<SavedWorkspace>();
+      const loaded = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+        sessionRevision: 4,
+      });
+      getWorkspaceMock.mockResolvedValue(loaded);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      updateWorkspaceActivityMock
+        .mockImplementationOnce(() => firstSave.promise)
+        .mockImplementationOnce(() => secondSave.promise);
+      replaceUrl(sessionUrl(
+        "alpha",
+        "?workspace=workspace-one&tab=stale",
+      ));
+      const replace = vi.fn();
+      const open = vi.spyOn(window, "open").mockReturnValue({
+        opener: window,
+        location: { replace },
+        close: vi.fn(),
+      } as unknown as Window);
+
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Copy beta tab to new window",
+      }));
+      expect(open).toHaveBeenCalledOnce();
+      expectWorkspaceSearch("?workspace=workspace-one", ["alpha", "beta"]);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Move beta tab to new window",
+      }));
+      expect(open).toHaveBeenCalledOnce();
+      expectWorkspaceSearch("?workspace=workspace-one", ["alpha", "beta"]);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Muxdeck is finishing an earlier workspace save before moving beta.",
+      );
+
+      await act(async () => {
+        firstSave.resolve(loaded);
+        await firstSave.promise;
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(screen.getByRole("button", { name: "Move beta tab left" }));
+      expectWorkspaceSearch("?workspace=workspace-one", ["beta", "alpha"]);
+      fireEvent.click(screen.getByRole("button", {
+        name: "Move beta tab to new window",
+      }));
+      expect(open).toHaveBeenCalledOnce();
+      expectWorkspaceSearch("?workspace=workspace-one", ["beta", "alpha"]);
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        secondSave.resolve(savedWorkspace({
+          tabs: ["beta", "alpha"],
+          activeSession: "alpha",
+          sessionRevision: 4,
+        }));
+        await secondSave.promise;
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Move beta tab to new window",
+      }));
+      expect(open).toHaveBeenCalledTimes(2);
+      expectWorkspaceSearch("?workspace=workspace-one", ["alpha"]);
+
+      act(() => window.dispatchEvent(new Event("pagehide")));
+      expect(sendBeaconMock).toHaveBeenCalledOnce();
+      const body = sendBeaconMock.mock.calls[0]?.[1];
+      expect(body).toBeInstanceOf(Blob);
+      vi.useRealTimers();
+      expect(JSON.parse(await readBlobText(body as Blob))).toEqual({
+        tabs: ["alpha"],
+        groups: [],
+        activeSession: "alpha",
+        sessionRevision: 4,
+      });
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
+      expect(terminateSessionMock).not.toHaveBeenCalled();
+
+      open.mockRestore();
     });
 
     it("reports a hydration failure as a workspace persistence error", async () => {
@@ -2773,6 +3255,17 @@ describe("App routing", () => {
       })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Save workspace" }))
         .not.toBeInTheDocument();
+      const moveTabToWindow = screen.getByRole("button", {
+        name: "Move alpha tab to new window",
+      });
+      const copyTabToWindow = screen.getByRole("button", {
+        name: "Copy alpha tab to new window",
+      });
+      expect(moveTabToWindow).toBeDisabled();
+      expect(moveTabToWindow).toHaveAccessibleDescription(
+        "Move is unavailable until the workspace sync issue is resolved.",
+      );
+      expect(copyTabToWindow).toBeEnabled();
 
       fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
 
@@ -2805,6 +3298,8 @@ describe("App routing", () => {
       expect(screen.queryByRole("complementary", {
         name: "Workspace sync recovery",
       })).not.toBeInTheDocument();
+      expect(moveTabToWindow).toBeEnabled();
+      expect(copyTabToWindow).toBeEnabled();
     });
 
     it("clears a load sync problem after navigating to an unsaved URL", async () => {
@@ -2949,6 +3444,50 @@ describe("App routing", () => {
       expect(window.location.pathname).toBe(`${BASE_PATH}/session/server-beta`);
     });
 
+    it("preserves saved tab groups through dashboard history and workspace resume", async () => {
+      getWorkspaceMock.mockResolvedValue(savedWorkspace({
+        groups: [coreGroup],
+      }));
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(`${BASE_PATH}/?workspace=workspace-one&tab=stale`);
+
+      render(<App />);
+
+      const resume = await screen.findByRole("button", {
+        name: "Resume workspace at alpha, 2 open tabs",
+      });
+      await waitFor(() => expect(urlGroups()).toEqual([coreGroup]));
+      fireEvent.click(resume);
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+          "data-session",
+          "alpha",
+        );
+      });
+      expect(openTabs()).toEqual(["alpha", "beta"]);
+      expect(urlGroups()).toEqual([coreGroup]);
+
+      act(() => window.history.back());
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+      });
+      expect(openTabs()).toEqual(["alpha", "beta"]);
+      expect(urlGroups()).toEqual([coreGroup]);
+
+      act(() => window.history.forward());
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+          "data-session",
+          "alpha",
+        );
+      });
+      expect(openTabs()).toEqual(["alpha", "beta"]);
+      expect(urlGroups()).toEqual([coreGroup]);
+    });
+
     it.each([
       {
         label: "the saved active tab",
@@ -3075,10 +3614,95 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
         "workspace-one",
         ["beta", "alpha", "gamma"],
+        [],
         "beta",
         7,
       );
       expect(screen.getByTitle("Renamed remotely - Saved")).toBeVisible();
+    });
+
+    it("autosyncs a saved workspace without dropping its tab groups", async () => {
+      vi.useFakeTimers();
+      const serverWorkspace = savedWorkspace({
+        groups: [coreGroup],
+        sessionRevision: 9,
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue({
+        ...serverWorkspace,
+        activeSession: "beta",
+      });
+      replaceUrl(sessionUrl(
+        "alpha",
+        "?workspace=workspace-one&tab=stale",
+      ));
+
+      render(<App />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
+      expect(urlGroups()).toEqual([coreGroup]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["alpha", "beta"],
+        [coreGroup],
+        "beta",
+        9,
+      );
+    });
+
+    it("keeps an active group collapsed in the URL and saved activity", async () => {
+      vi.useFakeTimers();
+      const collapsedCoreGroup = { ...coreGroup, collapsed: true };
+      const serverWorkspace = savedWorkspace({
+        groups: [coreGroup],
+        sessionRevision: 9,
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue({
+        ...serverWorkspace,
+        groups: [collapsedCoreGroup],
+      });
+      replaceUrl(sessionUrl("alpha", "?workspace=workspace-one&tab=stale"));
+
+      render(<App />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      fireEvent.click(screen.getByRole("button", {
+        name: "Collapse Core work tab group",
+      }));
+      expect(urlGroups()).toEqual([collapsedCoreGroup]);
+      expect(screen.getByRole("button", {
+        name: "Expand Core work tab group",
+      })).toBeVisible();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["alpha", "beta"],
+        [collapsedCoreGroup],
+        "alpha",
+        9,
+      );
     });
 
     it("debounces changes and serializes the latest activity behind an in-flight save", async () => {
@@ -3121,6 +3745,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["alpha", "beta"],
+        [],
         "alpha",
         0,
       );
@@ -3146,6 +3771,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["beta"],
+        [],
         "beta",
         0,
       );
@@ -3161,8 +3787,13 @@ describe("App routing", () => {
 
     it("sends the latest workspace activity when the page hides before the debounce", async () => {
       vi.useFakeTimers();
+      const pageHideGroup = {
+        ...coreGroup,
+        tabs: ["alpha", "second work"],
+      };
       getWorkspaceMock.mockResolvedValue(savedWorkspace({
-        tabs: ["alpha"],
+        tabs: ["alpha", "second work"],
+        groups: [pageHideGroup],
         activeSession: "alpha",
       }));
       listSessionsMock.mockResolvedValue([
@@ -3196,9 +3827,164 @@ describe("App routing", () => {
       vi.useRealTimers();
       expect(JSON.parse(await readBlobText(body as Blob))).toEqual({
         tabs: ["alpha", "second work"],
+        groups: [pageHideGroup],
         activeSession: "second work",
         sessionRevision: 0,
       });
+    });
+
+    it("keeps legacy workspace tabs saving without claiming groups are durable", async () => {
+      vi.useFakeTimers();
+      const legacyWorkspace = savedWorkspace({
+        tabs: ["alpha"],
+        activeSession: "alpha",
+      });
+      Reflect.deleteProperty(legacyWorkspace, "groups");
+      getWorkspaceMock.mockResolvedValue(legacyWorkspace);
+      updateWorkspaceActivityMock.mockResolvedValue(legacyWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("second work", "$second"),
+      ]);
+      replaceUrl(`${BASE_PATH}/?workspace=workspace-one`);
+
+      const view = render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(openSessionFromDashboard).not.toBeNull();
+
+      act(() => openSessionFromDashboard?.("second work"));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["alpha", "second work"],
+        [],
+        "second work",
+        0,
+      );
+      expect(screen.getByRole("status", {
+        name: "Workspace saved automatically",
+      })).toBeVisible();
+
+      fireEvent.click(screen.getByRole("button", { name: "Create tab group" }));
+      const groupDialog = screen.getByRole("dialog", { name: "Create a group" });
+      fireEvent.change(within(groupDialog).getByRole("textbox", { name: "Group name" }), {
+        target: { value: "Local release lane" },
+      });
+      fireEvent.click(within(groupDialog).getByRole("checkbox", { name: /alpha/i }));
+      fireEvent.click(within(groupDialog).getByRole("button", { name: "Create group" }));
+
+      expect(screen.getByRole("status", {
+        name: "Workspace tabs saved; tab groups are not stored by this server",
+      })).toHaveTextContent("Tabs saved");
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
+      expect(updateWorkspaceActivityMock.mock.calls[1]?.[2]).toEqual([
+        expect.objectContaining({
+          name: "Local release lane",
+          tabs: ["alpha", "second work"],
+        }),
+      ]);
+      expect(screen.queryByText(/Workspace changes are not saved/i))
+        .not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Close alpha quick tab" }));
+      act(() => window.dispatchEvent(new Event("pagehide")));
+      expect(sendBeaconMock).toHaveBeenCalledOnce();
+      const body = sendBeaconMock.mock.calls[0]?.[1];
+      expect(body).toBeInstanceOf(Blob);
+
+      view.unmount();
+      vi.useRealTimers();
+      const payload = JSON.parse(await readBlobText(body as Blob));
+      expect(payload).toEqual({
+        tabs: ["second work"],
+        activeSession: "second work",
+        sessionRevision: 0,
+      });
+      expect(payload).not.toHaveProperty("groups");
+    });
+
+    it("resyncs local groups after a focused page detects an upgraded backend", async () => {
+      vi.useFakeTimers();
+      const legacyWorkspace = savedWorkspace();
+      Reflect.deleteProperty(legacyWorkspace, "groups");
+      getWorkspaceMock.mockResolvedValue(legacyWorkspace);
+      updateWorkspaceActivityMock
+        .mockResolvedValueOnce(legacyWorkspace)
+        .mockImplementation(async (
+          _workspaceId,
+          tabs,
+          groups,
+          activeSession,
+          sessionRevision,
+        ) => ({
+          ...legacyWorkspace,
+          tabs,
+          groups,
+          activeSession,
+          sessionRevision,
+        }));
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(sessionUrl(
+        "alpha",
+        "?workspace=workspace-one&tab=stale",
+      ));
+
+      render(<App />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Create tab group" }));
+      const groupDialog = screen.getByRole("dialog", { name: "Create a group" });
+      fireEvent.change(within(groupDialog).getByRole("textbox", { name: "Group name" }), {
+        target: { value: "Recovered group" },
+      });
+      fireEvent.click(within(groupDialog).getByRole("checkbox", { name: /beta/i }));
+      fireEvent.click(within(groupDialog).getByRole("button", { name: "Create group" }));
+      expect(screen.getByRole("status", {
+        name: "Workspace tabs saved; tab groups are not stored by this server",
+      })).toBeVisible();
+
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expect(updateWorkspaceActivityMock.mock.calls[0]?.[2]).toEqual([
+        expect.objectContaining({
+          name: "Recovered group",
+          tabs: ["alpha", "beta"],
+        }),
+      ]);
+      expect(screen.getByRole("status", {
+        name: "Workspace tabs saved; tab groups are not stored by this server",
+      })).toBeVisible();
+
+      getWorkspaceMock.mockResolvedValueOnce({
+        ...legacyWorkspace,
+        groups: [],
+      });
+      act(() => window.dispatchEvent(new Event("focus")));
+      await act(async () => {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getWorkspaceMock).toHaveBeenCalledTimes(2);
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
+      expect(updateWorkspaceActivityMock.mock.calls[1]?.[2]).toEqual([
+        expect.objectContaining({
+          name: "Recovered group",
+          tabs: ["alpha", "beta"],
+        }),
+      ]);
+      expect(screen.getByRole("status", {
+        name: "Workspace saved automatically",
+      })).toHaveTextContent("Saved");
     });
 
     it("clears a failed older activity after the newer queued activity succeeds", async () => {
@@ -3231,6 +4017,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["alpha", "beta"],
+        [],
         "alpha",
         0,
       );
@@ -3259,6 +4046,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["beta"],
+        [],
         "beta",
         0,
       );
@@ -3316,6 +4104,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["alpha", "beta"],
+        [],
         "beta",
         0,
       );
@@ -3343,6 +4132,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["beta"],
+        [],
         "beta",
         0,
       );
@@ -3357,9 +4147,9 @@ describe("App routing", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(updateWorkspaceActivityMock.mock.calls).toEqual([
-        ["workspace-one", ["alpha", "beta"], "alpha", 0],
-        ["workspace-one", ["alpha", "beta"], "beta", 0],
-        ["workspace-one", ["beta"], "beta", 0],
+        ["workspace-one", ["alpha", "beta"], [], "alpha", 0],
+        ["workspace-one", ["alpha", "beta"], [], "beta", 0],
+        ["workspace-one", ["beta"], [], "beta", 0],
       ]);
       expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     });
@@ -3396,6 +4186,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
         "workspace-one",
         ["alpha", "beta"],
+        [],
         "alpha",
         0,
       );
@@ -3431,6 +4222,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-two",
         ["gamma"],
+        [],
         "gamma",
         0,
       );
@@ -3591,6 +4383,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
         "workspace-one",
         ["old-name"],
+        [],
         "old-name",
         0,
       );
@@ -3619,6 +4412,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["new-name"],
+        [],
         "new-name",
         1,
       );
@@ -3683,6 +4477,7 @@ describe("App routing", () => {
       vi.useRealTimers();
       expect(JSON.parse(await readBlobText(body as Blob))).toEqual({
         tabs: ["new-name"],
+        groups: [],
         activeSession: "new-name",
         sessionRevision: 1,
       });
@@ -3750,6 +4545,7 @@ describe("App routing", () => {
       expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
         "workspace-one",
         ["new-name"],
+        [],
         "new-name",
         1,
       );

@@ -87,6 +87,25 @@ export function ExternalLinkIcon(props: IconProps) {
   );
 }
 
+export function WindowMoveIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="11" y="4.5" width="9" height="15" rx="1.7" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M4 12h11m-3.2-3.2L15 12l-3.2 3.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function WindowCopyIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="8" y="4.5" width="12" height="14" rx="1.8" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M16 18.5v.2a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 18.7V8.8A1.8 1.8 0 0 1 5.8 7H8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M14 8v7m-3.5-3.5h7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
 export function KeyboardIcon(props: IconProps) {
   return (
     <IconBase {...props}>

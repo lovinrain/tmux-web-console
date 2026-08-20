@@ -1269,7 +1269,8 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        unknown = sorted(str(field) for field in set(payload) - required)
+        allowed = required | {"groups"}
+        unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
 
@@ -1278,6 +1279,7 @@ def create_app(
                 name=payload["name"],
                 tabs=payload["tabs"],
                 active_session=payload["activeSession"],
+                groups=payload.get("groups", []),
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
@@ -1299,14 +1301,14 @@ def create_app(
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
 
-        allowed = {"name", "tabs", "activeSession", "sessionRevision"}
+        allowed = {"name", "tabs", "groups", "activeSession", "sessionRevision"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
-        if not set(payload) & {"name", "tabs", "activeSession"}:
-            return json_error("name, tabs, or activeSession is required", 400)
+        if not set(payload) & {"name", "tabs", "groups", "activeSession"}:
+            return json_error("name, tabs, groups, or activeSession is required", 400)
         if (
-            set(payload) & {"tabs", "activeSession"}
+            set(payload) & {"tabs", "groups", "activeSession"}
             and "sessionRevision" not in payload
         ):
             return json_error("sessionRevision is required", 400)
@@ -1316,9 +1318,11 @@ def create_app(
                 request.match_info["workspace_id"],
                 name=payload.get("name"),
                 tabs=payload.get("tabs"),
+                groups=payload.get("groups"),
                 active_session=payload.get("activeSession"),
                 update_name="name" in payload,
                 update_tabs="tabs" in payload,
+                update_groups="groups" in payload,
                 update_active_session="activeSession" in payload,
                 session_revision=payload.get("sessionRevision"),
             )
@@ -1350,7 +1354,8 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        unknown = sorted(str(field) for field in set(payload) - required)
+        allowed = required | {"groups"}
+        unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
 
@@ -1360,6 +1365,8 @@ def create_app(
                 tabs=payload["tabs"],
                 active_session=payload["activeSession"],
                 session_revision=payload["sessionRevision"],
+                groups=payload.get("groups"),
+                update_groups="groups" in payload,
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)

@@ -10,6 +10,7 @@ import {
   MIN_DESKTOP_TAB_RAIL_WIDTH,
   MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
   SessionWorkspaceNavigation,
+  WorkspaceTabSearchDialog,
   clampDesktopTabRailWidth,
 } from "./SessionWorkspaceNavigation";
 
@@ -121,6 +122,158 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it("finds tabs by group name and exposes their group name and color", () => {
+    render(
+      <WorkspaceTabSearchDialog
+        activeSession="alpha"
+        openSessions={["alpha", "beta", "zulu"]}
+        groups={[{
+          id: "release-lane",
+          name: "Release lane",
+          color: "orange",
+          collapsed: false,
+          tabs: ["beta", "zulu"],
+        }]}
+        sessions={sessions}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    fireEvent.change(within(dialog).getByRole("combobox"), {
+      target: { value: "release" },
+    });
+
+    const results = within(dialog).getAllByRole("option");
+    expect(results).toHaveLength(2);
+    expect(results[0]).toHaveTextContent("beta");
+    expect(results[1]).toHaveTextContent("Zulu shell");
+    for (const result of results) {
+      const metadata = within(result).getByLabelText(
+        "Tab group Release lane, color orange",
+      );
+      expect(metadata).toHaveTextContent("Release lane");
+      expect(metadata).toHaveAttribute("data-tab-group-color", "orange");
+    }
+  });
+
+  it("renders a colored group block with collapse, edit, and atomic move controls", () => {
+    const onToggleTabGroup = vi.fn();
+    const onMoveTabGroup = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "review",
+            name: "Review lane",
+            color: "cyan",
+            collapsed: false,
+            tabs: ["beta", "zulu"],
+          }],
+          onMoveTab: vi.fn(),
+          onSaveTabGroup: vi.fn(),
+          onDeleteTabGroup: vi.fn(),
+          onToggleTabGroup,
+          onMoveTabGroup,
+        })}
+      />,
+    );
+
+    const collapse = screen.getByRole("button", {
+      name: "Collapse Review lane tab group",
+    });
+    const group = collapse.closest<HTMLElement>("[data-workspace-tab-group-id]");
+    expect(group).toHaveAttribute("data-workspace-tab-group-id", "review");
+    expect(group).toHaveAttribute("data-tab-group-color", "cyan");
+    expect(within(group!).getAllByRole("tab")).toHaveLength(2);
+
+    expect(within(group!).getByRole("button", { name: "Move beta tab left" }))
+      .toBeDisabled();
+    expect(within(group!).getByRole("button", { name: "Move Zulu shell tab right" }))
+      .toBeDisabled();
+    fireEvent.click(collapse);
+    expect(onToggleTabGroup).toHaveBeenCalledWith("review", true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move Review lane group left" }));
+    expect(onMoveTabGroup).toHaveBeenCalledWith("review", -1);
+    expect(screen.getByRole("button", { name: "Move Review lane group right" }))
+      .toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Review lane tab group" }));
+    expect(screen.getByRole("dialog", { name: "Edit Review lane" })).toBeInTheDocument();
+  });
+
+  it("keeps only the active member visible when a group is collapsed", () => {
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          activeSession: "beta",
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "review",
+            name: "Review lane",
+            color: "orange",
+            collapsed: true,
+            tabs: ["beta", "zulu"],
+          }],
+          onToggleTabGroup: vi.fn(),
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Expand Review lane tab group" }))
+      .toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("tab", { name: /beta, Review lane group/i }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Zulu shell/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+  });
+
+  it("layers group management over Overview and returns without another history change", () => {
+    const onOpenRecents = vi.fn();
+    const onCloseRecents = vi.fn();
+    const onMoveTabGroup = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          recentsOpen: true,
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "review",
+            name: "Review lane",
+            color: "pink",
+            collapsed: false,
+            tabs: ["alpha", "beta"],
+          }],
+          onSaveTabGroup: vi.fn(),
+          onDeleteTabGroup: vi.fn(),
+          onMoveTabGroup,
+          onOpenRecents,
+          onCloseRecents,
+        })}
+      />,
+    );
+
+    const overview = screen.getByRole("dialog", { name: "Switch sessions" });
+    fireEvent.click(within(overview).getByRole("button", {
+      name: "Move Review lane group down",
+    }));
+    expect(onMoveTabGroup).toHaveBeenCalledWith("review", 1);
+    fireEvent.click(within(overview).getByRole("button", {
+      name: "Edit Review lane tab group",
+    }));
+    expect(onCloseRecents).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Switch sessions" }))
+      .not.toBeInTheDocument();
+
+    const editor = screen.getByRole("dialog", { name: "Edit Review lane" });
+    fireEvent.click(within(editor).getByRole("button", { name: "Close tab group editor" }));
+    expect(screen.getByRole("dialog", { name: "Switch sessions" })).toBeVisible();
+    expect(onOpenRecents).not.toHaveBeenCalled();
+  });
+
   it("clamps desktop tab rail widths to finite hard limits", () => {
     expect(MIN_DESKTOP_TAB_RAIL_WIDTH).toBe(72);
     expect(COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH).toBe(176);
@@ -242,6 +395,300 @@ describe("SessionWorkspaceNavigation", () => {
     expect(recents).toHaveTextContent("3");
     fireEvent.click(recents);
     expect(props.onOpenRecents).toHaveBeenCalledOnce();
+  });
+
+  it("exposes distinct Move and Copy window actions with exact accessible text", () => {
+    const onOpenTabInNewWindow = vi.fn().mockReturnValue("opened");
+    const onCloseTab = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({ onOpenTabInNewWindow, onCloseTab })}
+      />,
+    );
+
+    const actions = screen.getByRole("group", {
+      name: "Alpha control tab window actions",
+    });
+    const move = within(actions).getByRole("button", {
+      name: "Move Alpha control tab to new window",
+    });
+    const copy = within(actions).getByRole("button", {
+      name: "Copy Alpha control tab to new window",
+    });
+
+    expect(move).toHaveClass("workspace-tab-window-move");
+    expect(move).toHaveAttribute("title", "Move tab to new window");
+    expect(move).toHaveAccessibleDescription(
+      "Opens this session in a separate browser window and removes this quick tab here. The tmux session keeps running.",
+    );
+    expect(copy).toHaveClass("workspace-tab-window-copy");
+    expect(copy).toHaveAttribute("title", "Copy tab to new window");
+    expect(copy).toHaveAccessibleDescription(
+      "Opens this session in a separate browser window and keeps this quick tab here.",
+    );
+
+    fireEvent.click(copy);
+    expect(onOpenTabInNewWindow).toHaveBeenCalledOnce();
+    expect(onOpenTabInNewWindow).toHaveBeenLastCalledWith("alpha", "copy");
+    expect(onCloseTab).not.toHaveBeenCalled();
+    expect(screen.getByText(
+      "Alpha control copied to a new window and remains open here.",
+      { selector: "[role='status']" },
+    )).toBeInTheDocument();
+
+    fireEvent.click(move);
+    expect(onOpenTabInNewWindow).toHaveBeenCalledTimes(2);
+    expect(onOpenTabInNewWindow).toHaveBeenLastCalledWith("alpha", "move");
+    expect(onCloseTab).toHaveBeenCalledOnce();
+    expect(onCloseTab).toHaveBeenCalledWith("alpha");
+    expect(screen.getByText(
+      "Alpha control moved to a new window. The tmux session keeps running.",
+      { selector: "[role='status']" },
+    )).toBeInTheDocument();
+  });
+
+  it("keeps the source tab when a new window is blocked and closes it only after success", () => {
+    const onOpenTabInNewWindow = vi.fn()
+      .mockReturnValueOnce("blocked")
+      .mockReturnValueOnce("opened");
+    const onCloseTab = vi.fn();
+    const props = navigationProps({ onOpenTabInNewWindow });
+
+    function WindowMoveHarness() {
+      const [openSessions, setOpenSessions] = useState(["alpha", "beta"]);
+      return (
+        <SessionWorkspaceNavigation
+          {...props}
+          openSessions={openSessions}
+          onCloseTab={(sessionName) => {
+            onCloseTab(sessionName);
+            setOpenSessions((current) => current.filter((name) => name !== sessionName));
+          }}
+        />
+      );
+    }
+
+    render(<WindowMoveHarness />);
+    const move = screen.getByRole("button", {
+      name: "Move Alpha control tab to new window",
+    });
+
+    fireEvent.click(move);
+    expect(onOpenTabInNewWindow).toHaveBeenNthCalledWith(1, "alpha", "move");
+    expect(onCloseTab).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The browser blocked a new window for Alpha control. Allow pop-ups and try again.",
+    );
+    expect(screen.getByRole("button", { name: "Dismiss new window error" }))
+      .toBeVisible();
+
+    fireEvent.click(move);
+    expect(onOpenTabInNewWindow).toHaveBeenNthCalledWith(2, "alpha", "move");
+    expect(onCloseTab).toHaveBeenCalledOnce();
+    expect(onCloseTab).toHaveBeenCalledWith("alpha");
+    expect(screen.queryByRole("tab", { name: "Alpha control, Needs input" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("keeps Move in place while an earlier saved-workspace update finishes", () => {
+    const onOpenTabInNewWindow = vi.fn().mockReturnValue("workspace-sync-pending");
+    const onCloseTab = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({ onOpenTabInNewWindow, onCloseTab })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Move Alpha control tab to new window",
+    }));
+
+    expect(onOpenTabInNewWindow).toHaveBeenCalledWith("alpha", "move");
+    expect(onCloseTab).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Muxdeck is finishing an earlier workspace save before moving Alpha control. The source tab is unchanged. Try Move again when the save finishes.",
+    );
+  });
+
+  it("disables only Move while a saved workspace is loading in tabs and Overview", () => {
+    const onOpenTabInNewWindow = vi.fn().mockReturnValue("opened");
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          recentsOpen: true,
+          onOpenTabInNewWindow,
+          workspacePersistenceState: "loading",
+        })}
+      />,
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "Session workspace" });
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    const moveButtons = [
+      within(navigation).getByRole("button", {
+        name: "Move Alpha control tab to new window",
+      }),
+      within(openGroup).getByRole("button", {
+        name: "Move Alpha control tab to new window",
+      }),
+    ];
+    const copyButtons = [
+      within(navigation).getByRole("button", {
+        name: "Copy Alpha control tab to new window",
+      }),
+      within(openGroup).getByRole("button", {
+        name: "Copy Alpha control tab to new window",
+      }),
+    ];
+
+    for (const move of moveButtons) {
+      expect(move).toBeDisabled();
+      expect(move).toHaveAttribute(
+        "title",
+        "Move is unavailable until the saved workspace finishes opening.",
+      );
+      expect(move).toHaveAccessibleDescription(
+        "Move is unavailable until the saved workspace finishes opening.",
+      );
+      fireEvent.click(move);
+    }
+    for (const copy of copyButtons) {
+      expect(copy).toBeEnabled();
+      expect(copy).toHaveAttribute("title", "Copy tab to new window");
+      fireEvent.click(copy);
+    }
+    expect(onOpenTabInNewWindow).toHaveBeenCalledTimes(2);
+    expect(onOpenTabInNewWindow).toHaveBeenNthCalledWith(1, "alpha", "copy");
+    expect(onOpenTabInNewWindow).toHaveBeenNthCalledWith(2, "alpha", "copy");
+  });
+
+  it("keeps Copy available but disables Move while a workspace has a sync issue", () => {
+    const onOpenTabInNewWindow = vi.fn().mockReturnValue("opened");
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          recentsOpen: true,
+          onOpenTabInNewWindow,
+          workspacePersistenceState: "error",
+          workspaceName: "Release room",
+        })}
+      />,
+    );
+
+    const navigation = screen.getByRole("navigation", { name: "Session workspace" });
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    for (const surface of [navigation, openGroup]) {
+      const move = within(surface).getByRole("button", {
+        name: "Move Alpha control tab to new window",
+      });
+      const copy = within(surface).getByRole("button", {
+        name: "Copy Alpha control tab to new window",
+      });
+      expect(move).toBeDisabled();
+      expect(move).toHaveAccessibleDescription(
+        "Move is unavailable until the workspace sync issue is resolved.",
+      );
+      expect(copy).toBeEnabled();
+      fireEvent.click(copy);
+    }
+    expect(onOpenTabInNewWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers window actions only for open Overview rows and stacks them without End", () => {
+    const onOpenTabInNewWindow = vi.fn().mockReturnValue("opened");
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({ recentsOpen: true, onOpenTabInNewWindow })}
+      />,
+    );
+
+    const openGroup = screen.getByRole("region", { name: "Open tabs" });
+    const recentGroup = screen.getByRole("region", { name: "Recently visited" });
+    const availableGroup = screen.getByRole("region", { name: "Other live sessions" });
+    expect(within(openGroup).getAllByRole("group", { name: /tab window actions$/ }))
+      .toHaveLength(2);
+    expect(within(recentGroup).queryByRole("button", { name: /tab to new window$/ }))
+      .not.toBeInTheDocument();
+    expect(within(availableGroup).queryByRole("button", { name: /tab to new window$/ }))
+      .not.toBeInTheDocument();
+
+    const move = within(openGroup).getByRole("button", {
+      name: "Move Alpha control tab to new window",
+    });
+    const copy = within(openGroup).getByRole("button", {
+      name: "Copy Alpha control tab to new window",
+    });
+    const row = move.closest<HTMLElement>(".workspace-session-row");
+    expect(row).toHaveClass("stacked-actions");
+    expect(move).toHaveClass("workspace-session-window-move");
+    expect(copy).toHaveClass("workspace-session-window-copy");
+    expect(within(row!).queryByRole("button", {
+      name: "Terminate Alpha control tmux session",
+    })).not.toBeInTheDocument();
+  });
+
+  it("keeps Move and Copy actions on tabs inside a named group", () => {
+    const onOpenTabInNewWindow = vi.fn().mockReturnValue("opened");
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "review",
+            name: "Review lane",
+            color: "cyan",
+            collapsed: false,
+            tabs: ["beta", "zulu"],
+          }],
+          onOpenTabInNewWindow,
+        })}
+      />,
+    );
+
+    const group = screen.getByRole("tab", {
+      name: "beta, Review lane group, Working",
+    }).closest<HTMLElement>("[data-workspace-tab-group-id]");
+    const actions = within(group!).getByRole("group", {
+      name: "beta tab window actions",
+    });
+    const move = within(actions).getByRole("button", {
+      name: "Move beta tab to new window",
+    });
+    const copy = within(actions).getByRole("button", {
+      name: "Copy beta tab to new window",
+    });
+    expect(move).toHaveAttribute("title", "Move tab to new window");
+    expect(copy).toHaveAttribute("title", "Copy tab to new window");
+
+    fireEvent.click(copy);
+    expect(onOpenTabInNewWindow).toHaveBeenCalledWith("beta", "copy");
+  });
+
+  it("does not offer window actions for the synthetic New session tab", () => {
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          newSessionActive: true,
+          onCloseNewSession: vi.fn(),
+          onOpenTabInNewWindow: vi.fn().mockReturnValue("opened"),
+        })}
+      />,
+    );
+
+    const syntheticTab = screen.getByRole("tab", {
+      name: "New session, not created yet",
+    });
+    const syntheticContainer = syntheticTab.closest<HTMLElement>(
+      ".workspace-new-session-tab",
+    );
+    expect(within(syntheticContainer!).queryByRole("button", { name: /new window/i }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "New session tab window actions" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Alpha control tab window actions" }))
+      .toBeInTheDocument();
   });
 
   it("uses vertical tab semantics, arrow traversal, and reorder controls", () => {
@@ -745,6 +1192,32 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.queryByRole("group", { name: /Reorder .* tab/ })).not.toBeInTheDocument();
   });
 
+  it("announces the final position when an ungrouped tab crosses a group", () => {
+    const onMoveTab = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "workers",
+            name: "Workers",
+            color: "green",
+            collapsed: false,
+            tabs: ["beta", "zulu"],
+          }],
+          onMoveTab,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Move Alpha control tab right" }));
+    expect(onMoveTab).toHaveBeenCalledWith("alpha", 1);
+    expect(screen.getByText(
+      "Alpha control moved to position 3 of 3.",
+      { selector: "[role='status']" },
+    )).toBeInTheDocument();
+  });
+
   it("reorders the full tab order from Overview even when its list is filtered", () => {
     const onMoveTab = vi.fn();
     const props = navigationProps({
@@ -1205,6 +1678,11 @@ describe("SessionWorkspaceNavigation", () => {
   it.each([
     ["saved", "Workspace saved automatically", "Saved"],
     ["loading", "Opening saved workspace", "Opening"],
+    [
+      "limited",
+      "Workspace tabs saved; tab groups are not stored by this server",
+      "Tabs saved",
+    ],
     ["error", "Workspace sync issue", "Sync issue"],
   ] as const)(
     "shows the %s persistence status without another save action",
@@ -1255,6 +1733,12 @@ describe("SessionWorkspaceNavigation", () => {
   it.each([
     ["saved", "Workspace saved automatically", "Saved workspace", "Saved"],
     ["loading", "Opening saved workspace", "Opening workspace", "Opening"],
+    [
+      "limited",
+      "Workspace tabs saved; tab groups are not stored by this server",
+      "Saved workspace",
+      "Tabs saved",
+    ],
     ["error", "Workspace sync issue", "Saved workspace", "Sync issue"],
   ] as const)(
     "uses a saved-workspace fallback for %s state instead of calling it temporary",

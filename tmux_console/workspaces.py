@@ -19,8 +19,24 @@ LOGGER = logging.getLogger("muxdeck.workspaces")
 MAX_WORKSPACE_ID_LENGTH = 128
 MAX_WORKSPACE_NAME_LENGTH = 80
 MAX_WORKSPACE_TABS = 32
+MAX_WORKSPACE_GROUPS = 16
+MAX_WORKSPACE_GROUP_ID_LENGTH = 64
+MAX_WORKSPACE_GROUP_NAME_LENGTH = 40
+WORKSPACE_GROUP_COLORS = (
+    "gray",
+    "blue",
+    "cyan",
+    "green",
+    "yellow",
+    "orange",
+    "red",
+    "pink",
+    "purple",
+)
+WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
+_GROUPS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 2
+WORKSPACE_SCHEMA_VERSION = 3
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -81,6 +97,72 @@ def validate_workspace_tabs(value: object) -> tuple[str, ...]:
     return tuple(tabs)
 
 
+def _validate_workspace_group_id(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    if not value:
+        raise ValueError(f"{field} cannot be blank")
+    if len(value) > MAX_WORKSPACE_GROUP_ID_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_WORKSPACE_GROUP_ID_LENGTH} characters or fewer"
+        )
+    if not all(
+        character.isascii() and (character.isalnum() or character in "_-")
+        for character in value
+    ):
+        raise ValueError(
+            f"{field} can contain only ASCII letters, numbers, hyphens, and underscores"
+        )
+    return value
+
+
+def _normalize_workspace_group_name(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    name = value.strip()
+    if not name:
+        raise ValueError(f"{field} cannot be blank")
+    if len(name) > MAX_WORKSPACE_GROUP_NAME_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_WORKSPACE_GROUP_NAME_LENGTH} characters or fewer"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in name):
+        raise ValueError(f"{field} cannot contain control characters")
+    _validate_unicode(name, field)
+    return name
+
+
+def _validate_workspace_group_tabs(
+    value: object,
+    field: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be an array")
+    if not value:
+        raise ValueError(f"{field} cannot be empty")
+    if len(value) > MAX_WORKSPACE_TABS:
+        raise ValueError(
+            f"{field} cannot contain more than {MAX_WORKSPACE_TABS} sessions"
+        )
+
+    tabs: list[str] = []
+    seen: set[str] = set()
+    for index, candidate in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if not isinstance(candidate, str):
+            raise TypeError(f"{item_field} must be a string")
+        try:
+            tab = validate_session_name(candidate)
+            _validate_unicode(tab, item_field)
+        except ValueError as error:
+            raise ValueError(f"{item_field}: {error}") from error
+        if tab in seen:
+            raise ValueError(f"{field} contains duplicate session: {tab}")
+        seen.add(tab)
+        tabs.append(tab)
+    return tuple(tabs)
+
+
 def validate_active_session(value: object, tabs: tuple[str, ...]) -> str | None:
     if value is None:
         return None
@@ -136,10 +218,158 @@ def _validate_session_revision(value: object) -> int:
 
 
 @dataclass(frozen=True)
+class WorkspaceGroup:
+    id: str
+    name: str
+    color: str
+    collapsed: bool
+    tabs: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "color": self.color,
+            "collapsed": self.collapsed,
+            "tabs": list(self.tabs),
+        }
+
+
+def validate_workspace_groups(
+    value: object,
+    workspace_tabs: tuple[str, ...],
+) -> tuple[WorkspaceGroup, ...]:
+    if not isinstance(value, list):
+        raise TypeError("groups must be an array")
+    if len(value) > MAX_WORKSPACE_GROUPS:
+        raise ValueError(
+            f"groups cannot contain more than {MAX_WORKSPACE_GROUPS} groups"
+        )
+
+    workspace_positions = {
+        session_name: index for index, session_name in enumerate(workspace_tabs)
+    }
+    groups: list[WorkspaceGroup] = []
+    seen_ids: set[str] = set()
+    seen_tabs: set[str] = set()
+    previous_start = -1
+    expected_fields = {"id", "name", "color", "collapsed", "tabs"}
+    for index, candidate in enumerate(value):
+        path = f"groups[{index}]"
+        if not isinstance(candidate, dict):
+            raise TypeError(f"{path} must be an object")
+        missing = sorted(expected_fields - set(candidate))
+        if missing:
+            raise ValueError(f"{path} is missing field: {missing[0]}")
+        unknown = sorted(str(field) for field in set(candidate) - expected_fields)
+        if unknown:
+            raise ValueError(f"{path} has unknown field: {unknown[0]}")
+
+        group_id = _validate_workspace_group_id(candidate["id"], f"{path}.id")
+        if group_id in seen_ids:
+            raise ValueError(f"groups contains duplicate id: {group_id}")
+        seen_ids.add(group_id)
+        name = _normalize_workspace_group_name(candidate["name"], f"{path}.name")
+        color = candidate["color"]
+        if not isinstance(color, str):
+            raise TypeError(f"{path}.color must be a string")
+        if color not in WORKSPACE_GROUP_COLOR_SET:
+            raise ValueError(
+                f"{path}.color must be one of: {', '.join(WORKSPACE_GROUP_COLORS)}"
+            )
+        collapsed = candidate["collapsed"]
+        if not isinstance(collapsed, bool):
+            raise TypeError(f"{path}.collapsed must be a boolean")
+        tabs = _validate_workspace_group_tabs(candidate["tabs"], f"{path}.tabs")
+
+        unknown_tabs = [tab for tab in tabs if tab not in workspace_positions]
+        if unknown_tabs:
+            raise ValueError(
+                f"{path}.tabs contains session outside workspace tabs: {unknown_tabs[0]}"
+            )
+        duplicate_tabs = [tab for tab in tabs if tab in seen_tabs]
+        if duplicate_tabs:
+            raise ValueError(
+                f"groups contains session in more than one group: {duplicate_tabs[0]}"
+            )
+        start = workspace_positions[tabs[0]]
+        if tuple(workspace_tabs[start : start + len(tabs)]) != tabs:
+            raise ValueError(
+                f"{path}.tabs must be contiguous and follow workspace tab order"
+            )
+        if start <= previous_start:
+            raise ValueError("groups must follow workspace tab order")
+        previous_start = start
+        seen_tabs.update(tabs)
+        groups.append(
+            WorkspaceGroup(
+                id=group_id,
+                name=name,
+                color=color,
+                collapsed=collapsed,
+                tabs=tabs,
+            )
+        )
+    return tuple(groups)
+
+
+def _reconcile_workspace_groups(
+    groups: tuple[WorkspaceGroup, ...],
+    workspace_tabs: tuple[str, ...],
+) -> tuple[WorkspaceGroup, ...]:
+    positions = {tab: index for index, tab in enumerate(workspace_tabs)}
+    reconciled: list[tuple[int, WorkspaceGroup]] = []
+    for group in groups:
+        member_set = set(group.tabs)
+        tabs = tuple(tab for tab in workspace_tabs if tab in member_set)
+        if not tabs:
+            continue
+        start = positions[tabs[0]]
+        if tuple(workspace_tabs[start : start + len(tabs)]) != tabs:
+            continue
+        reconciled.append((start, replace(group, tabs=tabs)))
+    reconciled.sort(key=lambda item: item[0])
+    return tuple(group for _, group in reconciled)
+
+
+def _rename_workspace_groups(
+    groups: tuple[WorkspaceGroup, ...],
+    workspace_tabs: tuple[str, ...],
+    renamed_tabs: tuple[str, ...],
+    current_name: str,
+    new_name: str,
+) -> tuple[WorkspaceGroup, ...]:
+    group_by_tab = {
+        tab: group.id for group in groups for tab in group.tabs
+    }
+    source_by_renamed_tab: dict[str, str] = {}
+    for tab in workspace_tabs:
+        renamed_tab = new_name if tab == current_name else tab
+        if tab == current_name:
+            # The live renamed session wins over a stale saved tab that already
+            # used the target name, regardless of their workspace order.
+            source_by_renamed_tab[renamed_tab] = tab
+        else:
+            source_by_renamed_tab.setdefault(renamed_tab, tab)
+
+    renamed_groups: list[WorkspaceGroup] = []
+    for group in groups:
+        tabs = tuple(
+            tab
+            for tab in renamed_tabs
+            if group_by_tab.get(source_by_renamed_tab[tab]) == group.id
+        )
+        if tabs:
+            renamed_groups.append(replace(group, tabs=tabs))
+    return _reconcile_workspace_groups(tuple(renamed_groups), renamed_tabs)
+
+
+@dataclass(frozen=True)
 class SavedWorkspace:
     id: str
     name: str
     tabs: tuple[str, ...]
+    groups: tuple[WorkspaceGroup, ...]
     active_session: str | None
     created_at: int
     updated_at: int
@@ -150,6 +380,7 @@ class SavedWorkspace:
             "id": self.id,
             "name": self.name,
             "tabs": list(self.tabs),
+            "groups": [group.to_dict() for group in self.groups],
             "activeSession": self.active_session,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -226,9 +457,14 @@ class WorkspaceStore:
         name: object,
         tabs: object,
         active_session: object,
+        groups: object = _GROUPS_OMITTED,
     ) -> dict[str, Any]:
         normalized_name = normalize_workspace_name(name)
         validated_tabs = validate_workspace_tabs(tabs)
+        validated_groups = validate_workspace_groups(
+            [] if groups is _GROUPS_OMITTED else groups,
+            validated_tabs,
+        )
         validated_active_session = validate_active_session(
             active_session, validated_tabs
         )
@@ -241,6 +477,7 @@ class WorkspaceStore:
                 id=workspace_id,
                 name=normalized_name,
                 tabs=validated_tabs,
+                groups=validated_groups,
                 active_session=validated_active_session,
                 created_at=timestamp,
                 updated_at=timestamp,
@@ -256,9 +493,11 @@ class WorkspaceStore:
         *,
         name: object = None,
         tabs: object = None,
+        groups: object = None,
         active_session: object = None,
         update_name: bool = False,
         update_tabs: bool = False,
+        update_groups: bool = False,
         update_active_session: bool = False,
         session_revision: object = None,
     ) -> dict[str, Any]:
@@ -267,7 +506,7 @@ class WorkspaceStore:
         validated_tabs = validate_workspace_tabs(tabs) if update_tabs else None
         validated_session_revision = (
             _validate_session_revision(session_revision)
-            if update_tabs or update_active_session
+            if update_tabs or update_groups or update_active_session
             else None
         )
 
@@ -282,6 +521,13 @@ class WorkspaceStore:
                     self._session_rename_revision, validated_session_revision
                 )
             next_tabs = validated_tabs if validated_tabs is not None else current.tabs
+            next_groups = (
+                validate_workspace_groups(groups, next_tabs)
+                if update_groups
+                else _reconcile_workspace_groups(current.groups, next_tabs)
+                if update_tabs
+                else current.groups
+            )
             next_active_session = (
                 validate_active_session(active_session, next_tabs)
                 if update_active_session
@@ -294,6 +540,7 @@ class WorkspaceStore:
                 current,
                 name=normalized_name if normalized_name is not None else current.name,
                 tabs=next_tabs,
+                groups=next_groups,
                 active_session=next_active_session,
                 updated_at=timestamp,
             )
@@ -308,6 +555,8 @@ class WorkspaceStore:
         tabs: object,
         active_session: object,
         session_revision: object,
+        groups: object = None,
+        update_groups: bool = False,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
         validated_tabs = validate_workspace_tabs(tabs)
@@ -323,6 +572,11 @@ class WorkspaceStore:
                 raise WorkspaceSessionRevisionConflict(
                     self._session_rename_revision, validated_session_revision
                 )
+            validated_groups = (
+                validate_workspace_groups(groups, validated_tabs)
+                if update_groups
+                else _reconcile_workspace_groups(current.groups, validated_tabs)
+            )
             timestamp = max(
                 self._timestamp(),
                 current.updated_at + 1,
@@ -331,6 +585,7 @@ class WorkspaceStore:
             workspace = replace(
                 current,
                 tabs=validated_tabs,
+                groups=validated_groups,
                 active_session=validated_active_session,
                 updated_at=timestamp,
                 last_active_at=timestamp,
@@ -364,7 +619,9 @@ class WorkspaceStore:
                     continue
                 renamed_tabs = tuple(
                     dict.fromkeys(
-                        new_name if tab == current_name else tab for tab in current.tabs
+                        new_name if tab == current_name else tab
+                        for tab in current.tabs
+                        if tab == current_name or tab != new_name
                     )
                 )
                 active_session = (
@@ -372,9 +629,17 @@ class WorkspaceStore:
                     if current.active_session == current_name
                     else current.active_session
                 )
+                groups = _rename_workspace_groups(
+                    current.groups,
+                    current.tabs,
+                    renamed_tabs,
+                    current_name,
+                    new_name,
+                )
                 workspace = replace(
                     current,
                     tabs=renamed_tabs,
+                    groups=groups,
                     active_session=active_session,
                     updated_at=max(timestamp, current.updated_at + 1),
                 )
@@ -425,7 +690,9 @@ class WorkspaceStore:
             version = payload.get("version")
             if (
                 isinstance(version, bool)
-                or version not in (1, WORKSPACE_SCHEMA_VERSION)
+                or not isinstance(version, int)
+                or version < 1
+                or version > WORKSPACE_SCHEMA_VERSION
             ):
                 raise ValueError("unsupported document version")
             session_rename_revision = (
@@ -439,7 +706,7 @@ class WorkspaceStore:
 
             workspaces: dict[str, SavedWorkspace] = {}
             for index, record in enumerate(records):
-                workspace = self._load_workspace(record, index)
+                workspace = self._load_workspace(record, index, version)
                 if workspace.id in workspaces:
                     raise ValueError(f"duplicate workspace id: {workspace.id}")
                 workspaces[workspace.id] = workspace
@@ -453,7 +720,11 @@ class WorkspaceStore:
         return {}, 0
 
     @staticmethod
-    def _load_workspace(record: object, index: int) -> SavedWorkspace:
+    def _load_workspace(
+        record: object,
+        index: int,
+        version: int,
+    ) -> SavedWorkspace:
         path = f"workspaces[{index}]"
         if not isinstance(record, dict):
             raise TypeError(f"{path} must be an object")
@@ -466,6 +737,8 @@ class WorkspaceStore:
             "updatedAt",
             "lastActiveAt",
         }
+        if version >= 3:
+            expected.add("groups")
         missing = sorted(expected - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -476,6 +749,11 @@ class WorkspaceStore:
         workspace_id = _validate_workspace_id(record["id"])
         name = normalize_workspace_name(record["name"])
         tabs = validate_workspace_tabs(record["tabs"])
+        groups = (
+            validate_workspace_groups(record["groups"], tabs)
+            if version >= 3
+            else ()
+        )
         active_session = validate_active_session(record["activeSession"], tabs)
         created_at = _validate_timestamp(record["createdAt"], "createdAt")
         updated_at = _validate_timestamp(record["updatedAt"], "updatedAt")
@@ -490,6 +768,7 @@ class WorkspaceStore:
             id=workspace_id,
             name=name,
             tabs=tabs,
+            groups=groups,
             active_session=active_session,
             created_at=created_at,
             updated_at=updated_at,

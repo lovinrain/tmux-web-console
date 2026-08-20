@@ -18,6 +18,7 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "../icons";
+import type { TerminalSubmissionTerminator } from "../terminalInput";
 
 export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
@@ -31,7 +32,7 @@ interface InputBarProps {
   mobileDistractionFree?: boolean;
   onToggleMobileDistractionFree?: () => void;
   onSend: (data: string) => boolean;
-  onSubmit: (data: string, withEnter: boolean) => Promise<boolean>;
+  onSubmit: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
   onAddToMemo?: (data: string) => Promise<void>;
   onConsumeMemo?: (source: MemoDraftSource) => Promise<void>;
   onReturnToLive: () => void;
@@ -424,7 +425,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (!shortcutsVisible) setOtherKeyPanelOpen(false);
   }, [shortcutsVisible]);
 
-  const sendDraft = async (withEnter: boolean) => {
+  const sendDraft = async (terminator: TerminalSubmissionTerminator) => {
     const textarea = textareaRef.current;
     if (!textarea || !textarea.value || !enabled || actionPendingRef.current) return;
     if (composingRef.current) {
@@ -439,7 +440,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     textarea.readOnly = true;
     let accepted = false;
     try {
-      accepted = await onSubmit(submitted, withEnter);
+      accepted = await onSubmit(submitted, terminator);
     } catch {
       accepted = false;
     }
@@ -528,7 +529,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (!enabled || !event.currentTarget.value || actionPendingRef.current) return;
 
     event.preventDefault();
-    if (!event.repeat) void sendDraft(true);
+    if (!event.repeat) void sendDraft("enter");
   };
 
   const clearDraft = () => {
@@ -697,7 +698,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               className="secondary-button composer-send"
               aria-label="Send"
               disabled={!enabled || !draftLength || actionPending}
-              onClick={() => void sendDraft(false)}
+              onClick={() => void sendDraft("none")}
             >
               <span className="composer-action-label-full" aria-hidden="true">Send</span>
               <span className="composer-action-label-compact" aria-hidden="true">S</span>
@@ -709,7 +710,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               aria-label="Send + Enter"
               aria-keyshortcuts="Shift+Enter"
               title="Send staged input followed by Enter (Shift+Enter)"
-              onClick={() => void sendDraft(true)}
+              onClick={() => void sendDraft("enter")}
             >
               <span className="composer-action-label-full" aria-hidden="true">Send + Enter</span>
               <span className="composer-action-label-compact" aria-hidden="true">S+E</span>
@@ -738,16 +739,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             </button>
             <button
               type="button"
-              className="secondary-button composer-insert-tab"
-              aria-label="Insert Tab into staged input"
-              aria-controls="terminal-staged-input"
-              title="Insert a literal Tab at the staged-input selection"
-              disabled={actionPending}
+              className="secondary-button composer-send-tab"
+              aria-label="Send + Tab"
+              title="Send staged input followed by Tab"
+              disabled={!enabled || !draftLength || actionPending}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => insertText("\t")}
+              onClick={() => void sendDraft("tab")}
             >
-              <span className="composer-action-label-full" aria-hidden="true">Tab</span>
-              <span className="composer-action-label-compact" aria-hidden="true">T</span>
+              <span className="composer-action-label-full" aria-hidden="true">Send + Tab</span>
+              <span className="composer-action-label-compact" aria-hidden="true">S+T</span>
             </button>
           </div>
         </div>

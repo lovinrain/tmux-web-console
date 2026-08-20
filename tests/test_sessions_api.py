@@ -789,6 +789,15 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
     saved_workspace = workspaces.create_workspace(
         name="Project",
         tabs=[old_name, "other", new_name],
+        groups=[
+            {
+                "id": "primary",
+                "name": "Primary",
+                "color": "blue",
+                "collapsed": False,
+                "tabs": [old_name, "other"],
+            }
+        ],
         active_session=old_name,
     )
     client = TestClient(
@@ -832,6 +841,15 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
             "workspace-id"
         )
         assert reloaded_workspace["tabs"] == [new_name, "other"]
+        assert reloaded_workspace["groups"] == [
+            {
+                "id": "primary",
+                "name": "Primary",
+                "color": "blue",
+                "collapsed": False,
+                "tabs": [new_name, "other"],
+            }
+        ]
         assert reloaded_workspace["activeSession"] == new_name
         assert reloaded_workspace["lastActiveAt"] == saved_workspace["lastActiveAt"]
         assert reloaded_workspace["updatedAt"] > saved_workspace["updatedAt"]
@@ -860,6 +878,7 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
         assert current_activity.status == 200
         current_workspace = (await current_activity.json())["workspace"]
         assert current_workspace["tabs"] == [new_name, "ended-but-preserved"]
+        assert current_workspace["groups"][0]["tabs"] == [new_name]
         assert current_workspace["activeSession"] == "ended-but-preserved"
         assert current_workspace["sessionRevision"] == 1
     finally:

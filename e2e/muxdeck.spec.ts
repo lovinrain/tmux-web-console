@@ -1379,7 +1379,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     const stagedInput = page.getByRole("textbox", { name: "Staged input" });
     const desktopComposerActions = page.locator(".composer-actions-primary");
     expect(await desktopComposerActions.locator(".composer-action-label-full").allTextContents())
-      .toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Tab"]);
+      .toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Send + Tab"]);
     for (const label of await desktopComposerActions.locator(
       ".composer-action-label-full",
     ).all()) {
@@ -1583,6 +1583,395 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
   }
 });
 
+test("workspace tabs copy and move into isolated browser windows", async ({ browser, page }) => {
+  test.setTimeout(60_000);
+  const helperSession = `${sessionName}-window-actions`;
+  const sourceTabs = [sessionName, helperSession];
+  const sourceGroup = encodeURIComponent(JSON.stringify({
+    id: "window_actions",
+    name: "Window actions",
+    color: "cyan",
+    collapsed: false,
+    tabs: sourceTabs,
+  }));
+  let copiedPage: Page | null = null;
+  let movedPage: Page | null = null;
+
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    helperSession,
+    "bash",
+    "--noprofile",
+    "--norc",
+  ]);
+  const primaryIdentity = workspaceTmuxIdentity(sessionName);
+  const helperIdentity = workspaceTmuxIdentity(helperSession);
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(helperSession)}?kind=shells&view=list`
+      + sourceTabs.map((tab) => `&tab=${encodeURIComponent(tab)}`).join("")
+      + `&tab-group=${sourceGroup}`,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+
+    const [openedCopy] = await Promise.all([
+      page.context().waitForEvent("page"),
+      page.getByRole("button", {
+        name: `Copy ${helperSession} tab to new window`,
+      }).click(),
+    ]);
+    copiedPage = openedCopy;
+    await expectRoute(
+      copiedPage,
+      `/mux/session/${helperSession}`,
+      [helperSession],
+      { kind: "shells", view: "list" },
+    );
+    expect(await copiedPage.evaluate(() => window.opener === null)).toBe(true);
+    expect(new URL(copiedPage.url()).searchParams.has("workspace")).toBe(false);
+    expect(new URL(copiedPage.url()).searchParams.has("tab-group")).toBe(false);
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      sourceTabs,
+      { kind: "shells", view: "list" },
+    );
+    await expect(page.locator("#muxdeck-session-tabs .workspace-tab")).toHaveCount(2);
+    expect(workspaceTmuxIdentity(helperSession)).toBe(helperIdentity);
+    await copiedPage.close();
+    copiedPage = null;
+
+    await page.evaluate(() => {
+      const testWindow = window as typeof window & {
+        __muxdeckOriginalOpen?: typeof window.open;
+      };
+      testWindow.__muxdeckOriginalOpen = window.open;
+      window.open = (() => null) as typeof window.open;
+    });
+    await page.getByRole("button", {
+      name: `Copy ${helperSession} tab to new window`,
+    }).click();
+    const blockedAlert = page.getByRole("alert");
+    await expect(blockedAlert).toBeVisible();
+    await blockedAlert.locator("span").evaluate((message) => {
+      message.textContent = `Muxdeck could not open ${"unbroken-title-".repeat(18)}.`;
+    });
+    expect(await blockedAlert.evaluate((alert) => alert.scrollWidth <= alert.clientWidth))
+      .toBe(true);
+    await page.getByRole("button", { name: "Dismiss new window error" }).click();
+    await page.evaluate(() => {
+      const testWindow = window as typeof window & {
+        __muxdeckOriginalOpen?: typeof window.open;
+      };
+      if (testWindow.__muxdeckOriginalOpen) {
+        window.open = testWindow.__muxdeckOriginalOpen;
+        delete testWindow.__muxdeckOriginalOpen;
+      }
+    });
+
+    const touchContext = await browser.newContext({
+      hasTouch: true,
+      viewport: { width: 1366, height: 900 },
+    });
+    try {
+      const touchPage = await touchContext.newPage();
+      await touchPage.goto(page.url());
+      await touchPage.evaluate(() => {
+        window.localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
+        window.localStorage.setItem("muxdeck-desktop-tab-rail-width", "288");
+      });
+      await touchPage.reload({ waitUntil: "domcontentloaded" });
+      expect(await touchPage.evaluate(() => window.matchMedia("(pointer: coarse)").matches))
+        .toBe(true);
+      const touchNavigation = touchPage.getByRole("navigation", {
+        name: "Session workspace",
+      });
+      await expect(touchNavigation).toHaveAttribute("data-orientation", "vertical");
+      const touchHelperTab = touchNavigation.locator(
+        `.workspace-tab[data-workspace-session-name="${helperSession}"]`,
+      );
+      await expect(touchHelperTab.locator(".workspace-tab-window-actions")).toBeHidden();
+      const touchGeometry = await touchHelperTab.evaluate((tab) => {
+        const tabRect = tab.getBoundingClientRect();
+        const titleRect = tab.querySelector(".workspace-tab-title")!.getBoundingClientRect();
+        const closeRect = tab.querySelector(".workspace-tab-close")!.getBoundingClientRect();
+        return {
+          closeRight: closeRect.right,
+          tabRight: tabRect.right,
+          titleWidth: titleRect.width,
+        };
+      });
+      expect(touchGeometry.closeRight).toBeLessThanOrEqual(
+        touchGeometry.tabRight + CSS_PIXEL_TOLERANCE,
+      );
+      expect(touchGeometry.titleWidth).toBeGreaterThan(0);
+
+      await touchPage.getByRole("button", { name: /Open session switcher/ }).click();
+      const touchOverview = touchPage.getByRole("dialog", { name: "Switch sessions" });
+      const touchHelperRow = touchOverview.locator(
+        `.workspace-session-row[data-workspace-session-name="${helperSession}"]`,
+      );
+      await expect(touchHelperRow.getByRole("button", {
+        name: `Move ${helperSession} tab to new window`,
+      })).toBeVisible();
+      await expect(touchHelperRow.getByRole("button", {
+        name: `Copy ${helperSession} tab to new window`,
+      })).toBeVisible();
+    } finally {
+      await touchContext.close();
+    }
+
+    await page.evaluate(() => {
+      window.localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
+      window.localStorage.setItem("muxdeck-desktop-tab-rail-width", "72");
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const navigation = page.getByRole("navigation", { name: "Session workspace" });
+    await expect(navigation).toHaveAttribute("data-orientation", "vertical");
+    await expect(navigation).toHaveAttribute("data-compact", "true");
+    const helperTab = navigation.locator(
+      `.workspace-tab[data-workspace-session-name="${helperSession}"]`,
+    );
+    await expect(helperTab.locator(".workspace-tab-window-actions")).toBeHidden();
+
+    await page.getByRole("button", { name: /Open session switcher/ }).click();
+    let overview = page.getByRole("dialog", { name: "Switch sessions" });
+    let helperRow = overview.locator(
+      `.workspace-session-row[data-workspace-session-name="${helperSession}"]`,
+    );
+    await expect(helperRow.getByRole("button", {
+      name: `Move ${helperSession} tab to new window`,
+    })).toBeVisible();
+    await expect(helperRow.getByRole("button", {
+      name: `Copy ${helperSession} tab to new window`,
+    })).toBeVisible();
+    await overview.getByRole("button", { name: "Close session switcher" }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      sourceTabs,
+      { kind: "shells", view: "list" },
+    );
+
+    await page.setViewportSize({ width: 390, height: 664 });
+    await page.getByRole("navigation", { name: "Mobile console focus" })
+      .getByRole("button", { name: "Overview" })
+      .click();
+    overview = page.getByRole("dialog", { name: "Switch sessions" });
+    helperRow = overview.locator(
+      `.workspace-session-row[data-workspace-session-name="${helperSession}"]`,
+    );
+    const mobileMove = helperRow.getByRole("button", {
+      name: `Move ${helperSession} tab to new window`,
+    });
+    const mobileCopy = helperRow.getByRole("button", {
+      name: `Copy ${helperSession} tab to new window`,
+    });
+    for (const action of [mobileMove, mobileCopy]) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThanOrEqual(44 - CSS_PIXEL_TOLERANCE);
+      expect(box!.height).toBeGreaterThanOrEqual(44 - CSS_PIXEL_TOLERANCE);
+    }
+    expect(await overview.evaluate((element) => element.scrollWidth <= element.clientWidth))
+      .toBe(true);
+    expect(await helperRow.locator(".workspace-session-actions").evaluate((element) => (
+      element.scrollWidth <= element.clientWidth
+    ))).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+    await overview.getByRole("button", { name: "Close session switcher" }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      sourceTabs,
+      { kind: "shells", view: "list" },
+    );
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const orientationToggle = page.getByRole("group", { name: "Console bars" })
+      .getByRole("button", { name: "Vertical session tabs" });
+    await expect(orientationToggle).toHaveAttribute("aria-pressed", "true");
+    await orientationToggle.click();
+    await expect(navigation).toHaveAttribute("data-orientation", "horizontal");
+
+    const [openedMove] = await Promise.all([
+      page.context().waitForEvent("page"),
+      page.getByRole("button", {
+        name: `Move ${helperSession} tab to new window`,
+      }).click(),
+    ]);
+    movedPage = openedMove;
+    await expectRoute(
+      movedPage,
+      `/mux/session/${helperSession}`,
+      [helperSession],
+      { kind: "shells", view: "list" },
+    );
+    expect(await movedPage.evaluate(() => window.opener === null)).toBe(true);
+    expect(new URL(movedPage.url()).searchParams.has("tab-group")).toBe(false);
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}`,
+      [sessionName],
+      { kind: "shells", view: "list" },
+    );
+    await expect(navigation.locator(
+      `.workspace-tab[data-workspace-session-name="${sessionName}"]`,
+    )).toBeVisible();
+    await expect(navigation.locator(
+      `.workspace-tab[data-workspace-session-name="${helperSession}"]`,
+    )).toHaveCount(0);
+    expect(workspaceTmuxIdentity(sessionName)).toBe(primaryIdentity);
+    expect(workspaceTmuxIdentity(helperSession)).toBe(helperIdentity);
+  } finally {
+    if (copiedPage && !copiedPage.isClosed()) await copiedPage.close();
+    if (movedPage && !movedPage.isClosed()) await movedPage.close();
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the session created on this test's disposable socket.
+    }
+  }
+});
+
+test("workspace tab groups persist in the URL and remain manageable on mobile", async ({ page }) => {
+  test.setTimeout(60_000);
+  const firstGroupedSession = `${sessionName}-group-one`;
+  const secondGroupedSession = `${sessionName}-group-two`;
+  const initialTabs = [sessionName, firstGroupedSession, secondGroupedSession];
+
+  for (const helperSession of [firstGroupedSession, secondGroupedSession]) {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+  }
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${firstGroupedSession}?kind=shells`
+      + initialTabs.map((tab) => `&tab=${encodeURIComponent(tab)}`).join(""),
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+
+    await page.getByRole("button", { name: "Create tab group" }).click();
+    const createDialog = page.getByRole("dialog", { name: "Create a group" });
+    await createDialog.getByRole("textbox", { name: "Group name" }).fill("Review lane");
+    await createDialog.getByRole("radio", { name: "orange" }).check();
+    await createDialog.getByRole("checkbox", {
+      name: new RegExp(secondGroupedSession),
+    }).check();
+    await createDialog.getByRole("button", { name: "Create group" }).click();
+
+    const groupBlock = page.locator("[data-workspace-tab-group-id]").filter({
+      has: page.getByRole("button", { name: "Collapse Review lane tab group" }),
+    });
+    await expect(groupBlock).toHaveAttribute("data-tab-group-color", "orange");
+    await expect(groupBlock.getByRole("tab")).toHaveCount(2);
+    await expect.poll(async () => page.evaluate(() => {
+      const url = new URL(window.location.href);
+      return {
+        tabs: url.searchParams.getAll("tab"),
+        groups: url.searchParams.getAll("tab-group").map((value) => JSON.parse(value)),
+      };
+    })).toEqual({
+      tabs: initialTabs,
+      groups: [{
+        id: expect.any(String),
+        name: "Review lane",
+        color: "orange",
+        collapsed: false,
+        tabs: [firstGroupedSession, secondGroupedSession],
+      }],
+    });
+
+    await page.getByRole("button", { name: "Search open tabs" }).click();
+    const searchDialog = page.getByRole("dialog", { name: "Jump to tab" });
+    await searchDialog.getByRole("combobox").fill("Review lane");
+    await expect(searchDialog.getByRole("option")).toHaveCount(2);
+    await searchDialog.getByRole("combobox").press("Escape");
+
+    await page.getByRole("button", { name: "Collapse Review lane tab group" }).click();
+    await expect(page.getByRole("tab", {
+      name: new RegExp(`^${firstGroupedSession}, Review lane group`),
+    })).toBeVisible();
+    await expect(page.getByRole("tab", {
+      name: new RegExp(`^${secondGroupedSession}, Review lane group`),
+    })).toBeHidden();
+    await page.getByRole("button", { name: "Expand Review lane tab group" }).click();
+
+    await page.getByRole("button", { name: "Move Review lane group left" }).click();
+    await expect.poll(async () => page.evaluate(() => (
+      new URL(window.location.href).searchParams.getAll("tab")
+    ))).toEqual([firstGroupedSession, secondGroupedSession, sessionName]);
+
+    await page.setViewportSize({ width: 390, height: 664 });
+    await page.getByRole("navigation", { name: "Mobile console focus" })
+      .getByRole("button", { name: "Overview" })
+      .click();
+    const overview = page.getByRole("dialog", { name: "Switch sessions" });
+    await overview.getByRole("button", { name: "Edit Review lane tab group" }).click();
+
+    const editDialog = page.getByRole("dialog", { name: "Edit Review lane" });
+    await editDialog.getByRole("textbox", { name: "Group name" }).fill("Release lane");
+    await editDialog.getByRole("button", { name: "Save group" }).click();
+    await expect(page.getByRole("dialog", { name: "Switch sessions" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit Release lane tab group" }))
+      .toBeVisible();
+    await page.screenshot({ path: "artifacts/workspace-tab-groups-mobile.png" });
+
+    await page.getByRole("button", { name: "Close session switcher" }).click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("button", { name: "Collapse Release lane tab group" }))
+      .toBeVisible();
+    await expect.poll(async () => page.evaluate(() => {
+      const value = new URL(window.location.href).searchParams.get("tab-group");
+      return value ? JSON.parse(value).name : null;
+    })).toBe("Release lane");
+    await page.screenshot({ path: "artifacts/workspace-tab-groups-desktop.png" });
+
+    await page.getByRole("button", { name: "All sessions" }).click();
+    await expect(page.locator("main.dashboard-shell")).toBeVisible();
+    await expect(page.getByText("Release lane", { exact: true })).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+;");
+    await expect(page.getByRole("dialog", { name: "Jump to tab" })).toHaveCount(0);
+    await expect.poll(async () => page.evaluate(() => {
+      const value = new URL(window.location.href).searchParams.get("tab-group");
+      return value ? JSON.parse(value).name : null;
+    })).toBe("Release lane");
+  } finally {
+    for (const helperSession of [firstGroupedSession, secondGroupedSession]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to sessions created on this test's disposable socket.
+      }
+    }
+  }
+});
+
 test("mobile workspace quick-switches one live terminal and keeps a page-local visit trail", async ({ page }) => {
   test.setTimeout(60_000);
   execFileSync("tmux", [
@@ -1736,7 +2125,6 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     });
     const socketsBeforeModes = await constructedTerminalSocketCount();
     const visibilityDraft = "mobile focus modes keep this staged draft";
-    const tabbedVisibilityDraft = "mobile\t focus modes keep this staged draft";
     const alternateDraft = page.locator("#terminal-staged-input");
     await inputMode.click();
     await expect(consoleShell).toHaveAttribute("data-mobile-focus", "input");
@@ -1749,18 +2137,18 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
       const field = textarea as HTMLTextAreaElement;
       field.setSelectionRange(6, 6);
     });
-    const insertDraftTab = page.getByRole("button", {
-      name: "Insert Tab into staged input",
+    const sendWithTab = page.getByRole("button", {
+      name: "Send + Tab",
     });
-    await insertDraftTab.click();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(sendWithTab).toBeEnabled();
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect(alternateDraft).toBeFocused();
     const stagedActionButtons = page.locator(".composer-actions-primary > button");
     await expect(stagedActionButtons).toHaveCount(5);
     const compactActionLabels = page.locator(
       ".composer-actions-primary .composer-action-label-compact",
     );
-    expect(await compactActionLabels.allTextContents()).toEqual(["C", "S", "S+E", "M", "T"]);
+    expect(await compactActionLabels.allTextContents()).toEqual(["C", "S", "S+E", "M", "S+T"]);
     for (const label of await compactActionLabels.all()) await expect(label).toBeVisible();
     for (const label of await page.locator(
       ".composer-actions-primary .composer-action-label-full",
@@ -1788,7 +2176,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await expect(stagedInputRegion).toBeVisible();
     await expect(alternateDraft).toBeVisible();
     await expect(alternateDraft).toBeFocused();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect(page.locator(".composer-heading > label"))
       .toHaveCSS("clip", "rect(0px, 0px, 0px, 0px)");
     const focusedComposerStatus = page.locator(".composer-status");
@@ -1804,7 +2192,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
       page.getByRole("button", { name: "Send", exact: true }),
       page.getByRole("button", { name: "Send + Enter" }),
       page.getByRole("button", { name: "Queue in memo" }),
-      insertDraftTab,
+      sendWithTab,
       exitInputFocus,
     ];
     for (const control of focusedInputControls) {
@@ -1861,7 +2249,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await expect(mobileFocus).toBeVisible();
     await expect(page.locator(".terminal-view")).toBeVisible();
     await expect(terminalShortcuts).toBeVisible();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect.poll(() => workspaceTmuxSnapshot(alternateSessionName))
       .toBe(inputFocusTmuxSize);
     expect(await constructedTerminalSocketCount()).toBe(socketsBeforeModes);
@@ -1878,7 +2266,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await expect(stagedInputRegion).toBeHidden();
     await expect(terminalShortcuts).toBeHidden();
     await expect(alternateDraft).not.toBeFocused();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect(page).toHaveURL(alternateUrl);
     await expect.poll(async () => {
       const sockets = await activeTerminalSockets();
@@ -1891,7 +2279,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     expect(await constructedTerminalSocketCount()).toBe(socketsBeforeModes);
 
     await inputMode.click();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await page.goBack();
     await expectRoute(page, "/mux/", [sessionName, alternateSessionName], dashboardQuery);
     const resumeWorkspace = page.getByRole("button", {
@@ -1907,7 +2295,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await expect(page).toHaveURL(alternateUrl);
     await expect(consoleShell).toHaveAttribute("data-mobile-focus", "input");
     await expect(inputMode).toHaveAttribute("aria-pressed", "true");
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect.poll(async () => {
       const sockets = await activeTerminalSockets();
       return sockets.length === 1 && sockets[0].includes(`session=${alternateSessionName}`);
@@ -2015,13 +2403,13 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await expect(page).toHaveURL(alternateOnlyUrl);
 
     await inputMode.click();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(consoleShell).toHaveAttribute("data-mobile-focus", "terminal");
     await expect(terminalMode).toHaveAttribute("aria-pressed", "true");
     await expect(stagedInputRegion).toBeHidden();
     await expect(terminalShortcuts).toBeHidden();
-    await expect(alternateDraft).toHaveValue(tabbedVisibilityDraft);
+    await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect(page.locator("[role='tab']")).toHaveCount(1);
     await expect(page.getByRole("tab", { name: alternateTabName, includeHidden: true })).toHaveAttribute(
       "aria-selected",
@@ -3107,7 +3495,7 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
       page.getByRole("button", { name: "Send", exact: true }),
       page.getByRole("button", { name: "Send + Enter" }),
       queueInMemo,
-      page.getByRole("button", { name: "Insert Tab into staged input" }),
+      page.getByRole("button", { name: "Send + Tab" }),
     ];
     const actionBoxes = [];
     for (const button of actionButtons) {

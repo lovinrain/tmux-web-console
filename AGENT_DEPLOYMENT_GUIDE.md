@@ -354,16 +354,19 @@ names. The
 second contains memoranda and may include sensitive commands or prose. The third
 contains the global folder/snippet tree and may also contain sensitive commands
 or prose. The fourth contains saved workspace names, ordered tmux session names,
-and activity times. An existing unit may override any path; inspect its
+tab-group names/colors/membership, and activity times. An existing unit may
+override any path; inspect its
 environment rather than assuming defaults.
 
-The workspace file uses schema version 2. Version 1 loads at native-session
-rename revision zero and upgrades atomically on the next workspace write. Each
-record permits an 80-character name and at most 32 unique ordered tabs. Keep a
-pre-upgrade copy for rollback because a version-1-only release rejects the
-version 2 document. As with snippets, an unreadable, malformed, or unsupported
-existing workspace file makes that store unavailable; Muxdeck returns `503` for
-workspace APIs instead of overwriting the file.
+The workspace file uses schema version 3. Version 1 loads at native-session
+rename revision zero; versions 1 and 2 load with no tab groups. Either upgrades
+atomically on the next workspace write. Each record permits an 80-character name,
+at most 32 unique ordered tabs, and at most 16 disjoint contiguous tab groups
+whose names are at most 40 characters. Keep a pre-upgrade copy for rollback
+because a version-1-or-2 release rejects the version 3 document. As with snippets,
+an unreadable, malformed, or unsupported existing workspace file makes that store
+unavailable; Muxdeck returns `503` for workspace APIs instead of overwriting the
+file.
 
 Muxdeck accepts version 1 through 4 title files. Version 1 through 3 files have
 no tags, and versions 1 and 2 also treat their missing ignored list as empty.
@@ -400,7 +403,7 @@ process, not coordinated between processes.
 Saved workspaces are server-global and shared by every browser that can reach
 this Muxdeck instance. Their stable `workspace=` URL identifier is independent
 of the editable workspace name. Opening or changing one records its ordered tabs,
-active session, and last-active time. Concurrent pages use last-write-wins
+groups and collapse state, active session, and last-active time. Concurrent pages use last-write-wins
 semantics for ordinary activity. Each snapshot echoes the document-wide native
 session rename revision; stale pre-rename snapshots receive `409` and reload
 instead of restoring an obsolete session name. Deleting a saved workspace
@@ -590,9 +593,9 @@ From a client allowed by the chosen access controls, verify:
    library, and saved workspaces appear if state was migrated. Ignored sessions
    should be in the collapsed background section and absent from regular state
    counts; a reverse-filtered tag must hide matches from every session section.
-8. Opening a saved workspace restores its ordered tabs and active session. Its
-   approximate last-active label updates after an explicit workspace
-   interaction; merely listing workspaces must not touch tmux.
+8. Opening a saved workspace restores its ordered tabs, tab groups, collapse
+   state, and active session. Its approximate last-active label updates after an
+   explicit workspace interaction; merely listing workspaces must not touch tmux.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
 
