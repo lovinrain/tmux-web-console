@@ -374,13 +374,28 @@ The landing-page `New session` action opens `/sessions/new` as a synthetic
 workspace tab and waits for explicit confirmation before changing tmux. On
 confirmation, Muxdeck uses the optional native tmux name entered in the form or
 assigns a collision-resistant `muxdeck-*` name when the field is empty. It starts
-tmux's configured default shell in the service user's home directory and replaces
-the route with `/session/:name`. Existing ordered quick tabs stay in place and the
-created session is appended. `New window` opens the same confirmation screen in
-an isolated browser workspace. The synthetic tab is represented by the route,
-never by a fake `tab=` value. A successfully created tmux session remains alive
-until it is ended through tmux itself, independently of whether its quick tab is
-saved in a named workspace.
+tmux's configured default shell in the optional absolute server directory entered
+in the form, or in the service user's home directory when that field is blank.
+The server rejects missing paths and paths that are not directories before it
+invokes tmux. Workspace Memory shows up to eight one-click directory choices. It
+learns the active-pane paths and activity times of known tmux sessions, counts a
+session identity only once, remembers successful launches, and blends recency,
+frequency, and currently live sessions into the order. Manually saved paths are
+pinned above learned suggestions. Any suggestion can be pinned or unpinned,
+hidden, and restored after hiding; a manually entered path remains available for
+anything not yet known.
+
+Workspace Memory is stored only in that browser and synchronizes between its open
+Muxdeck windows. Unlike named Muxdeck workspaces, it is not written to
+`MUXDECK_WORKSPACES_FILE` or shared across devices. Existing browser-local saved
+directory lists from the earlier picker are migrated as pins.
+
+After creation, Muxdeck replaces the route with `/session/:name`. Existing
+ordered quick tabs stay in place and the created session is appended. `New
+window` opens the same confirmation screen in an isolated browser workspace. The
+synthetic tab is represented by the route, never by a fake `tab=` value. A
+successfully created tmux session remains alive until it is ended through tmux
+itself, independently of whether its quick tab is saved in a named workspace.
 
 Whole-session termination is available from the console's bottom `End` control,
 the trash action on each landing-page session in both Cards and List views, every

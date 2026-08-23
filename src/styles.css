@@ -4633,6 +4633,367 @@ span.workspace-tab-group-toggle {
   line-height: 1.5;
 }
 
+.new-session-directory-field {
+  display: grid;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 16px 18px;
+  background: rgba(15, 18, 15, 0.7);
+  border: 1px solid #343d31;
+}
+
+.new-session-directory-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.new-session-directory-label > label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--cyan);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.new-session-directory-label em {
+  padding: 3px 6px;
+  color: #909a8d;
+  background: #20261f;
+  border: 1px solid #3a4437;
+  border-radius: 99px;
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+}
+
+.new-session-directory-label > button {
+  padding: 4px 0;
+  color: #a8b3a4;
+  background: transparent;
+  border: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  text-decoration: underline;
+  text-decoration-color: #53604f;
+  text-underline-offset: 3px;
+}
+
+.new-session-directory-label > button:hover:not(:disabled) {
+  color: var(--cyan);
+  text-decoration-color: var(--cyan);
+}
+
+.new-session-directory-label > button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.new-session-directory-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.new-session-directory-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.new-session-directory-input-wrap > svg {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  width: 18px;
+  height: 18px;
+  color: #687364;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.new-session-directory-input-wrap > input {
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  padding: 0 13px 0 40px;
+  color: var(--paper);
+  caret-color: var(--cyan);
+  background: #0b0e0b;
+  border: 1px solid #465241;
+  border-radius: 2px;
+  outline: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 14px;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.new-session-directory-input-wrap > input::placeholder {
+  color: #596256;
+}
+
+.new-session-directory-input-wrap > input:focus {
+  background: #101510;
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 2px rgba(104, 223, 208, 0.13);
+}
+
+.new-session-directory-input-wrap > input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.new-session-directory-input-wrap > input:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.new-session-save-directory {
+  min-height: 48px;
+  padding: 0 14px;
+  color: var(--cyan);
+  background: #162521;
+  border: 1px solid #35665e;
+  border-radius: 2px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.new-session-save-directory:hover:not(:disabled) {
+  color: #0c1512;
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
+.new-session-save-directory:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.new-session-directory-field > small {
+  color: #7f897c;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.new-session-saved-directories {
+  display: grid;
+  gap: 8px;
+  margin-top: 5px;
+  padding-top: 13px;
+  border-top: 1px solid #30382e;
+}
+
+.new-session-saved-directories-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.new-session-saved-directories-heading strong {
+  color: #c4cec0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+.new-session-saved-directories-heading span {
+  color: #687364;
+  font-size: 10px;
+}
+
+.new-session-saved-directories > ul {
+  display: grid;
+  gap: 6px;
+  max-height: 290px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.new-session-saved-directories li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 40px 40px;
+  gap: 5px;
+}
+
+.new-session-saved-directory,
+.new-session-pin-directory,
+.new-session-remove-directory {
+  min-height: 50px;
+  color: #aeb8aa;
+  background: #101410;
+  border: 1px solid #343d31;
+  border-radius: 2px;
+}
+
+.new-session-saved-directory {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  text-align: left;
+}
+
+.new-session-saved-directory > svg,
+.new-session-pin-directory > svg,
+.new-session-remove-directory > svg {
+  width: 17px;
+  height: 17px;
+}
+
+.new-session-workspace-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.new-session-workspace-copy > strong {
+  overflow: hidden;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 11px;
+  font-weight: 540;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-workspace-copy > small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  color: #717c6e;
+  font-size: 9px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-workspace-copy > small > em {
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  color: #94a18f;
+  background: #20261f;
+  border-radius: 99px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+}
+
+.new-session-saved-directories li[data-reason="active"]
+  .new-session-workspace-copy > small > em {
+  color: #bff8ef;
+  background: #18574e;
+}
+
+.new-session-saved-directories li[data-reason="frequent"]
+  .new-session-workspace-copy > small > em {
+  color: #e6fbbf;
+  background: #3c5525;
+}
+
+.new-session-saved-directory:hover:not(:disabled),
+.new-session-saved-directory[aria-pressed="true"] {
+  color: var(--cyan);
+  background: #14231f;
+  border-color: #35665e;
+}
+
+.new-session-pin-directory,
+.new-session-remove-directory {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: #788274;
+}
+
+.new-session-pin-directory:hover:not(:disabled) {
+  color: #e5f8bc;
+  background: rgba(187, 244, 81, 0.08);
+  border-color: rgba(187, 244, 81, 0.34);
+}
+
+.new-session-pin-directory[aria-pressed="true"] {
+  color: var(--lime);
+}
+
+.new-session-remove-directory:hover:not(:disabled) {
+  color: #ffaaa2;
+  background: rgba(255, 115, 104, 0.08);
+  border-color: rgba(255, 115, 104, 0.35);
+}
+
+.new-session-saved-directory:disabled,
+.new-session-pin-directory:disabled,
+.new-session-remove-directory:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.new-session-saved-directories > p {
+  margin: 0;
+  padding: 9px 10px;
+  color: #687364;
+  background: #101410;
+  border: 1px dashed #343d31;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.new-session-memory-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.new-session-memory-footer > p {
+  margin: 0;
+  color: #687364;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.new-session-memory-footer > button {
+  flex: 0 0 auto;
+  padding: 4px 0;
+  color: #a8b3a4;
+  background: transparent;
+  border: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  text-decoration: underline;
+  text-decoration-color: #53604f;
+  text-underline-offset: 3px;
+}
+
+.new-session-memory-footer > button:hover:not(:disabled) {
+  color: var(--cyan);
+  text-decoration-color: var(--cyan);
+}
+
+.new-session-directory-status {
+  margin: 0;
+  padding: 7px 9px;
+  color: #a8b3a4;
+  background: #101410;
+  border-left: 2px solid #53604f;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .new-session-error {
   margin: 13px 0 0;
   padding: 10px 12px;
@@ -7562,6 +7923,28 @@ html.history-resizing * {
 
   .new-session-name-field {
     padding: 15px;
+  }
+
+  .new-session-directory-field {
+    padding: 15px;
+  }
+
+  .new-session-directory-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .new-session-save-directory {
+    min-height: 48px;
+  }
+
+  .new-session-saved-directories li {
+    grid-template-columns: minmax(0, 1fr) 44px 44px;
+  }
+
+  .new-session-saved-directory,
+  .new-session-pin-directory,
+  .new-session-remove-directory {
+    min-height: 44px;
   }
 
   .new-session-actions .primary-button,

@@ -40,6 +40,7 @@ from .tmux import (
     validate_tmux_new_session_name,
     validate_tmux_session_id,
     validate_tmux_session_name,
+    validate_tmux_start_directory,
 )
 from .workspaces import (
     WorkspaceNotFoundError,
@@ -536,7 +537,7 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        unknown_fields = sorted(set(payload) - {"name", "theme"})
+        unknown_fields = sorted(set(payload) - {"directory", "name", "theme"})
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
 
@@ -556,9 +557,22 @@ def create_app(
             if requested_theme not in {"dark", "light"}:
                 return json_error("theme must be dark or light", 400)
 
+        requested_directory = payload.get("directory")
+        if "directory" in payload:
+            if not isinstance(requested_directory, str):
+                return json_error("directory must be a string", 400)
+            try:
+                requested_directory = validate_tmux_start_directory(
+                    requested_directory
+                )
+            except ValueError as error:
+                return json_error(str(error), 400)
+
         try:
             created_session = await app[TMUX_KEY].create_session(
-                requested_name, theme=requested_theme
+                requested_name,
+                theme=requested_theme,
+                start_directory=requested_directory,
             )
         except ValueError as error:
             return json_error(str(error), 400)

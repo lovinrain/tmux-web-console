@@ -10,7 +10,7 @@ from tmux_console.tmux import CreatedSession, Session, TmuxClient
 class SecurityFakeTmux(TmuxClient):
     def __init__(self) -> None:
         super().__init__(binary="unused-tmux")
-        self.create_calls: list[tuple[str | None, str | None]] = []
+        self.create_calls: list[tuple[str | None, str | None, str | None]] = []
 
     async def list_sessions(self) -> list[Session]:
         return []
@@ -19,8 +19,10 @@ class SecurityFakeTmux(TmuxClient):
         self,
         requested_name: str | None = None,
         theme: str | None = None,
+        *,
+        start_directory: str | None = None,
     ) -> CreatedSession:
-        self.create_calls.append((requested_name, theme))
+        self.create_calls.append((requested_name, theme, start_directory))
         return CreatedSession(requested_name or "assigned", "$1")
 
 
@@ -107,7 +109,7 @@ async def test_configured_reverse_proxy_origin_allows_reads_and_mutations():
         )
         assert created.status == 201
         assert await created.json() == {"session": "allowed", "sessionId": "$1"}
-        assert tmux.create_calls == [("allowed", None)]
+        assert tmux.create_calls == [("allowed", None, None)]
     finally:
         await client.close()
 

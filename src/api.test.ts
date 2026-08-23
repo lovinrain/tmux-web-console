@@ -152,6 +152,28 @@ describe("session creation API", () => {
     );
   });
 
+  it("passes an exact server working directory for session creation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "directory-work",
+      sessionId: "$16",
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createSession("directory-work", "dark", "/srv/projects/work one"))
+      .resolves.toEqual({ name: "directory-work", id: "$16" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "directory-work",
+          theme: "dark",
+          directory: "/srv/projects/work one",
+        }),
+      }),
+    );
+  });
+
   it("retries without a theme when an older backend rejects that field", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -163,7 +185,8 @@ describe("session creation API", () => {
       }), { status: 201, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(createSession("mixed-release-work", "dark")).resolves.toEqual({
+    await expect(createSession("mixed-release-work", "dark", "/work/mixed-release"))
+      .resolves.toEqual({
       name: "mixed-release-work",
       id: "$15",
     });
@@ -171,16 +194,37 @@ describe("session creation API", () => {
       1,
       `${BASE_PATH}/api/sessions`,
       expect.objectContaining({
-        body: JSON.stringify({ name: "mixed-release-work", theme: "dark" }),
+        body: JSON.stringify({
+          name: "mixed-release-work",
+          theme: "dark",
+          directory: "/work/mixed-release",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       `${BASE_PATH}/api/sessions`,
       expect.objectContaining({
-        body: JSON.stringify({ name: "mixed-release-work" }),
+        body: JSON.stringify({
+          name: "mixed-release-work",
+          directory: "/work/mixed-release",
+        }),
       }),
     );
+  });
+
+  it("does not retry without a requested directory when an older backend rejects it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "unknown field: directory",
+    }), { status: 400, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await createSession(undefined, "dark", "/work/requires-new-backend")
+      .catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ message: "unknown field: directory", status: 400 });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("preserves the server error and status when creation fails", async () => {

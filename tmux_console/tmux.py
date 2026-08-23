@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shlex
+import stat
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
@@ -114,6 +115,30 @@ def validate_tmux_new_session_name(value: str) -> str:
     if value.endswith(";"):
         # tmux parses a final semicolon as a command separator even with exec argv.
         raise ValueError("session name cannot end with ';'")
+    return value
+
+
+def validate_tmux_start_directory(value: str) -> str:
+    if not value:
+        raise ValueError("working directory is required")
+    if any(unicodedata.category(character) == "Cc" for character in value):
+        raise ValueError("working directory cannot contain control characters")
+    if "\u2028" in value or "\u2029" in value:
+        raise ValueError("working directory cannot contain Unicode line separators")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise ValueError("working directory contains invalid Unicode")
+
+    directory = Path(value)
+    if not directory.is_absolute():
+        raise ValueError("working directory must be an absolute path")
+    try:
+        directory_mode = directory.stat().st_mode
+    except FileNotFoundError as error:
+        raise ValueError("working directory does not exist") from error
+    except OSError as error:
+        raise ValueError("working directory is not accessible") from error
+    if not stat.S_ISDIR(directory_mode):
+        raise ValueError("working directory is not a directory")
     return value
 
 
@@ -322,10 +347,23 @@ class TmuxClient:
         return parse_sessions(output)
 
     async def create_session(
-        self, requested_name: str | None = None, theme: str | None = None
+        self,
+        requested_name: str | None = None,
+        theme: str | None = None,
+        *,
+        start_directory: str | None = None,
     ) -> CreatedSession:
+        directory = (
+            validate_tmux_start_directory(start_directory)
+            if start_directory is not None
+            else None
+        )
         async with self._session_creation_lock:
-            return await self._create_session(requested_name, theme=theme)
+            return await self._create_session(
+                requested_name,
+                theme=theme,
+                start_directory=directory,
+            )
 
     async def copy_session(
         self,
@@ -426,7 +464,7 @@ class TmuxClient:
                 requested_name,
             )
         directory = start_directory if start_directory is not None else str(Path.home())
-        args.extend(["-c", directory])
+        args.extend(["-c", _escape_tmux_format(directory)])
         output = await self.run(args)
         # Tabs and line separators are invalid in names, so this preserves spaces.
         rows = output.splitlines()

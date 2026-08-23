@@ -656,6 +656,8 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
   let popup: Page | null = null;
   const dashboardQuery = { kind: "shells", view: "list" };
   const requestedSessionName = `${sessionName}-named-#{pid}`;
+  const workingDirectory = `/tmp/${sessionName}-new-session-workspace`;
+  mkdirSync(workingDirectory, { recursive: true });
 
   const createdSessionName = async (target: Page): Promise<string> => {
     await expect.poll(() => new URL(target.url()).pathname).toMatch(/^\/mux\/session\/[^/]+$/);
@@ -697,7 +699,18 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
     await expect(page.getByRole("heading", { name: "Start a new session." })).toBeFocused();
     await expect(page.locator(".new-session-card")).toHaveCSS("opacity", "1");
     const nameInput = page.getByRole("textbox", { name: /tmux session name/i });
+    const directoryInput = page.getByRole("textbox", { name: /starting directory/i });
     await expect(nameInput).toHaveAttribute("maxlength", "256");
+    await expect(directoryInput).toHaveValue("");
+    const discoveredWorkspace = page.getByRole("button", {
+      name: `Use workspace ${process.cwd()}`,
+      exact: true,
+    });
+    await expect(discoveredWorkspace).toBeVisible();
+    await expect(discoveredWorkspace).toContainText("LIVE NOW");
+    await discoveredWorkspace.click();
+    await expect(directoryInput).toHaveValue(process.cwd());
+    await page.getByRole("button", { name: "Use home" }).click();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
       .toBe(true);
     await page.screenshot({ path: "artifacts/new-session-mobile.png", fullPage: true });
@@ -709,6 +722,28 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
       expect(box?.height).toBeGreaterThanOrEqual(48);
     }
     await page.setViewportSize({ width: 390, height: 844 });
+
+    await directoryInput.fill("/tmp");
+    await page.getByRole("button", { name: "Save path" }).click();
+    await expect(page.getByRole("button", { name: "Use workspace /tmp", exact: true }))
+      .toBeVisible();
+    await page.getByRole("button", {
+      name: "Remove workspace /tmp from suggestions",
+    }).click();
+    await expect(page.getByRole("button", { name: "Use workspace /tmp", exact: true }))
+      .toHaveCount(0);
+
+    await directoryInput.fill(workingDirectory);
+    await page.getByRole("button", { name: "Save path" }).click();
+    const savedWorkspace = page.getByRole("button", {
+      name: `Use workspace ${workingDirectory}`,
+      exact: true,
+    });
+    await expect(savedWorkspace).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Use home" }).click();
+    await expect(directoryInput).toHaveValue("");
+    await savedWorkspace.click();
+    await expect(directoryInput).toHaveValue(workingDirectory);
 
     await nameInput.fill(requestedSessionName);
     await page.getByRole("button", { name: "Create session" }).click();
@@ -722,6 +757,19 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
       dashboardQuery,
     );
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    const createdPath = execFileSync(
+      "tmux",
+      [
+        ...tmux,
+        "list-panes",
+        "-t",
+        `=${createdInSpa}`,
+        "-F",
+        "#{pane_current_path}",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+    expect(createdPath).toBe(workingDirectory);
 
     await page.getByRole("button", { name: "Back to sessions" }).click();
     await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
@@ -732,6 +780,10 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
     ]);
     popup = openedPopup;
     await expectRoute(openedPopup, "/mux/sessions/new", [], dashboardQuery);
+    await expect(openedPopup.getByRole("button", {
+      name: `Use workspace ${workingDirectory}`,
+      exact: true,
+    })).toBeVisible();
     await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
 
     await openedPopup.getByRole("button", { name: "Create session" }).click();
@@ -756,6 +808,7 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
         // Cleanup stays scoped to sessions created on this test's disposable socket.
       }
     }
+    rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
 

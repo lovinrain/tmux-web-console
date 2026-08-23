@@ -107,12 +107,18 @@ class CreatingFakeTmux(FakeTmux):
         self.result = result
         self.create_calls: list[str | None] = []
         self.create_theme_calls: list[str | None] = []
+        self.create_directory_calls: list[str | None] = []
 
     async def create_session(
-        self, requested_name: str | None = None, theme: str | None = None
+        self,
+        requested_name: str | None = None,
+        theme: str | None = None,
+        *,
+        start_directory: str | None = None,
     ) -> CreatedSession:
         self.create_calls.append(requested_name)
         self.create_theme_calls.append(theme)
+        self.create_directory_calls.append(start_directory)
         if isinstance(self.result, TmuxError):
             raise self.result
         return self.result
@@ -288,6 +294,7 @@ async def test_create_session_api_returns_created_native_name():
         }
         assert tmux.create_calls == [None]
         assert tmux.create_theme_calls == [None]
+        assert tmux.create_directory_calls == [None]
     finally:
         await client.close()
 
@@ -309,6 +316,7 @@ async def test_create_session_api_preserves_a_requested_native_name():
         }
         assert tmux.create_calls == [requested_name]
         assert tmux.create_theme_calls == [None]
+        assert tmux.create_directory_calls == [None]
     finally:
         await client.close()
 
@@ -334,12 +342,39 @@ async def test_create_session_api_passes_the_requested_theme(
         }
         assert tmux.create_calls == ["themed-work"]
         assert tmux.create_theme_calls == [theme]
+        assert tmux.create_directory_calls == [None]
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_create_session_api_rejects_invalid_bodies_and_fields():
+async def test_create_session_api_passes_an_exact_working_directory(tmp_path):
+    working_directory = tmp_path / "project one"
+    working_directory.mkdir()
+    tmux = CreatingFakeTmux(CreatedSession("directory-work", "$16"))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/sessions",
+            json={"name": "directory-work", "directory": str(working_directory)},
+        )
+
+        assert response.status == 201
+        assert await response.json() == {
+            "session": "directory-work",
+            "sessionId": "$16",
+        }
+        assert tmux.create_calls == ["directory-work"]
+        assert tmux.create_theme_calls == [None]
+        assert tmux.create_directory_calls == [str(working_directory)]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_create_session_api_rejects_invalid_bodies_and_fields(tmp_path):
     tmux = CreatingFakeTmux(CreatedSession("unused", "$14"))
     client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
 
@@ -381,6 +416,31 @@ async def test_create_session_api_rejects_invalid_bodies_and_fields():
                 "error": "theme must be dark or light"
             }
 
+        for value in (None, 7, True, []):
+            wrong_type = await client.post(
+                "/api/sessions", json={"directory": value}
+            )
+            assert wrong_type.status == 400
+            assert await wrong_type.json() == {
+                "error": "directory must be a string"
+            }
+
+        regular_file = tmp_path / "README.md"
+        regular_file.write_text("not a directory", encoding="utf-8")
+        invalid_directories = {
+            "": "working directory is required",
+            "relative/project": "working directory must be an absolute path",
+            "/tmp/line\nbreak": "working directory cannot contain control characters",
+            str(tmp_path / "missing"): "working directory does not exist",
+            str(regular_file): "working directory is not a directory",
+        }
+        for directory, message in invalid_directories.items():
+            invalid = await client.post(
+                "/api/sessions", json={"directory": directory}
+            )
+            assert invalid.status == 400
+            assert await invalid.json() == {"error": message}
+
         invalid_names = {
             "": "session name is required",
             "   ": "session name is required",
@@ -400,6 +460,7 @@ async def test_create_session_api_rejects_invalid_bodies_and_fields():
 
         assert tmux.create_calls == []
         assert tmux.create_theme_calls == []
+        assert tmux.create_directory_calls == []
     finally:
         await client.close()
 

@@ -1884,6 +1884,167 @@ html[data-theme="light"] .new-session-name-field small {
   color: #606a5e;
 }
 
+html[data-theme="light"] .new-session-directory-field {
+  background: rgba(255, 253, 248, 0.75);
+  border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .new-session-directory-label > label {
+  color: #087a70;
+}
+
+html[data-theme="light"] .new-session-directory-label em {
+  color: #626b60;
+  background: #e7e2d9;
+  border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .new-session-directory-label > button {
+  color: #586457;
+  text-decoration-color: #9da996;
+}
+
+html[data-theme="light"] .new-session-directory-label > button:hover:not(:disabled) {
+  color: #087a70;
+  text-decoration-color: #087a70;
+}
+
+html[data-theme="light"] .new-session-directory-input-wrap > svg {
+  color: #788274;
+}
+
+html[data-theme="light"] .new-session-directory-input-wrap > input {
+  color: #22261f;
+  caret-color: #087a70;
+  background: #fffdf8;
+  border-color: #9da996;
+}
+
+html[data-theme="light"] .new-session-directory-input-wrap > input::placeholder {
+  color: #8a9285;
+}
+
+html[data-theme="light"] .new-session-directory-input-wrap > input:focus {
+  background: #fff;
+  border-color: #087a70;
+  box-shadow: 0 0 0 2px rgba(8, 122, 112, 0.13);
+}
+
+html[data-theme="light"] .new-session-directory-input-wrap > input[aria-invalid="true"] {
+  border-color: #b64036;
+}
+
+html[data-theme="light"] .new-session-save-directory {
+  color: #087a70;
+  background: #e2efeb;
+  border-color: #85aaa3;
+}
+
+html[data-theme="light"] .new-session-save-directory:hover:not(:disabled) {
+  color: #fff;
+  background: #087a70;
+  border-color: #087a70;
+}
+
+html[data-theme="light"] .new-session-directory-field > small {
+  color: #606a5e;
+}
+
+html[data-theme="light"] .new-session-saved-directories {
+  border-top-color: #d2cbc0;
+}
+
+html[data-theme="light"] .new-session-saved-directories-heading strong {
+  color: #4d574b;
+}
+
+html[data-theme="light"] .new-session-saved-directories-heading span {
+  color: #788274;
+}
+
+html[data-theme="light"] .new-session-saved-directory,
+html[data-theme="light"] .new-session-pin-directory,
+html[data-theme="light"] .new-session-remove-directory {
+  color: #505b4e;
+  background: #f8f5ee;
+  border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .new-session-workspace-copy > small {
+  color: #778174;
+}
+
+html[data-theme="light"] .new-session-workspace-copy > small > em {
+  color: #5f6a5c;
+  background: #e7e2d9;
+}
+
+html[data-theme="light"] .new-session-saved-directories li[data-reason="active"]
+  .new-session-workspace-copy > small > em {
+  color: #075c54;
+  background: #cce9e4;
+}
+
+html[data-theme="light"] .new-session-saved-directories li[data-reason="frequent"]
+  .new-session-workspace-copy > small > em {
+  color: #49651d;
+  background: #e2edcd;
+}
+
+html[data-theme="light"] .new-session-saved-directory:hover:not(:disabled),
+html[data-theme="light"] .new-session-saved-directory[aria-pressed="true"] {
+  color: #087a70;
+  background: #e7f1ee;
+  border-color: #85aaa3;
+}
+
+html[data-theme="light"] .new-session-remove-directory {
+  color: #788274;
+}
+
+html[data-theme="light"] .new-session-pin-directory {
+  color: #788274;
+}
+
+html[data-theme="light"] .new-session-pin-directory:hover:not(:disabled),
+html[data-theme="light"] .new-session-pin-directory[aria-pressed="true"] {
+  color: #577923;
+  background: #edf3e2;
+  border-color: #aabf83;
+}
+
+html[data-theme="light"] .new-session-remove-directory:hover:not(:disabled) {
+  color: #9f3129;
+  background: #f8e4e0;
+  border-color: #dfafa8;
+}
+
+html[data-theme="light"] .new-session-saved-directories > p {
+  color: #70796d;
+  background: #f8f5ee;
+  border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .new-session-memory-footer > p {
+  color: #778174;
+}
+
+html[data-theme="light"] .new-session-memory-footer > button {
+  color: #586457;
+  text-decoration-color: #9da996;
+}
+
+html[data-theme="light"] .new-session-memory-footer > button:hover:not(:disabled) {
+  color: #087a70;
+  text-decoration-color: #087a70;
+}
+
+html[data-theme="light"] .new-session-directory-status {
+  color: #586457;
+  background: #f8f5ee;
+  border-left-color: #9da996;
+}
+
 html[data-theme="light"] .new-session-error {
   color: #9f3129;
   background: #f8e4e0;

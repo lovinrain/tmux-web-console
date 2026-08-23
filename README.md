@@ -60,7 +60,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
   indicators, and reusable snippets
-- Confirmed session creation, native rename, and whole-session termination
+- Confirmed session creation with reusable starting directories, native rename,
+  and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
 
 ## Quick start
@@ -89,6 +90,10 @@ For frontend development, run `npm run dev`. Vite serves
   that client but leaves the tmux session and foreground process running.
 - A tab's `X` and workspace deletion only remove Muxdeck navigation records.
   `End` terminates the entire tmux session after confirmation.
+- New Session can start in an absolute server directory. Its browser-local
+  Workspace Memory ranks paths learned from tmux sessions and successful
+  launches by recency and frequency; paths can also be pinned, hidden, restored,
+  or entered manually. Blank continues to use the service user's home directory.
 - `Fit active` may resize the shared tmux window. Use `Size protected` when
   observing a valuable session without disturbing another client.
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not

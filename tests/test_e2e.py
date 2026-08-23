@@ -557,7 +557,7 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_real_tmux_create_session_api_is_immediately_attachable():
+async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path):
     socket_name = f"muxdeck-create-pytest-{os.getpid()}-{time.time_ns()}"
     tmux_command = ["tmux", "-L", socket_name]
     tmux_client = TmuxClient(socket_name=socket_name)
@@ -610,6 +610,29 @@ async def test_real_tmux_create_session_api_is_immediately_attachable():
         assert named_payload["session"] == requested_name
         assert named_payload["sessionId"].startswith("$")
 
+        working_directory = tmp_path / "working #directory"
+        working_directory.mkdir()
+        directory_name = "directory-work"
+        directory_response = await client.post(
+            "/mux/api/sessions",
+            json={
+                "name": directory_name,
+                "directory": str(working_directory),
+            },
+        )
+        assert directory_response.status == 201
+        assert (
+            await tmux_client.run(
+                [
+                    "list-panes",
+                    "-t",
+                    f"={directory_name}",
+                    "-F",
+                    "#{pane_current_path}",
+                ]
+            )
+        ).strip() == str(working_directory)
+
         themed_name = "grok-light"
         themed_response = await client.post(
             "/mux/api/sessions", json={"name": themed_name, "theme": "light"}
@@ -645,6 +668,7 @@ async def test_real_tmux_create_session_api_is_immediately_attachable():
         assert {session["name"] for session in listed["sessions"]} == {
             session_name,
             requested_name,
+            directory_name,
             themed_name,
         }
     finally:

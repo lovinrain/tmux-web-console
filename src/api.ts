@@ -60,10 +60,15 @@ async function requestSessionCreation(
   return { name: result.session, id: result.sessionId };
 }
 
-export async function createSession(name?: string, theme?: Theme): Promise<CreatedSession> {
+export async function createSession(
+  name?: string,
+  theme?: Theme,
+  directory?: string,
+): Promise<CreatedSession> {
   const body = {
     ...(name === undefined ? {} : { name }),
     ...(theme === undefined ? {} : { theme }),
+    ...(directory === undefined ? {} : { directory }),
   };
   try {
     return await requestSessionCreation(body);
@@ -74,7 +79,10 @@ export async function createSession(name?: string, theme?: Theme): Promise<Creat
     ) {
       // An older backend rejects the field before creating anything, so one
       // theme-less retry safely bridges an in-place frontend/backend rollout.
-      return requestSessionCreation(name === undefined ? {} : { name });
+      return requestSessionCreation({
+        ...(name === undefined ? {} : { name }),
+        ...(directory === undefined ? {} : { directory }),
+      });
     }
     throw error;
   }

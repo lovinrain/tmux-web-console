@@ -1,3 +1,4 @@
+import re
 import time
 from collections.abc import Sequence
 from dataclasses import replace
@@ -25,6 +26,7 @@ from tmux_console.tmux import (
     parse_sessions,
     validate_tmux_new_session_name,
     validate_tmux_session_name,
+    validate_tmux_start_directory,
 )
 
 TMUX_WITH_SESSION_ENV_USAGE = (
@@ -187,6 +189,58 @@ async def test_create_session_preserves_a_requested_name_exactly():
             str(Path.home()),
         ]
     ]
+
+
+async def test_create_session_uses_an_exact_requested_working_directory(tmp_path):
+    working_directory = tmp_path / "project #one"
+    working_directory.mkdir()
+    tmux = RecordingRunTmux("directory-work\t$13\n")
+
+    created = await tmux.create_session(
+        "directory-work",
+        start_directory=str(working_directory),
+    )
+
+    assert created == CreatedSession(name="directory-work", id="$13")
+    assert tmux.calls == [
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "directory-work",
+            "-c",
+            str(working_directory).replace("#", "##"),
+        ]
+    ]
+
+
+def test_validate_tmux_start_directory_requires_an_existing_absolute_directory(
+    tmp_path,
+):
+    working_directory = tmp_path / "project one"
+    working_directory.mkdir()
+    regular_file = tmp_path / "README.md"
+    regular_file.write_text("not a directory", encoding="utf-8")
+
+    assert validate_tmux_start_directory(str(working_directory)) == str(
+        working_directory
+    )
+    invalid_directories = {
+        "": "working directory is required",
+        "relative/project": "working directory must be an absolute path",
+        "/tmp/line\nbreak": "working directory cannot contain control characters",
+        "/tmp/left\u2028right": (
+            "working directory cannot contain Unicode line separators"
+        ),
+        str(tmp_path / "missing"): "working directory does not exist",
+        str(regular_file): "working directory is not a directory",
+    }
+    for directory, message in invalid_directories.items():
+        with pytest.raises(ValueError, match=re.escape(message)):
+            validate_tmux_start_directory(directory)
 
 
 async def test_copy_session_uses_the_active_pane_directory_and_next_name():
