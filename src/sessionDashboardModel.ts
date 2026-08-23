@@ -15,7 +15,14 @@ export type SessionKindFilter =
   | "cursor"
   | "grok"
   | "shells";
-type SessionKind = "claude" | "codex" | "copilot" | "cursor" | "grok" | "shells" | "other";
+export type SessionKind =
+  | "claude"
+  | "codex"
+  | "copilot"
+  | "cursor"
+  | "grok"
+  | "shells"
+  | "other";
 export type SessionStateFilter = "any" | AgentState;
 export type SessionViewMode = "cards" | "list";
 export type SessionGroupMode = "none" | "state" | "tag";

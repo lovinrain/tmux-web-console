@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 import {
   ContractIcon,
@@ -18,6 +19,7 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "../icons";
+import type { AgentScrollMode } from "../agentScrollPreferences";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
 
 export const MAX_DRAFT_LENGTH = 65_536;
@@ -29,6 +31,10 @@ interface InputBarProps {
   enabled: boolean;
   composerVisible?: boolean;
   shortcutsVisible?: boolean;
+  shortcutPanelHeader?: ReactNode;
+  preferredScrollMode?: AgentScrollMode;
+  preferredScrollLabel?: string;
+  onScrollModeUsed?: (mode: AgentScrollMode) => void;
   mobileDistractionFree?: boolean;
   onToggleMobileDistractionFree?: () => void;
   onSend: (data: string) => boolean;
@@ -67,6 +73,8 @@ interface TerminalKey {
   compact?: string;
   ariaLabel?: string;
   title?: string;
+  scrollMode?: AgentScrollMode;
+  scrollDirection?: "up" | "down";
 }
 
 const PAGE_UP_SEQUENCE = "\x1b[5~";
@@ -92,6 +100,8 @@ const KEYS: TerminalKey[] = [
     data: `\x02${PAGE_UP_SEQUENCE}`,
     ariaLabel: "Tmux Page Up",
     title: "Enter tmux copy mode one page up (Ctrl+B, then Page Up)",
+    scrollMode: "tmux",
+    scrollDirection: "up",
   },
   {
     label: "Tmux PgDn",
@@ -100,6 +110,8 @@ const KEYS: TerminalKey[] = [
     data: PAGE_DOWN_SEQUENCE,
     ariaLabel: "Tmux Page Down",
     title: "Page down while tmux copy mode is active",
+    scrollMode: "tmux",
+    scrollDirection: "down",
   },
   {
     label: "^A",
@@ -117,11 +129,15 @@ const KEYS: TerminalKey[] = [
     label: "PgUp",
     data: PAGE_UP_SEQUENCE,
     title: "Page up in the foreground application or tmux copy mode",
+    scrollMode: "application",
+    scrollDirection: "up",
   },
   {
     label: "PgDn",
     data: PAGE_DOWN_SEQUENCE,
     title: "Page down in the foreground application or tmux copy mode",
+    scrollMode: "application",
+    scrollDirection: "down",
   },
 ];
 
@@ -136,18 +152,44 @@ interface TerminalKeyButtonProps {
   terminalKey: TerminalKey;
   enabled: boolean;
   onSend: (data: string) => boolean;
+  preferredScrollMode?: AgentScrollMode;
+  preferredScrollLabel?: string;
+  onScrollModeUsed?: (mode: AgentScrollMode) => void;
 }
 
-function TerminalKeyButton({ terminalKey, enabled, onSend }: TerminalKeyButtonProps) {
+function TerminalKeyButton({
+  terminalKey,
+  enabled,
+  onSend,
+  preferredScrollMode,
+  preferredScrollLabel,
+  onScrollModeUsed,
+}: TerminalKeyButtonProps) {
+  const preferred = Boolean(
+    terminalKey.scrollMode && terminalKey.scrollMode === preferredScrollMode,
+  );
+  const shortcut = preferred && terminalKey.scrollDirection
+    ? `Control+Shift+${terminalKey.scrollDirection === "up" ? "U" : "D"}`
+    : undefined;
+  const title = preferred
+    ? `${terminalKey.title}. Preferred for ${preferredScrollLabel || "this agent"}${
+      shortcut ? ` (${shortcut.replace("Control", "Ctrl")})` : ""
+    }`
+    : terminalKey.title;
   return (
     <button
       type="button"
-      className="key-button"
+      className={preferred ? "key-button preferred-scroll-key" : "key-button"}
       disabled={!enabled}
       aria-label={terminalKey.ariaLabel || terminalKey.label}
-      title={terminalKey.title}
+      aria-keyshortcuts={shortcut}
+      data-scroll-preferred={preferred ? "true" : undefined}
+      title={title}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => onSend(terminalKey.data)}
+      onClick={() => {
+        const sent = onSend(terminalKey.data);
+        if (sent && terminalKey.scrollMode) onScrollModeUsed?.(terminalKey.scrollMode);
+      }}
     >
       <span className={terminalKey.compact ? "wide-key-label" : ""}>
         {terminalKey.label}
@@ -291,6 +333,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   enabled,
   composerVisible = true,
   shortcutsVisible = true,
+  shortcutPanelHeader,
+  preferredScrollMode,
+  preferredScrollLabel,
+  onScrollModeUsed,
   mobileDistractionFree = false,
   onToggleMobileDistractionFree,
   onSend,
@@ -598,6 +644,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       aria-label="Terminal input"
       hidden={!composerVisible && !shortcutsVisible}
     >
+      {shortcutPanelHeader}
       <div
         id="muxdeck-staged-input"
         className="staged-composer"
@@ -802,7 +849,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           disabled={!enabled}
           aria-label="Focus live terminal input"
           aria-controls="muxdeck-active-console"
-          title="Exit scrollback and focus raw terminal input"
+          aria-keyshortcuts="Control+Shift+L"
+          title="Exit scrollback and focus raw terminal input (Ctrl+Shift+L)"
           onMouseDown={(event) => event.preventDefault()}
         >
           <TerminalIcon /> <span>Live</span>
@@ -826,7 +874,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           disabled={!onTerminateSession}
           aria-label="Terminate tmux session"
           aria-haspopup="dialog"
-          title="End this entire tmux session and all of its panes"
+          aria-keyshortcuts="Control+Shift+E"
+          title="End this entire tmux session and all of its panes (Ctrl+Shift+E)"
         >
           <TrashIcon /> <span>End</span>
         </button>
@@ -859,6 +908,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             terminalKey={terminalKey}
             enabled={enabled}
             onSend={onSend}
+            preferredScrollMode={preferredScrollMode}
+            preferredScrollLabel={preferredScrollLabel}
+            onScrollModeUsed={onScrollModeUsed}
           />
         ))}
         <button

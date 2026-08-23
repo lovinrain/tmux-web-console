@@ -96,6 +96,15 @@ export function WindowMoveIcon(props: IconProps) {
   );
 }
 
+export function MoveIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M12 3v18M3 12h18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="m8.5 6 3.5-3 3.5 3M8.5 18l3.5 3 3.5-3M6 8.5 3 12l3 3.5M18 8.5l3 3.5-3 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function WindowCopyIcon(props: IconProps) {
   return (
     <IconBase {...props}>

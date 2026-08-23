@@ -840,6 +840,109 @@ test("desktop scrollback width is adjustable for the current browser tab", async
   await expect(panel).toHaveCSS("width", "680px");
 });
 
+test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({
+  context,
+  page,
+}) => {
+  test.setTimeout(45_000);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: "http://127.0.0.1:7684",
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live", {
+    timeout: 10_000,
+  });
+
+  await page.evaluate(() => {
+    const terminalFrames: number[][] = [];
+    const nativeSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (this.url.includes("/ws/terminal")) {
+        if (data instanceof ArrayBuffer) {
+          terminalFrames.push([...new Uint8Array(data)]);
+        } else if (ArrayBuffer.isView(data)) {
+          terminalFrames.push([
+            ...new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+          ]);
+        }
+      }
+      return nativeSend.call(this, data);
+    };
+    Object.defineProperty(window, "__muxdeckCopyModeTerminalFrames", {
+      value: terminalFrames,
+    });
+  });
+  const terminalFrameCount = () => page.evaluate(() => (
+    window as Window & { __muxdeckCopyModeTerminalFrames: number[][] }
+  ).__muxdeckCopyModeTerminalFrames.length);
+  const copyText = "MUXDECK_BROWSER_COPY_TARGET";
+  const pasteText = "MUXDECK_BROWSER_PASTE_TARGET";
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "send-keys",
+      "-t",
+      paneId,
+      "-l",
+      `printf '\\033[2J\\033[H\\033[?1003h%s\\n' '${copyText}'`,
+    ]);
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
+    await expect.poll(() => workspaceTmuxContentSnapshot(sessionName))
+      .toContain(copyText);
+
+    const shell = page.locator(".console-shell");
+    const copyMode = page.getByRole("button", { name: "Browser terminal copy mode" });
+    const terminalScreen = page.locator(".terminal-host .xterm-screen");
+    await expect(copyMode).toBeVisible();
+    await expect(copyMode).toHaveAttribute("aria-pressed", "false");
+    await copyMode.click();
+    await expect(copyMode).toHaveAttribute("aria-pressed", "true");
+    await expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+    await expect(page.locator(".terminal-stage")).toHaveAttribute("data-copy-mode", "true");
+
+    const screenBox = await terminalScreen.boundingBox();
+    expect(screenBox).not.toBeNull();
+    const cellHeight = screenBox!.height / workspacePaneHeight(sessionName);
+    const frameCountBeforeSelection = await terminalFrameCount();
+    await page.mouse.move(screenBox!.x + 2, screenBox!.y + (cellHeight / 2));
+    await page.mouse.down();
+    await page.mouse.move(
+      screenBox!.x + screenBox!.width - 4,
+      screenBox!.y + (cellHeight / 2),
+      { steps: 8 },
+    );
+    await page.mouse.up();
+    await page.keyboard.press("Control+C");
+
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toContain(copyText);
+    expect(await terminalFrameCount()).toBe(frameCountBeforeSelection);
+
+    await page.evaluate((text) => navigator.clipboard.writeText(text), pasteText);
+    await page.keyboard.press("Control+V");
+    await expect.poll(() => workspaceTmuxContentSnapshot(sessionName))
+      .toContain(pasteText);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(copyMode).toBeHidden();
+    await expect(shell).toHaveAttribute("data-desktop-copy-mode", "false");
+    await expect(page.locator(".terminal-stage")).toHaveAttribute("data-copy-mode", "false");
+  } finally {
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "C-c"]);
+    execFileSync("tmux", [
+      ...tmux,
+      "send-keys",
+      "-t",
+      paneId,
+      "-l",
+      "printf '\\033[?1003l'",
+    ]);
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
+  }
+});
+
 test("desktop terminal focus fills the viewport without replacing the live session", async ({
   page,
 }) => {
@@ -898,6 +1001,7 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
     name: "Enter desktop terminal focus",
   });
   await expect(enterFocus).toBeVisible();
+  await expect(enterFocus).toHaveAttribute("aria-keyshortcuts", "Control+Shift+F");
   await expect(terminalShortcuts.getByRole("button", {
     name: "Enter desktop terminal focus",
   })).toHaveCount(0);
@@ -913,9 +1017,11 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
     Object.defineProperty(window, "__muxdeckDesktopFocusTerminal", { value: element });
   });
 
-  await enterFocus.click();
+  const keydownFrameCountBeforeFocus = await terminalKeydownFrameCount();
+  await page.keyboard.press("Control+Shift+F");
   await expect(shell).toHaveAttribute("data-desktop-focus", "true");
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  expect(await terminalKeydownFrameCount()).toBe(keydownFrameCountBeforeFocus);
   const exitFocus = page.getByRole("button", {
     name: "Exit desktop terminal focus",
   });
@@ -925,9 +1031,16 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   const focusRedraw = focusControls.getByRole("button", {
     name: "Redraw terminal display",
   });
-  await expect(focusControls.getByRole("button")).toHaveCount(2);
+  const focusShortcuts = focusControls.locator(".desktop-terminal-focus-shortcuts");
+  await expect(focusControls.getByRole("button")).toHaveCount(3);
   await expect(focusRedraw).toBeVisible();
   await expect(focusRedraw).toBeInViewport();
+  await expect(focusShortcuts).toHaveAccessibleName("Show all buttons");
+  await expect(focusShortcuts).toHaveAttribute("aria-expanded", "false");
+  await expect(focusShortcuts).toHaveAttribute(
+    "aria-controls",
+    "muxdeck-terminal-shortcuts",
+  );
   await expect(exitFocus).toBeVisible();
   await expect(exitFocus).toBeInViewport();
   await expect(exitFocus).toHaveAttribute("aria-pressed", "true");
@@ -941,13 +1054,110 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
   expect(terminalSocketCount).toBe(socketCountBeforeFocus);
   expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
-  await expect(page.locator("button:visible")).toHaveCount(2);
+  await expect(page.locator("button:visible")).toHaveCount(3);
   await expect(page.locator(".console-bar-toolbar")).toBeHidden();
   await expect(page.locator(".console-header")).toBeHidden();
   await expect(page.locator(".console-session-navigation")).toBeHidden();
   await expect(page.locator(".terminal-coordinate")).toBeHidden();
   await expect(page.locator(".input-dock")).toBeHidden();
   await expect(page.locator(".terminal-view-controls")).toBeHidden();
+
+  const shortcutDock = page.locator(".input-dock");
+  const shortcutStrip = page.getByRole("group", { name: "Terminal input shortcuts" });
+  await focusShortcuts.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "true");
+  await expect(focusShortcuts).toHaveAccessibleName("Hide all buttons");
+  await expect(focusShortcuts).toHaveAttribute("aria-expanded", "true");
+  await expect(shortcutDock).toBeVisible();
+  await expect(shortcutDock).toHaveCSS("position", "absolute");
+  const moveShortcutPanel = shortcutDock.getByRole("button", {
+    name: "Move floating button panel",
+  });
+  await expect(moveShortcutPanel).toBeVisible();
+  await expect(moveShortcutPanel).toHaveCSS("cursor", "grab");
+  await expect(shortcutStrip.getByRole("button")).toHaveCount(21);
+  await expect(shortcutStrip.getByRole("button", { name: "Raw terminal keyboard" }))
+    .toBeVisible();
+  await expect(shortcutStrip.getByRole("button", { name: "Edit title and tags" }))
+    .toBeVisible();
+  await expect(shortcutStrip.getByRole("button", { name: "Open snippets" }))
+    .toBeVisible();
+  await expect(shortcutStrip.getByRole("button", { name: "Paste to draft" }))
+    .toBeInViewport();
+  const floatingPanelGeometry = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>(".input-dock")!
+      .getBoundingClientRect();
+    const stage = document.querySelector<HTMLElement>(".terminal-stage")!
+      .getBoundingClientRect();
+    return {
+      panel: [panel.left, panel.top, panel.right, panel.bottom],
+      stage: [stage.left, stage.top, stage.right, stage.bottom],
+      viewport: [window.innerWidth, window.innerHeight],
+    };
+  });
+  expect(floatingPanelGeometry.panel[0]).toBeGreaterThan(0);
+  expect(floatingPanelGeometry.panel[1]).toBeGreaterThan(0);
+  expect(floatingPanelGeometry.panel[2]).toBeLessThan(floatingPanelGeometry.viewport[0]);
+  expect(floatingPanelGeometry.panel[3]).toBeLessThan(floatingPanelGeometry.viewport[1]);
+  expect(floatingPanelGeometry.stage).toEqual([0, 0, 1440, 900]);
+
+  const initialPanelBox = await shortcutDock.boundingBox();
+  const moveHandleBox = await moveShortcutPanel.boundingBox();
+  expect(initialPanelBox).not.toBeNull();
+  expect(moveHandleBox).not.toBeNull();
+  await page.mouse.move(
+    moveHandleBox!.x + (moveHandleBox!.width / 2),
+    moveHandleBox!.y + (moveHandleBox!.height / 2),
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    Math.max(1, moveHandleBox!.x - 100),
+    moveHandleBox!.y - 160,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+  await expect(page.locator("html")).not.toHaveClass(/desktop-focus-shortcuts-moving/);
+  await expect.poll(async () => (await shortcutDock.boundingBox())!.x)
+    .toBeLessThan(initialPanelBox!.x);
+  const movedPanelBox = (await shortcutDock.boundingBox())!;
+  expect(movedPanelBox.x).toBeGreaterThanOrEqual(11);
+  expect(movedPanelBox.y).toBeGreaterThanOrEqual(11);
+  expect(movedPanelBox.x + movedPanelBox.width).toBeLessThanOrEqual(1429);
+  expect(movedPanelBox.y + movedPanelBox.height).toBeLessThanOrEqual(889);
+  expect((await terminalStage.boundingBox())!.height).toBe(900);
+
+  await moveShortcutPanel.focus();
+  const xBeforeKeyboardMove = Number(await shell.evaluate((element) => (
+    element.style.getPropertyValue("--desktop-focus-shortcuts-x").replace("px", "")
+  )));
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => shell.evaluate((element) => Number(
+    element.style.getPropertyValue("--desktop-focus-shortcuts-x").replace("px", ""),
+  ))).toBe(xBeforeKeyboardMove + 16);
+  await page.keyboard.press("Enter");
+  await expect.poll(() => shell.evaluate((element) => [
+    element.style.getPropertyValue("--desktop-focus-shortcuts-x"),
+    element.style.getPropertyValue("--desktop-focus-shortcuts-y"),
+  ])).toEqual(["0px", "0px"]);
+  await expect.poll(async () => (await shortcutDock.boundingBox())!.x)
+    .toBeCloseTo(initialPanelBox!.x, 0);
+  await expect.poll(async () => (await shortcutDock.boundingBox())!.y)
+    .toBeCloseTo(initialPanelBox!.y, 0);
+
+  const moreKeys = shortcutStrip.locator(".other-keys-toggle");
+  await moreKeys.click();
+  const otherKeys = page.getByRole("group", { name: "Other keys" });
+  await expect(otherKeys).toBeVisible();
+  await expect(otherKeys.getByRole("button")).toHaveCount(4);
+  await expect(otherKeys.getByRole("button", { name: "Right" })).toBeInViewport();
+  await moreKeys.click();
+  await expect(otherKeys).toBeHidden();
+
+  await focusShortcuts.click();
+  await expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "false");
+  await expect(focusShortcuts).toHaveAccessibleName("Show all buttons");
+  await expect(shortcutDock).toBeHidden();
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
 
   expect((await terminalStage.boundingBox())!.height).toBeGreaterThan(standardStageHeight);
   await expect.poll(() => workspacePaneHeight(sessionName)).toBeGreaterThan(standardPaneHeight);
@@ -1007,9 +1217,11 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   expect(page.url()).toBe(urlBeforeFocus);
   expect(await page.evaluate(() => window.history.length)).toBe(historyLengthBeforeFocus);
 
-  await enterFocus.click();
+  const keydownFrameCountBeforeReenter = await terminalKeydownFrameCount();
+  await page.keyboard.press("Control+Shift+F");
   await expect(shell).toHaveAttribute("data-desktop-focus", "true");
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  expect(await terminalKeydownFrameCount()).toBe(keydownFrameCountBeforeReenter);
   const keydownFrameCountBeforeExit = await terminalKeydownFrameCount();
   await page.keyboard.press("Control+Shift+F");
   await expect(shell).toHaveAttribute("data-desktop-focus", "false");
@@ -1063,7 +1275,12 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     const navigation = page.getByRole("navigation", { name: "Session workspace" });
     const tabList = page.getByRole("tablist", { name: "Session workspace tabs" });
     const terminal = page.locator(".terminal-host .xterm");
-    const orientationToggle = page.getByRole("group", { name: "Console bars" })
+    const consoleBars = page.getByRole("group", { name: "Console bars" });
+    const sessionTabsToggle = consoleBars.getByRole("button", {
+      name: "Session tabs",
+      exact: true,
+    });
+    const orientationToggle = consoleBars
       .getByRole("button", { name: "Vertical session tabs" });
     await terminal.evaluate((element) => {
       Object.defineProperty(window, "__muxdeckVerticalTabsTerminal", { value: element });
@@ -1089,6 +1306,19 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     await expect.poll(() => page.evaluate(() => (
       window.localStorage.getItem("muxdeck-desktop-tab-orientation")
     ))).toBe("vertical");
+
+    await expect(sessionTabsToggle)
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+S");
+    await terminal.click();
+    await page.keyboard.press("Control+Shift+S");
+    await expect(shell).toHaveAttribute("data-session-tabs-visible", "false");
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(navigation).toBeHidden();
+    await page.keyboard.press("Control+Shift+S");
+    await expect(shell).toHaveAttribute("data-session-tabs-visible", "true");
+    await expect(sessionTabsToggle).toHaveAttribute("aria-pressed", "true");
+    await expect(navigation).toBeVisible();
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
 
     const verticalNavigationBox = await navigation.boundingBox();
     const terminalViewBox = await page.locator(".terminal-view").boundingBox();
@@ -1461,8 +1691,91 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     await page.keyboard.press("Escape");
     await expect(jumpDialog).toBeHidden();
 
+    const keymapTrigger = page.getByRole("button", { name: "Show desktop keymap" });
+    await expect(keymapTrigger).toBeVisible();
+    await keymapTrigger.click();
+    const keymap = page.getByRole("dialog", { name: "Desktop workspace keymap" });
+    await expect(keymap).toBeVisible();
+    for (const shortcut of [
+      "Ctrl+Shift+E",
+      "Ctrl+Shift+L",
+      "Ctrl+Shift+C",
+      "Ctrl+Shift+A",
+      "Ctrl+Shift+U",
+      "Ctrl+Shift+D",
+      "Ctrl+Shift+S",
+      "Ctrl+Shift+F",
+    ]) {
+      await expect(keymap.getByText(shortcut, { exact: true })).toBeVisible();
+    }
+    await page.screenshot({ path: "artifacts/workspace-keymap-desktop.png" });
+    await page.keyboard.press("Escape");
+    await expect(keymap).toBeHidden();
+
+    const shell = page.locator(".console-shell");
+    const actionsToggle = page.getByRole("button", { name: "Tab action buttons" });
+    const copyToggle = page.getByRole("button", { name: "Browser terminal copy mode" });
+    await expect(actionsToggle).toHaveAttribute("aria-keyshortcuts", "Control+Shift+A");
+    await expect(copyToggle).toHaveAttribute("aria-keyshortcuts", "Control+Shift+C");
+    await page.keyboard.press("Control+Shift+A");
+    await expect(actionsToggle).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Control+Shift+C");
+    await expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+
+    const desktopRawPageUp = desktopShortcutStrip.getByRole("button", { name: "PgUp" });
+    const desktopTmuxPageUp = desktopShortcutStrip.getByRole("button", {
+      name: "Tmux Page Up",
+    });
+    await expect(shell).toHaveAttribute("data-scroll-agent", "shells");
+    await expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+    await expect(desktopTmuxPageUp).toHaveClass(/preferred-scroll-key/);
+    await expect(desktopTmuxPageUp).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Control+Shift+U",
+    );
+    await expect(desktopRawPageUp).not.toHaveClass(/preferred-scroll-key/);
+
+    const paneInMode = () => execFileSync(
+      "tmux",
+      [...tmux, "display-message", "-p", "-t", paneId, "#{pane_in_mode}"],
+      { encoding: "utf8" },
+    ).trim();
+    await page.keyboard.press("Control+Shift+U");
+    await expect.poll(paneInMode).toBe("1");
+    await page.keyboard.press("Control+Shift+D");
+    await page.keyboard.press("Control+Shift+L");
+    await expect.poll(paneInMode).toBe("0");
+
+    await desktopRawPageUp.click();
+    await expect(shell).toHaveAttribute("data-scroll-mode", "application");
+    await expect(desktopRawPageUp).toHaveClass(/preferred-scroll-key/);
+    await expect(desktopRawPageUp).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Control+Shift+U",
+    );
+    await expect(desktopTmuxPageUp).not.toHaveClass(/preferred-scroll-key/);
+    await expect.poll(() => page.evaluate(() => (
+      JSON.parse(window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}")
+        .shells
+    ))).toBe("application");
+    await page.keyboard.press("Control+Shift+U");
+    await expect.poll(paneInMode).toBe("0");
+
+    const identityBeforeEndShortcut = workspaceTmuxIdentity(sessionName);
+    await page.keyboard.press("Control+Shift+E");
+    const endDialog = page.getByRole("alertdialog", { name: "Terminate tmux session?" });
+    await expect(endDialog).toBeVisible();
+    expect(workspaceTmuxIdentity(sessionName)).toBe(identityBeforeEndShortcut);
+    await endDialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(endDialog).toBeHidden();
+    await page.keyboard.press("Control+Shift+C");
+    await expect(shell).toHaveAttribute("data-desktop-copy-mode", "false");
+    await page.keyboard.press("Control+Shift+A");
+    await expect(actionsToggle).toHaveAttribute("aria-pressed", "true");
+
     await page.setViewportSize({ width: 390, height: 700 });
     await expect(tabSearchButton).toBeHidden();
+    await expect(keymapTrigger).toBeHidden();
     await expect(desktopLiveButton).toBeHidden();
     await expect(desktopFocusButton).toBeHidden();
     await page.keyboard.press("Control+Shift+.");
@@ -2722,6 +3035,193 @@ test("saved workspace survives reload and device handoff without touching tmux p
   }
 });
 
+test("desktop link shelf keeps common links global and workspace links isolated", async ({
+  page,
+  request,
+}) => {
+  const firstName = `Link shelf one ${process.pid}`;
+  const secondName = `Link shelf two ${process.pid}`;
+  const workspaceIds: string[] = [];
+
+  const createWorkspace = async (name: string): Promise<string> => {
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name,
+        tabs: [sessionName],
+        groups: [],
+        activeSession: sessionName,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const body = await response.json();
+    return body.workspace.id as string;
+  };
+
+  try {
+    const resetCommon = await request.put("/mux/api/workspace-quick-links", {
+      data: { links: [] },
+    });
+    expect(resetCommon.ok()).toBe(true);
+    workspaceIds.push(await createWorkspace(firstName));
+    workspaceIds.push(await createWorkspace(secondName));
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceIds[0])}`
+      + `&tab=${encodeURIComponent(sessionName)}`,
+    );
+    await expect(page.getByRole("status", { name: "Workspace saved automatically" }))
+      .toBeVisible();
+
+    const commonRegion = page.getByRole("region", { name: "Common quick links" });
+    const workspaceRegion = page.getByRole("region", { name: "Workspace quick links" });
+    const consoleToolbar = page.getByRole("group", { name: "Console bars" });
+    const tabsToggle = consoleToolbar.getByRole("button", {
+      name: "Session tabs",
+      exact: true,
+    });
+    await expect(commonRegion).toBeVisible();
+    await expect(workspaceRegion).toContainText(firstName);
+    await expect(consoleToolbar.getByRole("region", { name: "Common quick links" }))
+      .toBeVisible();
+    await expect(consoleToolbar.getByRole("region", { name: "Workspace quick links" }))
+      .toBeVisible();
+    const commonBox = await commonRegion.boundingBox();
+    const workspaceBox = await workspaceRegion.boundingBox();
+    const tabsBox = await tabsToggle.boundingBox();
+    expect(commonBox).not.toBeNull();
+    expect(workspaceBox).not.toBeNull();
+    expect(tabsBox).not.toBeNull();
+    expect(commonBox!.x).toBeLessThan(workspaceBox!.x);
+    expect(Math.abs(commonBox!.y - workspaceBox!.y)).toBeLessThan(1);
+    expect(Math.abs(
+      commonBox!.y + commonBox!.height / 2
+      - (tabsBox!.y + tabsBox!.height / 2),
+    )).toBeLessThan(1);
+
+    await page.setViewportSize({ width: 800, height: 700 });
+    const narrowToolbarBox = await consoleToolbar.boundingBox();
+    const narrowWorkspaceBox = await workspaceRegion.boundingBox();
+    const narrowFocusBox = await consoleToolbar.getByRole("button", {
+      name: "Enter desktop terminal focus",
+    }).boundingBox();
+    expect(narrowToolbarBox).not.toBeNull();
+    expect(narrowWorkspaceBox).not.toBeNull();
+    expect(narrowFocusBox).not.toBeNull();
+    expect(narrowWorkspaceBox!.x + narrowWorkspaceBox!.width)
+      .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
+    expect(narrowFocusBox!.x + narrowFocusBox!.width)
+      .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await tabsToggle.click();
+    await expect(tabsToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator('nav[aria-label="Session workspace"]'))
+      .not.toBeVisible();
+    await expect(commonRegion).toBeVisible();
+    await expect(workspaceRegion).toBeVisible();
+    await tabsToggle.click();
+    await expect(tabsToggle).toHaveAttribute("aria-pressed", "true");
+
+    await commonRegion.getByRole("button", {
+      name: "Manage common quick links",
+    }).click();
+    const commonDialog = page.getByRole("dialog", { name: "Manage Common links" });
+    await commonDialog.getByRole("textbox", { name: "Label" }).fill("Team runbook");
+    await commonDialog.getByRole("textbox", { name: "URL" })
+      .fill("docs.example.test/runbook");
+    await commonDialog.getByRole("button", { name: "Add to shelf" }).click();
+    await commonDialog.getByRole("button", { name: "Save links" }).click();
+    const commonLink = commonRegion.getByRole("link", { name: "Team runbook" });
+    await expect(commonLink).toHaveAttribute("href", "https://docs.example.test/runbook");
+    await expect(commonLink).toHaveAttribute("target", "_blank");
+    await expect(commonLink).toHaveAttribute("rel", "noreferrer");
+
+    await workspaceRegion.getByRole("button", {
+      name: "Manage workspace quick links",
+    }).click();
+    const workspaceDialog = page.getByRole("dialog", {
+      name: `Manage ${firstName} links`,
+    });
+    await workspaceDialog.getByRole("textbox", { name: "Label" }).fill("Launch ticket");
+    await workspaceDialog.getByRole("textbox", { name: "URL" })
+      .fill("https://issues.example.test/launch");
+    await workspaceDialog.getByRole("button", { name: "Add to shelf" }).click();
+    await workspaceDialog.getByRole("button", { name: "Save links" }).click();
+    await expect(workspaceRegion.getByRole("link", { name: "Launch ticket" })).toBeVisible();
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("region", { name: "Common quick links" })
+      .getByRole("link", { name: "Team runbook" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Workspace quick links" })
+      .getByRole("link", { name: "Launch ticket" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    const verticalCommonBox = await commonRegion.boundingBox();
+    const verticalWorkspaceBox = await workspaceRegion.boundingBox();
+    expect(verticalCommonBox).not.toBeNull();
+    expect(verticalWorkspaceBox).not.toBeNull();
+    expect(verticalCommonBox!.x).toBeLessThan(verticalWorkspaceBox!.x);
+    expect(Math.abs(verticalCommonBox!.y - verticalWorkspaceBox!.y)).toBeLessThan(1);
+
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceIds[1])}`
+      + `&tab=${encodeURIComponent(sessionName)}`,
+    );
+    const secondCommonRegion = page.getByRole("region", { name: "Common quick links" });
+    const secondWorkspaceRegion = page.getByRole("region", { name: "Workspace quick links" });
+    await expect(secondCommonRegion.getByRole("link", { name: "Team runbook" })).toBeVisible();
+    await expect(secondWorkspaceRegion).toContainText(secondName);
+    await expect(secondWorkspaceRegion).toContainText("No links yet");
+    await expect(secondWorkspaceRegion.getByRole("link", { name: "Launch ticket" }))
+      .toHaveCount(0);
+
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?tab=${encodeURIComponent(sessionName)}`,
+    );
+    await expect(page.getByRole("region", { name: "Common quick links" })
+      .getByRole("link", { name: "Team runbook" })).toBeVisible();
+    const temporaryRegion = page.getByRole("region", { name: "Workspace quick links" });
+    await expect(temporaryRegion).toContainText("Save workspace to add links");
+    await expect(temporaryRegion.getByRole("button", {
+      name: "Manage workspace quick links",
+    })).toBeDisabled();
+
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceIds[0])}`
+      + `&tab=${encodeURIComponent(sessionName)}`,
+    );
+    const firstWorkspaceRegion = page.getByRole("region", { name: "Workspace quick links" });
+    await firstWorkspaceRegion.getByRole("button", {
+      name: "Manage workspace quick links",
+    }).click();
+    const removeDialog = page.getByRole("dialog", {
+      name: `Manage ${firstName} links`,
+    });
+    await removeDialog.getByRole("button", { name: "Remove Launch ticket" }).click();
+    await removeDialog.getByRole("button", { name: "Save links" }).click();
+    await expect(firstWorkspaceRegion.getByRole("link", { name: "Launch ticket" }))
+      .toHaveCount(0);
+  } finally {
+    try {
+      await request.put("/mux/api/workspace-quick-links", { data: { links: [] } });
+    } catch {
+      // Keep global test state clean after a failed assertion.
+    }
+    for (const workspaceId of workspaceIds) {
+      try {
+        await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      } catch {
+        // Keep workspace cleanup scoped to records created by this test.
+      }
+    }
+  }
+});
+
 test("snippet tree persists and stages exact input from cards and lists", async ({ page }) => {
   const snippetCommand = "printf 'SNIPPET_E2E_OK\\n'";
   await page.setViewportSize({ width: 390, height: 844 });
@@ -3040,6 +3540,13 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   });
   await expect(terminalControls).toBeVisible();
   await expect(page.getByRole("group", { name: "Terminal input shortcuts" })).toBeHidden();
+  const shell = page.locator(".console-shell");
+  await expect(shell).toHaveAttribute("data-scroll-agent", "shells");
+  await expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+  await expect(tmuxPageUp).toHaveClass(/preferred-scroll-control/);
+  await expect(tmuxPageDown).toHaveClass(/preferred-scroll-control/);
+  await expect(rawPageUp).not.toHaveClass(/preferred-scroll-control/);
+  await expect(rawPageDown).not.toHaveClass(/preferred-scroll-control/);
   const portraitRailButtons = terminalControls.getByRole("button");
   await expect(portraitRailButtons).toHaveCount(7);
   for (const button of await portraitRailButtons.all()) {
@@ -3066,6 +3573,9 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
 
   await rawPageUp.click();
   await expect(terminalKeyboardTarget).toBeFocused();
+  await expect(shell).toHaveAttribute("data-scroll-mode", "application");
+  await expect(rawPageUp).toHaveClass(/preferred-scroll-control/);
+  await expect(rawPageDown).toHaveClass(/preferred-scroll-control/);
   await rawPageDown.click();
   await expect(terminalKeyboardTarget).toBeFocused();
 
@@ -3076,6 +3586,9 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
 
   await tmuxPageUp.click();
   await expect(terminalKeyboardTarget).toBeFocused();
+  await expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+  await expect(tmuxPageUp).toHaveClass(/preferred-scroll-control/);
+  await expect(tmuxPageDown).toHaveClass(/preferred-scroll-control/);
 
   await expect.poll(() => terminalHistoryActions.slice(historyFramesBefore))
     .toEqual(["page-up"]);

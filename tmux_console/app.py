@@ -1244,6 +1244,39 @@ def create_app(
             return json_error(str(error), 503)
         return web.json_response({"workspaces": workspaces})
 
+    async def list_common_workspace_quick_links(_: web.Request) -> web.Response:
+        try:
+            links = app[WORKSPACES_KEY].list_common_quick_links()
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        return web.json_response({"links": links})
+
+    async def replace_common_workspace_quick_links(
+        request: web.Request,
+    ) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        if "links" not in payload:
+            return json_error("links is required", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"links"})
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        try:
+            links = app[WORKSPACES_KEY].replace_common_quick_links(payload["links"])
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception("Unable to save common workspace quick links")
+            return json_error("unable to save workspace quick links", 500)
+        return web.json_response({"links": links})
+
     async def get_workspace(request: web.Request) -> web.Response:
         try:
             workspace = app[WORKSPACES_KEY].get_workspace(
@@ -1256,6 +1289,51 @@ def create_app(
         except ValueError as error:
             return json_error(str(error), 400)
         return web.json_response({"workspace": workspace})
+
+    async def get_workspace_quick_links(request: web.Request) -> web.Response:
+        try:
+            links = app[WORKSPACES_KEY].get_workspace_quick_links(
+                request.match_info["workspace_id"]
+            )
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        return web.json_response({"links": links})
+
+    async def replace_workspace_quick_links(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        if "links" not in payload:
+            return json_error("links is required", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"links"})
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        try:
+            links = app[WORKSPACES_KEY].replace_workspace_quick_links(
+                request.match_info["workspace_id"],
+                payload["links"],
+            )
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to save quick links for workspace %s",
+                request.match_info["workspace_id"],
+            )
+            return json_error("unable to save workspace quick links", 500)
+        return web.json_response({"links": links})
 
     async def create_workspace(request: web.Request) -> web.Response:
         try:
@@ -1599,8 +1677,24 @@ def create_app(
     )
     app.router.add_get(f"{prefix}/api/snippets", list_snippets)
     app.router.add_put(f"{prefix}/api/snippets", replace_snippets)
+    app.router.add_get(
+        f"{prefix}/api/workspace-quick-links",
+        list_common_workspace_quick_links,
+    )
+    app.router.add_put(
+        f"{prefix}/api/workspace-quick-links",
+        replace_common_workspace_quick_links,
+    )
     app.router.add_get(f"{prefix}/api/workspaces", list_workspaces)
     app.router.add_post(f"{prefix}/api/workspaces", create_workspace)
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/quick-links",
+        get_workspace_quick_links,
+    )
+    app.router.add_put(
+        f"{prefix}/api/workspaces/{{workspace_id}}/quick-links",
+        replace_workspace_quick_links,
+    )
     app.router.add_get(f"{prefix}/api/workspaces/{{workspace_id}}", get_workspace)
     app.router.add_patch(f"{prefix}/api/workspaces/{{workspace_id}}", update_workspace)
     app.router.add_post(

@@ -812,6 +812,18 @@ html[data-theme="light"] .console-bar-toggle[aria-pressed="true"]::before {
   box-shadow: 0 0 0 3px rgba(85, 124, 29, 0.12);
 }
 
+html[data-theme="light"] .desktop-terminal-copy-toggle[aria-pressed="true"] {
+  color: #fff;
+  background: #087a70;
+  border-color: #087a70;
+  box-shadow: 0 0 0 1px rgba(8, 122, 112, 0.14), 0 0 16px rgba(8, 122, 112, 0.12);
+}
+
+html[data-theme="light"] .desktop-terminal-copy-toggle[aria-pressed="true"]::before {
+  background: #fff;
+  box-shadow: none;
+}
+
 html[data-theme="light"] .console-bar-toggle:disabled {
   color: #7a8377;
   background: #e5e1d8;
@@ -897,6 +909,81 @@ html[data-theme="light"] .workspace-navigation {
   box-shadow: 0 6px 18px rgba(65, 55, 38, 0.08);
 }
 
+html[data-theme="light"] .workspace-quick-links {
+  color: #394337;
+  background:
+    linear-gradient(90deg, rgba(8, 122, 112, 0.055), transparent 42%),
+    #f5f1e9;
+  border-color: #cbc5b9;
+}
+
+html[data-theme="light"] .workspace-quick-links-region.common,
+html[data-theme="light"] .workspace-quick-links-region-heading,
+html[data-theme="light"] .workspace-quick-links-manage {
+  border-color: #cbc5b9;
+}
+
+html[data-theme="light"] .workspace-quick-links-region-heading {
+  color: #087a70;
+  background: rgba(8, 122, 112, 0.045);
+}
+
+html[data-theme="light"] .workspace-quick-links-region.workspace
+  .workspace-quick-links-region-heading {
+  color: #557c1d;
+  background: rgba(85, 124, 29, 0.045);
+}
+
+html[data-theme="light"] .workspace-quick-links-region-heading span,
+html[data-theme="light"] .workspace-quick-links-placeholder {
+  color: #737c70;
+}
+
+html[data-theme="light"] .workspace-quick-link {
+  color: #414b3e;
+  background: #fffdf8;
+  border-color: #c7c1b5;
+}
+
+html[data-theme="light"] .workspace-quick-link svg {
+  color: #737c70;
+}
+
+html[data-theme="light"] .workspace-quick-link:hover,
+html[data-theme="light"] .workspace-quick-link:focus-visible {
+  color: #20261e;
+  background: #ffffff;
+  border-color: #879778;
+}
+
+html[data-theme="light"] .workspace-quick-link:hover svg,
+html[data-theme="light"] .workspace-quick-link:focus-visible svg,
+html[data-theme="light"] .workspace-quick-links-manage:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-links-manage:focus-visible {
+  color: #087a70;
+}
+
+html[data-theme="light"] .workspace-quick-links-region.workspace
+  .workspace-quick-links-manage:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-links-region.workspace
+  .workspace-quick-links-manage:focus-visible {
+  color: #557c1d;
+}
+
+html[data-theme="light"] .workspace-quick-links-manage {
+  color: #687365;
+  background: #ece8df;
+}
+
+html[data-theme="light"] .workspace-quick-links-manage:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-links-manage:focus-visible {
+  background: #fffdf8;
+}
+
+html[data-theme="light"] .workspace-quick-links-placeholder.error {
+  color: #a2362e;
+}
+
 html[data-theme="light"] [data-desktop-tabs="vertical"] .workspace-navigation-vertical {
   box-shadow: 7px 0 18px rgba(65, 55, 38, 0.08);
 }
@@ -930,6 +1017,7 @@ html[data-theme="light"] .workspace-new-session-button,
 html[data-theme="light"] .workspace-save-button,
 html[data-theme="light"] .workspace-saved-indicator,
 html[data-theme="light"] .workspace-tab-search-button,
+html[data-theme="light"] .workspace-keymap-toggle,
 html[data-theme="light"] .workspace-recents-button {
   color: #596356;
   background: #e6e1d8;
@@ -944,6 +1032,8 @@ html[data-theme="light"] .workspace-save-button:hover,
 html[data-theme="light"] .workspace-save-button:focus-visible,
 html[data-theme="light"] .workspace-tab-search-button:hover,
 html[data-theme="light"] .workspace-tab-search-button:focus-visible,
+html[data-theme="light"] .workspace-keymap-toggle:hover,
+html[data-theme="light"] .workspace-keymap-toggle:focus-visible,
 html[data-theme="light"] .workspace-recents-button:hover,
 html[data-theme="light"] .workspace-recents-button:focus-visible,
 html[data-theme="light"] .workspace-recents-button.active {
@@ -953,6 +1043,55 @@ html[data-theme="light"] .workspace-recents-button.active {
 
 html[data-theme="light"] .workspace-recents-button.active {
   color: #426d0b;
+}
+
+html[data-theme="light"] .workspace-keymap-panel {
+  color: #283126;
+  background:
+    linear-gradient(145deg, rgba(8, 122, 112, 0.07), transparent 36%),
+    rgba(255, 253, 248, 0.98);
+  border-color: #aaa397;
+  box-shadow: 0 20px 52px rgba(65, 55, 38, 0.2);
+}
+
+html[data-theme="light"] .workspace-keymap-panel > header,
+html[data-theme="light"] .workspace-keymap-panel > p {
+  border-color: #d5cfc4;
+}
+
+html[data-theme="light"] .workspace-keymap-panel > header span {
+  color: #087a70;
+}
+
+html[data-theme="light"] .workspace-keymap-panel h3 {
+  color: #557c1d;
+}
+
+html[data-theme="light"] .workspace-keymap-close {
+  color: #596356;
+  background: #f0ece4;
+  border-color: #c5beb2;
+}
+
+html[data-theme="light"] .workspace-keymap-close:hover,
+html[data-theme="light"] .workspace-keymap-close:focus-visible {
+  color: #20261e;
+  background: #ffffff;
+  border-color: #879778;
+}
+
+html[data-theme="light"] .workspace-keymap-panel li {
+  color: #536050;
+}
+
+html[data-theme="light"] .workspace-keymap-panel kbd {
+  color: #354132;
+  background: #f3efe7;
+  border-color: #bdb6aa;
+}
+
+html[data-theme="light"] .workspace-keymap-panel > p {
+  color: #687365;
 }
 
 html[data-theme="light"] .workspace-new-session-button {
@@ -1830,6 +1969,7 @@ html[data-theme="light"] .jump-live {
 }
 
 html[data-theme="light"] .desktop-terminal-focus-redraw,
+html[data-theme="light"] .desktop-terminal-focus-shortcuts,
 html[data-theme="light"] .desktop-terminal-focus-exit {
   color: #354132;
   background: rgba(255, 253, 248, 0.92);
@@ -1839,11 +1979,65 @@ html[data-theme="light"] .desktop-terminal-focus-exit {
 
 html[data-theme="light"] .desktop-terminal-focus-redraw:hover,
 html[data-theme="light"] .desktop-terminal-focus-redraw:focus-visible,
+html[data-theme="light"] .desktop-terminal-focus-shortcuts:hover,
+html[data-theme="light"] .desktop-terminal-focus-shortcuts:focus-visible,
 html[data-theme="light"] .desktop-terminal-focus-exit:hover,
 html[data-theme="light"] .desktop-terminal-focus-exit:focus-visible {
   color: #fff;
   background: #557c1d;
   border-color: #557c1d;
+}
+
+html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"],
+html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:hover,
+html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:focus-visible {
+  color: #fff;
+  background: #087a70;
+  border-color: #087a70;
+}
+
+html[data-theme="light"]
+  .console-shell[data-desktop-focus="true"][data-desktop-focus-shortcuts="true"]
+  > .input-dock {
+  background: rgba(250, 248, 242, 0.95);
+  border-color: #9eaa99;
+  box-shadow: 0 18px 54px rgba(65, 55, 38, 0.28);
+  scrollbar-color: #aaa599 transparent;
+}
+
+html[data-theme="light"]
+  .console-shell[data-desktop-focus="true"][data-desktop-focus-shortcuts="true"]
+  > .input-dock > .other-key-panel {
+  background: rgba(8, 122, 112, 0.055);
+  border-color: rgba(112, 127, 105, 0.34);
+}
+
+html[data-theme="light"]
+  .console-shell[data-desktop-focus="true"][data-desktop-focus-shortcuts="true"]
+  > .input-dock > .desktop-focus-shortcuts-drag-handle {
+  color: #52604f;
+  background:
+    linear-gradient(90deg, rgba(8, 122, 112, 0.09), transparent 38%),
+    rgba(242, 238, 229, 0.97);
+  border-color: rgba(112, 127, 105, 0.34);
+}
+
+html[data-theme="light"] .desktop-focus-shortcuts-drag-handle:hover,
+html[data-theme="light"] .desktop-focus-shortcuts-drag-handle:focus-visible {
+  color: #20261e;
+  background:
+    linear-gradient(90deg, rgba(8, 122, 112, 0.13), transparent 44%),
+    #f7f4ed;
+}
+
+html[data-theme="light"] .desktop-focus-shortcuts-drag-hint {
+  color: #6c7668;
+}
+
+html[data-theme="light"] .desktop-focus-shortcuts-drag-hint kbd {
+  color: #52604f;
+  background: #fffdf8;
+  border-color: #b9b2a6;
 }
 
 html[data-theme="light"] .terminal-view-controls {
@@ -2007,6 +2201,22 @@ html[data-theme="light"] .key-button:active {
   background: #557c1d;
 }
 
+html[data-theme="light"] .key-button.preferred-scroll-key,
+html[data-theme="light"] .terminal-view-control.preferred-scroll-control {
+  color: #426d0b;
+  background:
+    linear-gradient(145deg, rgba(85, 124, 29, 0.15), transparent 72%),
+    #f2f7ea;
+  border-color: #7f9b5c;
+  box-shadow: inset 0 0 0 1px rgba(85, 124, 29, 0.08), 0 0 10px rgba(85, 124, 29, 0.1);
+}
+
+html[data-theme="light"] .key-button.preferred-scroll-key::after,
+html[data-theme="light"] .terminal-view-control.preferred-scroll-control::after {
+  background: #557c1d;
+  box-shadow: 0 0 0 2px rgba(85, 124, 29, 0.13);
+}
+
 html[data-theme="light"] .other-keys-toggle[aria-expanded="true"],
 html[data-theme="light"] .other-keys-toggle[aria-expanded="true"]:hover:not(:disabled) {
   color: #086a61;
@@ -2133,8 +2343,66 @@ html[data-theme="light"] .history-status {
 }
 
 html[data-theme="light"] .history-status.error,
-html[data-theme="light"] .title-form-body .title-error {
+html[data-theme="light"] .title-form-body .title-error,
+html[data-theme="light"] .workspace-quick-links-dialog-body .title-error {
   color: #9f3129;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor {
+  background: #f5f1e9;
+  border-color: #c7c0b4;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor li,
+html[data-theme="light"] .workspace-quick-links-editor a,
+html[data-theme="light"] .workspace-quick-links-editor button {
+  border-color: #d3cdc1;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor strong {
+  color: #252b23;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor small,
+html[data-theme="light"] .workspace-quick-links-dialog-description,
+html[data-theme="light"] .workspace-quick-links-empty-editor,
+html[data-theme="light"] .workspace-quick-links-limit {
+  color: #687166;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor a,
+html[data-theme="light"] .workspace-quick-links-editor button {
+  color: #687365;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor a:hover,
+html[data-theme="light"] .workspace-quick-links-editor a:focus-visible {
+  color: #087a70;
+  background: #e4f1ee;
+}
+
+html[data-theme="light"] .workspace-quick-links-editor button:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-links-editor button:focus-visible {
+  color: #a2362e;
+  background: #f7e7e3;
+}
+
+html[data-theme="light"] .workspace-quick-links-dialog-body fieldset {
+  border-color: #c2bbaf;
+}
+
+html[data-theme="light"] .workspace-quick-links-dialog-body legend {
+  color: #557c1d;
+}
+
+html[data-theme="light"] .workspace-quick-links-dialog-body fieldset label {
+  color: #596356;
+}
+
+html[data-theme="light"] .workspace-quick-links-dialog-body fieldset input {
+  color: #252b23;
+  background: #fffdf8;
+  border-color: #bdb6aa;
 }
 
 html[data-theme="light"] .history-status button {

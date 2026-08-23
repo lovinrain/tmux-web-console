@@ -8,8 +8,13 @@ interface MockTerminalInstance {
   options: Record<string, unknown>;
   cols: number;
   rows: number;
+  element?: HTMLElement;
+  keyHandler?: (event: KeyboardEvent) => boolean;
+  emitData: (data: string) => void;
+  clearSelection: ReturnType<typeof vi.fn>;
   clearTextureAtlas: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
+  scrollLines: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
 }
@@ -26,6 +31,9 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     modes = { bracketedPasteMode: false };
     buffer = { active: { viewportY: 0, baseY: 0 } };
+    element: HTMLElement | undefined;
+    keyHandler: ((event: KeyboardEvent) => boolean) | undefined;
+    private dataHandler: ((data: string) => void) | undefined;
 
     constructor(options: Record<string, unknown>) {
       this.options = { ...options };
@@ -33,16 +41,32 @@ vi.mock("@xterm/xterm", () => ({
     }
 
     loadAddon() {}
-    open() {}
+    open(parent: HTMLElement) {
+      this.element = document.createElement("div");
+      this.element.className = "xterm";
+      const screen = document.createElement("div");
+      screen.className = "xterm-screen";
+      this.element.append(screen);
+      parent.append(this.element);
+    }
     write = vi.fn();
     writeln() {}
     paste() {}
     focus() {}
     scrollToBottom() {}
+    scrollLines = vi.fn();
+    clearSelection = vi.fn();
     clearTextureAtlas = vi.fn();
     refresh = vi.fn();
     dispose = vi.fn();
-    onData() { return { dispose: vi.fn() }; }
+    attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => {
+      this.keyHandler = handler;
+    });
+    emitData(data: string) { this.dataHandler?.(data); }
+    onData(handler: (data: string) => void) {
+      this.dataHandler = handler;
+      return { dispose: vi.fn() };
+    }
     onScroll() { return { dispose: vi.fn() }; }
   },
 }));
@@ -145,7 +169,164 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("LiveTerminal browser copy mode", () => {
+  it("forces xterm selection while blocking mouse frames and preserves the terminal instance", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const terminalView = (browserCopyMode: boolean) => (
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        browserCopyMode={browserCopyMode}
+        theme="dark"
+        {...callbacks}
+      />
+    );
+    const view = render(terminalView(false));
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    const terminalElement = terminal.element!;
+    const terminalScreen = terminalElement.querySelector<HTMLElement>(".xterm-screen")!;
+    socket.emit("open");
+    socket.send.mockClear();
+
+    const selectionMouseDowns: MouseEvent[] = [];
+    const selectionMouseMoves: MouseEvent[] = [];
+    terminalElement.addEventListener("mousedown", (event) => {
+      selectionMouseDowns.push(event);
+      terminal.emitData("\x1b[mouse-down");
+      document.addEventListener("mousemove", (moveEvent) => {
+        selectionMouseMoves.push(moveEvent);
+        terminal.emitData("\x1b[mouse-drag");
+      }, { once: true });
+    });
+
+    view.rerender(terminalView(true));
+    expect(view.container.querySelector(".terminal-stage"))
+      .toHaveAttribute("data-copy-mode", "true");
+    terminalScreen.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      clientX: 40,
+      clientY: 20,
+      detail: 1,
+    }));
+
+    expect(selectionMouseDowns).toHaveLength(1);
+    expect(selectionMouseDowns[0].shiftKey).toBe(true);
+    expect(selectionMouseDowns[0].altKey).toBe(false);
+    expect(socket.send).not.toHaveBeenCalled();
+
+    terminalScreen.dispatchEvent(new MouseEvent("mousemove", {
+      bubbles: true,
+      cancelable: true,
+      buttons: 1,
+      clientX: 90,
+      clientY: 40,
+    }));
+    expect(selectionMouseMoves).toHaveLength(1);
+    expect(selectionMouseMoves[0].target).toBe(document);
+    expect(selectionMouseMoves[0].shiftKey).toBe(true);
+    expect(socket.send).not.toHaveBeenCalled();
+
+    document.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 0,
+      clientX: 90,
+      clientY: 40,
+    }));
+    terminalScreen.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaMode: WheelEvent.DOM_DELTA_LINE,
+      deltaY: 3,
+    }));
+    expect(terminal.scrollLines).toHaveBeenCalledWith(3);
+    expect(socket.send).not.toHaveBeenCalled();
+
+    expect(terminal.keyHandler?.(new KeyboardEvent("keydown", {
+      key: "c",
+      ctrlKey: true,
+    }))).toBe(false);
+    expect(terminal.keyHandler?.(new KeyboardEvent("keydown", {
+      key: "v",
+      ctrlKey: true,
+    }))).toBe(false);
+    expect(terminal.keyHandler?.(new KeyboardEvent("keydown", {
+      key: "x",
+      ctrlKey: true,
+    }))).toBe(true);
+
+    view.rerender(terminalView(false));
+    expect(terminal.clearSelection).toHaveBeenCalledOnce();
+    expect(view.container.querySelector(".terminal-stage"))
+      .toHaveAttribute("data-copy-mode", "false");
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+
+    socket.send.mockClear();
+    terminalScreen.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      detail: 1,
+    }));
+    expect(selectionMouseDowns).toHaveLength(2);
+    expect(selectionMouseDowns[1].shiftKey).toBe(false);
+    expect(socket.send).toHaveBeenCalledOnce();
+    document.dispatchEvent(new MouseEvent("mousemove"));
+  });
+
+  it("uses xterm's forced Option selection path on macOS", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        browserCopyMode
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const terminalElement = terminal.element!;
+    const terminalScreen = terminalElement.querySelector<HTMLElement>(".xterm-screen")!;
+    let forcedMouseDown: MouseEvent | undefined;
+    let macSelectionDuringDispatch: unknown;
+    terminalElement.addEventListener("mousedown", (event) => {
+      forcedMouseDown = event;
+      macSelectionDuringDispatch = terminal.options.macOptionClickForcesSelection;
+    });
+
+    terminalScreen.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      detail: 1,
+    }));
+
+    expect(forcedMouseDown?.altKey).toBe(true);
+    expect(forcedMouseDown?.shiftKey).toBe(false);
+    expect(macSelectionDuringDispatch).toBe(true);
+    expect(terminal.options.macOptionClickForcesSelection).toBeUndefined();
+    expect(terminal.keyHandler?.(new KeyboardEvent("keydown", {
+      key: "c",
+      metaKey: true,
+    }))).toBe(false);
+    expect(terminal.keyHandler?.(new KeyboardEvent("keydown", {
+      key: "c",
+      ctrlKey: true,
+    }))).toBe(true);
+  });
 });
 
 describe("LiveTerminal themes", () => {

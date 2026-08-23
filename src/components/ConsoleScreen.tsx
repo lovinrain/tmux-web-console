@@ -4,6 +4,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -25,10 +27,19 @@ import {
   HistoryIcon,
   KeyboardIcon,
   ListIcon,
+  MoveIcon,
   RefreshIcon,
   TerminalIcon,
   TrashIcon,
 } from "../icons";
+import {
+  AGENT_SCROLL_PREFERENCES_STORAGE_KEY,
+  loadAgentScrollPreferences,
+  preferredAgentScrollMode,
+  rememberAgentScrollMode,
+  type AgentScrollMode,
+} from "../agentScrollPreferences";
+import { paneCommandKind } from "../sessionDashboardModel";
 import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
@@ -57,6 +68,7 @@ interface ConsoleScreenProps {
   sessionName: string;
   workspaceName?: string | null;
   onBack: () => void;
+  workspaceLinks?: ReactNode;
   sessionNavigation?: ReactNode;
   workspaceOverlayOpen?: boolean;
   mobileMode?: MobileConsoleMode;
@@ -130,11 +142,39 @@ const MOBILE_CONSOLE_LAYOUT_QUERY = [
   "(max-width: 1024px) and (pointer: coarse)",
   "(max-width: 1024px) and (max-height: 500px)",
 ].join(", ");
+const DESKTOP_FOCUS_SHORTCUTS_GUTTER = 12;
+const DESKTOP_FOCUS_SHORTCUTS_KEY_STEP = 16;
+const DESKTOP_FOCUS_SHORTCUTS_KEY_LARGE_STEP = 64;
+
+interface DesktopFocusShortcutsPosition {
+  x: number;
+  y: number;
+}
+
+interface DesktopFocusShortcutsDrag {
+  pointerId: number;
+  captureTarget: HTMLButtonElement;
+  startClientX: number;
+  startClientY: number;
+  startPosition: DesktopFocusShortcutsPosition;
+  minDeltaX: number;
+  maxDeltaX: number;
+  minDeltaY: number;
+  maxDeltaY: number;
+}
+
+function clampDelta(value: number, minimum: number, maximum: number): number {
+  if (minimum > maximum) return 0;
+  return Math.min(maximum, Math.max(minimum, value));
+}
 
 interface ConsoleBarToolbarProps {
   visibility: ConsoleBarVisibility;
   availability?: Partial<Record<ConsoleBar, boolean>>;
   onChange: (bar: ConsoleBar, visible: boolean) => void;
+  workspaceLinks?: ReactNode;
+  desktopCopyMode?: boolean;
+  onDesktopCopyModeChange?: (enabled: boolean) => void;
   onEnterDesktopFocus?: () => void;
   desktopTabOrientation?: WorkspaceTabOrientation;
   onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
@@ -172,6 +212,9 @@ function ConsoleBarToolbar({
   visibility,
   availability,
   onChange,
+  workspaceLinks,
+  desktopCopyMode = false,
+  onDesktopCopyModeChange,
   onEnterDesktopFocus,
   desktopTabOrientation = "horizontal",
   onDesktopTabOrientationChange,
@@ -179,12 +222,24 @@ function ConsoleBarToolbar({
   onTabActionsVisibilityChange,
 }: ConsoleBarToolbarProps) {
   return (
-    <div className="console-bar-toolbar" role="group" aria-label="Console bars">
+    <div
+      className={workspaceLinks
+        ? "console-bar-toolbar has-workspace-links"
+        : "console-bar-toolbar"}
+      role="group"
+      aria-label="Console bars"
+    >
       <span className="console-bar-toolbar-label" aria-hidden="true">VIEW</span>
+      {workspaceLinks && (
+        <div className="console-bar-toolbar-links">{workspaceLinks}</div>
+      )}
       <div className="console-bar-toggle-group">
         {CONSOLE_BARS.map(({ bar, label, shortLabel, controls }) => {
           const visible = visibility[bar];
           const available = availability?.[bar] ?? true;
+          const shortcut = bar === "sessionTabs" && available
+            ? "Control+Shift+S"
+            : undefined;
           return (
             <button
               key={bar}
@@ -193,9 +248,12 @@ function ConsoleBarToolbar({
               aria-label={label}
               aria-pressed={available && visible}
               aria-controls={available ? controls : undefined}
+              aria-keyshortcuts={shortcut}
               disabled={!available}
               title={available
-                ? `${visible ? "Hide" : "Show"} ${label.toLowerCase()}`
+                ? `${visible ? "Hide" : "Show"} ${label.toLowerCase()}${shortcut
+                  ? " (Ctrl+Shift+S)"
+                  : ""}`
                 : `${label} unavailable for this session`}
               onClick={() => onChange(bar, !visible)}
             >
@@ -229,12 +287,30 @@ function ConsoleBarToolbar({
           aria-label="Tab action buttons"
           aria-controls="muxdeck-session-tabs"
           aria-pressed={tabActionsVisible}
+          aria-keyshortcuts="Control+Shift+A"
           title={tabActionsVisible
-            ? "Hide action buttons on every session tab"
-            : "Show action buttons on every session tab"}
+            ? "Hide action buttons on every session tab (Ctrl+Shift+A)"
+            : "Show action buttons on every session tab (Ctrl+Shift+A)"}
           onClick={() => onTabActionsVisibilityChange(!tabActionsVisible)}
         >
           <span>Actions</span>
+        </button>
+      )}
+      {onDesktopCopyModeChange && (
+        <button
+          type="button"
+          className="console-bar-toggle desktop-terminal-copy-toggle"
+          aria-label="Browser terminal copy mode"
+          aria-controls="muxdeck-active-console"
+          aria-pressed={desktopCopyMode}
+          aria-keyshortcuts="Control+Shift+C"
+          title={desktopCopyMode
+            ? "Browser selection is active. Click to return mouse control to the terminal application (Ctrl+Shift+C)"
+            : "Select terminal text with the browser; TUI mouse actions are temporarily blocked (Ctrl+Shift+C)"}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onDesktopCopyModeChange(!desktopCopyMode)}
+        >
+          <span>Copy</span>
         </button>
       )}
       {onEnterDesktopFocus && (
@@ -245,7 +321,8 @@ function ConsoleBarToolbar({
           aria-label="Enter desktop terminal focus"
           aria-controls="muxdeck-active-console"
           aria-pressed="false"
-          title="Fill the browser viewport with this live terminal"
+          aria-keyshortcuts="Control+Shift+F"
+          title="Fill the browser viewport with this live terminal (Ctrl+Shift+F)"
           onMouseDown={(event) => event.preventDefault()}
         >
           <ExpandIcon /> <span>Focus</span>
@@ -259,6 +336,7 @@ export function ConsoleScreen({
   sessionName,
   workspaceName = null,
   onBack,
+  workspaceLinks,
   sessionNavigation,
   workspaceOverlayOpen = false,
   mobileMode,
@@ -312,7 +390,17 @@ export function ConsoleScreen({
   const [mobileDistractionFreeMode, setMobileDistractionFreeMode] = useState<
     MobileConsoleMode | null
   >(null);
+  const [desktopCopyMode, setDesktopCopyMode] = useState(false);
+  const [agentScrollPreferences, setAgentScrollPreferences] = useState(
+    loadAgentScrollPreferences,
+  );
   const [desktopTerminalFocus, setDesktopTerminalFocus] = useState(false);
+  const [desktopFocusShortcutsOpen, setDesktopFocusShortcutsOpen] = useState(false);
+  const [desktopFocusShortcutsPosition, setDesktopFocusShortcutsPosition] = useState<
+    DesktopFocusShortcutsPosition
+  >({ x: 0, y: 0 });
+  const desktopFocusShortcutsPositionRef = useRef(desktopFocusShortcutsPosition);
+  const desktopFocusShortcutsDragRef = useRef<DesktopFocusShortcutsDrag | null>(null);
   const [localHistoryPanelWidth, setLocalHistoryPanelWidth] = useState(
     DEFAULT_HISTORY_PANEL_WIDTH,
   );
@@ -323,9 +411,19 @@ export function ConsoleScreen({
   const clampedDesktopTabRailWidth = clampDesktopTabRailWidth(desktopTabRailWidth);
   const consoleShellStyle = {
     "--desktop-tab-rail-width": `${clampedDesktopTabRailWidth}px`,
+    "--desktop-focus-shortcuts-x": `${desktopFocusShortcutsPosition.x}px`,
+    "--desktop-focus-shortcuts-y": `${desktopFocusShortcutsPosition.y}px`,
   } as CSSProperties;
 
   const session = loadedSession?.name === sessionName ? loadedSession : null;
+  const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId)
+    || (session ? activePane(session) : undefined);
+  const classification = classifyPane(pane);
+  const scrollAgentKind = paneCommandKind(pane?.command || "", pane?.title || "");
+  const preferredScrollMode = preferredAgentScrollMode(
+    scrollAgentKind,
+    agentScrollPreferences,
+  );
   const visibleRenameWarning = renameWarning?.sessionName === sessionName
     && renameWarning.sessionId === session?.id
     ? renameWarning
@@ -354,6 +452,169 @@ export function ConsoleScreen({
     setLocalBarVisibility((current) => ({ ...current, [bar]: visible }));
   }, [onBarVisibilityChange]);
 
+  const updateDesktopFocusShortcutsPosition = useCallback((
+    position: DesktopFocusShortcutsPosition,
+  ) => {
+    desktopFocusShortcutsPositionRef.current = position;
+    setDesktopFocusShortcutsPosition(position);
+  }, []);
+
+  const finishDesktopFocusShortcutsDrag = useCallback((
+    pointerId: number,
+    cancelled: boolean,
+  ) => {
+    const drag = desktopFocusShortcutsDragRef.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+
+    desktopFocusShortcutsDragRef.current = null;
+    document.documentElement.classList.remove("desktop-focus-shortcuts-moving");
+    if (cancelled) updateDesktopFocusShortcutsPosition(drag.startPosition);
+    try {
+      if (drag.captureTarget.hasPointerCapture?.(pointerId)) {
+        drag.captureTarget.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Window-level pointer listeners still finish the move if capture is lost.
+    }
+  }, [updateDesktopFocusShortcutsPosition]);
+
+  const resetDesktopFocusShortcutsPosition = useCallback(() => {
+    const drag = desktopFocusShortcutsDragRef.current;
+    desktopFocusShortcutsDragRef.current = null;
+    document.documentElement.classList.remove("desktop-focus-shortcuts-moving");
+    if (drag) {
+      try {
+        if (drag.captureTarget.hasPointerCapture?.(drag.pointerId)) {
+          drag.captureTarget.releasePointerCapture(drag.pointerId);
+        }
+      } catch {
+        // The position reset does not depend on pointer capture cleanup.
+      }
+    }
+    updateDesktopFocusShortcutsPosition({ x: 0, y: 0 });
+  }, [updateDesktopFocusShortcutsPosition]);
+
+  const startDesktopFocusShortcutsDrag = useCallback((
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    if (
+      desktopFocusShortcutsDragRef.current
+      || event.button !== 0
+      || event.isPrimary === false
+    ) return;
+    const panel = event.currentTarget.closest<HTMLElement>(".input-dock");
+    const shell = consoleShellRef.current;
+    if (!panel || !shell) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.focus();
+    const panelRect = panel.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    desktopFocusShortcutsDragRef.current = {
+      pointerId: event.pointerId,
+      captureTarget: event.currentTarget,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPosition: desktopFocusShortcutsPositionRef.current,
+      minDeltaX: shellRect.left + DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.left,
+      maxDeltaX: shellRect.right - DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.right,
+      minDeltaY: shellRect.top + DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.top,
+      maxDeltaY: shellRect.bottom - DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.bottom,
+    };
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Window-level listeners keep the panel movable without pointer capture.
+    }
+    document.documentElement.classList.add("desktop-focus-shortcuts-moving");
+  }, []);
+
+  useEffect(() => {
+    const movePanel = (event: PointerEvent) => {
+      const drag = desktopFocusShortcutsDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const deltaX = clampDelta(
+        event.clientX - drag.startClientX,
+        drag.minDeltaX,
+        drag.maxDeltaX,
+      );
+      const deltaY = clampDelta(
+        event.clientY - drag.startClientY,
+        drag.minDeltaY,
+        drag.maxDeltaY,
+      );
+      updateDesktopFocusShortcutsPosition({
+        x: drag.startPosition.x + deltaX,
+        y: drag.startPosition.y + deltaY,
+      });
+    };
+    const finishPanelMove = (event: PointerEvent) => {
+      finishDesktopFocusShortcutsDrag(event.pointerId, false);
+    };
+    const cancelPanelMove = (event: PointerEvent) => {
+      finishDesktopFocusShortcutsDrag(event.pointerId, true);
+    };
+
+    window.addEventListener("pointermove", movePanel);
+    window.addEventListener("pointerup", finishPanelMove);
+    window.addEventListener("pointercancel", cancelPanelMove);
+    return () => {
+      window.removeEventListener("pointermove", movePanel);
+      window.removeEventListener("pointerup", finishPanelMove);
+      window.removeEventListener("pointercancel", cancelPanelMove);
+      desktopFocusShortcutsDragRef.current = null;
+      document.documentElement.classList.remove("desktop-focus-shortcuts-moving");
+    };
+  }, [finishDesktopFocusShortcutsDrag, updateDesktopFocusShortcutsPosition]);
+
+  const moveDesktopFocusShortcutsBy = useCallback((deltaX: number, deltaY: number) => {
+    const shell = consoleShellRef.current;
+    const panel = shell?.querySelector<HTMLElement>(".input-dock");
+    if (!shell || !panel) return;
+    const panelRect = panel.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    const nextDeltaX = clampDelta(
+      deltaX,
+      shellRect.left + DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.left,
+      shellRect.right - DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.right,
+    );
+    const nextDeltaY = clampDelta(
+      deltaY,
+      shellRect.top + DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.top,
+      shellRect.bottom - DESKTOP_FOCUS_SHORTCUTS_GUTTER - panelRect.bottom,
+    );
+    const current = desktopFocusShortcutsPositionRef.current;
+    updateDesktopFocusShortcutsPosition({
+      x: current.x + nextDeltaX,
+      y: current.y + nextDeltaY,
+    });
+  }, [updateDesktopFocusShortcutsPosition]);
+
+  const moveDesktopFocusShortcutsFromKeyboard = useCallback((
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ) => {
+    const step = event.shiftKey
+      ? DESKTOP_FOCUS_SHORTCUTS_KEY_LARGE_STEP
+      : DESKTOP_FOCUS_SHORTCUTS_KEY_STEP;
+    let deltaX = 0;
+    let deltaY = 0;
+    if (event.key === "ArrowLeft") deltaX = -step;
+    else if (event.key === "ArrowRight") deltaX = step;
+    else if (event.key === "ArrowUp") deltaY = -step;
+    else if (event.key === "ArrowDown") deltaY = step;
+    else if (event.key === "Enter" || event.key === "Home") {
+      event.preventDefault();
+      resetDesktopFocusShortcutsPosition();
+      return;
+    } else return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    moveDesktopFocusShortcutsBy(deltaX, deltaY);
+  }, [moveDesktopFocusShortcutsBy, resetDesktopFocusShortcutsPosition]);
+
   const setMobileMode = useCallback((mode: MobileConsoleMode) => {
     if (onMobileModeChange) {
       onMobileModeChange(mode);
@@ -363,8 +624,11 @@ export function ConsoleScreen({
   }, [onMobileModeChange]);
 
   const showComposer = useCallback(() => {
+    setDesktopFocusShortcutsOpen(false);
+    setDesktopTerminalFocus(false);
+    resetDesktopFocusShortcutsPosition();
     setBarVisible("stagedInput", true);
-  }, [setBarVisible]);
+  }, [resetDesktopFocusShortcutsPosition, setBarVisible]);
 
   const setHistoryPanelWidth = useCallback((width: number) => {
     if (historyPanelWidth === undefined) setLocalHistoryPanelWidth(width);
@@ -406,6 +670,37 @@ export function ConsoleScreen({
   ]);
 
   useEffect(() => {
+    if (!desktopTerminalFocus || !desktopFocusShortcutsOpen) return;
+    let frame = 0;
+    const keepPanelInViewport = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        moveDesktopFocusShortcutsBy(0, 0);
+      });
+    };
+    const panel = consoleShellRef.current?.querySelector<HTMLElement>(".input-dock");
+    const observer = panel && typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(keepPanelInViewport)
+      : null;
+    if (panel) observer?.observe(panel);
+    keepPanelInViewport();
+    window.addEventListener("resize", keepPanelInViewport);
+    window.visualViewport?.addEventListener("resize", keepPanelInViewport);
+    window.visualViewport?.addEventListener("scroll", keepPanelInViewport);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener("resize", keepPanelInViewport);
+      window.visualViewport?.removeEventListener("resize", keepPanelInViewport);
+      window.visualViewport?.removeEventListener("scroll", keepPanelInViewport);
+    };
+  }, [
+    desktopFocusShortcutsOpen,
+    desktopTerminalFocus,
+    moveDesktopFocusShortcutsBy,
+  ]);
+
+  useEffect(() => {
     const shell = consoleShellRef.current;
     const viewport = window.visualViewport;
     if (!shell || !viewport) return;
@@ -422,6 +717,17 @@ export function ConsoleScreen({
       viewport.removeEventListener("scroll", syncViewport);
     };
   }, [currentLookupError, sessionName]);
+
+  useEffect(() => {
+    const syncAgentScrollPreferences = (event: StorageEvent) => {
+      if (
+        event.storageArea === window.localStorage
+        && event.key === AGENT_SCROLL_PREFERENCES_STORAGE_KEY
+      ) setAgentScrollPreferences(loadAgentScrollPreferences());
+    };
+    window.addEventListener("storage", syncAgentScrollPreferences);
+    return () => window.removeEventListener("storage", syncAgentScrollPreferences);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -468,26 +774,32 @@ export function ConsoleScreen({
   useEffect(() => {
     setPaneId(null);
     setMobileDistractionFreeMode(null);
+    setDesktopCopyMode(false);
     setDesktopTerminalFocus(false);
+    setDesktopFocusShortcutsOpen(false);
+    resetDesktopFocusShortcutsPosition();
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
-  }, [sessionName]);
+  }, [resetDesktopFocusShortcutsPosition, sessionName]);
 
   useEffect(() => {
     if (!workspaceOverlayOpen) return;
     setMobileDistractionFreeMode(null);
+    setDesktopCopyMode(false);
     setDesktopTerminalFocus(false);
+    setDesktopFocusShortcutsOpen(false);
+    resetDesktopFocusShortcutsPosition();
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
-  }, [workspaceOverlayOpen]);
+  }, [resetDesktopFocusShortcutsPosition, workspaceOverlayOpen]);
 
   useEffect(() => {
     if (
@@ -500,12 +812,17 @@ export function ConsoleScreen({
     if (typeof window.matchMedia !== "function") return;
     const mobileLayout = window.matchMedia(MOBILE_CONSOLE_LAYOUT_QUERY);
     const leaveDesktopFocus = () => {
-      if (mobileLayout.matches) setDesktopTerminalFocus(false);
+      if (mobileLayout.matches) {
+        setDesktopCopyMode(false);
+        setDesktopTerminalFocus(false);
+        setDesktopFocusShortcutsOpen(false);
+        resetDesktopFocusShortcutsPosition();
+      }
     };
     leaveDesktopFocus();
     mobileLayout.addEventListener("change", leaveDesktopFocus);
     return () => mobileLayout.removeEventListener("change", leaveDesktopFocus);
-  }, []);
+  }, [resetDesktopFocusShortcutsPosition]);
 
   useEffect(() => {
     const sessionTitle = session?.name === sessionName
@@ -517,8 +834,6 @@ export function ConsoleScreen({
       : `${sessionTitle} - Muxdeck`;
   }, [session, sessionName, workspaceName]);
 
-  const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId) || (session ? activePane(session) : undefined);
-  const classification = classifyPane(pane);
   const grokThemeName = theme === "light" ? "grokday" : "groknight";
   const grokThemeCommand = `/theme ${grokThemeName}`;
   const stageGrokTheme = useCallback(() => {
@@ -534,6 +849,27 @@ export function ConsoleScreen({
     terminalRef.current?.jumpToLive();
     terminalRef.current?.focus();
   }, []);
+  const rememberScrollMode = useCallback((mode: AgentScrollMode) => {
+    setAgentScrollPreferences((current) => (
+      rememberAgentScrollMode(current, scrollAgentKind, mode)
+    ));
+  }, [scrollAgentKind]);
+  const scrollTerminal = useCallback((
+    direction: "up" | "down",
+    mode: AgentScrollMode,
+    remember = false,
+  ) => {
+    const accepted = mode === "tmux"
+      ? terminalRef.current?.navigateHistory(direction === "up" ? "page-up" : "page-down")
+      : terminalRef.current?.send(
+        direction === "up" ? RAW_PAGE_UP_SEQUENCE : RAW_PAGE_DOWN_SEQUENCE,
+      );
+    if (accepted && remember) rememberScrollMode(mode);
+    return accepted ?? false;
+  }, [rememberScrollMode]);
+  const scrollTerminalWithPreference = useCallback((direction: "up" | "down") => {
+    scrollTerminal(direction, preferredScrollMode);
+  }, [preferredScrollMode, scrollTerminal]);
   const redrawTerminal = useCallback(() => {
     terminalRef.current?.redraw();
   }, []);
@@ -566,42 +902,113 @@ export function ConsoleScreen({
   const enterDesktopTerminalFocus = useCallback(() => {
     inputBarRef.current?.blur();
     setMobileDistractionFreeMode(null);
+    setDesktopCopyMode(false);
     setHistoryOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
+    setDesktopFocusShortcutsOpen(false);
+    resetDesktopFocusShortcutsPosition();
     setDesktopTerminalFocus(true);
     window.requestAnimationFrame(() => terminalRef.current?.focus());
-  }, []);
+  }, [resetDesktopFocusShortcutsPosition]);
   const exitDesktopTerminalFocus = useCallback(() => {
+    setDesktopFocusShortcutsOpen(false);
     setDesktopTerminalFocus(false);
+    resetDesktopFocusShortcutsPosition();
     window.requestAnimationFrame(() => terminalRef.current?.focus());
-  }, []);
+  }, [resetDesktopFocusShortcutsPosition]);
+  const openTerminateEditor = useCallback(() => {
+    if (!session) return;
+    setTerminateTarget({
+      name: session.name,
+      id: session.id,
+      created: session.created,
+      serverStarted: session.serverStarted,
+      serverPid: session.serverPid,
+      title: session.customTitle,
+    });
+  }, [session]);
   useEffect(() => {
-    if (!desktopTerminalFocus) return;
-
-    const handleDesktopFocusShortcut = (event: KeyboardEvent) => {
+    const handleDesktopViewShortcut = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented
         || event.isComposing
         || event.keyCode === 229
-        || event.code !== "KeyF"
         || !event.ctrlKey
         || !event.shiftKey
         || event.altKey
         || event.metaKey
       ) return;
+
+      const togglesFocus = event.code === "KeyF";
+      const togglesSessionTabs = event.code === "KeyS" && Boolean(sessionNavigation);
+      const endsSession = event.code === "KeyE";
+      const returnsLive = event.code === "KeyL";
+      const togglesCopyMode = event.code === "KeyC";
+      const scrollsUp = event.code === "KeyU";
+      const scrollsDown = event.code === "KeyD";
+      if (
+        !togglesFocus
+        && !togglesSessionTabs
+        && !endsSession
+        && !returnsLive
+        && !togglesCopyMode
+        && !scrollsUp
+        && !scrollsDown
+      ) return;
+      if (
+        workspaceOverlayOpen
+        || document.querySelector('[aria-modal="true"]')
+        || (window.matchMedia?.(MOBILE_CONSOLE_LAYOUT_QUERY).matches ?? false)
+      ) return;
+
       event.preventDefault();
       event.stopPropagation();
-      exitDesktopTerminalFocus();
+
+      if (togglesSessionTabs) {
+        setBarVisible("sessionTabs", !visibleBars.sessionTabs);
+        return;
+      }
+
+      if (endsSession) {
+        openTerminateEditor();
+        return;
+      }
+      if (returnsLive) {
+        returnToLiveTerminal();
+        return;
+      }
+      if (togglesCopyMode) {
+        setDesktopCopyMode((enabled) => !enabled);
+        return;
+      }
+      if (scrollsUp || scrollsDown) {
+        scrollTerminalWithPreference(scrollsUp ? "up" : "down");
+        return;
+      }
+
+      if (desktopTerminalFocus) exitDesktopTerminalFocus();
+      else enterDesktopTerminalFocus();
     };
 
-    // Capture the chord before xterm turns it into terminal input.
-    window.addEventListener("keydown", handleDesktopFocusShortcut, true);
-    return () => window.removeEventListener("keydown", handleDesktopFocusShortcut, true);
-  }, [desktopTerminalFocus, exitDesktopTerminalFocus]);
+    // Capture app-level view chords before xterm turns them into terminal input.
+    window.addEventListener("keydown", handleDesktopViewShortcut, true);
+    return () => window.removeEventListener("keydown", handleDesktopViewShortcut, true);
+  }, [
+    desktopTerminalFocus,
+    enterDesktopTerminalFocus,
+    exitDesktopTerminalFocus,
+    openTerminateEditor,
+    returnToLiveTerminal,
+    scrollTerminalWithPreference,
+    sessionNavigation,
+    setBarVisible,
+    visibleBars.sessionTabs,
+    workspaceOverlayOpen,
+  ]);
   const saveSessionDetails = useCallback(async (title: string, tags: SessionTag[]) => {
     if (!session) return;
     let updatedSession = session;
@@ -675,17 +1082,6 @@ export function ConsoleScreen({
     setRenameEditorOpen(false);
     onSessionRenamed?.(sessionName, result.session, session.id, result.warnings);
   }, [onSessionRenamed, session, sessionName]);
-  const openTerminateEditor = useCallback(() => {
-    if (!session) return;
-    setTerminateTarget({
-      name: session.name,
-      id: session.id,
-      created: session.created,
-      serverStarted: session.serverStarted,
-      serverPid: session.serverPid,
-      title: session.customTitle,
-    });
-  }, [session]);
   const terminateCurrentSession = useCallback(async () => {
     if (!terminateTarget || !onSessionTerminated) {
       throw new Error("This tmux session is no longer available.");
@@ -717,6 +1113,7 @@ export function ConsoleScreen({
             shortcuts: false,
           }}
           onChange={setBarVisible}
+          workspaceLinks={workspaceLinks}
           desktopTabOrientation={desktopTabOrientation}
           onDesktopTabOrientationChange={sessionNavigation
             ? onDesktopTabOrientationChange
@@ -755,7 +1152,11 @@ export function ConsoleScreen({
       data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
       data-mobile-focus={activeMobileFocus}
       data-mobile-distraction-free={mobileDistractionFree ? "true" : "false"}
+      data-desktop-copy-mode={desktopCopyMode ? "true" : "false"}
       data-desktop-focus={desktopTerminalFocus ? "true" : "false"}
+      data-desktop-focus-shortcuts={desktopFocusShortcutsOpen ? "true" : "false"}
+      data-scroll-agent={scrollAgentKind}
+      data-scroll-mode={preferredScrollMode}
       data-desktop-tabs={desktopTabOrientation}
       data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
       data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
@@ -764,6 +1165,7 @@ export function ConsoleScreen({
         visibility={visibleBars}
         availability={{ sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
+        workspaceLinks={workspaceLinks}
         desktopTabOrientation={desktopTabOrientation}
         onDesktopTabOrientationChange={sessionNavigation
           ? onDesktopTabOrientationChange
@@ -772,6 +1174,8 @@ export function ConsoleScreen({
         onTabActionsVisibilityChange={sessionNavigation
           ? onTabActionsVisibilityChange
           : undefined}
+        desktopCopyMode={desktopCopyMode}
+        onDesktopCopyModeChange={setDesktopCopyMode}
         onEnterDesktopFocus={enterDesktopTerminalFocus}
       />
       <nav className="mobile-console-focus" aria-label="Mobile console focus">
@@ -906,6 +1310,7 @@ export function ConsoleScreen({
           session={sessionName}
           ignoreSize={ignoreSize}
           layoutSuspended={mobileInputDistractionFree}
+          browserCopyMode={desktopCopyMode}
           layoutRefreshToken={[
             activeMobileFocus,
             mobileDistractionFree ? "focus" : "standard",
@@ -920,52 +1325,84 @@ export function ConsoleScreen({
         <nav className="terminal-view-controls" aria-label="Terminal view controls">
           <button
             type="button"
-            className="terminal-view-control"
+            className={preferredScrollMode === "application"
+              ? "terminal-view-control preferred-scroll-control"
+              : "terminal-view-control"}
             aria-label="Raw terminal Page Up"
             aria-controls="muxdeck-active-console"
-            title="Send Page Up to the foreground terminal application"
+            aria-keyshortcuts={preferredScrollMode === "application"
+              ? "Control+Shift+U"
+              : undefined}
+            data-scroll-preferred={preferredScrollMode === "application" ? "true" : undefined}
+            title={preferredScrollMode === "application"
+              ? `Send Page Up to the foreground terminal application; preferred for ${classification.label} (Ctrl+Shift+U)`
+              : "Send Page Up to the foreground terminal application"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => terminalRef.current?.send(RAW_PAGE_UP_SEQUENCE)}
+            onClick={() => scrollTerminal("up", "application", true)}
           >
             <ArrowUpIcon />
             <span>PgUp</span>
           </button>
           <button
             type="button"
-            className="terminal-view-control"
+            className={preferredScrollMode === "application"
+              ? "terminal-view-control preferred-scroll-control"
+              : "terminal-view-control"}
             aria-label="Raw terminal Page Down"
             aria-controls="muxdeck-active-console"
-            title="Send Page Down to the foreground terminal application"
+            aria-keyshortcuts={preferredScrollMode === "application"
+              ? "Control+Shift+D"
+              : undefined}
+            data-scroll-preferred={preferredScrollMode === "application" ? "true" : undefined}
+            title={preferredScrollMode === "application"
+              ? `Send Page Down to the foreground terminal application; preferred for ${classification.label} (Ctrl+Shift+D)`
+              : "Send Page Down to the foreground terminal application"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => terminalRef.current?.send(RAW_PAGE_DOWN_SEQUENCE)}
+            onClick={() => scrollTerminal("down", "application", true)}
           >
             <ArrowDownIcon />
             <span>PgDn</span>
           </button>
           <button
             type="button"
-            className="terminal-view-control tmux-history"
+            className={preferredScrollMode === "tmux"
+              ? "terminal-view-control tmux-history preferred-scroll-control"
+              : "terminal-view-control tmux-history"}
             aria-label="Tmux Page Up"
             aria-controls="muxdeck-active-console"
-            title="Enter tmux copy mode one page up"
+            aria-keyshortcuts={preferredScrollMode === "tmux"
+              ? "Control+Shift+U"
+              : undefined}
+            data-scroll-preferred={preferredScrollMode === "tmux" ? "true" : undefined}
+            title={preferredScrollMode === "tmux"
+              ? `Enter tmux copy mode one page up; preferred for ${classification.label} (Ctrl+Shift+U)`
+              : "Enter tmux copy mode one page up"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => terminalRef.current?.navigateHistory("page-up")}
+            onClick={() => scrollTerminal("up", "tmux", true)}
           >
             <HistoryIcon />
             <span>T Up</span>
           </button>
           <button
             type="button"
-            className="terminal-view-control tmux-history"
+            className={preferredScrollMode === "tmux"
+              ? "terminal-view-control tmux-history preferred-scroll-control"
+              : "terminal-view-control tmux-history"}
             aria-label="Tmux Page Down"
             aria-controls="muxdeck-active-console"
-            title="Page down while tmux copy mode is active"
+            aria-keyshortcuts={preferredScrollMode === "tmux"
+              ? "Control+Shift+D"
+              : undefined}
+            data-scroll-preferred={preferredScrollMode === "tmux" ? "true" : undefined}
+            title={preferredScrollMode === "tmux"
+              ? `Page down while tmux copy mode is active; preferred for ${classification.label} (Ctrl+Shift+D)`
+              : "Page down while tmux copy mode is active"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => terminalRef.current?.navigateHistory("page-down")}
+            onClick={() => scrollTerminal("down", "tmux", true)}
           >
             <HistoryIcon />
             <span>T Dn</span>
@@ -975,7 +1412,8 @@ export function ConsoleScreen({
             className="terminal-view-control live-toggle"
             aria-label="Return to live terminal"
             aria-controls="muxdeck-active-console"
-            title="Leave tmux copy mode and return to live output"
+            aria-keyshortcuts="Control+Shift+L"
+            title="Leave tmux copy mode and return to live output (Ctrl+Shift+L)"
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
             onClick={returnToLiveTerminal}
@@ -988,7 +1426,8 @@ export function ConsoleScreen({
             className="terminal-view-control terminate-session-control"
             aria-label="Terminate tmux session"
             aria-haspopup="dialog"
-            title="End this entire tmux session and all of its panes"
+            aria-keyshortcuts="Control+Shift+E"
+            title="End this entire tmux session and all of its panes (Ctrl+Shift+E)"
             disabled={!session || !onSessionTerminated}
             onMouseDown={(event) => event.preventDefault()}
             onClick={openTerminateEditor}
@@ -1031,6 +1470,28 @@ export function ConsoleScreen({
             </button>
             <button
               type="button"
+              className="desktop-terminal-focus-shortcuts"
+              aria-label={desktopFocusShortcutsOpen
+                ? "Hide all buttons"
+                : "Show all buttons"}
+              aria-controls="muxdeck-terminal-shortcuts"
+              aria-expanded={desktopFocusShortcutsOpen}
+              title={desktopFocusShortcutsOpen
+                ? "Hide the floating terminal shortcut panel"
+                : "Show all bottom terminal shortcuts in a floating panel"}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                setDesktopFocusShortcutsOpen((open) => !open);
+                if (desktopFocusShortcutsOpen) {
+                  window.requestAnimationFrame(() => terminalRef.current?.focus());
+                }
+              }}
+            >
+              <KeyboardIcon />
+              <span>{desktopFocusShortcutsOpen ? "Hide all buttons" : "Show all buttons"}</span>
+            </button>
+            <button
+              type="button"
               className="desktop-terminal-focus-exit"
               aria-label="Exit desktop terminal focus"
               aria-controls="muxdeck-active-console"
@@ -1053,7 +1514,34 @@ export function ConsoleScreen({
         sessionId={session?.id}
         enabled={connection === "live"}
         composerVisible={visibleBars.stagedInput || visibleMobileMode === "input"}
-        shortcutsVisible={visibleBars.shortcuts || visibleMobileMode === "input"}
+        shortcutsVisible={
+          visibleBars.shortcuts
+          || visibleMobileMode === "input"
+          || (desktopTerminalFocus && desktopFocusShortcutsOpen)
+        }
+        shortcutPanelHeader={desktopTerminalFocus && desktopFocusShortcutsOpen ? (
+          <button
+            type="button"
+            className="desktop-focus-shortcuts-drag-handle"
+            aria-label="Move floating button panel"
+            title="Drag to move. Use arrow keys; hold Shift for larger steps. Enter resets the position."
+            onPointerDown={startDesktopFocusShortcutsDrag}
+            onLostPointerCapture={(event) => {
+              finishDesktopFocusShortcutsDrag(event.pointerId, false);
+            }}
+            onDoubleClick={resetDesktopFocusShortcutsPosition}
+            onKeyDown={moveDesktopFocusShortcutsFromKeyboard}
+          >
+            <MoveIcon />
+            <span>Move panel</span>
+            <span className="desktop-focus-shortcuts-drag-hint" aria-hidden="true">
+              Drag / arrows <kbd>Enter</kbd> resets
+            </span>
+          </button>
+        ) : undefined}
+        preferredScrollMode={preferredScrollMode}
+        preferredScrollLabel={classification.label}
+        onScrollModeUsed={rememberScrollMode}
         onSend={(data) => terminalRef.current?.send(data) ?? false}
         onSubmit={(data, terminator) => (
           terminalRef.current?.submit(data, terminator) ?? Promise.resolve(false)

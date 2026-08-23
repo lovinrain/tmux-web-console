@@ -51,11 +51,13 @@ vi.mock("./LiveTerminal", async () => {
   return {
     LiveTerminal: forwardRef(function MockLiveTerminal(
       {
+        browserCopyMode,
         layoutSuspended,
         layoutRefreshToken,
         theme,
         onStateChange,
       }: {
+        browserCopyMode?: boolean;
         layoutSuspended?: boolean;
         layoutRefreshToken?: string;
         theme: Theme;
@@ -68,6 +70,7 @@ vi.mock("./LiveTerminal", async () => {
       return (
         <div
           data-testid="live-terminal"
+          data-browser-copy-mode={browserCopyMode ? "true" : "false"}
           data-layout-suspended={layoutSuspended ? "true" : "false"}
           data-layout-refresh-token={layoutRefreshToken}
           data-terminal-theme={theme}
@@ -432,6 +435,181 @@ describe("ConsoleScreen session identity", () => {
     expect(stagedInput).toHaveFocus();
   });
 
+  it("toggles browser-owned terminal selection without remounting or sending input", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session(),
+      session(null, "next-session"),
+    ]);
+    const view = renderWithTheme(
+      <ConsoleScreen sessionName="test" onBack={vi.fn()} />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const terminal = screen.getByTestId("live-terminal");
+    const copyMode = screen.getByRole("button", {
+      name: "Browser terminal copy mode",
+    });
+    expect(copyMode).not.toBePressed();
+    expect(copyMode).toHaveTextContent("Copy");
+    expect(copyMode).toHaveAttribute("aria-controls", "muxdeck-active-console");
+    expect(copyMode).toHaveAttribute("aria-keyshortcuts", "Control+Shift+C");
+    expect(shell).toHaveAttribute("data-desktop-copy-mode", "false");
+    expect(terminal).toHaveAttribute("data-browser-copy-mode", "false");
+
+    expect(fireEvent.mouseDown(copyMode)).toBe(false);
+    fireEvent.click(copyMode);
+
+    expect(copyMode).toBePressed();
+    expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+    expect(terminal).toHaveAttribute("data-browser-copy-mode", "true");
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen sessionName="next-session" onBack={vi.fn()} />
+      </ThemeProvider>,
+    );
+
+    await screen.findByRole("heading", { name: "next-session" });
+    expect(screen.getByRole("button", {
+      name: "Browser terminal copy mode",
+    })).not.toBePressed();
+    expect(screen.getByTestId("live-terminal"))
+      .toHaveAttribute("data-browser-copy-mode", "false");
+  });
+
+  it("learns agent paging controls and captures the exact desktop terminal shortcuts", async () => {
+    const claudeSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
+    };
+    const onSessionTerminated = vi.fn(async () => {});
+    vi.mocked(listSessions).mockResolvedValue([claudeSession]);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+        onSessionTerminated={onSessionTerminated}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const shell = screen.getByRole("main");
+    const bottomControls = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const mobileControls = screen.getByRole("navigation", { name: "Terminal view controls" });
+    const rawPageUp = within(bottomControls).getByRole("button", { name: "PgUp" });
+    const rawPageDown = within(bottomControls).getByRole("button", { name: "PgDn" });
+    const tmuxPageUp = within(bottomControls).getByRole("button", { name: "Tmux Page Up" });
+    const mobileRawPageUp = within(mobileControls).getByRole("button", {
+      name: "Raw terminal Page Up",
+    });
+    const mobileTmuxPageUp = within(mobileControls).getByRole("button", {
+      name: "Tmux Page Up",
+    });
+
+    expect(shell).toHaveAttribute("data-scroll-agent", "claude");
+    expect(shell).toHaveAttribute("data-scroll-mode", "application");
+    expect(rawPageUp).toHaveClass("preferred-scroll-key");
+    expect(rawPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
+    expect(rawPageDown).toHaveAttribute("aria-keyshortcuts", "Control+Shift+D");
+    expect(mobileRawPageUp).toHaveClass("preferred-scroll-control");
+    expect(mobileRawPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
+    expect(tmuxPageUp).not.toHaveClass("preferred-scroll-key");
+    expect(mobileTmuxPageUp).not.toHaveClass("preferred-scroll-control");
+
+    expect(fireEvent.keyDown(window, {
+      code: "KeyU",
+      key: "U",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(fireEvent.keyDown(window, {
+      code: "KeyD",
+      key: "D",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(liveTerminalHandle.send.mock.calls).toEqual([
+      ["\x1b[5~"],
+      ["\x1b[6~"],
+    ]);
+
+    fireEvent.click(tmuxPageUp);
+    expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+    expect(tmuxPageUp).toHaveClass("preferred-scroll-key");
+    expect(tmuxPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
+    expect(mobileTmuxPageUp).toHaveClass("preferred-scroll-control");
+    expect(rawPageUp).not.toHaveClass("preferred-scroll-key");
+    expect(JSON.parse(
+      window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}",
+    )).toEqual({ claude: "tmux" });
+
+    fireEvent.keyDown(window, {
+      code: "KeyU",
+      key: "U",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(window, {
+      code: "KeyD",
+      key: "D",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([
+      ["page-up"],
+      ["page-down"],
+    ]);
+
+    expect(fireEvent.keyDown(window, {
+      code: "KeyC",
+      key: "C",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+    expect(fireEvent.keyDown(window, {
+      code: "KeyC",
+      key: "C",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+    })).toBe(true);
+    expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+
+    expect(fireEvent.keyDown(window, {
+      code: "KeyL",
+      key: "L",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+    expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
+    expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
+
+    expect(fireEvent.keyDown(window, {
+      code: "KeyE",
+      key: "E",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(screen.getByRole("alertdialog", { name: "Terminate tmux session?" }))
+      .toBeVisible();
+    expect(onSessionTerminated).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(window, {
+      code: "KeyC",
+      key: "C",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(true);
+    expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+  });
+
   it("fills the desktop viewport without remounting the terminal or losing its draft", async () => {
     vi.mocked(listSessions).mockResolvedValue([
       session(),
@@ -456,15 +634,22 @@ describe("ConsoleScreen session identity", () => {
     const enterFocus = within(consoleBars).getByRole("button", {
       name: "Enter desktop terminal focus",
     });
+    const copyMode = within(consoleBars).getByRole("button", {
+      name: "Browser terminal copy mode",
+    });
     expect(within(terminalShortcuts).queryByRole("button", {
       name: "Enter desktop terminal focus",
     })).not.toBeInTheDocument();
     expect(enterFocus).toHaveTextContent("Focus");
     expect(enterFocus).toHaveAttribute("aria-controls", "muxdeck-active-console");
+    expect(enterFocus).toHaveAttribute("aria-keyshortcuts", "Control+Shift+F");
     expect(enterFocus).not.toBePressed();
     fireEvent.input(draft, { target: { value: "keep this desktop draft" } });
 
     expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    fireEvent.click(copyMode);
+    expect(copyMode).toBePressed();
+    expect(terminal).toHaveAttribute("data-browser-copy-mode", "true");
     expect(terminal).toHaveAttribute(
       "data-layout-refresh-token",
       "terminal:standard:desktop-standard:desktop-tabs-horizontal:desktop-tab-rail-288",
@@ -473,6 +658,8 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.click(enterFocus);
 
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(copyMode).not.toBePressed();
+    expect(terminal).toHaveAttribute("data-browser-copy-mode", "false");
     expect(screen.getByTestId("live-terminal")).toBe(terminal);
     expect(draft).toHaveValue("keep this desktop draft");
     expect(terminal).toHaveAttribute(
@@ -488,12 +675,42 @@ describe("ConsoleScreen session identity", () => {
     const focusRedraw = within(focusControls).getByRole("button", {
       name: "Redraw terminal display",
     });
-    expect(within(focusControls).getAllByRole("button")).toHaveLength(2);
+    const focusShortcuts = within(focusControls).getByRole("button", {
+      name: "Show all buttons",
+    });
+    expect(within(focusControls).getAllByRole("button")).toHaveLength(3);
     expect(focusRedraw).toHaveTextContent("Redraw");
+    expect(focusShortcuts).toHaveTextContent("Show all buttons");
+    expect(focusShortcuts).toHaveAttribute(
+      "aria-controls",
+      "muxdeck-terminal-shortcuts",
+    );
+    expect(focusShortcuts).toHaveAttribute("aria-expanded", "false");
+    expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "false");
     expect(fireEvent.mouseDown(focusRedraw)).toBe(false);
     fireEvent.click(focusRedraw);
     expect(liveTerminalHandle.redraw).toHaveBeenCalledOnce();
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(fireEvent.mouseDown(focusShortcuts)).toBe(false);
+    fireEvent.click(focusShortcuts);
+    expect(focusShortcuts).toHaveAttribute("aria-expanded", "true");
+    expect(focusShortcuts).toHaveTextContent("Hide all buttons");
+    expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "true");
+    expect(within(terminalShortcuts).getByRole("button", {
+      name: "Raw terminal keyboard",
+    })).toBeInTheDocument();
+    expect(within(terminalShortcuts).getByRole("button", {
+      name: "Edit title and tags",
+    })).toBeInTheDocument();
+    expect(within(terminalShortcuts).getByRole("button", {
+      name: "Open snippets",
+    })).toBeInTheDocument();
+    expect(within(terminalShortcuts).getByRole("button", {
+      name: "Paste to draft",
+    })).toBeInTheDocument();
+    fireEvent.click(focusShortcuts);
+    expect(focusShortcuts).toHaveAttribute("aria-expanded", "false");
+    expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "false");
     expect(exitFocus).toHaveTextContent("Exit");
     expect(exitFocus).toBePressed();
     fireEvent.keyDown(document, { key: "Escape" });
@@ -510,9 +727,14 @@ describe("ConsoleScreen session identity", () => {
       "data-layout-refresh-token",
       "terminal:standard:desktop-standard:desktop-tabs-horizontal:desktop-tab-rail-288",
     );
-    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(3));
 
-    fireEvent.click(enterFocus);
+    expect(fireEvent.keyDown(window, {
+      code: "KeyF",
+      key: "F",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
     expect(screen.getByRole("button", {
       name: "Exit desktop terminal focus",
@@ -538,10 +760,12 @@ describe("ConsoleScreen session identity", () => {
       shiftKey: true,
     })).toBe(false);
     expect(shell).toHaveAttribute("data-desktop-focus", "false");
-    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(5));
 
     fireEvent.click(enterFocus);
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Show all buttons" }));
+    expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "true");
     view.rerender(
       <ThemeProvider>
         <ConsoleScreen
@@ -552,6 +776,130 @@ describe("ConsoleScreen session identity", () => {
       </ThemeProvider>,
     );
     await waitFor(() => expect(shell).toHaveAttribute("data-desktop-focus", "false"));
+    expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "false");
+  });
+
+  it("offers every shortcut in focus even when the normal bottom strip is hidden", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        barVisibility={{
+          sessionTabs: false,
+          stagedInput: true,
+          shortcuts: false,
+        }}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const shortcutStrip = document.getElementById("muxdeck-terminal-shortcuts");
+    expect(shortcutStrip).not.toBeNull();
+    expect(shortcutStrip).toHaveAttribute("hidden");
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Enter desktop terminal focus",
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all buttons" }));
+
+    expect(shortcutStrip).not.toHaveAttribute("hidden");
+    expect(screen.getByRole("group", {
+      name: "Terminal input shortcuts",
+    })).toBe(shortcutStrip);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide all buttons" }));
+    expect(shortcutStrip).toHaveAttribute("hidden");
+  });
+
+  it("moves the floating shortcut panel by pointer and keyboard within the viewport", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", {
+      name: "Enter desktop terminal focus",
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all buttons" }));
+
+    const shell = screen.getByRole("main");
+    const panel = screen.getByRole("region", { name: "Terminal input" });
+    const moveHandle = screen.getByRole("button", {
+      name: "Move floating button panel",
+    });
+    const rect = (left: number, top: number, width: number, height: number) => ({
+      x: left,
+      y: top,
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    vi.spyOn(shell, "getBoundingClientRect").mockReturnValue(rect(0, 0, 1_000, 700));
+    vi.spyOn(panel, "getBoundingClientRect").mockReturnValue(rect(100, 400, 800, 200));
+    Object.defineProperties(moveHandle, {
+      setPointerCapture: { value: vi.fn(), configurable: true },
+      hasPointerCapture: { value: vi.fn(() => true), configurable: true },
+      releasePointerCapture: { value: vi.fn(), configurable: true },
+    });
+    const dispatchPointer = (
+      target: Window | Element,
+      type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+      pointerId: number,
+      clientX: number,
+      clientY: number,
+    ) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX,
+        clientY,
+      });
+      Object.defineProperties(event, {
+        pointerId: { value: pointerId },
+        pointerType: { value: "mouse" },
+        isPrimary: { value: true },
+      });
+      fireEvent(target, event);
+    };
+    const position = () => [
+      shell.style.getPropertyValue("--desktop-focus-shortcuts-x"),
+      shell.style.getPropertyValue("--desktop-focus-shortcuts-y"),
+    ];
+
+    expect(moveHandle).toHaveTextContent("Move panel");
+    expect(position()).toEqual(["0px", "0px"]);
+    fireEvent.keyDown(moveHandle, { key: "ArrowRight" });
+    fireEvent.keyDown(moveHandle, { key: "ArrowUp", shiftKey: true });
+    expect(position()).toEqual(["16px", "-64px"]);
+    fireEvent.keyDown(moveHandle, { key: "Enter" });
+    expect(position()).toEqual(["0px", "0px"]);
+
+    dispatchPointer(moveHandle, "pointerdown", 7, 200, 450);
+    expect(document.documentElement).toHaveClass("desktop-focus-shortcuts-moving");
+    dispatchPointer(window, "pointermove", 8, 500, 250);
+    expect(position()).toEqual(["0px", "0px"]);
+    dispatchPointer(window, "pointermove", 7, 500, 250);
+    expect(position()).toEqual(["88px", "-200px"]);
+    dispatchPointer(window, "pointerup", 7, 500, 250);
+    expect(document.documentElement).not.toHaveClass("desktop-focus-shortcuts-moving");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide all buttons" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show all buttons" }));
+    expect(position()).toEqual(["88px", "-200px"]);
+    fireEvent.doubleClick(screen.getByRole("button", {
+      name: "Move floating button panel",
+    }));
+    expect(position()).toEqual(["0px", "0px"]);
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Exit desktop terminal focus",
+    }));
+    expect(position()).toEqual(["0px", "0px"]);
   });
 
   it("switches the desktop tab rail without remounting the terminal", async () => {
@@ -592,7 +940,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabActionsToggle).toHaveAttribute("aria-controls", "muxdeck-session-tabs");
     expect(tabActionsToggle).toHaveAttribute(
       "title",
-      "Hide action buttons on every session tab",
+      "Hide action buttons on every session tab (Ctrl+Shift+A)",
     );
     fireEvent.click(tabActionsToggle);
     expect(onTabActionsVisibilityChange).toHaveBeenCalledWith(false);
@@ -621,7 +969,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabActionsToggle).not.toBePressed();
     expect(tabActionsToggle).toHaveAttribute(
       "title",
-      "Show action buttons on every session tab",
+      "Show action buttons on every session tab (Ctrl+Shift+A)",
     );
     fireEvent.click(tabActionsToggle);
     expect(onTabActionsVisibilityChange).toHaveBeenLastCalledWith(true);
@@ -801,6 +1149,7 @@ describe("ConsoleScreen session identity", () => {
       <ConsoleScreen
         sessionName="test"
         onBack={vi.fn()}
+        workspaceLinks={<section aria-label="Workspace links">Pinned links</section>}
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
       />,
     );
@@ -812,9 +1161,15 @@ describe("ConsoleScreen session identity", () => {
     const keys = within(toolbar).getByRole("button", {
       name: "Terminal shortcut buttons",
     });
+    const workspaceLinks = within(toolbar).getByRole("region", {
+      name: "Workspace links",
+    });
 
+    expect(workspaceLinks).toBeVisible();
     expect(tabs).toBePressed();
     expect(tabs).toHaveAttribute("aria-controls", "muxdeck-session-tabs");
+    expect(tabs).toHaveAttribute("aria-keyshortcuts", "Control+Shift+S");
+    expect(tabs).toHaveAttribute("title", "Hide session tabs (Ctrl+Shift+S)");
     expect(input).toBePressed();
     expect(input).toHaveAttribute("aria-controls", "muxdeck-staged-input");
     expect(keys).toBePressed();
@@ -832,11 +1187,17 @@ describe("ConsoleScreen session identity", () => {
       .not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Console bars" })).toBeVisible();
 
-    fireEvent.click(tabs);
+    expect(fireEvent.keyDown(window, {
+      code: "KeyS",
+      key: "S",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
     expect(tabs).not.toBePressed();
-    expect(tabs).toHaveAttribute("title", "Show session tabs");
+    expect(tabs).toHaveAttribute("title", "Show session tabs (Ctrl+Shift+S)");
+    expect(workspaceLinks).toBeVisible();
     expect(within(screen.getByRole("group", { name: "Console bars" }))
-      .getAllByRole("button")).toHaveLength(4);
+      .getAllByRole("button")).toHaveLength(5);
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
@@ -944,6 +1305,9 @@ describe("ConsoleScreen session identity", () => {
 
     const titleButton = screen.getByRole("button", { name: "Edit title and tags" });
     await waitFor(() => expect(titleButton).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Browser terminal copy mode" }));
+    expect(screen.getByTestId("live-terminal"))
+      .toHaveAttribute("data-browser-copy-mode", "true");
     fireEvent.click(titleButton);
     expect(screen.getByRole("dialog", { name: "Edit title and tags" })).toBeVisible();
 
@@ -954,6 +1318,8 @@ describe("ConsoleScreen session identity", () => {
     );
     expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
       .not.toBeInTheDocument();
+    expect(screen.getByTestId("live-terminal"))
+      .toHaveAttribute("data-browser-copy-mode", "false");
 
     view.rerender(
       <ThemeProvider>

@@ -397,6 +397,46 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onOpenRecents).toHaveBeenCalledOnce();
   });
 
+  it("shows the complete desktop keymap from the workspace strip", () => {
+    render(<SessionWorkspaceNavigation {...navigationProps()} />);
+
+    const trigger = screen.getByRole("button", { name: "Show desktop keymap" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-controls", "muxdeck-workspace-keymap");
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const keymap = screen.getByRole("dialog", { name: "Desktop workspace keymap" });
+    for (const mapping of [
+      ["Ctrl+Shift+E", "Open End session confirmation"],
+      ["Ctrl+Shift+L", "Return to live output"],
+      ["Ctrl+Shift+C", "Toggle browser Copy mode"],
+      ["Ctrl+Shift+A", "Toggle tab Actions"],
+      ["Ctrl+Shift+U", "Preferred page up"],
+      ["Ctrl+Shift+D", "Preferred page down"],
+      ["Ctrl+Shift+S", "Show or hide session tabs"],
+      ["Ctrl+Shift+F", "Enter or exit terminal Focus"],
+      ["Ctrl+Shift+,", "Previous tab"],
+      ["Ctrl+Shift+.", "Next tab"],
+      ["Ctrl+Shift+1-9", "Jump to numbered tab"],
+      ["Ctrl+Shift+;", "Find an open tab"],
+    ]) {
+      expect(within(keymap).getByText(mapping[0], { selector: "kbd" })).toBeVisible();
+      expect(within(keymap).getByText(mapping[1])).toBeVisible();
+    }
+    expect(keymap).toHaveTextContent("teaches Muxdeck which paging style");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Desktop workspace keymap" }))
+      .not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("dialog", { name: "Desktop workspace keymap" }))
+      .not.toBeInTheDocument();
+  });
+
   it("exposes distinct Move and Copy window actions with exact accessible text", () => {
     const onOpenTabInNewWindow = vi.fn().mockReturnValue("opened");
     const onCloseTab = vi.fn();

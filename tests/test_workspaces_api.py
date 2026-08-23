@@ -70,6 +70,7 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
             "name": "Main project",
             "tabs": ["agent-a", "agent-b"],
             "groups": [workspace_group("agents", ["agent-a", "agent-b"])],
+            "quickLinks": [],
             "activeSession": "agent-a",
             "createdAt": 10_000,
             "updatedAt": 10_000,
@@ -194,6 +195,91 @@ async def test_workspaces_api_updates_groups_and_accepts_legacy_omission(tmp_pat
         assert (await response.json())["workspace"]["groups"] == []
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_workspace_quick_links_api_separates_common_and_saved_workspace_links(
+    tmp_path,
+):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(
+        path,
+        clock=sequence([10, 20]),
+        id_factory=lambda: "workspace-id",
+    )
+    store.create_workspace(
+        name="Project",
+        tabs=["agent"],
+        active_session="agent",
+    )
+    client = TestClient(TestServer(create_app(workspaces=store, base_path="")))
+    common = [{"id": "docs", "label": "Docs", "url": "https://docs.test/"}]
+    workspace = [
+        {"id": "ticket", "label": "Ticket 42", "url": "https://issues.test/42"}
+    ]
+
+    try:
+        await client.start_server()
+        assert await (await client.get("/api/workspace-quick-links")).json() == {
+            "links": []
+        }
+        response = await client.put(
+            "/api/workspace-quick-links",
+            json={"links": common},
+        )
+        assert response.status == 200
+        assert await response.json() == {"links": common}
+
+        assert await (
+            await client.get("/api/workspaces/workspace-id/quick-links")
+        ).json() == {"links": []}
+        response = await client.put(
+            "/api/workspaces/workspace-id/quick-links",
+            json={"links": workspace},
+        )
+        assert response.status == 200
+        assert await response.json() == {"links": workspace}
+        assert await (
+            await client.get("/api/workspaces/workspace-id/quick-links")
+        ).json() == {"links": workspace}
+        assert await (await client.get("/api/workspace-quick-links")).json() == {
+            "links": common
+        }
+
+        missing = await client.get("/api/workspaces/missing/quick-links")
+        assert missing.status == 404
+        assert await missing.json() == {"error": "workspace not found: missing"}
+
+        invalid = await client.put(
+            "/api/workspace-quick-links",
+            json={
+                "links": [
+                    {"id": "bad", "label": "Bad", "url": "javascript:alert(1)"}
+                ]
+            },
+        )
+        assert invalid.status == 400
+        assert "valid HTTP or HTTPS URL" in (await invalid.json())["error"]
+
+        for path_name in (
+            "/api/workspace-quick-links",
+            "/api/workspaces/workspace-id/quick-links",
+        ):
+            malformed = await client.put(path_name, data="{")
+            assert malformed.status == 400
+            assert await malformed.json() == {"error": "request body must be JSON"}
+            missing_links = await client.put(path_name, json={})
+            assert missing_links.status == 400
+            assert await missing_links.json() == {"error": "links is required"}
+            unknown = await client.put(path_name, json={"links": [], "extra": True})
+            assert unknown.status == 400
+            assert await unknown.json() == {"error": "unknown field: extra"}
+    finally:
+        await client.close()
+
+    reloaded = WorkspaceStore(path)
+    assert reloaded.list_common_quick_links() == common
+    assert reloaded.get_workspace_quick_links("workspace-id") == workspace
 
 
 @pytest.mark.asyncio
@@ -401,7 +487,7 @@ async def test_workspaces_api_reports_persistence_failure_without_mutating_store
         id_factory=lambda: "workspace-id",
     )
 
-    def fail_persist(_workspaces, _session_rename_revision):
+    def fail_persist(_workspaces, _session_rename_revision, _common_quick_links):
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr(store, "_persist", fail_persist)

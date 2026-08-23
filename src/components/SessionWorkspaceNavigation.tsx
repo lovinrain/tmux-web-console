@@ -21,6 +21,7 @@ import {
   FolderIcon,
   GridIcon,
   HistoryIcon,
+  KeyboardIcon,
   PlusIcon,
   SaveIcon,
   SearchIcon,
@@ -122,6 +123,17 @@ export const WORKSPACE_TAB_SHORTCUTS = {
   direct: "Ctrl+Shift+1-9",
 } as const;
 
+export const DESKTOP_CONSOLE_SHORTCUTS = {
+  endSession: "Ctrl+Shift+E",
+  returnLive: "Ctrl+Shift+L",
+  copyMode: "Ctrl+Shift+C",
+  tabActions: "Ctrl+Shift+A",
+  pageUp: "Ctrl+Shift+U",
+  pageDown: "Ctrl+Shift+D",
+  sessionTabs: "Ctrl+Shift+S",
+  focus: "Ctrl+Shift+F",
+} as const;
+
 export const MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID = "muxdeck-mobile-workspace-overview";
 
 export function isCompactWorkspaceViewport(): boolean {
@@ -130,6 +142,133 @@ export function isCompactWorkspaceViewport(): boolean {
   const coarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
   return viewportWidth <= 640
     || (viewportWidth <= 1024 && (coarsePointer || viewportHeight <= 500));
+}
+
+const WORKSPACE_KEYMAP_GROUPS = [
+  {
+    label: "Terminal",
+    shortcuts: [
+      [DESKTOP_CONSOLE_SHORTCUTS.pageUp, "Preferred page up"],
+      [DESKTOP_CONSOLE_SHORTCUTS.pageDown, "Preferred page down"],
+      [DESKTOP_CONSOLE_SHORTCUTS.returnLive, "Return to live output"],
+      [DESKTOP_CONSOLE_SHORTCUTS.copyMode, "Toggle browser Copy mode"],
+      [DESKTOP_CONSOLE_SHORTCUTS.endSession, "Open End session confirmation"],
+    ],
+  },
+  {
+    label: "Workspace",
+    shortcuts: [
+      [WORKSPACE_TAB_SHORTCUTS.previous, "Previous tab"],
+      [WORKSPACE_TAB_SHORTCUTS.next, "Next tab"],
+      [WORKSPACE_TAB_SHORTCUTS.direct, "Jump to numbered tab"],
+      [WORKSPACE_TAB_SHORTCUTS.search, "Find an open tab"],
+    ],
+  },
+  {
+    label: "View",
+    shortcuts: [
+      [DESKTOP_CONSOLE_SHORTCUTS.tabActions, "Toggle tab Actions"],
+      [DESKTOP_CONSOLE_SHORTCUTS.sessionTabs, "Show or hide session tabs"],
+      [DESKTOP_CONSOLE_SHORTCUTS.focus, "Enter or exit terminal Focus"],
+    ],
+  },
+] as const;
+
+function WorkspaceKeymap({ orientation }: { orientation: WorkspaceTabOrientation }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const close = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeFromOutside = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node
+        && !containerRef.current?.contains(event.target)
+      ) close();
+    };
+    const closeFromEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
+    };
+    window.addEventListener("pointerdown", closeFromOutside, true);
+    window.addEventListener("keydown", closeFromEscape, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeFromOutside, true);
+      window.removeEventListener("keydown", closeFromEscape, true);
+    };
+  }, [close, open]);
+
+  return (
+    <div
+      ref={containerRef}
+      className={`workspace-keymap workspace-keymap-${orientation}`}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="workspace-keymap-toggle"
+        aria-label={open ? "Hide desktop keymap" : "Show desktop keymap"}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="muxdeck-workspace-keymap"
+        title="Desktop keyboard shortcuts"
+        onClick={() => setOpen((visible) => !visible)}
+      >
+        <KeyboardIcon />
+        <span>Keymap</span>
+      </button>
+      {open && (
+        <section
+          id="muxdeck-workspace-keymap"
+          className="workspace-keymap-panel"
+          role="dialog"
+          aria-label="Desktop workspace keymap"
+        >
+          <header>
+            <div>
+              <span>Exact chords</span>
+              <h2>Desktop keymap</h2>
+            </div>
+            <button
+              type="button"
+              className="workspace-keymap-close"
+              aria-label="Close keymap"
+              onClick={() => close(true)}
+            >
+              <CloseIcon />
+            </button>
+          </header>
+          <div className="workspace-keymap-groups">
+            {WORKSPACE_KEYMAP_GROUPS.map((group) => (
+              <section key={group.label} aria-label={`${group.label} shortcuts`}>
+                <h3>{group.label}</h3>
+                <ul>
+                  {group.shortcuts.map(([shortcut, action]) => (
+                    <li key={shortcut}>
+                      <kbd>{shortcut}</kbd>
+                      <span>{action}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+          <p>
+            Page shortcuts follow the highlighted controls. Using PgUp or Tmux PgUp
+            teaches Muxdeck which paging style that agent needs.
+          </p>
+        </section>
+      )}
+    </div>
+  );
 }
 
 function useWorkspaceTabOrientation(
@@ -1612,6 +1751,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       "--desktop-tab-rail-width": `${visibleDesktopTabRailWidth}px`,
     } as CSSProperties
     : undefined;
+  const navigationStackStyle = orientation === "vertical"
+    ? {
+      width: `${visibleDesktopTabRailWidth}px`,
+      "--desktop-tab-rail-width": `${visibleDesktopTabRailWidth}px`,
+    } as CSSProperties
+    : undefined;
   const compactDesktopTabRail = orientation === "vertical"
     && visibleDesktopTabRailWidth <= COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH;
 
@@ -2010,17 +2155,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
 
   return (
     <>
-      <nav
-        ref={navigationRef}
-        id="muxdeck-session-tabs"
-        className={`workspace-navigation workspace-navigation-${orientation}`}
+      <div
+        className={`workspace-navigation-stack workspace-navigation-stack-${orientation}`}
         data-orientation={orientation}
         data-compact={compactDesktopTabRail ? "true" : undefined}
-        data-tab-actions-visible={tabActionsVisible ? "true" : "false"}
-        style={navigationStyle}
-        aria-label="Session workspace"
+        style={navigationStackStyle}
         hidden={!tabsVisible}
       >
+        <nav
+          ref={navigationRef}
+          id="muxdeck-session-tabs"
+          className={`workspace-navigation workspace-navigation-${orientation}`}
+          data-orientation={orientation}
+          data-compact={compactDesktopTabRail ? "true" : undefined}
+          data-tab-actions-visible={tabActionsVisible ? "true" : "false"}
+          style={navigationStyle}
+          aria-label="Session workspace"
+          hidden={!tabsVisible}
+        >
           <button
             type="button"
             className="workspace-dashboard-button"
@@ -2258,6 +2410,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <kbd>{WORKSPACE_TAB_SHORTCUTS.search}</kbd>
             </button>
           )}
+          <WorkspaceKeymap orientation={orientation} />
           <button
             type="button"
             className={recentsOpen ? "workspace-recents-button active" : "workspace-recents-button"}
@@ -2290,7 +2443,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <span className="workspace-tab-rail-resize-grip" aria-hidden="true" />
             </div>
           )}
-      </nav>
+        </nav>
+      </div>
 
       <WorkspaceWindowActionError
         message={windowActionError}

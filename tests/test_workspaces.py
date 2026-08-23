@@ -11,6 +11,7 @@ from tmux_console.workspaces import (
     MAX_WORKSPACE_GROUP_NAME_LENGTH,
     MAX_WORKSPACE_GROUPS,
     MAX_WORKSPACE_NAME_LENGTH,
+    MAX_WORKSPACE_QUICK_LINKS,
     MAX_WORKSPACE_TABS,
     WORKSPACE_SCHEMA_VERSION,
     WORKSPACE_STORE_UNAVAILABLE_MESSAGE,
@@ -20,6 +21,7 @@ from tmux_console.workspaces import (
     WorkspaceStoreUnavailable,
     _WorkspaceDirectorySyncError,
     default_workspaces_path,
+    validate_workspace_quick_links,
 )
 
 
@@ -68,6 +70,7 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
         "name": "Project alpha",
         "tabs": ["agent-a", "agent-b"],
         "groups": [],
+        "quickLinks": [],
         "activeSession": "agent-b",
         "createdAt": 10_000,
         "updatedAt": 10_000,
@@ -113,6 +116,7 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["version"] == WORKSPACE_SCHEMA_VERSION
     assert document["sessionRenameRevision"] == 0
+    assert document["commonQuickLinks"] == []
     persisted_active = {**active}
     del persisted_active["sessionRevision"]
     assert document["workspaces"] == [persisted_active]
@@ -197,6 +201,7 @@ def test_version_one_workspace_defaults_session_revision_and_upgrades_on_write(t
     assert upgraded["sessionRenameRevision"] == 0
     assert "sessionRevision" not in upgraded["workspaces"][0]
     assert upgraded["workspaces"][0]["groups"] == []
+    assert upgraded["workspaces"][0]["quickLinks"] == []
 
 
 def test_version_two_workspace_defaults_groups_and_upgrades_on_write(tmp_path):
@@ -225,6 +230,7 @@ def test_version_two_workspace_defaults_groups_and_upgrades_on_write(tmp_path):
 
     legacy = store.get_workspace("legacy-id")
     assert legacy["groups"] == []
+    assert legacy["quickLinks"] == []
     assert legacy["sessionRevision"] == 4
     store.update_workspace("legacy-id", name="Upgraded", update_name=True)
 
@@ -232,6 +238,123 @@ def test_version_two_workspace_defaults_groups_and_upgrades_on_write(tmp_path):
     assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
     assert upgraded["sessionRenameRevision"] == 4
     assert upgraded["workspaces"][0]["groups"] == []
+    assert upgraded["workspaces"][0]["quickLinks"] == []
+
+
+def test_version_three_workspace_defaults_quick_links_and_upgrades_on_write(tmp_path):
+    path = tmp_path / "workspaces.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "sessionRenameRevision": 4,
+                "workspaces": [
+                    {
+                        "id": "legacy-id",
+                        "name": "Legacy workspace",
+                        "tabs": ["agent"],
+                        "groups": [],
+                        "activeSession": "agent",
+                        "createdAt": 1_000,
+                        "updatedAt": 1_000,
+                        "lastActiveAt": 1_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = WorkspaceStore(path, clock=lambda: 2)
+
+    legacy = store.get_workspace("legacy-id")
+    assert legacy["quickLinks"] == []
+    assert store.list_common_quick_links() == []
+    store.replace_common_quick_links(
+        [{"id": "docs", "label": "Docs", "url": "https://example.test/docs"}]
+    )
+
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
+    assert upgraded["commonQuickLinks"] == [
+        {"id": "docs", "label": "Docs", "url": "https://example.test/docs"}
+    ]
+    assert upgraded["workspaces"][0]["quickLinks"] == []
+
+
+def test_common_and_workspace_quick_links_are_atomic_and_independent(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(
+        path,
+        clock=sequence([10, 20, 30]),
+        id_factory=lambda: "workspace-id",
+    )
+    created = store.create_workspace(
+        name="Project",
+        tabs=["agent"],
+        active_session="agent",
+    )
+    common = [
+        {"id": "runbook", "label": " Runbook ", "url": "https://docs.test/runbook"}
+    ]
+    workspace = [
+        {"id": "ticket", "label": "Launch ticket", "url": "https://issues.test/42"}
+    ]
+
+    assert store.replace_common_quick_links(common) == [
+        {"id": "runbook", "label": "Runbook", "url": "https://docs.test/runbook"}
+    ]
+    assert store.get_workspace("workspace-id")["updatedAt"] == created["updatedAt"]
+    assert store.replace_workspace_quick_links("workspace-id", workspace) == workspace
+    updated = store.get_workspace("workspace-id")
+    assert updated["quickLinks"] == workspace
+    assert updated["updatedAt"] == 20_000
+    assert updated["lastActiveAt"] == created["lastActiveAt"]
+
+    active = store.record_activity(
+        "workspace-id",
+        tabs=["agent"],
+        active_session="agent",
+        session_revision=0,
+    )
+    assert active["quickLinks"] == workspace
+    reloaded = WorkspaceStore(path)
+    assert reloaded.list_common_quick_links() == [
+        {"id": "runbook", "label": "Runbook", "url": "https://docs.test/runbook"}
+    ]
+    assert reloaded.get_workspace_quick_links("workspace-id") == workspace
+
+
+@pytest.mark.parametrize(
+    ("links", "message"),
+    [
+        ([{"id": "x", "label": "", "url": "https://example.test"}], "label cannot be blank"),
+        ([{"id": "x", "label": "Docs", "url": "javascript:alert(1)"}], "valid HTTP or HTTPS URL"),
+        ([{"id": "x", "label": "Docs", "url": "https://example.test/\x7f"}], "control characters"),
+        ([{"id": "x", "label": "Docs", "url": "https://example.test:bad"}], "valid HTTP or HTTPS URL"),
+        ([{"id": "x", "label": "Docs", "url": "https://user:secret@example.test"}], "cannot contain credentials"),
+        ([{"id": "x", "label": "Docs", "url": "https://example.test", "extra": True}], "unknown field: extra"),
+        (
+            [
+                {"id": "same", "label": "One", "url": "https://one.test"},
+                {"id": "same", "label": "Two", "url": "https://two.test"},
+            ],
+            "duplicate id: same",
+        ),
+        (
+            [
+                {"id": f"link-{index}", "label": str(index), "url": f"https://example.test/{index}"}
+                for index in range(MAX_WORKSPACE_QUICK_LINKS + 1)
+            ],
+            f"more than {MAX_WORKSPACE_QUICK_LINKS} links",
+        ),
+    ],
+)
+def test_workspace_quick_link_validation_rejects_unsafe_or_ambiguous_values(
+    links,
+    message,
+):
+    with pytest.raises((TypeError, ValueError), match=message):
+        validate_workspace_quick_links(links)
 
 
 @pytest.mark.parametrize(
@@ -608,7 +731,7 @@ def test_failed_persistence_does_not_mutate_memory(tmp_path, monkeypatch):
         id_factory=lambda: "workspace-id",
     )
 
-    def fail_persist(_workspaces, _session_rename_revision):
+    def fail_persist(_workspaces, _session_rename_revision, _common_quick_links):
         raise OSError("disk full")
 
     monkeypatch.setattr(store, "_persist", fail_persist)
@@ -629,7 +752,7 @@ def test_failed_rename_revision_persistence_does_not_advance_memory(
         name="Project", tabs=["old"], active_session="old"
     )
 
-    def fail_persist(_workspaces, _session_rename_revision):
+    def fail_persist(_workspaces, _session_rename_revision, _common_quick_links):
         raise OSError("disk full")
 
     monkeypatch.setattr(store, "_persist", fail_persist)
@@ -656,7 +779,7 @@ def test_post_replace_directory_sync_failure_advances_without_fencing(
     store.create_workspace(name="Project", tabs=["old"], active_session="old")
     persist = store._persist
 
-    def fail_directory_sync(_workspaces, _session_rename_revision):
+    def fail_directory_sync(_workspaces, _session_rename_revision, _common_quick_links):
         raise _WorkspaceDirectorySyncError("directory sync failed")
 
     monkeypatch.setattr(store, "_persist", fail_directory_sync)
@@ -683,12 +806,14 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
             {
                 "version": WORKSPACE_SCHEMA_VERSION,
                 "sessionRenameRevision": MAX_SESSION_RENAME_REVISION - 1,
+                "commonQuickLinks": [],
                 "workspaces": [
                     {
                         "id": "workspace-id",
                         "name": "Project",
                         "tabs": ["old"],
                         "groups": [],
+                        "quickLinks": [],
                         "activeSession": "old",
                         "createdAt": 1_000,
                         "updatedAt": 1_000,

@@ -152,6 +152,53 @@ describe("InputBar", () => {
     ]);
   });
 
+  it("marks the remembered paging family and teaches only after a successful send", () => {
+    const onScrollModeUsed = vi.fn();
+    const onSend = vi.fn(() => true);
+    const view = render(
+      <InputBar
+        {...props}
+        onSend={onSend}
+        preferredScrollMode="application"
+        preferredScrollLabel="Claude"
+        onScrollModeUsed={onScrollModeUsed}
+      />,
+    );
+    const rawPageUp = screen.getByRole("button", { name: "PgUp" });
+    const rawPageDown = screen.getByRole("button", { name: "PgDn" });
+    const tmuxPageUp = screen.getByRole("button", { name: "Tmux Page Up" });
+    const tmuxPageDown = screen.getByRole("button", { name: "Tmux Page Down" });
+
+    expect(rawPageUp).toHaveClass("preferred-scroll-key");
+    expect(rawPageUp).toHaveAttribute("data-scroll-preferred", "true");
+    expect(rawPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
+    expect(rawPageDown).toHaveAttribute("aria-keyshortcuts", "Control+Shift+D");
+    expect(rawPageUp).toHaveAttribute("title", expect.stringContaining("Preferred for Claude"));
+    expect(tmuxPageUp).not.toHaveClass("preferred-scroll-key");
+    expect(tmuxPageUp).not.toHaveAttribute("aria-keyshortcuts");
+
+    fireEvent.click(tmuxPageUp);
+    expect(onScrollModeUsed).toHaveBeenCalledWith("tmux");
+
+    view.rerender(
+      <InputBar
+        {...props}
+        onSend={() => false}
+        preferredScrollMode="tmux"
+        preferredScrollLabel="Claude"
+        onScrollModeUsed={onScrollModeUsed}
+      />,
+    );
+    expect(tmuxPageUp).toHaveClass("preferred-scroll-key");
+    expect(tmuxPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
+    expect(tmuxPageDown).toHaveAttribute("aria-keyshortcuts", "Control+Shift+D");
+    expect(rawPageUp).not.toHaveClass("preferred-scroll-key");
+    expect(rawPageUp).not.toHaveAttribute("aria-keyshortcuts");
+
+    fireEvent.click(rawPageUp);
+    expect(onScrollModeUsed).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps session termination separate from terminal key delivery", () => {
     const onTerminateSession = vi.fn();
     const view = render(<InputBar {...props} onTerminateSession={onTerminateSession} />);
@@ -159,6 +206,7 @@ describe("InputBar", () => {
     const terminate = screen.getByRole("button", { name: "Terminate tmux session" });
     expect(terminate).toHaveTextContent("End");
     expect(terminate).toHaveAttribute("aria-haspopup", "dialog");
+    expect(terminate).toHaveAttribute("aria-keyshortcuts", "Control+Shift+E");
     fireEvent.click(terminate);
     expect(onTerminateSession).toHaveBeenCalledOnce();
     expect(props.onSend).not.toHaveBeenCalled();

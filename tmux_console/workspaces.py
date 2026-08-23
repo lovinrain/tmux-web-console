@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .messages import validate_session_name
 
@@ -22,6 +23,10 @@ MAX_WORKSPACE_TABS = 32
 MAX_WORKSPACE_GROUPS = 16
 MAX_WORKSPACE_GROUP_ID_LENGTH = 64
 MAX_WORKSPACE_GROUP_NAME_LENGTH = 40
+MAX_WORKSPACE_QUICK_LINKS = 16
+MAX_WORKSPACE_QUICK_LINK_ID_LENGTH = 64
+MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH = 48
+MAX_WORKSPACE_QUICK_LINK_URL_LENGTH = 2048
 WORKSPACE_GROUP_COLORS = (
     "gray",
     "blue",
@@ -35,8 +40,9 @@ WORKSPACE_GROUP_COLORS = (
 )
 WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
+_QUICK_LINKS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 3
+WORKSPACE_SCHEMA_VERSION = 4
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -205,6 +211,104 @@ def _validate_timestamp(value: object, field: str) -> int:
     return value
 
 
+def _normalize_quick_link_label(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    label = value.strip()
+    if not label:
+        raise ValueError(f"{field} cannot be blank")
+    if len(label) > MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH} characters or fewer"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in label):
+        raise ValueError(f"{field} cannot contain control characters")
+    _validate_unicode(label, field)
+    return label
+
+
+def _normalize_quick_link_url(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    url = value.strip()
+    if not url:
+        raise ValueError(f"{field} cannot be blank")
+    if len(url) > MAX_WORKSPACE_QUICK_LINK_URL_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_WORKSPACE_QUICK_LINK_URL_LENGTH} characters or fewer"
+        )
+    if any(
+        character.isspace() or ord(character) < 32 or ord(character) == 127
+        for character in url
+    ):
+        raise ValueError(f"{field} cannot contain whitespace or control characters")
+    _validate_unicode(url, field)
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{field} must be a valid HTTP or HTTPS URL") from error
+    if parsed.scheme not in {"http", "https"} or not hostname:
+        raise ValueError(f"{field} must be a valid HTTP or HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field} cannot contain credentials")
+    return url
+
+
+@dataclass(frozen=True)
+class WorkspaceQuickLink:
+    id: str
+    label: str
+    url: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"id": self.id, "label": self.label, "url": self.url}
+
+
+def validate_workspace_quick_links(
+    value: object,
+    field: str = "quickLinks",
+) -> tuple[WorkspaceQuickLink, ...]:
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be an array")
+    if len(value) > MAX_WORKSPACE_QUICK_LINKS:
+        raise ValueError(
+            f"{field} cannot contain more than {MAX_WORKSPACE_QUICK_LINKS} links"
+        )
+
+    links: list[WorkspaceQuickLink] = []
+    seen_ids: set[str] = set()
+    expected_fields = {"id", "label", "url"}
+    for index, candidate in enumerate(value):
+        path = f"{field}[{index}]"
+        if not isinstance(candidate, dict):
+            raise TypeError(f"{path} must be an object")
+        missing = sorted(expected_fields - set(candidate))
+        if missing:
+            raise ValueError(f"{path} is missing field: {missing[0]}")
+        unknown = sorted(str(item) for item in set(candidate) - expected_fields)
+        if unknown:
+            raise ValueError(f"{path} has unknown field: {unknown[0]}")
+
+        link_id = _validate_workspace_group_id(candidate["id"], f"{path}.id")
+        if len(link_id) > MAX_WORKSPACE_QUICK_LINK_ID_LENGTH:
+            raise ValueError(
+                f"{path}.id must be {MAX_WORKSPACE_QUICK_LINK_ID_LENGTH} characters or fewer"
+            )
+        if link_id in seen_ids:
+            raise ValueError(f"{field} contains duplicate id: {link_id}")
+        seen_ids.add(link_id)
+        links.append(
+            WorkspaceQuickLink(
+                id=link_id,
+                label=_normalize_quick_link_label(candidate["label"], f"{path}.label"),
+                url=_normalize_quick_link_url(candidate["url"], f"{path}.url"),
+            )
+        )
+    return tuple(links)
+
+
 def _validate_session_revision(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("sessionRevision must be an integer")
@@ -370,6 +474,7 @@ class SavedWorkspace:
     name: str
     tabs: tuple[str, ...]
     groups: tuple[WorkspaceGroup, ...]
+    quick_links: tuple[WorkspaceQuickLink, ...]
     active_session: str | None
     created_at: int
     updated_at: int
@@ -381,6 +486,7 @@ class SavedWorkspace:
             "name": self.name,
             "tabs": list(self.tabs),
             "groups": [group.to_dict() for group in self.groups],
+            "quickLinks": [link.to_dict() for link in self.quick_links],
             "activeSession": self.active_session,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -424,7 +530,11 @@ class WorkspaceStore:
         self._lock = threading.RLock()
         self._load_error: str | None = None
         self._write_error: str | None = None
-        self._workspaces, self._session_rename_revision = self._load()
+        (
+            self._workspaces,
+            self._session_rename_revision,
+            self._common_quick_links,
+        ) = self._load()
         if (
             self._load_error is None
             and self._session_rename_revision == MAX_SESSION_RENAME_REVISION
@@ -451,6 +561,43 @@ class WorkspaceStore:
             self._ensure_available()
             return self._workspace_dict(self._find(workspace_id))
 
+    def list_common_quick_links(self) -> list[dict[str, str]]:
+        with self._lock:
+            self._ensure_available()
+            return [link.to_dict() for link in self._common_quick_links]
+
+    def replace_common_quick_links(self, links: object) -> list[dict[str, str]]:
+        validated_links = validate_workspace_quick_links(links, "links")
+        with self._lock:
+            self._ensure_writable()
+            self._commit(self._workspaces, common_quick_links=validated_links)
+            return [link.to_dict() for link in self._common_quick_links]
+
+    def get_workspace_quick_links(self, workspace_id: str) -> list[dict[str, str]]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        with self._lock:
+            self._ensure_available()
+            return [link.to_dict() for link in self._find(workspace_id).quick_links]
+
+    def replace_workspace_quick_links(
+        self,
+        workspace_id: str,
+        links: object,
+    ) -> list[dict[str, str]]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_links = validate_workspace_quick_links(links, "links")
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            timestamp = max(self._timestamp(), current.updated_at + 1)
+            workspace = replace(
+                current,
+                quick_links=validated_links,
+                updated_at=timestamp,
+            )
+            self._commit({**self._workspaces, workspace_id: workspace})
+            return [link.to_dict() for link in workspace.quick_links]
+
     def create_workspace(
         self,
         *,
@@ -458,12 +605,16 @@ class WorkspaceStore:
         tabs: object,
         active_session: object,
         groups: object = _GROUPS_OMITTED,
+        quick_links: object = _QUICK_LINKS_OMITTED,
     ) -> dict[str, Any]:
         normalized_name = normalize_workspace_name(name)
         validated_tabs = validate_workspace_tabs(tabs)
         validated_groups = validate_workspace_groups(
             [] if groups is _GROUPS_OMITTED else groups,
             validated_tabs,
+        )
+        validated_quick_links = validate_workspace_quick_links(
+            [] if quick_links is _QUICK_LINKS_OMITTED else quick_links,
         )
         validated_active_session = validate_active_session(
             active_session, validated_tabs
@@ -478,6 +629,7 @@ class WorkspaceStore:
                 name=normalized_name,
                 tabs=validated_tabs,
                 groups=validated_groups,
+                quick_links=validated_quick_links,
                 active_session=validated_active_session,
                 created_at=timestamp,
                 updated_at=timestamp,
@@ -682,7 +834,13 @@ class WorkspaceStore:
     def _timestamp(self) -> int:
         return max(0, int(self._clock() * 1000))
 
-    def _load(self) -> tuple[dict[str, SavedWorkspace], int]:
+    def _load(
+        self,
+    ) -> tuple[
+        dict[str, SavedWorkspace],
+        int,
+        tuple[WorkspaceQuickLink, ...],
+    ]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
@@ -700,6 +858,14 @@ class WorkspaceStore:
                 if version >= 2
                 else 0
             )
+            common_quick_links = (
+                validate_workspace_quick_links(
+                    payload.get("commonQuickLinks"),
+                    "commonQuickLinks",
+                )
+                if version >= 4
+                else ()
+            )
             records = payload.get("workspaces")
             if not isinstance(records, list):
                 raise TypeError("workspaces must be an array")
@@ -710,14 +876,14 @@ class WorkspaceStore:
                 if workspace.id in workspaces:
                     raise ValueError(f"duplicate workspace id: {workspace.id}")
                 workspaces[workspace.id] = workspace
-            return workspaces, session_rename_revision
+            return workspaces, session_rename_revision, common_quick_links
         except FileNotFoundError as error:
             if not self.path.is_symlink():
-                return {}, 0
+                return {}, 0, ()
             self._record_load_error(error)
         except (OSError, TypeError, ValueError, RecursionError) as error:
             self._record_load_error(error)
-        return {}, 0
+        return {}, 0, ()
 
     @staticmethod
     def _load_workspace(
@@ -739,6 +905,8 @@ class WorkspaceStore:
         }
         if version >= 3:
             expected.add("groups")
+        if version >= 4:
+            expected.add("quickLinks")
         missing = sorted(expected - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -752,6 +920,11 @@ class WorkspaceStore:
         groups = (
             validate_workspace_groups(record["groups"], tabs)
             if version >= 3
+            else ()
+        )
+        quick_links = (
+            validate_workspace_quick_links(record["quickLinks"])
+            if version >= 4
             else ()
         )
         active_session = validate_active_session(record["activeSession"], tabs)
@@ -769,6 +942,7 @@ class WorkspaceStore:
             name=name,
             tabs=tabs,
             groups=groups,
+            quick_links=quick_links,
             active_session=active_session,
             created_at=created_at,
             updated_at=updated_at,
@@ -805,24 +979,32 @@ class WorkspaceStore:
         self,
         workspaces: dict[str, SavedWorkspace],
         session_rename_revision: int | None = None,
+        common_quick_links: tuple[WorkspaceQuickLink, ...] | None = None,
     ) -> None:
         next_revision = (
             self._session_rename_revision
             if session_rename_revision is None
             else session_rename_revision
         )
+        next_common_quick_links = (
+            self._common_quick_links
+            if common_quick_links is None
+            else common_quick_links
+        )
         try:
-            self._persist(workspaces, next_revision)
+            self._persist(workspaces, next_revision, next_common_quick_links)
         except _WorkspaceDirectorySyncError:
             # The atomic rename committed; keep memory consistent with disk even
             # though the caller must be told durability could not be confirmed.
             self._workspaces = workspaces
             self._session_rename_revision = next_revision
+            self._common_quick_links = next_common_quick_links
             if next_revision == MAX_SESSION_RENAME_REVISION:
                 self._fence_writes("the session rename revision is exhausted")
             raise
         self._workspaces = workspaces
         self._session_rename_revision = next_revision
+        self._common_quick_links = next_common_quick_links
         if next_revision == MAX_SESSION_RENAME_REVISION:
             self._fence_writes("the session rename revision is exhausted")
 
@@ -830,6 +1012,7 @@ class WorkspaceStore:
         self,
         workspaces: dict[str, SavedWorkspace],
         session_rename_revision: int,
+        common_quick_links: tuple[WorkspaceQuickLink, ...],
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -852,6 +1035,9 @@ class WorkspaceStore:
                     {
                         "version": WORKSPACE_SCHEMA_VERSION,
                         "sessionRenameRevision": session_rename_revision,
+                        "commonQuickLinks": [
+                            link.to_dict() for link in common_quick_links
+                        ],
                         "workspaces": [
                             workspace.to_dict() for workspace in workspaces.values()
                         ],

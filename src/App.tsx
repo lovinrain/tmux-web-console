@@ -26,6 +26,7 @@ import {
 import { SessionDashboard } from "./components/SessionDashboard";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
+import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import {
   SessionWorkspaceNavigation,
   WorkspaceTabSearchDialog,
@@ -1916,6 +1917,7 @@ function AppRoutes() {
       if (!parseSessionRoute(current.path) && !parseNewSessionRoute(current.path)) return;
 
       const searchRequested = event.code === "Semicolon";
+      const togglesTabActions = event.code === "KeyA";
       const direction = event.code === "Comma"
         ? -1
         : event.code === "Period"
@@ -1923,12 +1925,22 @@ function AppRoutes() {
           : 0;
       const directMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
       const directIndex = directMatch ? Number(directMatch[1]) - 1 : null;
-      if (!searchRequested && direction === 0 && directIndex === null) return;
+      if (
+        !searchRequested
+        && !togglesTabActions
+        && direction === 0
+        && directIndex === null
+      ) return;
 
       const currentWorkspace = workspaceRef.current;
       if (currentWorkspace.openSessions.length === 0) return;
       event.preventDefault();
       event.stopPropagation();
+
+      if (togglesTabActions) {
+        setDesktopTabActionsVisible(!desktopTabActionsVisible);
+        return;
+      }
 
       if (searchRequested) {
         setTabSearchOpen(true);
@@ -1961,7 +1973,7 @@ function AppRoutes() {
 
     window.addEventListener("keydown", handleWorkspaceShortcut, true);
     return () => window.removeEventListener("keydown", handleWorkspaceShortcut, true);
-  }, [switchSession, tabSearchOpen]);
+  }, [desktopTabActionsVisible, setDesktopTabActionsVisible, switchSession, tabSearchOpen]);
 
   const navigateToDashboard = useCallback((nextWorkspace: PendingWorkspaceSnapshot) => {
     const state = window.history.state as Record<string, unknown> | null;
@@ -2561,6 +2573,14 @@ function AppRoutes() {
       <ConsoleScreen
         sessionName={sessionName}
         workspaceName={workspaceName}
+        workspaceLinks={(
+          <WorkspaceQuickLinks
+            workspaceId={hydratedWorkspaceId === locationWorkspaceId
+              ? locationWorkspaceId
+              : null}
+            workspaceName={workspaceName}
+          />
+        )}
         onBack={returnToDashboard}
         workspaceOverlayOpen={recentsOpen}
         mobileMode={mobileConsoleMode}

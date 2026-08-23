@@ -5,7 +5,9 @@ import {
   ApiRequestError,
   BASE_PATH,
   createWorkspace,
+  getCommonWorkspaceQuickLinks,
   getWorkspace,
+  getWorkspaceQuickLinks,
   listSessions,
   terminateSession,
   updateWorkspaceActivity,
@@ -20,7 +22,9 @@ vi.mock("./api", async (importOriginal) => {
   return {
     ...actual,
     createWorkspace: vi.fn(),
+    getCommonWorkspaceQuickLinks: vi.fn(),
     getWorkspace: vi.fn(),
+    getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
     terminateSession: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
@@ -28,7 +32,9 @@ vi.mock("./api", async (importOriginal) => {
 });
 
 const createWorkspaceMock = vi.mocked(createWorkspace);
+const getCommonWorkspaceQuickLinksMock = vi.mocked(getCommonWorkspaceQuickLinks);
 const getWorkspaceMock = vi.mocked(getWorkspace);
+const getWorkspaceQuickLinksMock = vi.mocked(getWorkspaceQuickLinks);
 const listSessionsMock = vi.mocked(listSessions);
 const terminateSessionMock = vi.mocked(terminateSession);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
@@ -185,6 +191,7 @@ vi.mock("./components/ConsoleScreen", () => ({
   ConsoleScreen: ({
     sessionName,
     workspaceName,
+    workspaceLinks,
     onBack,
     sessionNavigation,
     workspaceOverlayOpen,
@@ -208,6 +215,7 @@ vi.mock("./components/ConsoleScreen", () => ({
   }: {
     sessionName: string;
     workspaceName?: string | null;
+    workspaceLinks?: ReactNode;
     onBack: () => void;
     sessionNavigation?: ReactNode;
     workspaceOverlayOpen?: boolean;
@@ -297,7 +305,8 @@ vi.mock("./components/ConsoleScreen", () => ({
             Input
           </button>
         </nav>
-        <div role="group" aria-label="Console bars">
+        <div className="console-bar-toolbar" role="group" aria-label="Console bars">
+          {workspaceLinks}
           {bars.map(([bar, label, controls]) => (
             <button
               key={bar}
@@ -502,12 +511,16 @@ function readBlobText(blob: Blob): Promise<string> {
 describe("App routing", () => {
   beforeEach(() => {
     createWorkspaceMock.mockReset();
+    getCommonWorkspaceQuickLinksMock.mockReset();
     getWorkspaceMock.mockReset();
+    getWorkspaceQuickLinksMock.mockReset();
     listSessionsMock.mockReset();
     terminateSessionMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
+    getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
     getWorkspaceMock.mockResolvedValue(savedWorkspace());
+    getWorkspaceQuickLinksMock.mockResolvedValue([]);
     listSessionsMock.mockResolvedValue([]);
     terminateSessionMock.mockResolvedValue(undefined);
     updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace());
@@ -2630,7 +2643,12 @@ describe("App routing", () => {
     expect(screen.getByRole("button", { name: "Close work/name #1 quick tab" }))
       .toBeVisible();
 
-    fireEvent.click(actionsToggle);
+    expect(fireEvent.keyDown(window, {
+      code: "KeyA",
+      key: "A",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
     expect(actionsToggle).not.toBePressed();
     expect(navigation).toHaveAttribute("data-tab-actions-visible", "false");
     expect(screen.queryByRole("button", { name: "Close work/name #1 quick tab" }))
@@ -2874,6 +2892,7 @@ describe("App routing", () => {
       render(<App />);
 
       await waitFor(() => expect(getWorkspaceMock).toHaveBeenCalledWith("workspace-one"));
+      expect(getWorkspaceQuickLinksMock).not.toHaveBeenCalled();
       expect(screen.getByRole("status", { name: "Opening saved workspace" })).toBeVisible();
       expect(screen.getByTitle("Opening workspace - Opening")).toBeVisible();
       expect(screen.queryByRole("status", {
@@ -2907,6 +2926,19 @@ describe("App routing", () => {
           name: "Workspace saved automatically",
         })).toBeVisible();
       });
+      await waitFor(() => expect(getWorkspaceQuickLinksMock).toHaveBeenCalledWith(
+        "workspace-one",
+        expect.any(AbortSignal),
+      ));
+      expect(screen.getByRole("region", { name: "Common quick links" })).toBeVisible();
+      expect(screen.getByRole("region", { name: "Workspace quick links" })).toBeVisible();
+      const consoleToolbar = screen.getByRole("group", { name: "Console bars" });
+      expect(within(consoleToolbar).getByRole("region", {
+        name: "Common quick links",
+      })).toBeVisible();
+      expect(within(consoleToolbar).getByRole("region", {
+        name: "Workspace quick links",
+      })).toBeVisible();
       expect(screen.getByTitle("Workspace one - Saved")).toBeVisible();
       expect(newSessionButton).toBeEnabled();
       expect(newSessionButton).toHaveAttribute("title", "New session");

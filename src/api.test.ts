@@ -7,10 +7,14 @@ import {
   createWorkspace,
   deleteQueuedMessage,
   deleteWorkspace,
+  getCommonWorkspaceQuickLinks,
   getWorkspace,
+  getWorkspaceQuickLinks,
   getSnippetTree,
   listQueuedMessages,
   renameSession,
+  replaceCommonWorkspaceQuickLinks,
+  replaceWorkspaceQuickLinks,
   saveSnippetTree,
   subscribeToSessions,
   terminateSession,
@@ -413,6 +417,56 @@ describe("saved workspace API", () => {
     expect(fetchMock.mock.calls[1][0]).toBe(
       `${BASE_PATH}/api/workspaces/workspace%2Fid`,
     );
+  });
+
+  it("loads and replaces common and workspace-specific quick links", async () => {
+    const common = [{ id: "docs", label: "Docs", url: "https://docs.test/" }];
+    const workspaceLinks = [
+      { id: "ticket", label: "Ticket", url: "https://issues.test/42" },
+    ];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ links: common }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ links: workspaceLinks }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ links: common }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ links: workspaceLinks }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCommonWorkspaceQuickLinks()).resolves.toEqual(common);
+    await expect(getWorkspaceQuickLinks("workspace/id")).resolves.toEqual(workspaceLinks);
+    await expect(replaceCommonWorkspaceQuickLinks(common)).resolves.toEqual(common);
+    await expect(replaceWorkspaceQuickLinks("workspace/id", workspaceLinks))
+      .resolves.toEqual(workspaceLinks);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/workspace-quick-links`);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/quick-links`,
+    );
+    expect(fetchMock.mock.calls[2]).toEqual([
+      `${BASE_PATH}/api/workspace-quick-links`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ links: common }),
+      }),
+    ]);
+    expect(fetchMock.mock.calls[3]).toEqual([
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/quick-links`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ links: workspaceLinks }),
+      }),
+    ]);
   });
 
   it("creates a workspace with its ordered tabs and active session", async () => {

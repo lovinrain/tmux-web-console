@@ -85,17 +85,26 @@ content in tmux history, `Tmux PgUp` sends `Ctrl+B` followed by Page Up to enter
 copy mode one page back; `Tmux PgDn` pages down once that mode is active. `^C`
 returns to the live pane. The tmux controls assume the default `Ctrl+B` prefix.
 
-The phone `Terminal` layout has a separate tmux-history rail. `Page up` enters
-tmux copy mode one page back, `Page down` moves toward the current output, and
+Muxdeck highlights the paging pair preferred for the detected foreground agent
+in both the phone terminal rail and desktop shortcut strip. Claude, Copilot,
+Cursor, and Grok start with application `PgUp` / `PgDn`; Codex, shells, and
+unrecognized processes start with the tmux pair. Successfully using either pair
+teaches that choice for the agent kind and stores it as a browser-local preference,
+so the highlight follows that agent across sessions, workspaces, and reloads.
+`Ctrl+Shift+U` and `Ctrl+Shift+D` invoke the highlighted Page Up and Page Down
+actions on desktop.
+
+The phone `Terminal` layout exposes both paging pairs. `Tmux Page up` enters tmux
+copy mode one page back, `Tmux Page down` moves toward the current output, and
 `Live` safely cancels copy mode, jumps to current output, and focuses raw terminal
-input. Desktop keeps the same `Live` action in the bottom terminal shortcut
-strip beside the other input buttons. These actions use explicit WebSocket
-control messages dispatched to the exact tmux attachment. The server verifies
-that attachment's process and stable session ID, then lets tmux resolve its
-client-local active pane. No history action sends key bytes to or interrupts the
-foreground application. The history actions are available while the terminal
-connection is live; `Focus` / `Exit` remains available even during a reconnect.
-Use Scrollback for a separate retained snapshot.
+input. Desktop keeps the same `Live` action in the bottom terminal shortcut strip
+beside the other input buttons. The tmux actions use explicit WebSocket control
+messages dispatched to the exact attachment. The server verifies that attachment's
+process and stable session ID, then lets tmux resolve its client-local active pane.
+No history action sends key bytes to or interrupts the foreground application.
+The history actions are available while the terminal connection is live; `Focus`
+/ `Exit` remains available even during a reconnect. Use Scrollback for a separate
+retained snapshot.
 
 On tablet and desktop layouts, drag the left edge of the Scrollback drawer to
 change its width. The resize handle also supports Left/Right arrows, Home/End,
@@ -112,15 +121,32 @@ not crowd the main shortcut strip.
 send a control sequence; subsequent keyboard input goes directly to the
 application attached through tmux instead of into the staged draft.
 
+On desktop, `Copy` in the top `VIEW` toolbar temporarily gives mouse selection
+to Muxdeck instead of the foreground TUI. Drag, double-click, and triple-click
+use xterm's local text selection even when the agent has enabled terminal mouse
+reporting; `Ctrl+C` / `Ctrl+V` (or `Cmd+C` / `Cmd+V` on macOS) then use the
+browser clipboard, and the wheel navigates local scrollback. Turning `Copy` off
+clears the local selection and returns mouse input to the TUI. The choice is
+ephemeral and resets on session changes, workspace overview, mobile layout,
+desktop Focus, or reload.
+
 On desktop, `Focus` in the top `VIEW` toolbar expands the live terminal to the
-full browser viewport and leaves only floating `Redraw` and `Exit` controls. It
-does not invoke the browser Fullscreen API, remount xterm, reconnect the WebSocket, change the
-URL, or discard the staged draft. Entering and leaving refits the existing PTY
-attachment so tmux receives the new dimensions. The choice is session-local and
-resets when the active session changes, the workspace overview opens, the layout
-switches to mobile, the console is left, or the page reloads. Escape remains raw
-terminal input rather than an exit shortcut; `Ctrl+Shift+F` exits Focus even
-while xterm owns keyboard focus.
+full browser viewport and leaves floating `Redraw`, `Show all buttons`, and
+`Exit` controls. `Show all buttons` overlays the existing bottom shortcut strip
+as a wrapped floating panel, including `More Keys`; it does not shrink the
+terminal or create duplicate actions. Drag the panel's `Move panel` handle to
+place it anywhere within the viewport. With that handle focused, the arrow keys
+move it by 16 pixels, Shift+Arrow moves it by 64 pixels, and Enter or Home resets
+it to the centered bottom position. Hiding and reopening the panel preserves its
+position until Focus ends. Actions that reveal staged input leave Focus so the
+composer is visible. Focus does not invoke the browser Fullscreen API, remount
+xterm, reconnect the WebSocket, change the URL, or discard the staged draft.
+Entering and leaving refits the existing PTY attachment so tmux receives the new
+dimensions. The choice is session-local and resets when the active session
+changes, the workspace overview opens, the layout switches to mobile, the
+console is left, or the page reloads. Escape remains raw terminal input rather
+than an exit shortcut; `Ctrl+Shift+F` enters or exits Focus even while xterm or
+staged input owns keyboard focus.
 
 The sticky `Details` shortcut in the terminal's bottom bar opens the same title
 and tag editor used by the dashboard. The optional display title changes only
@@ -316,17 +342,17 @@ URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
 or `Sync issue` state reports whether later tab-order and active-session changes
 are synchronizing automatically.
 
-Each saved workspace keeps its name, ordered open tabs, tab groups, active
-session, and server-generated creation, update, and last-active times in
+Each saved workspace keeps its name, ordered open tabs, tab groups, quick links,
+active session, and server-generated creation, update, and last-active times in
 `MUXDECK_WORKSPACES_FILE`. Opening or changing a saved workspace refreshes its
-rough last-active time. Workspace names and tab membership are shared by every
-browser connected to the same Muxdeck instance, so a phone or another computer
-can resume the same group. Concurrent pages use last-write-wins semantics; the
-most recently accepted full tab/activity update becomes the saved state. Each
-snapshot also carries the server's native-session rename revision. If another
-device tries to save names captured before a Muxdeck rename, the server rejects
-that stale snapshot and the page reloads the migrated workspace instead of
-restoring an obsolete tmux name.
+rough last-active time. Workspace names, tab membership, and quick links are
+shared by every browser connected to the same Muxdeck instance, so a phone or
+another computer can resume the same group. Concurrent pages use last-write-wins
+semantics; the most recently accepted full tab/activity or quick-link update
+becomes the saved state. Each tab snapshot also carries the server's
+native-session rename revision. If another device tries to save names captured
+before a Muxdeck rename, the server rejects that stale snapshot and the page
+reloads the migrated workspace instead of restoring an obsolete tmux name.
 
 The stable `workspace=` query parameter identifies a saved workspace without
 putting its editable name in the route. Ordered `tab=` values remain in the URL
@@ -402,8 +428,23 @@ Back still returns to the filtered dashboard. `Side tabs` in the desktop `VIEW`
 toolbar moves that strip into a vertically scrolling left rail; pressing it again
 returns the tabs to the top. This orientation is a browser-local display preference
 that survives reloads and session/New-session navigation, but it is not written to
-the workspace record or URL. Compact mobile layouts keep their horizontal/Overview
-navigation regardless of the desktop preference.
+the workspace record or URL. `Ctrl+Shift+S` quickly hides or restores the session
+tabs, including the left rail, without changing that orientation preference.
+Compact mobile layouts keep their horizontal/Overview navigation regardless of the
+desktop preference.
+
+The primary desktop `VIEW` toolbar also contains a link shelf split into `Common`
+and the current workspace. It stays in that first row beside `Tabs`, `Input`, and
+`Keys`, including when the session tabs are hidden or moved into the side rail.
+Common links are global to this Muxdeck instance and stay pinned in every
+temporary or saved workspace. The second region belongs only to the active saved
+workspace; a temporary workspace must be saved before links can be added there.
+Use the plus or pencil at the end of either region to open its manager, stage
+additions or removals, and choose `Save links` to persist the complete ordered
+list. Each region supports up to 16 user-defined links with 48-character labels.
+Links accept only HTTP or HTTPS URLs without embedded credentials, open in a new
+browser tab, and send no referrer. The shelf is not shown in compact mobile
+layouts.
 
 `Actions` in the same desktop `VIEW` toolbar shows or hides the repeated controls
 on every quick tab. Turning it off removes the directional reorder, new-window,
@@ -411,6 +452,7 @@ terminate, and close buttons from both the top strip and side rail while leaving
 each tab selector and tab-group controls available. Overview keeps the full action
 set as a fallback. The choice starts visible and persists as a browser-local display
 preference; it does not change the workspace record, URL, or any tmux session.
+`Ctrl+Shift+A` toggles the same setting from anywhere in the desktop workspace.
 
 The side rail's right-edge grip resizes it from a 72px numbered icon rail to a
 480px wide title view. As the rail narrows, text and secondary tab controls collapse
@@ -483,6 +525,19 @@ mobile layout, where Overview remains the session-switching surface. They are
 also inactive on the landing page, even when its URL retains a workspace
 snapshot for Back/Forward navigation.
 
+The live console adds exact `Ctrl+Shift` chords for session and terminal actions:
+`E` opens the existing End-session confirmation, `L` returns to live output, `C`
+toggles browser Copy mode, and `U` / `D` invoke the paging controls highlighted
+for the current agent. `F` enters or exits terminal Focus and `S` shows or hides
+the session strip. All are captured before xterm can turn them into terminal
+input, keep unrelated modifier combinations untouched, and pause while a modal
+dialog or mobile workspace layout is active.
+
+`Keymap` in the desktop workspace strip opens a non-modal reference containing
+all tab, view, paging, Copy, Live, and End chords. Escape or clicking outside
+closes it. The paging entries intentionally say `Preferred page up/down` because
+their raw-application or tmux implementation follows the remembered agent choice.
+
 `Recents` opens the route `/session/:name/recents`. The sheet separates open
 quick tabs, closed recently visited sessions, and other sessions currently on
 the tmux server. Closing an active tab selects its neighbor; closing the final
@@ -529,18 +584,23 @@ drafts, it lives on the server and is shared across browsers.
 by native tmux session name. A native rename performed through Muxdeck migrates
 that name in every saved workspace; an out-of-band tmux rename cannot do so.
 Unavailable names remain visible in the saved workspace until the workspace is
-updated or deleted. The file contains workspace names and tmux session names, so
-treat it as potentially sensitive runtime state.
+updated or deleted. The file contains workspace names, tmux session names, and
+user-defined quick-link labels and URLs, so treat it as potentially sensitive
+runtime state.
 
-The workspace schema is version 3. Version 1 files load at rename revision zero;
-version 1 and 2 files load with no tab groups. Either upgrades atomically on the
-next write. A workspace name is limited to 80 characters and a workspace can
-contain at most 32 unique ordered tabs and 16 disjoint, contiguous groups. Group
-names are limited to 40 characters. Writes use an atomic file replacement. Keep
-a pre-upgrade copy when rollback is possible because a version-1-or-2 release
-rejects the version 3 document. If an existing workspace file is unreadable,
-malformed, or uses an unsupported schema, the workspace API returns `503` and
-refuses to overwrite it until the file is repaired and Muxdeck is restarted.
+The workspace schema is version 4. Version 1 files load at rename revision zero;
+version 1 and 2 files load with no tab groups, and version 1 through 3 files load
+with no common or workspace quick links. A legacy document upgrades atomically
+on its next workspace or quick-link write. A workspace name is limited to 80
+characters and a workspace can contain at most 32 unique ordered tabs, 16
+disjoint contiguous groups, and 16 ordered quick links; the global common shelf
+also permits 16 links. Group names are limited to 40 characters, quick-link
+labels to 48 characters, and quick-link URLs to 2,048 characters. Writes use an
+atomic file replacement. Keep a pre-upgrade copy when rollback is possible
+because releases that only understand versions 1 through 3 reject the version 4
+document. If an existing workspace file is unreadable, malformed, or uses an
+unsupported schema, the workspace API returns `503` and refuses to overwrite it
+until the file is repaired and Muxdeck is restarted.
 
 ## Scrollback behavior
 
@@ -570,7 +630,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles, predefined tags, and starred/ignored session names |
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session notes and queued memo input |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
-| `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, and activity times |
+| `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, quick links, and activity times |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
 Loopback Hosts are accepted by default. Every non-loopback Host must correspond

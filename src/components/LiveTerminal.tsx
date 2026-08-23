@@ -30,6 +30,7 @@ export interface LiveTerminalHandle {
 interface LiveTerminalProps {
   session: string;
   ignoreSize: boolean;
+  browserCopyMode?: boolean;
   layoutSuspended?: boolean;
   layoutRefreshToken?: string;
   theme: TerminalThemeMode;
@@ -41,6 +42,31 @@ const encoder = new TextEncoder();
 const SUBMISSION_TIMEOUT_MS = 5_000;
 let submissionCounter = 0;
 
+function isMacBrowser(): boolean {
+  return ["Macintosh", "MacIntel", "MacPPC", "Mac68K"].includes(navigator.platform);
+}
+
+function copyMouseEvent(event: MouseEvent, forceMacSelection = false): MouseEvent {
+  return new MouseEvent(event.type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: event.view,
+    detail: event.detail,
+    screenX: event.screenX,
+    screenY: event.screenY,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    ctrlKey: event.ctrlKey,
+    shiftKey: forceMacSelection ? event.shiftKey : true,
+    altKey: forceMacSelection ? true : event.altKey,
+    metaKey: event.metaKey,
+    button: event.button,
+    buttons: event.buttons,
+    relatedTarget: event.relatedTarget,
+  });
+}
+
 function nextSubmissionId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   submissionCounter += 1;
@@ -51,6 +77,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
   function LiveTerminal({
     session,
     ignoreSize,
+    browserCopyMode = false,
     layoutSuspended = false,
     layoutRefreshToken = "default",
     theme,
@@ -60,6 +87,9 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
+    const browserCopyModeRef = useRef(browserCopyMode);
+    const copySelectionActiveRef = useRef(false);
+    const copyWheelRemainderRef = useRef(0);
     const layoutSuspendedRef = useRef(layoutSuspended);
     const scheduleFitAndResizeRef = useRef<(() => void) | null>(null);
     const redrawRef = useRef<(() => boolean) | null>(null);
@@ -70,6 +100,16 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       async () => false,
     );
     const [awayFromLive, setAwayFromLive] = useState(false);
+
+    useLayoutEffect(() => {
+      const wasEnabled = browserCopyModeRef.current;
+      browserCopyModeRef.current = browserCopyMode;
+      if (wasEnabled && !browserCopyMode) {
+        copySelectionActiveRef.current = false;
+        copyWheelRemainderRef.current = 0;
+        terminalRef.current?.clearSelection();
+      }
+    }, [browserCopyMode]);
 
     useLayoutEffect(() => {
       const wasSuspended = layoutSuspendedRef.current;
@@ -162,6 +202,101 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       terminal.loadAddon(fit);
       terminal.open(hostRef.current);
       terminalRef.current = terminal;
+      let suppressTerminalInput = false;
+      const terminalElement = terminal.element;
+      const terminalDocument = terminalElement?.ownerDocument;
+      const replayedMouseEvents = new WeakSet<MouseEvent>();
+      const macBrowser = isMacBrowser();
+
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (!browserCopyModeRef.current || event.altKey) return true;
+        const clipboardModifier = macBrowser
+          ? event.metaKey && !event.ctrlKey
+          : event.ctrlKey && !event.metaKey;
+        if (!clipboardModifier) return true;
+        const key = event.key.toLowerCase();
+        return key !== "c" && key !== "v";
+      });
+
+      const dispatchMouseEvent = (target: EventTarget, event: MouseEvent) => {
+        replayedMouseEvents.add(event);
+        suppressTerminalInput = true;
+        try {
+          target.dispatchEvent(event);
+        } finally {
+          suppressTerminalInput = false;
+        }
+      };
+
+      const handleCopyMouseDown = (event: MouseEvent) => {
+        if (!browserCopyModeRef.current || replayedMouseEvents.has(event)) return;
+        event.stopImmediatePropagation();
+        if (event.button !== 0 || !terminalElement) return;
+        event.preventDefault();
+        copySelectionActiveRef.current = true;
+        const forcedEvent = copyMouseEvent(event, macBrowser);
+        const previousMacSelection = terminal.options.macOptionClickForcesSelection;
+        if (macBrowser) terminal.options.macOptionClickForcesSelection = true;
+        try {
+          dispatchMouseEvent(
+            event.target instanceof Element ? event.target : terminalElement,
+            forcedEvent,
+          );
+        } finally {
+          if (macBrowser) {
+            terminal.options.macOptionClickForcesSelection = previousMacSelection;
+          }
+        }
+      };
+
+      const replayCopyDragEvent = (event: MouseEvent) => {
+        if (
+          !browserCopyModeRef.current
+          || !copySelectionActiveRef.current
+          || replayedMouseEvents.has(event)
+          || !terminalDocument
+        ) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        dispatchMouseEvent(terminalDocument, copyMouseEvent(event, macBrowser));
+        if (event.type === "mouseup") copySelectionActiveRef.current = false;
+      };
+
+      const blockCopyMouseMove = (event: MouseEvent) => {
+        if (!browserCopyModeRef.current || replayedMouseEvents.has(event)) return;
+        event.stopImmediatePropagation();
+      };
+
+      const blockCopyClick = (event: MouseEvent) => {
+        if (!browserCopyModeRef.current) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+
+      const handleCopyWheel = (event: WheelEvent) => {
+        if (!browserCopyModeRef.current || !terminalElement) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const rowHeight = Math.max(1, terminalElement.clientHeight / Math.max(1, terminal.rows));
+        const lineDelta = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? event.deltaY * terminal.rows
+          : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? event.deltaY
+            : event.deltaY / rowHeight;
+        copyWheelRemainderRef.current += lineDelta;
+        const wholeLines = Math.trunc(copyWheelRemainderRef.current);
+        if (wholeLines !== 0) {
+          copyWheelRemainderRef.current -= wholeLines;
+          terminal.scrollLines(wholeLines);
+        }
+      };
+
+      terminalElement?.addEventListener("mousedown", handleCopyMouseDown, true);
+      terminalElement?.addEventListener("mousemove", blockCopyMouseMove, true);
+      terminalElement?.addEventListener("click", blockCopyClick, true);
+      terminalElement?.addEventListener("wheel", handleCopyWheel, { capture: true, passive: false });
+      terminalDocument?.addEventListener("mousemove", replayCopyDragEvent, true);
+      terminalDocument?.addEventListener("mouseup", replayCopyDragEvent, true);
       const redraw = () => {
         if (cancelled || terminalRef.current !== terminal) return false;
         try {
@@ -303,6 +438,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       };
 
       const input = terminal.onData((data) => {
+        if (suppressTerminalInput) return;
         if (socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current.send(encoder.encode(data));
         }
@@ -334,6 +470,14 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           scheduleFitAndResizeRef.current = null;
         }
         if (redrawRef.current === redraw) redrawRef.current = null;
+        copySelectionActiveRef.current = false;
+        copyWheelRemainderRef.current = 0;
+        terminalElement?.removeEventListener("mousedown", handleCopyMouseDown, true);
+        terminalElement?.removeEventListener("mousemove", blockCopyMouseMove, true);
+        terminalElement?.removeEventListener("click", blockCopyClick, true);
+        terminalElement?.removeEventListener("wheel", handleCopyWheel, true);
+        terminalDocument?.removeEventListener("mousemove", replayCopyDragEvent, true);
+        terminalDocument?.removeEventListener("mouseup", replayCopyDragEvent, true);
         resizeObserver.disconnect();
         window.visualViewport?.removeEventListener("resize", scheduleFitAndResize);
         window.visualViewport?.removeEventListener("scroll", scheduleFitAndResize);
@@ -356,6 +500,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       <div
         id="muxdeck-active-console"
         className="terminal-stage"
+        data-copy-mode={browserCopyMode ? "true" : "false"}
         role="tabpanel"
         aria-label={`${session} live terminal`}
       >

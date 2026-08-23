@@ -268,11 +268,18 @@ export interface SavedWorkspace {
   name: string;
   tabs: string[];
   groups?: WorkspaceTabGroup[];
+  quickLinks?: WorkspaceQuickLink[];
   activeSession: string | null;
   sessionRevision: number;
   createdAt: number;
   updatedAt: number;
   lastActiveAt: number;
+}
+
+export interface WorkspaceQuickLink {
+  id: string;
+  label: string;
+  url: string;
 }
 
 export interface CreateWorkspaceInput {
@@ -289,6 +296,60 @@ export type WorkspaceUpdate = Partial<Pick<
 
 function workspacePath(workspaceId: string): string {
   return `/api/workspaces/${encodeURIComponent(workspaceId)}`;
+}
+
+function workspaceQuickLinksPath(workspaceId: string): string {
+  return `${workspacePath(workspaceId)}/quick-links`;
+}
+
+export async function getCommonWorkspaceQuickLinks(
+  signal?: AbortSignal,
+): Promise<WorkspaceQuickLink[]> {
+  const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
+    "/api/workspace-quick-links",
+    { signal },
+  );
+  return result.links;
+}
+
+export async function replaceCommonWorkspaceQuickLinks(
+  links: WorkspaceQuickLink[],
+): Promise<WorkspaceQuickLink[]> {
+  const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
+    "/api/workspace-quick-links",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ links }),
+    },
+  );
+  return result.links;
+}
+
+export async function getWorkspaceQuickLinks(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceQuickLink[]> {
+  const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
+    workspaceQuickLinksPath(workspaceId),
+    { signal },
+  );
+  return result.links;
+}
+
+export async function replaceWorkspaceQuickLinks(
+  workspaceId: string,
+  links: WorkspaceQuickLink[],
+): Promise<WorkspaceQuickLink[]> {
+  const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
+    workspaceQuickLinksPath(workspaceId),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ links }),
+    },
+  );
+  return result.links;
 }
 
 export async function listWorkspaces(signal?: AbortSignal): Promise<SavedWorkspace[]> {

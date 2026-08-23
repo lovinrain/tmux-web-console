@@ -55,7 +55,7 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Real xterm.js terminals with direct keyboard input and responsive desktop,
   tablet, and phone layouts
 - Persistent named workspaces with colored, collapsible tab groups, ordered top
-  or side tabs, and cross-device resume
+  or side tabs, common/workspace quick-link shelves, and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
@@ -110,6 +110,17 @@ page or compact mobile layout.
 | `Ctrl+Shift+.` | Next tab |
 | `Ctrl+Shift+1...9` | Jump to a numbered tab |
 | `Ctrl+Shift+;` | Find a tab by title, tmux name, or group |
+| `Ctrl+Shift+A` | Show or hide tab action buttons |
+| `Ctrl+Shift+S` | Show or hide the session tab strip |
+| `Ctrl+Shift+F` | Enter or exit terminal Focus |
+| `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's remembered controls |
+| `Ctrl+Shift+L` | Leave scrollback and return to live output |
+| `Ctrl+Shift+C` | Toggle browser terminal Copy mode |
+| `Ctrl+Shift+E` | Open the End-session confirmation |
+
+Use `Keymap` in the desktop workspace strip to see these chords in the app.
+Muxdeck highlights whether raw Page Up/Page Down or tmux history is preferred for
+the active agent, and successful paging-button use remembers that choice locally.
 
 ## Deployment and security
 
