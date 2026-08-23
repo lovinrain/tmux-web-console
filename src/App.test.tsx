@@ -57,6 +57,9 @@ let reportSessionTerminate: (
     serverPid: number,
   ) => Promise<void>)
 ) | null = null;
+let reportSessionCopy: (
+  (sourceName: string, sessionName: string, sessionId: string) => void
+) | null = null;
 let reportKnownSessions: ((sessions: Session[]) => void) | null = null;
 let openSessionFromDashboard: ((sessionName: string) => void) | null = null;
 let openSavedWorkspaceFromDashboard: ((workspace: SavedWorkspace) => void) | null = null;
@@ -210,6 +213,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onSessionsChange,
     onSessionRenamed,
     onSessionTerminated,
+    onSessionCopied,
     renameWarning,
     onDismissRenameWarning,
   }: {
@@ -252,6 +256,11 @@ vi.mock("./components/ConsoleScreen", () => ({
       serverStarted: number,
       serverPid: number,
     ) => Promise<void>;
+    onSessionCopied?: (
+      sourceName: string,
+      sessionName: string,
+      sessionId: string,
+    ) => void;
     renameWarning?: {
       sessionId: string;
       sessionName: string;
@@ -262,6 +271,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     reportKnownSessions = onSessionsChange ?? null;
     reportSessionRename = onSessionRenamed ?? null;
     reportSessionTerminate = onSessionTerminated ?? null;
+    reportSessionCopy = onSessionCopied ?? null;
     const bars = [
       ["sessionTabs", "Session tabs", "muxdeck-session-tabs"],
       ["stagedInput", "Staged input", "muxdeck-staged-input"],
@@ -374,6 +384,14 @@ vi.mock("./components/ConsoleScreen", () => ({
           </aside>
         )}
         <button type="button" onClick={onBack}>Back to sessions</button>
+        {onSessionCopied && (
+          <button
+            type="button"
+            onClick={() => onSessionCopied(sessionName, `${sessionName}_1`, "$copy")}
+          >
+            Copy New
+          </button>
+        )}
       </main>
     );
   },
@@ -527,6 +545,7 @@ describe("App routing", () => {
     pendingNewSessionCompletion = null;
     reportSessionRename = null;
     reportSessionTerminate = null;
+    reportSessionCopy = null;
     reportKnownSessions = null;
     openSessionFromDashboard = null;
     openSavedWorkspaceFromDashboard = null;
@@ -622,6 +641,46 @@ describe("App routing", () => {
       expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
     });
     expectWorkspaceSearch("?kind=codex", ["alpha", "beta", "fresh/session"]);
+  });
+
+  it("appends a copied session and focuses it when the source console is active", () => {
+    replaceUrl(sessionUrl("alpha", "?kind=codex&tab=alpha&tab=beta"));
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy New" }));
+
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "alpha_1",
+    );
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha_1`);
+    expectWorkspaceSearch("?kind=codex", ["alpha", "beta", "alpha_1"]);
+    expect(renderedTabs()).toEqual(["alpha", "beta", "alpha_1"]);
+    expect(screen.getByRole("tab", { name: /alpha_1/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(historySessionBindings()?.route).toEqual({
+      name: "alpha_1",
+      sessionId: "$copy",
+    });
+  });
+
+  it("keeps a late copied session without stealing focus from another tab", () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+    const completeCopy = reportSessionCopy;
+    expect(completeCopy).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
+    act(() => completeCopy?.("alpha", "alpha_1", "$copy"));
+
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "beta",
+    );
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+    expectWorkspaceSearch("", ["alpha", "beta", "alpha_1"]);
   });
 
   it("opens New session as a tab switch and returns to its saved-workspace source", async () => {
@@ -1840,6 +1899,67 @@ describe("App routing", () => {
     expect(directShortcut.defaultPrevented).toBe(false);
     expect(window.location.pathname).toBe(`${BASE_PATH}/`);
     expect(screen.queryByText("Hidden landing group")).not.toBeInTheDocument();
+
+    const newSessionShortcut = new KeyboardEvent("keydown", {
+      key: "B",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(newSessionShortcut);
+    expect(newSessionShortcut.defaultPrevented).toBe(false);
+    expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+  });
+
+  it("opens New session with the exact desktop workspace shortcut", () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+
+    const newSessionButton = screen.getByRole("button", { name: "New session" });
+    expect(newSessionButton).toHaveAttribute("aria-keyshortcuts", "Control+Shift+B");
+
+    const extraModifier = new KeyboardEvent("keydown", {
+      key: "B",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(extraModifier);
+    expect(extraModifier.defaultPrevented).toBe(false);
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+
+    const shortcut = new KeyboardEvent("keydown", {
+      key: "B",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => window.dispatchEvent(shortcut));
+
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(screen.getByRole("main", { name: "New session view" })).toBeVisible();
+    expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
+    expectWorkspaceSearch("", ["alpha", "beta"]);
+
+    const repeatedShortcut = new KeyboardEvent("keydown", {
+      key: "B",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(repeatedShortcut);
+    expect(repeatedShortcut.defaultPrevented).toBe(true);
+    expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
   });
 
   it("reorders tabs in the URL without changing the active route and remaps direct shortcuts", () => {
@@ -2941,7 +3061,7 @@ describe("App routing", () => {
       })).toBeVisible();
       expect(screen.getByTitle("Workspace one - Saved")).toBeVisible();
       expect(newSessionButton).toBeEnabled();
-      expect(newSessionButton).toHaveAttribute("title", "New session");
+      expect(newSessionButton).toHaveAttribute("title", "New session (Ctrl+Shift+B)");
       expect(moveTabToWindow).toBeEnabled();
       expect(copyTabToWindow).toBeEnabled();
       expect(screen.queryByRole("status", { name: "Opening saved workspace" }))

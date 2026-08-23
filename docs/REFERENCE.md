@@ -53,8 +53,15 @@ Tmux cannot render the same pane at two independent responsive sizes.
 
 The `Theme` control switches the full browser UI and xterm ANSI palette together.
 Dark remains the default, and the selected appearance is stored only in that
-browser. The Theme toggle never sends terminal input, resizes tmux, or reconnects
-the PTY client.
+browser. `Ctrl+Shift+H` toggles the theme globally, including on the landing page
+and compact layouts. The Theme toggle never sends terminal input, resizes tmux,
+or reconnects the PTY client.
+
+On desktop, `Copy New` starts a fresh detached shell in the active pane's current
+working directory and immediately opens it as the active workspace tab. The
+server tries `<source>_1`, then increments the suffix until it can atomically
+claim an available tmux session name. `Ctrl+Shift+M` invokes the same action.
+The button and shortcut are unavailable in compact mobile layouts.
 
 When Muxdeck creates a session with tmux 3.2 or newer, it gives the new shell
 `GROK_THEME=auto` and the browser's current `GROK_APPEARANCE=dark|light` value.
@@ -528,10 +535,13 @@ snapshot for Back/Forward navigation.
 The live console adds exact `Ctrl+Shift` chords for session and terminal actions:
 `E` opens the existing End-session confirmation, `L` returns to live output, `C`
 toggles browser Copy mode, and `U` / `D` invoke the paging controls highlighted
-for the current agent. `F` enters or exits terminal Focus and `S` shows or hides
-the session strip. All are captured before xterm can turn them into terminal
-input, keep unrelated modifier combinations untouched, and pause while a modal
-dialog or mobile workspace layout is active.
+for the current agent. `M` creates a numbered session in the active pane's
+directory, `B` opens New session, `F` enters or exits terminal Focus, and `S`
+shows or hides the session strip. The desktop keymap also lists the global `H`
+theme chord. The console-only
+chords are captured before xterm can turn them into terminal input, keep unrelated
+modifier combinations untouched, and pause while a modal dialog or mobile
+workspace layout is active.
 
 `Keymap` in the desktop workspace strip opens a non-modal reference containing
 all tab, view, paging, Copy, Live, and End chords. Escape or clicking outside

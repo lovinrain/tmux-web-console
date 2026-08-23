@@ -5204,7 +5204,8 @@ span.workspace-tab-group-toggle {
 }
 
 .history-button,
-.size-mode {
+.size-mode,
+.copy-new-button {
   display: flex;
   height: 38px;
   align-items: center;
@@ -5221,18 +5222,60 @@ span.workspace-tab-group-toggle {
 }
 
 .history-button:hover,
-.size-mode:hover {
+.size-mode:hover,
+.copy-new-button:hover {
   color: var(--paper);
   border-color: #626f5d;
 }
 
-.history-button:disabled {
+.history-button:disabled,
+.copy-new-button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.history-button svg {
+.history-button svg,
+.copy-new-button svg {
   width: 17px;
+}
+
+.copy-new-button {
+  display: none;
+  color: var(--cyan);
+  border-color: rgba(104, 223, 208, 0.34);
+}
+
+.copy-new-error {
+  position: fixed;
+  z-index: 18;
+  top: calc(max(5px, env(safe-area-inset-top, 0px)) + 108px);
+  right: max(12px, env(safe-area-inset-right, 0px));
+  display: none;
+  width: min(520px, calc(100vw - 24px));
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 12px 11px 14px;
+  color: #ffd0cb;
+  background: rgba(48, 22, 20, 0.98);
+  border: 1px solid rgba(255, 115, 104, 0.46);
+  border-left: 3px solid var(--red);
+  border-radius: 4px;
+  box-shadow: 0 15px 48px rgba(0, 0, 0, 0.42);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.copy-new-error button {
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding-inline: 10px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid rgba(255, 115, 104, 0.4);
+  border-radius: 3px;
+  cursor: pointer;
 }
 
 .size-mode.protected {
@@ -5494,6 +5537,11 @@ span.workspace-tab-group-toggle {
 
 @media (min-width: 1025px),
   (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  .copy-new-button,
+  .copy-new-error {
+    display: flex;
+  }
+
   .desktop-tab-orientation-toggle,
   .desktop-tab-actions-toggle,
   .desktop-terminal-copy-toggle,
@@ -7019,6 +7067,22 @@ html.history-resizing * {
   }
 
   .theme-toggle span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .copy-new-button {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .copy-new-button span {
     position: absolute;
     width: 1px;
     height: 1px;

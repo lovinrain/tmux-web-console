@@ -52,7 +52,11 @@ describe("ThemeProvider", () => {
     expect(screen.getByRole("button", { name: "Light theme" })).not.toBePressed();
     expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute(
       "title",
-      "Switch to light theme",
+      "Switch to light theme (Ctrl+Shift+H)",
+    );
+    expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Control+Shift+H",
     );
   });
 
@@ -65,8 +69,46 @@ describe("ThemeProvider", () => {
     expect(screen.getByRole("button", { name: "Light theme" })).toBePressed();
     expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute(
       "title",
-      "Switch to dark theme",
+      "Switch to dark theme (Ctrl+Shift+H)",
     );
+  });
+
+  it("toggles globally with the exact Ctrl+Shift+H chord", () => {
+    renderTheme();
+    const shortcut = {
+      key: "T",
+      code: "KeyH",
+      ctrlKey: true,
+      shiftKey: true,
+    };
+
+    expect(fireEvent.keyDown(window, shortcut)).toBe(false);
+    expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("light");
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+      "content",
+      "#f4f0e7",
+    );
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+
+    expect(fireEvent.keyDown(window, { ...shortcut, repeat: true })).toBe(false);
+    expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("light");
+
+    expect(fireEvent.keyDown(window, shortcut)).toBe(false);
+    expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("dark");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+
+    for (const modifiers of [
+      { ctrlKey: false },
+      { shiftKey: false },
+      { altKey: true },
+      { metaKey: true },
+      { isComposing: true },
+    ]) {
+      expect(fireEvent.keyDown(window, { ...shortcut, ...modifiers })).toBe(true);
+      expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("dark");
+    }
   });
 
   it("toggles the theme and persists the new selection", () => {

@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  copySession,
   createQueuedMessage,
   deleteQueuedMessage,
   getSnippetTree,
@@ -33,6 +34,7 @@ const liveTerminalState = vi.hoisted(() => ({
 }));
 
 vi.mock("../api", () => ({
+  copySession: vi.fn(),
   listSessions: vi.fn(),
   listQueuedMessages: vi.fn(),
   createQueuedMessage: vi.fn(),
@@ -1345,6 +1347,93 @@ describe("ConsoleScreen session identity", () => {
 
     expect(screen.getByRole("button", { name: "Light theme" })).toBePressed();
     expect(screen.getByTestId("live-terminal")).toHaveAttribute("data-terminal-theme", "light");
+  });
+
+  it("creates a focused session copy from the desktop header and exact shortcut", async () => {
+    const firstCreation = deferred<{ name: string; id: string }>();
+    const onSessionCopied = vi.fn();
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(copySession)
+      .mockReturnValueOnce(firstCreation.promise)
+      .mockResolvedValueOnce({ name: "test_2", id: "$3" });
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionCopied={onSessionCopied}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const copyNew = screen.getByRole("button", { name: "Copy New" });
+    expect(copyNew).toHaveAttribute("aria-keyshortcuts", "Control+Shift+M");
+    expect(copyNew).toHaveAttribute(
+      "title",
+      "Create and open a fresh session in this pane's working directory (Ctrl+Shift+M)",
+    );
+
+    fireEvent.click(copyNew);
+    expect(copySession).toHaveBeenCalledWith("test", "$1", "dark");
+    expect(screen.getByRole("button", { name: "Creating..." })).toBeDisabled();
+    expect(fireEvent.keyDown(window, {
+      code: "KeyM",
+      key: "N",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    expect(copySession).toHaveBeenCalledTimes(1);
+
+    await act(async () => firstCreation.resolve({ name: "test_1", id: "$2" }));
+    expect(onSessionCopied).toHaveBeenCalledWith("test", "test_1", "$2");
+
+    expect(fireEvent.keyDown(window, {
+      code: "KeyM",
+      key: "N",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+    })).toBe(true);
+    expect(copySession).toHaveBeenCalledTimes(1);
+
+    expect(fireEvent.keyDown(window, {
+      code: "KeyM",
+      key: "N",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    await waitFor(() => expect(onSessionCopied).toHaveBeenLastCalledWith(
+      "test",
+      "test_2",
+      "$3",
+    ));
+    expect(fireEvent.keyDown(window, {
+      code: "KeyM",
+      key: "N",
+      ctrlKey: true,
+      shiftKey: true,
+      repeat: true,
+    })).toBe(false);
+    expect(copySession).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps Copy New failures on the source session for dismissal", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(copySession).mockRejectedValue(new Error("source directory is gone"));
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionCopied={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Copy New" }));
+
+    const error = await screen.findByRole("alert");
+    expect(error).toHaveTextContent("Copy New failed: source directory is gone");
+    fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("inserts snippets into the staged draft without sending", async () => {

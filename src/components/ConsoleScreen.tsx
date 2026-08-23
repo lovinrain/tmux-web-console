@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  copySession,
   createQueuedMessage,
   deleteQueuedMessage,
   listSessions,
@@ -31,6 +32,7 @@ import {
   RefreshIcon,
   TerminalIcon,
   TrashIcon,
+  WindowCopyIcon,
 } from "../icons";
 import {
   AGENT_SCROLL_PREFERENCES_STORAGE_KEY,
@@ -100,6 +102,12 @@ interface ConsoleScreenProps {
     serverStarted: number,
     serverPid: number,
   ) => Promise<void>;
+  onSessionCopied?: (
+    sourceName: string,
+    sessionName: string,
+    sessionId: string,
+  ) => void;
+  copySessionDisabled?: boolean;
   renameWarning?: SessionRenameWarning | null;
   onDismissRenameWarning?: (sessionId: string) => void;
 }
@@ -356,6 +364,8 @@ export function ConsoleScreen({
   onSessionUpdate,
   onSessionRenamed,
   onSessionTerminated,
+  onSessionCopied,
+  copySessionDisabled = false,
   renameWarning,
   onDismissRenameWarning,
 }: ConsoleScreenProps) {
@@ -382,6 +392,11 @@ export function ConsoleScreen({
   } | null>(null);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [copyingSource, setCopyingSource] = useState<string | null>(null);
+  const [copySessionError, setCopySessionError] = useState<{
+    sourceName: string;
+    message: string;
+  } | null>(null);
   const [ignoreSize, setIgnoreSize] = useState(false);
   const [localBarVisibility, setLocalBarVisibility] = useState(
     DEFAULT_CONSOLE_BAR_VISIBILITY,
@@ -401,6 +416,9 @@ export function ConsoleScreen({
   >({ x: 0, y: 0 });
   const desktopFocusShortcutsPositionRef = useRef(desktopFocusShortcutsPosition);
   const desktopFocusShortcutsDragRef = useRef<DesktopFocusShortcutsDrag | null>(null);
+  const copyingSessionRef = useRef(false);
+  const sessionNameRef = useRef(sessionName);
+  sessionNameRef.current = sessionName;
   const [localHistoryPanelWidth, setLocalHistoryPanelWidth] = useState(
     DEFAULT_HISTORY_PANEL_WIDTH,
   );
@@ -443,6 +461,39 @@ export function ConsoleScreen({
   const visibleHistoryPanelWidth = historyPanelWidth ?? localHistoryPanelWidth;
   const memorandumCount = session?.memorandumCount ?? session?.queuedMessageCount ?? 0;
   const queuedMemorandumCount = session?.queuedMessageCount ?? 0;
+
+  const copyNewSession = useCallback(async () => {
+    if (
+      copyingSessionRef.current
+      || copySessionDisabled
+      || !session
+      || !onSessionCopied
+    ) return;
+
+    const sourceName = session.name;
+    copyingSessionRef.current = true;
+    setCopyingSource(sourceName);
+    setCopySessionError(null);
+    let created;
+    try {
+      created = await copySession(sourceName, session.id, theme);
+    } catch (error) {
+      copyingSessionRef.current = false;
+      setCopyingSource(null);
+      if (sessionNameRef.current === sourceName) {
+        setCopySessionError({
+          sourceName,
+          message: error instanceof Error
+            ? error.message
+            : "Unable to create a session copy",
+        });
+      }
+      return;
+    }
+    copyingSessionRef.current = false;
+    setCopyingSource(null);
+    onSessionCopied(sourceName, created.name, created.id);
+  }, [copySessionDisabled, onSessionCopied, session, theme]);
 
   const setBarVisible = useCallback((bar: ConsoleBar, visible: boolean) => {
     if (onBarVisibilityChange) {
@@ -948,6 +999,7 @@ export function ConsoleScreen({
       const endsSession = event.code === "KeyE";
       const returnsLive = event.code === "KeyL";
       const togglesCopyMode = event.code === "KeyC";
+      const copiesSession = event.code === "KeyM" && Boolean(onSessionCopied);
       const scrollsUp = event.code === "KeyU";
       const scrollsDown = event.code === "KeyD";
       if (
@@ -956,6 +1008,7 @@ export function ConsoleScreen({
         && !endsSession
         && !returnsLive
         && !togglesCopyMode
+        && !copiesSession
         && !scrollsUp
         && !scrollsDown
       ) return;
@@ -985,6 +1038,10 @@ export function ConsoleScreen({
         setDesktopCopyMode((enabled) => !enabled);
         return;
       }
+      if (copiesSession) {
+        if (!event.repeat) void copyNewSession();
+        return;
+      }
       if (scrollsUp || scrollsDown) {
         scrollTerminalWithPreference(scrollsUp ? "up" : "down");
         return;
@@ -1002,6 +1059,8 @@ export function ConsoleScreen({
     enterDesktopTerminalFocus,
     exitDesktopTerminalFocus,
     openTerminateEditor,
+    copyNewSession,
+    onSessionCopied,
     returnToLiveTerminal,
     scrollTerminalWithPreference,
     sessionNavigation,
@@ -1252,6 +1311,20 @@ export function ConsoleScreen({
           <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback">
             <HistoryIcon /><span>Scrollback</span>
           </button>
+          {onSessionCopied && (
+            <button
+              type="button"
+              className="copy-new-button"
+              aria-keyshortcuts="Control+Shift+M"
+              aria-busy={copyingSource === sessionName}
+              disabled={copySessionDisabled || !session || copyingSource !== null}
+              title="Create and open a fresh session in this pane's working directory (Ctrl+Shift+M)"
+              onClick={() => void copyNewSession()}
+            >
+              <WindowCopyIcon />
+              <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
+            </button>
+          )}
           <ThemeToggle />
           {pane?.command === "grok" && !pane.dead && (
             <button
@@ -1272,6 +1345,13 @@ export function ConsoleScreen({
           )}
         </div>
       </header>
+
+      {copySessionError?.sourceName === sessionName && (
+        <aside className="copy-new-error" role="alert">
+          <span>Copy New failed: {copySessionError.message}</span>
+          <button type="button" onClick={() => setCopySessionError(null)}>Dismiss</button>
+        </aside>
+      )}
 
       {visibleRenameWarning && (
         <aside

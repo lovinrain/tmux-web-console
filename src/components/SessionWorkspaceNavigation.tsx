@@ -124,6 +124,7 @@ export const WORKSPACE_TAB_SHORTCUTS = {
 } as const;
 
 export const DESKTOP_CONSOLE_SHORTCUTS = {
+  newSession: "Ctrl+Shift+B",
   endSession: "Ctrl+Shift+E",
   returnLive: "Ctrl+Shift+L",
   copyMode: "Ctrl+Shift+C",
@@ -132,6 +133,8 @@ export const DESKTOP_CONSOLE_SHORTCUTS = {
   pageDown: "Ctrl+Shift+D",
   sessionTabs: "Ctrl+Shift+S",
   focus: "Ctrl+Shift+F",
+  theme: "Ctrl+Shift+H",
+  copyNew: "Ctrl+Shift+M",
 } as const;
 
 export const MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID = "muxdeck-mobile-workspace-overview";
@@ -153,11 +156,13 @@ const WORKSPACE_KEYMAP_GROUPS = [
       [DESKTOP_CONSOLE_SHORTCUTS.returnLive, "Return to live output"],
       [DESKTOP_CONSOLE_SHORTCUTS.copyMode, "Toggle browser Copy mode"],
       [DESKTOP_CONSOLE_SHORTCUTS.endSession, "Open End session confirmation"],
+      [DESKTOP_CONSOLE_SHORTCUTS.copyNew, "Create session from current directory"],
     ],
   },
   {
     label: "Workspace",
     shortcuts: [
+      [DESKTOP_CONSOLE_SHORTCUTS.newSession, "Open New session"],
       [WORKSPACE_TAB_SHORTCUTS.previous, "Previous tab"],
       [WORKSPACE_TAB_SHORTCUTS.next, "Next tab"],
       [WORKSPACE_TAB_SHORTCUTS.direct, "Jump to numbered tab"],
@@ -170,6 +175,7 @@ const WORKSPACE_KEYMAP_GROUPS = [
       [DESKTOP_CONSOLE_SHORTCUTS.tabActions, "Toggle tab Actions"],
       [DESKTOP_CONSOLE_SHORTCUTS.sessionTabs, "Show or hide session tabs"],
       [DESKTOP_CONSOLE_SHORTCUTS.focus, "Enter or exit terminal Focus"],
+      [DESKTOP_CONSOLE_SHORTCUTS.theme, "Toggle light or dark theme"],
     ],
   },
 ] as const;
@@ -2192,12 +2198,13 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               onClick={onNewSession}
               disabled={newSessionDisabled}
               aria-label="New session"
+              aria-keyshortcuts="Control+Shift+B"
               aria-current={newSessionActive ? "page" : undefined}
               title={newSessionActive
                 ? "New session is already open"
                 : workspacePersistenceState === "loading"
                   ? "Wait for workspace to finish opening"
-                  : "New session"}
+                  : `New session (${DESKTOP_CONSOLE_SHORTCUTS.newSession})`}
             >
               <PlusIcon />
               <span>New session</span>

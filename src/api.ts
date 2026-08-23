@@ -48,8 +48,11 @@ export interface CreatedSession {
   id: string;
 }
 
-async function requestSessionCreation(body: Record<string, string>): Promise<CreatedSession> {
-  const result = await jsonRequest<{ session: string; sessionId: string }>("/api/sessions", {
+async function requestSessionCreation(
+  body: Record<string, string>,
+  path = "/api/sessions",
+): Promise<CreatedSession> {
+  const result = await jsonRequest<{ session: string; sessionId: string }>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -75,6 +78,17 @@ export async function createSession(name?: string, theme?: Theme): Promise<Creat
     }
     throw error;
   }
+}
+
+export async function copySession(
+  sourceSession: string,
+  sourceSessionId: string,
+  theme?: Theme,
+): Promise<CreatedSession> {
+  return requestSessionCreation({
+    sessionId: sourceSessionId,
+    ...(theme === undefined ? {} : { theme }),
+  }, `/api/sessions/${encodeURIComponent(sourceSession)}/copy`);
 }
 
 export async function terminateSession(

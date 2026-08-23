@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useState,
   type PropsWithChildren,
@@ -74,6 +75,28 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const toggleTheme = useCallback(() => {
     setThemeState((currentTheme) => (currentTheme === "dark" ? "light" : "dark"));
   }, []);
+
+  useEffect(() => {
+    const handleThemeShortcut = (event: KeyboardEvent) => {
+      if (
+        event.code !== "KeyH"
+        || !event.ctrlKey
+        || !event.shiftKey
+        || event.altKey
+        || event.metaKey
+        || event.isComposing
+        || event.keyCode === 229
+      ) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) toggleTheme();
+    };
+
+    // Capture the global chord before focused controls or xterm consume it.
+    window.addEventListener("keydown", handleThemeShortcut, true);
+    return () => window.removeEventListener("keydown", handleThemeShortcut, true);
+  }, [toggleTheme]);
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>

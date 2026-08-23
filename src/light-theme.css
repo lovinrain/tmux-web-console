@@ -1927,17 +1927,36 @@ html[data-theme="light"] .connection-badge.live > span {
 }
 
 html[data-theme="light"] .history-button,
-html[data-theme="light"] .size-mode {
+html[data-theme="light"] .size-mode,
+html[data-theme="light"] .copy-new-button {
   color: #424c40;
   background: #eeeae2;
   border-color: #c6bfb3;
 }
 
 html[data-theme="light"] .history-button:hover,
-html[data-theme="light"] .size-mode:hover {
+html[data-theme="light"] .size-mode:hover,
+html[data-theme="light"] .copy-new-button:hover {
   color: #20261e;
   background: #fffdf8;
   border-color: #828d7c;
+}
+
+html[data-theme="light"] .copy-new-button {
+  color: #087a70;
+  border-color: #8ebcb6;
+}
+
+html[data-theme="light"] .copy-new-error {
+  color: #8d2f27;
+  background: rgba(255, 248, 244, 0.98);
+  border-color: #cf8e87;
+  border-left-color: #b4493f;
+  box-shadow: 0 15px 48px rgba(65, 55, 38, 0.18);
+}
+
+html[data-theme="light"] .copy-new-error button {
+  border-color: #cf8e87;
 }
 
 html[data-theme="light"] .size-mode.protected {

@@ -409,6 +409,7 @@ describe("SessionWorkspaceNavigation", () => {
     const keymap = screen.getByRole("dialog", { name: "Desktop workspace keymap" });
     for (const mapping of [
       ["Ctrl+Shift+E", "Open End session confirmation"],
+      ["Ctrl+Shift+M", "Create session from current directory"],
       ["Ctrl+Shift+L", "Return to live output"],
       ["Ctrl+Shift+C", "Toggle browser Copy mode"],
       ["Ctrl+Shift+A", "Toggle tab Actions"],
@@ -416,6 +417,8 @@ describe("SessionWorkspaceNavigation", () => {
       ["Ctrl+Shift+D", "Preferred page down"],
       ["Ctrl+Shift+S", "Show or hide session tabs"],
       ["Ctrl+Shift+F", "Enter or exit terminal Focus"],
+      ["Ctrl+Shift+H", "Toggle light or dark theme"],
+      ["Ctrl+Shift+B", "Open New session"],
       ["Ctrl+Shift+,", "Previous tab"],
       ["Ctrl+Shift+.", "Next tab"],
       ["Ctrl+Shift+1-9", "Jump to numbered tab"],
@@ -1096,7 +1099,8 @@ describe("SessionWorkspaceNavigation", () => {
     const view = render(<SessionWorkspaceNavigation {...props} />);
 
     const openNewSession = screen.getByRole("button", { name: "New session" });
-    expect(openNewSession).toHaveAttribute("title", "New session");
+    expect(openNewSession).toHaveAttribute("aria-keyshortcuts", "Control+Shift+B");
+    expect(openNewSession).toHaveAttribute("title", "New session (Ctrl+Shift+B)");
     expect(within(openNewSession).getByText("New session")).toBeInTheDocument();
     expect(openNewSession).not.toHaveAttribute("aria-current");
     fireEvent.click(openNewSession);

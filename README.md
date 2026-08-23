@@ -101,11 +101,15 @@ For frontend development, run `npm run dev`. Vite serves
 
 ## Workspace shortcuts
 
+`Ctrl+Shift+H` toggles the saved light/dark theme from any Muxdeck screen,
+including the landing page and compact mobile layout.
+
 These shortcuts are active in the desktop multi-tab view, not on the landing
 page or compact mobile layout.
 
 | Shortcut | Action |
 | --- | --- |
+| `Ctrl+Shift+B` | Open New session in the current workspace |
 | `Ctrl+Shift+,` | Previous tab |
 | `Ctrl+Shift+.` | Next tab |
 | `Ctrl+Shift+1...9` | Jump to a numbered tab |
@@ -116,6 +120,7 @@ page or compact mobile layout.
 | `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's remembered controls |
 | `Ctrl+Shift+L` | Leave scrollback and return to live output |
 | `Ctrl+Shift+C` | Toggle browser terminal Copy mode |
+| `Ctrl+Shift+M` | Create and open a numbered session in the active pane's directory |
 | `Ctrl+Shift+E` | Open the End-session confirmation |
 
 Use `Keymap` in the desktop workspace strip to see these chords in the app.

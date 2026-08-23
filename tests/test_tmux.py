@@ -189,6 +189,70 @@ async def test_create_session_preserves_a_requested_name_exactly():
     ]
 
 
+async def test_copy_session_uses_the_active_pane_directory_and_next_name():
+    inventory = "\n".join(
+        [
+            pane_row(
+                session_name="work",
+                session_id="$7",
+                pane_current_path="/srv/current project",
+            ),
+            pane_row(session_name="work_1", session_id="$8", pane_id="%13"),
+            pane_row(session_name="work_3", session_id="$9", pane_id="%14"),
+        ]
+    )
+    tmux = RecordingRunTmux([inventory, "work_2\t$10\n"])
+
+    created = await tmux.copy_session("work", "$7")
+
+    assert created == CreatedSession(name="work_2", id="$10")
+    assert tmux.calls == [
+        ["list-panes", "-a", "-F", PANE_FORMAT],
+        [
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            CREATED_SESSION_FORMAT,
+            "-s",
+            "work_2",
+            "-c",
+            "/srv/current project",
+        ],
+    ]
+
+
+async def test_copy_session_retries_a_name_claimed_after_the_inventory_read():
+    inventory = pane_row(session_name="work", session_id="$7")
+    tmux = RecordingRunTmux(
+        [
+            inventory,
+            TmuxError("duplicate session: work_1", returncode=1),
+            "work_2\t$10\n",
+        ]
+    )
+
+    created = await tmux.copy_session("work", "$7")
+
+    assert created == CreatedSession(name="work_2", id="$10")
+    create_calls = [call for call in tmux.calls if call[0] == "new-session"]
+    assert [call[6] for call in create_calls] == ["work_1", "work_2"]
+
+
+async def test_copy_session_rejects_a_reused_source_name_before_creation():
+    tmux = RecordingRunTmux(
+        pane_row(session_name="work", session_id="$replacement")
+    )
+
+    with pytest.raises(
+        TmuxSessionIdentityChangedError,
+        match="identity changed",
+    ):
+        await tmux.copy_session("work", "$7")
+
+    assert tmux.calls == [["list-panes", "-a", "-F", PANE_FORMAT]]
+
+
 @pytest.mark.parametrize("theme", ["dark", "light"])
 async def test_create_session_sets_a_grok_appearance_hint(theme: str):
     tmux = RecordingRunTmux(

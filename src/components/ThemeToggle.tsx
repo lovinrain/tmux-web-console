@@ -9,7 +9,8 @@ export function ThemeToggle() {
       type="button"
       className="theme-toggle"
       aria-pressed={theme === "light"}
-      title={`Switch to ${nextTheme} theme`}
+      aria-keyshortcuts="Control+Shift+H"
+      title={`Switch to ${nextTheme} theme (Ctrl+Shift+H)`}
       onClick={toggleTheme}
     >
       {theme === "dark" ? (

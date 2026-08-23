@@ -571,6 +571,59 @@ def create_app(
             status=201,
         )
 
+    async def copy_session(request: web.Request) -> web.Response:
+        source_name = request.match_info["session"]
+        try:
+            source_name = validate_tmux_session_name(source_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        unknown_fields = sorted(set(payload) - {"sessionId", "theme"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+        if "sessionId" not in payload:
+            return json_error("sessionId is required", 400)
+
+        source_id = payload["sessionId"]
+        if not isinstance(source_id, str):
+            return json_error("sessionId must be a string", 400)
+        try:
+            source_id = validate_tmux_session_id(source_id)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        requested_theme = payload.get("theme")
+        if "theme" in payload:
+            if not isinstance(requested_theme, str):
+                return json_error("theme must be a string", 400)
+            if requested_theme not in {"dark", "light"}:
+                return json_error("theme must be dark or light", 400)
+
+        try:
+            created_session = await app[TMUX_KEY].copy_session(
+                source_name,
+                source_id,
+                theme=requested_theme,
+            )
+        except ValueError as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxSessionIdentityChangedError as error:
+            return json_error(str(error), 409)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        return web.json_response(
+            {"session": created_session.name, "sessionId": created_session.id},
+            status=201,
+        )
+
     async def terminate_session(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
         try:
@@ -1658,6 +1711,7 @@ def create_app(
     app.router.add_get(f"{prefix}/api/health", health)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
+    app.router.add_post(f"{prefix}/api/sessions/{{session}}/copy", copy_session)
     app.router.add_delete(f"{prefix}/api/sessions/{{session}}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)

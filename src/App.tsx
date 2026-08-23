@@ -1274,6 +1274,24 @@ function AppRoutes() {
 
   const activeRoute = parseSessionRoute(location.path);
   const newSessionRoute = parseNewSessionRoute(location.path);
+  const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+  const workspaceName = (
+    locationWorkspaceId && activeWorkspaceIdentity?.id === locationWorkspaceId
+      ? activeWorkspaceIdentity.name
+      : null
+  );
+  const workspacePersistenceState: WorkspacePersistenceState = (
+    !locationWorkspaceId
+      ? "unsaved"
+      : workspaceSyncProblem?.kind === "load" || workspaceSyncProblem?.kind === "save"
+        ? "error"
+        : hydratedWorkspaceId === locationWorkspaceId
+          ? (workspaceGroupsSupported === false || workspaceGroupsPending)
+              && workspace.groups.length > 0
+            ? "limited"
+            : "saved"
+          : "loading"
+  );
 
   useEffect(() => {
     const savedWorkspaceId = savedWorkspaceIdFromSearch(location.search);
@@ -1742,6 +1760,47 @@ function AppRoutes() {
     syncLocation();
   }, [replaceLocation, syncLocation]);
 
+  const completeCopiedSession = useCallback((
+    sourceName: string,
+    sessionName: string,
+    sessionId: string,
+  ) => {
+    const current = currentLocation();
+    const route = parseSessionRoute(current.path);
+    const ownsCurrentView = route?.sessionName === sourceName && !route.recentsOpen;
+    const currentWorkspace = workspaceRef.current;
+    const nextWorkspace = ownsCurrentView
+      ? visitWorkspaceSession(currentWorkspace, sessionName)
+      : {
+          ...currentWorkspace,
+          openSessions: currentWorkspace.openSessions.includes(sessionName)
+            ? currentWorkspace.openSessions
+            : [...currentWorkspace.openSessions, sessionName],
+        };
+    workspaceRef.current = nextWorkspace;
+    if (
+      pendingWorkspaceSnapshot.current
+      && !pendingWorkspaceSnapshot.current.openSessions.includes(sessionName)
+    ) {
+      pendingWorkspaceSnapshot.current = {
+        ...pendingWorkspaceSnapshot.current,
+        openSessions: [...pendingWorkspaceSnapshot.current.openSessions, sessionName],
+      };
+    }
+    setWorkspace(nextWorkspace);
+    replaceLocation(
+      window.history.state,
+      ownsCurrentView ? sessionPath(sessionName) : current.path,
+      searchWithWorkspaceState(
+        current.search,
+        nextWorkspace.openSessions,
+        nextWorkspace.groups,
+      ),
+      [{ name: sessionName, sessionId }],
+    );
+    syncLocation();
+  }, [replaceLocation, syncLocation]);
+
   const finishSessionSwitch = useCallback((
     sessionName: string,
     nextWorkspace: SessionWorkspaceState,
@@ -1918,6 +1977,7 @@ function AppRoutes() {
 
       const searchRequested = event.code === "Semicolon";
       const togglesTabActions = event.code === "KeyA";
+      const opensNewSession = event.code === "KeyB";
       const direction = event.code === "Comma"
         ? -1
         : event.code === "Period"
@@ -1928,6 +1988,7 @@ function AppRoutes() {
       if (
         !searchRequested
         && !togglesTabActions
+        && !opensNewSession
         && direction === 0
         && directIndex === null
       ) return;
@@ -1939,6 +2000,11 @@ function AppRoutes() {
 
       if (togglesTabActions) {
         setDesktopTabActionsVisible(!desktopTabActionsVisible);
+        return;
+      }
+
+      if (opensNewSession) {
+        if (workspacePersistenceState !== "loading" && !event.repeat) openNewSession();
         return;
       }
 
@@ -1973,7 +2039,14 @@ function AppRoutes() {
 
     window.addEventListener("keydown", handleWorkspaceShortcut, true);
     return () => window.removeEventListener("keydown", handleWorkspaceShortcut, true);
-  }, [desktopTabActionsVisible, setDesktopTabActionsVisible, switchSession, tabSearchOpen]);
+  }, [
+    desktopTabActionsVisible,
+    openNewSession,
+    setDesktopTabActionsVisible,
+    switchSession,
+    tabSearchOpen,
+    workspacePersistenceState,
+  ]);
 
   const navigateToDashboard = useCallback((nextWorkspace: PendingWorkspaceSnapshot) => {
     const state = window.history.state as Record<string, unknown> | null;
@@ -2458,24 +2531,6 @@ function AppRoutes() {
       : workspace.recentSessions.find((sessionName) => (
         workspace.openSessions.includes(sessionName)
       )) ?? null);
-  const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
-  const workspaceName = (
-    locationWorkspaceId && activeWorkspaceIdentity?.id === locationWorkspaceId
-      ? activeWorkspaceIdentity.name
-      : null
-  );
-  const workspacePersistenceState: WorkspacePersistenceState = (
-    !locationWorkspaceId
-      ? "unsaved"
-      : workspaceSyncProblem?.kind === "load" || workspaceSyncProblem?.kind === "save"
-        ? "error"
-        : hydratedWorkspaceId === locationWorkspaceId
-          ? (workspaceGroupsSupported === false || workspaceGroupsPending)
-              && workspace.groups.length > 0
-            ? "limited"
-            : "saved"
-          : "loading"
-  );
   const workspaceSyncNoticeDismissed = (
     workspaceSyncProblem !== null
     && dismissedWorkspaceSyncProblem === workspaceSyncProblem
@@ -2601,6 +2656,8 @@ function AppRoutes() {
         onSessionUpdate={updateKnownSession}
         onSessionRenamed={renameOpenSession}
         onSessionTerminated={terminateOpenSession}
+        onSessionCopied={completeCopiedSession}
+        copySessionDisabled={workspacePersistenceState === "loading"}
         renameWarning={renameWarning}
         onDismissRenameWarning={dismissRenameWarning}
         sessionNavigation={(

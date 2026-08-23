@@ -3,6 +3,7 @@ import {
   BASE_PATH,
   ApiRequestError,
   createQueuedMessage,
+  copySession,
   createSession,
   createWorkspace,
   deleteQueuedMessage,
@@ -206,6 +207,26 @@ describe("session creation API", () => {
       message: "duplicate session: existing",
       status: 409,
     });
+  });
+
+  it("requests a numbered session copy from the source session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "work/name #1_2",
+      sessionId: "$18",
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(copySession("work/name #1", "$7", "light")).resolves.toEqual({
+      name: "work/name #1_2",
+      id: "$18",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/copy`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ sessionId: "$7", theme: "light" }),
+      }),
+    );
   });
 });
 

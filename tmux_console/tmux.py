@@ -267,6 +267,7 @@ class TmuxClient:
         )
         self._history_dispatch_lock = asyncio.Lock()
         self._capability_probe_lock = asyncio.Lock()
+        self._session_creation_lock = asyncio.Lock()
         self._new_session_environment_supported: bool | None = None
 
     @property
@@ -323,6 +324,69 @@ class TmuxClient:
     async def create_session(
         self, requested_name: str | None = None, theme: str | None = None
     ) -> CreatedSession:
+        async with self._session_creation_lock:
+            return await self._create_session(requested_name, theme=theme)
+
+    async def copy_session(
+        self,
+        source_name: str,
+        source_id: str,
+        theme: str | None = None,
+    ) -> CreatedSession:
+        source_name = validate_tmux_session_name(source_name)
+        source_id = validate_tmux_session_id(source_id)
+        if theme is not None and theme not in {"dark", "light"}:
+            raise ValueError("theme must be dark or light")
+
+        async with self._session_creation_lock:
+            sessions = await self.list_sessions()
+            source = next(
+                (session for session in sessions if session.name == source_name),
+                None,
+            )
+            if source is None:
+                raise TmuxSessionNotFoundError(
+                    f"tmux session not found: {source_name}"
+                )
+            if source.id != source_id:
+                raise TmuxSessionIdentityChangedError(
+                    "tmux session identity changed; refresh before copying it"
+                )
+            if source.active_pane is None or not source.active_pane.path:
+                raise TmuxError("tmux session has no active pane working directory")
+
+            existing_names = {session.name for session in sessions}
+            increment = 1
+            while True:
+                candidate = f"{source_name}_{increment}"
+                if len(candidate) > MAX_SESSION_NAME_LENGTH:
+                    raise ValueError(
+                        "source session name is too long to create a numbered copy"
+                    )
+                if candidate in existing_names:
+                    increment += 1
+                    continue
+
+                try:
+                    return await self._create_session(
+                        candidate,
+                        theme=theme,
+                        start_directory=source.active_pane.path,
+                    )
+                except TmuxError as error:
+                    if "duplicate session" not in str(error).lower():
+                        raise
+                    # A session may be created outside Muxdeck after the inventory read.
+                    existing_names.add(candidate)
+                    increment += 1
+
+    async def _create_session(
+        self,
+        requested_name: str | None = None,
+        theme: str | None = None,
+        *,
+        start_directory: str | None = None,
+    ) -> CreatedSession:
         requested_name = (
             f"muxdeck-{secrets.token_hex(6)}"
             if requested_name is None
@@ -361,7 +425,8 @@ class TmuxClient:
                 "creating %r without a Grok appearance hint",
                 requested_name,
             )
-        args.extend(["-c", str(Path.home())])
+        directory = start_directory if start_directory is not None else str(Path.home())
+        args.extend(["-c", directory])
         output = await self.run(args)
         # Tabs and line separators are invalid in names, so this preserves spaces.
         rows = output.splitlines()

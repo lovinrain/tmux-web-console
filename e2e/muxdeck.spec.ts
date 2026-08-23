@@ -310,10 +310,11 @@ test("light theme persists across dashboard, snippets, overlays, and console", a
 
   const themeToggle = page.getByRole("button", { name: "Light theme" });
   await expect(themeToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(themeToggle).toHaveAttribute("aria-keyshortcuts", "Control+Shift+H");
   const darkToggleBox = await themeToggle.boundingBox();
   expect(darkToggleBox?.width).toBeGreaterThanOrEqual(40);
   expect(darkToggleBox?.height).toBeGreaterThanOrEqual(40);
-  await themeToggle.click();
+  await page.keyboard.press("Control+Shift+H");
   await expect(themeToggle).toHaveAttribute("aria-pressed", "true");
   const lightToggleBox = await themeToggle.boundingBox();
   expect(lightToggleBox?.width).toBe(darkToggleBox?.width);
@@ -758,6 +759,110 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
   }
 });
 
+test("desktop Copy New creates the next numbered session in the active directory", async ({ page }) => {
+  const sourceSession = `${sessionName}-copy-source`;
+  const collisionSessions = [`${sourceSession}_1`, `${sourceSession}_2`];
+  const copiedSession = `${sourceSession}_3`;
+  const workingDirectory = `/tmp/${sourceSession}-cwd`;
+  const createdSessions = [sourceSession, ...collisionSessions, copiedSession];
+  mkdirSync(workingDirectory, { recursive: true });
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      sourceSession,
+      "-c",
+      workingDirectory,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+    for (const name of collisionSessions) {
+      execFileSync("tmux", [
+        ...tmux,
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "bash",
+        "--noprofile",
+        "--norc",
+      ]);
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sourceSession)}`
+      + `?tab=${encodeURIComponent(sourceSession)}`,
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    const copyNew = page.getByRole("button", { name: "Copy New" });
+    await expect(copyNew).toBeHidden();
+    await page.keyboard.press("Control+Shift+M");
+    await expectRoute(
+      page,
+      `/mux/session/${sourceSession}`,
+      [sourceSession],
+    );
+    await page.keyboard.press("Control+Shift+B");
+    await expectRoute(
+      page,
+      `/mux/session/${sourceSession}`,
+      [sourceSession],
+    );
+    expect(() => execFileSync(
+      "tmux",
+      [...tmux, "has-session", "-t", `=${copiedSession}`],
+      { stdio: "ignore" },
+    )).toThrow();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(copyNew).toBeVisible();
+    await expect(copyNew).toHaveAttribute("aria-keyshortcuts", "Control+Shift+M");
+    await copyNew.click();
+
+    await expectRoute(
+      page,
+      `/mux/session/${copiedSession}`,
+      [sourceSession, copiedSession],
+    );
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await expect(page.getByRole("tab", { name: new RegExp(copiedSession) }))
+      .toHaveAttribute("aria-selected", "true");
+    const copiedPath = execFileSync(
+      "tmux",
+      [
+        ...tmux,
+        "list-panes",
+        "-t",
+        `=${copiedSession}`,
+        "-F",
+        "#{pane_current_path}",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+    expect(copiedPath).toBe(workingDirectory);
+  } finally {
+    for (const name of createdSessions) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to sessions created on this disposable socket.
+      }
+    }
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 test("tab bar opens and cancels New session without a dashboard round trip", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(
@@ -770,7 +875,8 @@ test("tab bar opens and cancels New session without a dashboard round trip", asy
   const newSessionButton = page.getByRole("button", { name: "New session", exact: true });
   await expect(newSessionButton).toBeVisible();
   await expect(newSessionButton).toBeEnabled();
-  await newSessionButton.click();
+  await expect(newSessionButton).toHaveAttribute("aria-keyshortcuts", "Control+Shift+B");
+  await page.keyboard.press("Control+Shift+B");
 
   await expectRoute(page, "/mux/sessions/new", [sessionName], { kind: "shells" });
   await expect(newSessionButton).toBeDisabled();
@@ -1698,6 +1804,8 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     await expect(keymap).toBeVisible();
     for (const shortcut of [
       "Ctrl+Shift+E",
+      "Ctrl+Shift+B",
+      "Ctrl+Shift+M",
       "Ctrl+Shift+L",
       "Ctrl+Shift+C",
       "Ctrl+Shift+A",
@@ -1705,6 +1813,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
       "Ctrl+Shift+D",
       "Ctrl+Shift+S",
       "Ctrl+Shift+F",
+      "Ctrl+Shift+H",
     ]) {
       await expect(keymap.getByText(shortcut, { exact: true })).toBeVisible();
     }

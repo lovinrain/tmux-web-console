@@ -28,6 +28,7 @@ from tmux_console.tmux import (
     TmuxError,
     TmuxRenameUnverifiedError,
     TmuxSessionIdentityChangedError,
+    TmuxSessionNotFoundError,
 )
 from tmux_console.workspaces import WorkspaceStore
 
@@ -113,6 +114,24 @@ class CreatingFakeTmux(FakeTmux):
         self.create_calls.append(requested_name)
         self.create_theme_calls.append(theme)
         if isinstance(self.result, TmuxError):
+            raise self.result
+        return self.result
+
+
+class CopyingFakeTmux(FakeTmux):
+    def __init__(self, result: CreatedSession | Exception) -> None:
+        super().__init__([[]])
+        self.result = result
+        self.copy_calls: list[tuple[str, str, str | None]] = []
+
+    async def copy_session(
+        self,
+        source_name: str,
+        source_id: str,
+        theme: str | None = None,
+    ) -> CreatedSession:
+        self.copy_calls.append((source_name, source_id, theme))
+        if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
@@ -415,6 +434,91 @@ async def test_create_session_api_reports_an_atomic_name_conflict():
         assert await response.json() == {"error": "duplicate session: existing"}
         assert tmux.create_calls == ["existing"]
         assert tmux.create_theme_calls == [None]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_session_api_preserves_the_source_identity_and_theme():
+    source_name = "work/name #1"
+    tmux = CopyingFakeTmux(CreatedSession(f"{source_name}_2", "$18"))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            f"/api/sessions/{quote(source_name, safe='')}/copy",
+            json={"sessionId": "$7", "theme": "light"},
+        )
+
+        assert response.status == 201
+        assert await response.json() == {
+            "session": f"{source_name}_2",
+            "sessionId": "$18",
+        }
+        assert tmux.copy_calls == [(source_name, "$7", "light")]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_session_api_rejects_invalid_bodies_without_calling_tmux():
+    tmux = CopyingFakeTmux(CreatedSession("unused_1", "$18"))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        malformed = await client.post(
+            "/api/sessions/work/copy",
+            data="{",
+            headers={"Content-Type": "application/json"},
+        )
+        assert malformed.status == 400
+        assert await malformed.json() == {"error": "request body must be JSON"}
+
+        for body, message in [
+            ([], "request body must be an object"),
+            ({}, "sessionId is required"),
+            ({"sessionId": 7}, "sessionId must be a string"),
+            ({"sessionId": "7"}, "invalid tmux session id"),
+            ({"sessionId": "$7", "theme": "auto"}, "theme must be dark or light"),
+            ({"sessionId": "$7", "extra": True}, "unknown field: extra"),
+        ]:
+            response = await client.post("/api/sessions/work/copy", json=body)
+            assert response.status == 400
+            assert await response.json() == {"error": message}
+
+        assert tmux.copy_calls == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (TmuxSessionNotFoundError("tmux session not found: work"), 404),
+        (
+            TmuxSessionIdentityChangedError("tmux session identity changed"),
+            409,
+        ),
+        (TmuxError("permission denied", returncode=1), 503),
+    ],
+)
+@pytest.mark.asyncio
+async def test_copy_session_api_maps_tmux_failures(error: Exception, status: int):
+    tmux = CopyingFakeTmux(error)
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/sessions/work/copy",
+            json={"sessionId": "$7"},
+        )
+
+        assert response.status == status
+        assert await response.json() == {"error": str(error)}
+        assert tmux.copy_calls == [("work", "$7", None)]
     finally:
         await client.close()
 
