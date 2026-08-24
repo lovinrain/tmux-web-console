@@ -55,7 +55,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Real xterm.js terminals with direct keyboard input and responsive desktop,
   tablet, and phone layouts
 - Persistent named workspaces with colored, collapsible tab groups, ordered top
-  or side tabs, common/workspace quick-link shelves, and cross-device resume
+  or side tabs, common/workspace/session quick-link shelves, scoped sticky notes,
+  and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
@@ -96,6 +97,13 @@ For frontend development, run `npm run dev`. Vite serves
   or entered manually. Blank continues to use the service user's home directory.
 - `Fit active` may resize the shared tmux window. Use `Size protected` when
   observing a valuable session without disturbing another client.
+- Desktop consoles place Common, Workspace, and Session sticky notes beside the
+  header controls. They autosave to the server; temporary workspaces can use the
+  Common and Session notes until the workspace itself is saved. Each note button
+  toggles a floating window that moves by dragging its title strip. Pinned Common
+  and Workspace windows stay visible while switching session tabs. The browser
+  remembers the open, pinned, and position state separately for each saved
+  workspace and restores that arrangement when the workspace is resumed.
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not
   that a command or agent turn completed. Uncertain deliveries are never
   retried automatically.
@@ -126,6 +134,7 @@ page or compact mobile layout.
 | `Ctrl+Shift+L` | Leave scrollback and return to live output |
 | `Ctrl+Shift+C` | Toggle browser terminal Copy mode |
 | `Ctrl+Shift+M` | Create and open a numbered session in the active pane's directory |
+| `Ctrl+Shift+R` | Rename the active tmux session |
 | `Ctrl+Shift+E` | Open the End-session confirmation |
 
 Use `Keymap` in the desktop workspace strip to see these chords in the app.

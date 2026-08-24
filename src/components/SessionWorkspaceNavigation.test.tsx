@@ -107,12 +107,51 @@ function navigationProps(overrides: Partial<NavigationProps> = {}): NavigationPr
   };
 }
 
+function dragDataTransfer(): DataTransfer {
+  return {
+    dropEffect: "none",
+    effectAllowed: "uninitialized",
+    setData: vi.fn(),
+  } as unknown as DataTransfer;
+}
+
+function mockElementBounds(
+  element: HTMLElement,
+  bounds: Partial<DOMRect>,
+): void {
+  const left = bounds.left ?? 0;
+  const top = bounds.top ?? 0;
+  const width = bounds.width ?? 100;
+  const height = bounds.height ?? 40;
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    x: left,
+    y: top,
+    left,
+    top,
+    width,
+    height,
+    right: bounds.right ?? left + width,
+    bottom: bounds.bottom ?? top + height,
+    toJSON: () => ({}),
+  });
+}
+
+class TestDragEvent extends MouseEvent {
+  readonly dataTransfer: DataTransfer | null;
+
+  constructor(type: string, init: DragEventInit = {}) {
+    super(type, init);
+    this.dataTransfer = init.dataTransfer ?? null;
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 1;
   });
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.stubGlobal("DragEvent", TestDragEvent);
   document.body.style.overflow = "";
 });
 
@@ -409,6 +448,7 @@ describe("SessionWorkspaceNavigation", () => {
     const keymap = screen.getByRole("dialog", { name: "Desktop workspace keymap" });
     for (const mapping of [
       ["Ctrl+Shift+E", "Open End session confirmation"],
+      ["Ctrl+Shift+R", "Rename tmux session"],
       ["Ctrl+Shift+M", "Create session from current directory"],
       ["Ctrl+Shift+L", "Return to live output"],
       ["Ctrl+Shift+C", "Toggle browser Copy mode"],
@@ -1063,7 +1103,7 @@ describe("SessionWorkspaceNavigation", () => {
     vi.stubGlobal("visualViewport", { width: 390, height: 664 });
     render(
       <SessionWorkspaceNavigation
-        {...navigationProps()}
+        {...navigationProps({ onMoveTab: vi.fn() })}
         orientation="vertical"
       />,
     );
@@ -1074,6 +1114,8 @@ describe("SessionWorkspaceNavigation", () => {
       .toHaveAttribute("aria-orientation", "horizontal");
     expect(screen.queryByRole("separator", { name: "Resize vertical session tabs" }))
       .not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .not.toHaveAttribute("draggable");
   });
 
   it.each(["horizontal", "vertical"] as const)(
@@ -1239,6 +1281,211 @@ describe("SessionWorkspaceNavigation", () => {
       .toHaveFocus());
   });
 
+  it("drags horizontal desktop tabs to a new position without selecting or closing them", () => {
+    const onMoveTab = vi.fn();
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "zulu"],
+      onMoveTab,
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+
+    const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    const alphaContainer = alpha.closest<HTMLElement>(".workspace-tab")!;
+    const zuluContainer = screen.getByRole("tab", { name: "Zulu shell, Other" })
+      .closest<HTMLElement>(".workspace-tab")!;
+    const dataTransfer = dragDataTransfer();
+    mockElementBounds(zuluContainer, { left: 200, width: 100 });
+
+    expect(alpha).toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(alpha, { dataTransfer });
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "alpha");
+    expect(alphaContainer).toHaveAttribute("data-tab-dragging", "true");
+
+    fireEvent.dragOver(zuluContainer, {
+      clientX: 290,
+      clientY: 20,
+      dataTransfer,
+    });
+    expect(zuluContainer).toHaveAttribute("data-tab-drop-edge", "after");
+
+    fireEvent.drop(zuluContainer, {
+      clientX: 290,
+      clientY: 20,
+      dataTransfer,
+    });
+    expect(onMoveTab).toHaveBeenCalledWith("alpha", 2);
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onCloseTab).not.toHaveBeenCalled();
+    expect(alphaContainer).not.toHaveAttribute("data-tab-dragging");
+    expect(zuluContainer).not.toHaveAttribute("data-tab-drop-edge");
+    expect(screen.getByText(
+      "Alpha control moved to position 3 of 3.",
+      { selector: "[role='status']" },
+    )).toBeInTheDocument();
+  });
+
+  it("uses the vertical midpoint when dragging tabs in the desktop side rail", () => {
+    const onMoveTab = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          onMoveTab,
+        })}
+        orientation="vertical"
+      />,
+    );
+
+    const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" });
+    const alphaContainer = screen.getByRole("tab", {
+      name: "Alpha control, Needs input",
+    }).closest<HTMLElement>(".workspace-tab")!;
+    const dataTransfer = dragDataTransfer();
+    mockElementBounds(alphaContainer, { top: 100, height: 40 });
+
+    fireEvent.dragStart(zulu, { dataTransfer });
+    fireEvent.dragOver(alphaContainer, {
+      clientX: 999,
+      clientY: 105,
+      dataTransfer,
+    });
+    expect(alphaContainer).toHaveAttribute("data-tab-drop-edge", "before");
+    fireEvent.drop(alphaContainer, {
+      clientX: 999,
+      clientY: 105,
+      dataTransfer,
+    });
+
+    expect(onMoveTab).toHaveBeenCalledWith("zulu", 0);
+  });
+
+  it("keeps grouped tab drags inside their group", () => {
+    const onMoveTab = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "workers",
+            name: "Workers",
+            color: "green",
+            collapsed: false,
+            tabs: ["beta", "zulu"],
+          }],
+          onMoveTab,
+        })}
+      />,
+    );
+
+    const beta = screen.getByRole("tab", { name: /beta, Workers group/i });
+    const zuluContainer = screen.getByRole("tab", { name: /Zulu shell, Workers group/i })
+      .closest<HTMLElement>(".workspace-tab")!;
+    const alphaContainer = screen.getByRole("tab", {
+      name: "Alpha control, Needs input",
+    }).closest<HTMLElement>(".workspace-tab")!;
+    const firstTransfer = dragDataTransfer();
+    mockElementBounds(zuluContainer, { left: 200, width: 100 });
+
+    fireEvent.dragStart(beta, { dataTransfer: firstTransfer });
+    fireEvent.dragOver(zuluContainer, {
+      clientX: 290,
+      clientY: 20,
+      dataTransfer: firstTransfer,
+    });
+    fireEvent.drop(zuluContainer, {
+      clientX: 290,
+      clientY: 20,
+      dataTransfer: firstTransfer,
+    });
+    expect(onMoveTab).toHaveBeenCalledWith("beta", 2);
+
+    const secondTransfer = dragDataTransfer();
+    mockElementBounds(alphaContainer, { left: 0, width: 100 });
+    fireEvent.dragStart(beta, { dataTransfer: secondTransfer });
+    fireEvent.dragOver(alphaContainer, {
+      clientX: 5,
+      clientY: 20,
+      dataTransfer: secondTransfer,
+    });
+    expect(alphaContainer).not.toHaveAttribute("data-tab-drop-edge");
+    fireEvent.drop(alphaContainer, {
+      clientX: 5,
+      clientY: 20,
+      dataTransfer: secondTransfer,
+    });
+    fireEvent.dragEnd(beta, { dataTransfer: secondTransfer });
+    expect(onMoveTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops ungrouped tabs around a group as one atomic block", () => {
+    const onMoveTab = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "workers",
+            name: "Workers",
+            color: "green",
+            collapsed: false,
+            tabs: ["beta", "zulu"],
+          }],
+          onMoveTab,
+        })}
+      />,
+    );
+
+    const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    const group = document.querySelector<HTMLElement>(
+      '[data-workspace-tab-group-id="workers"]',
+    )!;
+    const dataTransfer = dragDataTransfer();
+    mockElementBounds(group, { left: 100, width: 240 });
+
+    fireEvent.dragStart(alpha, { dataTransfer });
+    fireEvent.dragOver(group, {
+      clientX: 330,
+      clientY: 20,
+      dataTransfer,
+    });
+    expect(group).toHaveAttribute("data-tab-drop-edge", "after");
+    fireEvent.drop(group, {
+      clientX: 330,
+      clientY: 20,
+      dataTransfer,
+    });
+
+    expect(onMoveTab).toHaveBeenCalledWith("alpha", 2);
+    expect(screen.getByText(
+      "Alpha control moved to position 3 of 3.",
+      { selector: "[role='status']" },
+    )).toBeInTheDocument();
+  });
+
+  it("does not make a visible member of a collapsed group draggable", () => {
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          activeSession: "beta",
+          openSessions: ["alpha", "beta", "zulu"],
+          groups: [{
+            id: "workers",
+            name: "Workers",
+            color: "green",
+            collapsed: true,
+            tabs: ["beta", "zulu"],
+          }],
+          onMoveTab: vi.fn(),
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: /beta, Workers group/i }))
+      .not.toHaveAttribute("draggable");
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .toHaveAttribute("draggable", "true");
+  });
+
   it("reorders tabs with explicit controls without selecting or closing them", () => {
     const onMoveTab = vi.fn();
     const props = navigationProps({
@@ -1303,6 +1550,8 @@ describe("SessionWorkspaceNavigation", () => {
   it("omits reorder controls when reordering is unavailable or only one tab is open", () => {
     const view = render(<SessionWorkspaceNavigation {...navigationProps()} />);
     expect(screen.queryByRole("group", { name: /Reorder .* tab/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .not.toHaveAttribute("draggable");
 
     view.rerender(
       <SessionWorkspaceNavigation
@@ -1310,6 +1559,8 @@ describe("SessionWorkspaceNavigation", () => {
       />,
     );
     expect(screen.queryByRole("group", { name: /Reorder .* tab/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .not.toHaveAttribute("draggable");
   });
 
   it("announces the final position when an ungrouped tab crosses a group", () => {

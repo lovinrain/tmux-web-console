@@ -146,6 +146,22 @@ beforeEach(() => {
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("places desktop notes immediately before the header action cluster", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        headerNotes={<aside data-testid="header-notes">Scoped notes</aside>}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const notes = screen.getByTestId("header-notes");
+    expect(notes.parentElement).toHaveClass("console-header");
+    expect(notes.nextElementSibling).toBe(view.container.querySelector(".console-actions"));
+  });
+
   it("stages the current browser theme for Grok without sending terminal input", async () => {
     const grokSession = {
       ...session(),
@@ -1615,14 +1631,27 @@ describe("ConsoleScreen session identity", () => {
     const renameButton = screen.getByRole("button", { name: "Rename tmux session" });
     await waitFor(() => expect(renameButton).toBeEnabled());
     expect(aliasButton).toBeEnabled();
+    expect(renameButton).toHaveAttribute("aria-keyshortcuts", "Control+Shift+R");
+    expect(renameButton).toHaveAttribute("title", expect.stringContaining("Ctrl+Shift+R"));
 
-    fireEvent.click(renameButton);
+    expect(fireEvent.keyDown(window, {
+      code: "KeyR",
+      key: "R",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
     const dialog = screen.getByRole("dialog", { name: "Rename tmux session" });
     expect(within(dialog).getByRole("textbox", { name: "Native tmux name" }))
       .toHaveValue("test");
     expect(dialog).toHaveTextContent("display title is preserved");
     expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
       .not.toBeInTheDocument();
+    expect(fireEvent.keyDown(window, {
+      code: "KeyR",
+      key: "R",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(true);
 
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Native tmux name" }), {
       target: { value: "  renamed/session  " },

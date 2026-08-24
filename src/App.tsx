@@ -26,6 +26,7 @@ import {
 import { SessionDashboard } from "./components/SessionDashboard";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
+import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
 import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import {
   SessionWorkspaceNavigation,
@@ -2628,8 +2629,18 @@ function AppRoutes() {
       <ConsoleScreen
         sessionName={sessionName}
         workspaceName={workspaceName}
+        headerNotes={(
+          <ScopedStickyNotes
+            sessionName={sessionName}
+            workspaceId={hydratedWorkspaceId === locationWorkspaceId
+              ? locationWorkspaceId
+              : null}
+            workspaceName={workspaceName}
+          />
+        )}
         workspaceLinks={(
           <WorkspaceQuickLinks
+            sessionName={sessionName}
             workspaceId={hydratedWorkspaceId === locationWorkspaceId
               ? locationWorkspaceId
               : null}

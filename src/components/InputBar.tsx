@@ -929,7 +929,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onClick={onRenameSession}
           disabled={!onRenameSession}
           aria-label="Rename tmux session"
-          title="Rename the real tmux session (Ctrl+B, then $)"
+          aria-keyshortcuts="Control+Shift+R"
+          title="Rename the real tmux session (Ctrl+Shift+R; tmux: Ctrl+B, then $)"
         >
           <TerminalIcon /> <span>Tmux</span>
         </button>

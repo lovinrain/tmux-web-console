@@ -7,6 +7,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.app import create_app
 from tmux_console.workspaces import (
+    MAX_SCOPED_NOTE_LENGTH,
     MAX_SESSION_RENAME_REVISION,
     MAX_WORKSPACE_GROUPS,
     MAX_WORKSPACE_NAME_LENGTH,
@@ -283,6 +284,125 @@ async def test_workspace_quick_links_api_separates_common_and_saved_workspace_li
 
 
 @pytest.mark.asyncio
+async def test_common_and_workspace_note_apis_are_scoped_and_persistent(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+    store.create_workspace(
+        name="Project",
+        tabs=["agent"],
+        active_session="agent",
+    )
+    client = TestClient(TestServer(create_app(workspaces=store, base_path="")))
+
+    try:
+        await client.start_server()
+        assert await (await client.get("/api/common-note")).json() == {"note": ""}
+        assert await (
+            await client.get("/api/workspaces/workspace-id/note")
+        ).json() == {"note": ""}
+
+        response = await client.put(
+            "/api/common-note",
+            json={"note": "Shared\r\nchecklist"},
+        )
+        assert response.status == 200
+        assert await response.json() == {"note": "Shared\nchecklist"}
+        response = await client.put(
+            "/api/workspaces/workspace-id/note",
+            json={"note": "Workspace plan"},
+        )
+        assert response.status == 200
+        assert await response.json() == {"note": "Workspace plan"}
+        assert await (await client.get("/api/common-note")).json() == {
+            "note": "Shared\nchecklist"
+        }
+
+        missing = await client.get("/api/workspaces/missing/note")
+        assert missing.status == 404
+        assert await missing.json() == {"error": "workspace not found: missing"}
+        missing = await client.put(
+            "/api/workspaces/missing/note",
+            json={"note": "No workspace"},
+        )
+        assert missing.status == 404
+        assert await missing.json() == {"error": "workspace not found: missing"}
+
+        for endpoint in (
+            "/api/common-note",
+            "/api/workspaces/workspace-id/note",
+        ):
+            malformed = await client.put(endpoint, data="{")
+            assert malformed.status == 400
+            assert await malformed.json() == {"error": "request body must be JSON"}
+            wrong_shape = await client.put(endpoint, json=[])
+            assert wrong_shape.status == 400
+            assert await wrong_shape.json() == {
+                "error": "request body must be an object"
+            }
+            missing_note = await client.put(endpoint, json={})
+            assert missing_note.status == 400
+            assert await missing_note.json() == {"error": "note is required"}
+            unknown = await client.put(endpoint, json={"note": "", "extra": True})
+            assert unknown.status == 400
+            assert await unknown.json() == {"error": "unknown field: extra"}
+            invalid = await client.put(endpoint, json={"note": 7})
+            assert invalid.status == 400
+            assert await invalid.json() == {"error": "note must be a string"}
+            too_long = await client.put(
+                endpoint,
+                json={"note": "x" * (MAX_SCOPED_NOTE_LENGTH + 1)},
+            )
+            assert too_long.status == 400
+            assert "8000 characters or fewer" in (await too_long.json())["error"]
+    finally:
+        await client.close()
+
+    reloaded = WorkspaceStore(path)
+    assert reloaded.get_common_note() == "Shared\nchecklist"
+    assert reloaded.get_workspace_note("workspace-id") == "Workspace plan"
+
+
+@pytest.mark.asyncio
+async def test_common_and_workspace_note_apis_report_persistence_failure(
+    tmp_path,
+    monkeypatch,
+):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    store.create_workspace(name="Project", tabs=[], active_session=None)
+
+    def fail_persist(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(store, "_persist", fail_persist)
+    client = TestClient(TestServer(create_app(workspaces=store, base_path="")))
+
+    try:
+        await client.start_server()
+        common = await client.put("/api/common-note", json={"note": "Shared"})
+        assert common.status == 500
+        assert await common.json() == {"error": "unable to save common note"}
+        workspace = await client.put(
+            "/api/workspaces/workspace-id/note",
+            json={"note": "Plan"},
+        )
+        assert workspace.status == 500
+        assert await workspace.json() == {"error": "unable to save workspace note"}
+        assert store.get_common_note() == ""
+        assert store.get_workspace_note("workspace-id") == ""
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_workspaces_api_strict_request_validation(tmp_path):
     store = WorkspaceStore(
         tmp_path / "workspaces.json",
@@ -467,6 +587,14 @@ async def test_workspaces_api_fails_closed_for_invalid_persisted_state(tmp_path)
         assert response.status == 503
         assert await response.json() == {"error": WORKSPACE_STORE_UNAVAILABLE_MESSAGE}
 
+        response = await client.get("/api/common-note")
+        assert response.status == 503
+        assert await response.json() == {"error": WORKSPACE_STORE_UNAVAILABLE_MESSAGE}
+
+        response = await client.get("/api/workspaces/any/note")
+        assert response.status == 503
+        assert await response.json() == {"error": WORKSPACE_STORE_UNAVAILABLE_MESSAGE}
+
         response = await client.post(
             "/api/workspaces",
             json={"name": "Lost", "tabs": [], "activeSession": None},
@@ -487,7 +615,13 @@ async def test_workspaces_api_reports_persistence_failure_without_mutating_store
         id_factory=lambda: "workspace-id",
     )
 
-    def fail_persist(_workspaces, _session_rename_revision, _common_quick_links):
+    def fail_persist(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr(store, "_persist", fail_persist)

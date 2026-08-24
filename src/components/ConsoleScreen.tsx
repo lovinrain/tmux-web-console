@@ -70,6 +70,7 @@ interface ConsoleScreenProps {
   sessionName: string;
   workspaceName?: string | null;
   onBack: () => void;
+  headerNotes?: ReactNode;
   workspaceLinks?: ReactNode;
   sessionNavigation?: ReactNode;
   workspaceOverlayOpen?: boolean;
@@ -344,6 +345,7 @@ export function ConsoleScreen({
   sessionName,
   workspaceName = null,
   onBack,
+  headerNotes,
   workspaceLinks,
   sessionNavigation,
   workspaceOverlayOpen = false,
@@ -982,6 +984,10 @@ export function ConsoleScreen({
       title: session.customTitle,
     });
   }, [session]);
+  const openRenameEditor = useCallback(() => {
+    if (!session || !onSessionRenamed) return;
+    setRenameEditorOpen(true);
+  }, [onSessionRenamed, session]);
   useEffect(() => {
     const handleDesktopViewShortcut = (event: KeyboardEvent) => {
       if (
@@ -997,6 +1003,7 @@ export function ConsoleScreen({
       const togglesFocus = event.code === "KeyF";
       const togglesSessionTabs = event.code === "KeyS" && Boolean(sessionNavigation);
       const endsSession = event.code === "KeyE";
+      const renamesSession = event.code === "KeyR" && Boolean(session && onSessionRenamed);
       const returnsLive = event.code === "KeyL";
       const togglesCopyMode = event.code === "KeyC";
       const copiesSession = event.code === "KeyM" && Boolean(onSessionCopied);
@@ -1006,6 +1013,7 @@ export function ConsoleScreen({
         !togglesFocus
         && !togglesSessionTabs
         && !endsSession
+        && !renamesSession
         && !returnsLive
         && !togglesCopyMode
         && !copiesSession
@@ -1028,6 +1036,10 @@ export function ConsoleScreen({
 
       if (endsSession) {
         openTerminateEditor();
+        return;
+      }
+      if (renamesSession) {
+        openRenameEditor();
         return;
       }
       if (returnsLive) {
@@ -1058,6 +1070,7 @@ export function ConsoleScreen({
     desktopTerminalFocus,
     enterDesktopTerminalFocus,
     exitDesktopTerminalFocus,
+    openRenameEditor,
     openTerminateEditor,
     copyNewSession,
     onSessionCopied,
@@ -1298,6 +1311,7 @@ export function ConsoleScreen({
           </div>
           <p>{session?.customTitle ? `${sessionName} / ${pane?.path || "loading"}` : pane?.path || "Loading tmux session..."}</p>
         </div>
+        {headerNotes}
         <div className="console-actions">
           <span className={`connection-badge ${connection}`}><span />{STATE_LABEL[connection]}</span>
           <button
@@ -1636,7 +1650,7 @@ export function ConsoleScreen({
         onRevealComposer={showComposer}
         onEditSessionTitle={session ? () => setTitleEditorOpen(true) : undefined}
         onRenameSession={session && onSessionRenamed
-          ? () => setRenameEditorOpen(true)
+          ? openRenameEditor
           : undefined}
         onTerminateSession={session && onSessionTerminated
           ? openTerminateEditor

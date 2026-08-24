@@ -950,6 +950,11 @@ describe("InputBar", () => {
     const renameButton = screen.getByRole("button", { name: "Rename tmux session" });
     expect(aliasButton).toHaveTextContent("Details");
     expect(renameButton).toHaveTextContent("Tmux");
+    expect(renameButton).toHaveAttribute("aria-keyshortcuts", "Control+Shift+R");
+    expect(renameButton).toHaveAttribute(
+      "title",
+      expect.stringContaining("Ctrl+Shift+R"),
+    );
     expect(renameButton).toHaveAttribute(
       "title",
       expect.stringContaining("Ctrl+B, then $"),

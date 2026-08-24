@@ -1857,6 +1857,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     await expect(keymap).toBeVisible();
     for (const shortcut of [
       "Ctrl+Shift+E",
+      "Ctrl+Shift+R",
       "Ctrl+Shift+B",
       "Ctrl+Shift+M",
       "Ctrl+Shift+L",
@@ -3197,19 +3198,20 @@ test("saved workspace survives reload and device handoff without touching tmux p
   }
 });
 
-test("desktop link shelf keeps common links global and workspace links isolated", async ({
+test("desktop link shelf scopes common, workspace, and session links", async ({
   page,
   request,
 }) => {
   const firstName = `Link shelf one ${process.pid}`;
   const secondName = `Link shelf two ${process.pid}`;
+  const helperSession = `${sessionName}-link-shelf`;
   const workspaceIds: string[] = [];
 
   const createWorkspace = async (name: string): Promise<string> => {
     const response = await request.post("/mux/api/workspaces", {
       data: {
         name,
-        tabs: [sessionName],
+        tabs: [sessionName, helperSession],
         groups: [],
         activeSession: sessionName,
       },
@@ -3220,10 +3222,27 @@ test("desktop link shelf keeps common links global and workspace links isolated"
   };
 
   try {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
     const resetCommon = await request.put("/mux/api/workspace-quick-links", {
       data: { links: [] },
     });
     expect(resetCommon.ok()).toBe(true);
+    for (const name of [sessionName, helperSession]) {
+      const resetSession = await request.put(
+        `/mux/api/sessions/${encodeURIComponent(name)}/quick-links`,
+        { data: { links: [] } },
+      );
+      expect(resetSession.ok()).toBe(true);
+    }
     workspaceIds.push(await createWorkspace(firstName));
     workspaceIds.push(await createWorkspace(secondName));
 
@@ -3231,13 +3250,15 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     await page.goto(
       `/mux/session/${encodeURIComponent(sessionName)}`
       + `?workspace=${encodeURIComponent(workspaceIds[0])}`
-      + `&tab=${encodeURIComponent(sessionName)}`,
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
     );
     await expect(page.getByRole("status", { name: "Workspace saved automatically" }))
       .toBeVisible();
 
     const commonRegion = page.getByRole("region", { name: "Common quick links" });
     const workspaceRegion = page.getByRole("region", { name: "Workspace quick links" });
+    const sessionRegion = page.getByRole("region", { name: "Session quick links" });
     const consoleToolbar = page.getByRole("group", { name: "Console bars" });
     const tabsToggle = consoleToolbar.getByRole("button", {
       name: "Session tabs",
@@ -3245,18 +3266,25 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     });
     await expect(commonRegion).toBeVisible();
     await expect(workspaceRegion).toContainText(firstName);
+    await expect(sessionRegion).toContainText(sessionName);
     await expect(consoleToolbar.getByRole("region", { name: "Common quick links" }))
       .toBeVisible();
     await expect(consoleToolbar.getByRole("region", { name: "Workspace quick links" }))
       .toBeVisible();
+    await expect(consoleToolbar.getByRole("region", { name: "Session quick links" }))
+      .toBeVisible();
     const commonBox = await commonRegion.boundingBox();
     const workspaceBox = await workspaceRegion.boundingBox();
+    const sessionBox = await sessionRegion.boundingBox();
     const tabsBox = await tabsToggle.boundingBox();
     expect(commonBox).not.toBeNull();
     expect(workspaceBox).not.toBeNull();
+    expect(sessionBox).not.toBeNull();
     expect(tabsBox).not.toBeNull();
     expect(commonBox!.x).toBeLessThan(workspaceBox!.x);
+    expect(workspaceBox!.x).toBeLessThan(sessionBox!.x);
     expect(Math.abs(commonBox!.y - workspaceBox!.y)).toBeLessThan(1);
+    expect(Math.abs(workspaceBox!.y - sessionBox!.y)).toBeLessThan(1);
     expect(Math.abs(
       commonBox!.y + commonBox!.height / 2
       - (tabsBox!.y + tabsBox!.height / 2),
@@ -3265,13 +3293,17 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     await page.setViewportSize({ width: 800, height: 700 });
     const narrowToolbarBox = await consoleToolbar.boundingBox();
     const narrowWorkspaceBox = await workspaceRegion.boundingBox();
+    const narrowSessionBox = await sessionRegion.boundingBox();
     const narrowFocusBox = await consoleToolbar.getByRole("button", {
       name: "Enter desktop terminal focus",
     }).boundingBox();
     expect(narrowToolbarBox).not.toBeNull();
     expect(narrowWorkspaceBox).not.toBeNull();
+    expect(narrowSessionBox).not.toBeNull();
     expect(narrowFocusBox).not.toBeNull();
     expect(narrowWorkspaceBox!.x + narrowWorkspaceBox!.width)
+      .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
+    expect(narrowSessionBox!.x + narrowSessionBox!.width)
       .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
     expect(narrowFocusBox!.x + narrowFocusBox!.width)
       .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
@@ -3283,6 +3315,7 @@ test("desktop link shelf keeps common links global and workspace links isolated"
       .not.toBeVisible();
     await expect(commonRegion).toBeVisible();
     await expect(workspaceRegion).toBeVisible();
+    await expect(sessionRegion).toBeVisible();
     await tabsToggle.click();
     await expect(tabsToggle).toHaveAttribute("aria-pressed", "true");
 
@@ -3313,24 +3346,44 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     await workspaceDialog.getByRole("button", { name: "Save links" }).click();
     await expect(workspaceRegion.getByRole("link", { name: "Launch ticket" })).toBeVisible();
 
+    await sessionRegion.getByRole("button", {
+      name: "Manage session quick links",
+    }).click();
+    const sessionDialog = page.getByRole("dialog", {
+      name: `Manage ${sessionName} links`,
+    });
+    await sessionDialog.getByRole("textbox", { name: "Label" }).fill("Agent trace");
+    await sessionDialog.getByRole("textbox", { name: "URL" })
+      .fill("https://traces.example.test/current");
+    await sessionDialog.getByRole("button", { name: "Add to shelf" }).click();
+    await sessionDialog.getByRole("button", { name: "Save links" }).click();
+    await expect(sessionRegion.getByRole("link", { name: "Agent trace" })).toBeVisible();
+
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByRole("region", { name: "Common quick links" })
       .getByRole("link", { name: "Team runbook" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Workspace quick links" })
       .getByRole("link", { name: "Launch ticket" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Session quick links" })
+      .getByRole("link", { name: "Agent trace" })).toBeVisible();
 
     await page.getByRole("button", { name: "Vertical session tabs" }).click();
     const verticalCommonBox = await commonRegion.boundingBox();
     const verticalWorkspaceBox = await workspaceRegion.boundingBox();
+    const verticalSessionBox = await sessionRegion.boundingBox();
     expect(verticalCommonBox).not.toBeNull();
     expect(verticalWorkspaceBox).not.toBeNull();
+    expect(verticalSessionBox).not.toBeNull();
     expect(verticalCommonBox!.x).toBeLessThan(verticalWorkspaceBox!.x);
+    expect(verticalWorkspaceBox!.x).toBeLessThan(verticalSessionBox!.x);
     expect(Math.abs(verticalCommonBox!.y - verticalWorkspaceBox!.y)).toBeLessThan(1);
+    expect(Math.abs(verticalWorkspaceBox!.y - verticalSessionBox!.y)).toBeLessThan(1);
 
     await page.goto(
       `/mux/session/${encodeURIComponent(sessionName)}`
       + `?workspace=${encodeURIComponent(workspaceIds[1])}`
-      + `&tab=${encodeURIComponent(sessionName)}`,
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
     );
     const secondCommonRegion = page.getByRole("region", { name: "Common quick links" });
     const secondWorkspaceRegion = page.getByRole("region", { name: "Workspace quick links" });
@@ -3339,10 +3392,28 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     await expect(secondWorkspaceRegion).toContainText("No links yet");
     await expect(secondWorkspaceRegion.getByRole("link", { name: "Launch ticket" }))
       .toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Session quick links" })
+      .getByRole("link", { name: "Agent trace" })).toBeVisible();
+
+    await page.getByRole("tab", {
+      name: new RegExp(`^${helperSession},`),
+    }).click();
+    const helperSessionRegion = page.getByRole("region", { name: "Session quick links" });
+    await expect(helperSessionRegion).toContainText(helperSession);
+    await expect(helperSessionRegion).toContainText("No links yet");
+    await expect(helperSessionRegion.getByRole("link", { name: "Agent trace" }))
+      .toHaveCount(0);
+
+    await page.getByRole("tab", {
+      name: new RegExp(`^${sessionName},`),
+    }).click();
+    await expect(page.getByRole("region", { name: "Session quick links" })
+      .getByRole("link", { name: "Agent trace" })).toBeVisible();
 
     await page.goto(
       `/mux/session/${encodeURIComponent(sessionName)}`
-      + `?tab=${encodeURIComponent(sessionName)}`,
+      + `?tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
     );
     await expect(page.getByRole("region", { name: "Common quick links" })
       .getByRole("link", { name: "Team runbook" })).toBeVisible();
@@ -3351,11 +3422,14 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     await expect(temporaryRegion.getByRole("button", {
       name: "Manage workspace quick links",
     })).toBeDisabled();
+    await expect(page.getByRole("region", { name: "Session quick links" })
+      .getByRole("link", { name: "Agent trace" })).toBeVisible();
 
     await page.goto(
       `/mux/session/${encodeURIComponent(sessionName)}`
       + `?workspace=${encodeURIComponent(workspaceIds[0])}`
-      + `&tab=${encodeURIComponent(sessionName)}`,
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
     );
     const firstWorkspaceRegion = page.getByRole("region", { name: "Workspace quick links" });
     await firstWorkspaceRegion.getByRole("button", {
@@ -3374,12 +3448,236 @@ test("desktop link shelf keeps common links global and workspace links isolated"
     } catch {
       // Keep global test state clean after a failed assertion.
     }
+    for (const name of [sessionName, helperSession]) {
+      try {
+        await request.put(
+          `/mux/api/sessions/${encodeURIComponent(name)}/quick-links`,
+          { data: { links: [] } },
+        );
+      } catch {
+        // Keep per-session test state clean while the helper session is live.
+      }
+    }
     for (const workspaceId of workspaceIds) {
       try {
         await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
       } catch {
         // Keep workspace cleanup scoped to records created by this test.
       }
+    }
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the helper session on this test's disposable socket.
+    }
+  }
+});
+
+test("desktop sticky notes autosave and remain isolated by scope", async ({
+  page,
+  request,
+}) => {
+  const firstWorkspaceName = `Notes workspace one ${process.pid}`;
+  const secondWorkspaceName = `Notes workspace two ${process.pid}`;
+  const helperSession = `${sessionName}-sticky-notes`;
+  const workspaceIds: string[] = [];
+
+  const createWorkspace = async (name: string): Promise<string> => {
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name,
+        tabs: [sessionName, helperSession],
+        groups: [],
+        activeSession: sessionName,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    return (await response.json()).workspace.id as string;
+  };
+
+  const saveNote = async (
+    buttonName: string,
+    dialogName: string,
+    note: string,
+  ): Promise<void> => {
+    await page.getByRole("button", { name: buttonName }).click();
+    const dialog = page.getByRole("dialog", { name: dialogName });
+    const textarea = dialog.getByRole("textbox", { name: "Note" });
+    await textarea.fill(note);
+    await expect(dialog.getByRole("status")).toContainText("Waiting to save");
+    await expect(dialog.getByRole("status")).toHaveText("Saved");
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).toBeHidden();
+  };
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+    expect((await request.put("/mux/api/common-note", {
+      data: { note: "" },
+    })).ok()).toBe(true);
+    for (const name of [sessionName, helperSession]) {
+      expect((await request.put(
+        `/mux/api/sessions/${encodeURIComponent(name)}/note`,
+        { data: { note: "" } },
+      )).ok()).toBe(true);
+    }
+    workspaceIds.push(await createWorkspace(firstWorkspaceName));
+    workspaceIds.push(await createWorkspace(secondWorkspaceName));
+
+    const firstWorkspaceUrl = (
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceIds[0])}`
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(firstWorkspaceUrl);
+    await expect(page.getByRole("status", { name: "Workspace saved automatically" }))
+      .toBeVisible();
+
+    const noteRegion = page.getByRole("region", { name: "Sticky notes" });
+    await expect(noteRegion).toBeVisible();
+    const commonCard = noteRegion.getByRole("button", { name: "Add common note" });
+    const workspaceCard = noteRegion.getByRole("button", { name: "Add workspace note" });
+    const sessionCard = noteRegion.getByRole("button", { name: "Add session note" });
+    const actionCluster = page.locator(".console-actions");
+    const cardBoxes = await Promise.all([
+      commonCard.boundingBox(),
+      workspaceCard.boundingBox(),
+      sessionCard.boundingBox(),
+    ]);
+    const notesBox = await noteRegion.boundingBox();
+    const actionsBox = await actionCluster.boundingBox();
+    expect(cardBoxes.every(Boolean)).toBe(true);
+    expect(notesBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
+    expect(cardBoxes[0]!.x).toBeLessThan(cardBoxes[1]!.x);
+    expect(cardBoxes[1]!.x).toBeLessThan(cardBoxes[2]!.x);
+    expect(notesBox!.x + notesBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
+
+    await saveNote("Add common note", "Common", "Shared release checklist");
+    await saveNote("Add workspace note", firstWorkspaceName, "First workspace plan");
+    await saveNote("Add session note", sessionName, "Primary session handoff");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(noteRegion.getByRole("button", { name: "Edit common note" }))
+      .toContainText("Shared release checklist");
+    await expect(noteRegion.getByRole("button", { name: "Edit workspace note" }))
+      .toContainText("First workspace plan");
+    await expect(noteRegion.getByRole("button", { name: "Edit session note" }))
+      .toContainText("Primary session handoff");
+    await page.screenshot({ path: "artifacts/scoped-sticky-notes-desktop.png" });
+    await noteRegion.getByRole("button", { name: "Edit workspace note" }).click();
+    const persistedEditor = page.getByRole("dialog", { name: firstWorkspaceName });
+    await expect(persistedEditor).toHaveClass(/floating/);
+    await expect(persistedEditor).not.toHaveClass(/modal/);
+    await expect(persistedEditor.getByRole("button", { name: /Float|Dock/ }))
+      .toHaveCount(0);
+    await expect(persistedEditor.getByRole("textbox", { name: "Note" }))
+      .toHaveValue("First workspace plan");
+    await expect(persistedEditor).toHaveCSS("opacity", "1");
+    await expect(persistedEditor).toHaveCSS("background-color", "rgb(23, 40, 39)");
+    await page.screenshot({
+      path: "artifacts/scoped-sticky-note-editor.png",
+      animations: "disabled",
+    });
+    await noteRegion.getByRole("button", { name: "Hide workspace note" }).click();
+    await expect(persistedEditor).toBeHidden();
+
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceIds[1])}`
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
+    );
+    await expect(noteRegion.getByRole("button", { name: "Edit common note" }))
+      .toContainText("Shared release checklist");
+    await expect(noteRegion.getByRole("button", { name: "Add workspace note" }))
+      .toContainText("Add note");
+    await expect(noteRegion.getByRole("button", { name: "Edit session note" }))
+      .toContainText("Primary session handoff");
+
+    await page.getByRole("tab", {
+      name: new RegExp(`^${helperSession},`),
+    }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      [sessionName, helperSession],
+      { workspace: workspaceIds[1] },
+    );
+    await expect(noteRegion.getByRole("button", { name: "Add session note" }))
+      .toContainText("Add note");
+    await expect(noteRegion.getByRole("button", { name: "Edit common note" }))
+      .toContainText("Shared release checklist");
+
+    await page.goto(
+      `/mux/session/${encodeURIComponent(helperSession)}`
+      + `?tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
+    );
+    await expect(noteRegion.getByRole("button", { name: "Add workspace note" }))
+      .toBeDisabled();
+    await expect(noteRegion.getByRole("button", { name: "Add workspace note" }))
+      .toContainText("Save workspace first");
+    await expect(noteRegion.getByRole("button", { name: "Edit common note" }))
+      .toContainText("Shared release checklist");
+
+    await noteRegion.getByRole("button", { name: "Edit common note" }).click();
+    const clearDialog = page.getByRole("dialog", { name: "Common" });
+    await clearDialog.getByRole("button", { name: "Clear" }).click();
+    await clearDialog.getByRole("button", { name: "Done" }).click();
+    await expect(noteRegion.getByRole("button", { name: "Add common note" }))
+      .toContainText("Add note");
+    expect(await (await request.get("/mux/api/common-note")).json()).toEqual({
+      note: "",
+    });
+
+    await page.setViewportSize({ width: 800, height: 700 });
+    await expect(noteRegion).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+      .toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(noteRegion).toBeHidden();
+  } finally {
+    try {
+      await request.put("/mux/api/common-note", { data: { note: "" } });
+    } catch {
+      // Keep global note state clean after a failed assertion.
+    }
+    for (const name of [sessionName, helperSession]) {
+      try {
+        await request.put(
+          `/mux/api/sessions/${encodeURIComponent(name)}/note`,
+          { data: { note: "" } },
+        );
+      } catch {
+        // Keep per-session note cleanup scoped to live disposable sessions.
+      }
+    }
+    for (const workspaceId of workspaceIds) {
+      try {
+        await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      } catch {
+        // Keep workspace cleanup scoped to records created by this test.
+      }
+    }
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the helper session on this test's disposable socket.
     }
   }
 });
@@ -4338,8 +4636,11 @@ test("native tmux rename preserves alias, workspace order, draft, and metadata",
     const renameButton = page.getByRole("button", { name: "Rename tmux session" });
     await renameButton.scrollIntoViewIfNeeded();
     await expect(renameButton).toBeInViewport();
+    await expect(renameButton).toHaveAttribute("aria-keyshortcuts", "Control+Shift+R");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await stagedInput.focus();
     const historyLength = await page.evaluate(() => window.history.length);
-    await renameButton.click();
+    await page.keyboard.press("Control+Shift+R");
     const renameDialog = page.getByRole("dialog", { name: "Rename tmux session" });
     await expect(renameDialog).toContainText("separate Muxdeck display title is preserved");
     await page.setViewportSize({ width: 320, height: 300 });

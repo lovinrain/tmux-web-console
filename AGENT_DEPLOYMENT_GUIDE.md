@@ -354,22 +354,26 @@ names. The
 second contains memoranda and may include sensitive commands or prose. The third
 contains the global folder/snippet tree and may also contain sensitive commands
 or prose. The fourth contains saved workspace names, ordered tmux session names,
-tab-group names/colors/membership, common and workspace-specific quick links,
-and activity times. An existing unit may override any path; inspect its
-environment rather than assuming defaults.
+tab-group names/colors/membership, common, workspace-specific, and
+session-specific quick links, Common/Workspace/Session notes, and activity times.
+Notes may contain sensitive commands or prose. An existing unit may override any
+path; inspect its environment rather than assuming defaults.
 
-The workspace file uses schema version 4. Version 1 loads at native-session
+The workspace file uses schema version 6. Version 1 loads at native-session
 rename revision zero; versions 1 and 2 load with no tab groups, and versions 1
-through 3 load with no common or workspace-specific quick links. A legacy file
-upgrades atomically on the next workspace or quick-link write. Each record
-permits an 80-character name, at most 32 unique ordered tabs, at most 16
-disjoint contiguous tab groups whose names are at most 40 characters, and at
-most 16 quick links; the global common shelf also permits 16 links. Quick-link
-labels are limited to 48 characters and URLs to 2,048 characters. Keep a
-pre-upgrade copy for rollback because a release that only understands versions
-1 through 3 rejects the version 4 document. As with snippets, an unreadable,
-malformed, or unsupported existing workspace file makes that store unavailable;
-Muxdeck returns `503` for workspace APIs instead of overwriting the file.
+through 3 load with no common or workspace-specific quick links. Versions 1
+through 4 load with no session-specific quick links, and versions 1 through 5
+load with empty scoped notes. A legacy file upgrades atomically on the next
+workspace, quick-link, or note write. Each record permits an 80-character name,
+at most 32 unique ordered tabs, at most 16 disjoint contiguous tab groups whose
+names are at most 40 characters, and at most 16 quick links; the global common
+shelf and each native-session shelf also permit 16 links. Quick-link labels are
+limited to 48 characters and URLs to 2,048 characters. Each scoped note is
+limited to 8,000 characters. Keep a pre-upgrade copy for rollback because a
+release that only understands versions 1 through 5 rejects the version 6
+document. As with snippets, an unreadable, malformed, or unsupported existing
+workspace file makes that store unavailable; Muxdeck returns `503` for workspace
+APIs instead of overwriting the file.
 
 Muxdeck accepts version 1 through 4 title files. Version 1 through 3 files have
 no tags, and versions 1 and 2 also treat their missing ignored list as empty.
@@ -395,29 +399,34 @@ Migration procedure:
 5. Point the rendered unit at their absolute target paths.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
-Title, tag, star, ignored, memorandum, and saved-workspace tab entries are keyed by
-tmux session name, so old entries may remain dormant until a session with the
-same name exists. A new session that reuses that name inherits the stored
-metadata or workspace position. The snippet tree and saved-workspace collection
-are global to the Muxdeck instance rather than per browser. Do not run two
-Muxdeck processes against the same state files; persistence is atomic within one
-process, not coordinated between processes.
+Title, tag, star, ignored, memorandum, saved-workspace tab, session-link, and
+session-note entries are keyed by tmux session name, so old entries may remain
+dormant until a session with the same name exists. A new session that reuses that
+name inherits the stored metadata, workspace position, link shelf, or note. The
+snippet tree and saved-workspace collection are global to the Muxdeck instance
+rather than per browser. Do not run two Muxdeck processes against the same state
+files; persistence is atomic within one process, not coordinated between
+processes.
 
 Saved workspaces are server-global and shared by every browser that can reach
 this Muxdeck instance. Their stable `workspace=` URL identifier is independent
 of the editable workspace name. Opening or changing one records its ordered tabs,
 groups and collapse state, workspace-specific quick links, active session, and
 last-active time. A separate common quick-link list is pinned across all
-workspaces. Concurrent pages use last-write-wins semantics for ordinary activity
-and quick-link replacement. Each tab snapshot echoes the document-wide native
-session rename revision; stale pre-rename snapshots receive `409` and reload
-instead of restoring an obsolete session name. Deleting a saved workspace
-removes only that JSON record; it must not stop, rename, resize, or send input to
-any referenced tmux session.
+workspaces. Session-specific quick-link lists are keyed by native tmux name and
+follow the active session across temporary and saved workspaces. Common,
+workspace, and session notes use the same scopes and last-write-wins replacement;
+deleting a workspace also deletes only its workspace-scoped note. Concurrent
+pages use last-write-wins semantics for ordinary activity, quick-link, and note
+replacement. Each tab snapshot echoes the document-wide native session rename
+revision; stale pre-rename snapshots receive `409` and reload instead of
+restoring an obsolete session name. Deleting a saved workspace must not stop,
+rename, resize, or send input to any referenced tmux session.
 
-Renaming a native session through Muxdeck moves its title/tag/star/ignored metadata,
-memorandum queue, and every saved-workspace tab to the new name. Renaming
-directly in another tmux client does not notify Muxdeck to migrate those
+Renaming a native session through Muxdeck moves its title/tag/star/ignored
+metadata, memorandum queue, session-specific quick links, session note, and
+every saved-workspace tab to the new name. Renaming directly in another tmux
+client does not notify Muxdeck to migrate those
 name-keyed files. If Muxdeck reports a post-rename storage warning, the tmux
 rename itself has already succeeded; keep all affected state files and resolve
 the warned migration before deleting old-name records.
@@ -523,6 +532,9 @@ curl -fsS \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/workspace-quick-links" \
   >/dev/null
 curl -fsS \
+  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/common-note" \
+  >/dev/null
+curl -fsS \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/session/nonexistent" \
   >/dev/null
 curl --max-time 5 -NsS \
@@ -536,8 +548,8 @@ Expected results:
 - a request with an untrusted Host returns `403`;
 - `N` matches the intended tmux server, not merely any tmux server;
 - dashboard and deep-link routes return the built SPA;
-- the workspace APIs return JSON workspace and common-link lists rather than a
-  storage `503`;
+- the workspace APIs return JSON workspace, common-link, and Common-note state
+  rather than a storage `503`;
 - the SSE request emits a `sessions` event (the command may end at its timeout);
 - logs contain no import, permission, socket, or malformed-state errors,
   including errors loading the saved-workspace file.
@@ -604,9 +616,13 @@ From a client allowed by the chosen access controls, verify:
    counts; a reverse-filtered tag must hide matches from every session section.
 8. Opening a saved workspace restores its ordered tabs, tab groups, collapse
    state, workspace-specific quick links, and active session. Common quick links
-   appear in both temporary and saved workspaces. Its approximate last-active
-   label updates after an explicit workspace interaction; merely listing
-   workspaces or links must not touch tmux.
+   appear in both temporary and saved workspaces. Session-specific quick links
+   follow the active native session across both kinds of workspace. On desktop,
+   Common, Workspace, and Session notes appear immediately left of the console
+   action controls, autosave edits, survive reload, and remain isolated by scope;
+   a temporary workspace disables only the Workspace note. Its approximate
+   last-active label updates after an explicit workspace interaction; merely
+   listing workspaces, links, or notes must not mutate tmux.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
 
@@ -624,7 +640,7 @@ The deployment agent should report:
 - Python, Node, npm, and tmux versions;
 - base path, port, trusted browser origins, and proxy/access-control choice;
 - whether state was migrated and its target directory (not memorandum, snippet,
-  workspace-name, workspace-tab, or quick-link content);
+  workspace-name, workspace-tab, quick-link, or note content);
 - source/unit/Caddy and state-file backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
@@ -650,10 +666,12 @@ For a failed replacement:
    owner and modes. Preserve `workspaces.json` even when the rollback release
    does not understand it, so a later compatible release can recover the saved
    workspace list.
-   When rolling back to a release that only understands workspace-file version
-   1 through 3, retain a separate copy of the version-4 file and restore the
-   pre-upgrade `workspaces.json`; common and workspace-specific quick links are
-   unavailable to that older release.
+   When rolling back to a release that only understands workspace-file versions
+   1 through 5, retain a separate copy of the version-6 file and restore the
+   pre-upgrade `workspaces.json`; scoped notes are unavailable to that older
+   release. Versions 1 through 4 also lack session-specific quick links, and
+   versions 1 through 3 additionally lack common and workspace-specific quick
+   links.
    When rolling back to a release that only writes title-file version 1 through
    3, retain a separate copy of the version-4 file and restore the pre-upgrade
    `session-titles.json`; tags are unavailable to that older release and would be

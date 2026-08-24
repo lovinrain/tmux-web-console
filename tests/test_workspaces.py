@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tmux_console.workspaces import (
+    MAX_SCOPED_NOTE_LENGTH,
     MAX_SESSION_RENAME_REVISION,
     MAX_WORKSPACE_GROUP_ID_LENGTH,
     MAX_WORKSPACE_GROUP_NAME_LENGTH,
@@ -21,6 +22,10 @@ from tmux_console.workspaces import (
     WorkspaceStoreUnavailable,
     _WorkspaceDirectorySyncError,
     default_workspaces_path,
+    normalize_scoped_note,
+    validate_session_notes,
+    validate_session_quick_links,
+    validate_workspace_notes,
     validate_workspace_quick_links,
 )
 
@@ -117,6 +122,10 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
     assert document["version"] == WORKSPACE_SCHEMA_VERSION
     assert document["sessionRenameRevision"] == 0
     assert document["commonQuickLinks"] == []
+    assert document["sessionQuickLinks"] == {}
+    assert document["commonNote"] == ""
+    assert document["workspaceNotes"] == {}
+    assert document["sessionNotes"] == {}
     persisted_active = {**active}
     del persisted_active["sessionRevision"]
     assert document["workspaces"] == [persisted_active]
@@ -281,7 +290,112 @@ def test_version_three_workspace_defaults_quick_links_and_upgrades_on_write(tmp_
     assert upgraded["workspaces"][0]["quickLinks"] == []
 
 
-def test_common_and_workspace_quick_links_are_atomic_and_independent(tmp_path):
+def test_version_four_workspace_defaults_session_links_and_upgrades_on_write(tmp_path):
+    path = tmp_path / "workspaces.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 4,
+                "sessionRenameRevision": 4,
+                "commonQuickLinks": [
+                    {
+                        "id": "docs",
+                        "label": "Docs",
+                        "url": "https://example.test/docs",
+                    }
+                ],
+                "workspaces": [
+                    {
+                        "id": "legacy-id",
+                        "name": "Legacy workspace",
+                        "tabs": ["agent"],
+                        "groups": [],
+                        "quickLinks": [
+                            {
+                                "id": "ticket",
+                                "label": "Ticket",
+                                "url": "https://example.test/ticket",
+                            }
+                        ],
+                        "activeSession": "agent",
+                        "createdAt": 1_000,
+                        "updatedAt": 1_000,
+                        "lastActiveAt": 1_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = WorkspaceStore(path)
+
+    assert store.get_session_quick_links("agent") == []
+    store.replace_session_quick_links(
+        "agent",
+        [{"id": "trace", "label": "Trace", "url": "https://trace.test/run"}],
+    )
+
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
+    assert upgraded["sessionQuickLinks"] == {
+        "agent": [
+            {"id": "trace", "label": "Trace", "url": "https://trace.test/run"}
+        ]
+    }
+    assert upgraded["commonQuickLinks"][0]["id"] == "docs"
+    assert upgraded["workspaces"][0]["quickLinks"][0]["id"] == "ticket"
+
+
+def test_version_five_workspace_defaults_scoped_notes_and_upgrades_on_write(tmp_path):
+    path = tmp_path / "workspaces.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 5,
+                "sessionRenameRevision": 4,
+                "commonQuickLinks": [],
+                "sessionQuickLinks": {
+                    "agent": [
+                        {
+                            "id": "trace",
+                            "label": "Trace",
+                            "url": "https://trace.test/run",
+                        }
+                    ]
+                },
+                "workspaces": [
+                    {
+                        "id": "legacy-id",
+                        "name": "Legacy workspace",
+                        "tabs": ["agent"],
+                        "groups": [],
+                        "quickLinks": [],
+                        "activeSession": "agent",
+                        "createdAt": 1_000,
+                        "updatedAt": 1_000,
+                        "lastActiveAt": 1_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = WorkspaceStore(path)
+
+    assert store.get_common_note() == ""
+    assert store.get_workspace_note("legacy-id") == ""
+    assert store.get_session_note("agent") == ""
+    store.replace_workspace_note("legacy-id", "Remember this")
+
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
+    assert upgraded["commonNote"] == ""
+    assert upgraded["workspaceNotes"] == {"legacy-id": "Remember this"}
+    assert upgraded["sessionNotes"] == {}
+    assert upgraded["sessionQuickLinks"]["agent"][0]["id"] == "trace"
+
+
+def test_common_workspace_and_session_quick_links_are_atomic_and_independent(tmp_path):
     path = tmp_path / "workspaces.json"
     store = WorkspaceStore(
         path,
@@ -299,10 +413,18 @@ def test_common_and_workspace_quick_links_are_atomic_and_independent(tmp_path):
     workspace = [
         {"id": "ticket", "label": "Launch ticket", "url": "https://issues.test/42"}
     ]
+    session = [
+        {"id": "trace", "label": " Agent trace ", "url": "https://trace.test/run"}
+    ]
 
     assert store.replace_common_quick_links(common) == [
         {"id": "runbook", "label": "Runbook", "url": "https://docs.test/runbook"}
     ]
+    assert store.get_workspace("workspace-id")["updatedAt"] == created["updatedAt"]
+    assert store.replace_session_quick_links("agent", session) == [
+        {"id": "trace", "label": "Agent trace", "url": "https://trace.test/run"}
+    ]
+    assert store.get_session_quick_links("other-agent") == []
     assert store.get_workspace("workspace-id")["updatedAt"] == created["updatedAt"]
     assert store.replace_workspace_quick_links("workspace-id", workspace) == workspace
     updated = store.get_workspace("workspace-id")
@@ -322,6 +444,83 @@ def test_common_and_workspace_quick_links_are_atomic_and_independent(tmp_path):
         {"id": "runbook", "label": "Runbook", "url": "https://docs.test/runbook"}
     ]
     assert reloaded.get_workspace_quick_links("workspace-id") == workspace
+    assert reloaded.get_session_quick_links("agent") == [
+        {"id": "trace", "label": "Agent trace", "url": "https://trace.test/run"}
+    ]
+    assert reloaded.replace_session_quick_links("agent", []) == []
+    assert json.loads(path.read_text(encoding="utf-8"))["sessionQuickLinks"] == {}
+
+
+def test_scoped_notes_are_independent_normalized_and_persistent(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, clock=lambda: 10, id_factory=lambda: "workspace-id")
+    created = store.create_workspace(
+        name="Project",
+        tabs=["agent"],
+        active_session="agent",
+    )
+
+    assert store.replace_common_note("Common\r\nchecklist") == "Common\nchecklist"
+    assert store.replace_workspace_note("workspace-id", "Workspace plan") == (
+        "Workspace plan"
+    )
+    assert store.replace_session_note("agent", "Session handoff") == (
+        "Session handoff"
+    )
+    assert store.get_session_note("other-agent") == ""
+    assert store.get_workspace("workspace-id")["updatedAt"] == created["updatedAt"]
+
+    reloaded = WorkspaceStore(path)
+    assert reloaded.get_common_note() == "Common\nchecklist"
+    assert reloaded.get_workspace_note("workspace-id") == "Workspace plan"
+    assert reloaded.get_session_note("agent") == "Session handoff"
+
+    assert reloaded.replace_session_note("agent", " \n\t") == ""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["sessionNotes"] == {}
+    assert document["workspaceNotes"] == {"workspace-id": "Workspace plan"}
+
+    reloaded.delete_workspace("workspace-id")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["workspaceNotes"] == {}
+    assert document["commonNote"] == "Common\nchecklist"
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (None, "note must be a string"),
+        ("x" * (MAX_SCOPED_NOTE_LENGTH + 1), "8000 characters or fewer"),
+        ("unsafe\x00note", "cannot contain control characters"),
+    ],
+)
+def test_scoped_note_validation_rejects_invalid_values(value, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        normalize_scoped_note(value)
+
+
+@pytest.mark.parametrize(
+    ("validator", "value", "message"),
+    [
+        (validate_workspace_notes, [], "workspaceNotes must be an object"),
+        (validate_workspace_notes, {7: "note"}, "workspace ids must be strings"),
+        (validate_workspace_notes, {"bad/id": "note"}, "workspace id can contain"),
+        (validate_session_notes, [], "sessionNotes must be an object"),
+        (validate_session_notes, {7: "note"}, "session names must be strings"),
+        (
+            validate_session_notes,
+            {"bad\nname": "note"},
+            "session name cannot contain control characters",
+        ),
+    ],
+)
+def test_scoped_note_map_validation_rejects_malformed_values(
+    validator,
+    value,
+    message,
+):
+    with pytest.raises((TypeError, ValueError), match=message):
+        validator(value)
 
 
 @pytest.mark.parametrize(
@@ -355,6 +554,20 @@ def test_workspace_quick_link_validation_rejects_unsafe_or_ambiguous_values(
 ):
     with pytest.raises((TypeError, ValueError), match=message):
         validate_workspace_quick_links(links)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ([], "sessionQuickLinks must be an object"),
+        ({7: []}, "session names must be strings"),
+        ({"bad\nname": []}, "session name cannot contain control characters"),
+        ({"agent": "not-an-array"}, r"sessionQuickLinks\['agent'\] must be an array"),
+    ],
+)
+def test_session_quick_link_map_validation_rejects_malformed_values(value, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        validate_session_quick_links(value)
 
 
 @pytest.mark.parametrize(
@@ -620,6 +833,16 @@ def test_workspace_session_rename_updates_every_reference_without_activity(tmp_p
         groups=[workspace_group("keep", ["keep"], color="green")],
         active_session="keep",
     )
+    source_links = [
+        {"id": "trace", "label": "Source trace", "url": "https://trace.test/source"}
+    ]
+    store.replace_session_quick_links("old", source_links)
+    store.replace_session_quick_links(
+        "new",
+        [{"id": "stale", "label": "Stale", "url": "https://trace.test/stale"}],
+    )
+    store.replace_session_note("old", "Source handoff")
+    store.replace_session_note("new", "Stale handoff")
 
     assert store.rename_session("old", "new") == 2
     renamed_first = store.get_workspace("one")
@@ -637,7 +860,13 @@ def test_workspace_session_rename_updates_every_reference_without_activity(tmp_p
     unaffected = store.get_workspace("unaffected")
     assert {**unaffected, "sessionRevision": 0} == untouched
     assert unaffected["sessionRevision"] == 1
+    assert store.get_session_quick_links("old") == []
+    assert store.get_session_quick_links("new") == source_links
+    assert store.get_session_note("old") == ""
+    assert store.get_session_note("new") == "Source handoff"
     assert WorkspaceStore(path).get_workspace("one") == renamed_first
+    assert WorkspaceStore(path).get_session_quick_links("new") == source_links
+    assert WorkspaceStore(path).get_session_note("new") == "Source handoff"
 
     with pytest.raises(WorkspaceSessionRevisionConflict, match="reload the workspace"):
         WorkspaceStore(path).record_activity(
@@ -731,7 +960,13 @@ def test_failed_persistence_does_not_mutate_memory(tmp_path, monkeypatch):
         id_factory=lambda: "workspace-id",
     )
 
-    def fail_persist(_workspaces, _session_rename_revision, _common_quick_links):
+    def fail_persist(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
         raise OSError("disk full")
 
     monkeypatch.setattr(store, "_persist", fail_persist)
@@ -752,7 +987,13 @@ def test_failed_rename_revision_persistence_does_not_advance_memory(
         name="Project", tabs=["old"], active_session="old"
     )
 
-    def fail_persist(_workspaces, _session_rename_revision, _common_quick_links):
+    def fail_persist(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
         raise OSError("disk full")
 
     monkeypatch.setattr(store, "_persist", fail_persist)
@@ -779,7 +1020,13 @@ def test_post_replace_directory_sync_failure_advances_without_fencing(
     store.create_workspace(name="Project", tabs=["old"], active_session="old")
     persist = store._persist
 
-    def fail_directory_sync(_workspaces, _session_rename_revision, _common_quick_links):
+    def fail_directory_sync(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
         raise _WorkspaceDirectorySyncError("directory sync failed")
 
     monkeypatch.setattr(store, "_persist", fail_directory_sync)
@@ -807,6 +1054,10 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
                 "version": WORKSPACE_SCHEMA_VERSION,
                 "sessionRenameRevision": MAX_SESSION_RENAME_REVISION - 1,
                 "commonQuickLinks": [],
+                "sessionQuickLinks": {},
+                "commonNote": "",
+                "workspaceNotes": {},
+                "sessionNotes": {},
                 "workspaces": [
                     {
                         "id": "workspace-id",
@@ -859,6 +1110,33 @@ def test_corrupt_or_unsupported_state_fails_closed(tmp_path):
         store.list_workspaces()
     with pytest.raises(WorkspaceStoreUnavailable):
         store.create_workspace(name="Do not overwrite", tabs=[], active_session=None)
+    assert path.read_bytes() == original
+
+
+def test_malformed_session_quick_link_state_fails_closed(tmp_path):
+    path = tmp_path / "workspaces.json"
+    original = json.dumps(
+        {
+            "version": WORKSPACE_SCHEMA_VERSION,
+            "sessionRenameRevision": 0,
+            "commonQuickLinks": [],
+            "sessionQuickLinks": [],
+            "commonNote": "",
+            "workspaceNotes": {},
+            "sessionNotes": {},
+            "workspaces": [],
+        }
+    ).encode()
+    path.write_bytes(original)
+    store = WorkspaceStore(path)
+
+    with pytest.raises(
+        WorkspaceStoreUnavailable,
+        match=WORKSPACE_STORE_UNAVAILABLE_MESSAGE,
+    ):
+        store.get_session_quick_links("agent")
+    with pytest.raises(WorkspaceStoreUnavailable):
+        store.replace_session_quick_links("agent", [])
     assert path.read_bytes() == original
 
 

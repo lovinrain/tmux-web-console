@@ -349,14 +349,15 @@ URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
 or `Sync issue` state reports whether later tab-order and active-session changes
 are synchronizing automatically.
 
-Each saved workspace keeps its name, ordered open tabs, tab groups, quick links,
-active session, and server-generated creation, update, and last-active times in
-`MUXDECK_WORKSPACES_FILE`. Opening or changing a saved workspace refreshes its
-rough last-active time. Workspace names, tab membership, and quick links are
-shared by every browser connected to the same Muxdeck instance, so a phone or
-another computer can resume the same group. Concurrent pages use last-write-wins
-semantics; the most recently accepted full tab/activity or quick-link update
-becomes the saved state. Each tab snapshot also carries the server's
+Each saved workspace keeps its name, ordered open tabs, tab groups,
+workspace-scoped quick links, active session, and server-generated creation,
+update, and last-active times in `MUXDECK_WORKSPACES_FILE`. Opening or changing a
+saved workspace refreshes its rough last-active time. Workspace names, tab
+membership, and workspace links are shared by every browser connected to the
+same Muxdeck instance, so a phone or another computer can resume the same group.
+Concurrent pages use last-write-wins semantics; the most recently accepted full
+tab/activity or workspace-link update becomes the saved state. Each tab snapshot
+also carries the server's
 native-session rename revision. If another device tries to save names captured
 before a Muxdeck rename, the server rejects that stale snapshot and the page
 reloads the migrated workspace instead of restoring an obsolete tmux name.
@@ -455,18 +456,30 @@ tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
 
-The primary desktop `VIEW` toolbar also contains a link shelf split into `Common`
-and the current workspace. It stays in that first row beside `Tabs`, `Input`, and
-`Keys`, including when the session tabs are hidden or moved into the side rail.
-Common links are global to this Muxdeck instance and stay pinned in every
-temporary or saved workspace. The second region belongs only to the active saved
-workspace; a temporary workspace must be saved before links can be added there.
-Use the plus or pencil at the end of either region to open its manager, stage
-additions or removals, and choose `Save links` to persist the complete ordered
-list. Each region supports up to 16 user-defined links with 48-character labels.
-Links accept only HTTP or HTTPS URLs without embedded credentials, open in a new
-browser tab, and send no referrer. The shelf is not shown in compact mobile
-layouts.
+The primary desktop `VIEW` toolbar also contains a link shelf split into three
+regions: `Common`, the current workspace, and the active native tmux session. It
+stays in that first row beside `Tabs`, `Input`, and `Keys`, including when the
+session tabs are hidden or moved into the side rail. Common links are global to
+this Muxdeck instance and stay pinned in every temporary or saved workspace. The
+workspace region belongs only to the active saved workspace; a temporary
+workspace must be saved before links can be added there. The session region is
+available in both temporary and saved workspaces and follows that session across
+every workspace in which it is opened. Use the plus or pencil at the end of a
+region to open its manager, stage additions or removals, and choose `Save links`
+to persist the complete ordered list. Each region supports up to 16 user-defined
+links with 48-character labels. Links accept only HTTP or HTTPS URLs without
+embedded credentials, open in a new browser tab, and send no referrer. The shelf
+is not shown in compact mobile layouts.
+
+The desktop console header places three compact sticky-note cards immediately to
+the left of `Fit active`, `Scrollback`, `Copy New`, and the theme control. `Common`
+is shared by every workspace on the Muxdeck server, `Workspace` belongs to the
+active saved workspace, and `Session` follows the active native tmux session
+across workspaces. A temporary workspace cannot have its own note, but its Common
+and Session cards remain available. Selecting a card opens a focused editor;
+changes autosave after a short pause and are flushed before the editor closes.
+Each scope holds up to 8,000 characters. The cards and editor are desktop-only,
+and concurrent editors use last-write-wins replacement.
 
 `Actions` in the same desktop `VIEW` toolbar shows or hides the repeated controls
 on every quick tab. Turning it off removes the directional reorder, new-window,
@@ -548,12 +561,12 @@ also inactive on the landing page, even when its URL retains a workspace
 snapshot for Back/Forward navigation.
 
 The live console adds exact `Ctrl+Shift` chords for session and terminal actions:
-`E` opens the existing End-session confirmation, `L` returns to live output, `C`
-toggles browser Copy mode, and `U` / `D` invoke the paging controls highlighted
-for the current agent. `M` creates a numbered session in the active pane's
-directory, `B` opens New session, `F` enters or exits terminal Focus, and `S`
-shows or hides the session strip. The desktop keymap also lists the global `H`
-theme chord. The console-only
+`E` opens the existing End-session confirmation, `R` opens the native tmux
+session rename dialog, `L` returns to live output, `C` toggles browser Copy mode,
+and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
+creates a numbered session in the active pane's directory, `B` opens New session,
+`F` enters or exits terminal Focus, and `S` shows or hides the session strip. The
+desktop keymap also lists the global `H` theme chord. The console-only
 chords are captured before xterm can turn them into terminal input, keep unrelated
 modifier combinations untouched, and pause while a modal dialog or mobile
 workspace layout is active.
@@ -607,25 +620,36 @@ drafts, it lives on the server and is shared across browsers.
 
 `MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list. Tabs are keyed
 by native tmux session name. A native rename performed through Muxdeck migrates
-that name in every saved workspace; an out-of-band tmux rename cannot do so.
-Unavailable names remain visible in the saved workspace until the workspace is
-updated or deleted. The file contains workspace names, tmux session names, and
-user-defined quick-link labels and URLs, so treat it as potentially sensitive
-runtime state.
+that name in every saved workspace and moves its session-scoped quick links and
+note; an out-of-band tmux rename cannot do so. Unavailable names remain visible
+in the saved workspace until the workspace is updated or deleted. Session-link
+and session-note entries for sessions that disappear outside Muxdeck remain
+dormant, so a future tmux session that reuses the same native name inherits that
+link shelf and note. Deleting a saved workspace also deletes its workspace note,
+but does not affect the Common note, a session note, or tmux. The file contains
+workspace names, tmux session names, user-defined quick-link labels and URLs, and
+user-authored notes, so treat it as potentially sensitive runtime state.
+Desktop note-window layout is separate browser-local state, namespaced by saved
+workspace ID. The open, floating, pinned, and position values do not modify the
+server workspace document, but the browser restores them when that workspace is
+resumed. Pinned Common and Workspace windows remain open across session-tab
+switches, while a Session window remains tied to its native tmux session.
 
-The workspace schema is version 4. Version 1 files load at rename revision zero;
-version 1 and 2 files load with no tab groups, and version 1 through 3 files load
-with no common or workspace quick links. A legacy document upgrades atomically
-on its next workspace or quick-link write. A workspace name is limited to 80
-characters and a workspace can contain at most 32 unique ordered tabs, 16
-disjoint contiguous groups, and 16 ordered quick links; the global common shelf
-also permits 16 links. Group names are limited to 40 characters, quick-link
-labels to 48 characters, and quick-link URLs to 2,048 characters. Writes use an
-atomic file replacement. Keep a pre-upgrade copy when rollback is possible
-because releases that only understand versions 1 through 3 reject the version 4
-document. If an existing workspace file is unreadable, malformed, or uses an
-unsupported schema, the workspace API returns `503` and refuses to overwrite it
-until the file is repaired and Muxdeck is restarted.
+The workspace schema is version 6. Version 1 files load at rename revision zero;
+version 1 and 2 files load with no tab groups, version 1 through 3 files load with
+no common or workspace quick links, version 1 through 4 files load with no
+session quick links, and version 1 through 5 files load with empty scoped notes.
+A legacy document upgrades atomically on its next workspace, quick-link, or note
+write. A workspace name is limited to 80 characters and a workspace can contain
+at most 32 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
+quick links. The global common shelf and each native-session shelf also permit 16
+links. Group names are limited to 40 characters, quick-link labels to 48
+characters, quick-link URLs to 2,048 characters, and every scoped note to 8,000
+characters. Writes use an atomic file replacement. Keep a pre-upgrade copy when
+rollback is possible because releases that only understand versions 1 through 5
+reject the version 6 document. If an existing workspace file is unreadable,
+malformed, or uses an unsupported schema, the workspace API returns `503` and
+refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
 ## Scrollback behavior
 
@@ -655,7 +679,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles, predefined tags, and starred/ignored session names |
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session notes and queued memo input |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
-| `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, quick links, and activity times |
+| `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, scoped quick links and notes, and activity times |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
 Loopback Hosts are accepted by default. Every non-loopback Host must correspond

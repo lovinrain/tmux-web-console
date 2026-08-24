@@ -8,8 +8,10 @@ import {
 import { createPortal } from "react-dom";
 import {
   getCommonWorkspaceQuickLinks,
+  getSessionQuickLinks,
   getWorkspaceQuickLinks,
   replaceCommonWorkspaceQuickLinks,
+  replaceSessionQuickLinks,
   replaceWorkspaceQuickLinks,
   type WorkspaceQuickLink,
 } from "../api";
@@ -27,15 +29,17 @@ export const MAX_WORKSPACE_QUICK_LINKS = 16;
 export const MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH = 48;
 export const MAX_WORKSPACE_QUICK_LINK_URL_LENGTH = 2048;
 
-type QuickLinkScope = "common" | "workspace";
+type QuickLinkScope = "common" | "workspace" | "session";
 
 interface WorkspaceQuickLinksProps {
+  sessionName: string;
   workspaceId?: string | null;
   workspaceName?: string | null;
 }
 
 interface QuickLinkDialogProps {
   scope: QuickLinkScope;
+  sessionName: string;
   workspaceName?: string | null;
   links: WorkspaceQuickLink[];
   onClose: () => void;
@@ -84,6 +88,7 @@ export function normalizeWorkspaceQuickLinkUrl(value: string): string {
 
 function WorkspaceQuickLinksDialog({
   scope,
+  sessionName,
   workspaceName,
   links,
   onClose,
@@ -103,7 +108,16 @@ function WorkspaceQuickLinksDialog({
   const [entryError, setEntryError] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const scopeName = scope === "common" ? "Common" : workspaceName || "This workspace";
+  const scopeName = scope === "common"
+    ? "Common"
+    : scope === "session"
+      ? sessionName
+      : workspaceName || "This workspace";
+  const scopeEyebrow = scope === "common"
+    ? "EVERY WORKSPACE"
+    : scope === "session"
+      ? "THIS SESSION"
+      : "THIS WORKSPACE";
 
   useEffect(() => {
     mountedRef.current = true;
@@ -231,7 +245,7 @@ function WorkspaceQuickLinksDialog({
       >
         <header>
           <div>
-            <p className="eyebrow">{scope === "common" ? "EVERY WORKSPACE" : "THIS WORKSPACE"}</p>
+            <p className="eyebrow">{scopeEyebrow}</p>
             <h2 id={headingId}>Manage {scopeName} links</h2>
           </div>
           <button
@@ -249,7 +263,9 @@ function WorkspaceQuickLinksDialog({
           <p id={descriptionId} className="workspace-quick-links-dialog-description">
             {scope === "common"
               ? "These links stay pinned in every desktop workspace."
-              : "These links belong only to this saved workspace."}
+              : scope === "session"
+                ? `These links follow ${sessionName} wherever that tmux session is open.`
+                : "These links belong only to this saved workspace."}
           </p>
 
           <section className="workspace-quick-links-editor" aria-label={`${scopeName} links`}>
@@ -371,7 +387,11 @@ function QuickLinkRegion({
   disabledReason?: string;
   onManage: () => void;
 }) {
-  const regionLabel = scope === "common" ? "Common quick links" : "Workspace quick links";
+  const regionLabel = scope === "common"
+    ? "Common quick links"
+    : scope === "session"
+      ? "Session quick links"
+      : "Workspace quick links";
   const unavailable = loading || Boolean(error) || Boolean(disabledReason);
   return (
     <section
@@ -425,6 +445,7 @@ function QuickLinkRegion({
 }
 
 export function WorkspaceQuickLinks({
+  sessionName,
   workspaceId = null,
   workspaceName = null,
 }: WorkspaceQuickLinksProps) {
@@ -434,9 +455,14 @@ export function WorkspaceQuickLinks({
   const [workspaceLinks, setWorkspaceLinks] = useState<WorkspaceQuickLink[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(Boolean(workspaceId));
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [sessionLinks, setSessionLinks] = useState<WorkspaceQuickLink[]>([]);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [dialogScope, setDialogScope] = useState<QuickLinkScope | null>(null);
   const currentWorkspaceIdRef = useRef(workspaceId);
   currentWorkspaceIdRef.current = workspaceId;
+  const currentSessionNameRef = useRef(sessionName);
+  currentSessionNameRef.current = sessionName;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -477,11 +503,37 @@ export function WorkspaceQuickLinks({
     return () => controller.abort();
   }, [workspaceId]);
 
+  useEffect(() => {
+    setDialogScope(null);
+    setSessionLinks([]);
+    setSessionError(null);
+    const controller = new AbortController();
+    setSessionLoading(true);
+    void getSessionQuickLinks(sessionName, controller.signal).then((links) => {
+      if (controller.signal.aborted) return;
+      setSessionLinks(links);
+      setSessionLoading(false);
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      setSessionError(requestErrorMessage(error, "Unable to load session links."));
+      setSessionLoading(false);
+    });
+    return () => controller.abort();
+  }, [sessionName]);
+
   const saveDialogLinks = async (links: WorkspaceQuickLink[]) => {
     if (dialogScope === "common") {
       const saved = await replaceCommonWorkspaceQuickLinks(links);
       setCommonLinks(saved);
       setCommonError(null);
+      return;
+    }
+    if (dialogScope === "session") {
+      const targetSessionName = sessionName;
+      const saved = await replaceSessionQuickLinks(targetSessionName, links);
+      if (currentSessionNameRef.current !== targetSessionName) return;
+      setSessionLinks(saved);
+      setSessionError(null);
       return;
     }
     if (!workspaceId) throw new Error("Save this workspace before adding its own links.");
@@ -515,14 +567,28 @@ export function WorkspaceQuickLinks({
           disabledReason={workspaceId ? undefined : "Save workspace to add links"}
           onManage={() => setDialogScope("workspace")}
         />
+        <QuickLinkRegion
+          scope="session"
+          label={sessionName}
+          detail="This session"
+          links={sessionLinks}
+          loading={sessionLoading}
+          error={sessionError}
+          onManage={() => setDialogScope("session")}
+        />
       </div>
 
       {dialogScope && (
         <WorkspaceQuickLinksDialog
-          key={`${dialogScope}:${workspaceId ?? "unsaved"}`}
+          key={`${dialogScope}:${workspaceId ?? "unsaved"}:${sessionName}`}
           scope={dialogScope}
+          sessionName={sessionName}
           workspaceName={workspaceName}
-          links={dialogScope === "common" ? commonLinks : workspaceLinks}
+          links={dialogScope === "common"
+            ? commonLinks
+            : dialogScope === "session"
+              ? sessionLinks
+              : workspaceLinks}
           onClose={() => setDialogScope(null)}
           onSave={saveDialogLinks}
         />

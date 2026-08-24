@@ -6,6 +6,7 @@ import {
   BASE_PATH,
   createWorkspace,
   getCommonWorkspaceQuickLinks,
+  getSessionQuickLinks,
   getWorkspace,
   getWorkspaceQuickLinks,
   listSessions,
@@ -23,6 +24,7 @@ vi.mock("./api", async (importOriginal) => {
     ...actual,
     createWorkspace: vi.fn(),
     getCommonWorkspaceQuickLinks: vi.fn(),
+    getSessionQuickLinks: vi.fn(),
     getWorkspace: vi.fn(),
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock("./api", async (importOriginal) => {
 
 const createWorkspaceMock = vi.mocked(createWorkspace);
 const getCommonWorkspaceQuickLinksMock = vi.mocked(getCommonWorkspaceQuickLinks);
+const getSessionQuickLinksMock = vi.mocked(getSessionQuickLinks);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const getWorkspaceQuickLinksMock = vi.mocked(getWorkspaceQuickLinks);
 const listSessionsMock = vi.mocked(listSessions);
@@ -530,6 +533,7 @@ describe("App routing", () => {
   beforeEach(() => {
     createWorkspaceMock.mockReset();
     getCommonWorkspaceQuickLinksMock.mockReset();
+    getSessionQuickLinksMock.mockReset();
     getWorkspaceMock.mockReset();
     getWorkspaceQuickLinksMock.mockReset();
     listSessionsMock.mockReset();
@@ -537,6 +541,7 @@ describe("App routing", () => {
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
+    getSessionQuickLinksMock.mockResolvedValue([]);
     getWorkspaceMock.mockResolvedValue(savedWorkspace());
     getWorkspaceQuickLinksMock.mockResolvedValue([]);
     listSessionsMock.mockResolvedValue([]);
@@ -586,7 +591,7 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open test session" }));
 
     expect(screen.getByRole("main", { name: "Console" })).toBeVisible();
-    expect(screen.getByText("work/name #1")).toBeVisible();
+    expect(screen.getByRole("tab", { name: /work\/name #1/ })).toBeVisible();
     expect(window.location.pathname).toBe(`${BASE_PATH}/session/work%2Fname%20%231`);
     expectWorkspaceSearch(search, ["work/name #1"]);
 
@@ -1057,7 +1062,7 @@ describe("App routing", () => {
     render(<App />);
 
     expect(screen.getByRole("main", { name: "Console" })).toBeVisible();
-    expect(screen.getByText("direct work")).toBeVisible();
+    expect(screen.getByRole("tab", { name: /direct work/ })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "Back to sessions" }));
 
@@ -3050,14 +3055,22 @@ describe("App routing", () => {
         "workspace-one",
         expect.any(AbortSignal),
       ));
+      await waitFor(() => expect(getSessionQuickLinksMock).toHaveBeenCalledWith(
+        "alpha",
+        expect.any(AbortSignal),
+      ));
       expect(screen.getByRole("region", { name: "Common quick links" })).toBeVisible();
       expect(screen.getByRole("region", { name: "Workspace quick links" })).toBeVisible();
+      expect(screen.getByRole("region", { name: "Session quick links" })).toBeVisible();
       const consoleToolbar = screen.getByRole("group", { name: "Console bars" });
       expect(within(consoleToolbar).getByRole("region", {
         name: "Common quick links",
       })).toBeVisible();
       expect(within(consoleToolbar).getByRole("region", {
         name: "Workspace quick links",
+      })).toBeVisible();
+      expect(within(consoleToolbar).getByRole("region", {
+        name: "Session quick links",
       })).toBeVisible();
       expect(screen.getByTitle("Workspace one - Saved")).toBeVisible();
       expect(newSessionButton).toBeEnabled();

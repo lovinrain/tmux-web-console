@@ -2232,12 +2232,13 @@ a:focus-visible {
   .workspace-quick-links-region {
     display: flex;
     min-width: 0;
-    flex: 1 1 50%;
+    flex: 1 1 33.333%;
     align-items: stretch;
     overflow: hidden;
   }
 
-  .workspace-quick-links-region.common {
+  .workspace-quick-links-region.common,
+  .workspace-quick-links-region.workspace {
     border-right: 1px solid #354034;
   }
 
@@ -2259,6 +2260,11 @@ a:focus-visible {
   .workspace-quick-links-region.workspace .workspace-quick-links-region-heading {
     color: var(--acid);
     background: rgba(187, 244, 81, 0.03);
+  }
+
+  .workspace-quick-links-region.session .workspace-quick-links-region-heading {
+    color: var(--amber);
+    background: rgba(255, 182, 72, 0.035);
   }
 
   .workspace-quick-links-region-heading strong,
@@ -2380,6 +2386,11 @@ a:focus-visible {
   .workspace-quick-links-region.workspace .workspace-quick-links-manage:hover:not(:disabled),
   .workspace-quick-links-region.workspace .workspace-quick-links-manage:focus-visible {
     color: var(--acid);
+  }
+
+  .workspace-quick-links-region.session .workspace-quick-links-manage:hover:not(:disabled),
+  .workspace-quick-links-region.session .workspace-quick-links-manage:focus-visible {
+    color: var(--amber);
   }
 
   .workspace-quick-links-manage:disabled {
@@ -2952,6 +2963,7 @@ a:focus-visible {
 
 .workspace-tab-group {
   --tab-group-color: #9aa39a;
+  position: relative;
   display: flex;
   height: 44px;
   flex: 0 0 auto;
@@ -3153,7 +3165,44 @@ span.workspace-tab-group-toggle {
   border-radius: 3px;
   scroll-margin-inline: 24px;
   scroll-snap-align: center;
-  transition: background 140ms ease, border-color 140ms ease;
+  transition: background 140ms ease, border-color 140ms ease, opacity 120ms ease;
+}
+
+.workspace-tab[data-tab-dragging="true"] {
+  opacity: 0.46;
+}
+
+.workspace-tab > [role="tab"][draggable="true"] {
+  cursor: grab;
+}
+
+.workspace-navigation[data-tab-drag-active="true"]
+  .workspace-tab > [role="tab"][draggable="true"] {
+  cursor: grabbing;
+}
+
+.workspace-tab[data-tab-drop-edge]::before,
+.workspace-tab-group[data-tab-drop-edge]::before {
+  position: absolute;
+  z-index: 7;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  pointer-events: none;
+  content: "";
+  background: var(--cyan);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px #102d2a, 0 0 12px rgba(104, 223, 208, 0.72);
+}
+
+.workspace-tab[data-tab-drop-edge="before"]::before,
+.workspace-tab-group[data-tab-drop-edge="before"]::before {
+  left: 0;
+}
+
+.workspace-tab[data-tab-drop-edge="after"]::before,
+.workspace-tab-group[data-tab-drop-edge="after"]::before {
+  right: 0;
 }
 
 .workspace-tab::after {
@@ -5479,8 +5528,318 @@ span.workspace-tab-group-toggle {
 
 .console-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+}
+
+.scoped-sticky-notes {
+  display: none;
+}
+
+.title-sheet.scoped-note-sheet {
+  --note-accent: #f1c565;
+  --note-paper: #292716;
+  --note-line: rgba(241, 197, 101, 0.11);
+  width: min(620px, 100%);
+  color: #eee9cf;
+  background:
+    linear-gradient(90deg, transparent 44px, rgba(255, 126, 104, 0.13) 44px, rgba(255, 126, 104, 0.13) 45px, transparent 45px),
+    repeating-linear-gradient(180deg, transparent 0, transparent 27px, var(--note-line) 28px),
+    var(--note-paper);
+  border-color: color-mix(in srgb, var(--note-accent) 42%, #3b4538);
+  border-top: 4px solid var(--note-accent);
+  box-shadow: 0 30px 110px rgba(0, 0, 0, 0.68);
+  transform: rotate(-0.15deg);
+}
+
+.scoped-note-sheet.workspace {
+  --note-accent: var(--cyan);
+  --note-paper: #172827;
+  --note-line: rgba(104, 223, 208, 0.1);
+}
+
+.scoped-note-sheet.session {
+  --note-accent: var(--acid);
+  --note-paper: #202816;
+  --note-line: rgba(187, 244, 81, 0.1);
+}
+
+.title-sheet.scoped-note-sheet header {
+  padding-left: 58px;
+  background: color-mix(in srgb, var(--note-paper) 90%, #0b0e0c);
+  border-color: color-mix(in srgb, var(--note-accent) 22%, transparent);
+}
+
+.scoped-note-sheet .eyebrow {
+  color: var(--note-accent);
+}
+
+.scoped-note-sheet h2 {
+  color: #f5f2df;
+}
+
+.scoped-note-description {
+  margin: 0;
+  padding: 18px 24px 0 58px;
+  color: #a8aa93;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.scoped-note-sheet > label {
+  display: block;
+  margin: 16px 24px 7px 58px;
+  color: color-mix(in srgb, var(--note-accent) 72%, #d5d2c0);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.scoped-note-sheet textarea {
+  display: block;
+  width: calc(100% - 82px);
+  min-height: min(330px, 42dvh);
+  margin: 0 24px 0 58px;
+  padding: 13px 14px;
+  resize: vertical;
+  color: #f1eedc;
+  background: rgba(8, 11, 8, 0.54);
+  border: 1px solid color-mix(in srgb, var(--note-accent) 31%, #3b4538);
+  border-radius: 3px;
+  outline: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.scoped-note-sheet textarea::placeholder {
+  color: #727763;
+}
+
+.scoped-note-sheet textarea:focus {
+  border-color: var(--note-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--note-accent) 13%, transparent);
+}
+
+.scoped-note-editor-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 24px 16px 58px;
+  color: #848873;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.scoped-note-save-state.saved {
+  color: color-mix(in srgb, var(--note-accent) 72%, #d5d2c0);
+}
+
+.scoped-note-save-state.pending,
+.scoped-note-save-state.saving {
+  color: #e5bc75;
+}
+
+.scoped-note-save-state.error {
+  color: #ff9187;
+}
+
+.title-actions.scoped-note-actions {
+  padding-left: 58px;
+  background: color-mix(in srgb, var(--note-paper) 88%, #0b0e0c);
+  border-color: color-mix(in srgb, var(--note-accent) 22%, transparent);
+}
+
+.scoped-note-actions .secondary-button:first-child {
+  margin-right: auto;
+}
+
+.scoped-note-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+.scoped-note-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.scoped-note-heading {
+  min-width: 0;
+}
+
+.scoped-note-window-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.scoped-note-window-control {
+  display: inline-grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  color: color-mix(in srgb, var(--note-accent) 76%, #e9eadc);
+  background: color-mix(in srgb, var(--note-accent) 8%, rgba(8, 11, 8, 0.72));
+  border: 1px solid color-mix(in srgb, var(--note-accent) 28%, #3b4538);
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+}
+
+.scoped-note-window-control:hover:not(:disabled),
+.scoped-note-window-control:focus-visible {
+  color: #fffce9;
+  background: color-mix(in srgb, var(--note-accent) 18%, #121712);
+  border-color: color-mix(in srgb, var(--note-accent) 68%, #fff);
+  outline: 0;
+}
+
+.scoped-note-window-control:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
+
+.scoped-note-window-control svg {
+  width: 15px;
+  height: 15px;
+}
+
+.title-sheet.scoped-note-sheet.floating {
+  position: fixed;
+  display: none;
+  width: min(430px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 5px 5px 10px 5px;
+  box-shadow:
+    0 22px 75px rgba(0, 0, 0, 0.58),
+    0 3px 0 color-mix(in srgb, var(--note-accent) 24%, transparent);
+  transform: none;
+  animation: scoped-note-float-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.title-sheet.scoped-note-sheet.floating.active {
+  border-color: color-mix(in srgb, var(--note-accent) 65%, #d8ded2);
+  box-shadow:
+    0 28px 90px rgba(0, 0, 0, 0.68),
+    0 0 0 1px color-mix(in srgb, var(--note-accent) 15%, transparent);
+}
+
+.title-sheet.scoped-note-sheet.floating.pinned {
+  border-top-color: color-mix(in srgb, var(--note-accent) 82%, #fff);
+}
+
+.scoped-note-sheet.floating .scoped-note-floating-header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  min-height: 42px;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 4px 6px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.scoped-note-sheet.floating .scoped-note-floating-header:active {
+  cursor: grabbing;
+}
+
+.scoped-note-sheet.floating .scoped-note-floating-header:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--note-accent) 72%, #fff);
+  outline-offset: -2px;
+}
+
+.scoped-note-floating-header .scoped-note-heading {
+  flex: 1 1 auto;
+}
+
+.scoped-note-floating-header h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scoped-note-floating-header .eyebrow {
+  display: none;
+}
+
+.scoped-note-floating-header h2 {
+  margin-top: 0;
+  font-size: 14px;
+}
+
+.scoped-note-pinned-badge {
+  padding: 3px 4px;
+  color: color-mix(in srgb, var(--note-accent) 82%, #fff);
+  background: color-mix(in srgb, var(--note-accent) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--note-accent) 30%, transparent);
+  border-radius: 2px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 7px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+}
+
+.scoped-note-sheet.floating .scoped-note-description,
+.scoped-note-sheet.floating > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.scoped-note-sheet.floating textarea {
+  width: calc(100% - 8px);
+  min-height: min(300px, 45dvh);
+  max-height: 64dvh;
+  margin: 4px 4px 0;
+  padding: 8px 9px;
+}
+
+.scoped-note-sheet.floating .scoped-note-editor-meta {
+  padding: 3px 5px 4px;
+}
+
+.scoped-note-sheet.floating .scoped-note-actions {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
+  padding: 4px 6px;
+}
+
+html.scoped-note-moving,
+html.scoped-note-moving * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+@keyframes scoped-note-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .console-rename-warning {
@@ -5903,6 +6262,160 @@ span.workspace-tab-group-toggle {
     display: flex;
   }
 
+  .title-sheet.scoped-note-sheet.floating {
+    display: flex;
+  }
+
+  .scoped-sticky-notes {
+    display: flex;
+    min-width: 0;
+    max-width: 390px;
+    flex: 0 1 390px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+  }
+
+  .scoped-sticky-notes-label {
+    flex: 0 0 auto;
+    color: #667160;
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+  }
+
+  .scoped-sticky-note {
+    --note-accent: #f1c565;
+    --note-card: #312c18;
+    position: relative;
+    display: grid;
+    width: min(116px, 9vw);
+    min-width: 72px;
+    height: 46px;
+    min-height: 46px;
+    grid-template-columns: 18px minmax(0, 1fr);
+    flex: 1 1 0;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px 5px 7px;
+    overflow: hidden;
+    color: #d9d4b5;
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--note-accent) 8%, transparent), transparent 58%),
+      var(--note-card);
+    border: 1px solid color-mix(in srgb, var(--note-accent) 34%, #343c31);
+    border-radius: 2px 2px 7px 2px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+    cursor: pointer;
+    text-align: left;
+    transform: rotate(-0.45deg);
+    transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+  }
+
+  .scoped-sticky-note.workspace {
+    --note-accent: var(--cyan);
+    --note-card: #172a28;
+    transform: rotate(0.35deg);
+  }
+
+  .scoped-sticky-note.session {
+    --note-accent: var(--acid);
+    --note-card: #232b17;
+    transform: rotate(-0.2deg);
+  }
+
+  .scoped-sticky-note::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    content: "";
+    background: linear-gradient(135deg, transparent 48%, color-mix(in srgb, var(--note-accent) 34%, #111511) 50%);
+    pointer-events: none;
+  }
+
+  .scoped-sticky-note:hover:not(:disabled),
+  .scoped-sticky-note:focus-visible {
+    z-index: 1;
+    border-color: color-mix(in srgb, var(--note-accent) 72%, #fff);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+    outline: 0;
+    transform: translateY(-2px) rotate(0deg);
+  }
+
+  .scoped-sticky-note:disabled {
+    cursor: not-allowed;
+    filter: saturate(0.35);
+    opacity: 0.5;
+  }
+
+  .scoped-sticky-note.error {
+    --note-accent: var(--red);
+  }
+
+  .scoped-sticky-note > svg {
+    width: 17px;
+    height: 17px;
+    color: var(--note-accent);
+  }
+
+  .scoped-sticky-note > span {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .scoped-sticky-note strong,
+  .scoped-sticky-note small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .scoped-sticky-note strong {
+    color: color-mix(in srgb, var(--note-accent) 76%, #fff);
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .scoped-sticky-note small {
+    color: #989b82;
+    font-size: 8px;
+  }
+
+  .scoped-sticky-note.has-note small {
+    color: #c3c4aa;
+  }
+
+  .scoped-sticky-note.window-open {
+    border-color: color-mix(in srgb, var(--note-accent) 62%, #fff);
+  }
+
+  .scoped-sticky-note.window-pinned {
+    box-shadow:
+      0 5px 16px rgba(0, 0, 0, 0.34),
+      0 0 0 1px color-mix(in srgb, var(--note-accent) 16%, transparent);
+  }
+
+  .scoped-sticky-note-window-state {
+    position: absolute;
+    top: 2px;
+    right: 3px;
+    color: color-mix(in srgb, var(--note-accent) 80%, #fff);
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 5px;
+    font-style: normal;
+    font-weight: 850;
+    letter-spacing: 0.05em;
+    line-height: 1;
+  }
+
   .desktop-tab-orientation-toggle,
   .desktop-tab-actions-toggle,
   .desktop-terminal-copy-toggle,
@@ -6185,6 +6698,32 @@ span.workspace-tab-group-toggle {
     scroll-margin-block: 18px;
     scroll-margin-inline: 0;
     scroll-snap-align: none;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab[data-tab-drop-edge]::before,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab-group[data-tab-drop-edge]::before {
+    top: auto;
+    right: 4px;
+    bottom: auto;
+    left: 4px;
+    width: auto;
+    height: 3px;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab[data-tab-drop-edge="before"]::before,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab-group[data-tab-drop-edge="before"]::before {
+    top: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab[data-tab-drop-edge="after"]::before,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab-group[data-tab-drop-edge="after"]::before {
+    bottom: 0;
   }
 
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-tab::after {
@@ -7314,6 +7853,22 @@ html.history-resizing * {
   }
 }
 
+@media (min-width: 801px) and (max-width: 1200px) and (pointer: fine) {
+  .scoped-sticky-notes {
+    max-width: 248px;
+    flex-basis: 248px;
+  }
+
+  .scoped-sticky-note {
+    width: auto;
+    min-width: 62px;
+  }
+
+  .scoped-sticky-note small {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
   .workspace-keymap-panel {
     width: min(390px, calc(100vw - 24px));
@@ -7451,6 +8006,41 @@ html.history-resizing * {
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
+  }
+
+  .scoped-sticky-notes {
+    max-width: 116px;
+    flex-basis: 116px;
+    gap: 4px;
+  }
+
+  .scoped-sticky-notes-label {
+    display: none;
+  }
+
+  .scoped-sticky-note {
+    width: 36px;
+    min-width: 36px;
+    height: 40px;
+    min-height: 40px;
+    grid-template-columns: 1fr;
+    flex: 0 0 36px;
+    justify-items: center;
+    padding: 0;
+  }
+
+  .scoped-sticky-note > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .scoped-sticky-note-window-state {
+    display: none;
   }
 
   .grok-theme-stage {

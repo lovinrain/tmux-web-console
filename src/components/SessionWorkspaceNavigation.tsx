@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -126,6 +127,7 @@ export const WORKSPACE_TAB_SHORTCUTS = {
 export const DESKTOP_CONSOLE_SHORTCUTS = {
   newSession: "Ctrl+Shift+B",
   endSession: "Ctrl+Shift+E",
+  renameSession: "Ctrl+Shift+R",
   returnLive: "Ctrl+Shift+L",
   copyMode: "Ctrl+Shift+C",
   tabActions: "Ctrl+Shift+A",
@@ -156,6 +158,7 @@ const WORKSPACE_KEYMAP_GROUPS = [
       [DESKTOP_CONSOLE_SHORTCUTS.returnLive, "Return to live output"],
       [DESKTOP_CONSOLE_SHORTCUTS.copyMode, "Toggle browser Copy mode"],
       [DESKTOP_CONSOLE_SHORTCUTS.endSession, "Open End session confirmation"],
+      [DESKTOP_CONSOLE_SHORTCUTS.renameSession, "Rename tmux session"],
       [DESKTOP_CONSOLE_SHORTCUTS.copyNew, "Create session from current directory"],
     ],
   },
@@ -279,7 +282,10 @@ function WorkspaceKeymap({ orientation }: { orientation: WorkspaceTabOrientation
 
 function useWorkspaceTabOrientation(
   preferredOrientation: WorkspaceTabOrientation,
-): WorkspaceTabOrientation {
+): {
+  orientation: WorkspaceTabOrientation;
+  compactViewport: boolean;
+} {
   const [compactViewport, setCompactViewport] = useState(isCompactWorkspaceViewport);
 
   useEffect(() => {
@@ -297,7 +303,10 @@ function useWorkspaceTabOrientation(
     };
   }, []);
 
-  return compactViewport ? "horizontal" : preferredOrientation;
+  return {
+    orientation: compactViewport ? "horizontal" : preferredOrientation,
+    compactViewport,
+  };
 }
 
 function desktopTabRailMaxWidth(): number {
@@ -464,6 +473,43 @@ function tabMoveResultIndex(
   return currentIndex < targetIndex
     ? openSessions.indexOf(targetGroup.tabs.at(-1)!)
     : openSessions.indexOf(targetGroup.tabs[0]);
+}
+
+type WorkspaceTabDropEdge = "before" | "after";
+
+interface WorkspaceTabDragTarget {
+  kind: "tab" | "group";
+  id: string;
+  edge: WorkspaceTabDropEdge;
+  targetIndex: number;
+}
+
+interface WorkspaceTabDragState {
+  sessionName: string;
+  target: WorkspaceTabDragTarget | null;
+}
+
+function workspaceTabDropEdge(
+  element: HTMLElement,
+  clientX: number,
+  clientY: number,
+  orientation: WorkspaceTabOrientation,
+): WorkspaceTabDropEdge {
+  const bounds = element.getBoundingClientRect();
+  const coordinate = orientation === "vertical" ? clientY : clientX;
+  const midpoint = orientation === "vertical"
+    ? bounds.top + bounds.height / 2
+    : bounds.left + bounds.width / 2;
+  return coordinate < midpoint ? "before" : "after";
+}
+
+function workspaceTabDropIndex(
+  sourceIndex: number,
+  boundaryIndex: number,
+  tabCount: number,
+): number {
+  const targetIndex = boundaryIndex - (sourceIndex < boundaryIndex ? 1 : 0);
+  return Math.max(0, Math.min(tabCount - 1, targetIndex));
 }
 
 interface WorkspaceTabSearchDialogProps {
@@ -1531,7 +1577,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onSaveWorkspace,
     onSessionTerminated,
   } = props;
-  const orientation = useWorkspaceTabOrientation(preferredOrientation);
+  const { orientation, compactViewport } = useWorkspaceTabOrientation(
+    preferredOrientation,
+  );
   const desktopTabRailMaxWidth = useDesktopTabRailMaxWidth();
   const [internalDesktopTabRailWidth, setInternalDesktopTabRailWidth] = useState(() => (
     clampDesktopTabRailWidth(desktopTabRailWidth ?? DEFAULT_DESKTOP_TAB_RAIL_WIDTH)
@@ -1572,12 +1620,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     direction: "previous" | "next";
   } | null>(null);
   const groupDialogTriggerRef = useRef<HTMLElement | null>(null);
+  const workspaceTabDragSessionRef = useRef<string | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [recentsQuery, setRecentsQuery] = useState("");
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const [windowActionError, setWindowActionError] = useState("");
+  const [workspaceTabDrag, setWorkspaceTabDrag] = useState<WorkspaceTabDragState | null>(
+    null,
+  );
   const [groupDialog, setGroupDialog] = useState<{
     groupId: string | null;
     initialSession: string | null;
@@ -1620,6 +1672,235 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && openSessions.length > 0
     && groups.length < MAX_WORKSPACE_TAB_GROUPS,
   );
+  const desktopTabDragEnabled = Boolean(
+    onMoveTab
+    && openSessions.length > 1
+    && !compactViewport
+    && tabsVisible,
+  );
+
+  const finishWorkspaceTabDrag = useCallback(() => {
+    workspaceTabDragSessionRef.current = null;
+    setWorkspaceTabDrag(null);
+  }, []);
+
+  const clearWorkspaceTabDropTarget = useCallback(() => {
+    setWorkspaceTabDrag((current) => (
+      current?.target ? { ...current, target: null } : current
+    ));
+  }, []);
+
+  const previewWorkspaceTabDrop = useCallback((target: WorkspaceTabDragTarget) => {
+    const sessionName = workspaceTabDragSessionRef.current;
+    if (!sessionName) return;
+    setWorkspaceTabDrag((current) => {
+      if (
+        current?.sessionName === sessionName
+        && current.target?.kind === target.kind
+        && current.target.id === target.id
+        && current.target.edge === target.edge
+        && current.target.targetIndex === target.targetIndex
+      ) return current;
+      return { sessionName, target };
+    });
+  }, []);
+
+  const startWorkspaceTabDrag = useCallback((
+    event: ReactDragEvent<HTMLButtonElement>,
+    sessionName: string,
+  ) => {
+    if (!desktopTabDragEnabled) {
+      event.preventDefault();
+      return;
+    }
+    workspaceTabDragSessionRef.current = sessionName;
+    setWorkspaceTabDrag({ sessionName, target: null });
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", sessionName);
+  }, [desktopTabDragEnabled]);
+
+  const tabDragTarget = useCallback((
+    targetSessionName: string,
+    element: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ): WorkspaceTabDragTarget | null => {
+    const sourceSessionName = workspaceTabDragSessionRef.current;
+    if (!sourceSessionName) return null;
+    const sourceIndex = openSessions.indexOf(sourceSessionName);
+    const targetIndex = openSessions.indexOf(targetSessionName);
+    if (sourceIndex < 0 || targetIndex < 0) return null;
+
+    const sourceGroup = groupsBySession.get(sourceSessionName);
+    const targetGroup = groupsBySession.get(targetSessionName);
+    if (sourceGroup?.id !== targetGroup?.id || targetGroup?.collapsed) return null;
+
+    const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
+    const boundaryIndex = targetIndex + (edge === "after" ? 1 : 0);
+    return {
+      kind: "tab",
+      id: targetSessionName,
+      edge,
+      targetIndex: workspaceTabDropIndex(
+        sourceIndex,
+        boundaryIndex,
+        openSessions.length,
+      ),
+    };
+  }, [groupsBySession, openSessions, orientation]);
+
+  const groupDragTarget = useCallback((
+    group: WorkspaceTabGroup,
+    element: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ): WorkspaceTabDragTarget | null => {
+    const sourceSessionName = workspaceTabDragSessionRef.current;
+    if (!sourceSessionName || groupsBySession.has(sourceSessionName)) return null;
+    const sourceIndex = openSessions.indexOf(sourceSessionName);
+    const groupStart = openSessions.indexOf(group.tabs[0]);
+    const groupEnd = openSessions.indexOf(group.tabs.at(-1)!);
+    if (sourceIndex < 0 || groupStart < 0 || groupEnd < groupStart) return null;
+
+    const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
+    const boundaryIndex = edge === "before" ? groupStart : groupEnd + 1;
+    return {
+      kind: "group",
+      id: group.id,
+      edge,
+      targetIndex: workspaceTabDropIndex(
+        sourceIndex,
+        boundaryIndex,
+        openSessions.length,
+      ),
+    };
+  }, [groupsBySession, openSessions, orientation]);
+
+  const nudgeWorkspaceTabViewport = useCallback((
+    element: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const viewport = element.closest<HTMLElement>(".workspace-tab-viewport");
+    if (!viewport?.scrollBy) return;
+    const bounds = viewport.getBoundingClientRect();
+    const coordinate = orientation === "vertical" ? clientY : clientX;
+    const start = orientation === "vertical" ? bounds.top : bounds.left;
+    const end = orientation === "vertical" ? bounds.bottom : bounds.right;
+    const threshold = Math.min(48, Math.max(24, (end - start) * 0.15));
+    const delta = coordinate < start + threshold
+      ? -20
+      : coordinate > end - threshold
+        ? 20
+        : 0;
+    if (!delta) return;
+    viewport.scrollBy(orientation === "vertical" ? { top: delta } : { left: delta });
+  }, [orientation]);
+
+  const dragOverWorkspaceTab = useCallback((
+    event: ReactDragEvent<HTMLDivElement>,
+    targetSessionName: string,
+  ) => {
+    const target = tabDragTarget(
+      targetSessionName,
+      event.currentTarget,
+      event.clientX,
+      event.clientY,
+    );
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    previewWorkspaceTabDrop(target);
+    nudgeWorkspaceTabViewport(event.currentTarget, event.clientX, event.clientY);
+  }, [nudgeWorkspaceTabViewport, previewWorkspaceTabDrop, tabDragTarget]);
+
+  const dragOverWorkspaceTabGroup = useCallback((
+    event: ReactDragEvent<HTMLDivElement>,
+    group: WorkspaceTabGroup,
+  ) => {
+    const target = groupDragTarget(
+      group,
+      event.currentTarget,
+      event.clientX,
+      event.clientY,
+    );
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    previewWorkspaceTabDrop(target);
+    nudgeWorkspaceTabViewport(event.currentTarget, event.clientX, event.clientY);
+  }, [groupDragTarget, nudgeWorkspaceTabViewport, previewWorkspaceTabDrop]);
+
+  const commitWorkspaceTabDrop = useCallback((target: WorkspaceTabDragTarget) => {
+    const sourceSessionName = workspaceTabDragSessionRef.current;
+    const sourceIndex = sourceSessionName
+      ? openSessions.indexOf(sourceSessionName)
+      : -1;
+    finishWorkspaceTabDrag();
+    if (
+      !sourceSessionName
+      || !onMoveTab
+      || sourceIndex < 0
+      || sourceIndex === target.targetIndex
+    ) return;
+    onMoveTab(sourceSessionName, target.targetIndex);
+    const resultIndex = tabMoveResultIndex(
+      openSessions,
+      groups,
+      sourceSessionName,
+      target.targetIndex,
+    );
+    setReorderAnnouncement(
+      `${tabTitle(sourceSessionName, sessionsByName)} moved to position ${resultIndex + 1} of ${openSessions.length}.`,
+    );
+  }, [finishWorkspaceTabDrag, groups, onMoveTab, openSessions, sessionsByName]);
+
+  const dropOnWorkspaceTab = useCallback((
+    event: ReactDragEvent<HTMLDivElement>,
+    targetSessionName: string,
+  ) => {
+    const target = tabDragTarget(
+      targetSessionName,
+      event.currentTarget,
+      event.clientX,
+      event.clientY,
+    );
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitWorkspaceTabDrop(target);
+  }, [commitWorkspaceTabDrop, tabDragTarget]);
+
+  const dropOnWorkspaceTabGroup = useCallback((
+    event: ReactDragEvent<HTMLDivElement>,
+    group: WorkspaceTabGroup,
+  ) => {
+    const target = groupDragTarget(
+      group,
+      event.currentTarget,
+      event.clientX,
+      event.clientY,
+    );
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitWorkspaceTabDrop(target);
+  }, [commitWorkspaceTabDrop, groupDragTarget]);
+
+  useEffect(() => {
+    const draggedSession = workspaceTabDragSessionRef.current;
+    const draggedGroup = draggedSession
+      ? groupsBySession.get(draggedSession)
+      : undefined;
+    if (
+      desktopTabDragEnabled
+      && (!draggedSession || openSessions.includes(draggedSession))
+      && (!draggedGroup || (!draggedGroup.collapsed && draggedGroup.tabs.length > 1))
+    ) return;
+    finishWorkspaceTabDrag();
+  }, [desktopTabDragEnabled, finishWorkspaceTabDrag, groupsBySession, openSessions]);
 
   const previewDesktopTabRailWidth = useCallback((width: number) => {
     const nextWidth = clampDesktopTabRailWidthForViewport(width, desktopTabRailMaxWidth);
@@ -2046,12 +2327,29 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const canMoveNext = group
       ? groupTabIndex >= 0 && groupTabIndex < group.tabs.length - 1
       : index < openSessions.length - 1;
+    const canDragTab = desktopTabDragEnabled && (
+      !group || (!group.collapsed && group.tabs.length > 1)
+    );
+    const dropEdge = workspaceTabDrag?.target?.kind === "tab"
+      && workspaceTabDrag.target.id === sessionName
+      ? workspaceTabDrag.target.edge
+      : undefined;
     return (
       <div
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
         data-tab-group-color={group?.color}
+        data-tab-dragging={workspaceTabDrag?.sessionName === sessionName
+          ? "true"
+          : undefined}
+        data-tab-drop-edge={dropEdge}
         key={sessionName}
+        onDragOver={desktopTabDragEnabled
+          ? (event) => dragOverWorkspaceTab(event, sessionName)
+          : undefined}
+        onDrop={desktopTabDragEnabled
+          ? (event) => dropOnWorkspaceTab(event, sessionName)
+          : undefined}
       >
         <button
           ref={active ? activeTabRef : undefined}
@@ -2063,8 +2361,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           aria-keyshortcuts={index < 9 ? `Control+Shift+${index + 1}` : undefined}
           title={index < 9 ? `${title} (Ctrl+Shift+${index + 1})` : title}
           tabIndex={active ? 0 : -1}
+          draggable={canDragTab ? true : undefined}
+          aria-description={canDragTab
+            ? "Drag to reorder this tab. Reorder buttons are also available in Actions."
+            : undefined}
           onKeyDown={tabKeyDown}
           onClick={() => onSelect(sessionName)}
+          onDragStart={canDragTab
+            ? (event) => startWorkspaceTabDrag(event, sessionName)
+            : undefined}
+          onDragEnd={canDragTab ? finishWorkspaceTabDrag : undefined}
         >
           <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
           <span
@@ -2175,6 +2481,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           data-orientation={orientation}
           data-compact={compactDesktopTabRail ? "true" : undefined}
           data-tab-actions-visible={tabActionsVisible ? "true" : "false"}
+          data-tab-drag-active={workspaceTabDrag ? "true" : undefined}
           style={navigationStyle}
           aria-label="Session workspace"
           hidden={!tabsVisible}
@@ -2216,6 +2523,20 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               role="tablist"
               aria-label="Session workspace tabs"
               aria-orientation={orientation}
+              onDragOver={desktopTabDragEnabled
+                ? clearWorkspaceTabDropTarget
+                : undefined}
+              onDragLeave={desktopTabDragEnabled
+                ? (event) => {
+                  const relatedTarget = event.relatedTarget;
+                  if (
+                    relatedTarget instanceof Node
+                    && event.currentTarget.contains(relatedTarget)
+                  ) return;
+                  clearWorkspaceTabDropTarget();
+                }
+                : undefined}
+              onDrop={desktopTabDragEnabled ? finishWorkspaceTabDrag : undefined}
             >
               {workspaceTabItems.map((item) => {
                 if (item.kind === "tab") return renderWorkspaceTab(item.sessionName);
@@ -2225,6 +2546,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 const visibleTabs = group.collapsed
                   ? group.tabs.filter((sessionName) => sessionName === activeSession)
                   : group.tabs;
+                const dropEdge = workspaceTabDrag?.target?.kind === "group"
+                  && workspaceTabDrag.target.id === group.id
+                  ? workspaceTabDrag.target.edge
+                  : undefined;
                 return (
                   <div
                     className={group.collapsed
@@ -2232,7 +2557,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       : "workspace-tab-group"}
                     data-workspace-tab-group-id={group.id}
                     data-tab-group-color={group.color}
+                    data-tab-drop-edge={dropEdge}
                     key={group.id}
+                    onDragOver={desktopTabDragEnabled
+                      ? (event) => dragOverWorkspaceTabGroup(event, group)
+                      : undefined}
+                    onDrop={desktopTabDragEnabled
+                      ? (event) => dropOnWorkspaceTabGroup(event, group)
+                      : undefined}
                   >
                     <div className="workspace-tab-group-chip">
                       {onToggleTabGroup ? (

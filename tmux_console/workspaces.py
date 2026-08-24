@@ -27,6 +27,7 @@ MAX_WORKSPACE_QUICK_LINKS = 16
 MAX_WORKSPACE_QUICK_LINK_ID_LENGTH = 64
 MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH = 48
 MAX_WORKSPACE_QUICK_LINK_URL_LENGTH = 2048
+MAX_SCOPED_NOTE_LENGTH = 8_000
 WORKSPACE_GROUP_COLORS = (
     "gray",
     "blue",
@@ -42,7 +43,7 @@ WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 4
+WORKSPACE_SCHEMA_VERSION = 6
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -309,6 +310,96 @@ def validate_workspace_quick_links(
     return tuple(links)
 
 
+def validate_session_quick_links(
+    value: object,
+    field: str = "sessionQuickLinks",
+) -> dict[str, tuple[WorkspaceQuickLink, ...]]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field} must be an object")
+
+    session_links: dict[str, tuple[WorkspaceQuickLink, ...]] = {}
+    for raw_session_name, raw_links in value.items():
+        if not isinstance(raw_session_name, str):
+            raise TypeError(f"{field} session names must be strings")
+        try:
+            session_name = validate_session_name(raw_session_name)
+            _validate_unicode(session_name, f"{field} session name")
+        except ValueError as error:
+            raise ValueError(f"{field} session name: {error}") from error
+        links = validate_workspace_quick_links(
+            raw_links,
+            f"{field}[{session_name!r}]",
+        )
+        if links:
+            session_links[session_name] = links
+    return session_links
+
+
+def normalize_scoped_note(value: object, field: str = "note") -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    note = value.replace("\r\n", "\n").replace("\r", "\n")
+    if len(note) > MAX_SCOPED_NOTE_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_SCOPED_NOTE_LENGTH} characters or fewer"
+        )
+    if any(
+        (ord(character) < 32 and character not in "\n\t")
+        or ord(character) == 127
+        for character in note
+    ):
+        raise ValueError(f"{field} cannot contain control characters")
+    _validate_unicode(note, field)
+    return note if note.strip() else ""
+
+
+def validate_workspace_notes(
+    value: object,
+    field: str = "workspaceNotes",
+) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field} must be an object")
+
+    notes: dict[str, str] = {}
+    for raw_workspace_id, raw_note in value.items():
+        if not isinstance(raw_workspace_id, str):
+            raise TypeError(f"{field} workspace ids must be strings")
+        workspace_id = _validate_workspace_id(raw_workspace_id)
+        note = normalize_scoped_note(raw_note, f"{field}[{workspace_id!r}]")
+        if note:
+            notes[workspace_id] = note
+    return notes
+
+
+def validate_session_notes(
+    value: object,
+    field: str = "sessionNotes",
+) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field} must be an object")
+
+    notes: dict[str, str] = {}
+    for raw_session_name, raw_note in value.items():
+        if not isinstance(raw_session_name, str):
+            raise TypeError(f"{field} session names must be strings")
+        try:
+            session_name = validate_session_name(raw_session_name)
+            _validate_unicode(session_name, f"{field} session name")
+        except ValueError as error:
+            raise ValueError(f"{field} session name: {error}") from error
+        note = normalize_scoped_note(raw_note, f"{field}[{session_name!r}]")
+        if note:
+            notes[session_name] = note
+    return notes
+
+
+@dataclass(frozen=True)
+class ScopedNotes:
+    common: str
+    workspaces: dict[str, str]
+    sessions: dict[str, str]
+
+
 def _validate_session_revision(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("sessionRevision must be an integer")
@@ -534,6 +625,8 @@ class WorkspaceStore:
             self._workspaces,
             self._session_rename_revision,
             self._common_quick_links,
+            self._session_quick_links,
+            self._notes,
         ) = self._load()
         if (
             self._load_error is None
@@ -573,6 +666,72 @@ class WorkspaceStore:
             self._commit(self._workspaces, common_quick_links=validated_links)
             return [link.to_dict() for link in self._common_quick_links]
 
+    def get_common_note(self) -> str:
+        with self._lock:
+            self._ensure_available()
+            return self._notes.common
+
+    def replace_common_note(self, note: object) -> str:
+        validated_note = normalize_scoped_note(note)
+        with self._lock:
+            self._ensure_writable()
+            self._commit(
+                self._workspaces,
+                notes=replace(self._notes, common=validated_note),
+            )
+            return self._notes.common
+
+    def get_session_quick_links(self, session_name: str) -> list[dict[str, str]]:
+        session_name = validate_session_name(session_name)
+        with self._lock:
+            self._ensure_available()
+            return [
+                link.to_dict()
+                for link in self._session_quick_links.get(session_name, ())
+            ]
+
+    def replace_session_quick_links(
+        self,
+        session_name: str,
+        links: object,
+    ) -> list[dict[str, str]]:
+        session_name = validate_session_name(session_name)
+        validated_links = validate_workspace_quick_links(links, "links")
+        with self._lock:
+            self._ensure_writable()
+            next_session_quick_links = self._session_quick_links.copy()
+            if validated_links:
+                next_session_quick_links[session_name] = validated_links
+            else:
+                next_session_quick_links.pop(session_name, None)
+            self._commit(
+                self._workspaces,
+                session_quick_links=next_session_quick_links,
+            )
+            return self.get_session_quick_links(session_name)
+
+    def get_session_note(self, session_name: str) -> str:
+        session_name = validate_session_name(session_name)
+        with self._lock:
+            self._ensure_available()
+            return self._notes.sessions.get(session_name, "")
+
+    def replace_session_note(self, session_name: str, note: object) -> str:
+        session_name = validate_session_name(session_name)
+        validated_note = normalize_scoped_note(note)
+        with self._lock:
+            self._ensure_writable()
+            next_session_notes = self._notes.sessions.copy()
+            if validated_note:
+                next_session_notes[session_name] = validated_note
+            else:
+                next_session_notes.pop(session_name, None)
+            self._commit(
+                self._workspaces,
+                notes=replace(self._notes, sessions=next_session_notes),
+            )
+            return self._notes.sessions.get(session_name, "")
+
     def get_workspace_quick_links(self, workspace_id: str) -> list[dict[str, str]]:
         workspace_id = _validate_workspace_id(workspace_id)
         with self._lock:
@@ -597,6 +756,30 @@ class WorkspaceStore:
             )
             self._commit({**self._workspaces, workspace_id: workspace})
             return [link.to_dict() for link in workspace.quick_links]
+
+    def get_workspace_note(self, workspace_id: str) -> str:
+        workspace_id = _validate_workspace_id(workspace_id)
+        with self._lock:
+            self._ensure_available()
+            self._find(workspace_id)
+            return self._notes.workspaces.get(workspace_id, "")
+
+    def replace_workspace_note(self, workspace_id: str, note: object) -> str:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_note = normalize_scoped_note(note)
+        with self._lock:
+            self._ensure_writable()
+            self._find(workspace_id)
+            next_workspace_notes = self._notes.workspaces.copy()
+            if validated_note:
+                next_workspace_notes[workspace_id] = validated_note
+            else:
+                next_workspace_notes.pop(workspace_id, None)
+            self._commit(
+                self._workspaces,
+                notes=replace(self._notes, workspaces=next_workspace_notes),
+            )
+            return self._notes.workspaces.get(workspace_id, "")
 
     def create_workspace(
         self,
@@ -753,7 +936,12 @@ class WorkspaceStore:
             self._find(workspace_id)
             next_workspaces = self._workspaces.copy()
             del next_workspaces[workspace_id]
-            self._commit(next_workspaces)
+            next_workspace_notes = self._notes.workspaces.copy()
+            next_workspace_notes.pop(workspace_id, None)
+            self._commit(
+                next_workspaces,
+                notes=replace(self._notes, workspaces=next_workspace_notes),
+            )
 
     def rename_session(self, current_name: str, new_name: str) -> int:
         current_name = validate_session_name(current_name)
@@ -798,8 +986,25 @@ class WorkspaceStore:
                 next_workspaces[workspace_id] = workspace
                 changed += 1
 
+            next_session_quick_links = self._session_quick_links.copy()
+            renamed_links = next_session_quick_links.pop(current_name, ())
+            next_session_quick_links.pop(new_name, None)
+            if renamed_links:
+                next_session_quick_links[new_name] = renamed_links
+
+            next_session_notes = self._notes.sessions.copy()
+            renamed_note = next_session_notes.pop(current_name, "")
+            next_session_notes.pop(new_name, None)
+            if renamed_note:
+                next_session_notes[new_name] = renamed_note
+
             try:
-                self._commit(next_workspaces, self._session_rename_revision + 1)
+                self._commit(
+                    next_workspaces,
+                    self._session_rename_revision + 1,
+                    session_quick_links=next_session_quick_links,
+                    notes=replace(self._notes, sessions=next_session_notes),
+                )
             except _WorkspaceDirectorySyncError:
                 raise
             except OSError as error:
@@ -840,6 +1045,8 @@ class WorkspaceStore:
         dict[str, SavedWorkspace],
         int,
         tuple[WorkspaceQuickLink, ...],
+        dict[str, tuple[WorkspaceQuickLink, ...]],
+        ScopedNotes,
     ]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -866,6 +1073,25 @@ class WorkspaceStore:
                 if version >= 4
                 else ()
             )
+            session_quick_links = (
+                validate_session_quick_links(payload.get("sessionQuickLinks"))
+                if version >= 5
+                else {}
+            )
+            notes = (
+                ScopedNotes(
+                    common=normalize_scoped_note(
+                        payload.get("commonNote"),
+                        "commonNote",
+                    ),
+                    workspaces=validate_workspace_notes(
+                        payload.get("workspaceNotes")
+                    ),
+                    sessions=validate_session_notes(payload.get("sessionNotes")),
+                )
+                if version >= 6
+                else ScopedNotes(common="", workspaces={}, sessions={})
+            )
             records = payload.get("workspaces")
             if not isinstance(records, list):
                 raise TypeError("workspaces must be an array")
@@ -876,14 +1102,20 @@ class WorkspaceStore:
                 if workspace.id in workspaces:
                     raise ValueError(f"duplicate workspace id: {workspace.id}")
                 workspaces[workspace.id] = workspace
-            return workspaces, session_rename_revision, common_quick_links
+            return (
+                workspaces,
+                session_rename_revision,
+                common_quick_links,
+                session_quick_links,
+                notes,
+            )
         except FileNotFoundError as error:
             if not self.path.is_symlink():
-                return {}, 0, ()
+                return {}, 0, (), {}, ScopedNotes(common="", workspaces={}, sessions={})
             self._record_load_error(error)
         except (OSError, TypeError, ValueError, RecursionError) as error:
             self._record_load_error(error)
-        return {}, 0, ()
+        return {}, 0, (), {}, ScopedNotes(common="", workspaces={}, sessions={})
 
     @staticmethod
     def _load_workspace(
@@ -980,6 +1212,10 @@ class WorkspaceStore:
         workspaces: dict[str, SavedWorkspace],
         session_rename_revision: int | None = None,
         common_quick_links: tuple[WorkspaceQuickLink, ...] | None = None,
+        session_quick_links: (
+            dict[str, tuple[WorkspaceQuickLink, ...]] | None
+        ) = None,
+        notes: ScopedNotes | None = None,
     ) -> None:
         next_revision = (
             self._session_rename_revision
@@ -991,20 +1227,36 @@ class WorkspaceStore:
             if common_quick_links is None
             else common_quick_links
         )
+        next_session_quick_links = (
+            self._session_quick_links
+            if session_quick_links is None
+            else session_quick_links
+        )
+        next_notes = self._notes if notes is None else notes
         try:
-            self._persist(workspaces, next_revision, next_common_quick_links)
+            self._persist(
+                workspaces,
+                next_revision,
+                next_common_quick_links,
+                next_session_quick_links,
+                next_notes,
+            )
         except _WorkspaceDirectorySyncError:
             # The atomic rename committed; keep memory consistent with disk even
             # though the caller must be told durability could not be confirmed.
             self._workspaces = workspaces
             self._session_rename_revision = next_revision
             self._common_quick_links = next_common_quick_links
+            self._session_quick_links = next_session_quick_links
+            self._notes = next_notes
             if next_revision == MAX_SESSION_RENAME_REVISION:
                 self._fence_writes("the session rename revision is exhausted")
             raise
         self._workspaces = workspaces
         self._session_rename_revision = next_revision
         self._common_quick_links = next_common_quick_links
+        self._session_quick_links = next_session_quick_links
+        self._notes = next_notes
         if next_revision == MAX_SESSION_RENAME_REVISION:
             self._fence_writes("the session rename revision is exhausted")
 
@@ -1013,6 +1265,8 @@ class WorkspaceStore:
         workspaces: dict[str, SavedWorkspace],
         session_rename_revision: int,
         common_quick_links: tuple[WorkspaceQuickLink, ...],
+        session_quick_links: dict[str, tuple[WorkspaceQuickLink, ...]],
+        notes: ScopedNotes,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -1038,6 +1292,13 @@ class WorkspaceStore:
                         "commonQuickLinks": [
                             link.to_dict() for link in common_quick_links
                         ],
+                        "sessionQuickLinks": {
+                            session_name: [link.to_dict() for link in links]
+                            for session_name, links in session_quick_links.items()
+                        },
+                        "commonNote": notes.common,
+                        "workspaceNotes": notes.workspaces,
+                        "sessionNotes": notes.sessions,
                         "workspaces": [
                             workspace.to_dict() for workspace in workspaces.values()
                         ],

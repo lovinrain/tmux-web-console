@@ -324,6 +324,18 @@ function workspaceQuickLinksPath(workspaceId: string): string {
   return `${workspacePath(workspaceId)}/quick-links`;
 }
 
+function sessionQuickLinksPath(sessionName: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionName)}/quick-links`;
+}
+
+function workspaceNotePath(workspaceId: string): string {
+  return `${workspacePath(workspaceId)}/note`;
+}
+
+function sessionNotePath(sessionName: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionName)}/note`;
+}
+
 export async function getCommonWorkspaceQuickLinks(
   signal?: AbortSignal,
 ): Promise<WorkspaceQuickLink[]> {
@@ -339,6 +351,32 @@ export async function replaceCommonWorkspaceQuickLinks(
 ): Promise<WorkspaceQuickLink[]> {
   const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
     "/api/workspace-quick-links",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ links }),
+    },
+  );
+  return result.links;
+}
+
+export async function getSessionQuickLinks(
+  sessionName: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceQuickLink[]> {
+  const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
+    sessionQuickLinksPath(sessionName),
+    { signal },
+  );
+  return result.links;
+}
+
+export async function replaceSessionQuickLinks(
+  sessionName: string,
+  links: WorkspaceQuickLink[],
+): Promise<WorkspaceQuickLink[]> {
+  const result = await jsonRequest<{ links: WorkspaceQuickLink[] }>(
+    sessionQuickLinksPath(sessionName),
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -372,6 +410,66 @@ export async function replaceWorkspaceQuickLinks(
     },
   );
   return result.links;
+}
+
+export async function getCommonNote(signal?: AbortSignal): Promise<string> {
+  const result = await jsonRequest<{ note: string }>("/api/common-note", { signal });
+  return result.note;
+}
+
+export async function replaceCommonNote(note: string): Promise<string> {
+  const result = await jsonRequest<{ note: string }>("/api/common-note", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  return result.note;
+}
+
+export async function getWorkspaceNote(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await jsonRequest<{ note: string }>(
+    workspaceNotePath(workspaceId),
+    { signal },
+  );
+  return result.note;
+}
+
+export async function replaceWorkspaceNote(
+  workspaceId: string,
+  note: string,
+): Promise<string> {
+  const result = await jsonRequest<{ note: string }>(workspaceNotePath(workspaceId), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  return result.note;
+}
+
+export async function getSessionNote(
+  sessionName: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await jsonRequest<{ note: string }>(
+    sessionNotePath(sessionName),
+    { signal },
+  );
+  return result.note;
+}
+
+export async function replaceSessionNote(
+  sessionName: string,
+  note: string,
+): Promise<string> {
+  const result = await jsonRequest<{ note: string }>(sessionNotePath(sessionName), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  return result.note;
 }
 
 export async function listWorkspaces(signal?: AbortSignal): Promise<SavedWorkspace[]> {

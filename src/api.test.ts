@@ -8,13 +8,21 @@ import {
   createWorkspace,
   deleteQueuedMessage,
   deleteWorkspace,
+  getCommonNote,
   getCommonWorkspaceQuickLinks,
+  getSessionNote,
+  getSessionQuickLinks,
   getWorkspace,
+  getWorkspaceNote,
   getWorkspaceQuickLinks,
   getSnippetTree,
   listQueuedMessages,
   renameSession,
+  replaceCommonNote,
   replaceCommonWorkspaceQuickLinks,
+  replaceSessionNote,
+  replaceSessionQuickLinks,
+  replaceWorkspaceNote,
   replaceWorkspaceQuickLinks,
   saveSnippetTree,
   subscribeToSessions,
@@ -484,10 +492,13 @@ describe("saved workspace API", () => {
     );
   });
 
-  it("loads and replaces common and workspace-specific quick links", async () => {
+  it("loads and replaces common, workspace, and session-specific quick links", async () => {
     const common = [{ id: "docs", label: "Docs", url: "https://docs.test/" }];
     const workspaceLinks = [
       { id: "ticket", label: "Ticket", url: "https://issues.test/42" },
+    ];
+    const sessionLinks = [
+      { id: "trace", label: "Trace", url: "https://traces.test/run" },
     ];
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ links: common }), {
@@ -498,6 +509,10 @@ describe("saved workspace API", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ links: sessionLinks }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ links: common }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -505,31 +520,104 @@ describe("saved workspace API", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ links: workspaceLinks }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ links: sessionLinks }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
       }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getCommonWorkspaceQuickLinks()).resolves.toEqual(common);
     await expect(getWorkspaceQuickLinks("workspace/id")).resolves.toEqual(workspaceLinks);
+    await expect(getSessionQuickLinks("agent/name")).resolves.toEqual(sessionLinks);
     await expect(replaceCommonWorkspaceQuickLinks(common)).resolves.toEqual(common);
     await expect(replaceWorkspaceQuickLinks("workspace/id", workspaceLinks))
       .resolves.toEqual(workspaceLinks);
+    await expect(replaceSessionQuickLinks("agent/name", sessionLinks))
+      .resolves.toEqual(sessionLinks);
 
     expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/workspace-quick-links`);
     expect(fetchMock.mock.calls[1][0]).toBe(
       `${BASE_PATH}/api/workspaces/workspace%2Fid/quick-links`,
     );
     expect(fetchMock.mock.calls[2]).toEqual([
+      `${BASE_PATH}/api/sessions/agent%2Fname/quick-links`,
+      expect.objectContaining({}),
+    ]);
+    expect(fetchMock.mock.calls[3]).toEqual([
       `${BASE_PATH}/api/workspace-quick-links`,
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ links: common }),
       }),
     ]);
-    expect(fetchMock.mock.calls[3]).toEqual([
+    expect(fetchMock.mock.calls[4]).toEqual([
       `${BASE_PATH}/api/workspaces/workspace%2Fid/quick-links`,
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ links: workspaceLinks }),
+      }),
+    ]);
+    expect(fetchMock.mock.calls[5]).toEqual([
+      `${BASE_PATH}/api/sessions/agent%2Fname/quick-links`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ links: sessionLinks }),
+      }),
+    ]);
+  });
+
+  it("loads and replaces common, workspace, and session-scoped notes", async () => {
+    const notes = [
+      "Shared checklist",
+      "Workspace plan",
+      "Session handoff",
+      "Updated shared checklist",
+      "Updated workspace plan",
+      "Updated session handoff",
+    ];
+    const fetchMock = vi.fn();
+    for (const note of notes) {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ note }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    }
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCommonNote()).resolves.toBe(notes[0]);
+    await expect(getWorkspaceNote("workspace/id")).resolves.toBe(notes[1]);
+    await expect(getSessionNote("agent/name")).resolves.toBe(notes[2]);
+    await expect(replaceCommonNote(notes[3])).resolves.toBe(notes[3]);
+    await expect(replaceWorkspaceNote("workspace/id", notes[4])).resolves.toBe(notes[4]);
+    await expect(replaceSessionNote("agent/name", notes[5])).resolves.toBe(notes[5]);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/common-note`);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/note`,
+    );
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      `${BASE_PATH}/api/sessions/agent%2Fname/note`,
+    );
+    expect(fetchMock.mock.calls[3]).toEqual([
+      `${BASE_PATH}/api/common-note`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ note: notes[3] }),
+      }),
+    ]);
+    expect(fetchMock.mock.calls[4]).toEqual([
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/note`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ note: notes[4] }),
+      }),
+    ]);
+    expect(fetchMock.mock.calls[5]).toEqual([
+      `${BASE_PATH}/api/sessions/agent%2Fname/note`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ note: notes[5] }),
       }),
     ]);
   });

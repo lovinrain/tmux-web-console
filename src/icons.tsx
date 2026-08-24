@@ -105,6 +105,21 @@ export function MoveIcon(props: IconProps) {
   );
 }
 
+export function PinIcon({ filled = false, ...props }: IconProps & { filled?: boolean }) {
+  return (
+    <IconBase {...props}>
+      <path
+        d="M8 3h8l-1.5 6 3 3v2h-11v-2l3-3L8 3Z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path d="M12 14v7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
 export function WindowCopyIcon(props: IconProps) {
   return (
     <IconBase {...props}>

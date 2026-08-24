@@ -772,6 +772,131 @@ html[data-theme="light"] .console-header {
   box-shadow: 0 2px 12px rgba(65, 55, 38, 0.08);
 }
 
+html[data-theme="light"] .scoped-sticky-notes-label {
+  color: #7f8879;
+}
+
+html[data-theme="light"] .scoped-sticky-note {
+  --note-card: #fff0b8;
+  color: #453d21;
+  border-color: color-mix(in srgb, var(--note-accent) 48%, #b8ae8c);
+  box-shadow: 0 3px 9px rgba(65, 55, 38, 0.13);
+}
+
+html[data-theme="light"] .scoped-sticky-note.workspace {
+  --note-card: #dff2ee;
+}
+
+html[data-theme="light"] .scoped-sticky-note.session {
+  --note-card: #eaf2cf;
+}
+
+html[data-theme="light"] .scoped-sticky-note strong {
+  color: color-mix(in srgb, var(--note-accent) 70%, #31372d);
+}
+
+html[data-theme="light"] .scoped-sticky-note small,
+html[data-theme="light"] .scoped-sticky-note.has-note small {
+  color: #5f6456;
+}
+
+html[data-theme="light"] .title-sheet.scoped-note-sheet {
+  --note-paper: #fff8cf;
+  --note-line: rgba(127, 102, 39, 0.12);
+  color: #353529;
+  background:
+    linear-gradient(90deg, transparent 44px, rgba(190, 81, 68, 0.17) 44px, rgba(190, 81, 68, 0.17) 45px, transparent 45px),
+    repeating-linear-gradient(180deg, transparent 0, transparent 27px, var(--note-line) 28px),
+    var(--note-paper);
+  border-color: color-mix(in srgb, var(--note-accent) 42%, #bdb6aa);
+  box-shadow: 0 28px 80px rgba(65, 55, 38, 0.3);
+}
+
+html[data-theme="light"] .scoped-note-sheet.workspace {
+  --note-paper: #e8f5f1;
+}
+
+html[data-theme="light"] .scoped-note-sheet.session {
+  --note-paper: #f1f6dc;
+}
+
+html[data-theme="light"] .title-sheet.scoped-note-sheet header,
+html[data-theme="light"] .title-actions.scoped-note-actions {
+  background: color-mix(in srgb, var(--note-paper) 88%, #e8e1d5);
+  border-color: color-mix(in srgb, var(--note-accent) 24%, #c9c2b5);
+}
+
+html[data-theme="light"] .scoped-note-sheet h2 {
+  color: #282d25;
+}
+
+html[data-theme="light"] .scoped-note-description {
+  color: #5f675b;
+}
+
+html[data-theme="light"] .scoped-note-sheet > label,
+html[data-theme="light"] .scoped-note-save-state.saved {
+  color: color-mix(in srgb, var(--note-accent) 72%, #424a3e);
+}
+
+html[data-theme="light"] .scoped-note-sheet textarea {
+  color: #282d25;
+  background: rgba(255, 255, 249, 0.72);
+  border-color: color-mix(in srgb, var(--note-accent) 38%, #bdb6aa);
+}
+
+html[data-theme="light"] .scoped-note-sheet textarea::placeholder,
+html[data-theme="light"] .scoped-note-editor-meta {
+  color: #70776b;
+}
+
+html[data-theme="light"] .scoped-note-save-state.pending,
+html[data-theme="light"] .scoped-note-save-state.saving {
+  color: #8b570f;
+}
+
+html[data-theme="light"] .scoped-note-save-state.error {
+  color: #a33229;
+}
+
+html[data-theme="light"] .title-sheet.scoped-note-sheet.floating {
+  box-shadow:
+    0 22px 65px rgba(65, 55, 38, 0.26),
+    0 3px 0 color-mix(in srgb, var(--note-accent) 26%, transparent);
+}
+
+html[data-theme="light"] .title-sheet.scoped-note-sheet.floating.active {
+  border-color: color-mix(in srgb, var(--note-accent) 68%, #6c695f);
+  box-shadow:
+    0 27px 76px rgba(65, 55, 38, 0.34),
+    0 0 0 1px color-mix(in srgb, var(--note-accent) 18%, transparent);
+}
+
+html[data-theme="light"] .scoped-note-window-control {
+  color: color-mix(in srgb, var(--note-accent) 75%, #353a32);
+  background: color-mix(in srgb, var(--note-accent) 7%, #fffdf7);
+  border-color: color-mix(in srgb, var(--note-accent) 36%, #bbb4a8);
+}
+
+html[data-theme="light"] .scoped-note-window-control:hover:not(:disabled),
+html[data-theme="light"] .scoped-note-window-control:focus-visible {
+  color: #242921;
+  background: color-mix(in srgb, var(--note-accent) 15%, #fffdf7);
+  border-color: color-mix(in srgb, var(--note-accent) 70%, #6c695f);
+}
+
+html[data-theme="light"] .scoped-note-pinned-badge {
+  color: color-mix(in srgb, var(--note-accent) 76%, #353a32);
+  background: color-mix(in srgb, var(--note-accent) 10%, #fffdf7);
+  border-color: color-mix(in srgb, var(--note-accent) 34%, #bbb4a8);
+}
+
+html[data-theme="light"] .scoped-sticky-note.window-pinned {
+  box-shadow:
+    0 5px 14px rgba(65, 55, 38, 0.2),
+    0 0 0 1px color-mix(in srgb, var(--note-accent) 20%, transparent);
+}
+
 html[data-theme="light"] .console-bar-toolbar {
   color: #4e594c;
   background:
@@ -918,6 +1043,7 @@ html[data-theme="light"] .workspace-quick-links {
 }
 
 html[data-theme="light"] .workspace-quick-links-region.common,
+html[data-theme="light"] .workspace-quick-links-region.workspace,
 html[data-theme="light"] .workspace-quick-links-region-heading,
 html[data-theme="light"] .workspace-quick-links-manage {
   border-color: #cbc5b9;
@@ -932,6 +1058,12 @@ html[data-theme="light"] .workspace-quick-links-region.workspace
   .workspace-quick-links-region-heading {
   color: #557c1d;
   background: rgba(85, 124, 29, 0.045);
+}
+
+html[data-theme="light"] .workspace-quick-links-region.session
+  .workspace-quick-links-region-heading {
+  color: #a4570d;
+  background: rgba(164, 87, 13, 0.045);
 }
 
 html[data-theme="light"] .workspace-quick-links-region-heading span,
@@ -968,6 +1100,13 @@ html[data-theme="light"] .workspace-quick-links-region.workspace
 html[data-theme="light"] .workspace-quick-links-region.workspace
   .workspace-quick-links-manage:focus-visible {
   color: #557c1d;
+}
+
+html[data-theme="light"] .workspace-quick-links-region.session
+  .workspace-quick-links-manage:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-links-region.session
+  .workspace-quick-links-manage:focus-visible {
+  color: #a4570d;
 }
 
 html[data-theme="light"] .workspace-quick-links-manage {
@@ -1270,6 +1409,12 @@ html[data-theme="light"] .workspace-tab.active {
 html[data-theme="light"] .workspace-tab:focus-within {
   border-color: #426d0b;
   box-shadow: inset 0 0 0 1px #426d0b;
+}
+
+html[data-theme="light"] .workspace-tab[data-tab-drop-edge]::before,
+html[data-theme="light"] .workspace-tab-group[data-tab-drop-edge]::before {
+  background: #087a70;
+  box-shadow: 0 0 0 1px #d7f3ed, 0 0 10px rgba(8, 122, 112, 0.46);
 }
 
 html[data-theme="light"] .workspace-tab.active::after {

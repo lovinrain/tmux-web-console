@@ -30,7 +30,7 @@ from tmux_console.tmux import (
     TmuxSessionIdentityChangedError,
     TmuxSessionNotFoundError,
 )
-from tmux_console.workspaces import WorkspaceStore
+from tmux_console.workspaces import MAX_SCOPED_NOTE_LENGTH, WorkspaceStore
 
 SESSION_CREATED = 1_700_000_000
 SERVER_STARTED = 1_699_999_900
@@ -929,6 +929,358 @@ async def test_terminate_session_api_preserves_persistent_session_state(
 
 
 @pytest.mark.asyncio
+async def test_session_quick_links_api_isolates_live_sessions_and_persists(tmp_path):
+    first_name = "agent-one"
+    second_name = "agent-two"
+    tmux = FakeTmux([[make_session(first_name), make_session(second_name)]])
+    path = tmp_path / "workspaces.json"
+    workspaces = WorkspaceStore(path)
+    client = TestClient(
+        TestServer(create_app(tmux=tmux, workspaces=workspaces, base_path=""))
+    )
+    links = [
+        {"id": "trace", "label": "Trace", "url": "https://trace.test/run"}
+    ]
+
+    try:
+        await client.start_server()
+        response = await client.get(f"/api/sessions/{first_name}/quick-links")
+        assert response.status == 200
+        assert await response.json() == {"links": []}
+
+        response = await client.put(
+            f"/api/sessions/{first_name}/quick-links",
+            json={"links": links},
+        )
+        assert response.status == 200
+        assert await response.json() == {"links": links}
+        assert await (
+            await client.get(f"/api/sessions/{first_name}/quick-links")
+        ).json() == {"links": links}
+        assert await (
+            await client.get(f"/api/sessions/{second_name}/quick-links")
+        ).json() == {"links": []}
+    finally:
+        await client.close()
+
+    reloaded = WorkspaceStore(path)
+    assert reloaded.get_session_quick_links(first_name) == links
+    assert reloaded.get_session_quick_links(second_name) == []
+
+
+@pytest.mark.asyncio
+async def test_session_quick_links_api_validates_requests_and_live_session(tmp_path):
+    session_name = "agent-one"
+    tmux = FakeTmux([[make_session(session_name)]])
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=tmux,
+                workspaces=WorkspaceStore(tmp_path / "workspaces.json"),
+                base_path="",
+            )
+        )
+    )
+    endpoint = f"/api/sessions/{session_name}/quick-links"
+
+    try:
+        await client.start_server()
+        malformed = await client.put(endpoint, data="{")
+        assert malformed.status == 400
+        assert await malformed.json() == {"error": "request body must be JSON"}
+
+        invalid_requests = [
+            ([], "request body must be an object"),
+            ({}, "links is required"),
+            ({"links": [], "extra": True}, "unknown field: extra"),
+            ({"links": "bad"}, "links must be an array"),
+            (
+                {
+                    "links": [
+                        {
+                            "id": "bad",
+                            "label": "Bad",
+                            "url": "javascript:alert(1)",
+                        }
+                    ]
+                },
+                "valid HTTP or HTTPS URL",
+            ),
+        ]
+        for payload, message in invalid_requests:
+            response = await client.put(endpoint, json=payload)
+            assert response.status == 400
+            assert message in (await response.json())["error"]
+
+        missing = await client.get("/api/sessions/missing/quick-links")
+        assert missing.status == 404
+        assert await missing.json() == {"error": "tmux session not found: missing"}
+        missing = await client.put(
+            "/api/sessions/missing/quick-links",
+            json={"links": []},
+        )
+        assert missing.status == 404
+        assert await missing.json() == {"error": "tmux session not found: missing"}
+
+        invalid_name = await client.get(
+            f"/api/sessions/{quote('x' * 257, safe='')}/quick-links"
+        )
+        assert invalid_name.status == 400
+        assert "session name must be 256 characters or fewer" in (
+            await invalid_name.json()
+        )["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_quick_links_api_reports_tmux_and_persistence_failures(
+    tmp_path,
+    monkeypatch,
+):
+    unavailable_tmux = FakeTmux(
+        [TmuxError("tmux unavailable"), TmuxError("tmux unavailable")]
+    )
+    unavailable_client = TestClient(
+        TestServer(
+            create_app(
+                tmux=unavailable_tmux,
+                workspaces=WorkspaceStore(tmp_path / "unavailable.json"),
+                base_path="",
+            )
+        )
+    )
+    try:
+        await unavailable_client.start_server()
+        invalid_response = await unavailable_client.put(
+            "/api/sessions/agent-one/quick-links",
+            json={"links": "bad"},
+        )
+        assert invalid_response.status == 400
+        assert await invalid_response.json() == {"error": "links must be an array"}
+        assert unavailable_tmux.list_calls == 0
+
+        get_response = await unavailable_client.get(
+            "/api/sessions/agent-one/quick-links"
+        )
+        put_response = await unavailable_client.put(
+            "/api/sessions/agent-one/quick-links",
+            json={"links": []},
+        )
+        assert get_response.status == 503
+        assert await get_response.json() == {"error": "tmux unavailable"}
+        assert put_response.status == 503
+        assert await put_response.json() == {"error": "tmux unavailable"}
+    finally:
+        await unavailable_client.close()
+
+    workspaces = WorkspaceStore(tmp_path / "read-only.json")
+
+    def fail_persist(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(workspaces, "_persist", fail_persist)
+    persistence_client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[make_session("agent-one")]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+    try:
+        await persistence_client.start_server()
+        response = await persistence_client.put(
+            "/api/sessions/agent-one/quick-links",
+            json={
+                "links": [
+                    {
+                        "id": "trace",
+                        "label": "Trace",
+                        "url": "https://trace.test/run",
+                    }
+                ]
+            },
+        )
+        assert response.status == 500
+        assert await response.json() == {
+            "error": "unable to save session quick links"
+        }
+        assert workspaces.get_session_quick_links("agent-one") == []
+    finally:
+        await persistence_client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_note_api_isolates_live_sessions_and_persists(tmp_path):
+    first_name = "agent-one"
+    second_name = "agent-two"
+    tmux = FakeTmux([[make_session(first_name), make_session(second_name)]])
+    path = tmp_path / "workspaces.json"
+    workspaces = WorkspaceStore(path)
+    client = TestClient(
+        TestServer(create_app(tmux=tmux, workspaces=workspaces, base_path=""))
+    )
+
+    try:
+        await client.start_server()
+        response = await client.get(f"/api/sessions/{first_name}/note")
+        assert response.status == 200
+        assert await response.json() == {"note": ""}
+
+        response = await client.put(
+            f"/api/sessions/{first_name}/note",
+            json={"note": "Handoff\r\nnext step"},
+        )
+        assert response.status == 200
+        assert await response.json() == {"note": "Handoff\nnext step"}
+        assert await (
+            await client.get(f"/api/sessions/{first_name}/note")
+        ).json() == {"note": "Handoff\nnext step"}
+        assert await (
+            await client.get(f"/api/sessions/{second_name}/note")
+        ).json() == {"note": ""}
+    finally:
+        await client.close()
+
+    reloaded = WorkspaceStore(path)
+    assert reloaded.get_session_note(first_name) == "Handoff\nnext step"
+    assert reloaded.get_session_note(second_name) == ""
+
+
+@pytest.mark.asyncio
+async def test_session_note_api_validates_payload_and_live_session(tmp_path):
+    session_name = "agent-one"
+    tmux = FakeTmux([[make_session(session_name)]])
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json")
+    client = TestClient(
+        TestServer(create_app(tmux=tmux, workspaces=workspaces, base_path=""))
+    )
+    endpoint = f"/api/sessions/{session_name}/note"
+
+    try:
+        await client.start_server()
+        malformed = await client.put(endpoint, data="{")
+        assert malformed.status == 400
+        assert await malformed.json() == {"error": "request body must be JSON"}
+
+        invalid_requests = [
+            ([], "request body must be an object"),
+            ({}, "note is required"),
+            ({"note": "", "extra": True}, "unknown field: extra"),
+            ({"note": 7}, "note must be a string"),
+            (
+                {"note": "x" * (MAX_SCOPED_NOTE_LENGTH + 1)},
+                "8000 characters or fewer",
+            ),
+            ({"note": "unsafe\x00note"}, "cannot contain control characters"),
+        ]
+        for payload, message in invalid_requests:
+            response = await client.put(endpoint, json=payload)
+            assert response.status == 400
+            assert message in (await response.json())["error"]
+
+        missing = await client.get("/api/sessions/missing/note")
+        assert missing.status == 404
+        assert await missing.json() == {"error": "tmux session not found: missing"}
+        missing = await client.put(
+            "/api/sessions/missing/note",
+            json={"note": "No session"},
+        )
+        assert missing.status == 404
+        assert await missing.json() == {"error": "tmux session not found: missing"}
+
+        invalid_name = await client.get(
+            f"/api/sessions/{quote('x' * 257, safe='')}/note"
+        )
+        assert invalid_name.status == 400
+        assert "session name must be 256 characters or fewer" in (
+            await invalid_name.json()
+        )["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_note_api_reports_tmux_and_persistence_failures(
+    tmp_path,
+    monkeypatch,
+):
+    unavailable_tmux = FakeTmux(
+        [TmuxError("tmux unavailable"), TmuxError("tmux unavailable")]
+    )
+    unavailable_client = TestClient(
+        TestServer(
+            create_app(
+                tmux=unavailable_tmux,
+                workspaces=WorkspaceStore(tmp_path / "unavailable-notes.json"),
+                base_path="",
+            )
+        )
+    )
+    try:
+        await unavailable_client.start_server()
+        invalid = await unavailable_client.put(
+            "/api/sessions/agent-one/note",
+            json={"note": 7},
+        )
+        assert invalid.status == 400
+        assert unavailable_tmux.list_calls == 0
+
+        get_response = await unavailable_client.get("/api/sessions/agent-one/note")
+        put_response = await unavailable_client.put(
+            "/api/sessions/agent-one/note",
+            json={"note": "Handoff"},
+        )
+        assert get_response.status == 503
+        assert await get_response.json() == {"error": "tmux unavailable"}
+        assert put_response.status == 503
+        assert await put_response.json() == {"error": "tmux unavailable"}
+    finally:
+        await unavailable_client.close()
+
+    workspaces = WorkspaceStore(tmp_path / "read-only-notes.json")
+
+    def fail_persist(
+        _workspaces,
+        _session_rename_revision,
+        _common_quick_links,
+        _session_quick_links,
+        _notes,
+    ):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(workspaces, "_persist", fail_persist)
+    persistence_client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[make_session("agent-one")]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+    try:
+        await persistence_client.start_server()
+        response = await persistence_client.put(
+            "/api/sessions/agent-one/note",
+            json={"note": "Handoff"},
+        )
+        assert response.status == 500
+        assert await response.json() == {"error": "unable to save session note"}
+        assert workspaces.get_session_note("agent-one") == ""
+    finally:
+        await persistence_client.close()
+
+
+@pytest.mark.asyncio
 async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp_path):
     old_name = "agent-old"
     new_name = "agent-new"
@@ -965,6 +1317,20 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
         ],
         active_session=old_name,
     )
+    source_links = [
+        {
+            "id": "trace",
+            "label": "Source trace",
+            "url": "https://trace.test/source",
+        }
+    ]
+    workspaces.replace_session_quick_links(old_name, source_links)
+    workspaces.replace_session_quick_links(
+        new_name,
+        [{"id": "stale", "label": "Stale", "url": "https://trace.test/stale"}],
+    )
+    workspaces.replace_session_note(old_name, "Source handoff")
+    workspaces.replace_session_note(new_name, "Stale handoff")
     client = TestClient(
         TestServer(
             create_app(
@@ -1019,6 +1385,11 @@ async def test_rename_session_api_renames_tmux_and_migrates_persistent_state(tmp
         assert reloaded_workspace["lastActiveAt"] == saved_workspace["lastActiveAt"]
         assert reloaded_workspace["updatedAt"] > saved_workspace["updatedAt"]
         assert reloaded_workspace["sessionRevision"] == 1
+        reloaded_workspaces = WorkspaceStore(workspaces_path)
+        assert reloaded_workspaces.get_session_quick_links(old_name) == []
+        assert reloaded_workspaces.get_session_quick_links(new_name) == source_links
+        assert reloaded_workspaces.get_session_note(old_name) == ""
+        assert reloaded_workspaces.get_session_note(new_name) == "Source handoff"
 
         stale_activity = await client.post(
             "/api/workspaces/workspace-id/activity",
