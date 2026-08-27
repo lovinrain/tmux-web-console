@@ -44,9 +44,11 @@ from .tmux import (
 )
 from .workspaces import (
     WorkspaceNotFoundError,
+    WorkspacePinCapacityError,
     WorkspaceSessionRevisionConflict,
     WorkspaceStore,
     WorkspaceStoreUnavailable,
+    WorkspaceTransferConflictError,
     normalize_scoped_note,
     validate_workspace_quick_links,
 )
@@ -82,12 +84,14 @@ class SessionSnapshotBuilder:
         clock: Callable[[], float] = time.time,
         messages: SessionMessageStore | None = None,
         mutation_lock: asyncio.Lock | None = None,
+        workspaces: WorkspaceStore | None = None,
     ) -> None:
         self._tmux = tmux
         self._titles = titles
         self._agent_states = agent_states
         self._messages = messages
         self._mutation_lock = mutation_lock
+        self._workspaces = workspaces
         self._clock = clock
         self._lock = asyncio.Lock()
         self._state_history: dict[str, tuple[str, str, int]] = {}
@@ -105,6 +109,14 @@ class SessionSnapshotBuilder:
         observed_at = int(self._clock())
         next_state_history: dict[str, tuple[str, str, int]] = {}
         payload: list[dict[str, Any]] = []
+        try:
+            workspace_pins = (
+                set(self._workspaces.list_pinned_sessions())
+                if self._workspaces is not None
+                else set()
+            )
+        except WorkspaceStoreUnavailable:
+            workspace_pins = set()
 
         for item in items:
             state = states[item.name]
@@ -127,6 +139,7 @@ class SessionSnapshotBuilder:
                     "customTitle": self._titles.get_title(item.name),
                     "starred": self._titles.is_starred(item.name),
                     "ignored": self._titles.is_ignored(item.name),
+                    "workspacePinned": item.name in workspace_pins,
                     "tags": self._titles.get_tags(item.name),
                     "memorandumCount": (
                         self._messages.count_messages(item.name)
@@ -500,6 +513,7 @@ def create_app(
         app[AGENT_STATES_KEY],
         messages=app[MESSAGES_KEY],
         mutation_lock=app[SESSION_RENAME_LOCK_KEY],
+        workspaces=app[WORKSPACES_KEY],
     )
     app[SESSION_STREAM_BROKER_KEY] = SessionStreamBroker(
         app[SESSION_SNAPSHOTS_KEY],
@@ -1045,6 +1059,127 @@ def create_app(
                 "ignored": saved_ignored,
             }
         )
+
+    async def update_session_workspace_pin(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        missing_fields = sorted({"session", "pinned"} - set(payload))
+        if missing_fields:
+            return json_error(f"{missing_fields[0]} is required", 400)
+        unknown_fields = sorted(set(payload) - {"session", "pinned"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+
+        session_name = payload["session"]
+        pinned = payload["pinned"]
+        if not isinstance(session_name, str):
+            return json_error("session must be a string", 400)
+        if not isinstance(pinned, bool):
+            return json_error("pinned must be a boolean", 400)
+        try:
+            session_name = validate_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                result = app[WORKSPACES_KEY].set_session_workspace_pinned(
+                    session_name,
+                    pinned,
+                )
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        except WorkspacePinCapacityError as error:
+            return json_error(str(error), 409)
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except OSError:
+            LOGGER.exception(
+                "Unable to save global workspace pin for tmux session %s",
+                session_name,
+            )
+            return json_error("unable to save session workspace pin", 500)
+        return web.json_response(result)
+
+    async def transfer_session_workspace(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        required = {
+            "session",
+            "destinationWorkspaceId",
+            "operation",
+            "sessionRevision",
+        }
+        missing = sorted(required - set(payload))
+        if missing:
+            return json_error(f"{missing[0]} is required", 400)
+        allowed = required | {"sourceWorkspaceId"}
+        unknown = sorted(str(field) for field in set(payload) - allowed)
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        session_name = payload["session"]
+        if not isinstance(session_name, str):
+            return json_error("session must be a string", 400)
+        source_workspace_id = payload.get("sourceWorkspaceId")
+        if source_workspace_id is not None and not isinstance(
+            source_workspace_id, str
+        ):
+            return json_error("sourceWorkspaceId must be a string or null", 400)
+        destination_workspace_id = payload["destinationWorkspaceId"]
+        if not isinstance(destination_workspace_id, str):
+            return json_error("destinationWorkspaceId must be a string", 400)
+        operation = payload["operation"]
+        if not isinstance(operation, str):
+            return json_error("operation must be a string", 400)
+        try:
+            session_name = validate_session_name(session_name)
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                await app[TMUX_KEY].get_session(session_name)
+                result = app[WORKSPACES_KEY].transfer_session(
+                    session_name,
+                    source_workspace_id=source_workspace_id,
+                    destination_workspace_id=destination_workspace_id,
+                    operation=operation,
+                    session_revision=payload["sessionRevision"],
+                )
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except (
+            WorkspaceSessionRevisionConflict,
+            WorkspaceTransferConflictError,
+        ) as error:
+            return json_error(str(error), 409)
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to %s tmux session %s to workspace %s",
+                operation,
+                session_name,
+                destination_workspace_id,
+            )
+            return json_error("unable to transfer session between workspaces", 500)
+        return web.json_response(result)
 
     async def update_session_tags(request: web.Request) -> web.Response:
         try:
@@ -1995,6 +2130,14 @@ def create_app(
     app.router.add_put(f"{prefix}/api/session-title", update_session_title)
     app.router.add_put(f"{prefix}/api/session-star", update_session_star)
     app.router.add_put(f"{prefix}/api/session-ignored", update_session_ignored)
+    app.router.add_put(
+        f"{prefix}/api/session-workspace-pin",
+        update_session_workspace_pin,
+    )
+    app.router.add_post(
+        f"{prefix}/api/session-workspace-transfer",
+        transfer_session_workspace,
+    )
     app.router.add_put(f"{prefix}/api/session-tags", update_session_tags)
     app.router.add_put(f"{prefix}/api/session-details", update_session_details)
     app.router.add_post(f"{prefix}/api/panes/{{pane_id}}/history", create_history)

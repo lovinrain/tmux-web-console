@@ -828,6 +828,38 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onMoveTab).toHaveBeenCalledWith("beta", 0);
   });
 
+  it("centers the active vertical tab by scrolling only the tab viewport", () => {
+    const props = navigationProps({
+      activeSession: "alpha",
+      openSessions: ["alpha", "beta", "zulu"],
+    });
+    const view = render(
+      <SessionWorkspaceNavigation {...props} orientation="vertical" />,
+    );
+    const viewport = document.querySelector<HTMLElement>(".workspace-tab-viewport")!;
+    const beta = screen.getByRole("tab", { name: "beta, Working" });
+    const betaScrollIntoView = vi.fn();
+    beta.scrollIntoView = betaScrollIntoView;
+    Object.defineProperty(viewport, "clientHeight", {
+      configurable: true,
+      value: 300,
+    });
+    viewport.scrollTop = 100;
+    mockElementBounds(viewport, { top: 100, height: 300 });
+    mockElementBounds(beta, { top: 500, height: 42 });
+
+    view.rerender(
+      <SessionWorkspaceNavigation
+        {...props}
+        activeSession="beta"
+        orientation="vertical"
+      />,
+    );
+
+    expect(viewport.scrollTop).toBe(371);
+    expect(betaScrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("hides direct actions for every top or side tab while Overview keeps them", () => {
     const props = navigationProps({
       openSessions: ["alpha", "beta", "zulu"],

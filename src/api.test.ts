@@ -27,8 +27,10 @@ import {
   saveSnippetTree,
   subscribeToSessions,
   terminateSession,
+  transferSessionToWorkspace,
   updateSessionIgnored,
   updateSessionStar,
+  updateSessionWorkspacePin,
   updateSessionDetails,
   updateSessionTags,
   updateQueuedMessage,
@@ -406,6 +408,83 @@ describe("session attention API", () => {
         body: JSON.stringify({ session: "work/name", ignored: true }),
       }),
     ]);
+  });
+});
+
+describe("session workspace pin API", () => {
+  it("updates the global pin and returns the workspace revision fence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      session: "work/name",
+      workspacePinned: true,
+      sessionRevision: 9,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateSessionWorkspacePin("work/name", true)).resolves.toEqual({
+      session: "work/name",
+      workspacePinned: true,
+      sessionRevision: 9,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/session-workspace-pin`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ session: "work/name", pinned: true }),
+      }),
+    );
+  });
+});
+
+describe("session workspace transfer API", () => {
+  it("posts the source, destination, operation, and revision fence", async () => {
+    const destinationWorkspace = {
+      id: "destination",
+      name: "Destination",
+      tabs: ["work/name"],
+      groups: [],
+      quickLinks: [],
+      activeSession: "work/name",
+      sessionRevision: 10,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveAt: 1,
+    };
+    const result = {
+      session: "work/name",
+      operation: "copy" as const,
+      destinationAlreadyContained: false,
+      destinationAdded: true,
+      sourceRemoved: false,
+      sourceWorkspace: null,
+      destinationWorkspace,
+      sessionRevision: 10,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(transferSessionToWorkspace(
+      "work/name",
+      "source",
+      "destination",
+      "copy",
+      9,
+    )).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/session-workspace-transfer`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          session: "work/name",
+          sourceWorkspaceId: "source",
+          destinationWorkspaceId: "destination",
+          operation: "copy",
+          sessionRevision: 9,
+        }),
+      }),
+    );
   });
 });
 

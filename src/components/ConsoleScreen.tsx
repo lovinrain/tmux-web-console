@@ -15,8 +15,11 @@ import {
   listSessions,
   renameSession,
   updateSessionDetails,
+  updateSessionWorkspacePin,
   updateSessionTags,
   updateSessionTitle,
+  type WorkspaceSessionTransferOperation,
+  type WorkspaceSessionTransferResult,
 } from "../api";
 import {
   ArrowLeftIcon,
@@ -29,10 +32,12 @@ import {
   KeyboardIcon,
   ListIcon,
   MoveIcon,
+  PinIcon,
   RefreshIcon,
   TerminalIcon,
   TrashIcon,
   WindowCopyIcon,
+  WindowMoveIcon,
 } from "../icons";
 import {
   AGENT_SCROLL_PREFERENCES_STORAGE_KEY,
@@ -58,6 +63,7 @@ import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
+import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
 import {
   DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
   MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
@@ -68,6 +74,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 interface ConsoleScreenProps {
   sessionName: string;
+  workspaceId?: string | null;
   workspaceName?: string | null;
   onBack: () => void;
   headerNotes?: ReactNode;
@@ -90,6 +97,18 @@ interface ConsoleScreenProps {
   onHistoryPanelWidthChange?: (width: number) => void;
   onSessionsChange?: (sessions: Session[]) => void;
   onSessionUpdate?: (session: Session) => void;
+  onWorkspacePinChange?: (
+    sessionName: string,
+    pinned: boolean,
+    sessionRevision: number,
+  ) => void | Promise<void>;
+  onSessionWorkspaceTransfer?: (
+    sessionName: string,
+    destinationWorkspaceId: string,
+    operation: WorkspaceSessionTransferOperation,
+    sessionRevision: number,
+  ) => Promise<WorkspaceSessionTransferResult>;
+  workspaceTransferDisabled?: boolean;
   onSessionRenamed?: (
     previousName: string,
     nextName: string,
@@ -343,6 +362,7 @@ function ConsoleBarToolbar({
 
 export function ConsoleScreen({
   sessionName,
+  workspaceId = null,
   workspaceName = null,
   onBack,
   headerNotes,
@@ -364,6 +384,9 @@ export function ConsoleScreen({
   onHistoryPanelWidthChange,
   onSessionsChange,
   onSessionUpdate,
+  onWorkspacePinChange,
+  onSessionWorkspaceTransfer,
+  workspaceTransferDisabled = false,
   onSessionRenamed,
   onSessionTerminated,
   onSessionCopied,
@@ -399,6 +422,12 @@ export function ConsoleScreen({
     sourceName: string;
     message: string;
   } | null>(null);
+  const [workspacePinSource, setWorkspacePinSource] = useState<string | null>(null);
+  const [workspacePinError, setWorkspacePinError] = useState<{
+    sessionName: string;
+    message: string;
+  } | null>(null);
+  const [workspaceTransferOpen, setWorkspaceTransferOpen] = useState(false);
   const [ignoreSize, setIgnoreSize] = useState(false);
   const [localBarVisibility, setLocalBarVisibility] = useState(
     DEFAULT_CONSOLE_BAR_VISIBILITY,
@@ -496,6 +525,45 @@ export function ConsoleScreen({
     setCopyingSource(null);
     onSessionCopied(sourceName, created.name, created.id);
   }, [copySessionDisabled, onSessionCopied, session, theme]);
+
+  const toggleWorkspacePin = useCallback(async () => {
+    if (workspacePinSource !== null || !session) return;
+    const sourceName = session.name;
+    const previous = Boolean(session.workspacePinned);
+    const next = !previous;
+    setWorkspacePinSource(sourceName);
+    setWorkspacePinError(null);
+    setLoadedSession((current) => current?.name === sourceName
+      ? { ...current, workspacePinned: next }
+      : current);
+    try {
+      const result = await updateSessionWorkspacePin(sourceName, next);
+      const updatedSession = { ...session, workspacePinned: result.workspacePinned };
+      setLoadedSession((current) => current?.name === sourceName
+        ? { ...current, workspacePinned: result.workspacePinned }
+        : current);
+      onSessionUpdate?.(updatedSession);
+      await onWorkspacePinChange?.(
+        result.session,
+        result.workspacePinned,
+        result.sessionRevision,
+      );
+    } catch (error) {
+      setLoadedSession((current) => current?.name === sourceName
+        ? { ...current, workspacePinned: previous }
+        : current);
+      if (sessionNameRef.current === sourceName) {
+        setWorkspacePinError({
+          sessionName: sourceName,
+          message: error instanceof Error
+            ? error.message
+            : "Unable to update the workspace pin",
+        });
+      }
+    } finally {
+      setWorkspacePinSource(null);
+    }
+  }, [onSessionUpdate, onWorkspacePinChange, session, workspacePinSource]);
 
   const setBarVisible = useCallback((bar: ConsoleBar, visible: boolean) => {
     if (onBarVisibilityChange) {
@@ -799,6 +867,7 @@ export function ConsoleScreen({
           setTerminateTarget(null);
           setMessagesOpen(false);
           setSnippetsOpen(false);
+          setWorkspaceTransferOpen(false);
           setLookupError({
             sessionName,
             message: "This tmux session no longer exists.",
@@ -837,6 +906,7 @@ export function ConsoleScreen({
     setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
+    setWorkspaceTransferOpen(false);
   }, [resetDesktopFocusShortcutsPosition, sessionName]);
 
   useEffect(() => {
@@ -852,6 +922,7 @@ export function ConsoleScreen({
     setTerminateTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
+    setWorkspaceTransferOpen(false);
   }, [resetDesktopFocusShortcutsPosition, workspaceOverlayOpen]);
 
   useEffect(() => {
@@ -869,6 +940,7 @@ export function ConsoleScreen({
         setDesktopCopyMode(false);
         setDesktopTerminalFocus(false);
         setDesktopFocusShortcutsOpen(false);
+        setWorkspaceTransferOpen(false);
         resetDesktopFocusShortcutsPosition();
       }
     };
@@ -1339,6 +1411,42 @@ export function ConsoleScreen({
               <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
             </button>
           )}
+          <button
+            type="button"
+            className={session?.workspacePinned
+              ? "workspace-pin-button active"
+              : "workspace-pin-button"}
+            aria-label={session?.workspacePinned
+              ? `Unpin ${sessionName} from every workspace`
+              : `Pin ${sessionName} to every workspace`}
+            aria-pressed={Boolean(session?.workspacePinned)}
+            aria-busy={workspacePinSource === sessionName}
+            disabled={!session || workspacePinSource !== null}
+            title={session?.workspacePinned
+              ? "Stop adding this session to every workspace"
+              : "Add this session once to every saved and future workspace"}
+            onClick={() => void toggleWorkspacePin()}
+          >
+            <PinIcon filled={Boolean(session?.workspacePinned)} />
+            <span>{session?.workspacePinned ? "Pinned all" : "Pin all"}</span>
+          </button>
+          {onSessionWorkspaceTransfer && (
+            <button
+              type="button"
+              className="workspace-transfer-button"
+              aria-label={`Move or copy ${sessionName} to a workspace`}
+              aria-haspopup="dialog"
+              aria-expanded={workspaceTransferOpen}
+              disabled={!session || workspaceTransferDisabled}
+              title={workspaceTransferDisabled
+                ? "Wait for the current workspace to finish syncing"
+                : "Move or copy this session to a saved workspace"}
+              onClick={() => setWorkspaceTransferOpen(true)}
+            >
+              <WindowMoveIcon />
+              <span>Move / Copy</span>
+            </button>
+          )}
           <ThemeToggle />
           {pane?.command === "grok" && !pane.dead && (
             <button
@@ -1364,6 +1472,13 @@ export function ConsoleScreen({
         <aside className="copy-new-error" role="alert">
           <span>Copy New failed: {copySessionError.message}</span>
           <button type="button" onClick={() => setCopySessionError(null)}>Dismiss</button>
+        </aside>
+      )}
+
+      {workspacePinError?.sessionName === sessionName && (
+        <aside className="copy-new-error workspace-pin-error" role="alert">
+          <span>Workspace pin failed: {workspacePinError.message}</span>
+          <button type="button" onClick={() => setWorkspacePinError(null)}>Dismiss</button>
         </aside>
       )}
 
@@ -1682,6 +1797,26 @@ export function ConsoleScreen({
           onRename={saveSessionName}
         />
       )}
+      {!workspaceOverlayOpen
+        && workspaceTransferOpen
+        && session
+        && onSessionWorkspaceTransfer && (
+          <SessionWorkspaceTransferDialog
+            sessionName={session.name}
+            sourceWorkspaceId={workspaceId}
+            sourceWorkspaceName={workspaceName}
+            workspacePinned={Boolean(session.workspacePinned)}
+            onClose={() => setWorkspaceTransferOpen(false)}
+            onTransfer={(destinationWorkspaceId, operation, sessionRevision) => (
+              onSessionWorkspaceTransfer(
+                session.name,
+                destinationWorkspaceId,
+                operation,
+                sessionRevision,
+              )
+            )}
+          />
+        )}
       {!workspaceOverlayOpen && terminateTarget && (
         <SessionTerminateDialog
           sessionName={terminateTarget.name}

@@ -355,22 +355,24 @@ second contains memoranda and may include sensitive commands or prose. The third
 contains the global folder/snippet tree and may also contain sensitive commands
 or prose. The fourth contains saved workspace names, ordered tmux session names,
 tab-group names/colors/membership, common, workspace-specific, and
-session-specific quick links, Common/Workspace/Session notes, and activity times.
+session-specific quick links, Common/Workspace/Session notes, global session
+pins and their per-workspace inherited-membership provenance, and activity times.
 Notes may contain sensitive commands or prose. An existing unit may override any
 path; inspect its environment rather than assuming defaults.
 
-The workspace file uses schema version 6. Version 1 loads at native-session
-rename revision zero; versions 1 and 2 load with no tab groups, and versions 1
+The workspace file uses schema version 7. Version 1 loads at workspace session
+revision zero; versions 1 and 2 load with no tab groups, and versions 1
 through 3 load with no common or workspace-specific quick links. Versions 1
-through 4 load with no session-specific quick links, and versions 1 through 5
-load with empty scoped notes. A legacy file upgrades atomically on the next
-workspace, quick-link, or note write. Each record permits an 80-character name,
+through 4 load with no session-specific quick links, versions 1 through 5 load
+with empty scoped notes, and versions 1 through 6 load with no global session
+pins or inherited-pin provenance. A legacy file upgrades atomically on the next
+workspace, quick-link, note, or global-pin write. Each record permits an 80-character name,
 at most 32 unique ordered tabs, at most 16 disjoint contiguous tab groups whose
 names are at most 40 characters, and at most 16 quick links; the global common
 shelf and each native-session shelf also permit 16 links. Quick-link labels are
 limited to 48 characters and URLs to 2,048 characters. Each scoped note is
 limited to 8,000 characters. Keep a pre-upgrade copy for rollback because a
-release that only understands versions 1 through 5 rejects the version 6
+release that only understands versions 1 through 6 rejects the version 7
 document. As with snippets, an unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
@@ -419,8 +421,12 @@ workspace, and session notes use the same scopes and last-write-wins replacement
 deleting a workspace also deletes only its workspace-scoped note. Concurrent
 pages use last-write-wins semantics for ordinary activity, quick-link, and note
 replacement. Each tab snapshot echoes the document-wide native session rename
-revision; stale pre-rename snapshots receive `409` and reload instead of
-restoring an obsolete session name. Deleting a saved workspace must not stop,
+revision; native renames, global-pin changes, and atomic copy/move transfers
+advance that fence. Stale snapshots receive `409` and reload instead of
+restoring an obsolete session name or undoing an explicit session transfer.
+Copying to a workspace deduplicates existing membership. Moving writes the
+destination and saved source in one state-file replacement, and rejects a full
+destination or globally pinned session without removing the source. Deleting a saved workspace must not stop,
 rename, resize, or send input to any referenced tmux session.
 
 Renaming a native session through Muxdeck moves its title/tag/star/ignored
@@ -625,6 +631,10 @@ From a client allowed by the chosen access controls, verify:
    listing workspaces, links, or notes must not mutate tmux.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
+10. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
+    one destination tab; moving to a destination that already contains the
+    session removes only the source tab. A globally pinned session explains why
+    Move is unavailable until it is unpinned.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux
@@ -667,11 +677,11 @@ For a failed replacement:
    does not understand it, so a later compatible release can recover the saved
    workspace list.
    When rolling back to a release that only understands workspace-file versions
-   1 through 5, retain a separate copy of the version-6 file and restore the
-   pre-upgrade `workspaces.json`; scoped notes are unavailable to that older
-   release. Versions 1 through 4 also lack session-specific quick links, and
-   versions 1 through 3 additionally lack common and workspace-specific quick
-   links.
+   1 through 6, retain a separate copy of the version-7 file and restore the
+   pre-upgrade `workspaces.json`; global pins and inherited-membership provenance
+   are unavailable to that older release. Versions 1 through 5 also lack scoped
+   notes, versions 1 through 4 lack session-specific quick links, and versions 1
+   through 3 additionally lack common and workspace-specific quick links.
    When rolling back to a release that only writes title-file version 1 through
    3, retain a separate copy of the version-4 file and restore the pre-upgrade
    `session-titles.json`; tags are unavailable to that older release and would be

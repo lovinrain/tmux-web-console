@@ -17,9 +17,11 @@ from tmux_console.workspaces import (
     WORKSPACE_SCHEMA_VERSION,
     WORKSPACE_STORE_UNAVAILABLE_MESSAGE,
     WorkspaceNotFoundError,
+    WorkspacePinCapacityError,
     WorkspaceSessionRevisionConflict,
     WorkspaceStore,
     WorkspaceStoreUnavailable,
+    WorkspaceTransferConflictError,
     _WorkspaceDirectorySyncError,
     default_workspaces_path,
     normalize_scoped_note,
@@ -126,8 +128,10 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
     assert document["commonNote"] == ""
     assert document["workspaceNotes"] == {}
     assert document["sessionNotes"] == {}
+    assert document["pinnedSessions"] == []
     persisted_active = {**active}
     del persisted_active["sessionRevision"]
+    persisted_active["inheritedPins"] = []
     assert document["workspaces"] == [persisted_active]
     assert list(tmp_path.glob(".workspaces.json.*.tmp")) == []
 
@@ -393,6 +397,276 @@ def test_version_five_workspace_defaults_scoped_notes_and_upgrades_on_write(tmp_
     assert upgraded["workspaceNotes"] == {"legacy-id": "Remember this"}
     assert upgraded["sessionNotes"] == {}
     assert upgraded["sessionQuickLinks"]["agent"][0]["id"] == "trace"
+
+
+def test_version_six_workspace_defaults_global_pins_and_upgrades_on_write(tmp_path):
+    path = tmp_path / "workspaces.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 6,
+                "sessionRenameRevision": 4,
+                "commonQuickLinks": [],
+                "sessionQuickLinks": {},
+                "commonNote": "Shared",
+                "workspaceNotes": {},
+                "sessionNotes": {},
+                "workspaces": [
+                    {
+                        "id": "legacy-id",
+                        "name": "Legacy workspace",
+                        "tabs": ["agent"],
+                        "groups": [],
+                        "quickLinks": [],
+                        "activeSession": "agent",
+                        "createdAt": 1_000,
+                        "updatedAt": 1_000,
+                        "lastActiveAt": 1_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = WorkspaceStore(path)
+
+    assert store.list_pinned_sessions() == ()
+    store.replace_common_note("Updated")
+
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
+    assert upgraded["pinnedSessions"] == []
+    assert upgraded["workspaces"][0]["inheritedPins"] == []
+
+
+def test_global_workspace_pin_deduplicates_and_tracks_inherited_membership(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(
+        path,
+        clock=lambda: 10,
+        id_factory=sequence(["explicit", "inherited", "future"]),
+    )
+    explicit = store.create_workspace(
+        name="Already here",
+        tabs=["agent", "other"],
+        active_session="other",
+    )
+    inherited = store.create_workspace(
+        name="Needs pin",
+        tabs=["other"],
+        active_session="other",
+    )
+
+    result = store.set_session_workspace_pinned("agent", True)
+
+    assert result == {
+        "session": "agent",
+        "workspacePinned": True,
+        "sessionRevision": 1,
+    }
+    assert store.list_pinned_sessions() == ("agent",)
+    assert store.get_workspace("explicit")["tabs"] == ["agent", "other"]
+    assert store.get_workspace("explicit")["updatedAt"] == explicit["updatedAt"]
+    assert store.get_workspace("inherited")["tabs"] == ["other", "agent"]
+    assert store.get_workspace("inherited")["updatedAt"] > inherited["updatedAt"]
+
+    # Repeating the action is idempotent and never appends another copy.
+    assert store.set_session_workspace_pinned("agent", True)["sessionRevision"] == 1
+    assert store.get_workspace("inherited")["tabs"].count("agent") == 1
+
+    future = store.create_workspace(
+        name="Created later",
+        tabs=["future-only"],
+        active_session="future-only",
+    )
+    assert future["tabs"] == ["future-only", "agent"]
+
+    # Stale or ordinary browser activity cannot drop a live global pin.
+    saved = store.record_activity(
+        "inherited",
+        tabs=["other"],
+        active_session="other",
+        session_revision=1,
+    )
+    assert saved["tabs"] == ["other", "agent"]
+
+    unpinned = store.set_session_workspace_pinned("agent", False)
+    assert unpinned["sessionRevision"] == 2
+    assert store.get_workspace("explicit")["tabs"] == ["agent", "other"]
+    assert store.get_workspace("inherited")["tabs"] == ["other"]
+    assert store.get_workspace("future")["tabs"] == ["future-only"]
+    assert WorkspaceStore(path).list_pinned_sessions() == ()
+
+
+def test_global_workspace_pin_rejects_full_workspace_atomically(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "full",
+    )
+    full_tabs = [f"session-{index}" for index in range(MAX_WORKSPACE_TABS)]
+    original = store.create_workspace(
+        name="Full",
+        tabs=full_tabs,
+        active_session=full_tabs[0],
+    )
+
+    with pytest.raises(WorkspacePinCapacityError, match="already has 32 sessions"):
+        store.set_session_workspace_pinned("new-agent", True)
+
+    assert store.list_pinned_sessions() == ()
+    assert store.get_workspace("full") == original
+
+
+def test_workspace_session_transfer_copies_deduplicates_and_moves_atomically(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(
+        path,
+        clock=lambda: 10,
+        id_factory=sequence(["source", "destination"]),
+    )
+    source = store.create_workspace(
+        name="Source",
+        tabs=["agent", "sidecar"],
+        groups=[workspace_group("pair", ["agent", "sidecar"])],
+        active_session="agent",
+    )
+    destination = store.create_workspace(
+        name="Destination",
+        tabs=["review"],
+        active_session="review",
+    )
+
+    copied = store.transfer_session(
+        "agent",
+        source_workspace_id="source",
+        destination_workspace_id="destination",
+        operation="copy",
+        session_revision=0,
+    )
+    assert copied["destinationAdded"] is True
+    assert copied["destinationAlreadyContained"] is False
+    assert copied["sourceRemoved"] is False
+    assert copied["sessionRevision"] == 1
+    assert copied["sourceWorkspace"]["tabs"] == source["tabs"]
+    assert copied["destinationWorkspace"]["tabs"] == ["review", "agent"]
+
+    repeated = store.transfer_session(
+        "agent",
+        source_workspace_id="source",
+        destination_workspace_id="destination",
+        operation="copy",
+        session_revision=1,
+    )
+    assert repeated["destinationAlreadyContained"] is True
+    assert repeated["destinationAdded"] is False
+    assert repeated["sessionRevision"] == 1
+    assert repeated["destinationWorkspace"]["tabs"].count("agent") == 1
+
+    moved = store.transfer_session(
+        "agent",
+        source_workspace_id="source",
+        destination_workspace_id="destination",
+        operation="move",
+        session_revision=1,
+    )
+    assert moved["destinationAlreadyContained"] is True
+    assert moved["destinationAdded"] is False
+    assert moved["sourceRemoved"] is True
+    assert moved["sessionRevision"] == 2
+    assert moved["sourceWorkspace"]["tabs"] == ["sidecar"]
+    assert moved["sourceWorkspace"]["groups"] == [
+        workspace_group("pair", ["sidecar"])
+    ]
+    assert moved["sourceWorkspace"]["activeSession"] == "sidecar"
+    assert moved["destinationWorkspace"]["tabs"] == ["review", "agent"]
+    assert WorkspaceStore(path).get_workspace("destination")["tabs"].count("agent") == 1
+    assert destination["lastActiveAt"] == moved["destinationWorkspace"]["lastActiveAt"]
+
+
+def test_workspace_session_transfer_rejects_stale_full_and_pinned_moves(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=sequence(["source", "full"]),
+    )
+    store.create_workspace(
+        name="Source",
+        tabs=["agent"],
+        active_session="agent",
+    )
+    full_tabs = [f"session-{index}" for index in range(MAX_WORKSPACE_TABS)]
+    full = store.create_workspace(
+        name="Full",
+        tabs=full_tabs,
+        active_session=full_tabs[0],
+    )
+
+    with pytest.raises(WorkspaceTransferConflictError, match="already has 32 sessions"):
+        store.transfer_session(
+            "agent",
+            source_workspace_id="source",
+            destination_workspace_id="full",
+            operation="move",
+            session_revision=0,
+        )
+    assert store.get_workspace("source")["tabs"] == ["agent"]
+    assert store.get_workspace("full") == full
+
+    pinned_store = WorkspaceStore(
+        tmp_path / "pinned-workspaces.json",
+        id_factory=sequence(["pinned-source", "pinned-destination"]),
+    )
+    pinned_store.create_workspace(
+        name="Pinned source",
+        tabs=["agent"],
+        active_session="agent",
+    )
+    pinned_store.create_workspace(
+        name="Pinned destination",
+        tabs=[],
+        active_session=None,
+    )
+    pinned_store.set_session_workspace_pinned("agent", True)
+    with pytest.raises(WorkspaceSessionRevisionConflict, match="current revision is 1"):
+        pinned_store.transfer_session(
+            "agent",
+            source_workspace_id="pinned-source",
+            destination_workspace_id="pinned-destination",
+            operation="copy",
+            session_revision=0,
+        )
+    with pytest.raises(WorkspaceTransferConflictError, match="unpin it first"):
+        pinned_store.transfer_session(
+            "agent",
+            source_workspace_id="pinned-source",
+            destination_workspace_id="pinned-destination",
+            operation="move",
+            session_revision=1,
+        )
+
+
+def test_session_rename_migrates_global_pin_and_its_provenance(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=sequence(["explicit", "inherited"]),
+    )
+    store.create_workspace(
+        name="Explicit",
+        tabs=["old"],
+        active_session="old",
+    )
+    store.create_workspace(
+        name="Inherited",
+        tabs=[],
+        active_session=None,
+    )
+    store.set_session_workspace_pinned("old", True)
+
+    assert store.rename_session("old", "new") == 2
+    assert store.list_pinned_sessions() == ("new",)
+
+    store.set_session_workspace_pinned("new", False)
+    assert store.get_workspace("explicit")["tabs"] == ["new"]
+    assert store.get_workspace("inherited")["tabs"] == []
 
 
 def test_common_workspace_and_session_quick_links_are_atomic_and_independent(tmp_path):
@@ -966,6 +1240,7 @@ def test_failed_persistence_does_not_mutate_memory(tmp_path, monkeypatch):
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise OSError("disk full")
 
@@ -993,6 +1268,7 @@ def test_failed_rename_revision_persistence_does_not_advance_memory(
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise OSError("disk full")
 
@@ -1026,6 +1302,7 @@ def test_post_replace_directory_sync_failure_advances_without_fencing(
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise _WorkspaceDirectorySyncError("directory sync failed")
 
@@ -1058,6 +1335,7 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
                 "commonNote": "",
                 "workspaceNotes": {},
                 "sessionNotes": {},
+                "pinnedSessions": [],
                 "workspaces": [
                     {
                         "id": "workspace-id",
@@ -1065,6 +1343,7 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
                         "tabs": ["old"],
                         "groups": [],
                         "quickLinks": [],
+                        "inheritedPins": [],
                         "activeSession": "old",
                         "createdAt": 1_000,
                         "updatedAt": 1_000,
@@ -1124,6 +1403,7 @@ def test_malformed_session_quick_link_state_fails_closed(tmp_path):
             "commonNote": "",
             "workspaceNotes": {},
             "sessionNotes": {},
+            "pinnedSessions": [],
             "workspaces": [],
         }
     ).encode()

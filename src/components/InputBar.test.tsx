@@ -124,6 +124,7 @@ describe("InputBar", () => {
     fireEvent.click(startButton);
     fireEvent.click(endButton);
     fireEvent.click(deleteToEndButton);
+    fireEvent.click(screen.getByRole("button", { name: "Clear terminal input" }));
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
     fireEvent.click(screen.getByRole("button", { name: "PgDn" }));
     fireEvent.click(screen.getByRole("button", { name: "Esc" }));
@@ -141,6 +142,7 @@ describe("InputBar", () => {
       ["\x01"],
       ["\x05"],
       ["\x0b"],
+      ["\x01\x0b"],
       ["\x1b[5~"],
       ["\x1b[6~"],
       ["\x1b"],
@@ -261,6 +263,7 @@ describe("InputBar", () => {
     expect(textarea).toHaveValue("prepare this offline");
     expect(screen.getByRole("button", { name: "Queue in memo" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Send + Enter" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear terminal input" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Focus live terminal input" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Esc" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Tmux Page Up" })).toBeDisabled();
@@ -292,6 +295,34 @@ describe("InputBar", () => {
     fireEvent.click(startButton);
 
     expect(onSend).toHaveBeenCalledWith("\x01");
+  });
+
+  it("clears terminal-side input without discarding the local staged draft", () => {
+    const onSend = vi.fn(() => true);
+    render(<InputBar {...props} onSend={onSend} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const clearDraft = screen.getByRole("button", { name: /^Clear$/ });
+    const clearTerminal = screen.getByRole("button", { name: "Clear terminal input" });
+
+    expect(clearDraft).toBeDisabled();
+    expect(clearTerminal).toBeEnabled();
+    expect(clearTerminal).toHaveAttribute(
+      "title",
+      expect.stringContaining("keep the local staged-input box unchanged"),
+    );
+
+    fireEvent.input(textarea, { target: { value: "keep this reusable draft" } });
+    textarea.focus();
+    expect(fireEvent.mouseDown(clearTerminal)).toBe(false);
+    expect(textarea).toHaveFocus();
+    fireEvent.click(clearTerminal);
+
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledWith("\x01\x0b");
+    expect(textarea).toHaveValue("keep this reusable draft");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
+      .toBe("keep this reusable draft");
+    expect(screen.getByText(/Terminal-side input cleared/)).toBeVisible();
   });
 
   it("sends the staged snapshot followed by Tab and clears only after acknowledgement", async () => {
@@ -336,6 +367,7 @@ describe("InputBar", () => {
 
     expect(actionButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
       "Clear",
+      "Clear terminal input",
       "Send",
       "Send + Enter",
       "Queue in memo",
@@ -343,10 +375,17 @@ describe("InputBar", () => {
     ]);
     expect(Array.from(actions.querySelectorAll(".composer-action-label-full"), (label) => (
       label.textContent
-    ))).toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Send + Tab"]);
+    ))).toEqual([
+      "Clear",
+      "Clear terminal",
+      "Send",
+      "Send + Enter",
+      "Queue in memo",
+      "Send + Tab",
+    ]);
     expect(Array.from(actions.querySelectorAll(".composer-action-label-compact"), (label) => (
       label.textContent
-    ))).toEqual(["C", "S", "S+E", "M", "S+T"]);
+    ))).toEqual(["C", "CT", "S", "S+E", "M", "S+T"]);
     expect(screen.getAllByRole("button", { name: "Send + Tab" }))
       .toHaveLength(1);
     expect(within(screen.getByRole("group", { name: "Mobile staged input controls" }))
@@ -427,7 +466,7 @@ describe("InputBar", () => {
     const actions = document.querySelector<HTMLElement>(".composer-actions-primary")!;
     const queueAction = within(actions).getByRole("button", { name: "Queue in memo" });
 
-    expect(within(actions).getAllByRole("button")).toHaveLength(5);
+    expect(within(actions).getAllByRole("button")).toHaveLength(6);
     expect(queueAction).toHaveClass("has-queued");
     expect(queueAction.querySelector(".composer-memo-queued-count")).toBeNull();
 
@@ -445,7 +484,7 @@ describe("InputBar", () => {
       .toHaveTextContent("M");
     expect(badge).toHaveTextContent("Q 3");
     expect(badge).toHaveAttribute("aria-hidden", "true");
-    expect(within(actions).getAllByRole("button")).toHaveLength(5);
+    expect(within(actions).getAllByRole("button")).toHaveLength(6);
   });
 
   it("submits the final replacement value once and clears only after success", async () => {
@@ -487,7 +526,8 @@ describe("InputBar", () => {
     expect(screen.getByRole("button", { name: "Queue in memo" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Queue in memo" })
       .querySelector(".composer-action-label-full")).toHaveTextContent("Queueing...");
-    expect(screen.getByRole("button", { name: "Clear" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Clear$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear terminal input" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
     await act(async () => resolveAdd?.());
@@ -961,6 +1001,8 @@ describe("InputBar", () => {
     );
     expect(aliasButton).toBeEnabled();
     expect(renameButton).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Insert snippet into staged input" }))
+      .toBeEnabled();
 
     fireEvent.click(aliasButton);
     expect(onEditSessionTitle).toHaveBeenCalledOnce();
@@ -968,11 +1010,36 @@ describe("InputBar", () => {
 
     fireEvent.click(renameButton);
     fireEvent.click(screen.getByRole("button", { name: "Open memoranda" }));
+    fireEvent.click(screen.getByRole("button", { name: "Insert snippet into staged input" }));
     fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
 
     expect(onRenameSession).toHaveBeenCalledOnce();
     expect(onOpenMessages).toHaveBeenCalledOnce();
+    expect(onOpenSnippets).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens snippets from the staged-input heading without losing the insertion point", () => {
+    const onOpenSnippets = vi.fn();
+    render(<InputBar {...props} enabled={false} onOpenSnippets={onOpenSnippets} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" }) as HTMLTextAreaElement;
+    const snippetButton = screen.getByRole("button", {
+      name: "Insert snippet into staged input",
+    });
+
+    fireEvent.input(textarea, { target: { value: "alpha omega" } });
+    textarea.focus();
+    textarea.setSelectionRange(6, 11);
+
+    expect(fireEvent.mouseDown(snippetButton)).toBe(false);
+    expect(textarea).toHaveFocus();
+    expect(textarea.selectionStart).toBe(6);
+    expect(textarea.selectionEnd).toBe(11);
+
+    fireEvent.click(snippetButton);
+
     expect(onOpenSnippets).toHaveBeenCalledOnce();
+    expect(textarea.selectionStart).toBe(6);
+    expect(textarea.selectionEnd).toBe(11);
   });
 
   it("disables alias and native rename independently when callbacks are unavailable", () => {

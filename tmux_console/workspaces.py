@@ -43,7 +43,7 @@ WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 6
+WORKSPACE_SCHEMA_VERSION = 7
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -102,6 +102,32 @@ def validate_workspace_tabs(value: object) -> tuple[str, ...]:
         seen.add(tab)
         tabs.append(tab)
     return tuple(tabs)
+
+
+def _validate_pinned_session_names(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be an array")
+    if len(value) > MAX_WORKSPACE_TABS:
+        raise ValueError(
+            f"{field} cannot contain more than {MAX_WORKSPACE_TABS} sessions"
+        )
+
+    sessions: list[str] = []
+    seen: set[str] = set()
+    for index, candidate in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if not isinstance(candidate, str):
+            raise TypeError(f"{item_field} must be a string")
+        try:
+            session_name = validate_session_name(candidate)
+            _validate_unicode(session_name, item_field)
+        except ValueError as error:
+            raise ValueError(f"{item_field}: {error}") from error
+        if session_name in seen:
+            raise ValueError(f"{field} contains duplicate session: {session_name}")
+        seen.add(session_name)
+        sessions.append(session_name)
+    return tuple(sessions)
 
 
 def _validate_workspace_group_id(value: object, field: str) -> str:
@@ -566,13 +592,14 @@ class SavedWorkspace:
     tabs: tuple[str, ...]
     groups: tuple[WorkspaceGroup, ...]
     quick_links: tuple[WorkspaceQuickLink, ...]
+    inherited_pins: tuple[str, ...]
     active_session: str | None
     created_at: int
     updated_at: int
     last_active_at: int
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
+        payload = {
             "id": self.id,
             "name": self.name,
             "tabs": list(self.tabs),
@@ -583,6 +610,9 @@ class SavedWorkspace:
             "updatedAt": self.updated_at,
             "lastActiveAt": self.last_active_at,
         }
+        if include_internal:
+            payload["inheritedPins"] = list(self.inherited_pins)
+        return payload
 
 
 class WorkspaceNotFoundError(LookupError):
@@ -600,6 +630,14 @@ class WorkspaceSessionRevisionConflict(RuntimeError):
 
 
 class WorkspaceStoreUnavailable(RuntimeError):
+    pass
+
+
+class WorkspacePinCapacityError(ValueError):
+    pass
+
+
+class WorkspaceTransferConflictError(ValueError):
     pass
 
 
@@ -627,6 +665,7 @@ class WorkspaceStore:
             self._common_quick_links,
             self._session_quick_links,
             self._notes,
+            self._pinned_sessions,
         ) = self._load()
         if (
             self._load_error is None
@@ -653,6 +692,200 @@ class WorkspaceStore:
         with self._lock:
             self._ensure_available()
             return self._workspace_dict(self._find(workspace_id))
+
+    def list_pinned_sessions(self) -> tuple[str, ...]:
+        with self._lock:
+            self._ensure_available()
+            return self._pinned_sessions
+
+    def set_session_workspace_pinned(
+        self,
+        session_name: str,
+        pinned: bool,
+    ) -> dict[str, Any]:
+        session_name = validate_session_name(session_name)
+        if not isinstance(pinned, bool):
+            raise TypeError("pinned must be a boolean")
+
+        with self._lock:
+            self._ensure_writable()
+            currently_pinned = session_name in self._pinned_sessions
+            if currently_pinned == pinned:
+                return {
+                    "session": session_name,
+                    "workspacePinned": pinned,
+                    "sessionRevision": self._session_rename_revision,
+                }
+            if self._session_rename_revision == MAX_SESSION_RENAME_REVISION:
+                self._fence_writes("the session rename revision is exhausted")
+                raise WorkspaceStoreUnavailable(WORKSPACE_STORE_UNAVAILABLE_MESSAGE)
+
+            timestamp = self._timestamp()
+            next_workspaces = self._workspaces.copy()
+            if pinned:
+                for workspace in self._workspaces.values():
+                    if (
+                        session_name not in workspace.tabs
+                        and len(workspace.tabs) >= MAX_WORKSPACE_TABS
+                    ):
+                        raise WorkspacePinCapacityError(
+                            f'cannot pin session "{session_name}": workspace '
+                            f'"{workspace.name}" already has {MAX_WORKSPACE_TABS} sessions'
+                        )
+                next_pinned_sessions = (*self._pinned_sessions, session_name)
+                for workspace_id, current in self._workspaces.items():
+                    if session_name in current.tabs:
+                        continue
+                    next_workspaces[workspace_id] = replace(
+                        current,
+                        tabs=(*current.tabs, session_name),
+                        inherited_pins=(*current.inherited_pins, session_name),
+                        updated_at=max(timestamp, current.updated_at + 1),
+                    )
+            else:
+                next_pinned_sessions = tuple(
+                    item for item in self._pinned_sessions if item != session_name
+                )
+                for workspace_id, current in self._workspaces.items():
+                    if session_name not in current.inherited_pins:
+                        continue
+                    tabs = tuple(tab for tab in current.tabs if tab != session_name)
+                    active_session = current.active_session
+                    if active_session == session_name:
+                        active_session = tabs[0] if tabs else None
+                    next_workspaces[workspace_id] = replace(
+                        current,
+                        tabs=tabs,
+                        groups=_reconcile_workspace_groups(current.groups, tabs),
+                        inherited_pins=tuple(
+                            item
+                            for item in current.inherited_pins
+                            if item != session_name
+                        ),
+                        active_session=active_session,
+                        updated_at=max(timestamp, current.updated_at + 1),
+                    )
+
+            next_revision = self._session_rename_revision + 1
+            self._commit(
+                next_workspaces,
+                next_revision,
+                pinned_sessions=next_pinned_sessions,
+            )
+            return {
+                "session": session_name,
+                "workspacePinned": pinned,
+                "sessionRevision": next_revision,
+            }
+
+    def transfer_session(
+        self,
+        session_name: str,
+        *,
+        destination_workspace_id: str,
+        operation: str,
+        session_revision: object,
+        source_workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        session_name = validate_session_name(session_name)
+        destination_workspace_id = _validate_workspace_id(destination_workspace_id)
+        if source_workspace_id is not None:
+            source_workspace_id = _validate_workspace_id(source_workspace_id)
+        if operation not in {"copy", "move"}:
+            raise ValueError("operation must be copy or move")
+        if source_workspace_id == destination_workspace_id:
+            raise ValueError("destination workspace must differ from source workspace")
+        validated_session_revision = _validate_session_revision(session_revision)
+
+        with self._lock:
+            self._ensure_writable()
+            if validated_session_revision != self._session_rename_revision:
+                raise WorkspaceSessionRevisionConflict(
+                    self._session_rename_revision,
+                    validated_session_revision,
+                )
+
+            destination = self._find(destination_workspace_id)
+            source = (
+                self._find(source_workspace_id)
+                if source_workspace_id is not None
+                else None
+            )
+            destination_already_contained = session_name in destination.tabs
+            if operation == "move" and session_name in self._pinned_sessions:
+                raise WorkspaceTransferConflictError(
+                    f'cannot move globally pinned session "{session_name}"; unpin it first'
+                )
+            if (
+                not destination_already_contained
+                and len(destination.tabs) >= MAX_WORKSPACE_TABS
+            ):
+                raise WorkspaceTransferConflictError(
+                    f'cannot {operation} session "{session_name}": workspace '
+                    f'"{destination.name}" already has {MAX_WORKSPACE_TABS} sessions'
+                )
+
+            source_removed = bool(
+                operation == "move"
+                and source is not None
+                and session_name in source.tabs
+            )
+            destination_added = not destination_already_contained
+            if not source_removed and not destination_added:
+                return {
+                    "session": session_name,
+                    "operation": operation,
+                    "destinationAlreadyContained": destination_already_contained,
+                    "destinationAdded": False,
+                    "sourceRemoved": False,
+                    "sourceWorkspace": self._workspace_dict(source) if source else None,
+                    "destinationWorkspace": self._workspace_dict(destination),
+                    "sessionRevision": self._session_rename_revision,
+                }
+            if self._session_rename_revision == MAX_SESSION_RENAME_REVISION:
+                self._fence_writes("the session rename revision is exhausted")
+                raise WorkspaceStoreUnavailable(WORKSPACE_STORE_UNAVAILABLE_MESSAGE)
+
+            timestamp = self._timestamp()
+            next_workspaces = self._workspaces.copy()
+            if source_removed and source is not None:
+                source_tabs = tuple(tab for tab in source.tabs if tab != session_name)
+                source_active_session = source.active_session
+                if source_active_session == session_name:
+                    source_active_session = source_tabs[0] if source_tabs else None
+                next_workspaces[source.id] = replace(
+                    source,
+                    tabs=source_tabs,
+                    groups=_reconcile_workspace_groups(source.groups, source_tabs),
+                    inherited_pins=tuple(
+                        tab for tab in source.inherited_pins if tab != session_name
+                    ),
+                    active_session=source_active_session,
+                    updated_at=max(timestamp, source.updated_at + 1),
+                )
+            if destination_added:
+                next_workspaces[destination.id] = replace(
+                    destination,
+                    tabs=(*destination.tabs, session_name),
+                    updated_at=max(timestamp, destination.updated_at + 1),
+                )
+
+            next_revision = self._session_rename_revision + 1
+            self._commit(next_workspaces, next_revision)
+            return {
+                "session": session_name,
+                "operation": operation,
+                "destinationAlreadyContained": destination_already_contained,
+                "destinationAdded": destination_added,
+                "sourceRemoved": source_removed,
+                "sourceWorkspace": (
+                    self._workspace_dict(next_workspaces[source.id]) if source else None
+                ),
+                "destinationWorkspace": self._workspace_dict(
+                    next_workspaces[destination.id]
+                ),
+                "sessionRevision": next_revision,
+            }
 
     def list_common_quick_links(self) -> list[dict[str, str]]:
         with self._lock:
@@ -799,20 +1032,21 @@ class WorkspaceStore:
         validated_quick_links = validate_workspace_quick_links(
             [] if quick_links is _QUICK_LINKS_OMITTED else quick_links,
         )
-        validated_active_session = validate_active_session(
-            active_session, validated_tabs
-        )
-
         with self._lock:
             self._ensure_writable()
+            merged_tabs, inherited_pins = self._merge_pinned_sessions(validated_tabs)
+            validated_active_session = validate_active_session(
+                active_session, merged_tabs
+            )
             workspace_id = self._new_id()
             timestamp = self._timestamp()
             workspace = SavedWorkspace(
                 id=workspace_id,
                 name=normalized_name,
-                tabs=validated_tabs,
+                tabs=merged_tabs,
                 groups=validated_groups,
                 quick_links=validated_quick_links,
+                inherited_pins=inherited_pins,
                 active_session=validated_active_session,
                 created_at=timestamp,
                 updated_at=timestamp,
@@ -855,7 +1089,14 @@ class WorkspaceStore:
                 raise WorkspaceSessionRevisionConflict(
                     self._session_rename_revision, validated_session_revision
                 )
-            next_tabs = validated_tabs if validated_tabs is not None else current.tabs
+            if validated_tabs is not None:
+                next_tabs, next_inherited_pins = self._merge_pinned_sessions(
+                    validated_tabs,
+                    current.inherited_pins,
+                )
+            else:
+                next_tabs = current.tabs
+                next_inherited_pins = current.inherited_pins
             next_groups = (
                 validate_workspace_groups(groups, next_tabs)
                 if update_groups
@@ -876,6 +1117,7 @@ class WorkspaceStore:
                 name=normalized_name if normalized_name is not None else current.name,
                 tabs=next_tabs,
                 groups=next_groups,
+                inherited_pins=next_inherited_pins,
                 active_session=next_active_session,
                 updated_at=timestamp,
             )
@@ -895,9 +1137,6 @@ class WorkspaceStore:
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
         validated_tabs = validate_workspace_tabs(tabs)
-        validated_active_session = validate_active_session(
-            active_session, validated_tabs
-        )
         validated_session_revision = _validate_session_revision(session_revision)
 
         with self._lock:
@@ -907,10 +1146,17 @@ class WorkspaceStore:
                 raise WorkspaceSessionRevisionConflict(
                     self._session_rename_revision, validated_session_revision
                 )
+            merged_tabs, inherited_pins = self._merge_pinned_sessions(
+                validated_tabs,
+                current.inherited_pins,
+            )
+            validated_active_session = validate_active_session(
+                active_session, merged_tabs
+            )
             validated_groups = (
-                validate_workspace_groups(groups, validated_tabs)
+                validate_workspace_groups(groups, merged_tabs)
                 if update_groups
-                else _reconcile_workspace_groups(current.groups, validated_tabs)
+                else _reconcile_workspace_groups(current.groups, merged_tabs)
             )
             timestamp = max(
                 self._timestamp(),
@@ -919,8 +1165,9 @@ class WorkspaceStore:
             )
             workspace = replace(
                 current,
-                tabs=validated_tabs,
+                tabs=merged_tabs,
                 groups=validated_groups,
+                inherited_pins=inherited_pins,
                 active_session=validated_active_session,
                 updated_at=timestamp,
                 last_active_at=timestamp,
@@ -976,10 +1223,22 @@ class WorkspaceStore:
                     current_name,
                     new_name,
                 )
+                inherited_pins = tuple(
+                    dict.fromkeys(
+                        new_name if item == current_name else item
+                        for item in current.inherited_pins
+                        if item == current_name
+                        or item != new_name
+                        or current_name not in current.tabs
+                    )
+                )
                 workspace = replace(
                     current,
                     tabs=renamed_tabs,
                     groups=groups,
+                    inherited_pins=tuple(
+                        item for item in inherited_pins if item in renamed_tabs
+                    ),
                     active_session=active_session,
                     updated_at=max(timestamp, current.updated_at + 1),
                 )
@@ -998,12 +1257,21 @@ class WorkspaceStore:
             if renamed_note:
                 next_session_notes[new_name] = renamed_note
 
+            next_pinned_sessions = tuple(
+                dict.fromkeys(
+                    new_name if item == current_name else item
+                    for item in self._pinned_sessions
+                    if item == current_name or item != new_name
+                )
+            )
+
             try:
                 self._commit(
                     next_workspaces,
                     self._session_rename_revision + 1,
                     session_quick_links=next_session_quick_links,
                     notes=replace(self._notes, sessions=next_session_notes),
+                    pinned_sessions=next_pinned_sessions,
                 )
             except _WorkspaceDirectorySyncError:
                 raise
@@ -1036,6 +1304,34 @@ class WorkspaceStore:
                 f"workspace not found: {workspace_id}"
             ) from error
 
+    def _merge_pinned_sessions(
+        self,
+        tabs: tuple[str, ...],
+        inherited_pins: tuple[str, ...] = (),
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        merged = list(tabs)
+        merged_set = set(merged)
+        inherited = [
+            session_name
+            for session_name in inherited_pins
+            if session_name in self._pinned_sessions
+        ]
+        inherited_set = set(inherited)
+        for session_name in self._pinned_sessions:
+            if session_name in merged_set:
+                continue
+            if len(merged) >= MAX_WORKSPACE_TABS:
+                raise WorkspacePinCapacityError(
+                    "workspace tabs plus globally pinned sessions cannot contain "
+                    f"more than {MAX_WORKSPACE_TABS} sessions"
+                )
+            merged.append(session_name)
+            merged_set.add(session_name)
+            if session_name not in inherited_set:
+                inherited.append(session_name)
+                inherited_set.add(session_name)
+        return tuple(merged), tuple(inherited)
+
     def _timestamp(self) -> int:
         return max(0, int(self._clock() * 1000))
 
@@ -1047,6 +1343,7 @@ class WorkspaceStore:
         tuple[WorkspaceQuickLink, ...],
         dict[str, tuple[WorkspaceQuickLink, ...]],
         ScopedNotes,
+        tuple[str, ...],
     ]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -1092,13 +1389,26 @@ class WorkspaceStore:
                 if version >= 6
                 else ScopedNotes(common="", workspaces={}, sessions={})
             )
+            pinned_sessions = (
+                _validate_pinned_session_names(
+                    payload.get("pinnedSessions"),
+                    "pinnedSessions",
+                )
+                if version >= 7
+                else ()
+            )
             records = payload.get("workspaces")
             if not isinstance(records, list):
                 raise TypeError("workspaces must be an array")
 
             workspaces: dict[str, SavedWorkspace] = {}
             for index, record in enumerate(records):
-                workspace = self._load_workspace(record, index, version)
+                workspace = self._load_workspace(
+                    record,
+                    index,
+                    version,
+                    pinned_sessions,
+                )
                 if workspace.id in workspaces:
                     raise ValueError(f"duplicate workspace id: {workspace.id}")
                 workspaces[workspace.id] = workspace
@@ -1108,20 +1418,29 @@ class WorkspaceStore:
                 common_quick_links,
                 session_quick_links,
                 notes,
+                pinned_sessions,
             )
         except FileNotFoundError as error:
             if not self.path.is_symlink():
-                return {}, 0, (), {}, ScopedNotes(common="", workspaces={}, sessions={})
+                return (
+                    {},
+                    0,
+                    (),
+                    {},
+                    ScopedNotes(common="", workspaces={}, sessions={}),
+                    (),
+                )
             self._record_load_error(error)
         except (OSError, TypeError, ValueError, RecursionError) as error:
             self._record_load_error(error)
-        return {}, 0, (), {}, ScopedNotes(common="", workspaces={}, sessions={})
+        return {}, 0, (), {}, ScopedNotes(common="", workspaces={}, sessions={}), ()
 
     @staticmethod
     def _load_workspace(
         record: object,
         index: int,
         version: int,
+        pinned_sessions: tuple[str, ...],
     ) -> SavedWorkspace:
         path = f"workspaces[{index}]"
         if not isinstance(record, dict):
@@ -1139,6 +1458,8 @@ class WorkspaceStore:
             expected.add("groups")
         if version >= 4:
             expected.add("quickLinks")
+        if version >= 7:
+            expected.add("inheritedPins")
         missing = sorted(expected - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -1159,6 +1480,22 @@ class WorkspaceStore:
             if version >= 4
             else ()
         )
+        inherited_pins = (
+            _validate_pinned_session_names(
+                record["inheritedPins"],
+                f"{path}.inheritedPins",
+            )
+            if version >= 7
+            else ()
+        )
+        if any(session_name not in tabs for session_name in inherited_pins):
+            raise ValueError(f"{path}.inheritedPins must be workspace tabs")
+        if any(session_name not in pinned_sessions for session_name in inherited_pins):
+            raise ValueError(
+                f"{path}.inheritedPins must be globally pinned sessions"
+            )
+        if any(session_name not in tabs for session_name in pinned_sessions):
+            raise ValueError(f"{path}.tabs must include every globally pinned session")
         active_session = validate_active_session(record["activeSession"], tabs)
         created_at = _validate_timestamp(record["createdAt"], "createdAt")
         updated_at = _validate_timestamp(record["updatedAt"], "updatedAt")
@@ -1175,6 +1512,7 @@ class WorkspaceStore:
             tabs=tabs,
             groups=groups,
             quick_links=quick_links,
+            inherited_pins=inherited_pins,
             active_session=active_session,
             created_at=created_at,
             updated_at=updated_at,
@@ -1216,6 +1554,7 @@ class WorkspaceStore:
             dict[str, tuple[WorkspaceQuickLink, ...]] | None
         ) = None,
         notes: ScopedNotes | None = None,
+        pinned_sessions: tuple[str, ...] | None = None,
     ) -> None:
         next_revision = (
             self._session_rename_revision
@@ -1233,6 +1572,9 @@ class WorkspaceStore:
             else session_quick_links
         )
         next_notes = self._notes if notes is None else notes
+        next_pinned_sessions = (
+            self._pinned_sessions if pinned_sessions is None else pinned_sessions
+        )
         try:
             self._persist(
                 workspaces,
@@ -1240,6 +1582,7 @@ class WorkspaceStore:
                 next_common_quick_links,
                 next_session_quick_links,
                 next_notes,
+                next_pinned_sessions,
             )
         except _WorkspaceDirectorySyncError:
             # The atomic rename committed; keep memory consistent with disk even
@@ -1249,6 +1592,7 @@ class WorkspaceStore:
             self._common_quick_links = next_common_quick_links
             self._session_quick_links = next_session_quick_links
             self._notes = next_notes
+            self._pinned_sessions = next_pinned_sessions
             if next_revision == MAX_SESSION_RENAME_REVISION:
                 self._fence_writes("the session rename revision is exhausted")
             raise
@@ -1257,6 +1601,7 @@ class WorkspaceStore:
         self._common_quick_links = next_common_quick_links
         self._session_quick_links = next_session_quick_links
         self._notes = next_notes
+        self._pinned_sessions = next_pinned_sessions
         if next_revision == MAX_SESSION_RENAME_REVISION:
             self._fence_writes("the session rename revision is exhausted")
 
@@ -1267,6 +1612,7 @@ class WorkspaceStore:
         common_quick_links: tuple[WorkspaceQuickLink, ...],
         session_quick_links: dict[str, tuple[WorkspaceQuickLink, ...]],
         notes: ScopedNotes,
+        pinned_sessions: tuple[str, ...],
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -1299,8 +1645,10 @@ class WorkspaceStore:
                         "commonNote": notes.common,
                         "workspaceNotes": notes.workspaces,
                         "sessionNotes": notes.sessions,
+                        "pinnedSessions": list(pinned_sessions),
                         "workspaces": [
-                            workspace.to_dict() for workspace in workspaces.values()
+                            workspace.to_dict(include_internal=True)
+                            for workspace in workspaces.values()
                         ],
                     },
                     handle,

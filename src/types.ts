@@ -54,6 +54,7 @@ export interface Session {
   tags: SessionTag[];
   starred: boolean;
   ignored: boolean;
+  workspacePinned?: boolean;
   queuedMessageCount: number;
   memorandumCount?: number;
   panes: Pane[];

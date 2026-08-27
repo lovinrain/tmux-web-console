@@ -652,6 +652,7 @@ html[data-theme="light"] .session-terminate-toggle,
 html[data-theme="light"] .session-title-edit,
 html[data-theme="light"] .session-ignore-toggle,
 html[data-theme="light"] .session-star-toggle,
+html[data-theme="light"] .session-workspace-pin-toggle,
 html[data-theme="light"] .session-messages-toggle,
 html[data-theme="light"] .session-snippets-toggle {
   color: #596458;
@@ -697,6 +698,14 @@ html[data-theme="light"] .session-ignore-toggle.active {
   color: #4f594d;
   background: #e7e4dc;
   border-color: #939c90;
+}
+
+html[data-theme="light"] .session-workspace-pin-toggle:hover,
+html[data-theme="light"] .session-workspace-pin-toggle.active,
+html[data-theme="light"] .workspace-pin-button.active {
+  color: #006d64;
+  background: #e2efeb;
+  border-color: #6fa9a0;
 }
 
 html[data-theme="light"] .session-messages-toggle:hover {
@@ -883,6 +892,18 @@ html[data-theme="light"] .scoped-note-window-control:focus-visible {
   color: #242921;
   background: color-mix(in srgb, var(--note-accent) 15%, #fffdf7);
   border-color: color-mix(in srgb, var(--note-accent) 70%, #6c695f);
+}
+
+html[data-theme="light"] .scoped-note-resize-handle {
+  color: color-mix(in srgb, var(--note-accent) 72%, #4b5048);
+  background: color-mix(in srgb, var(--note-accent) 8%, #fffdf7);
+  border-color: color-mix(in srgb, var(--note-accent) 24%, #c9c2b5);
+}
+
+html[data-theme="light"] .scoped-note-resize-handle:hover,
+html[data-theme="light"] .scoped-note-resize-handle:focus-visible {
+  color: #242921;
+  background: color-mix(in srgb, var(--note-accent) 16%, #fffdf7);
 }
 
 html[data-theme="light"] .scoped-note-pinned-badge {
@@ -2234,7 +2255,9 @@ html[data-theme="light"] .connection-badge.live > span {
 
 html[data-theme="light"] .history-button,
 html[data-theme="light"] .size-mode,
-html[data-theme="light"] .copy-new-button {
+html[data-theme="light"] .copy-new-button,
+html[data-theme="light"] .workspace-pin-button,
+html[data-theme="light"] .workspace-transfer-button {
   color: #424c40;
   background: #eeeae2;
   border-color: #c6bfb3;
@@ -2242,7 +2265,9 @@ html[data-theme="light"] .copy-new-button {
 
 html[data-theme="light"] .history-button:hover,
 html[data-theme="light"] .size-mode:hover,
-html[data-theme="light"] .copy-new-button:hover {
+html[data-theme="light"] .copy-new-button:hover,
+html[data-theme="light"] .workspace-pin-button:hover,
+html[data-theme="light"] .workspace-transfer-button:hover {
   color: #20261e;
   background: #fffdf8;
   border-color: #828d7c;
@@ -2251,6 +2276,142 @@ html[data-theme="light"] .copy-new-button:hover {
 html[data-theme="light"] .copy-new-button {
   color: #087a70;
   border-color: #8ebcb6;
+}
+
+html[data-theme="light"] .workspace-transfer-button {
+  color: #8a5a13;
+  border-color: #c9ad7d;
+}
+
+html[data-theme="light"] .workspace-transfer-backdrop {
+  background:
+    radial-gradient(circle at 68% 18%, rgba(150, 99, 24, 0.1), transparent 36%),
+    rgba(55, 50, 40, 0.42);
+}
+
+html[data-theme="light"] .workspace-transfer-dialog {
+  color: #30392e;
+  background:
+    linear-gradient(135deg, rgba(150, 99, 24, 0.045), transparent 38%),
+    #f8f5ee;
+  border-color: #b9b2a5;
+  border-top-color: #a87020;
+  box-shadow: 0 34px 100px rgba(65, 55, 38, 0.25);
+}
+
+html[data-theme="light"] .workspace-transfer-header,
+html[data-theme="light"] .workspace-transfer-footer {
+  background: rgba(235, 229, 218, 0.72);
+  border-color: #d4cdc1;
+}
+
+html[data-theme="light"] .workspace-transfer-header h2 {
+  color: #292f27;
+}
+
+html[data-theme="light"] .workspace-transfer-header .eyebrow {
+  color: #8a5a13;
+}
+
+html[data-theme="light"] .workspace-transfer-context {
+  color: #697267;
+  background: #f1ede5;
+  border-color: #d8d1c5;
+}
+
+html[data-theme="light"] .workspace-transfer-context strong {
+  color: #087a70;
+}
+
+html[data-theme="light"] .workspace-transfer-context span::before {
+  color: #aaa396;
+}
+
+html[data-theme="light"] .workspace-transfer-pinned {
+  color: #744d16;
+  background: #f7ecd9;
+  border-color: #d9bd8f;
+  border-left-color: #a87020;
+}
+
+html[data-theme="light"] .workspace-transfer-hint {
+  color: #326c65;
+  background: #e8f2ef;
+  border-color: #afd1cc;
+  border-left-color: #087a70;
+}
+
+html[data-theme="light"] .workspace-transfer-search {
+  color: #697468;
+  background: #fffdf8;
+  border-color: #c6bfb3;
+}
+
+html[data-theme="light"] .workspace-transfer-search:focus-within {
+  color: #087a70;
+  border-color: #6ca9a1;
+  box-shadow: 0 0 0 3px rgba(8, 122, 112, 0.08);
+}
+
+html[data-theme="light"] .workspace-transfer-search input {
+  color: #283027;
+}
+
+html[data-theme="light"] .workspace-transfer-search button,
+html[data-theme="light"] .workspace-transfer-state button,
+html[data-theme="light"] .workspace-transfer-row-actions button {
+  color: #465044;
+  background: #eeeae2;
+  border-color: #c6bfb3;
+}
+
+html[data-theme="light"] .workspace-transfer-row {
+  background: rgba(242, 238, 230, 0.9);
+  border-color: #cbc4b8;
+  border-left-color: #8d9789;
+}
+
+html[data-theme="light"] .workspace-transfer-row:hover {
+  background: #fffdf8;
+  border-color: #9ba495;
+  border-left-color: #a87020;
+}
+
+html[data-theme="light"] .workspace-transfer-row.already-contains {
+  border-left-color: #087a70;
+}
+
+html[data-theme="light"] .workspace-transfer-row-copy strong,
+html[data-theme="light"] .workspace-transfer-state strong {
+  color: #30382e;
+}
+
+html[data-theme="light"] .workspace-transfer-row-copy span,
+html[data-theme="light"] .workspace-transfer-footer p,
+html[data-theme="light"] .workspace-transfer-state {
+  color: #677164;
+}
+
+html[data-theme="light"] .workspace-transfer-row.already-contains .workspace-transfer-row-copy span,
+html[data-theme="light"] .workspace-transfer-row-actions .workspace-transfer-copy {
+  color: #087a70;
+}
+
+html[data-theme="light"] .workspace-transfer-status {
+  color: #236b63;
+  background: #e8f2ef;
+  border-color: #afd1cc;
+}
+
+html[data-theme="light"] .workspace-transfer-row-actions .workspace-transfer-move {
+  color: #8a5a13;
+  border-color: #c9ad7d;
+}
+
+html[data-theme="light"] .workspace-transfer-row-error,
+html[data-theme="light"] .workspace-transfer-state.error,
+html[data-theme="light"] .workspace-transfer-state.error strong {
+  color: #a63c33;
 }
 
 html[data-theme="light"] .copy-new-error {
@@ -2481,6 +2642,19 @@ html[data-theme="light"] .composer-status {
   color: #606a5e;
 }
 
+html[data-theme="light"] .composer-snippet-trigger {
+  color: #426d0b;
+  background: #edf3e3;
+  border-color: #b7cb98;
+}
+
+html[data-theme="light"] .composer-snippet-trigger:hover,
+html[data-theme="light"] .composer-snippet-trigger:focus-visible {
+  color: #315a08;
+  background: #e3edd3;
+  border-color: #829e59;
+}
+
 html[data-theme="light"] .composer-body textarea {
   color: #22261f;
   background: #fffdf8;
@@ -2499,6 +2673,11 @@ html[data-theme="light"] .composer-body textarea:focus {
 
 html[data-theme="light"] .composer-clear {
   color: #5d675b;
+}
+
+html[data-theme="light"] .composer-clear-terminal {
+  color: #895313;
+  border-color: #caa36d;
 }
 
 html[data-theme="light"] .composer-status > span {

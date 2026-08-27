@@ -8,7 +8,6 @@ from typing import Literal
 
 from .tmux import Pane, Session, TmuxClient, TmuxError
 
-
 AgentStateName = Literal[
     "working", "waiting_human", "waiting_command", "unknown", "other"
 ]
@@ -39,6 +38,21 @@ CURSOR_COMMANDS = frozenset({"agent", "cursor-agent"})
 COPILOT_COMMAND = "copilot"
 COPILOT_NODE_COMMAND = "node"
 COPILOT_TITLE = "github copilot"
+# Copilot keeps a static tmux title throughout a turn. Its bottom status row is
+# the reliable distinction: live turns show both Working and the interrupt hint,
+# while an idle prompt shows the command/help shortcuts.
+COPILOT_WORKING_PATTERN = re.compile(
+    r"^\s*(?:[^\w\s]\s+)?working\b.*\besc\s+interrupt\b", re.IGNORECASE
+)
+COPILOT_IDLE_PATTERN = re.compile(
+    r"/\s+commands\s+\u00b7\s+\?\s+help\s+\u00b7\s+tab\s+next\s+tab\b",
+    re.IGNORECASE,
+)
+COPILOT_DECISION_PATTERN = re.compile(
+    r"\benter\s+to\s+select\b.*\besc\s+to\s+cancel\b",
+    re.IGNORECASE | re.DOTALL,
+)
+COPILOT_FOOTER_LINES = 6
 AGENT_COMMANDS = (
     frozenset({"claude", "codex", "grok", COPILOT_COMMAND}) | CURSOR_COMMANDS
 )
@@ -152,6 +166,28 @@ def _is_copilot_pane(command: str, title: str) -> bool:
     )
 
 
+def _classify_copilot_state(
+    pane: Pane, visible_screen: str | None, now: float | None
+) -> AgentState:
+    if visible_screen is None:
+        return AgentState("unknown", "Copilot screen capture is unavailable")
+
+    footer = _rendered_lines(visible_screen)[-COPILOT_FOOTER_LINES:]
+    # Read bottom-up so the current footer outranks identical text quoted in the
+    # most recent transcript entry.
+    for line in reversed(footer):
+        if COPILOT_WORKING_PATTERN.search(line):
+            if _activity_is_stale(pane, now):
+                return AgentState("unknown", "Agent activity indicator is stale")
+            return AgentState("working", "Copilot is running a turn")
+        if COPILOT_IDLE_PATTERN.search(line):
+            return AgentState("waiting_human", "Copilot is idle at its input prompt")
+
+    if COPILOT_DECISION_PATTERN.search("\n".join(footer)):
+        return AgentState("waiting_human", "Copilot is waiting on a selection")
+    return AgentState("unknown", "Copilot footer state signal is not recognized")
+
+
 def _cursor_prompt_index(footer: list[str]) -> int:
     for index in reversed(range(len(footer))):
         if CURSOR_PROMPT_MARKER in footer[index]:
@@ -205,12 +241,7 @@ def classify_agent_state(
     if command in CURSOR_COMMANDS:
         return _classify_cursor_state(pane, visible_screen, now)
     if copilot_pane:
-        # Copilot's active and idle terminal signals cannot be distinguished
-        # safely through this tmux inventory. Do not infer state from prose.
-        return AgentState(
-            "unknown",
-            "No reliable GitHub Copilot CLI activity signal is available through tmux",
-        )
+        return _classify_copilot_state(pane, visible_screen, now)
 
     title = pane.title.strip()
     if _title_has_live_activity(command, title):
@@ -257,6 +288,7 @@ def _needs_screen_capture(pane: Pane, state: AgentState) -> bool:
     command = pane.command.lower()
     return (
         state.name == "working"
+        or _is_copilot_pane(command, pane.title)
         or command in CURSOR_COMMANDS
         or (command == "claude" and _title_has_live_activity(command, pane.title))
         or (

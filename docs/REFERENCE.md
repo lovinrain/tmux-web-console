@@ -190,11 +190,13 @@ Unconfirmed deliveries remain as notes for manual resolution. If delivery is
 acknowledged but automatic deletion fails, the sent note remains visible with
 guidance to delete it manually without accidentally running it twice.
 
-The `Snippets` shortcut opens the global snippet library picker. Choosing a
-snippet inserts its exact text at the staged textarea's current selection and
-never sends automatically. The same picker is available on every dashboard
-card/list row and inside memorandum editors. From a dashboard row, choosing a
-snippet saves it as that session's local draft and opens the console for review.
+On desktop, `Insert snippet` beside the staged-input heading opens the global
+snippet library without moving the textarea's cursor or selection. The
+bottom-strip `Snippets` shortcut remains an alternate entry point. Choosing a
+snippet inserts its exact text at the current selection and never sends
+automatically. The same picker is available on every dashboard card/list row
+and inside memorandum editors. From a dashboard row, choosing a snippet saves
+it as that session's local draft and opens the console for review.
 
 Use the top-level `Snippets` section to configure the shared tree. The virtual
 library root can contain snippets or folders, folders can nest, and snippets are
@@ -223,11 +225,12 @@ GitHub Copilot CLI is recognized by the standalone `copilot` command. The
 official npm launcher keeps `node` as tmux's foreground command while it runs the
 native child, so Muxdeck also recognizes that exact process shape when its pane
 title is `GitHub Copilot` or ends in ` - GitHub Copilot`; arbitrary Node panes
-remain ordinary processes. Copilot does not currently expose a stable
-interactive-state signal through tmux that Muxdeck can safely use to separate an
-active turn, an idle prompt, a permission dialog, and idle background work.
-Copilot sessions therefore participate in the agent inventory and filters but
-remain Unclear instead of guessing that they are working or need input.
+remain ordinary processes. Because Copilot keeps that title static, Muxdeck
+reads its current visible footer: `Working ... esc interrupt` identifies a live
+turn, the command/help shortcut row identifies its idle input prompt, and a
+selection footer identifies a permission or choice dialog. Missing, stale, or
+unrecognized footer signals remain Unclear rather than being inferred from
+transcript prose.
 
 Cursor Agent (`cursor-agent`, also installed as `agent`) names its pane after the
 conversation, so its title carries no state. Muxdeck reads the footer of its
@@ -326,6 +329,30 @@ exclusive: ignoring a starred session unpins it, while starring an ignored
 session restores and pins it. Both choices persist across browser and Muxdeck
 restarts.
 
+The separate pushpin action adds a live native tmux session to every saved
+workspace. It is available on each landing-page session card and as `Pin all`
+beside the desktop console's `Fit active`, `Scrollback`, and `Copy New` actions.
+Muxdeck appends the session only to workspaces that do not already contain it,
+so pinning repeatedly never duplicates or reorders a tab. New saved workspaces
+inherit all current global pins, and ordinary tab/activity saves cannot drop
+them while they remain pinned. Unpinning removes only memberships that Muxdeck
+automatically inherited from that pin; a workspace that already contained the
+session keeps its tab. This global workspace pin is independent of the star
+that organizes landing-page results.
+
+On desktop, `Move / Copy` sits immediately beside `Pin all`. It opens a
+searchable list of the other saved workspaces, with an explicit `Copy` and
+`Move` action on every destination. Copy adds the current native tmux session
+without changing the current workspace. Move adds it to the destination and
+removes it from the current workspace; an unsaved current workspace removes
+only the browser's local tab. A destination that already contains the session
+is marked `Added`: Copy becomes a no-op, and Move removes only the source tab,
+so neither action can create duplicates. A globally pinned session cannot be
+moved until it is unpinned, because the pin requires it to remain in every
+workspace. Transfers are atomic, reject a full destination without touching
+the source, and advance the workspace revision fence so an older browser
+autosave cannot undo the result.
+
 Selecting the main body of a card or list row opens its console in the current
 window. Use the adjacent `New window` link to open that console in a separate
 browser context instead. The link carries the current dashboard query, so its
@@ -350,17 +377,19 @@ or `Sync issue` state reports whether later tab-order and active-session changes
 are synchronizing automatically.
 
 Each saved workspace keeps its name, ordered open tabs, tab groups,
-workspace-scoped quick links, active session, and server-generated creation,
-update, and last-active times in `MUXDECK_WORKSPACES_FILE`. Opening or changing a
+workspace-scoped quick links, active session, global-pin provenance, and
+server-generated creation, update, and last-active times in
+`MUXDECK_WORKSPACES_FILE`. Opening or changing a
 saved workspace refreshes its rough last-active time. Workspace names, tab
 membership, and workspace links are shared by every browser connected to the
 same Muxdeck instance, so a phone or another computer can resume the same group.
 Concurrent pages use last-write-wins semantics; the most recently accepted full
 tab/activity or workspace-link update becomes the saved state. Each tab snapshot
-also carries the server's
-native-session rename revision. If another device tries to save names captured
-before a Muxdeck rename, the server rejects that stale snapshot and the page
-reloads the migrated workspace instead of restoring an obsolete tmux name.
+also carries the server's workspace session revision. Native renames and global
+pin/unpin changes and session transfers advance that fence. If another device tries to save tabs
+captured before either change, the server rejects that stale snapshot and the
+page reloads the authoritative workspace instead of restoring an obsolete name
+or inherited pin.
 
 The stable `workspace=` query parameter identifies a saved workspace without
 putting its editable name in the route. Ordered `tab=` values remain in the URL
@@ -618,10 +647,13 @@ instead of being replaced; repair the configured file and restart Muxdeck.
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
 
-`MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list. Tabs are keyed
-by native tmux session name. A native rename performed through Muxdeck migrates
-that name in every saved workspace and moves its session-scoped quick links and
-note; an out-of-band tmux rename cannot do so. Unavailable names remain visible
+`MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list and ordered
+global session pins. Tabs are keyed by native tmux session name. Each workspace
+also records which tab memberships were inherited from a global pin, allowing
+unpin to remove those tabs without deleting pre-existing membership. A native
+rename performed through Muxdeck migrates the pin, provenance, and that name in
+every saved workspace and moves its session-scoped quick links and note; an
+out-of-band tmux rename cannot do so. Unavailable names remain visible
 in the saved workspace until the workspace is updated or deleted. Session-link
 and session-note entries for sessions that disappear outside Muxdeck remain
 dormant, so a future tmux session that reuses the same native name inherits that
@@ -635,19 +667,21 @@ server workspace document, but the browser restores them when that workspace is
 resumed. Pinned Common and Workspace windows remain open across session-tab
 switches, while a Session window remains tied to its native tmux session.
 
-The workspace schema is version 6. Version 1 files load at rename revision zero;
+The workspace schema is version 7. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
-session quick links, and version 1 through 5 files load with empty scoped notes.
-A legacy document upgrades atomically on its next workspace, quick-link, or note
-write. A workspace name is limited to 80 characters and a workspace can contain
+session quick links, version 1 through 5 files load with empty scoped notes, and
+version 1 through 6 files load with no global session pins or inherited-pin
+provenance. A legacy document upgrades atomically on its next workspace,
+quick-link, note, or global-pin write. A workspace name is limited to 80
+characters and a workspace can contain
 at most 32 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
 quick links. The global common shelf and each native-session shelf also permit 16
 links. Group names are limited to 40 characters, quick-link labels to 48
 characters, quick-link URLs to 2,048 characters, and every scoped note to 8,000
 characters. Writes use an atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 5
-reject the version 6 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 6
+reject the version 7 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 

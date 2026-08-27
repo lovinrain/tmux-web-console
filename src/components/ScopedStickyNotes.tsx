@@ -26,7 +26,14 @@ import {
 } from "../icons";
 
 export const MAX_SCOPED_NOTE_LENGTH = 8_000;
+export const DEFAULT_SCOPED_NOTE_WINDOW_WIDTH = 430;
+export const DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT = 430;
+export const MIN_SCOPED_NOTE_WINDOW_WIDTH = 220;
+export const MIN_SCOPED_NOTE_WINDOW_HEIGHT = 168;
 const NOTE_AUTOSAVE_DELAY_MS = 650;
+const NOTE_WINDOW_MARGIN = 12;
+const NOTE_WINDOW_KEYBOARD_STEP = 12;
+const NOTE_WINDOW_KEYBOARD_LARGE_STEP = 32;
 const DESKTOP_SCOPED_NOTE_QUERY = "(min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine)";
 const LEGACY_SCOPED_NOTE_WINDOW_STORAGE_PREFIX = "muxdeck.scoped-note-window.v1:";
 export const SCOPED_NOTE_WINDOW_STORAGE_PREFIX = "muxdeck.scoped-note-window.v2:";
@@ -39,11 +46,17 @@ interface FloatingNotePosition {
   y: number;
 }
 
+interface FloatingNoteSize {
+  width: number;
+  height: number;
+}
+
 interface NoteWindowPreference {
   open: boolean;
   floating: boolean;
   pinned: boolean;
   position: FloatingNotePosition | null;
+  size: FloatingNoteSize | null;
 }
 
 interface OpenNoteEditor {
@@ -54,6 +67,7 @@ interface OpenNoteEditor {
   note: string;
   pinned: boolean;
   position: FloatingNotePosition;
+  size: FloatingNoteSize;
   focusOnMount: boolean;
 }
 
@@ -77,6 +91,7 @@ interface StickyNoteEditorProps {
   note: string;
   pinned: boolean;
   position: FloatingNotePosition;
+  size: FloatingNoteSize;
   focusOnMount: boolean;
   active: boolean;
   onSave: (note: string) => Promise<void>;
@@ -84,6 +99,8 @@ interface StickyNoteEditorProps {
   onPinnedChange: (pinned: boolean) => void;
   onPositionChange: (position: FloatingNotePosition) => void;
   onPositionCommit: (position: FloatingNotePosition) => void;
+  onSizeChange: (size: FloatingNoteSize) => void;
+  onSizeCommit: (size: FloatingNoteSize) => void;
   onActivate: () => void;
 }
 
@@ -112,6 +129,15 @@ function validFloatingNotePosition(value: unknown): value is FloatingNotePositio
   return Number.isFinite(candidate.x) && Number.isFinite(candidate.y);
 }
 
+function validFloatingNoteSize(value: unknown): value is FloatingNoteSize {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<FloatingNoteSize>;
+  return Number.isFinite(candidate.width)
+    && Number.isFinite(candidate.height)
+    && Number(candidate.width) > 0
+    && Number(candidate.height) > 0;
+}
+
 function parseNoteWindowPreference(raw: string): NoteWindowPreference | null {
   try {
     const candidate = JSON.parse(raw) as Partial<NoteWindowPreference>;
@@ -124,6 +150,7 @@ function parseNoteWindowPreference(raw: string): NoteWindowPreference | null {
       position: validFloatingNotePosition(candidate.position)
         ? candidate.position
         : null,
+      size: validFloatingNoteSize(candidate.size) ? candidate.size : null,
     };
   } catch {
     return null;
@@ -139,6 +166,7 @@ function readNoteWindowPreference(
     floating: true,
     pinned: false,
     position: null,
+    size: null,
   };
   try {
     const raw = window.localStorage.getItem(`${SCOPED_NOTE_WINDOW_STORAGE_PREFIX}${key}`);
@@ -166,33 +194,76 @@ function writeNoteWindowPreference(
   }
 }
 
-function defaultFloatingNotePosition(scope: NoteScope): FloatingNotePosition {
-  const index = scope === "common" ? 0 : scope === "workspace" ? 1 : 2;
-  const width = Math.min(430, Math.max(320, window.innerWidth - 32));
+function floatingNoteViewport(): { width: number; height: number } {
   return {
-    x: Math.max(12, window.innerWidth - width - 24 - index * 34),
+    width: window.visualViewport?.width ?? window.innerWidth,
+    height: window.visualViewport?.height ?? window.innerHeight,
+  };
+}
+
+function clampFloatingNoteSize(
+  size: FloatingNoteSize,
+  position?: FloatingNotePosition,
+): FloatingNoteSize {
+  const viewport = floatingNoteViewport();
+  const maxWidth = Math.max(
+    MIN_SCOPED_NOTE_WINDOW_WIDTH,
+    viewport.width - (position?.x ?? NOTE_WINDOW_MARGIN) - NOTE_WINDOW_MARGIN,
+  );
+  const maxHeight = Math.max(
+    MIN_SCOPED_NOTE_WINDOW_HEIGHT,
+    viewport.height - (position?.y ?? NOTE_WINDOW_MARGIN) - NOTE_WINDOW_MARGIN,
+  );
+  return {
+    width: Math.round(Math.min(
+      maxWidth,
+      Math.max(MIN_SCOPED_NOTE_WINDOW_WIDTH, size.width),
+    )),
+    height: Math.round(Math.min(
+      maxHeight,
+      Math.max(MIN_SCOPED_NOTE_WINDOW_HEIGHT, size.height),
+    )),
+  };
+}
+
+function preferredFloatingNoteSize(preference: NoteWindowPreference): FloatingNoteSize {
+  return clampFloatingNoteSize(preference.size ?? {
+    width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
+    height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
+  });
+}
+
+function defaultFloatingNotePosition(
+  scope: NoteScope,
+  size: FloatingNoteSize,
+): FloatingNotePosition {
+  const index = scope === "common" ? 0 : scope === "workspace" ? 1 : 2;
+  return {
+    x: Math.max(
+      NOTE_WINDOW_MARGIN,
+      floatingNoteViewport().width - size.width - 24 - index * 34,
+    ),
     y: 92 + index * 54,
   };
 }
 
 function clampFloatingNotePosition(
   position: FloatingNotePosition,
+  size?: FloatingNoteSize,
   element?: HTMLElement | null,
 ): FloatingNotePosition {
-  const margin = 12;
-  const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  const viewport = floatingNoteViewport();
   const rect = element?.getBoundingClientRect();
-  const width = rect?.width || Math.min(430, Math.max(320, viewportWidth - margin * 2));
-  const height = rect?.height || Math.min(470, Math.max(280, viewportHeight - margin * 2));
+  const width = size?.width || rect?.width || DEFAULT_SCOPED_NOTE_WINDOW_WIDTH;
+  const height = size?.height || rect?.height || DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT;
   return {
     x: Math.round(Math.min(
-      Math.max(margin, position.x),
-      Math.max(margin, viewportWidth - width - margin),
+      Math.max(NOTE_WINDOW_MARGIN, position.x),
+      Math.max(NOTE_WINDOW_MARGIN, viewport.width - width - NOTE_WINDOW_MARGIN),
     )),
     y: Math.round(Math.min(
-      Math.max(margin, position.y),
-      Math.max(margin, viewportHeight - height - margin),
+      Math.max(NOTE_WINDOW_MARGIN, position.y),
+      Math.max(NOTE_WINDOW_MARGIN, viewport.height - height - NOTE_WINDOW_MARGIN),
     )),
   };
 }
@@ -200,9 +271,11 @@ function clampFloatingNotePosition(
 function preferredFloatingNotePosition(
   scope: NoteScope,
   preference: NoteWindowPreference,
+  size: FloatingNoteSize,
 ): FloatingNotePosition {
   return clampFloatingNotePosition(
-    preference.position ?? defaultFloatingNotePosition(scope),
+    preference.position ?? defaultFloatingNotePosition(scope, size),
+    size,
   );
 }
 
@@ -321,6 +394,7 @@ function StickyNoteEditor({
   note,
   pinned,
   position,
+  size,
   focusOnMount,
   active,
   onSave,
@@ -328,6 +402,8 @@ function StickyNoteEditor({
   onPinnedChange,
   onPositionChange,
   onPositionCommit,
+  onSizeChange,
+  onSizeCommit,
   onActivate,
 }: StickyNoteEditorProps) {
   const headingId = useId();
@@ -347,7 +423,7 @@ function StickyNoteEditor({
   const requestVersionRef = useRef(0);
   const queuedRequestCountRef = useRef(0);
   const autosaveTimerRef = useRef<number | null>(null);
-  const dragCleanupRef = useRef<(() => void) | null>(null);
+  const interactionCleanupRef = useRef<(() => void) | null>(null);
   const [draft, setDraft] = useState(note);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -448,7 +524,11 @@ function StickyNoteEditor({
     return () => {
       mountedRef.current = false;
       clearAutosaveTimer();
-      dragCleanupRef.current?.();
+      interactionCleanupRef.current?.();
+      document.documentElement.classList.remove(
+        "scoped-note-moving",
+        "scoped-note-resizing",
+      );
       const latestDraft = draftRef.current;
       if (
         latestDraft !== lastQueuedRef.current
@@ -468,7 +548,7 @@ function StickyNoteEditor({
 
   useEffect(() => {
     const keepWindowVisible = () => {
-      const next = clampFloatingNotePosition(position, formRef.current);
+      const next = clampFloatingNotePosition(position, undefined, formRef.current);
       if (next.x === position.x && next.y === position.y) return;
       onPositionChange(next);
       onPositionCommit(next);
@@ -488,7 +568,7 @@ function StickyNoteEditor({
     event.preventDefault();
     event.stopPropagation();
     onActivate();
-    dragCleanupRef.current?.();
+    interactionCleanupRef.current?.();
 
     const pointerId = event.pointerId;
     const rect = formRef.current?.getBoundingClientRect();
@@ -502,7 +582,9 @@ function StickyNoteEditor({
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
       document.documentElement.classList.remove("scoped-note-moving");
-      if (dragCleanupRef.current === cleanupDrag) dragCleanupRef.current = null;
+      if (interactionCleanupRef.current === cleanupDrag) {
+        interactionCleanupRef.current = null;
+      }
     };
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
@@ -510,7 +592,7 @@ function StickyNoteEditor({
       latestPosition = clampFloatingNotePosition({
         x: moveEvent.clientX - offsetX,
         y: moveEvent.clientY - offsetY,
-      }, formRef.current);
+      }, size, formRef.current);
       onPositionChange(latestPosition);
     };
     const handlePointerEnd = (endEvent: PointerEvent) => {
@@ -519,12 +601,12 @@ function StickyNoteEditor({
       onPositionCommit(latestPosition);
     };
 
-    dragCleanupRef.current = cleanupDrag;
+    interactionCleanupRef.current = cleanupDrag;
     document.documentElement.classList.add("scoped-note-moving");
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerEnd);
     window.addEventListener("pointercancel", handlePointerEnd);
-  }, [onActivate, onPositionChange, onPositionCommit, position]);
+  }, [onActivate, onPositionChange, onPositionCommit, position, size]);
 
   const moveWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -541,11 +623,92 @@ function StickyNoteEditor({
     const next = clampFloatingNotePosition({
       x: position.x + direction[0] * distance,
       y: position.y + direction[1] * distance,
-    }, formRef.current);
+    }, size, formRef.current);
     onActivate();
     onPositionChange(next);
     onPositionCommit(next);
-  }, [onActivate, onPositionChange, onPositionCommit, position]);
+  }, [onActivate, onPositionChange, onPositionCommit, position, size]);
+
+  const commitSize = useCallback((candidate: FloatingNoteSize) => {
+    const next = clampFloatingNoteSize(candidate, position);
+    onActivate();
+    onSizeChange(next);
+    onSizeCommit(next);
+  }, [onActivate, onSizeChange, onSizeCommit, position]);
+
+  const startResizing = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onActivate();
+    interactionCleanupRef.current?.();
+
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startSize = size;
+    let latestSize = size;
+
+    const cleanupResize = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+      document.documentElement.classList.remove("scoped-note-resizing");
+      if (interactionCleanupRef.current === cleanupResize) {
+        interactionCleanupRef.current = null;
+      }
+    };
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      moveEvent.preventDefault();
+      latestSize = clampFloatingNoteSize({
+        width: startSize.width + moveEvent.clientX - startX,
+        height: startSize.height + moveEvent.clientY - startY,
+      }, position);
+      onSizeChange(latestSize);
+    };
+    const handlePointerEnd = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== pointerId) return;
+      cleanupResize();
+      onSizeCommit(latestSize);
+    };
+
+    interactionCleanupRef.current = cleanupResize;
+    document.documentElement.classList.add("scoped-note-resizing");
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerEnd);
+  }, [onActivate, onSizeChange, onSizeCommit, position, size]);
+
+  const resizeWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const step = event.shiftKey
+      ? NOTE_WINDOW_KEYBOARD_LARGE_STEP
+      : NOTE_WINDOW_KEYBOARD_STEP;
+    let next: FloatingNoteSize | null = null;
+    if (event.key === "ArrowLeft") next = { ...size, width: size.width - step };
+    if (event.key === "ArrowRight") next = { ...size, width: size.width + step };
+    if (event.key === "ArrowUp") next = { ...size, height: size.height - step };
+    if (event.key === "ArrowDown") next = { ...size, height: size.height + step };
+    if (event.key === "Home") {
+      next = {
+        width: MIN_SCOPED_NOTE_WINDOW_WIDTH,
+        height: MIN_SCOPED_NOTE_WINDOW_HEIGHT,
+      };
+    }
+    if (event.key === "End") {
+      next = { width: Number.MAX_SAFE_INTEGER, height: Number.MAX_SAFE_INTEGER };
+    }
+    if (event.key === "Enter") {
+      next = {
+        width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
+        height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
+      };
+    }
+    if (!next) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitSize(next);
+  }, [commitSize, size]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -555,6 +718,8 @@ function StickyNoteEditor({
   const editorStyle: CSSProperties = {
     left: position.x,
     top: position.y,
+    width: size.width,
+    height: size.height,
     zIndex: active ? 39 : 35,
   };
 
@@ -698,6 +863,21 @@ function StickyNoteEditor({
           {closing ? "Saving..." : "Done"}
         </button>
       </div>
+      <button
+        type="button"
+        className="scoped-note-resize-handle"
+        aria-label={`Resize ${scope} note window`}
+        aria-description="Drag to resize in both directions. Arrow keys resize one dimension; Home minimizes and Enter resets."
+        title="Drag to resize. Arrow keys resize; Home minimizes; Enter resets."
+        onPointerDown={startResizing}
+        onDoubleClick={() => commitSize({
+          width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
+          height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
+        })}
+        onKeyDown={resizeWithKeyboard}
+      >
+        <span aria-hidden="true" />
+      </button>
     </form>
   );
 
@@ -807,6 +987,7 @@ export function ScopedStickyNotes({
         floating: true,
         pinned: reopenWithSession,
         position: editor.position,
+        size: editor.size,
       });
       return false;
     }));
@@ -898,12 +1079,14 @@ export function ScopedStickyNotes({
     const key = noteWindowKey(windowWorkspaceIdentity, scope, identity);
     const preference = readNoteWindowPreference(key, legacyKey);
     if (restoreOnly && !preference.open) return;
-    const position = preferredFloatingNotePosition(scope, preference);
+    const size = preferredFloatingNoteSize(preference);
+    const position = preferredFloatingNotePosition(scope, preference, size);
     writeNoteWindowPreference(key, {
       open: true,
       floating: true,
       pinned: preference.pinned,
       position,
+      size,
     });
     const editor: OpenNoteEditor = {
       key,
@@ -917,6 +1100,7 @@ export function ScopedStickyNotes({
       note: snapshot.note,
       pinned: preference.pinned,
       position,
+      size,
       focusOnMount: !restoreOnly,
     };
     setOpenEditors((current) => (
@@ -987,6 +1171,7 @@ export function ScopedStickyNotes({
       floating: true,
       pinned: false,
       position: editor.position,
+      size: editor.size,
     });
     setOpenEditors((current) => current.filter((candidate) => (
       candidate.key !== editor.key
@@ -1040,6 +1225,7 @@ export function ScopedStickyNotes({
           note={editor.note}
           pinned={editor.pinned}
           position={editor.position}
+          size={editor.size}
           focusOnMount={editor.focusOnMount}
           active={activeEditorKey === editor.key}
           onSave={(note) => saveNote(editor.scope, editor.identity, note)}
@@ -1050,6 +1236,7 @@ export function ScopedStickyNotes({
               floating: true,
               pinned,
               position: editor.position,
+              size: editor.size,
             });
             setOpenEditors((current) => current.map((candidate) => (
               candidate.key === editor.key ? { ...candidate, pinned } : candidate
@@ -1067,6 +1254,21 @@ export function ScopedStickyNotes({
               floating: true,
               pinned: editor.pinned,
               position,
+              size: editor.size,
+            });
+          }}
+          onSizeChange={(size) => {
+            setOpenEditors((current) => current.map((candidate) => (
+              candidate.key === editor.key ? { ...candidate, size } : candidate
+            )));
+          }}
+          onSizeCommit={(size) => {
+            writeNoteWindowPreference(editor.key, {
+              open: true,
+              floating: true,
+              pinned: editor.pinned,
+              position: editor.position,
+              size,
             });
           }}
           onActivate={() => bringEditorToFront(editor.key)}

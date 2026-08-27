@@ -285,6 +285,23 @@ export async function updateSessionIgnored(
   return { starred: result.starred, ignored: result.ignored };
 }
 
+export interface SessionWorkspacePinResult {
+  session: string;
+  workspacePinned: boolean;
+  sessionRevision: number;
+}
+
+export async function updateSessionWorkspacePin(
+  session: string,
+  pinned: boolean,
+): Promise<SessionWorkspacePinResult> {
+  return jsonRequest<SessionWorkspacePinResult>("/api/session-workspace-pin", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session, pinned }),
+  });
+}
+
 export interface SavedWorkspace {
   id: string;
   name: string;
@@ -296,6 +313,19 @@ export interface SavedWorkspace {
   createdAt: number;
   updatedAt: number;
   lastActiveAt: number;
+}
+
+export type WorkspaceSessionTransferOperation = "copy" | "move";
+
+export interface WorkspaceSessionTransferResult {
+  session: string;
+  operation: WorkspaceSessionTransferOperation;
+  destinationAlreadyContained: boolean;
+  destinationAdded: boolean;
+  sourceRemoved: boolean;
+  sourceWorkspace: SavedWorkspace | null;
+  destinationWorkspace: SavedWorkspace;
+  sessionRevision: number;
 }
 
 export interface WorkspaceQuickLink {
@@ -529,6 +559,29 @@ export async function updateWorkspace(
     },
   );
   return result.workspace;
+}
+
+export async function transferSessionToWorkspace(
+  session: string,
+  sourceWorkspaceId: string | null,
+  destinationWorkspaceId: string,
+  operation: WorkspaceSessionTransferOperation,
+  sessionRevision: number,
+): Promise<WorkspaceSessionTransferResult> {
+  return jsonRequest<WorkspaceSessionTransferResult>(
+    "/api/session-workspace-transfer",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session,
+        sourceWorkspaceId,
+        destinationWorkspaceId,
+        operation,
+        sessionRevision,
+      }),
+    },
+  );
 }
 
 export async function updateWorkspaceActivity(

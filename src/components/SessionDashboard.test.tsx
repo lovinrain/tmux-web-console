@@ -10,6 +10,7 @@ import {
   updateSessionDetails,
   updateSessionIgnored,
   updateSessionStar,
+  updateSessionWorkspacePin,
   updateSessionTags,
   updateSessionTitle,
   type SavedWorkspace,
@@ -34,6 +35,7 @@ vi.mock("../api", () => ({
   updateSessionDetails: vi.fn(),
   updateSessionIgnored: vi.fn(),
   updateSessionStar: vi.fn(),
+  updateSessionWorkspacePin: vi.fn(),
   updateSessionTags: vi.fn(),
   updateSessionTitle: vi.fn(),
 }));
@@ -1414,6 +1416,71 @@ describe("session classification", () => {
     await waitFor(() => expect(updateSessionStar).toHaveBeenCalledWith("test", false));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Starred" })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Add test to starred" })).toBeVisible();
+  });
+
+  it("pins and unpins a session across workspaces with an optimistic card control", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(updateSessionWorkspacePin)
+      .mockResolvedValueOnce({
+        session: "test",
+        workspacePinned: true,
+        sessionRevision: 3,
+      })
+      .mockResolvedValueOnce({
+        session: "test",
+        workspacePinned: false,
+        sessionRevision: 4,
+      });
+    const onWorkspacePinChange = vi.fn();
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        onWorkspacePinChange={onWorkspacePinChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Pin test to every workspace",
+    }));
+    await waitFor(() => expect(updateSessionWorkspacePin).toHaveBeenCalledWith(
+      "test",
+      true,
+    ));
+    expect(screen.getByRole("button", {
+      name: "Unpin test from every workspace",
+    })).toBePressed();
+    expect(onWorkspacePinChange).toHaveBeenCalledWith("test", true, 3);
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Unpin test from every workspace",
+    }));
+    await waitFor(() => expect(updateSessionWorkspacePin).toHaveBeenLastCalledWith(
+      "test",
+      false,
+    ));
+    expect(screen.getByRole("button", {
+      name: "Pin test to every workspace",
+    })).not.toBePressed();
+    expect(onWorkspacePinChange).toHaveBeenLastCalledWith("test", false, 4);
+  });
+
+  it("rolls back a failed global workspace pin", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(updateSessionWorkspacePin).mockRejectedValue(
+      new Error("A workspace already has 32 sessions"),
+    );
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Pin test to every workspace",
+    }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A workspace already has 32 sessions",
+    );
+    expect(screen.getByRole("button", {
+      name: "Pin test to every workspace",
+    })).not.toBePressed();
   });
 
   it("does not schedule another refresh when a pending request resolves after unmount", async () => {

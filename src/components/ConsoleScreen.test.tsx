@@ -5,10 +5,12 @@ import {
   createQueuedMessage,
   deleteQueuedMessage,
   getSnippetTree,
+  listWorkspaces,
   listQueuedMessages,
   listSessions,
   renameSession,
   updateSessionDetails,
+  updateSessionWorkspacePin,
   updateQueuedMessage,
   updateSessionTags,
   updateSessionTitle,
@@ -43,6 +45,8 @@ vi.mock("../api", () => ({
   getSnippetTree: vi.fn(),
   renameSession: vi.fn(),
   updateSessionDetails: vi.fn(),
+  updateSessionWorkspacePin: vi.fn(),
+  listWorkspaces: vi.fn(),
   updateSessionStar: vi.fn(),
   updateSessionTags: vi.fn(),
   updateSessionTitle: vi.fn(),
@@ -142,6 +146,7 @@ beforeEach(() => {
   liveTerminalState.onStateChange = null;
   window.localStorage.clear();
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
+  vi.mocked(listWorkspaces).mockResolvedValue([]);
   document.title = "Muxdeck";
 });
 
@@ -1365,6 +1370,132 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByTestId("live-terminal")).toHaveAttribute("data-terminal-theme", "light");
   });
 
+  it("pins and unpins the current session from the desktop header", async () => {
+    const current = session();
+    vi.mocked(listSessions).mockResolvedValue([current]);
+    vi.mocked(updateSessionWorkspacePin).mockResolvedValue({
+      session: "test",
+      workspacePinned: true,
+      sessionRevision: 7,
+    });
+    const onSessionUpdate = vi.fn();
+    const onWorkspacePinChange = vi.fn();
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionUpdate={onSessionUpdate}
+        onWorkspacePinChange={onWorkspacePinChange}
+      />,
+    );
+
+    const pin = await screen.findByRole("button", {
+      name: "Pin test to every workspace",
+    });
+    expect(pin).not.toBePressed();
+    fireEvent.click(pin);
+
+    await waitFor(() => expect(updateSessionWorkspacePin).toHaveBeenCalledWith(
+      "test",
+      true,
+    ));
+    expect(screen.getByRole("button", {
+      name: "Unpin test from every workspace",
+    })).toBePressed();
+    expect(onSessionUpdate).toHaveBeenCalledWith({
+      ...current,
+      workspacePinned: true,
+    });
+    expect(onWorkspacePinChange).toHaveBeenCalledWith("test", true, 7);
+  });
+
+  it("restores the console pin control and reports a failed request", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(updateSessionWorkspacePin).mockRejectedValue(
+      new Error("workspace storage is unavailable"),
+    );
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Pin test to every workspace",
+    }));
+
+    const error = await screen.findByRole("alert");
+    expect(error).toHaveTextContent(
+      "Workspace pin failed: workspace storage is unavailable",
+    );
+    expect(screen.getByRole("button", {
+      name: "Pin test to every workspace",
+    })).not.toBePressed();
+    fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("opens the desktop workspace transfer picker beside the global pin", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(listWorkspaces).mockResolvedValue([{
+      id: "destination",
+      name: "Release room",
+      tabs: ["review"],
+      groups: [],
+      quickLinks: [],
+      activeSession: "review",
+      sessionRevision: 4,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveAt: 1,
+    }]);
+    const onSessionWorkspaceTransfer = vi.fn().mockResolvedValue({
+      session: "test",
+      operation: "copy",
+      destinationAlreadyContained: false,
+      destinationAdded: true,
+      sourceRemoved: false,
+      sourceWorkspace: null,
+      destinationWorkspace: {
+        id: "destination",
+        name: "Release room",
+        tabs: ["review", "test"],
+        groups: [],
+        quickLinks: [],
+        activeSession: "review",
+        sessionRevision: 5,
+        createdAt: 1,
+        updatedAt: 3,
+        lastActiveAt: 1,
+      },
+      sessionRevision: 5,
+    });
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        workspaceName="Current room"
+        onBack={vi.fn()}
+        onSessionWorkspaceTransfer={onSessionWorkspaceTransfer}
+      />,
+    );
+
+    const transferButton = await screen.findByRole("button", {
+      name: "Move or copy test to a workspace",
+    });
+    const pinButton = screen.getByRole("button", {
+      name: "Pin test to every workspace",
+    });
+    expect(pinButton.nextElementSibling).toBe(transferButton);
+    fireEvent.click(transferButton);
+
+    expect(await screen.findByRole("dialog", {
+      name: "Move or copy to a workspace",
+    })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Copy test to Release room" }));
+    await waitFor(() => expect(onSessionWorkspaceTransfer).toHaveBeenCalledWith(
+      "test",
+      "destination",
+      "copy",
+      4,
+    ));
+  });
+
   it("creates a focused session copy from the desktop header and exact shortcut", async () => {
     const firstCreation = deferred<{ name: string; id: string }>();
     const onSessionCopied = vi.fn();
@@ -1452,7 +1583,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("inserts snippets into the staged draft without sending", async () => {
+  it("inserts snippets from the staged composer at the current selection without sending", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(getSnippetTree).mockResolvedValue({
       revision: 1,
@@ -1461,12 +1592,20 @@ describe("ConsoleScreen session identity", () => {
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "test" });
-    fireEvent.click(screen.getByRole("button", { name: "Open snippets" }));
+    const textarea = screen.getByRole("textbox", { name: "Staged input" }) as HTMLTextAreaElement;
+    const snippetButton = screen.getByRole("button", {
+      name: "Insert snippet into staged input",
+    });
+    fireEvent.input(textarea, { target: { value: "alpha omega" } });
+    textarea.focus();
+    textarea.setSelectionRange(6, 11);
+    fireEvent.mouseDown(snippetButton);
+    fireEvent.click(snippetButton);
     fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Insert" }));
 
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Staged input" }))
-      .toHaveValue("continue from here"));
+      .toHaveValue("alpha continue from here"));
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveFocus();
   });
 

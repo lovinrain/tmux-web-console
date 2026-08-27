@@ -79,6 +79,7 @@ interface TerminalKey {
 
 const PAGE_UP_SEQUENCE = "\x1b[5~";
 const PAGE_DOWN_SEQUENCE = "\x1b[6~";
+const CLEAR_TERMINAL_INPUT_SEQUENCE = "\x01\x0b";
 
 const ESSENTIAL_KEYS: TerminalKey[] = [
   { label: "Esc", data: "\x1b" },
@@ -211,6 +212,7 @@ type DraftStatus =
   | "unconfirmed"
   | "queueing"
   | "queued"
+  | "terminal-cleared"
   | "queue-error"
   | "clipboard-error"
   | "storage-error";
@@ -589,6 +591,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     textarea.focus();
   };
 
+  const clearTerminalInput = () => {
+    if (!enabled || actionPendingRef.current) return;
+    if (onSend(CLEAR_TERMINAL_INPUT_SEQUENCE)) setStatus("terminal-cleared");
+  };
+
   const pasteClipboard = async () => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -622,6 +629,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     statusText = "Delivery was not confirmed. The draft is retained; check the terminal before retrying.";
   } else if (status === "queued") {
     statusText = "Queued in this session's memo; the local draft was cleared.";
+  } else if (status === "terminal-cleared") {
+    statusText = "Terminal-side input cleared; the local staged draft is unchanged.";
   } else if (status === "queueing") {
     statusText = "Queueing this staged snapshot in the session memo...";
   } else if (status === "queue-error") {
@@ -652,6 +661,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       >
         <div className="composer-heading">
           <label htmlFor="terminal-staged-input">Staged input</label>
+          <button
+            type="button"
+            className="composer-snippet-trigger"
+            aria-label="Insert snippet into staged input"
+            aria-haspopup="dialog"
+            title="Search your snippet library and insert at the current cursor without sending"
+            disabled={!onOpenSnippets}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={onOpenSnippets}
+          >
+            <SnippetIcon />
+            <span>Insert snippet</span>
+          </button>
           <div
             className="composer-mobile-controls"
             role="group"
@@ -739,6 +761,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             >
               <span className="composer-action-label-full" aria-hidden="true">Clear</span>
               <span className="composer-action-label-compact" aria-hidden="true">C</span>
+            </button>
+            <button
+              type="button"
+              className="secondary-button composer-clear-terminal"
+              aria-label="Clear terminal input"
+              title="Clear text already written to the terminal without submitting it; keep the local staged-input box unchanged"
+              disabled={!enabled || actionPending}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={clearTerminalInput}
+            >
+              <span className="composer-action-label-full" aria-hidden="true">Clear terminal</span>
+              <span className="composer-action-label-compact" aria-hidden="true">CT</span>
             </button>
             <button
               type="button"

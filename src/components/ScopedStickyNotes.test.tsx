@@ -10,6 +10,10 @@ import {
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import {
+  DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
+  DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
+  MIN_SCOPED_NOTE_WINDOW_HEIGHT,
+  MIN_SCOPED_NOTE_WINDOW_WIDTH,
   SCOPED_NOTE_WINDOW_STORAGE_PREFIX,
   ScopedStickyNotes,
 } from "./ScopedStickyNotes";
@@ -72,7 +76,10 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
   document.body.style.overflow = "";
-  document.documentElement.classList.remove("scoped-note-moving");
+  document.documentElement.classList.remove(
+    "scoped-note-moving",
+    "scoped-note-resizing",
+  );
   vi.mocked(getCommonNote).mockResolvedValue("Shared checklist");
   vi.mocked(getWorkspaceNote).mockResolvedValue("Workspace plan");
   vi.mocked(getSessionNote).mockResolvedValue("Session handoff");
@@ -498,6 +505,10 @@ describe("ScopedStickyNotes", () => {
       floating: true,
       pinned: true,
       position: { x: 125, y: 145 },
+      size: {
+        width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
+        height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
+      },
     });
   });
 
@@ -558,6 +569,72 @@ describe("ScopedStickyNotes", () => {
       top: `${saved.position.y}px`,
     });
     expect(document.documentElement).not.toHaveClass("scoped-note-moving");
+  });
+
+  it("resizes floating notes smaller and restores the workspace-specific size", async () => {
+    class TestPointerEvent extends MouseEvent {
+      readonly pointerId: number;
+
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 0;
+      }
+    }
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    await renderLoadedNotes();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    const handle = within(editor).getByRole("button", {
+      name: "Resize common note window",
+    });
+    expect(editor).toHaveStyle({
+      width: `${DEFAULT_SCOPED_NOTE_WINDOW_WIDTH}px`,
+      height: `${DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT}px`,
+    });
+
+    fireEvent.pointerDown(handle, {
+      pointerId: 9,
+      button: 0,
+      clientX: 600,
+      clientY: 600,
+    });
+    expect(document.documentElement).toHaveClass("scoped-note-resizing");
+    fireEvent.pointerMove(window, {
+      pointerId: 9,
+      clientX: 430,
+      clientY: 410,
+    });
+    fireEvent.pointerUp(window, {
+      pointerId: 9,
+      clientX: 430,
+      clientY: 410,
+    });
+
+    expect(editor).toHaveStyle({ width: "260px", height: "240px" });
+    expect(document.documentElement).not.toHaveClass("scoped-note-resizing");
+    const storageKey = workspaceWindowStorageKey("workspace-one", "common:common");
+    expect(JSON.parse(window.localStorage.getItem(storageKey) || "null").size)
+      .toEqual({ width: 260, height: 240 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide common note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const restored = screen.getByRole("dialog", { name: "Common" });
+    expect(restored).toHaveStyle({ width: "260px", height: "240px" });
+
+    const restoredHandle = within(restored).getByRole("button", {
+      name: "Resize common note window",
+    });
+    fireEvent.keyDown(restoredHandle, { key: "Home" });
+    expect(restored).toHaveStyle({
+      width: `${MIN_SCOPED_NOTE_WINDOW_WIDTH}px`,
+      height: `${MIN_SCOPED_NOTE_WINDOW_HEIGHT}px`,
+    });
+    fireEvent.keyDown(restoredHandle, { key: "Enter" });
+    expect(restored).toHaveStyle({
+      width: `${DEFAULT_SCOPED_NOTE_WINDOW_WIDTH}px`,
+      height: `${DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT}px`,
+    });
   });
 
   it("does not render saved floating windows in the compact mobile view", async () => {

@@ -180,7 +180,8 @@ test("dashboard recognizes the official npm Copilot launcher process shape", asy
     copilotSession,
     "node",
     "-e",
-    'require("node:child_process").spawnSync("/bin/sleep", ["120"], {stdio: "inherit"})',
+    'process.stdout.write("\\u25c9 Working \\u00b7 697 B esc interrupt\\n");'
+      + 'require("node:child_process").spawnSync("/bin/sleep", ["120"], {stdio: "inherit"})',
   ]);
   const copilotPane = execFileSync(
     "tmux",
@@ -204,7 +205,9 @@ test("dashboard recognizes the official npm Copilot launcher process shape", asy
     await expect(openCopilot).toBeVisible();
     const card = openCopilot.locator("xpath=ancestor::article[contains(@class, 'session-card')]");
     await expect(card.locator(".agent-badge")).toHaveText("Copilot");
-    await expect(card.locator(".state-badge")).toContainText("Unclear");
+    await expect(card.locator(".state-badge")).toContainText("Working");
+    await expect(card.locator(".state-badge"))
+      .toHaveAttribute("title", "Copilot is running a turn");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
       .toBe(true);
 
@@ -1648,6 +1651,71 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
   }
 });
 
+test("vertical tabs scroll their rail without displacing the console toolbar", async ({
+  page,
+}) => {
+  const overflowSessions = Array.from(
+    { length: 18 },
+    (_, index) => `${sessionName}-rail-overflow-${index + 1}`,
+  );
+  for (const overflowSession of overflowSessions) {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      overflowSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+  }
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 700 });
+    await page.addInitScript(() => {
+      window.localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
+    });
+    const tabs = [sessionName, ...overflowSessions];
+    const query = tabs
+      .map((tab) => `tab=${encodeURIComponent(tab)}`)
+      .join("&");
+    await page.goto(`/mux/session/${sessionName}?${query}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await expect(page.locator(".workspace-tab")).toHaveCount(tabs.length);
+
+    const toolbar = page.locator(".console-bar-toolbar");
+    const shell = page.locator(".console-shell");
+    const tabViewport = page.locator(".workspace-tab-viewport");
+    await expect(shell).toHaveJSProperty("scrollTop", 0);
+    expect((await toolbar.boundingBox())?.y).toBe(0);
+
+    const lastTab = page.locator(
+      `[data-workspace-session-name="${overflowSessions.at(-1)}"]`,
+    );
+    await lastTab.getByRole("tab").evaluate((button) => {
+      (button as HTMLButtonElement).click();
+    });
+    await expect(lastTab).toHaveClass(/active/);
+    await expect.poll(() => tabViewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    await expect(shell).toHaveJSProperty("scrollTop", 0);
+    expect((await toolbar.boundingBox())?.y).toBe(0);
+  } finally {
+    for (const overflowSession of overflowSessions) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${overflowSession}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to the disposable test tmux server.
+      }
+    }
+  }
+});
+
 test("desktop workspace shortcuts cycle, jump by number, and search tabs", async ({
   page,
   request,
@@ -1768,7 +1836,14 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     const stagedInput = page.getByRole("textbox", { name: "Staged input" });
     const desktopComposerActions = page.locator(".composer-actions-primary");
     expect(await desktopComposerActions.locator(".composer-action-label-full").allTextContents())
-      .toEqual(["Clear", "Send", "Send + Enter", "Queue in memo", "Send + Tab"]);
+      .toEqual([
+        "Clear",
+        "Clear terminal",
+        "Send",
+        "Send + Enter",
+        "Queue in memo",
+        "Send + Tab",
+      ]);
     for (const label of await desktopComposerActions.locator(
       ".composer-action-label-full",
     ).all()) {
@@ -2620,11 +2695,18 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await expect(alternateDraft).toHaveValue(visibilityDraft);
     await expect(alternateDraft).toBeFocused();
     const stagedActionButtons = page.locator(".composer-actions-primary > button");
-    await expect(stagedActionButtons).toHaveCount(5);
+    await expect(stagedActionButtons).toHaveCount(6);
     const compactActionLabels = page.locator(
       ".composer-actions-primary .composer-action-label-compact",
     );
-    expect(await compactActionLabels.allTextContents()).toEqual(["C", "S", "S+E", "M", "S+T"]);
+    expect(await compactActionLabels.allTextContents()).toEqual([
+      "C",
+      "CT",
+      "S",
+      "S+E",
+      "M",
+      "S+T",
+    ]);
     for (const label of await compactActionLabels.all()) await expect(label).toBeVisible();
     for (const label of await page.locator(
       ".composer-actions-primary .composer-action-label-full",
@@ -2664,7 +2746,8 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     });
     await expect(exitInputFocus).toHaveAttribute("aria-pressed", "true");
     const focusedInputControls = [
-      page.getByRole("button", { name: "Clear" }),
+      page.getByRole("button", { name: "Clear", exact: true }),
+      page.getByRole("button", { name: "Clear terminal input" }),
       page.getByRole("button", { name: "Send", exact: true }),
       page.getByRole("button", { name: "Send + Enter" }),
       page.getByRole("button", { name: "Queue in memo" }),
@@ -2675,7 +2758,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
       await expect(control).toBeVisible();
       await expect(control).toHaveCSS("min-height", "44px");
     }
-    expect(await page.locator(".input-dock button:visible").count()).toBe(6);
+    expect(await page.locator(".input-dock button:visible").count()).toBe(7);
     expect(await terminalElementBeforeInputFocus.evaluate((element) => (
       element === (window as Window & { __muxdeckInputFocusTerminal: Element })
         .__muxdeckInputFocusTerminal
@@ -3198,6 +3281,203 @@ test("saved workspace survives reload and device handoff without touching tmux p
   }
 });
 
+test("global session pin deduplicates saved, inherited, and future workspaces", async ({
+  page,
+  request,
+}) => {
+  const workspaceIds: string[] = [];
+  const createWorkspace = async (name: string, tabs: string[]): Promise<string> => {
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name,
+        tabs,
+        groups: [],
+        activeSession: tabs[0] ?? null,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as { id: string };
+    workspaceIds.push(workspace.id);
+    return workspace.id;
+  };
+  const workspaceTabs = async (workspaceId: string): Promise<string[]> => {
+    const response = await request.get(
+      `/mux/api/workspaces/${encodeURIComponent(workspaceId)}`,
+    );
+    expect(response.ok()).toBe(true);
+    return (await response.json()).workspace.tabs as string[];
+  };
+
+  try {
+    await request.put("/mux/api/session-workspace-pin", {
+      data: { session: sessionName, pinned: false },
+    });
+    const explicitId = await createWorkspace(
+      `Global pin explicit ${process.pid}`,
+      [sessionName],
+    );
+    const inheritedId = await createWorkspace(
+      `Global pin inherited ${process.pid}`,
+      [],
+    );
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/mux/");
+    const pin = page.getByRole("button", {
+      name: `Pin ${sessionName} to every workspace`,
+    });
+    await expect(pin).toBeVisible();
+    await pin.click();
+    await expect(page.getByRole("button", {
+      name: `Unpin ${sessionName} from every workspace`,
+    })).toBeVisible();
+
+    await expect.poll(() => workspaceTabs(explicitId)).toEqual([sessionName]);
+    await expect.poll(() => workspaceTabs(inheritedId)).toEqual([sessionName]);
+
+    const futureId = await createWorkspace(
+      `Global pin future ${process.pid}`,
+      [],
+    );
+    await expect.poll(() => workspaceTabs(futureId)).toEqual([sessionName]);
+
+    await page.getByRole("button", {
+      name: `Unpin ${sessionName} from every workspace`,
+    }).click();
+    await expect(page.getByRole("button", {
+      name: `Pin ${sessionName} to every workspace`,
+    })).toBeVisible();
+
+    await expect.poll(() => workspaceTabs(explicitId)).toEqual([sessionName]);
+    await expect.poll(() => workspaceTabs(inheritedId)).toEqual([]);
+    await expect.poll(() => workspaceTabs(futureId)).toEqual([]);
+
+    await page.goto(`/mux/session/${encodeURIComponent(sessionName)}`);
+    const consolePin = page.getByRole("button", {
+      name: `Pin ${sessionName} to every workspace`,
+    });
+    await expect(consolePin).toBeVisible();
+    await consolePin.click();
+    await expect(page.getByRole("button", {
+      name: `Unpin ${sessionName} from every workspace`,
+    })).toBeVisible();
+    await expect.poll(() => workspaceTabs(inheritedId)).toEqual([sessionName]);
+  } finally {
+    await request.put("/mux/api/session-workspace-pin", {
+      data: { session: sessionName, pinned: false },
+    });
+    for (const workspaceId of workspaceIds) {
+      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    }
+  }
+});
+
+test("desktop Move / Copy transfers a session and deduplicates existing destinations", async ({
+  page,
+  request,
+}) => {
+  const helperSession = `${sessionName}-workspace-transfer`;
+  const workspaceIds: string[] = [];
+  const createWorkspace = async (
+    name: string,
+    tabs: string[],
+    activeSession: string | null,
+  ): Promise<string> => {
+    const response = await request.post("/mux/api/workspaces", {
+      data: { name, tabs, groups: [], activeSession },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as { id: string };
+    workspaceIds.push(workspace.id);
+    return workspace.id;
+  };
+  const workspaceTabs = async (workspaceId: string): Promise<string[]> => {
+    const response = await request.get(
+      `/mux/api/workspaces/${encodeURIComponent(workspaceId)}`,
+    );
+    expect(response.ok()).toBe(true);
+    return (await response.json()).workspace.tabs as string[];
+  };
+
+  try {
+    await request.put("/mux/api/session-workspace-pin", {
+      data: { session: sessionName, pinned: false },
+    });
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+
+    const sourceName = `Transfer source ${process.pid}`;
+    const copyName = `Transfer copy ${process.pid}`;
+    const existingName = `Transfer existing ${process.pid}`;
+    const sourceId = await createWorkspace(
+      sourceName,
+      [sessionName, helperSession],
+      sessionName,
+    );
+    const copyId = await createWorkspace(copyName, [], null);
+    const existingId = await createWorkspace(existingName, [sessionName], sessionName);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+        + `?workspace=${encodeURIComponent(sourceId)}`
+        + `&tab=${encodeURIComponent(sessionName)}`
+        + `&tab=${encodeURIComponent(helperSession)}`,
+    );
+    const transferButton = page.getByRole("button", {
+      name: `Move or copy ${sessionName} to a workspace`,
+    });
+    await expect(transferButton).toBeVisible();
+    await transferButton.click();
+
+    const dialog = page.getByRole("dialog", { name: "Move or copy to a workspace" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(sourceName, { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("button", {
+      name: `${sessionName} is already in ${existingName}`,
+    })).toBeDisabled();
+
+    await dialog.getByRole("button", {
+      name: `Copy ${sessionName} to ${copyName}`,
+    }).click();
+    await expect(dialog.getByText(`Copied ${sessionName} to ${copyName}.`)).toBeVisible();
+    await expect(dialog.getByRole("button", {
+      name: `${sessionName} is already in ${copyName}`,
+    })).toBeDisabled();
+    await expect.poll(() => workspaceTabs(copyId)).toEqual([sessionName]);
+
+    await dialog.getByRole("button", {
+      name: `Move ${sessionName} to ${existingName}`,
+    }).click();
+    await expect(dialog).toBeHidden();
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      [helperSession],
+      { workspace: sourceId },
+    );
+    await expect.poll(() => workspaceTabs(sourceId)).toEqual([helperSession]);
+    await expect.poll(() => workspaceTabs(existingId)).toEqual([sessionName]);
+  } finally {
+    for (const workspaceId of workspaceIds) {
+      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    }
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`]);
+    } catch {
+      // Cleanup stays scoped to the helper session on this test's disposable socket.
+    }
+  }
+});
+
 test("desktop link shelf scopes common, workspace, and session links", async ({
   page,
   request,
@@ -3591,6 +3871,50 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
       path: "artifacts/scoped-sticky-note-editor.png",
       animations: "disabled",
     });
+    const initialEditorBox = await persistedEditor.boundingBox();
+    const noteResizeHandle = persistedEditor.getByRole("button", {
+      name: "Resize workspace note window",
+    });
+    const resizeHandleBox = await noteResizeHandle.boundingBox();
+    expect(initialEditorBox).not.toBeNull();
+    expect(resizeHandleBox).not.toBeNull();
+    await page.mouse.move(
+      resizeHandleBox!.x + resizeHandleBox!.width / 2,
+      resizeHandleBox!.y + resizeHandleBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      resizeHandleBox!.x + resizeHandleBox!.width / 2 - 150,
+      resizeHandleBox!.y + resizeHandleBox!.height / 2 - 140,
+      { steps: 4 },
+    );
+    await page.mouse.up();
+    const resizedEditorBox = await persistedEditor.boundingBox();
+    expect(resizedEditorBox).not.toBeNull();
+    expect(resizedEditorBox!.width).toBeLessThan(initialEditorBox!.width - 100);
+    expect(resizedEditorBox!.height).toBeLessThan(initialEditorBox!.height - 100);
+    expect(resizedEditorBox!.width).toBeGreaterThanOrEqual(220);
+    expect(resizedEditorBox!.height).toBeGreaterThanOrEqual(168);
+    await expect(page.locator("html")).not.toHaveClass(/scoped-note-resizing/);
+    await persistedEditor.screenshot({
+      path: "artifacts/scoped-sticky-note-editor-resized.png",
+      animations: "disabled",
+    });
+
+    await noteRegion.getByRole("button", { name: "Hide workspace note" }).click();
+    await expect(persistedEditor).toBeHidden();
+    await noteRegion.getByRole("button", { name: "Edit workspace note" }).click();
+    await expect(persistedEditor).toBeVisible();
+    await expect.poll(async () => {
+      const restoredBox = await persistedEditor.boundingBox();
+      return restoredBox && {
+        width: Math.round(restoredBox.width),
+        height: Math.round(restoredBox.height),
+      };
+    }).toEqual({
+      width: Math.round(resizedEditorBox!.width),
+      height: Math.round(resizedEditorBox!.height),
+    });
     await noteRegion.getByRole("button", { name: "Hide workspace note" }).click();
     await expect(persistedEditor).toBeHidden();
 
@@ -3744,6 +4068,26 @@ test("snippet tree persists and stages exact input from cards and lists", async 
   stagedInput = page.getByRole("textbox", { name: "Staged input" });
   await expect(stagedInput).toHaveValue(snippetCommand);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await expect(page.getByRole("button", { name: "Insert snippet into staged input" }))
+    .toBeHidden();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const directSnippet = page.getByRole("button", {
+    name: "Insert snippet into staged input",
+  });
+  await expect(directSnippet).toBeVisible();
+  await stagedInput.fill("alpha omega");
+  await stagedInput.evaluate((element) => {
+    const textarea = element as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(6, 11);
+  });
+  await directSnippet.click();
+  await page.getByRole("searchbox", { name: "Search all snippets" }).fill("E2E status");
+  await page.getByRole("button", { name: "Preview snippet E2E status" }).click();
+  await page.getByRole("button", { name: "Insert", exact: true }).click();
+  await expect(stagedInput).toHaveValue(`alpha ${snippetCommand}`);
+  await expect(stagedInput).toBeFocused();
 });
 
 test("mobile ignored sessions persist collapsed and remain recoverable", async ({ page, request }) => {
@@ -4349,6 +4693,26 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await page.getByRole("button", { name: "Ctrl+K - delete to end of input" }).click();
   await expect.poll(captureJoinedPane).toContain(String.raw`CTRL_K_KEY=$'\v'`);
 
+  const terminalClearProbe = `/tmp/muxdeck-terminal-clear-${process.pid}`;
+  rmSync(terminalClearProbe, { force: true });
+  try {
+    await stagedInput.fill(`printf x > '${terminalClearProbe}' #`);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(stagedInput).toHaveValue("");
+    await stagedInput.fill("keep this browser draft");
+    await page.getByRole("button", { name: "Clear terminal input" }).click();
+    await expect(stagedInput).toHaveValue("keep this browser draft");
+    await expect(page.locator(".composer-status"))
+      .toContainText("Terminal-side input cleared");
+    await stagedInput.fill(
+      `if [ ! -e '${terminalClearProbe}' ]; then printf 'TERMINAL_%s_OK\\n' CLEAR; else printf 'TERMINAL_%s_FAILED\\n' CLEAR; fi`,
+    );
+    await page.getByRole("button", { name: "Send + Enter" }).click();
+    await expect.poll(captureJoinedPane).toContain("TERMINAL_CLEAR_OK");
+  } finally {
+    rmSync(terminalClearProbe, { force: true });
+  }
+
   const paneFormat = (format: string) => execFileSync(
     "tmux",
     [...tmux, "display-message", "-p", "-t", paneId, format],
@@ -4464,7 +4828,8 @@ test("mobile memo exposes and clears queued work without touching tmux", async (
     expect(await actions.evaluate((element) => element.scrollWidth <= element.clientWidth))
       .toBe(true);
     const actionButtons = [
-      page.getByRole("button", { name: "Clear" }),
+      page.getByRole("button", { name: "Clear", exact: true }),
+      page.getByRole("button", { name: "Clear terminal input" }),
       page.getByRole("button", { name: "Send", exact: true }),
       page.getByRole("button", { name: "Send + Enter" }),
       queueInMemo,

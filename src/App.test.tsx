@@ -11,8 +11,11 @@ import {
   getWorkspaceQuickLinks,
   listSessions,
   terminateSession,
+  transferSessionToWorkspace,
   updateWorkspaceActivity,
   type SavedWorkspace,
+  type WorkspaceSessionTransferOperation,
+  type WorkspaceSessionTransferResult,
 } from "./api";
 import { App } from "./App";
 import type { Session } from "./types";
@@ -29,6 +32,7 @@ vi.mock("./api", async (importOriginal) => {
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
     terminateSession: vi.fn(),
+    transferSessionToWorkspace: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
   };
 });
@@ -40,6 +44,7 @@ const getWorkspaceMock = vi.mocked(getWorkspace);
 const getWorkspaceQuickLinksMock = vi.mocked(getWorkspaceQuickLinks);
 const listSessionsMock = vi.mocked(listSessions);
 const terminateSessionMock = vi.mocked(terminateSession);
+const transferSessionToWorkspaceMock = vi.mocked(transferSessionToWorkspace);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
 
 let pendingNewSessionCompletion: ((session: string, sessionId?: string) => void) | null = null;
@@ -68,6 +73,17 @@ let openSessionFromDashboard: ((sessionName: string) => void) | null = null;
 let openSavedWorkspaceFromDashboard: ((workspace: SavedWorkspace) => void) | null = null;
 let reportSavedWorkspaceDeleted: ((workspaceId: string) => void) | null = null;
 let reportSavedWorkspaceUpdated: ((workspace: SavedWorkspace) => void) | null = null;
+let reportWorkspacePinChange: (
+  (sessionName: string, pinned: boolean, sessionRevision: number) => void | Promise<void>
+) | null = null;
+let reportSessionWorkspaceTransfer: (
+  (
+    sessionName: string,
+    destinationWorkspaceId: string,
+    operation: WorkspaceSessionTransferOperation,
+    sessionRevision: number,
+  ) => Promise<WorkspaceSessionTransferResult>
+) | null = null;
 let dashboardActiveWorkspaceId: string | null = null;
 let dashboardMountCount = 0;
 const originalSendBeaconDescriptor = Object.getOwnPropertyDescriptor(
@@ -88,6 +104,7 @@ vi.mock("./components/SessionDashboard", () => ({
     onOpenSavedWorkspace,
     onSavedWorkspaceDeleted,
     onSavedWorkspaceUpdated,
+    onWorkspacePinChange,
     onSessionTerminated,
     activeWorkspaceId,
   }: {
@@ -101,6 +118,11 @@ vi.mock("./components/SessionDashboard", () => ({
     onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
     onSavedWorkspaceDeleted?: (workspaceId: string) => void;
     onSavedWorkspaceUpdated?: (workspace: SavedWorkspace) => void;
+    onWorkspacePinChange?: (
+      sessionName: string,
+      pinned: boolean,
+      sessionRevision: number,
+    ) => void | Promise<void>;
     onSessionTerminated?: (
       sessionName: string,
       sessionId: string,
@@ -118,6 +140,7 @@ vi.mock("./components/SessionDashboard", () => ({
     openSavedWorkspaceFromDashboard = onOpenSavedWorkspace ?? null;
     reportSavedWorkspaceDeleted = onSavedWorkspaceDeleted ?? null;
     reportSavedWorkspaceUpdated = onSavedWorkspaceUpdated ?? null;
+    reportWorkspacePinChange = onWorkspacePinChange ?? null;
     reportSessionTerminate = onSessionTerminated ?? null;
     dashboardActiveWorkspaceId = activeWorkspaceId ?? null;
     return (
@@ -214,6 +237,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     desktopTabRailWidth,
     onDesktopTabRailWidthChange,
     onSessionsChange,
+    onWorkspacePinChange,
+    onSessionWorkspaceTransfer,
     onSessionRenamed,
     onSessionTerminated,
     onSessionCopied,
@@ -246,6 +271,17 @@ vi.mock("./components/ConsoleScreen", () => ({
     desktopTabRailWidth: number;
     onDesktopTabRailWidthChange: (width: number) => void;
     onSessionsChange?: (sessions: Session[]) => void;
+    onWorkspacePinChange?: (
+      sessionName: string,
+      pinned: boolean,
+      sessionRevision: number,
+    ) => void | Promise<void>;
+    onSessionWorkspaceTransfer?: (
+      sessionName: string,
+      destinationWorkspaceId: string,
+      operation: WorkspaceSessionTransferOperation,
+      sessionRevision: number,
+    ) => Promise<WorkspaceSessionTransferResult>;
     onSessionRenamed?: (
       previousName: string,
       nextName: string,
@@ -272,6 +308,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     onDismissRenameWarning?: (sessionId: string) => void;
   }) => {
     reportKnownSessions = onSessionsChange ?? null;
+    reportWorkspacePinChange = onWorkspacePinChange ?? null;
+    reportSessionWorkspaceTransfer = onSessionWorkspaceTransfer ?? null;
     reportSessionRename = onSessionRenamed ?? null;
     reportSessionTerminate = onSessionTerminated ?? null;
     reportSessionCopy = onSessionCopied ?? null;
@@ -538,6 +576,7 @@ describe("App routing", () => {
     getWorkspaceQuickLinksMock.mockReset();
     listSessionsMock.mockReset();
     terminateSessionMock.mockReset();
+    transferSessionToWorkspaceMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
@@ -556,6 +595,8 @@ describe("App routing", () => {
     openSavedWorkspaceFromDashboard = null;
     reportSavedWorkspaceDeleted = null;
     reportSavedWorkspaceUpdated = null;
+    reportWorkspacePinChange = null;
+    reportSessionWorkspaceTransfer = null;
     dashboardActiveWorkspaceId = null;
     dashboardMountCount = 0;
     sendBeaconMock.mockReset();
@@ -2843,6 +2884,103 @@ describe("App routing", () => {
   });
 
   describe("saved workspace lifecycle", () => {
+    it("rehydrates the active saved workspace after a global session pin changes", async () => {
+      const initial = savedWorkspace({ sessionRevision: 4 });
+      const afterPin = savedWorkspace({
+        tabs: ["alpha", "beta", "shared"],
+        sessionRevision: 5,
+        updatedAt: 2_000,
+      });
+      getWorkspaceMock
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(afterPin);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+        { ...session("shared", "$shared"), workspacePinned: true },
+      ]);
+      replaceUrl(`${BASE_PATH}/?workspace=workspace-one&tab=stale`);
+
+      render(<App />);
+
+      await waitFor(() => expect(dashboardActiveWorkspaceId).toBe("workspace-one"));
+      expect(reportWorkspacePinChange).not.toBeNull();
+      await act(async () => {
+        await reportWorkspacePinChange?.("shared", true, 5);
+      });
+
+      await waitFor(() => expect(getWorkspaceMock).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(openTabs()).toEqual(["alpha", "beta", "shared"]));
+      expect(window.location.search).toBe(
+        "?workspace=workspace-one&tab=alpha&tab=beta&tab=shared",
+      );
+    });
+
+    it("atomically moves the active session and rehydrates the saved source workspace", async () => {
+      const initial = savedWorkspace({ sessionRevision: 4 });
+      const afterMove = savedWorkspace({
+        tabs: ["beta"],
+        activeSession: "beta",
+        sessionRevision: 5,
+        updatedAt: 2_000,
+      });
+      const destination = savedWorkspace({
+        id: "destination",
+        name: "Destination",
+        tabs: ["review", "alpha"],
+        activeSession: "review",
+        sessionRevision: 5,
+      });
+      getWorkspaceMock
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(afterMove);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue(initial);
+      transferSessionToWorkspaceMock.mockResolvedValue({
+        session: "alpha",
+        operation: "move",
+        destinationAlreadyContained: false,
+        destinationAdded: true,
+        sourceRemoved: true,
+        sourceWorkspace: afterMove,
+        destinationWorkspace: destination,
+        sessionRevision: 5,
+      });
+      replaceUrl(
+        sessionUrl("alpha", "?workspace=workspace-one&tab=alpha&tab=beta"),
+      );
+
+      render(<App />);
+
+      await waitFor(() => expect(openTabs()).toEqual(["alpha", "beta"]));
+      expect(reportSessionWorkspaceTransfer).not.toBeNull();
+      let transferResult: WorkspaceSessionTransferResult | undefined;
+      await act(async () => {
+        transferResult = await reportSessionWorkspaceTransfer?.(
+          "alpha",
+          "destination",
+          "move",
+          4,
+        );
+      });
+
+      expect(transferResult?.sourceWorkspace?.tabs).toEqual(["beta"]);
+      expect(transferSessionToWorkspaceMock).toHaveBeenCalledWith(
+        "alpha",
+        "workspace-one",
+        "destination",
+        "move",
+        4,
+      );
+      expect(getWorkspaceMock).toHaveBeenCalledOnce();
+      await waitFor(() => expect(openTabs()).toEqual(["beta"]));
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+      expect(window.location.search).toBe("?workspace=workspace-one&tab=beta");
+    });
+
     it("creates the exact open workspace and binds it in place without a redundant activity save", async () => {
       vi.useFakeTimers();
       const created = savedWorkspace({

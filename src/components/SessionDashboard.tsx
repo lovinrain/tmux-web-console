@@ -14,6 +14,7 @@ import {
   updateSessionDetails,
   updateSessionIgnored,
   updateSessionStar,
+  updateSessionWorkspacePin,
   updateSessionTags,
   updateSessionTitle,
   type SavedWorkspace,
@@ -26,6 +27,7 @@ import {
   GridIcon,
   ListIcon,
   MemoIcon,
+  PinIcon,
   RefreshIcon,
   SearchIcon,
   SnippetIcon,
@@ -92,6 +94,11 @@ interface SessionDashboardProps {
   onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
   onSavedWorkspaceDeleted?: (workspaceId: string) => void;
   onSavedWorkspaceUpdated?: (workspace: SavedWorkspace) => void;
+  onWorkspacePinChange?: (
+    sessionName: string,
+    pinned: boolean,
+    sessionRevision: number,
+  ) => void | Promise<void>;
   onSessionTerminated?: (
     sessionName: string,
     sessionId: string,
@@ -252,6 +259,7 @@ interface SessionItemProps {
   viewMode: SessionViewMode;
   showStateChangeTime: boolean;
   attentionBusy: boolean;
+  workspacePinBusy: boolean;
   onOpen: (name: string) => void;
   onEdit: (name: string, trigger: HTMLButtonElement) => void;
   onMessages: (name: string, trigger: HTMLButtonElement) => void;
@@ -259,6 +267,7 @@ interface SessionItemProps {
   onTerminate?: (session: Session) => void;
   onToggleStar: (session: Session) => void;
   onToggleIgnored: (session: Session) => void;
+  onToggleWorkspacePin: (session: Session) => void;
 }
 
 function SessionItem({
@@ -267,6 +276,7 @@ function SessionItem({
   viewMode,
   showStateChangeTime,
   attentionBusy,
+  workspacePinBusy,
   onOpen,
   onEdit,
   onMessages,
@@ -274,6 +284,7 @@ function SessionItem({
   onTerminate,
   onToggleStar,
   onToggleIgnored,
+  onToggleWorkspacePin,
 }: SessionItemProps) {
   const stateDescriptionId = useId();
   const tagsDescriptionId = useId();
@@ -376,6 +387,23 @@ function SessionItem({
       <div className="session-card-actions">
         <button
           type="button"
+          className={session.workspacePinned
+            ? "session-workspace-pin-toggle active"
+            : "session-workspace-pin-toggle"}
+          aria-label={session.workspacePinned
+            ? `Unpin ${displayName} from every workspace`
+            : `Pin ${displayName} to every workspace`}
+          aria-pressed={Boolean(session.workspacePinned)}
+          title={session.workspacePinned
+            ? "Stop adding this session to every workspace"
+            : "Add this session once to every saved and future workspace"}
+          disabled={workspacePinBusy}
+          onClick={() => onToggleWorkspacePin(session)}
+        >
+          <PinIcon filled={Boolean(session.workspacePinned)} />
+        </button>
+        <button
+          type="button"
           className="session-snippets-toggle"
           aria-label={`Use snippet with ${displayName}`}
           title="Stage a snippet"
@@ -458,6 +486,7 @@ export function SessionDashboard({
   onOpenSavedWorkspace,
   onSavedWorkspaceDeleted,
   onSavedWorkspaceUpdated,
+  onWorkspacePinChange,
   onSessionTerminated,
 }: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -476,6 +505,9 @@ export function SessionDashboard({
   const [snippetSessionName, setSnippetSessionName] = useState<string | null>(null);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [attentionBusyNames, setAttentionBusyNames] = useState<Set<string>>(() => new Set());
+  const [workspacePinBusyNames, setWorkspacePinBusyNames] = useState<Set<string>>(
+    () => new Set(),
+  );
   const tagFilterModeDescriptionId = useId();
   const terminatedSessionsRef = useRef<Session[]>([]);
   const editTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -862,6 +894,44 @@ export function SessionDashboard({
     }
   }, []);
 
+  const toggleWorkspacePin = useCallback(async (session: Session) => {
+    const previous = Boolean(session.workspacePinned);
+    const next = !previous;
+    setActionError(null);
+    setWorkspacePinBusyNames((current) => new Set(current).add(session.name));
+    setSessions((current) => current.map((item) => (
+      item.name === session.name ? { ...item, workspacePinned: next } : item
+    )));
+    try {
+      const result = await updateSessionWorkspacePin(session.name, next);
+      setSessions((current) => current.map((item) => (
+        item.name === session.name
+          ? { ...item, workspacePinned: result.workspacePinned }
+          : item
+      )));
+      await onWorkspacePinChange?.(
+        result.session,
+        result.workspacePinned,
+        result.sessionRevision,
+      );
+    } catch (pinError) {
+      setSessions((current) => current.map((item) => (
+        item.name === session.name ? { ...item, workspacePinned: previous } : item
+      )));
+      setActionError(
+        pinError instanceof Error
+          ? pinError.message
+          : "Unable to update the workspace pin",
+      );
+    } finally {
+      setWorkspacePinBusyNames((current) => {
+        const nextBusy = new Set(current);
+        nextBusy.delete(session.name);
+        return nextBusy;
+      });
+    }
+  }, [onWorkspacePinChange]);
+
   return (
     <main className="dashboard-shell">
       <div className="ambient-grid" />
@@ -1108,6 +1178,7 @@ export function SessionDashboard({
                     viewMode={viewMode}
                     showStateChangeTime={showStateChangeTime}
                     attentionBusy={attentionBusyNames.has(session.name)}
+                    workspacePinBusy={workspacePinBusyNames.has(session.name)}
                     onOpen={onOpen}
                     onEdit={(name, trigger) => {
                       editTriggerRef.current = trigger;
@@ -1118,6 +1189,7 @@ export function SessionDashboard({
                     onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                     onToggleStar={(item) => void toggleStar(item)}
                     onToggleIgnored={(item) => void toggleIgnored(item)}
+                    onToggleWorkspacePin={(item) => void toggleWorkspacePin(item)}
                   />
                 ))}
               </div>
@@ -1149,6 +1221,7 @@ export function SessionDashboard({
                           viewMode={viewMode}
                           showStateChangeTime
                           attentionBusy={attentionBusyNames.has(session.name)}
+                          workspacePinBusy={workspacePinBusyNames.has(session.name)}
                           onOpen={onOpen}
                           onEdit={(name, trigger) => {
                             editTriggerRef.current = trigger;
@@ -1159,6 +1232,7 @@ export function SessionDashboard({
                           onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                           onToggleStar={(item) => void toggleStar(item)}
                           onToggleIgnored={(item) => void toggleIgnored(item)}
+                          onToggleWorkspacePin={(item) => void toggleWorkspacePin(item)}
                         />
                       ))}
                     </div>
@@ -1189,6 +1263,7 @@ export function SessionDashboard({
                             viewMode={viewMode}
                             showStateChangeTime={showStateChangeTime}
                             attentionBusy={attentionBusyNames.has(session.name)}
+                            workspacePinBusy={workspacePinBusyNames.has(session.name)}
                             onOpen={onOpen}
                             onEdit={(name, trigger) => {
                               editTriggerRef.current = trigger;
@@ -1199,6 +1274,7 @@ export function SessionDashboard({
                             onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                             onToggleStar={(item) => void toggleStar(item)}
                             onToggleIgnored={(item) => void toggleIgnored(item)}
+                            onToggleWorkspacePin={(item) => void toggleWorkspacePin(item)}
                           />
                         ))}
                       </div>
@@ -1216,6 +1292,7 @@ export function SessionDashboard({
                     viewMode={viewMode}
                     showStateChangeTime={showStateChangeTime}
                     attentionBusy={attentionBusyNames.has(session.name)}
+                    workspacePinBusy={workspacePinBusyNames.has(session.name)}
                     onOpen={onOpen}
                     onEdit={(name, trigger) => {
                       editTriggerRef.current = trigger;
@@ -1226,6 +1303,7 @@ export function SessionDashboard({
                     onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                     onToggleStar={(item) => void toggleStar(item)}
                     onToggleIgnored={(item) => void toggleIgnored(item)}
+                    onToggleWorkspacePin={(item) => void toggleWorkspacePin(item)}
                   />
                 ))}
               </div>
@@ -1252,6 +1330,7 @@ export function SessionDashboard({
                   viewMode={viewMode}
                   showStateChangeTime={showStateChangeTime}
                   attentionBusy={attentionBusyNames.has(session.name)}
+                  workspacePinBusy={workspacePinBusyNames.has(session.name)}
                   onOpen={onOpen}
                   onEdit={(name, trigger) => {
                     editTriggerRef.current = trigger;
@@ -1262,6 +1341,7 @@ export function SessionDashboard({
                   onTerminate={onSessionTerminated ? setTerminateTarget : undefined}
                   onToggleStar={(item) => void toggleStar(item)}
                   onToggleIgnored={(item) => void toggleIgnored(item)}
+                  onToggleWorkspacePin={(item) => void toggleWorkspacePin(item)}
                 />
               ))}
             </div>

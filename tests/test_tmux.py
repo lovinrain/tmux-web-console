@@ -1256,18 +1256,33 @@ def test_grok_agent_state_follows_its_tmux_title_signals():
         "\u2839 Working - GitHub Copilot",
     ],
 )
-def test_copilot_is_recognized_without_guessing_its_live_state(title: str):
-    state = classify_agent_state(
-        agent_pane(command="copilot", title=title),
-        visible_screen="Thinking... Esc to interrupt",
+def test_copilot_uses_its_visible_footer_to_distinguish_work_and_input(title: str):
+    pane = agent_pane(command="copilot", title=title)
+
+    working = classify_agent_state(
+        pane,
+        visible_screen=(
+            "\u25cf Streaming the response\n\n"
+            "\u276f \n"
+            "\u25ce Working \u00b7 5.1 KiB esc interrupt    Auto -> gpt-5.6-luna"
+        ),
+        now=1000,
+    )
+    idle = classify_agent_state(
+        pane,
+        visible_screen=(
+            "\u25cf Finished the response\n\n"
+            "\u276f \n"
+            "\u2190 open sidebar \u00b7 / commands \u00b7 ? help \u00b7 tab next tab\n"
+            "Auto -> gpt-5.6-luna"
+        ),
         now=1000,
     )
 
-    assert state.name == "unknown"
-    assert (
-        state.reason
-        == "No reliable GitHub Copilot CLI activity signal is available through tmux"
-    )
+    assert working.name == "working"
+    assert working.reason == "Copilot is running a turn"
+    assert idle.name == "waiting_human"
+    assert idle.reason == "Copilot is idle at its input prompt"
 
 
 @pytest.mark.parametrize(
@@ -1282,15 +1297,68 @@ def test_copilot_is_recognized_without_guessing_its_live_state(title: str):
 def test_npm_copilot_is_recognized_from_its_exact_node_title_suffix(title: str):
     state = classify_agent_state(
         agent_pane(command="node", title=title),
-        visible_screen="Thinking... Esc to interrupt",
+        visible_screen=(
+            "\u276f \n"
+            "\u25c9 Working \u00b7 111 B esc interrupt    Auto -> gpt-5.6-luna"
+        ),
         now=1000,
     )
 
-    assert state.name == "unknown"
-    assert (
-        state.reason
-        == "No reliable GitHub Copilot CLI activity signal is available through tmux"
+    assert state.name == "working"
+
+
+def test_copilot_detects_selection_prompts_as_needing_input():
+    screen = (
+        "\u2502 Do you want to run this command? \u2502\n"
+        "\u2502 \u276f 1. Yes                     \u2502\n"
+        "\u2502 \u2191/\u2193 to navigate \u00b7 enter to select \u00b7 esc to cancel \u2502\n"
+        "\u2570\u2500\u2500\u2500\u2500\u2500\u256f"
     )
+
+    state = classify_agent_state(
+        agent_pane(command="copilot", title="GitHub Copilot"),
+        visible_screen=screen,
+        now=1000,
+    )
+
+    assert state.name == "waiting_human"
+    assert state.reason == "Copilot is waiting on a selection"
+
+
+def test_copilot_requires_a_fresh_specific_footer_signal():
+    pane = agent_pane(command="copilot", title="GitHub Copilot")
+    working_screen = (
+        "\u276f \n"
+        "\u25cb Working \u00b7 1.2 KiB esc interrupt    Auto -> gpt-5.6-luna"
+    )
+
+    unavailable = classify_agent_state(pane, now=1000)
+    stale = classify_agent_state(
+        replace(pane, activity=900), visible_screen=working_screen, now=1000
+    )
+    ambiguous = classify_agent_state(
+        pane,
+        visible_screen="The docs say Thinking... Esc to interrupt.",
+        now=1000,
+    )
+    old_status_above_idle_prompt = classify_agent_state(
+        pane,
+        visible_screen=(
+            "\u25ce Working \u00b7 1.2 KiB esc interrupt\n"
+            "\u25cf That was the previous status line.\n\n"
+            "\u276f \n"
+            "\u2190 open sidebar \u00b7 / commands \u00b7 ? help \u00b7 tab next tab"
+        ),
+        now=1000,
+    )
+
+    assert unavailable.name == "unknown"
+    assert unavailable.reason == "Copilot screen capture is unavailable"
+    assert stale.name == "unknown"
+    assert stale.reason == "Agent activity indicator is stale"
+    assert ambiguous.name == "unknown"
+    assert ambiguous.reason == "Copilot footer state signal is not recognized"
+    assert old_status_above_idle_prompt.name == "waiting_human"
 
 
 @pytest.mark.parametrize(
@@ -1593,7 +1661,7 @@ async def test_detect_sessions_captures_only_working_grok_panes():
         ("node", "Review status detection - GitHub Copilot"),
     ],
 )
-async def test_detect_sessions_does_not_capture_unverified_copilot_panes(
+async def test_detect_sessions_captures_copilot_footers(
     command: str, title: str
 ):
     copilot = agent_pane(
@@ -1602,7 +1670,14 @@ async def test_detect_sessions_does_not_capture_unverified_copilot_panes(
         title=title,
         activity=int(time.time()),
     )
-    tmux = RecordingTmux({copilot.id: "Thinking... Esc to interrupt"})
+    tmux = RecordingTmux(
+        {
+            copilot.id: (
+                "\u276f \n"
+                "\u25ce Working \u00b7 697 B esc interrupt    Auto -> gpt-5.6-luna"
+            )
+        }
+    )
     sessions = [
         Session(
             name="copilot-work",
@@ -1618,9 +1693,6 @@ async def test_detect_sessions_does_not_capture_unverified_copilot_panes(
         cast(TmuxClient, tmux), sessions
     )
 
-    assert states["copilot-work"].name == "unknown"
-    assert (
-        states["copilot-work"].reason
-        == "No reliable GitHub Copilot CLI activity signal is available through tmux"
-    )
-    assert tmux.captured == []
+    assert states["copilot-work"].name == "working"
+    assert states["copilot-work"].reason == "Copilot is running a turn"
+    assert tmux.captured == [copilot.id]

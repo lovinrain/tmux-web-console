@@ -30,7 +30,11 @@ from tmux_console.tmux import (
     TmuxSessionIdentityChangedError,
     TmuxSessionNotFoundError,
 )
-from tmux_console.workspaces import MAX_SCOPED_NOTE_LENGTH, WorkspaceStore
+from tmux_console.workspaces import (
+    MAX_SCOPED_NOTE_LENGTH,
+    MAX_WORKSPACE_TABS,
+    WorkspaceStore,
+)
 
 SESSION_CREATED = 1_700_000_000
 SERVER_STARTED = 1_699_999_900
@@ -1082,6 +1086,7 @@ async def test_session_quick_links_api_reports_tmux_and_persistence_failures(
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise OSError("read-only filesystem")
 
@@ -1254,6 +1259,7 @@ async def test_session_note_api_reports_tmux_and_persistence_failures(
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise OSError("read-only filesystem")
 
@@ -2388,6 +2394,299 @@ async def test_session_ignored_api_validates_payload_and_existing_session(tmp_pa
         )
         assert response.status == 404
         assert await response.json() == {"error": "tmux session not found: missing"}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_workspace_pin_api_updates_snapshots_and_workspaces(tmp_path):
+    session = make_session("shared-agent")
+    workspaces = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["explicit", "inherited"]).__next__,
+    )
+    workspaces.create_workspace(
+        name="Explicit",
+        tabs=[session.name],
+        active_session=session.name,
+    )
+    workspaces.create_workspace(
+        name="Inherited",
+        tabs=["other"],
+        active_session="other",
+    )
+    application = create_app(
+        tmux=FakeTmux([[session]]),
+        workspaces=workspaces,
+        agent_states=FakeAgentStateDetector(
+            [
+                {session.name: AgentState("working", "active")},
+                {session.name: AgentState("working", "active")},
+            ]
+        ),
+        base_path="",
+    )
+    client = TestClient(TestServer(application))
+
+    try:
+        await client.start_server()
+        before = await (await client.get("/api/sessions")).json()
+        assert before["sessions"][0]["workspacePinned"] is False
+
+        response = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": session.name, "pinned": True},
+        )
+        assert response.status == 200
+        assert await response.json() == {
+            "session": session.name,
+            "workspacePinned": True,
+            "sessionRevision": 1,
+        }
+        assert workspaces.get_workspace("explicit")["tabs"] == [session.name]
+        assert workspaces.get_workspace("inherited")["tabs"] == ["other", session.name]
+
+        repeated = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": session.name, "pinned": True},
+        )
+        assert repeated.status == 200
+        assert (await repeated.json())["sessionRevision"] == 1
+        assert workspaces.get_workspace("inherited")["tabs"].count(session.name) == 1
+
+        listed = await (await client.get("/api/sessions")).json()
+        assert listed["sessions"][0]["workspacePinned"] is True
+
+        response = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": session.name, "pinned": False},
+        )
+        assert response.status == 200
+        assert (await response.json())["sessionRevision"] == 2
+        assert workspaces.get_workspace("explicit")["tabs"] == [session.name]
+        assert workspaces.get_workspace("inherited")["tabs"] == ["other"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_workspace_pin_api_validates_live_session_and_capacity(tmp_path):
+    session = make_session("shared-agent")
+    workspaces = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "full",
+    )
+    full_tabs = [f"session-{index}" for index in range(MAX_WORKSPACE_TABS)]
+    workspaces.create_workspace(
+        name="Full workspace",
+        tabs=full_tabs,
+        active_session=full_tabs[0],
+    )
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[session]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        invalid = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": session.name, "pinned": "yes"},
+        )
+        assert invalid.status == 400
+        assert await invalid.json() == {"error": "pinned must be a boolean"}
+
+        missing = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": "missing", "pinned": True},
+        )
+        assert missing.status == 404
+
+        full = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": session.name, "pinned": True},
+        )
+        assert full.status == 409
+        assert "already has 32 sessions" in (await full.json())["error"]
+        assert workspaces.list_pinned_sessions() == ()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_workspace_pin_api_reports_persistence_failure(tmp_path, monkeypatch):
+    session = make_session("shared-agent")
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json")
+
+    def fail_persist(
+        _workspaces,
+        _session_revision,
+        _common_links,
+        _session_links,
+        _notes,
+        _pinned_sessions,
+    ):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(workspaces, "_persist", fail_persist)
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[session]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        response = await client.put(
+            "/api/session-workspace-pin",
+            json={"session": session.name, "pinned": True},
+        )
+        assert response.status == 500
+        assert await response.json() == {
+            "error": "unable to save session workspace pin"
+        }
+        assert workspaces.list_pinned_sessions() == ()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_workspace_transfer_api_copies_then_moves_without_duplicates(
+    tmp_path,
+):
+    session = make_session("shared-agent")
+    workspaces = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["source", "destination"]).__next__,
+    )
+    workspaces.create_workspace(
+        name="Source",
+        tabs=[session.name, "sidecar"],
+        active_session=session.name,
+    )
+    workspaces.create_workspace(
+        name="Destination",
+        tabs=["review"],
+        active_session="review",
+    )
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[session]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        copied_response = await client.post(
+            "/api/session-workspace-transfer",
+            json={
+                "session": session.name,
+                "sourceWorkspaceId": "source",
+                "destinationWorkspaceId": "destination",
+                "operation": "copy",
+                "sessionRevision": 0,
+            },
+        )
+        assert copied_response.status == 200
+        copied = await copied_response.json()
+        assert copied["destinationAdded"] is True
+        assert copied["sourceRemoved"] is False
+        assert copied["destinationWorkspace"]["tabs"] == ["review", session.name]
+        assert copied["sessionRevision"] == 1
+
+        moved_response = await client.post(
+            "/api/session-workspace-transfer",
+            json={
+                "session": session.name,
+                "sourceWorkspaceId": "source",
+                "destinationWorkspaceId": "destination",
+                "operation": "move",
+                "sessionRevision": 1,
+            },
+        )
+        assert moved_response.status == 200
+        moved = await moved_response.json()
+        assert moved["destinationAlreadyContained"] is True
+        assert moved["destinationAdded"] is False
+        assert moved["sourceRemoved"] is True
+        assert moved["sourceWorkspace"]["tabs"] == ["sidecar"]
+        assert moved["destinationWorkspace"]["tabs"].count(session.name) == 1
+        assert moved["sessionRevision"] == 2
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_workspace_transfer_api_validates_request_and_live_session(
+    tmp_path,
+):
+    session = make_session("shared-agent")
+    workspaces = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["source", "destination"]).__next__,
+    )
+    workspaces.create_workspace(name="Source", tabs=[], active_session=None)
+    workspaces.create_workspace(name="Destination", tabs=[], active_session=None)
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[session]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        invalid = await client.post(
+            "/api/session-workspace-transfer",
+            json={
+                "session": session.name,
+                "sourceWorkspaceId": "source",
+                "destinationWorkspaceId": "destination",
+                "operation": "teleport",
+                "sessionRevision": 0,
+            },
+        )
+        assert invalid.status == 400
+        assert await invalid.json() == {"error": "operation must be copy or move"}
+
+        same_workspace = await client.post(
+            "/api/session-workspace-transfer",
+            json={
+                "session": session.name,
+                "sourceWorkspaceId": "source",
+                "destinationWorkspaceId": "source",
+                "operation": "copy",
+                "sessionRevision": 0,
+            },
+        )
+        assert same_workspace.status == 400
+
+        missing_session = await client.post(
+            "/api/session-workspace-transfer",
+            json={
+                "session": "missing",
+                "destinationWorkspaceId": "destination",
+                "operation": "copy",
+                "sessionRevision": 0,
+            },
+        )
+        assert missing_session.status == 404
     finally:
         await client.close()
 

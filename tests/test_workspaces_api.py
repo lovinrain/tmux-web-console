@@ -379,6 +379,7 @@ async def test_common_and_workspace_note_apis_report_persistence_failure(
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise OSError("read-only filesystem")
 
@@ -621,6 +622,7 @@ async def test_workspaces_api_reports_persistence_failure_without_mutating_store
         _common_quick_links,
         _session_quick_links,
         _notes,
+        _pinned_sessions,
     ):
         raise OSError("read-only filesystem")
 

@@ -1792,6 +1792,7 @@ a:focus-visible {
 .session-title-edit,
 .session-ignore-toggle,
 .session-star-toggle,
+.session-workspace-pin-toggle,
 .session-messages-toggle,
 .session-snippets-toggle {
   position: relative;
@@ -1819,6 +1820,13 @@ a:focus-visible {
   border-color: rgba(255, 182, 72, 0.45);
 }
 
+.session-workspace-pin-toggle:hover,
+.session-workspace-pin-toggle.active {
+  color: var(--cyan);
+  background: rgba(104, 223, 208, 0.08);
+  border-color: rgba(104, 223, 208, 0.48);
+}
+
 .session-ignore-toggle:hover,
 .session-ignore-toggle.active {
   color: #b5beb2;
@@ -1826,13 +1834,15 @@ a:focus-visible {
 }
 
 .session-star-toggle:disabled,
-.session-ignore-toggle:disabled {
+.session-ignore-toggle:disabled,
+.session-workspace-pin-toggle:disabled {
   opacity: 0.5;
   cursor: wait;
 }
 
 .session-star-toggle svg,
-.session-ignore-toggle svg {
+.session-ignore-toggle svg,
+.session-workspace-pin-toggle svg {
   width: 16px;
 }
 
@@ -5163,6 +5173,41 @@ span.workspace-tab-group-toggle {
   font-size: 8px;
 }
 
+.composer-snippet-trigger {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding: 0 9px;
+  color: #a9dec8;
+  background: rgba(104, 223, 208, 0.055);
+  border: 1px solid rgba(104, 223, 208, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.composer-snippet-trigger:hover,
+.composer-snippet-trigger:focus-visible {
+  color: #e1fff9;
+  background: rgba(104, 223, 208, 0.11);
+  border-color: rgba(104, 223, 208, 0.48);
+}
+
+.composer-snippet-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-snippet-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
 .composer-mobile-controls {
   display: none;
 }
@@ -5204,10 +5249,10 @@ span.workspace-tab-group-toggle {
 
 .composer-actions-primary {
   display: grid;
-  grid-template-columns: auto auto auto;
+  grid-template-columns: auto auto auto auto;
   grid-template-areas:
-    "clear send submit"
-    "memo tab submit";
+    "clear terminal-clear send submit"
+    "memo memo tab submit";
   gap: 6px;
 }
 
@@ -5254,6 +5299,12 @@ span.workspace-tab-group-toggle {
 .composer-clear {
   grid-area: clear;
   color: #98a295;
+}
+
+.composer-clear-terminal {
+  grid-area: terminal-clear;
+  color: #e1b877;
+  border-color: rgba(255, 182, 72, 0.28);
 }
 
 .composer-memo {
@@ -5305,7 +5356,8 @@ span.workspace-tab-group-toggle {
 }
 
 .composer-status.sent,
-.composer-status.queued {
+.composer-status.queued,
+.composer-status.terminal-cleared {
   color: var(--acid);
 }
 
@@ -5718,8 +5770,11 @@ span.workspace-tab-group-toggle {
   position: fixed;
   display: none;
   width: min(430px, calc(100vw - 24px));
+  min-width: 220px;
+  min-height: 168px;
+  max-width: calc(100vw - 24px);
   max-height: calc(100dvh - 24px);
-  overflow: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   border-radius: 5px 5px 10px 5px;
   box-shadow:
@@ -5745,6 +5800,7 @@ span.workspace-tab-group-toggle {
   z-index: 2;
   top: 0;
   min-height: 42px;
+  flex: 0 0 auto;
   justify-content: flex-start;
   gap: 4px;
   padding: 4px 6px;
@@ -5808,13 +5864,16 @@ span.workspace-tab-group-toggle {
 
 .scoped-note-sheet.floating textarea {
   width: calc(100% - 8px);
-  min-height: min(300px, 45dvh);
-  max-height: 64dvh;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
   margin: 4px 4px 0;
   padding: 8px 9px;
+  resize: none;
 }
 
 .scoped-note-sheet.floating .scoped-note-editor-meta {
+  flex: 0 0 auto;
   padding: 3px 5px 4px;
 }
 
@@ -5822,12 +5881,73 @@ span.workspace-tab-group-toggle {
   position: sticky;
   z-index: 1;
   bottom: 0;
-  padding: 4px 6px;
+  flex: 0 0 auto;
+  padding: 4px 25px 4px 6px;
+}
+
+.scoped-note-resize-handle {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: 0;
+  display: block;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: color-mix(in srgb, var(--note-accent) 68%, #d8ded2);
+  background: color-mix(in srgb, var(--note-accent) 8%, rgba(8, 11, 8, 0.88));
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--note-accent) 18%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--note-accent) 18%, transparent);
+  border-radius: 5px 0 7px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.scoped-note-resize-handle > span,
+.scoped-note-resize-handle::before,
+.scoped-note-resize-handle::after {
+  position: absolute;
+  right: 3px;
+  bottom: 5px;
+  width: 11px;
+  height: 1px;
+  content: "";
+  background: currentColor;
+  border-radius: 99px;
+  transform: rotate(-45deg);
+  transform-origin: center;
+}
+
+.scoped-note-resize-handle::before {
+  right: 2px;
+  bottom: 3px;
+  width: 7px;
+}
+
+.scoped-note-resize-handle::after {
+  right: 6px;
+  bottom: 8px;
+  width: 8px;
+}
+
+.scoped-note-resize-handle:hover,
+.scoped-note-resize-handle:focus-visible {
+  color: #fffce9;
+  background: color-mix(in srgb, var(--note-accent) 18%, #121712);
+  outline: 1px solid color-mix(in srgb, var(--note-accent) 62%, #fff);
+  outline-offset: -2px;
 }
 
 html.scoped-note-moving,
 html.scoped-note-moving * {
   cursor: grabbing !important;
+  user-select: none !important;
+}
+
+html.scoped-note-resizing,
+html.scoped-note-resizing * {
+  cursor: nwse-resize !important;
   user-select: none !important;
 }
 
@@ -5925,7 +6045,9 @@ html.scoped-note-moving * {
 
 .history-button,
 .size-mode,
-.copy-new-button {
+.copy-new-button,
+.workspace-pin-button,
+.workspace-transfer-button {
   display: flex;
   height: 38px;
   align-items: center;
@@ -5943,19 +6065,25 @@ html.scoped-note-moving * {
 
 .history-button:hover,
 .size-mode:hover,
-.copy-new-button:hover {
+.copy-new-button:hover,
+.workspace-pin-button:hover,
+.workspace-transfer-button:hover {
   color: var(--paper);
   border-color: #626f5d;
 }
 
 .history-button:disabled,
-.copy-new-button:disabled {
+.copy-new-button:disabled,
+.workspace-pin-button:disabled,
+.workspace-transfer-button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
 .history-button svg,
-.copy-new-button svg {
+.copy-new-button svg,
+.workspace-pin-button svg,
+.workspace-transfer-button svg {
   width: 17px;
 }
 
@@ -5963,6 +6091,372 @@ html.scoped-note-moving * {
   display: none;
   color: var(--cyan);
   border-color: rgba(104, 223, 208, 0.34);
+}
+
+.workspace-pin-button {
+  display: none;
+  color: #9aa697;
+}
+
+.workspace-transfer-button {
+  display: none;
+  color: #d8b16b;
+  border-color: rgba(216, 177, 107, 0.34);
+}
+
+.workspace-pin-button.active {
+  color: var(--cyan);
+  background: rgba(104, 223, 208, 0.08);
+  border-color: rgba(104, 223, 208, 0.42);
+}
+
+.workspace-pin-error {
+  top: calc(max(5px, env(safe-area-inset-top, 0px)) + 156px);
+}
+
+.workspace-transfer-backdrop {
+  position: fixed;
+  z-index: 44;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top, 0px)) max(18px, env(safe-area-inset-right, 0px)) max(18px, env(safe-area-inset-bottom, 0px)) max(18px, env(safe-area-inset-left, 0px));
+  background:
+    radial-gradient(circle at 68% 18%, rgba(216, 177, 107, 0.11), transparent 36%),
+    rgba(5, 8, 6, 0.82);
+  backdrop-filter: blur(8px);
+}
+
+.workspace-transfer-dialog {
+  display: flex;
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100dvh - 36px));
+  flex-direction: column;
+  overflow: hidden;
+  color: #dce3d8;
+  background:
+    linear-gradient(135deg, rgba(216, 177, 107, 0.055), transparent 38%),
+    #151a15;
+  border: 1px solid #42493b;
+  border-top: 3px solid #d8b16b;
+  border-radius: 5px;
+  box-shadow: 0 34px 120px rgba(0, 0, 0, 0.72);
+}
+
+.workspace-transfer-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 17px 18px 14px;
+  background: rgba(10, 13, 10, 0.56);
+  border-bottom: 1px solid #30372d;
+}
+
+.workspace-transfer-header h2 {
+  margin: 3px 0 0;
+  color: #f2ead8;
+  font-size: 20px;
+  font-weight: 620;
+  letter-spacing: -0.035em;
+}
+
+.workspace-transfer-header .eyebrow {
+  color: #d8b16b;
+}
+
+.workspace-transfer-context {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 18px;
+  color: #7f897c;
+  background: rgba(8, 11, 8, 0.38);
+  border-bottom: 1px solid #262d24;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.workspace-transfer-context strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cyan);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-transfer-context span::before {
+  margin-right: 10px;
+  color: #485044;
+  content: "/";
+}
+
+.workspace-transfer-pinned,
+.workspace-transfer-hint {
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  color: #d7c9a9;
+  background: rgba(216, 177, 107, 0.08);
+  border: 1px solid rgba(216, 177, 107, 0.24);
+  border-left: 3px solid #d8b16b;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.workspace-transfer-hint {
+  color: #9db4ae;
+  background: rgba(104, 223, 208, 0.055);
+  border-color: rgba(104, 223, 208, 0.2);
+  border-left-color: var(--cyan);
+}
+
+.workspace-transfer-search {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  margin: 13px 18px 10px;
+  padding: 0 11px;
+  color: #758172;
+  background: #0e120e;
+  border: 1px solid #343d31;
+  border-radius: 3px;
+}
+
+.workspace-transfer-search:focus-within {
+  color: var(--cyan);
+  border-color: rgba(104, 223, 208, 0.58);
+  box-shadow: 0 0 0 3px rgba(104, 223, 208, 0.08);
+}
+
+.workspace-transfer-search svg {
+  width: 17px;
+  flex: 0 0 auto;
+}
+
+.workspace-transfer-search input {
+  min-width: 0;
+  height: 40px;
+  flex: 1;
+  color: #edf2e9;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 11px;
+}
+
+.workspace-transfer-search button,
+.workspace-transfer-state button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: #aeb7aa;
+  background: #1b211a;
+  border: 1px solid #394236;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.workspace-transfer-state button svg {
+  width: 14px;
+}
+
+.workspace-transfer-list {
+  display: flex;
+  min-height: 150px;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
+  padding: 0 18px 13px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.workspace-transfer-status {
+  flex: 0 0 auto;
+  margin: 0 18px 10px;
+  padding: 8px 10px;
+  color: #9adbd2;
+  background: rgba(104, 223, 208, 0.07);
+  border: 1px solid rgba(104, 223, 208, 0.22);
+  border-radius: 3px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.workspace-transfer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 11px 11px 13px;
+  background: rgba(31, 37, 30, 0.78);
+  border: 1px solid #343d31;
+  border-left: 3px solid #566052;
+  border-radius: 3px;
+}
+
+.workspace-transfer-row:hover {
+  background: #222921;
+  border-color: #505c4b;
+  border-left-color: #d8b16b;
+}
+
+.workspace-transfer-row.already-contains {
+  border-left-color: var(--cyan);
+}
+
+.workspace-transfer-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.workspace-transfer-row-copy strong {
+  overflow: hidden;
+  color: #e7ece3;
+  font-size: 12px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-transfer-row-copy span {
+  overflow: hidden;
+  color: #778274;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.workspace-transfer-row.already-contains .workspace-transfer-row-copy span {
+  color: #71b9af;
+}
+
+.workspace-transfer-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.workspace-transfer-row-actions button {
+  display: inline-flex;
+  min-width: 86px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: #aeb8aa;
+  background: #181e18;
+  border: 1px solid #3c4638;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.workspace-transfer-row-actions button:hover:not(:disabled),
+.workspace-transfer-row-actions button:focus-visible {
+  color: #f3f5ef;
+  background: #273025;
+  border-color: #73806c;
+  outline: 0;
+}
+
+.workspace-transfer-row-actions button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.workspace-transfer-row-actions button svg {
+  width: 15px;
+}
+
+.workspace-transfer-row-actions .workspace-transfer-copy {
+  color: var(--cyan);
+  border-color: rgba(104, 223, 208, 0.3);
+}
+
+.workspace-transfer-row-actions .workspace-transfer-move {
+  color: #e0bd7f;
+  border-color: rgba(216, 177, 107, 0.36);
+}
+
+.workspace-transfer-row-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 7px;
+  color: #ff9b92;
+  border-top: 1px solid rgba(255, 115, 104, 0.16);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.workspace-transfer-state {
+  display: grid;
+  min-height: 150px;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: #7f897c;
+  text-align: center;
+  font-size: 10px;
+}
+
+.workspace-transfer-state strong {
+  color: #cdd5c9;
+  font-size: 12px;
+}
+
+.workspace-transfer-state.error,
+.workspace-transfer-state.error strong {
+  color: #ff9b92;
+}
+
+.workspace-transfer-loader {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #3d4739;
+  border-top-color: #d8b16b;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.workspace-transfer-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  background: rgba(8, 11, 8, 0.56);
+  border-top: 1px solid #30372d;
+}
+
+.workspace-transfer-footer p {
+  max-width: 540px;
+  margin: 0;
+  color: #737e70;
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 .copy-new-error {
@@ -6258,6 +6752,8 @@ html.scoped-note-moving * {
 @media (min-width: 1025px),
   (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
   .copy-new-button,
+  .workspace-pin-button,
+  .workspace-transfer-button,
   .copy-new-error {
     display: flex;
   }
@@ -7998,7 +8494,21 @@ html.history-resizing * {
     justify-content: center;
   }
 
-  .copy-new-button span {
+  .workspace-pin-button {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .workspace-transfer-button {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .copy-new-button span,
+  .workspace-pin-button span,
+  .workspace-transfer-button span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -8006,6 +8516,18 @@ html.history-resizing * {
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
+  }
+
+  .workspace-transfer-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-transfer-row-actions {
+    justify-content: stretch;
+  }
+
+  .workspace-transfer-row-actions button {
+    flex: 1;
   }
 
   .scoped-sticky-notes {
@@ -8286,6 +8808,7 @@ html.history-resizing * {
   .session-title-edit,
   .session-ignore-toggle,
   .session-star-toggle,
+  .session-workspace-pin-toggle,
   .session-messages-toggle,
   .session-snippets-toggle {
     width: 44px;
@@ -8718,7 +9241,8 @@ html.history-resizing * {
     display: grid;
     grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
     grid-template-areas:
-      "clear memo"
+      "clear terminal-clear"
+      "memo tab"
       "send submit";
     margin-top: 6px;
   }
@@ -8871,6 +9395,10 @@ html.history-resizing * {
     margin-left: auto;
   }
 
+  .composer-snippet-trigger {
+    display: none;
+  }
+
   .composer-heading > span {
     display: none;
   }
@@ -8937,12 +9465,13 @@ html.history-resizing * {
 
   .console-shell[data-mobile-focus="input"] .composer-actions-primary {
     grid-template-columns:
-      minmax(44px, 0.8fr)
-      minmax(44px, 0.8fr)
-      minmax(56px, 1.2fr)
-      minmax(44px, 0.8fr)
-      minmax(44px, 0.8fr);
-    grid-template-areas: "clear send submit memo tab";
+      minmax(0, 0.8fr)
+      minmax(0, 0.8fr)
+      minmax(0, 0.8fr)
+      minmax(0, 1.2fr)
+      minmax(0, 0.8fr)
+      minmax(0, 0.8fr);
+    grid-template-areas: "clear terminal-clear send submit memo tab";
   }
 
   .composer-action-label-full,
@@ -9405,6 +9934,24 @@ html.history-resizing * {
 }
 
 @media (max-width: 360px) {
+  .session-card-actions,
+  .session-row .session-card-actions {
+    right: 8px;
+    left: 8px;
+    justify-content: space-between;
+    gap: 0;
+  }
+
+  .session-title-edit,
+  .session-ignore-toggle,
+  .session-star-toggle,
+  .session-workspace-pin-toggle,
+  .session-messages-toggle,
+  .session-snippets-toggle {
+    width: 40px;
+    height: 40px;
+  }
+
   .session-tag-picker > div {
     grid-template-columns: minmax(0, 1fr);
   }
