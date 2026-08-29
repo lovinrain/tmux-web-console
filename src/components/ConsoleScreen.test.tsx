@@ -14,6 +14,7 @@ import {
   updateQueuedMessage,
   updateSessionTags,
   updateSessionTitle,
+  uploadSessionImage,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
@@ -50,6 +51,7 @@ vi.mock("../api", () => ({
   updateSessionStar: vi.fn(),
   updateSessionTags: vi.fn(),
   updateSessionTitle: vi.fn(),
+  uploadSessionImage: vi.fn(),
 }));
 
 vi.mock("./LiveTerminal", async () => {

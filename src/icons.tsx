@@ -231,6 +231,16 @@ export function SnippetIcon(props: IconProps) {
   );
 }
 
+export function ImageIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3.5" y="4" width="17" height="16" rx="2" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="8.5" cy="9" r="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m5.5 17 4.2-4 2.8 2.5 2.3-2.2 3.7 3.7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function FolderIcon(props: IconProps) {
   return (
     <IconBase {...props}>

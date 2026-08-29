@@ -28,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("InputBar", () => {
@@ -1040,6 +1041,134 @@ describe("InputBar", () => {
     expect(onOpenSnippets).toHaveBeenCalledOnce();
     expect(textarea.selectionStart).toBe(6);
     expect(textarea.selectionEnd).toBe(11);
+  });
+
+  it("uploads a desktop image, stages its host path at the cursor, and never auto-sends", async () => {
+    let finishUpload: ((value: {
+      name: string;
+      path: string;
+      terminalText: string;
+      contentType: "image/png";
+      size: number;
+    }) => void) | undefined;
+    const onUploadImage = vi.fn((_file: File, _signal: AbortSignal) => new Promise<{
+      name: string;
+      path: string;
+      terminalText: string;
+      contentType: "image/png";
+      size: number;
+    }>((resolve) => { finishUpload = resolve; }));
+    const onSubmit = vi.fn(async () => true);
+    const view = render(
+      <InputBar {...props} onSubmit={onSubmit} onUploadImage={onUploadImage} />,
+    );
+    const textarea = screen.getByRole("textbox", { name: "Staged input" }) as HTMLTextAreaElement;
+    const imageButton = screen.getByRole("button", { name: "Attach images to staged input" });
+    const imageInput = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const image = new File(["png"], "Screen shot.png", { type: "image/png" });
+    fireEvent.input(textarea, { target: { value: "Review this placeholder" } });
+    textarea.focus();
+    textarea.setSelectionRange(12, 23);
+
+    expect(fireEvent.mouseDown(imageButton)).toBe(false);
+    expect(textarea).toHaveFocus();
+    fireEvent.change(imageInput, { target: { files: [image] } });
+
+    expect(onUploadImage).toHaveBeenCalledOnce();
+    expect(onUploadImage.mock.calls[0][0]).toBe(image);
+    expect(onUploadImage.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+    expect(screen.getByRole("button", { name: "Send + Enter" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Uploading Screen shot.png");
+
+    await act(async () => finishUpload?.({
+      name: "Screen shot.png",
+      path: "/var/lib/muxdeck/uploads/Screen shot.png",
+      terminalText: "'/var/lib/muxdeck/uploads/Screen shot.png'",
+      contentType: "image/png",
+      size: 3,
+    }));
+
+    await waitFor(() => expect(textarea).toHaveValue(
+      "Review this '/var/lib/muxdeck/uploads/Screen shot.png'",
+    ));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "Uploaded images" }))
+      .toHaveTextContent("Screen shot.png");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Image path staged at the cursor. Add instructions, then send.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send + Enter" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      "Review this '/var/lib/muxdeck/uploads/Screen shot.png'",
+      "enter",
+    ));
+    expect(screen.queryByRole("region", { name: "Uploaded images" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("accepts pasted and dropped desktop images while rejecting unsupported drops", async () => {
+    const onUploadImage = vi.fn(async (file: File) => ({
+      name: file.name,
+      path: `/uploads/${file.name}`,
+      terminalText: `/uploads/${file.name}`,
+      contentType: "image/png" as const,
+      size: file.size,
+    }));
+    render(<InputBar {...props} onUploadImage={onUploadImage} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    const pasted = new File(["one"], "paste.png", { type: "image/png" });
+
+    expect(fireEvent.paste(textarea, {
+      clipboardData: { files: [pasted] },
+    })).toBe(false);
+    await waitFor(() => expect(textarea).toHaveValue("/uploads/paste.png"));
+
+    const composer = document.getElementById("muxdeck-staged-input")!;
+    const dropped = new File(["two"], "drop.png", { type: "image/png" });
+    const dataTransfer = {
+      items: [{ kind: "file", type: "image/png" }],
+      files: [dropped],
+      dropEffect: "none",
+    };
+    fireEvent.dragEnter(composer, { dataTransfer });
+    expect(screen.getByText("Drop to stage image paths")).toBeVisible();
+    fireEvent.drop(composer, { dataTransfer });
+    await waitFor(() => expect(textarea).toHaveValue(
+      "/uploads/paste.png\n/uploads/drop.png",
+    ));
+    expect(screen.queryByText("Drop to stage image paths")).not.toBeInTheDocument();
+
+    const unsupported = new File(["text"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(
+      document.querySelector<HTMLInputElement>('input[type="file"]')!,
+      { target: { files: [unsupported] } },
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Choose a PNG, JPEG, GIF, or WebP image.",
+    );
+    expect(onUploadImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not intercept image paste in the mobile console layout", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      media: "",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    const onUploadImage = vi.fn();
+    render(<InputBar {...props} onUploadImage={onUploadImage} />);
+    const image = new File(["png"], "mobile.png", { type: "image/png" });
+
+    expect(fireEvent.paste(screen.getByRole("textbox", { name: "Staged input" }), {
+      clipboardData: { files: [image] },
+    })).toBe(true);
+    expect(onUploadImage).not.toHaveBeenCalled();
   });
 
   it("disables alias and native rename independently when callbacks are unavailable", () => {

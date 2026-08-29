@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 
 const sessionName = `muxdeck-browser-${process.pid}`;
@@ -10,6 +10,7 @@ const titlesFile = process.env.MUXDECK_PLAYWRIGHT_TITLES_FILE;
 const messagesFile = process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE;
 const snippetsFile = process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE;
 const workspacesFile = process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE;
+const uploadsDirectory = process.env.MUXDECK_PLAYWRIGHT_UPLOADS_DIR;
 const originalQueuedCommand = "printf 'MEMO_QUEUE_ORIGINAL\\n'";
 const editedQueuedCommand = "printf 'MEMO_QUEUE_EDITED\\n'";
 const CSS_PIXEL_TOLERANCE = 0.01;
@@ -103,7 +104,7 @@ function workspacePaneWidth(name: string): number {
   return Number(width);
 }
 
-if (!titlesFile || !messagesFile || !snippetsFile || !workspacesFile) {
+if (!titlesFile || !messagesFile || !snippetsFile || !workspacesFile || !uploadsDirectory) {
   throw new Error("Playwright state paths were not configured");
 }
 
@@ -112,6 +113,7 @@ test.beforeAll(() => {
   rmSync(messagesFile, { force: true });
   rmSync(snippetsFile, { force: true });
   rmSync(workspacesFile, { force: true });
+  rmSync(uploadsDirectory, { recursive: true, force: true });
   try {
     execFileSync("tmux", [...tmux, "kill-server"], { stdio: "ignore" });
   } catch {
@@ -132,6 +134,7 @@ test.afterAll(() => {
   rmSync(messagesFile, { force: true });
   rmSync(snippetsFile, { force: true });
   rmSync(workspacesFile, { force: true });
+  rmSync(uploadsDirectory, { recursive: true, force: true });
 });
 
 test("desktop dashboard renders a three-column session grid", async ({ page }) => {
@@ -1100,6 +1103,57 @@ test("terminal HTTP links require Ctrl-click and do not send a mouse frame", asy
     ]);
     execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
   }
+});
+
+test("desktop image attachment uploads, stages, and sends a host-readable path", async ({
+  page,
+}) => {
+  test.setTimeout(45_000);
+  const imageBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live", {
+    timeout: 10_000,
+  });
+
+  const attach = page.getByRole("button", { name: "Attach images to staged input" });
+  const stagedInput = page.getByRole("textbox", { name: "Staged input" });
+  const command = "printf 'IMAGE_UPLOAD_E2E=%s\\n' ";
+  await expect(attach).toBeVisible();
+  await stagedInput.fill(command);
+  await page.locator('.composer-heading-tools input[type="file"]').setInputFiles({
+    name: "Portal screenshot.png",
+    mimeType: "image/png",
+    buffer: imageBytes,
+  });
+
+  const pathButton = page.getByRole("button", {
+    name: "Copy server path for Portal screenshot.png",
+  });
+  await expect(pathButton).toBeVisible();
+  const uploadedPath = await pathButton.getAttribute("title");
+  expect(uploadedPath).not.toBeNull();
+  expect(uploadedPath).toContain(`${uploadsDirectory}/`);
+  expect(uploadedPath).toMatch(/Portal-screenshot\.png$/);
+  await expect(stagedInput).toHaveValue(`${command}${uploadedPath}`);
+  expect(existsSync(uploadedPath!)).toBe(true);
+  expect(readFileSync(uploadedPath!)).toEqual(imageBytes);
+  await expect(page.locator(".composer-image-status")).toContainText(
+    "Image path staged at the cursor",
+  );
+  await page.screenshot({ path: "artifacts/desktop-image-attachment.png" });
+
+  await page.getByRole("button", { name: "Send + Enter" }).click();
+  await expect(stagedInput).toHaveValue("");
+  await expect.poll(() => workspaceTmuxContentSnapshot(sessionName)).toContain(
+    `IMAGE_UPLOAD_E2E=${uploadedPath}`,
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(attach).toBeHidden();
 });
 
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({

@@ -14,3 +14,4 @@ def isolate_default_state_files(
     monkeypatch.setenv("MUXDECK_MESSAGES_FILE", str(state_dir / "session-messages.json"))
     monkeypatch.setenv("MUXDECK_SNIPPETS_FILE", str(state_dir / "snippets.json"))
     monkeypatch.setenv("MUXDECK_WORKSPACES_FILE", str(state_dir / "workspaces.json"))
+    monkeypatch.setenv("MUXDECK_UPLOADS_DIR", str(state_dir / "uploads"))

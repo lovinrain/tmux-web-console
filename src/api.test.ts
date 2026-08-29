@@ -28,6 +28,7 @@ import {
   subscribeToSessions,
   terminateSession,
   transferSessionToWorkspace,
+  uploadSessionImage,
   updateSessionIgnored,
   updateSessionStar,
   updateSessionWorkspacePin,
@@ -281,6 +282,62 @@ describe("session creation API", () => {
         body: JSON.stringify({ sessionId: "$7", theme: "light" }),
       }),
     );
+  });
+});
+
+describe("session image upload API", () => {
+  it("uploads the exact browser file against the stable session identity", async () => {
+    const payload = {
+      name: "Screen shot.png",
+      path: "/var/lib/muxdeck/uploads/session/screen-shot.png",
+      terminalText: "/var/lib/muxdeck/uploads/session/screen-shot.png",
+      contentType: "image/png",
+      size: 12,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const image = new File(["image-bytes"], "Screen shot.png", { type: "image/png" });
+    const controller = new AbortController();
+
+    await expect(uploadSessionImage(
+      "work/name #1",
+      "$7",
+      image,
+      controller.signal,
+    )).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/images?filename=Screen+shot.png&sessionId=%247`,
+      expect.objectContaining({
+        method: "POST",
+        body: image,
+        signal: controller.signal,
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "image/png",
+        }),
+      }),
+    );
+  });
+
+  it("preserves an image validation error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "image must be PNG, JPEG, GIF, or WebP",
+    }), { status: 400, headers: { "Content-Type": "application/json" } })));
+
+    const error = await uploadSessionImage(
+      "work",
+      "$1",
+      new File(["<svg />"], "drawing.svg", { type: "image/svg+xml" }),
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      message: "image must be PNG, JPEG, GIF, or WebP",
+      status: 400,
+    });
   });
 });
 

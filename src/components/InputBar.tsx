@@ -5,13 +5,17 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import {
+  CloseIcon,
   ContractIcon,
   EditIcon,
   ExpandIcon,
+  ImageIcon,
   KeyboardIcon,
   MemoIcon,
   RefreshIcon,
@@ -20,10 +24,17 @@ import {
   TrashIcon,
 } from "../icons";
 import type { AgentScrollMode } from "../agentScrollPreferences";
+import type { UploadedSessionImage } from "../api";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
 
 export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
+const MAX_IMAGE_UPLOAD_BATCH = 6;
+const MOBILE_IMAGE_UPLOAD_QUERY = [
+  "(max-width: 640px)",
+  "(max-width: 1024px) and (pointer: coarse)",
+  "(max-width: 1024px) and (max-height: 500px)",
+].join(", ");
 
 interface InputBarProps {
   sessionName: string;
@@ -50,6 +61,10 @@ interface InputBarProps {
   onTerminateSession?: () => void;
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
+  onUploadImage?: (
+    file: File,
+    signal: AbortSignal,
+  ) => Promise<UploadedSessionImage>;
   messageCount?: number;
   queuedMessageCount?: number;
 }
@@ -75,6 +90,10 @@ interface TerminalKey {
   title?: string;
   scrollMode?: AgentScrollMode;
   scrollDirection?: "up" | "down";
+}
+
+interface StagedImageUpload extends UploadedSessionImage {
+  previewUrl?: string;
 }
 
 const PAGE_UP_SEQUENCE = "\x1b[5~";
@@ -329,6 +348,16 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 48), 144)}px`;
 }
 
+function desktopImageUploadsAvailable(): boolean {
+  return typeof window.matchMedia !== "function"
+    || !window.matchMedia(MOBILE_IMAGE_UPLOAD_QUERY).matches;
+}
+
+function transferHasFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.items).some((item) => item.kind === "file")
+    || dataTransfer.files.length > 0;
+}
+
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({
   sessionName,
   sessionId,
@@ -354,6 +383,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onTerminateSession,
   onOpenMessages,
   onOpenSnippets,
+  onUploadImage,
   messageCount = 0,
   queuedMessageCount = 0,
 }, ref) {
@@ -368,9 +398,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const initialDraft = initialDraftState.draft;
   const otherKeyPanelId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const actionPendingRef = useRef(false);
+  const imageUploadPendingRef = useRef(false);
+  const imageUploadControllersRef = useRef(new Set<AbortController>());
+  const previewUrlsRef = useRef(new Set<string>());
+  const mountedRef = useRef(true);
+  const imageDragDepthRef = useRef(0);
   const memoSourceRef = useRef<MemoDraftSource | null>(null);
   const [draftLength, setDraftLength] = useState(initialDraft.length);
   const [draftHasContent, setDraftHasContent] = useState(Boolean(initialDraft.trim()));
@@ -381,6 +417,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   );
   const [actionPending, setActionPending] = useState(false);
   const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
+  const [imageUploadPending, setImageUploadPending] = useState(false);
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const [stagedImages, setStagedImages] = useState<StagedImageUpload[]>([]);
+  const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(null);
+  const [imageUploadError, setImageUploadError] = useState(false);
 
   const recordDraft = (value: string, nextStatus: DraftStatus = "saved") => {
     const persisted = writeDraft(sessionName, value);
@@ -473,9 +514,225 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (!shortcutsVisible) setOtherKeyPanelOpen(false);
   }, [shortcutsVisible]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const controller of imageUploadControllersRef.current) controller.abort();
+      imageUploadControllersRef.current.clear();
+      for (const previewUrl of previewUrlsRef.current) URL.revokeObjectURL(previewUrl);
+      previewUrlsRef.current.clear();
+    };
+  }, []);
+
+  const dismissImagePreview = (path: string) => {
+    setStagedImages((current) => current.filter((image) => {
+      if (image.path !== path) return true;
+      if (image.previewUrl) {
+        URL.revokeObjectURL(image.previewUrl);
+        previewUrlsRef.current.delete(image.previewUrl);
+      }
+      return false;
+    }));
+  };
+
+  const clearImagePreviews = () => {
+    for (const previewUrl of previewUrlsRef.current) URL.revokeObjectURL(previewUrl);
+    previewUrlsRef.current.clear();
+    setStagedImages([]);
+    setImageUploadMessage(null);
+    setImageUploadError(false);
+  };
+
+  const stageUploadedImages = (images: UploadedSessionImage[]): boolean => {
+    const textarea = textareaRef.current;
+    if (!textarea || images.length === 0) return false;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    const before = textarea.value.slice(0, start);
+    const after = textarea.value.slice(end);
+    const leading = before && !/\s$/.test(before) ? "\n" : "";
+    const trailing = after && !/^\s/.test(after) ? "\n" : "";
+    const paths = images.map((image) => image.terminalText || image.path).join("\n");
+    const insertion = `${leading}${paths}${trailing}`;
+    const nextLength = textarea.value.length - (end - start) + insertion.length;
+    if (nextLength > MAX_DRAFT_LENGTH) return false;
+
+    textarea.setRangeText(insertion, start, end, "end");
+    memoSourceRef.current = null;
+    recordDraft(textarea.value, "loaded");
+    resizeTextarea(textarea);
+    onRevealComposer?.();
+    window.requestAnimationFrame(() => textarea.focus());
+    return true;
+  };
+
+  const uploadImageFiles = async (files: File[]) => {
+    if (
+      !onUploadImage
+      || imageUploadPendingRef.current
+      || !desktopImageUploadsAvailable()
+    ) return;
+    const imageFiles = files.filter((file) => (
+      file.type.toLowerCase().startsWith("image/")
+      || /\.(png|jpe?g|gif|webp)$/i.test(file.name)
+    ));
+    if (imageFiles.length === 0) {
+      setImageUploadError(true);
+      setImageUploadMessage("Choose a PNG, JPEG, GIF, or WebP image.");
+      return;
+    }
+
+    const selected = imageFiles.slice(0, MAX_IMAGE_UPLOAD_BATCH);
+    const controller = new AbortController();
+    imageUploadControllersRef.current.add(controller);
+    imageUploadPendingRef.current = true;
+    setImageUploadPending(true);
+    setImageUploadError(false);
+    setImageUploadMessage(
+      `Uploading ${selected.length === 1 ? selected[0].name : `${selected.length} images`}...`,
+    );
+
+    const completed = await Promise.all(selected.map(async (file) => {
+      try {
+        return { file, uploaded: await onUploadImage(file, controller.signal) };
+      } catch (error) {
+        return { file, error };
+      }
+    }));
+    imageUploadControllersRef.current.delete(controller);
+    imageUploadPendingRef.current = false;
+    if (!mountedRef.current || controller.signal.aborted) return;
+    setImageUploadPending(false);
+
+    const successful = completed.filter((result) => "uploaded" in result) as Array<{
+      file: File;
+      uploaded: UploadedSessionImage;
+    }>;
+    const failed = completed.filter((result) => "error" in result) as Array<{
+      file: File;
+      error: unknown;
+    }>;
+    const previews = successful.map(({ file, uploaded }) => {
+      let previewUrl: string | undefined;
+      try {
+        previewUrl = URL.createObjectURL(file);
+        previewUrlsRef.current.add(previewUrl);
+      } catch {
+        previewUrl = undefined;
+      }
+      return { ...uploaded, previewUrl };
+    });
+    if (previews.length > 0) {
+      setStagedImages((current) => {
+        const combined = [...current, ...previews];
+        const retained = combined.slice(-MAX_IMAGE_UPLOAD_BATCH);
+        for (const removed of combined.slice(0, -MAX_IMAGE_UPLOAD_BATCH)) {
+          if (removed.previewUrl) {
+            URL.revokeObjectURL(removed.previewUrl);
+            previewUrlsRef.current.delete(removed.previewUrl);
+          }
+        }
+        return retained;
+      });
+    }
+
+    const staged = stageUploadedImages(successful.map((result) => result.uploaded));
+    if (failed.length > 0) {
+      const firstError = failed[0].error;
+      const detail = firstError instanceof Error
+        ? firstError.message
+        : `Unable to upload ${failed[0].file.name}`;
+      setImageUploadError(true);
+      setImageUploadMessage(successful.length > 0
+        ? `${successful.length} staged; ${failed.length} failed: ${detail}`
+        : detail);
+      return;
+    }
+    if (!staged) {
+      setImageUploadError(true);
+      setImageUploadMessage(
+        "Image uploaded, but the draft is too full for its path. Copy the path from the image card.",
+      );
+      return;
+    }
+    const skipped = imageFiles.length - selected.length;
+    setImageUploadMessage(
+      `${successful.length === 1 ? "Image path" : `${successful.length} image paths`} staged at the cursor. Add instructions, then send.${skipped > 0 ? ` ${skipped} extra files were skipped.` : ""}`,
+    );
+  };
+
+  const handleImagePaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (
+      files.length === 0
+      || !onUploadImage
+      || !desktopImageUploadsAvailable()
+    ) return;
+    event.preventDefault();
+    void uploadImageFiles(files);
+  };
+
+  const handleImageDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (
+      !onUploadImage
+      || !desktopImageUploadsAvailable()
+      || !transferHasFiles(event.dataTransfer)
+    ) return;
+    event.preventDefault();
+    imageDragDepthRef.current += 1;
+    setImageDragActive(true);
+  };
+
+  const handleImageDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (
+      !onUploadImage
+      || !desktopImageUploadsAvailable()
+      || !transferHasFiles(event.dataTransfer)
+    ) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleImageDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!imageDragActive) return;
+    event.preventDefault();
+    imageDragDepthRef.current = Math.max(0, imageDragDepthRef.current - 1);
+    if (imageDragDepthRef.current === 0) setImageDragActive(false);
+  };
+
+  const handleImageDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (
+      !onUploadImage
+      || !desktopImageUploadsAvailable()
+      || !transferHasFiles(event.dataTransfer)
+    ) return;
+    event.preventDefault();
+    imageDragDepthRef.current = 0;
+    setImageDragActive(false);
+    void uploadImageFiles(Array.from(event.dataTransfer.files));
+  };
+
+  const copyImagePath = async (image: StagedImageUpload) => {
+    try {
+      await navigator.clipboard.writeText(image.terminalText || image.path);
+      setImageUploadError(false);
+      setImageUploadMessage(`Copied the server path for ${image.name}.`);
+    } catch {
+      setImageUploadError(true);
+      setImageUploadMessage("Clipboard access was unavailable; select the path from the card.");
+    }
+  };
+
   const sendDraft = async (terminator: TerminalSubmissionTerminator) => {
     const textarea = textareaRef.current;
-    if (!textarea || !textarea.value || !enabled || actionPendingRef.current) return;
+    if (
+      !textarea
+      || !textarea.value
+      || !enabled
+      || actionPendingRef.current
+      || imageUploadPendingRef.current
+    ) return;
     if (composingRef.current) {
       textarea.blur();
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -520,13 +777,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setActionPending(false);
     if (memoCleanupFailed) setStatus("sent-memo-cleanup-error");
     else if (draftCleared) setStatus("sent");
+    clearImagePreviews();
     resizeTextarea(textarea);
     textarea.focus();
   };
 
   const addDraftToMemo = async () => {
     const textarea = textareaRef.current;
-    if (!textarea || !onAddToMemo || actionPendingRef.current) return;
+    if (
+      !textarea
+      || !onAddToMemo
+      || actionPendingRef.current
+      || imageUploadPendingRef.current
+    ) return;
     if (composingRef.current) {
       textarea.blur();
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -574,7 +837,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       || event.nativeEvent.isComposing
       || event.nativeEvent.keyCode === 229
     ) return;
-    if (!enabled || !event.currentTarget.value || actionPendingRef.current) return;
+    if (
+      !enabled
+      || !event.currentTarget.value
+      || actionPendingRef.current
+      || imageUploadPendingRef.current
+    ) return;
 
     event.preventDefault();
     if (!event.repeat) void sendDraft("enter");
@@ -587,6 +855,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     textarea.value = "";
     memoSourceRef.current = null;
     recordDraft("");
+    clearImagePreviews();
     resizeTextarea(textarea);
     textarea.focus();
   };
@@ -646,6 +915,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       ? "Nothing goes to tmux or memoranda until you choose an action."
       : "Compose now; memoranda remain available while terminal sending reconnects.";
   }
+  const draftActionPending = actionPending || imageUploadPending;
 
   return (
     <section
@@ -656,24 +926,56 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       {shortcutPanelHeader}
       <div
         id="muxdeck-staged-input"
-        className="staged-composer"
+        className={imageDragActive ? "staged-composer image-drag-active" : "staged-composer"}
+        data-image-uploading={imageUploadPending ? "true" : "false"}
         hidden={!composerVisible}
+        onDragEnter={handleImageDragEnter}
+        onDragOver={handleImageDragOver}
+        onDragLeave={handleImageDragLeave}
+        onDrop={handleImageDrop}
       >
         <div className="composer-heading">
           <label htmlFor="terminal-staged-input">Staged input</label>
-          <button
-            type="button"
-            className="composer-snippet-trigger"
-            aria-label="Insert snippet into staged input"
-            aria-haspopup="dialog"
-            title="Search your snippet library and insert at the current cursor without sending"
-            disabled={!onOpenSnippets}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={onOpenSnippets}
-          >
-            <SnippetIcon />
-            <span>Insert snippet</span>
-          </button>
+          <div className="composer-heading-tools">
+            <button
+              type="button"
+              className="composer-snippet-trigger"
+              aria-label="Insert snippet into staged input"
+              aria-haspopup="dialog"
+              title="Search your snippet library and insert at the current cursor without sending"
+              disabled={!onOpenSnippets}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onOpenSnippets}
+            >
+              <SnippetIcon />
+              <span>Insert snippet</span>
+            </button>
+            <button
+              type="button"
+              className="composer-image-trigger"
+              aria-label="Attach images to staged input"
+              title="Upload PNG, JPEG, GIF, or WebP images to this host and stage their paths"
+              disabled={!onUploadImage || imageUploadPending}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <ImageIcon />
+              <span>{imageUploadPending ? "Uploading..." : "Attach image"}</span>
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp"
+              multiple
+              hidden
+              tabIndex={-1}
+              onChange={(event) => {
+                const files = Array.from(event.currentTarget.files || []);
+                event.currentTarget.value = "";
+                if (files.length > 0) void uploadImageFiles(files);
+              }}
+            />
+          </div>
           <div
             className="composer-mobile-controls"
             role="group"
@@ -722,6 +1024,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           </div>
           <span>{draftLength.toLocaleString()} / {MAX_DRAFT_LENGTH.toLocaleString()}</span>
         </div>
+        {imageDragActive && (
+          <div className="composer-image-drop" role="status">
+            <ImageIcon />
+            <strong>Drop to stage image paths</strong>
+            <span>Files stay on the Muxdeck host for your terminal agent.</span>
+          </div>
+        )}
         <div className="composer-body">
           <textarea
             id="terminal-staged-input"
@@ -736,6 +1045,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             spellCheck={false}
             placeholder="Dictate, type, or insert a snippet or memorandum..."
             onKeyDown={handleDraftKeyDown}
+            onPaste={handleImagePaste}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={(event) => {
               composingRef.current = false;
@@ -756,7 +1066,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               type="button"
               className="secondary-button composer-clear"
               aria-label="Clear"
-              disabled={!draftLength || actionPending}
+              disabled={!draftLength || draftActionPending}
               onClick={clearDraft}
             >
               <span className="composer-action-label-full" aria-hidden="true">Clear</span>
@@ -778,7 +1088,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               type="button"
               className="secondary-button composer-send"
               aria-label="Send"
-              disabled={!enabled || !draftLength || actionPending}
+              disabled={!enabled || !draftLength || draftActionPending}
               onClick={() => void sendDraft("none")}
             >
               <span className="composer-action-label-full" aria-hidden="true">Send</span>
@@ -787,7 +1097,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             <button
               type="button"
               className="primary-button composer-send-enter"
-              disabled={!enabled || !draftLength || actionPending}
+              disabled={!enabled || !draftLength || draftActionPending}
               aria-label="Send + Enter"
               aria-keyshortcuts="Shift+Enter"
               title="Send staged input followed by Enter (Shift+Enter)"
@@ -805,7 +1115,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
                 ? "secondary-button composer-memo has-queued"
                 : "secondary-button composer-memo"}
               aria-label="Queue in memo"
-              disabled={!onAddToMemo || !draftHasContent || actionPending}
+              disabled={!onAddToMemo || !draftHasContent || draftActionPending}
               onClick={() => void addDraftToMemo()}
             >
               <span className="composer-action-label-full" aria-hidden="true">
@@ -823,7 +1133,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               className="secondary-button composer-send-tab"
               aria-label="Send + Tab"
               title="Send staged input followed by Tab"
-              disabled={!enabled || !draftLength || actionPending}
+              disabled={!enabled || !draftLength || draftActionPending}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => void sendDraft("tab")}
             >
@@ -832,6 +1142,58 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             </button>
           </div>
         </div>
+        {stagedImages.length > 0 && (
+          <div
+            className="composer-image-tray"
+            role="region"
+            aria-label="Uploaded images"
+          >
+            {stagedImages.map((image) => (
+              <article className="composer-image-card" key={image.path}>
+                {image.previewUrl ? (
+                  <img src={image.previewUrl} alt="" />
+                ) : (
+                  <span className="composer-image-fallback" aria-hidden="true">
+                    <ImageIcon />
+                  </span>
+                )}
+                <div>
+                  <strong>{image.name}</strong>
+                  <button
+                    type="button"
+                    title={image.path}
+                    aria-label={`Copy server path for ${image.name}`}
+                    onClick={() => void copyImagePath(image)}
+                  >
+                    <code>{image.path}</code>
+                    <span>Copy path</span>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="composer-image-dismiss"
+                  aria-label={`Dismiss preview for ${image.name}`}
+                  title="Dismiss this preview; the staged path and host file remain"
+                  onClick={() => dismissImagePreview(image.path)}
+                >
+                  <CloseIcon />
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+        {imageUploadMessage && (
+          <p
+            className={imageUploadError
+              ? "composer-image-status error"
+              : "composer-image-status"}
+            role="status"
+            aria-live="polite"
+          >
+            {imageUploadPending && <span className="composer-image-spinner" aria-hidden="true" />}
+            {imageUploadMessage}
+          </p>
+        )}
         <p className={`composer-status ${status}`} aria-live="polite">
           <span className={enabled || status === "queued" ? "ready" : ""} />{statusText}
         </p>

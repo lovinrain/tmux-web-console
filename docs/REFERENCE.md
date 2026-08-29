@@ -198,6 +198,24 @@ automatically. The same picker is available on every dashboard card/list row
 and inside memorandum editors. From a dashboard row, choosing a snippet saves
 it as that session's local draft and opens the console for review.
 
+`Attach image` is the adjacent desktop-only attachment flow. The file picker,
+an image pasted into the staged textarea, and images dropped over the composer
+all use the same behavior. Muxdeck verifies the file signature as PNG, JPEG,
+GIF, or WebP, limits each file to 12 MiB, and stores it with private permissions
+under `MUXDECK_UPLOADS_DIR`. A selection can contain up to six images. Their
+shell-safe absolute host paths are inserted at the textarea's current cursor;
+nothing is sent to tmux until the user reviews the draft and chooses a send
+action. Compact preview cards show the original name and full host path. Closing
+a card dismisses only its preview, while `Copy path` copies the exact staged
+token. The host file remains available to the CLI agent and is not deleted when
+the draft is cleared or sent.
+
+The upload directory has a 512 MiB application cap. Muxdeck refuses additional
+uploads with a visible storage error instead of deleting referenced files
+automatically. An operator can archive or remove old files directly from the
+configured directory. Image attachments are deliberately hidden in compact
+mobile layouts.
+
 Use the top-level `Snippets` section to configure the shared tree. The virtual
 library root can contain snippets or folders, folders can nest, and snippets are
 always leaves. Items can be renamed, moved between folders, reordered, or
@@ -675,6 +693,14 @@ instead of being replaced; repair the configured file and restart Muxdeck.
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
 
+`MUXDECK_UPLOADS_DIR` stores images attached from desktop staged input. The
+directory and per-session subdirectories use mode `0700`; image files use mode
+`0600`. Names are generated from a timestamp, random token, safe filename slug,
+and a hash of the native tmux session name. The API returns only an absolute path
+inside this managed directory and never accepts a browser-selected destination.
+Uploaded images are binary runtime state, may contain sensitive information,
+and require their own backup or retention policy.
+
 `MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list and ordered
 global session pins. Tabs are keyed by native tmux session name. Each workspace
 also records which tab memberships were inherited from a global pin, allowing
@@ -742,6 +768,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session notes and queued memo input |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, scoped quick links and notes, and activity times |
+| `MUXDECK_UPLOADS_DIR` | `~/.local/state/muxdeck/uploads` | Private host files uploaded from desktop staged input |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
 Loopback Hosts are accepted by default. Every non-loopback Host must correspond

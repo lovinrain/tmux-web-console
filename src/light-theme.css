@@ -2857,6 +2857,12 @@ html[data-theme="light"] .staged-composer {
     #f5f1e9;
 }
 
+html[data-theme="light"] .staged-composer.image-drag-active {
+  background:
+    linear-gradient(90deg, rgba(190, 112, 7, 0.11), rgba(8, 122, 112, 0.05)),
+    #f5f1e9;
+}
+
 html[data-theme="light"] .composer-heading label {
   color: #414b3f;
 }
@@ -2879,6 +2885,30 @@ html[data-theme="light"] .composer-snippet-trigger:focus-visible {
   border-color: #829e59;
 }
 
+html[data-theme="light"] .composer-image-trigger {
+  color: #8a5205;
+  background: #fff3dc;
+  border-color: #d5ae6f;
+}
+
+html[data-theme="light"] .composer-image-trigger:hover,
+html[data-theme="light"] .composer-image-trigger:focus-visible {
+  color: #6f4000;
+  background: #ffe9bd;
+  border-color: #b47b22;
+}
+
+html[data-theme="light"] .composer-image-drop {
+  color: #6f4000;
+  background: rgba(255, 252, 245, 0.97);
+  border-color: #b47b22;
+  box-shadow: 0 12px 28px rgba(80, 58, 25, 0.16);
+}
+
+html[data-theme="light"] .composer-image-drop span {
+  color: #675f52;
+}
+
 html[data-theme="light"] .composer-body textarea {
   color: #22261f;
   background: #fffdf8;
@@ -2893,6 +2923,43 @@ html[data-theme="light"] .composer-body textarea::placeholder {
 html[data-theme="light"] .composer-body textarea:focus {
   border-color: #658b83;
   box-shadow: 0 0 0 3px rgba(8, 122, 112, 0.11);
+}
+
+html[data-theme="light"] .composer-image-card {
+  color: #30382e;
+  background: #fffdf8;
+  border-color: #d2b889;
+}
+
+html[data-theme="light"] .composer-image-fallback {
+  color: #8a5205;
+  background: #fff1d8;
+}
+
+html[data-theme="light"] .composer-image-card > div > button {
+  color: #655e51;
+}
+
+html[data-theme="light"] .composer-image-card > div > button span {
+  color: #8a5205;
+}
+
+html[data-theme="light"] .composer-image-dismiss {
+  color: #6d7569;
+}
+
+html[data-theme="light"] .composer-image-dismiss:hover,
+html[data-theme="light"] .composer-image-dismiss:focus-visible {
+  color: #6f4000;
+  background: #fff1d8;
+}
+
+html[data-theme="light"] .composer-image-status {
+  color: #386f60;
+}
+
+html[data-theme="light"] .composer-image-status.error {
+  color: #a13f2c;
 }
 
 html[data-theme="light"] .composer-clear {

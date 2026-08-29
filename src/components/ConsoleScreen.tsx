@@ -14,6 +14,7 @@ import {
   deleteQueuedMessage,
   listSessions,
   renameSession,
+  uploadSessionImage,
   updateSessionDetails,
   updateSessionWorkspacePin,
   updateSessionTags,
@@ -1772,6 +1773,9 @@ export function ConsoleScreen({
           : undefined}
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
         onOpenSnippets={() => setSnippetsOpen(true)}
+        onUploadImage={session ? (file, signal) => (
+          uploadSessionImage(session.name, session.id, file, signal)
+        ) : undefined}
         messageCount={memorandumCount}
         queuedMessageCount={queuedMemorandumCount}
       />

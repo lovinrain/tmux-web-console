@@ -42,6 +42,11 @@ from .tmux import (
     validate_tmux_session_name,
     validate_tmux_start_directory,
 )
+from .uploads import (
+    MAX_IMAGE_UPLOAD_BYTES,
+    ImageUploadStorageFullError,
+    ImageUploadStore,
+)
 from .workspaces import (
     WorkspaceNotFoundError,
     WorkspacePinCapacityError,
@@ -63,6 +68,7 @@ TITLES_KEY = web.AppKey("titles", SessionTitleStore)
 MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
 SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
 WORKSPACES_KEY = web.AppKey("workspaces", WorkspaceStore)
+UPLOADS_KEY = web.AppKey("uploads", ImageUploadStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
 TRUSTED_ORIGINS_KEY = web.AppKey("trusted_origins", frozenset)
@@ -484,6 +490,7 @@ def create_app(
     messages: SessionMessageStore | None = None,
     snippets: SnippetStore | None = None,
     workspaces: WorkspaceStore | None = None,
+    uploads: ImageUploadStore | None = None,
     trusted_origins: Iterable[str] | str | None = None,
 ) -> web.Application:
     app = web.Application(
@@ -505,6 +512,7 @@ def create_app(
     app[MESSAGES_KEY] = messages or SessionMessageStore()
     app[SNIPPETS_KEY] = snippets or SnippetStore()
     app[WORKSPACES_KEY] = workspaces or WorkspaceStore()
+    app[UPLOADS_KEY] = uploads or ImageUploadStore()
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
@@ -653,6 +661,79 @@ def create_app(
             {"session": created_session.name, "sessionId": created_session.id},
             status=201,
         )
+
+    async def upload_session_image(request: web.Request) -> web.Response:
+        session_name = request.match_info["session"]
+        try:
+            session_name = validate_tmux_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        unknown_fields = sorted(set(request.query) - {"filename", "sessionId"})
+        if unknown_fields:
+            return json_error(f"unknown query field: {unknown_fields[0]}", 400)
+        if "filename" not in request.query:
+            return json_error("filename is required", 400)
+        if "sessionId" not in request.query:
+            return json_error("sessionId is required", 400)
+        if (
+            len(request.query.getall("filename")) != 1
+            or len(request.query.getall("sessionId")) != 1
+        ):
+            return json_error("filename and sessionId must appear exactly once", 400)
+
+        filename = request.query["filename"]
+        session_id = request.query["sessionId"]
+        try:
+            session_id = validate_tmux_session_id(session_id)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            current_session = await app[TMUX_KEY].get_session(session_name)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        if current_session.id != session_id:
+            return json_error(
+                "tmux session identity changed; refresh before uploading an image",
+                409,
+            )
+
+        if (
+            request.content_length is not None
+            and request.content_length > MAX_IMAGE_UPLOAD_BYTES
+        ):
+            return json_error(
+                f"image must be {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)} MiB or smaller",
+                413,
+            )
+
+        body = bytearray()
+        async for chunk in request.content.iter_chunked(64 * 1024):
+            if len(body) + len(chunk) > MAX_IMAGE_UPLOAD_BYTES:
+                return json_error(
+                    f"image must be {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)} MiB or smaller",
+                    413,
+                )
+            body.extend(chunk)
+
+        try:
+            uploaded = await asyncio.to_thread(
+                app[UPLOADS_KEY].save,
+                session_name,
+                filename,
+                bytes(body),
+            )
+        except ValueError as error:
+            return json_error(str(error), 400)
+        except ImageUploadStorageFullError as error:
+            return json_error(str(error), 507)
+        except OSError:
+            LOGGER.exception("Unable to store an uploaded image")
+            return json_error("unable to store image", 503)
+        return web.json_response(uploaded.to_dict(), status=201)
 
     async def terminate_session(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -2057,6 +2138,10 @@ def create_app(
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
     app.router.add_post(f"{prefix}/api/sessions/{{session}}/copy", copy_session)
+    app.router.add_post(
+        f"{prefix}/api/sessions/{{session}}/images",
+        upload_session_image,
+    )
     app.router.add_delete(f"{prefix}/api/sessions/{{session}}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
