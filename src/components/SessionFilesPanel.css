@@ -1,0 +1,860 @@
+.console-cwd-button {
+  display: flex;
+  width: min(55vw, 100%);
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  margin: 3px 0 0;
+  padding: 0;
+  overflow: hidden;
+  color: #7f8c7b;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  text-align: left;
+}
+
+.console-cwd-button:hover:not(:disabled),
+.console-cwd-button:focus-visible,
+.console-cwd-button[aria-expanded="true"] {
+  color: var(--cyan);
+}
+
+.console-cwd-button:focus-visible {
+  outline-width: 1px;
+  outline-offset: 3px;
+}
+
+.console-cwd-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.console-cwd-button svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.console-cwd-button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-files-panel {
+  --files-accent: var(--cyan);
+  position: fixed;
+  z-index: 40;
+  top: var(--session-files-y);
+  left: var(--session-files-x);
+  display: flex;
+  width: min(760px, calc(100vw - 24px));
+  min-width: min(430px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  height: min(560px, calc(100dvh - 24px));
+  min-height: min(300px, calc(100dvh - 24px));
+  max-height: calc(100dvh - 24px);
+  flex-direction: column;
+  overflow: hidden;
+  color: #dfe9e3;
+  background:
+    radial-gradient(circle at 92% -4%, rgba(104, 223, 208, 0.13), transparent 36%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.025), transparent 46%),
+    #111815;
+  border: 1px solid #3d5c55;
+  border-top: 3px solid var(--files-accent);
+  border-radius: 5px 5px 10px 5px;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.68), 0 3px 0 rgba(104, 223, 208, 0.16);
+  resize: both;
+  container-type: size;
+  font-family: "JetBrains Mono Variable", monospace;
+  animation: session-files-enter 160ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.session-files-header {
+  display: flex;
+  min-height: 48px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px 5px 10px;
+  background: rgba(6, 10, 8, 0.82);
+  border-bottom: 1px solid #2c3d37;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.session-files-header:active {
+  cursor: grabbing;
+}
+
+.session-files-header:focus-visible {
+  outline: 1px solid var(--files-accent);
+  outline-offset: -2px;
+}
+
+.session-files-heading-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #07110f;
+  background: var(--files-accent);
+  border-radius: 3px;
+}
+
+.session-files-heading-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.session-files-header > div {
+  min-width: 76px;
+  flex: 0 0 auto;
+}
+
+.session-files-header > div > span {
+  display: block;
+  color: #6e8c84;
+  font-size: 7px;
+  font-weight: 760;
+  letter-spacing: 0.1em;
+}
+
+.session-files-header h2 {
+  margin: 1px 0 0;
+  color: #f0f7f3;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 17px;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+.session-files-header > code {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #93a69f;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-files-header > button,
+.session-files-toolbar > button,
+.session-files-breadcrumbs button,
+.session-files-tools > button,
+.session-file-path-actions > button,
+.session-files-state button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.session-files-header > button:hover:not(:disabled),
+.session-files-toolbar > button:hover:not(:disabled),
+.session-files-breadcrumbs button:hover:not(:disabled),
+.session-files-tools > button:hover:not(:disabled),
+.session-file-path-actions > button:hover:not(:disabled),
+.session-files-state button:hover:not(:disabled) {
+  color: #effff9;
+  background: #21312b;
+  border-color: #5a7c72;
+}
+
+.session-files-header > button:disabled,
+.session-files-toolbar > button:disabled,
+.session-files-breadcrumbs button:disabled,
+.session-files-tools > button:disabled,
+.session-file-path-actions > button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.session-files-header > button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.session-files-header > button svg,
+.session-files-toolbar > button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-files-toolbar {
+  display: flex;
+  min-height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  background: rgba(16, 24, 20, 0.96);
+  border-bottom: 1px solid #28362f;
+}
+
+.session-files-toolbar > button {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.session-files-breadcrumbs {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.session-files-breadcrumbs > span {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.session-files-breadcrumbs > span > svg {
+  width: 11px;
+  height: 11px;
+  color: #586860;
+}
+
+.session-files-breadcrumbs button {
+  min-height: 27px;
+  flex: 0 0 auto;
+  gap: 5px;
+  padding: 0 7px;
+  border-color: transparent;
+  font-size: 9px;
+}
+
+.session-files-breadcrumbs button[aria-current="page"] {
+  color: var(--files-accent);
+  background: rgba(104, 223, 208, 0.08);
+  border-color: rgba(104, 223, 208, 0.24);
+}
+
+.session-files-breadcrumbs button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.session-files-tools {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  background: #121a16;
+  border-bottom: 1px solid #26332d;
+}
+
+.session-files-tools > label {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: #62766d;
+  background: #0c120f;
+  border: 1px solid #2b3933;
+  border-radius: 3px;
+}
+
+.session-files-tools > label:focus-within {
+  color: var(--files-accent);
+  border-color: rgba(104, 223, 208, 0.58);
+}
+
+.session-files-tools > label svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.session-files-tools input {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  padding: 0;
+  color: #e5eee9;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 9px;
+}
+
+.session-files-tools input::placeholder {
+  color: #5e6c65;
+}
+
+.session-files-tools > button {
+  min-height: 30px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.session-files-tools > button[aria-pressed="true"] {
+  color: var(--files-accent);
+  background: rgba(104, 223, 208, 0.09);
+  border-color: rgba(104, 223, 208, 0.38);
+}
+
+.session-files-content {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1.2fr);
+  overflow: hidden;
+}
+
+.session-files-list {
+  min-width: 0;
+  min-height: 0;
+  padding: 5px;
+  overflow: auto;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    #0e1512;
+  background-size: 100% 29px;
+  border-right: 1px solid #2b3933;
+  scrollbar-color: #40544c #111814;
+  scrollbar-width: thin;
+}
+
+.session-file-row {
+  display: flex;
+  width: 100%;
+  min-height: 41px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+  color: #bdcbc4;
+  background: rgba(16, 24, 20, 0.92);
+  border: 1px solid transparent;
+  border-bottom-color: #202c27;
+  border-radius: 2px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-file-row:hover:not(:disabled),
+.session-file-row:focus-visible {
+  color: #f2faf6;
+  background: #19251f;
+  border-color: #3d554c;
+  outline: 0;
+}
+
+.session-file-row.selected {
+  color: #effff9;
+  background: rgba(104, 223, 208, 0.1);
+  border-color: rgba(104, 223, 208, 0.38);
+}
+
+.session-file-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.session-file-row > svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: #617269;
+}
+
+.session-file-kind {
+  display: grid;
+  width: 31px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #9db4aa;
+  background: #1c2923;
+  border: 1px solid #34473f;
+  border-radius: 3px;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.session-file-row.directory .session-file-kind {
+  color: var(--amber);
+  background: rgba(255, 182, 72, 0.08);
+  border-color: rgba(255, 182, 72, 0.24);
+}
+
+.session-file-kind svg {
+  width: 17px;
+  height: 17px;
+}
+
+.session-file-name {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.session-file-name strong,
+.session-file-name small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-file-name strong {
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.session-file-name small {
+  margin-top: 2px;
+  color: #66786f;
+  font-size: 7px;
+}
+
+.session-files-limit {
+  margin: 5px 0 0;
+  padding: 6px 7px;
+  color: #d2ad6c;
+  background: rgba(255, 182, 72, 0.06);
+  border: 1px solid rgba(255, 182, 72, 0.18);
+  font-size: 8px;
+}
+
+.session-files-state,
+.session-file-preview-empty {
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  color: #708078;
+  text-align: center;
+}
+
+.session-files-state strong,
+.session-file-preview-empty strong {
+  color: #bac9c1;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 13px;
+}
+
+.session-files-state > span,
+.session-file-preview-empty > span {
+  max-width: 34ch;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.session-files-state.error,
+.session-file-preview-empty.error {
+  color: #d68d86;
+}
+
+.session-files-state button {
+  min-height: 29px;
+  margin-top: 3px;
+  padding: 0 9px;
+  font-size: 8px;
+}
+
+.session-file-preview {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: #101713;
+}
+
+.session-file-path-actions {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 5px;
+  padding: 6px;
+  background: #151e1a;
+  border-bottom: 1px solid #2b3832;
+}
+
+.session-file-path-actions > div {
+  min-width: 0;
+  align-self: center;
+}
+
+.session-file-path-actions > div > span {
+  display: block;
+  color: #688078;
+  font-size: 7px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+}
+
+.session-file-path-actions code {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: #c0d3ca;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-file-path-actions > button {
+  min-height: 34px;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 8px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.session-file-path-actions > button.primary {
+  color: #07130f;
+  background: var(--files-accent);
+  border-color: var(--files-accent);
+}
+
+.session-file-path-actions > button.primary:hover:not(:disabled) {
+  color: #06100d;
+  background: #9cf2e5;
+  border-color: #b9fff5;
+}
+
+.session-file-path-actions button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-file-action-status {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 4px 8px;
+  color: #aee8df;
+  background: rgba(104, 223, 208, 0.07);
+  border-bottom: 1px solid rgba(104, 223, 208, 0.14);
+  font-size: 8px;
+}
+
+.session-file-preview-empty {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.session-file-preview-empty > svg {
+  width: 38px;
+  height: 38px;
+  color: #385b51;
+}
+
+.session-file-preview-empty.binary,
+.session-file-preview-empty.locked {
+  margin: 8px;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.012),
+    rgba(255, 255, 255, 0.012) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+  border: 1px dashed #35463f;
+}
+
+.session-file-preview-meta {
+  display: flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  overflow: hidden;
+  color: #74867d;
+  background: #0d1411;
+  border-bottom: 1px solid #27342e;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.session-file-preview-meta strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #dbe8e1;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
+.session-file-preview pre {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 11px 24px;
+  overflow: auto;
+  color: #cad8d1;
+  background:
+    linear-gradient(90deg, rgba(104, 223, 208, 0.025) 1px, transparent 1px),
+    #0b110e;
+  background-size: 4ch 100%;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  tab-size: 4;
+  white-space: pre;
+  scrollbar-color: #40544c #0d1411;
+  scrollbar-width: thin;
+}
+
+.session-file-preview-truncated {
+  position: absolute;
+  right: 6px;
+  bottom: 5px;
+  margin: 0;
+  padding: 3px 5px;
+  color: #e9bd72;
+  background: rgba(31, 26, 17, 0.94);
+  border: 1px solid rgba(255, 182, 72, 0.28);
+  border-radius: 2px;
+  font-size: 7px;
+}
+
+.session-files-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #33483f;
+  border-top-color: var(--files-accent);
+  border-radius: 50%;
+  animation: session-files-spin 700ms linear infinite;
+}
+
+.session-files-resize-corner {
+  position: absolute;
+  z-index: 5;
+  right: 1px;
+  bottom: 1px;
+  width: 19px;
+  height: 19px;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    transparent 0 43%,
+    rgba(104, 223, 208, 0.25) 44% 50%,
+    transparent 51% 62%,
+    rgba(104, 223, 208, 0.52) 63% 69%,
+    transparent 70%
+  );
+}
+
+html.session-files-panel-moving,
+html.session-files-panel-moving * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+html[data-theme="light"] .console-cwd-button {
+  color: #6c7568;
+}
+
+html[data-theme="light"] .console-cwd-button:hover:not(:disabled),
+html[data-theme="light"] .console-cwd-button:focus-visible,
+html[data-theme="light"] .console-cwd-button[aria-expanded="true"] {
+  color: #006f67;
+}
+
+html[data-theme="light"] .session-files-panel {
+  --files-accent: #087f75;
+  color: #283129;
+  background:
+    radial-gradient(circle at 92% -4%, rgba(8, 127, 117, 0.1), transparent 36%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.56), transparent 46%),
+    #f6f2e9;
+  border-color: #7da49b;
+  box-shadow: 0 24px 72px rgba(63, 55, 43, 0.28), 0 3px 0 rgba(8, 127, 117, 0.18);
+}
+
+html[data-theme="light"] .session-files-header,
+html[data-theme="light"] .session-files-toolbar,
+html[data-theme="light"] .session-files-tools,
+html[data-theme="light"] .session-file-path-actions {
+  background: rgba(239, 235, 225, 0.97);
+  border-color: #c9c3b7;
+}
+
+html[data-theme="light"] .session-files-heading-icon,
+html[data-theme="light"] .session-file-path-actions > button.primary {
+  color: #f6fffc;
+}
+
+html[data-theme="light"] .session-files-header h2,
+html[data-theme="light"] .session-files-tools input,
+html[data-theme="light"] .session-file-name strong,
+html[data-theme="light"] .session-file-preview-meta strong {
+  color: #263029;
+}
+
+html[data-theme="light"] .session-files-header > code,
+html[data-theme="light"] .session-file-path-actions code {
+  color: #586a62;
+}
+
+html[data-theme="light"] .session-files-header > button,
+html[data-theme="light"] .session-files-toolbar > button,
+html[data-theme="light"] .session-files-breadcrumbs button,
+html[data-theme="light"] .session-files-tools > button,
+html[data-theme="light"] .session-file-path-actions > button,
+html[data-theme="light"] .session-files-state button {
+  color: #4d5c54;
+  background: #faf8f2;
+  border-color: #beb9ad;
+}
+
+html[data-theme="light"] .session-files-tools > label,
+html[data-theme="light"] .session-file-preview-meta {
+  color: #6b756d;
+  background: #fbfaf6;
+  border-color: #c9c3b8;
+}
+
+html[data-theme="light"] .session-files-list,
+html[data-theme="light"] .session-file-preview,
+html[data-theme="light"] .session-file-preview pre {
+  color: #303a32;
+  background-color: #fbfaf5;
+  border-color: #cbc5ba;
+}
+
+html[data-theme="light"] .session-file-row {
+  color: #465149;
+  background: rgba(250, 248, 242, 0.94);
+  border-bottom-color: #e0dcd3;
+}
+
+html[data-theme="light"] .session-file-row:hover:not(:disabled),
+html[data-theme="light"] .session-file-row:focus-visible {
+  color: #202a23;
+  background: #eef3ed;
+  border-color: #9bb3a8;
+}
+
+html[data-theme="light"] .session-file-row.selected {
+  color: #17352f;
+  background: #dcefeb;
+  border-color: #69aa9f;
+}
+
+html[data-theme="light"] .session-file-kind {
+  color: #52675e;
+  background: #e8ede7;
+  border-color: #bcc9c0;
+}
+
+html[data-theme="light"] .session-file-row.directory .session-file-kind {
+  color: #8a590b;
+  background: #f8ead3;
+  border-color: #d8bc88;
+}
+
+html[data-theme="light"] .session-file-name small,
+html[data-theme="light"] .session-files-state,
+html[data-theme="light"] .session-file-preview-empty {
+  color: #6c766e;
+}
+
+html[data-theme="light"] .session-files-state strong,
+html[data-theme="light"] .session-file-preview-empty strong {
+  color: #3b463e;
+}
+
+html[data-theme="light"] .session-file-action-status {
+  color: #096a61;
+  background: #e0f0ec;
+  border-color: #b8d8d1;
+}
+
+html[data-theme="light"] .session-file-preview-empty.binary,
+html[data-theme="light"] .session-file-preview-empty.locked {
+  background-color: #f4f1e9;
+  border-color: #bdb7ab;
+}
+
+@container (max-width: 570px) {
+  .session-files-content {
+    grid-template-columns: minmax(150px, 0.72fr) minmax(205px, 1.28fr);
+  }
+
+  .session-file-path-actions {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .session-file-path-actions > button span {
+    display: none;
+  }
+
+  .session-file-path-actions > button {
+    width: 34px;
+    padding: 0;
+  }
+
+  .session-file-path-actions > button:last-child {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 640px),
+  (max-width: 1024px) and (pointer: coarse),
+  (max-width: 1024px) and (max-height: 500px) {
+  .session-files-panel {
+    display: none !important;
+  }
+
+  .console-cwd-button:disabled {
+    color: #737d70;
+    opacity: 1;
+  }
+
+  .console-cwd-button:disabled svg {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-files-panel {
+    animation: none;
+  }
+}
+
+@keyframes session-files-enter {
+  from { opacity: 0; transform: translateY(-8px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes session-files-spin {
+  to { transform: rotate(360deg); }
+}

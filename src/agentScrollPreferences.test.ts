@@ -16,7 +16,7 @@ describe("agent scroll preferences", () => {
     expect(preferredAgentScrollMode("claude", {})).toBe("application");
     expect(preferredAgentScrollMode("codex", {})).toBe("tmux");
     expect(preferredAgentScrollMode("copilot", {})).toBe("application");
-    expect(preferredAgentScrollMode("cursor", {})).toBe("application");
+    expect(preferredAgentScrollMode("cursor", {})).toBe("tmux");
     expect(preferredAgentScrollMode("grok", {})).toBe("application");
     expect(preferredAgentScrollMode("shells", {})).toBe("tmux");
     expect(preferredAgentScrollMode("other", {})).toBe("tmux");

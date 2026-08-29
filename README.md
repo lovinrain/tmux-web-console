@@ -61,6 +61,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
   indicators, reusable snippets, and desktop file attachments
+- A desktop, read-only pane-CWD browser with folder navigation, safe text
+  previews, and shell-safe path staging
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
@@ -117,6 +119,12 @@ For frontend development, run `npm run dev`. Vite serves
   stage shell-safe paths for review; dropping files over the live terminal
   pastes those paths at its cursor without pressing Enter. The active CLI agent
   runs as the same Unix user and can read the private host files directly.
+- On desktop, click the working-directory line beneath the session title to open
+  a movable, resizable, read-only file browser. Its root is always derived from
+  the live tmux pane; requests cannot select an arbitrary server root or follow
+  a symlink outside that CWD. Text previews are UTF-8 and capped at 1 MiB;
+  binary files show metadata. `Copy path` copies the absolute server path, while
+  `Stage path` inserts its shell-quoted form into the composer without sending.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck

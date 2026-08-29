@@ -694,7 +694,7 @@ describe("App routing", () => {
     expectWorkspaceSearch("?kind=codex", ["alpha", "beta", "fresh/session"]);
   });
 
-  it("appends a copied session and focuses it when the source console is active", () => {
+  it("inserts a copied session after its source and focuses it", () => {
     replaceUrl(sessionUrl("alpha", "?kind=codex&tab=alpha&tab=beta"));
     render(<App />);
 
@@ -705,8 +705,8 @@ describe("App routing", () => {
       "alpha_1",
     );
     expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha_1`);
-    expectWorkspaceSearch("?kind=codex", ["alpha", "beta", "alpha_1"]);
-    expect(renderedTabs()).toEqual(["alpha", "beta", "alpha_1"]);
+    expectWorkspaceSearch("?kind=codex", ["alpha", "alpha_1", "beta"]);
+    expect(renderedTabs()).toEqual(["alpha", "alpha_1", "beta"]);
     expect(screen.getByRole("tab", { name: /alpha_1/ })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -731,7 +731,7 @@ describe("App routing", () => {
       "beta",
     );
     expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
-    expectWorkspaceSearch("", ["alpha", "beta", "alpha_1"]);
+    expectWorkspaceSearch("", ["alpha", "alpha_1", "beta"]);
   });
 
   it("opens New session as a tab switch and returns to its saved-workspace source", async () => {

@@ -19,7 +19,7 @@ const DEFAULT_SCROLL_MODE: Readonly<Record<SessionKind, AgentScrollMode>> = {
   claude: "application",
   codex: "tmux",
   copilot: "application",
-  cursor: "application",
+  cursor: "tmux",
   grok: "application",
   shells: "tmux",
   other: "tmux",

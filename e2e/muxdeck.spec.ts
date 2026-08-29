@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 
 const sessionName = `muxdeck-browser-${process.pid}`;
@@ -829,10 +837,11 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
 
 test("desktop Copy New creates the next numbered session in the active directory", async ({ page }) => {
   const sourceSession = `${sessionName}-copy-source`;
+  const tailSession = `${sourceSession}-tail`;
   const collisionSessions = [`${sourceSession}_1`, `${sourceSession}_2`];
   const copiedSession = `${sourceSession}_3`;
   const workingDirectory = `/tmp/${sourceSession}-cwd`;
-  const createdSessions = [sourceSession, ...collisionSessions, copiedSession];
+  const createdSessions = [sourceSession, tailSession, ...collisionSessions, copiedSession];
   mkdirSync(workingDirectory, { recursive: true });
 
   try {
@@ -860,11 +869,22 @@ test("desktop Copy New creates the next numbered session in the active directory
         "--norc",
       ]);
     }
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      tailSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(
       `/mux/session/${encodeURIComponent(sourceSession)}`
-      + `?tab=${encodeURIComponent(sourceSession)}`,
+      + `?tab=${encodeURIComponent(sourceSession)}`
+      + `&tab=${encodeURIComponent(tailSession)}`,
     );
     await expect(page.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
@@ -875,13 +895,13 @@ test("desktop Copy New creates the next numbered session in the active directory
     await expectRoute(
       page,
       `/mux/session/${sourceSession}`,
-      [sourceSession],
+      [sourceSession, tailSession],
     );
     await page.keyboard.press("Control+Shift+B");
     await expectRoute(
       page,
       `/mux/session/${sourceSession}`,
-      [sourceSession],
+      [sourceSession, tailSession],
     );
     expect(() => execFileSync(
       "tmux",
@@ -897,7 +917,7 @@ test("desktop Copy New creates the next numbered session in the active directory
     await expectRoute(
       page,
       `/mux/session/${copiedSession}`,
-      [sourceSession, copiedSession],
+      [sourceSession, copiedSession, tailSession],
     );
     await expect(page.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
@@ -1182,6 +1202,75 @@ test("desktop file attachments stage or paste host-readable paths", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(attach).toBeHidden();
   await expect(page.locator(".terminal-attachment-feedback")).toBeHidden();
+});
+
+test("desktop CWD browser previews and stages pane-scoped files", async ({ page }) => {
+  test.setTimeout(45_000);
+  const panePath = execFileSync(
+    "tmux",
+    [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"],
+    { encoding: "utf8" },
+  ).trim();
+  const fixtureName = `muxdeck-file-browser-${process.pid}`;
+  const fixtureDirectory = `${panePath}/${fixtureName}`;
+  const fixtureFile = `${fixtureDirectory}/read me.txt`;
+  const fixtureContent = "FILE_BROWSER_E2E\nsecond line\n";
+  mkdirSync(fixtureDirectory, { recursive: true });
+  writeFileSync(fixtureFile, fixtureContent, "utf8");
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    const terminalBefore = workspaceTmuxContentSnapshot(sessionName);
+    const cwd = page.getByRole("button", { name: `Browse files in ${panePath}` });
+    await expect(cwd).toBeEnabled();
+    await cwd.click();
+
+    const browser = page.getByRole("dialog", { name: "Files" });
+    await expect(browser).toBeVisible();
+    await browser.getByRole("button", { name: `Folder ${fixtureName}` }).click();
+    await browser.getByRole("button", { name: "File read me.txt" }).click();
+    await expect(browser.locator(".session-file-preview pre")).toHaveText(fixtureContent);
+    await expect(browser.locator(".session-file-path-actions code")).toHaveText(fixtureFile);
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
+
+    const header = browser.locator(".session-files-header");
+    const panelBeforeMove = await browser.boundingBox();
+    const headerBox = await header.boundingBox();
+    expect(panelBeforeMove).not.toBeNull();
+    expect(headerBox).not.toBeNull();
+    await page.mouse.move(headerBox!.x + 90, headerBox!.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(headerBox!.x - 30, headerBox!.y + 70, { steps: 4 });
+    await page.mouse.up();
+    const panelAfterMove = await browser.boundingBox();
+    expect(panelAfterMove).not.toBeNull();
+    expect(panelAfterMove!.x).not.toBe(panelBeforeMove!.x);
+    await expect(browser).toHaveCSS("resize", "both");
+
+    await browser.getByRole("button", {
+      name: "Insert server path into staged input",
+    }).click();
+    const stagedInput = page.getByRole("textbox", { name: "Staged input" });
+    await expect(stagedInput).toHaveValue(`'${fixtureFile}'`);
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
+    await page.screenshot({ path: "artifacts/desktop-cwd-file-browser.png" });
+    await stagedInput.fill("");
+
+    await browser.getByRole("button", { name: "Close file browser" }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".console-cwd-button")).toBeDisabled();
+    await expect(page.locator(".console-cwd-button")).toHaveAttribute(
+      "aria-label",
+      `Pane working directory: ${panePath}`,
+    );
+    await expect(browser).toBeHidden();
+  } finally {
+    rmSync(fixtureDirectory, { recursive: true, force: true });
+  }
 });
 
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({

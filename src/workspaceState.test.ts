@@ -3,6 +3,7 @@ import {
   clearClosedWorkspaceHistory,
   closeWorkspaceSession,
   createSessionWorkspace,
+  insertWorkspaceSessionAfter,
   isolatedWorkspaceSearch,
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
@@ -285,6 +286,36 @@ describe("session workspace state", () => {
       groups: [],
     });
     expect(visitWorkspaceSession(revisited, "alpha")).toBe(revisited);
+  });
+
+  it("inserts a copied session beside its source and preserves its tab group", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma", "delta"],
+      recentSessions: ["delta", "beta"],
+      groups: [{
+        id: "work",
+        name: "Work",
+        color: "cyan",
+        collapsed: true,
+        tabs: ["beta", "gamma"],
+      }],
+    };
+
+    const copied = insertWorkspaceSessionAfter(workspace, "beta", "beta_1");
+
+    expect(copied).toEqual({
+      ...workspace,
+      openSessions: ["alpha", "beta", "beta_1", "gamma", "delta"],
+      groups: [{ ...workspace.groups[0], tabs: ["beta", "beta_1", "gamma"] }],
+    });
+    expect(insertWorkspaceSessionAfter(copied, "beta", "beta_1")).toBe(copied);
+    expect(insertWorkspaceSessionAfter(workspace, "missing", "new").openSessions).toEqual([
+      "alpha",
+      "beta",
+      "gamma",
+      "delta",
+      "new",
+    ]);
   });
 
   it("keeps only the 30 most recent visits while retaining every open tab", () => {

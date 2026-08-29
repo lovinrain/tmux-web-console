@@ -107,6 +107,82 @@ export interface UploadedSessionAttachment {
   size: number;
 }
 
+export type SessionFileKind = "directory" | "file" | "other";
+
+export interface SessionFileEntry {
+  name: string;
+  path: string;
+  absolutePath: string;
+  terminalText: string;
+  kind: SessionFileKind;
+  size: number | null;
+  modified: number | null;
+  hidden: boolean;
+  symlink: boolean;
+  accessible: boolean;
+}
+
+export interface SessionDirectoryListing {
+  root: string;
+  path: string;
+  absolutePath: string;
+  terminalText: string;
+  entries: SessionFileEntry[];
+  truncated: boolean;
+  limit: number;
+}
+
+export interface SessionFilePreview {
+  root: string;
+  name: string;
+  path: string;
+  absolutePath: string;
+  terminalText: string;
+  kind: "text" | "binary";
+  mediaType: string;
+  size: number;
+  modified: number;
+  truncated: boolean;
+  previewBytes: number;
+  content: string | null;
+}
+
+function sessionFileQuery(
+  sessionId: string,
+  paneId: string,
+  path: string,
+): string {
+  return new URLSearchParams({ sessionId, paneId, path }).toString();
+}
+
+export async function listSessionFiles(
+  session: string,
+  sessionId: string,
+  paneId: string,
+  path = "",
+  signal?: AbortSignal,
+): Promise<SessionDirectoryListing> {
+  const query = sessionFileQuery(sessionId, paneId, path);
+  return jsonRequest<SessionDirectoryListing>(
+    `/api/sessions/${encodeURIComponent(session)}/files?${query}`,
+    { signal },
+  );
+}
+
+export async function previewSessionFile(
+  session: string,
+  sessionId: string,
+  paneId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<SessionFilePreview> {
+  const query = sessionFileQuery(sessionId, paneId, path);
+  return jsonRequest<SessionFilePreview>(
+    `/api/sessions/${encodeURIComponent(session)}/files/preview?${query}`,
+    { signal },
+  );
+}
+
 export async function uploadSessionAttachment(
   session: string,
   sessionId: string,

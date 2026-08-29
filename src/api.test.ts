@@ -16,7 +16,9 @@ import {
   getWorkspaceNote,
   getWorkspaceQuickLinks,
   getSnippetTree,
+  listSessionFiles,
   listQueuedMessages,
+  previewSessionFile,
   renameSession,
   replaceCommonNote,
   replaceCommonWorkspaceQuickLinks,
@@ -340,6 +342,71 @@ describe("session attachment upload API", () => {
       message: "attachment file cannot be empty",
       status: 400,
     });
+  });
+});
+
+describe("session file browser API", () => {
+  it("encodes session, pane, and relative paths for listing and preview", async () => {
+    const listing = {
+      root: "/work/project",
+      path: "src",
+      absolutePath: "/work/project/src",
+      terminalText: "/work/project/src",
+      entries: [],
+      truncated: false,
+      limit: 1_000,
+    };
+    const preview = {
+      root: "/work/project",
+      name: "main file.ts",
+      path: "src/main file.ts",
+      absolutePath: "/work/project/src/main file.ts",
+      terminalText: "'/work/project/src/main file.ts'",
+      kind: "text",
+      mediaType: "text/typescript",
+      size: 4,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 4,
+      content: "test",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(listing), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(preview), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(listSessionFiles(
+      "work/name #1",
+      "$7",
+      "%3",
+      "src",
+      controller.signal,
+    )).resolves.toEqual(listing);
+    await expect(previewSessionFile(
+      "work/name #1",
+      "$7",
+      "%3",
+      "src/main file.ts",
+      controller.signal,
+    )).resolves.toEqual(preview);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files?sessionId=%247&paneId=%253&path=src`,
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/preview?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 });
 

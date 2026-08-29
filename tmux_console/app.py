@@ -14,6 +14,11 @@ from urllib.parse import SplitResult, urlsplit
 
 from aiohttp import WSMsgType, web
 
+from .file_browser import (
+    FileBrowserPathOutsideRootError,
+    list_directory,
+    preview_file,
+)
 from .history import SnapshotStore
 from .messages import (
     MessageNotFoundError,
@@ -38,6 +43,7 @@ from .tmux import (
     TmuxSessionIdentityChangedError,
     TmuxSessionNotFoundError,
     validate_tmux_new_session_name,
+    validate_tmux_pane_id,
     validate_tmux_session_id,
     validate_tmux_session_name,
     validate_tmux_start_directory,
@@ -738,6 +744,93 @@ def create_app(
             LOGGER.exception("Unable to store an uploaded attachment")
             return json_error("unable to store attachment", 503)
         return web.json_response(uploaded.to_dict(), status=201)
+
+    async def session_file_request(
+        request: web.Request,
+        operation: Callable[[str, str], dict[str, object]],
+        *,
+        path_required: bool = False,
+    ) -> web.Response:
+        session_name = request.match_info["session"]
+        try:
+            session_name = validate_tmux_session_name(session_name)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        allowed_fields = {"sessionId", "paneId", "path"}
+        unknown_fields = sorted(set(request.query) - allowed_fields)
+        if unknown_fields:
+            return json_error(f"unknown query field: {unknown_fields[0]}", 400)
+        for required_field in ("sessionId", "paneId"):
+            if required_field not in request.query:
+                return json_error(f"{required_field} is required", 400)
+        if path_required and "path" not in request.query:
+            return json_error("path is required", 400)
+        for field in allowed_fields:
+            values = request.query.getall(field, [])
+            if len(values) > 1:
+                return json_error(f"{field} must appear at most once", 400)
+
+        session_id = request.query["sessionId"]
+        pane_id = request.query["paneId"]
+        relative_path = request.query.get("path", "")
+        try:
+            session_id = validate_tmux_session_id(session_id)
+            pane_id = validate_tmux_pane_id(pane_id)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            current_session = await app[TMUX_KEY].get_session(session_name)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        if current_session.id != session_id:
+            return json_error(
+                "tmux session identity changed; refresh before browsing files",
+                409,
+            )
+        pane = next(
+            (candidate for candidate in current_session.panes if candidate.id == pane_id),
+            None,
+        )
+        if pane is None:
+            return json_error(
+                "tmux pane identity changed; refresh before browsing files",
+                409,
+            )
+        if not pane.path:
+            return json_error("tmux pane has no working directory", 409)
+
+        try:
+            payload = await asyncio.to_thread(operation, pane.path, relative_path)
+        except FileBrowserPathOutsideRootError as error:
+            return json_error(str(error), 403)
+        except FileNotFoundError:
+            return json_error("file or directory no longer exists", 404)
+        except PermissionError:
+            return json_error("file or directory is not accessible", 403)
+        except (IsADirectoryError, NotADirectoryError, TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to browse files for tmux session %s pane %s",
+                session_name,
+                pane_id,
+            )
+            return json_error("unable to browse files", 500)
+        return web.json_response(payload)
+
+    async def list_session_files(request: web.Request) -> web.Response:
+        return await session_file_request(request, list_directory)
+
+    async def preview_session_file(request: web.Request) -> web.Response:
+        return await session_file_request(
+            request,
+            preview_file,
+            path_required=True,
+        )
 
     async def terminate_session(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -2149,6 +2242,14 @@ def create_app(
     app.router.add_post(
         f"{prefix}/api/sessions/{{session}}/images",
         upload_session_attachment,
+    )
+    app.router.add_get(
+        f"{prefix}/api/sessions/{{session}}/files",
+        list_session_files,
+    )
+    app.router.add_get(
+        f"{prefix}/api/sessions/{{session}}/files/preview",
+        preview_session_file,
     )
     app.router.add_delete(f"{prefix}/api/sessions/{{session}}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)

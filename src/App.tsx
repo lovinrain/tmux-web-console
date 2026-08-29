@@ -49,6 +49,7 @@ import {
   clearClosedWorkspaceHistory,
   closeWorkspaceSession,
   createSessionWorkspace,
+  insertWorkspaceSessionAfter,
   isolatedWorkspaceSearch,
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
@@ -1789,23 +1790,21 @@ function AppRoutes() {
     const route = parseSessionRoute(current.path);
     const ownsCurrentView = route?.sessionName === sourceName && !route.recentsOpen;
     const currentWorkspace = workspaceRef.current;
+    const insertedWorkspace = insertWorkspaceSessionAfter(
+      currentWorkspace,
+      sourceName,
+      sessionName,
+    );
     const nextWorkspace = ownsCurrentView
-      ? visitWorkspaceSession(currentWorkspace, sessionName)
-      : {
-          ...currentWorkspace,
-          openSessions: currentWorkspace.openSessions.includes(sessionName)
-            ? currentWorkspace.openSessions
-            : [...currentWorkspace.openSessions, sessionName],
-        };
+      ? visitWorkspaceSession(insertedWorkspace, sessionName)
+      : insertedWorkspace;
     workspaceRef.current = nextWorkspace;
-    if (
-      pendingWorkspaceSnapshot.current
-      && !pendingWorkspaceSnapshot.current.openSessions.includes(sessionName)
-    ) {
-      pendingWorkspaceSnapshot.current = {
-        ...pendingWorkspaceSnapshot.current,
-        openSessions: [...pendingWorkspaceSnapshot.current.openSessions, sessionName],
-      };
+    if (pendingWorkspaceSnapshot.current) {
+      pendingWorkspaceSnapshot.current = insertWorkspaceSessionAfter(
+        pendingWorkspaceSnapshot.current,
+        sourceName,
+        sessionName,
+      );
     }
     setWorkspace(nextWorkspace);
     replaceLocation(

@@ -46,6 +46,7 @@ CREATED_SESSION_FORMAT = "#{session_name}\t#{session_id}"
 CLIENT_IDENTITY_FORMAT = "#{client_pid}\t#{client_name}\t#{session_id}"
 MAX_SESSION_NAME_LENGTH = 256
 TMUX_SESSION_ID_PATTERN = re.compile(r"^\$\d+$")
+TMUX_PANE_ID_PATTERN = re.compile(r"^%\d+$")
 TERMINATE_IDENTITY_MISMATCH = "MUXDECK_SESSION_IDENTITY_CHANGED"
 TERMINAL_HISTORY_ACTIONS = frozenset({"page-up", "page-down", "exit"})
 HISTORY_USER_KEY_PATTERN = re.compile(r"\bUser(\d{1,3})\b")
@@ -145,6 +146,12 @@ def validate_tmux_start_directory(value: str) -> str:
 def validate_tmux_session_id(value: str) -> str:
     if not TMUX_SESSION_ID_PATTERN.fullmatch(value):
         raise ValueError("invalid tmux session id")
+    return value
+
+
+def validate_tmux_pane_id(value: str) -> str:
+    if not TMUX_PANE_ID_PATTERN.fullmatch(value):
+        raise ValueError("invalid tmux pane id")
     return value
 
 

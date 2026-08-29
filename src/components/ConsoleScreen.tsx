@@ -28,6 +28,7 @@ import {
   ArrowUpIcon,
   ContractIcon,
   ExpandIcon,
+  FolderIcon,
   GridIcon,
   HistoryIcon,
   KeyboardIcon,
@@ -63,6 +64,7 @@ import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
+import { SessionFilesPanel } from "./SessionFilesPanel";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
 import {
@@ -406,6 +408,7 @@ export function ConsoleScreen({
     state: ConnectionState;
   }>({ sessionName, state: "connecting" });
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [titleEditorOpen, setTitleEditorOpen] = useState(false);
   const [renameEditorOpen, setRenameEditorOpen] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<{
@@ -434,6 +437,10 @@ export function ConsoleScreen({
     DEFAULT_CONSOLE_BAR_VISIBILITY,
   );
   const [localMobileMode, setLocalMobileMode] = useState<MobileConsoleMode>("terminal");
+  const [mobileLayout, setMobileLayout] = useState(() => (
+    typeof window.matchMedia === "function"
+      && window.matchMedia(MOBILE_CONSOLE_LAYOUT_QUERY).matches
+  ));
   const [mobileDistractionFreeMode, setMobileDistractionFreeMode] = useState<
     MobileConsoleMode | null
   >(null);
@@ -863,6 +870,7 @@ export function ConsoleScreen({
           setLoadedSession(null);
           setPaneId(null);
           setHistoryOpen(false);
+          setFilesOpen(false);
           setTitleEditorOpen(false);
           setRenameEditorOpen(false);
           setTerminateTarget(null);
@@ -902,6 +910,7 @@ export function ConsoleScreen({
     setDesktopFocusShortcutsOpen(false);
     resetDesktopFocusShortcutsPosition();
     setHistoryOpen(false);
+    setFilesOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
@@ -911,6 +920,10 @@ export function ConsoleScreen({
   }, [resetDesktopFocusShortcutsPosition, sessionName]);
 
   useEffect(() => {
+    setFilesOpen(false);
+  }, [pane?.path, paneId, sessionName]);
+
+  useEffect(() => {
     if (!workspaceOverlayOpen) return;
     setMobileDistractionFreeMode(null);
     setDesktopCopyMode(false);
@@ -918,6 +931,7 @@ export function ConsoleScreen({
     setDesktopFocusShortcutsOpen(false);
     resetDesktopFocusShortcutsPosition();
     setHistoryOpen(false);
+    setFilesOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
@@ -935,19 +949,21 @@ export function ConsoleScreen({
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const mobileLayout = window.matchMedia(MOBILE_CONSOLE_LAYOUT_QUERY);
+    const mobileQuery = window.matchMedia(MOBILE_CONSOLE_LAYOUT_QUERY);
     const leaveDesktopFocus = () => {
-      if (mobileLayout.matches) {
+      setMobileLayout(mobileQuery.matches);
+      if (mobileQuery.matches) {
         setDesktopCopyMode(false);
         setDesktopTerminalFocus(false);
         setDesktopFocusShortcutsOpen(false);
         setWorkspaceTransferOpen(false);
+        setFilesOpen(false);
         resetDesktopFocusShortcutsPosition();
       }
     };
     leaveDesktopFocus();
-    mobileLayout.addEventListener("change", leaveDesktopFocus);
-    return () => mobileLayout.removeEventListener("change", leaveDesktopFocus);
+    mobileQuery.addEventListener("change", leaveDesktopFocus);
+    return () => mobileQuery.removeEventListener("change", leaveDesktopFocus);
   }, [resetDesktopFocusShortcutsPosition]);
 
   useEffect(() => {
@@ -1030,6 +1046,7 @@ export function ConsoleScreen({
     setMobileDistractionFreeMode(null);
     setDesktopCopyMode(false);
     setHistoryOpen(false);
+    setFilesOpen(false);
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
@@ -1040,6 +1057,11 @@ export function ConsoleScreen({
     setDesktopTerminalFocus(true);
     window.requestAnimationFrame(() => terminalRef.current?.focus());
   }, [resetDesktopFocusShortcutsPosition]);
+  const insertFilePath = useCallback((terminalText: string) => {
+    if (!inputBarRef.current?.insertText(terminalText)) return false;
+    revealAndFocusComposer();
+    return true;
+  }, [revealAndFocusComposer]);
   const exitDesktopTerminalFocus = useCallback(() => {
     setDesktopFocusShortcutsOpen(false);
     setDesktopTerminalFocus(false);
@@ -1388,7 +1410,27 @@ export function ConsoleScreen({
             <h1>{session?.customTitle || sessionName}</h1>
             <span className={`agent-badge ${classification.tone}`}>{classification.label}</span>
           </div>
-          <p>{session?.customTitle ? `${sessionName} / ${pane?.path || "loading"}` : pane?.path || "Loading tmux session..."}</p>
+          <button
+            type="button"
+            className="console-cwd-button"
+            aria-label={pane?.path && !mobileLayout
+              ? `Browse files in ${pane.path}`
+              : `Pane working directory: ${pane?.path || "unavailable"}`}
+            aria-controls="muxdeck-session-files"
+            aria-expanded={filesOpen}
+            disabled={!session || !pane?.path || mobileLayout}
+            title={pane?.path
+              ? mobileLayout
+                ? "File browsing is available in the desktop layout"
+                : "Browse this pane's working directory"
+              : undefined}
+            onClick={() => setFilesOpen((open) => !open)}
+          >
+            <FolderIcon />
+            <span>{session?.customTitle
+              ? `${sessionName} / ${pane?.path || "loading"}`
+              : pane?.path || "Loading tmux session..."}</span>
+          </button>
         </div>
         {headerNotes}
         <div className="console-actions">
@@ -1784,6 +1826,16 @@ export function ConsoleScreen({
         messageCount={memorandumCount}
         queuedMessageCount={queuedMemorandumCount}
       />
+      {!workspaceOverlayOpen && filesOpen && session && pane?.path && (
+        <SessionFilesPanel
+          sessionName={session.name}
+          sessionId={session.id}
+          paneId={pane.id}
+          panePath={pane.path}
+          onClose={() => setFilesOpen(false)}
+          onInsertPath={insertFilePath}
+        />
+      )}
       {!workspaceOverlayOpen && historyOpen && pane && (
         <HistoryPanel
           pane={pane}

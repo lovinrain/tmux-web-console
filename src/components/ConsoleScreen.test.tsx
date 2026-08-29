@@ -5,10 +5,12 @@ import {
   createQueuedMessage,
   deleteQueuedMessage,
   getSnippetTree,
+  listSessionFiles,
   listWorkspaces,
   listQueuedMessages,
   listSessions,
   renameSession,
+  previewSessionFile,
   updateSessionDetails,
   updateSessionWorkspacePin,
   updateQueuedMessage,
@@ -44,6 +46,8 @@ vi.mock("../api", () => ({
   updateQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn(),
   getSnippetTree: vi.fn(),
+  listSessionFiles: vi.fn(),
+  previewSessionFile: vi.fn(),
   renameSession: vi.fn(),
   updateSessionDetails: vi.fn(),
   updateSessionWorkspacePin: vi.fn(),
@@ -148,11 +152,46 @@ beforeEach(() => {
   liveTerminalState.onStateChange = null;
   window.localStorage.clear();
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
+  vi.mocked(listSessionFiles).mockResolvedValue({
+    root: "/work",
+    path: "",
+    absolutePath: "/work",
+    terminalText: "/work",
+    entries: [],
+    truncated: false,
+    limit: 1_000,
+  });
   vi.mocked(listWorkspaces).mockResolvedValue([]);
   document.title = "Muxdeck";
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("opens the desktop CWD browser and stages its path without sending", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    const cwd = await screen.findByRole("button", { name: "Browse files in /work" });
+    expect(cwd).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(cwd);
+
+    const files = await screen.findByRole("dialog", { name: "Files" });
+    expect(cwd).toHaveAttribute("aria-expanded", "true");
+    expect(listSessionFiles).toHaveBeenCalledWith(
+      "test",
+      "$1",
+      "%1",
+      "",
+      expect.any(AbortSignal),
+    );
+    fireEvent.click(within(files).getByRole("button", {
+      name: "Insert server path into staged input",
+    }));
+
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("/work");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+  });
+
   it("places desktop notes immediately before the header action cluster", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     const view = renderWithTheme(
@@ -504,6 +543,37 @@ describe("ConsoleScreen session identity", () => {
     })).not.toBePressed();
     expect(screen.getByTestId("live-terminal"))
       .toHaveAttribute("data-browser-copy-mode", "false");
+  });
+
+  it("highlights tmux paging for Cursor in desktop and mobile controls", async () => {
+    const cursorSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "cursor-agent", title: "Cursor Agent" }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([cursorSession]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const desktopControls = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const mobileControls = screen.getByRole("navigation", { name: "Terminal view controls" });
+
+    expect(shell).toHaveAttribute("data-scroll-agent", "cursor");
+    expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+    for (const name of ["Tmux Page Up", "Tmux Page Down"]) {
+      expect(within(desktopControls).getByRole("button", { name }))
+        .toHaveClass("preferred-scroll-key");
+      expect(within(mobileControls).getByRole("button", { name }))
+        .toHaveClass("preferred-scroll-control");
+    }
+    for (const name of ["PgUp", "PgDn"]) {
+      expect(within(desktopControls).getByRole("button", { name }))
+        .not.toHaveClass("preferred-scroll-key");
+    }
+    for (const name of ["Raw terminal Page Up", "Raw terminal Page Down"]) {
+      expect(within(mobileControls).getByRole("button", { name }))
+        .not.toHaveClass("preferred-scroll-control");
+    }
   });
 
   it("learns agent paging controls and captures the exact desktop terminal shortcuts", async () => {

@@ -286,6 +286,33 @@ export function visitWorkspaceSession(
   return { openSessions, recentSessions, groups };
 }
 
+export function insertWorkspaceSessionAfter<
+  T extends Pick<SessionWorkspaceState, "openSessions" | "groups">,
+>(
+  workspace: T,
+  sourceName: string,
+  sessionName: string,
+): T {
+  if (!sessionName || workspace.openSessions.includes(sessionName)) return workspace;
+
+  const sourceIndex = workspace.openSessions.indexOf(sourceName);
+  const openSessions = [...workspace.openSessions];
+  openSessions.splice(sourceIndex < 0 ? openSessions.length : sourceIndex + 1, 0, sessionName);
+
+  const sourceGroup = workspace.groups.find((group) => group.tabs.includes(sourceName));
+  const groups = sourceGroup
+    ? workspace.groups.map((group) => {
+        if (group.id !== sourceGroup.id) return group;
+        const sourceGroupIndex = group.tabs.indexOf(sourceName);
+        const tabs = [...group.tabs];
+        tabs.splice(sourceGroupIndex + 1, 0, sessionName);
+        return { ...group, tabs };
+      })
+    : workspace.groups;
+
+  return { ...workspace, openSessions, groups };
+}
+
 export function restoreWorkspaceTabs(
   workspace: SessionWorkspaceState,
   activeSession: string | undefined,
