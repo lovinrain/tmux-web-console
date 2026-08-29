@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DARK_TERMINAL_THEME, LIGHT_TERMINAL_THEME } from "../terminalTheme";
@@ -797,5 +797,185 @@ describe("LiveTerminal themes", () => {
     expect(callbacks.onPaneChange).not.toHaveBeenCalled();
     expect(callbacks.onStateChange).toHaveBeenCalledTimes(stateCallCount);
     expect(activeSocket.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LiveTerminal desktop attachment drops", () => {
+  function attachmentTransfer(file: File) {
+    return {
+      items: [{ kind: "file", type: file.type }],
+      files: [file],
+      dropEffect: "none",
+    };
+  }
+
+  it("uploads a dropped file and pastes its path without Enter", async () => {
+    const onUploadAttachment = vi.fn(async (_file: File, _signal: AbortSignal) => ({
+      name: "context.json",
+      path: "/uploads/context.json",
+      terminalText: "/uploads/context.json",
+      contentType: "application/json",
+      size: 12,
+    }));
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        onUploadAttachment={onUploadAttachment}
+        {...callbacks}
+      />,
+    );
+    const socket = socketMocks.instances[0];
+    socket.emit("open");
+    socket.send.mockClear();
+    const stage = screen.getByRole("tabpanel", { name: "agent live terminal" });
+    const transfer = attachmentTransfer(new File(['{"ok":true}'], "context.json", {
+      type: "application/json",
+    }));
+
+    expect(fireEvent.dragEnter(stage, { dataTransfer: transfer })).toBe(false);
+    expect(screen.getByText("Drop files into terminal input")).toBeVisible();
+    expect(fireEvent.dragOver(stage, { dataTransfer: transfer })).toBe(false);
+    expect(transfer.dropEffect).toBe("copy");
+    expect(fireEvent.drop(stage, { dataTransfer: transfer })).toBe(false);
+    expect(stage).toHaveAttribute("aria-busy", "true");
+
+    await waitFor(() => expect(socket.send).toHaveBeenCalledOnce());
+    const frame = JSON.parse(String(socket.send.mock.calls[0][0])) as {
+      type: string;
+      id: string;
+      data: string;
+    };
+    expect(frame).toMatchObject({
+      type: "input",
+      data: "/uploads/context.json ",
+    });
+    expect(frame.data).not.toContain("\r");
+    expect(onUploadAttachment).toHaveBeenCalledOnce();
+    expect(onUploadAttachment.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+
+    act(() => socket.emitMessage(JSON.stringify({ type: "inputAck", id: frame.id })));
+    expect(await screen.findByText("File path pasted")).toBeVisible();
+    expect(screen.getByText("Inserted at the live terminal cursor without Enter."))
+      .toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy uploaded file path" }))
+      .toHaveAttribute("title", "/uploads/context.json");
+    expect(stage).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("surfaces a backend rejection for an empty file", async () => {
+    const onUploadAttachment = vi.fn(async () => {
+      throw new Error("attachment file cannot be empty");
+    });
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        onUploadAttachment={onUploadAttachment}
+        {...callbacks}
+      />,
+    );
+    socketMocks.instances[0].emit("open");
+    const stage = screen.getByRole("tabpanel", { name: "agent live terminal" });
+    const transfer = attachmentTransfer(new File([], "empty.txt", {
+      type: "text/plain",
+    }));
+
+    fireEvent.dragEnter(stage, { dataTransfer: transfer });
+    fireEvent.drop(stage, { dataTransfer: transfer });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("File upload failed");
+    expect(screen.getByRole("alert")).toHaveTextContent("attachment file cannot be empty");
+    expect(onUploadAttachment).toHaveBeenCalledOnce();
+  });
+
+  it("leaves terminal file drops alone in the mobile layout", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      media: "",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    const onUploadAttachment = vi.fn();
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        onUploadAttachment={onUploadAttachment}
+        {...callbacks}
+      />,
+    );
+    socketMocks.instances[0].emit("open");
+    const stage = screen.getByRole("tabpanel", { name: "agent live terminal" });
+    const transfer = attachmentTransfer(new File(["notes"], "mobile.txt", {
+      type: "text/plain",
+    }));
+
+    expect(fireEvent.dragEnter(stage, { dataTransfer: transfer })).toBe(true);
+    expect(fireEvent.drop(stage, { dataTransfer: transfer })).toBe(true);
+    expect(screen.queryByText("Drop files into terminal input")).not.toBeInTheDocument();
+    expect(onUploadAttachment).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight upload instead of pasting it into a newly selected session", async () => {
+    let finishUpload: ((value: {
+      name: string;
+      path: string;
+      terminalText: string;
+      contentType: "application/octet-stream";
+      size: number;
+    }) => void) | undefined;
+    const onUploadAttachment = vi.fn((_file: File, _signal: AbortSignal) => new Promise<{
+      name: string;
+      path: string;
+      terminalText: string;
+      contentType: "application/octet-stream";
+      size: number;
+    }>((resolve) => {
+      finishUpload = resolve;
+    }));
+    const terminalView = (session: string) => (
+      <LiveTerminal
+        session={session}
+        ignoreSize={false}
+        theme="dark"
+        onUploadAttachment={onUploadAttachment}
+        {...callbacks}
+      />
+    );
+    const view = render(terminalView("alpha"));
+    const oldSocket = socketMocks.instances[0];
+    oldSocket.emit("open");
+    oldSocket.send.mockClear();
+    const transfer = attachmentTransfer(new File(["archive"], "late.tar", {
+      type: "application/x-tar",
+    }));
+    fireEvent.drop(screen.getByRole("tabpanel", { name: "alpha live terminal" }), {
+      dataTransfer: transfer,
+    });
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledOnce());
+    const signal = onUploadAttachment.mock.calls[0][1];
+
+    view.rerender(terminalView("beta"));
+    expect(signal.aborted).toBe(true);
+    finishUpload?.({
+      name: "late.tar",
+      path: "/uploads/late.tar",
+      terminalText: "/uploads/late.tar",
+      contentType: "application/octet-stream",
+      size: 7,
+    });
+    await act(async () => Promise.resolve());
+
+    expect(oldSocket.send).not.toHaveBeenCalled();
+    expect(socketMocks.instances[1].send).not.toHaveBeenCalledWith(expect.stringContaining("late.tar"));
+    expect(screen.queryByText("File path pasted")).not.toBeInTheDocument();
   });
 });

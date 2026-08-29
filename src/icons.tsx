@@ -241,6 +241,28 @@ export function ImageIcon(props: IconProps) {
   );
 }
 
+export function AttachmentIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path
+        d="m8.2 12.7 6.5-6.5a3.2 3.2 0 0 1 4.5 4.5l-8.1 8.1a5 5 0 0 1-7.1-7.1l7.7-7.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m10.9 10 4.1-4.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </IconBase>
+  );
+}
+
 export function FolderIcon(props: IconProps) {
   return (
     <IconBase {...props}>

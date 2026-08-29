@@ -14,7 +14,7 @@ import {
   deleteQueuedMessage,
   listSessions,
   renameSession,
-  uploadSessionImage,
+  uploadSessionAttachment,
   updateSessionDetails,
   updateSessionWorkspacePin,
   updateSessionTags,
@@ -1288,6 +1288,12 @@ export function ConsoleScreen({
     );
   }
 
+  const uploadAttachment = session
+    ? (file: File, signal: AbortSignal) => (
+      uploadSessionAttachment(session.name, session.id, file, signal)
+    )
+    : undefined;
+
   return (
     <main
       ref={consoleShellRef}
@@ -1529,6 +1535,7 @@ export function ConsoleScreen({
             `desktop-tab-rail-${clampedDesktopTabRailWidth}`,
           ].join(":")}
           theme={theme}
+          onUploadAttachment={uploadAttachment}
           onStateChange={stateChange}
           onPaneChange={paneChange}
         />
@@ -1773,9 +1780,7 @@ export function ConsoleScreen({
           : undefined}
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
         onOpenSnippets={() => setSnippetsOpen(true)}
-        onUploadImage={session ? (file, signal) => (
-          uploadSessionImage(session.name, session.id, file, signal)
-        ) : undefined}
+        onUploadAttachment={uploadAttachment}
         messageCount={memorandumCount}
         queuedMessageCount={queuedMemorandumCount}
       />

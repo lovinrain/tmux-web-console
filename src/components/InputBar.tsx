@@ -15,7 +15,7 @@ import {
   ContractIcon,
   EditIcon,
   ExpandIcon,
-  ImageIcon,
+  AttachmentIcon,
   KeyboardIcon,
   MemoIcon,
   RefreshIcon,
@@ -24,17 +24,17 @@ import {
   TrashIcon,
 } from "../icons";
 import type { AgentScrollMode } from "../agentScrollPreferences";
-import type { UploadedSessionImage } from "../api";
+import type { UploadedSessionAttachment } from "../api";
+import {
+  desktopAttachmentsAvailable,
+  MAX_ATTACHMENT_UPLOAD_BATCH,
+  transferHasFiles,
+  type SessionAttachmentUploader,
+} from "../attachments";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
 
 export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
-const MAX_IMAGE_UPLOAD_BATCH = 6;
-const MOBILE_IMAGE_UPLOAD_QUERY = [
-  "(max-width: 640px)",
-  "(max-width: 1024px) and (pointer: coarse)",
-  "(max-width: 1024px) and (max-height: 500px)",
-].join(", ");
 
 interface InputBarProps {
   sessionName: string;
@@ -61,10 +61,7 @@ interface InputBarProps {
   onTerminateSession?: () => void;
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
-  onUploadImage?: (
-    file: File,
-    signal: AbortSignal,
-  ) => Promise<UploadedSessionImage>;
+  onUploadAttachment?: SessionAttachmentUploader;
   messageCount?: number;
   queuedMessageCount?: number;
 }
@@ -92,7 +89,7 @@ interface TerminalKey {
   scrollDirection?: "up" | "down";
 }
 
-interface StagedImageUpload extends UploadedSessionImage {
+interface StagedAttachmentUpload extends UploadedSessionAttachment {
   previewUrl?: string;
 }
 
@@ -348,16 +345,6 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 48), 144)}px`;
 }
 
-function desktopImageUploadsAvailable(): boolean {
-  return typeof window.matchMedia !== "function"
-    || !window.matchMedia(MOBILE_IMAGE_UPLOAD_QUERY).matches;
-}
-
-function transferHasFiles(dataTransfer: DataTransfer): boolean {
-  return Array.from(dataTransfer.items).some((item) => item.kind === "file")
-    || dataTransfer.files.length > 0;
-}
-
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({
   sessionName,
   sessionId,
@@ -383,7 +370,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onTerminateSession,
   onOpenMessages,
   onOpenSnippets,
-  onUploadImage,
+  onUploadAttachment,
   messageCount = 0,
   queuedMessageCount = 0,
 }, ref) {
@@ -398,15 +385,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const initialDraft = initialDraftState.draft;
   const otherKeyPanelId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const actionPendingRef = useRef(false);
-  const imageUploadPendingRef = useRef(false);
-  const imageUploadControllersRef = useRef(new Set<AbortController>());
+  const attachmentUploadPendingRef = useRef(false);
+  const attachmentUploadControllersRef = useRef(new Set<AbortController>());
   const previewUrlsRef = useRef(new Set<string>());
   const mountedRef = useRef(true);
-  const imageDragDepthRef = useRef(0);
+  const attachmentDragDepthRef = useRef(0);
   const memoSourceRef = useRef<MemoDraftSource | null>(null);
   const [draftLength, setDraftLength] = useState(initialDraft.length);
   const [draftHasContent, setDraftHasContent] = useState(Boolean(initialDraft.trim()));
@@ -417,11 +404,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   );
   const [actionPending, setActionPending] = useState(false);
   const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
-  const [imageUploadPending, setImageUploadPending] = useState(false);
-  const [imageDragActive, setImageDragActive] = useState(false);
-  const [stagedImages, setStagedImages] = useState<StagedImageUpload[]>([]);
-  const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(null);
-  const [imageUploadError, setImageUploadError] = useState(false);
+  const [attachmentUploadPending, setAttachmentUploadPending] = useState(false);
+  const [attachmentDragActive, setAttachmentDragActive] = useState(false);
+  const [stagedAttachments, setStagedAttachments] = useState<StagedAttachmentUpload[]>([]);
+  const [attachmentUploadMessage, setAttachmentUploadMessage] = useState<string | null>(null);
+  const [attachmentUploadError, setAttachmentUploadError] = useState(false);
 
   const recordDraft = (value: string, nextStatus: DraftStatus = "saved") => {
     const persisted = writeDraft(sessionName, value);
@@ -518,42 +505,42 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      for (const controller of imageUploadControllersRef.current) controller.abort();
-      imageUploadControllersRef.current.clear();
+      for (const controller of attachmentUploadControllersRef.current) controller.abort();
+      attachmentUploadControllersRef.current.clear();
       for (const previewUrl of previewUrlsRef.current) URL.revokeObjectURL(previewUrl);
       previewUrlsRef.current.clear();
     };
   }, []);
 
-  const dismissImagePreview = (path: string) => {
-    setStagedImages((current) => current.filter((image) => {
-      if (image.path !== path) return true;
-      if (image.previewUrl) {
-        URL.revokeObjectURL(image.previewUrl);
-        previewUrlsRef.current.delete(image.previewUrl);
+  const dismissAttachmentPreview = (path: string) => {
+    setStagedAttachments((current) => current.filter((attachment) => {
+      if (attachment.path !== path) return true;
+      if (attachment.previewUrl) {
+        URL.revokeObjectURL(attachment.previewUrl);
+        previewUrlsRef.current.delete(attachment.previewUrl);
       }
       return false;
     }));
   };
 
-  const clearImagePreviews = () => {
+  const clearAttachmentPreviews = () => {
     for (const previewUrl of previewUrlsRef.current) URL.revokeObjectURL(previewUrl);
     previewUrlsRef.current.clear();
-    setStagedImages([]);
-    setImageUploadMessage(null);
-    setImageUploadError(false);
+    setStagedAttachments([]);
+    setAttachmentUploadMessage(null);
+    setAttachmentUploadError(false);
   };
 
-  const stageUploadedImages = (images: UploadedSessionImage[]): boolean => {
+  const stageUploadedAttachments = (attachments: UploadedSessionAttachment[]): boolean => {
     const textarea = textareaRef.current;
-    if (!textarea || images.length === 0) return false;
+    if (!textarea || attachments.length === 0) return false;
     const start = textarea.selectionStart ?? textarea.value.length;
     const end = textarea.selectionEnd ?? start;
     const before = textarea.value.slice(0, start);
     const after = textarea.value.slice(end);
     const leading = before && !/\s$/.test(before) ? "\n" : "";
     const trailing = after && !/^\s/.test(after) ? "\n" : "";
-    const paths = images.map((image) => image.terminalText || image.path).join("\n");
+    const paths = attachments.map((attachment) => attachment.terminalText || attachment.path).join("\n");
     const insertion = `${leading}${paths}${trailing}`;
     const nextLength = textarea.value.length - (end - start) + insertion.length;
     if (nextLength > MAX_DRAFT_LENGTH) return false;
@@ -567,47 +554,43 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     return true;
   };
 
-  const uploadImageFiles = async (files: File[]) => {
+  const uploadAttachmentFiles = async (files: File[]) => {
     if (
-      !onUploadImage
-      || imageUploadPendingRef.current
-      || !desktopImageUploadsAvailable()
+      !onUploadAttachment
+      || attachmentUploadPendingRef.current
+      || !desktopAttachmentsAvailable()
     ) return;
-    const imageFiles = files.filter((file) => (
-      file.type.toLowerCase().startsWith("image/")
-      || /\.(png|jpe?g|gif|webp)$/i.test(file.name)
-    ));
-    if (imageFiles.length === 0) {
-      setImageUploadError(true);
-      setImageUploadMessage("Choose a PNG, JPEG, GIF, or WebP image.");
+    if (files.length === 0) {
+      setAttachmentUploadError(true);
+      setAttachmentUploadMessage("Choose at least one file to attach.");
       return;
     }
 
-    const selected = imageFiles.slice(0, MAX_IMAGE_UPLOAD_BATCH);
+    const selected = files.slice(0, MAX_ATTACHMENT_UPLOAD_BATCH);
     const controller = new AbortController();
-    imageUploadControllersRef.current.add(controller);
-    imageUploadPendingRef.current = true;
-    setImageUploadPending(true);
-    setImageUploadError(false);
-    setImageUploadMessage(
-      `Uploading ${selected.length === 1 ? selected[0].name : `${selected.length} images`}...`,
+    attachmentUploadControllersRef.current.add(controller);
+    attachmentUploadPendingRef.current = true;
+    setAttachmentUploadPending(true);
+    setAttachmentUploadError(false);
+    setAttachmentUploadMessage(
+      `Uploading ${selected.length === 1 ? selected[0].name : `${selected.length} attachments`}...`,
     );
 
     const completed = await Promise.all(selected.map(async (file) => {
       try {
-        return { file, uploaded: await onUploadImage(file, controller.signal) };
+        return { file, uploaded: await onUploadAttachment(file, controller.signal) };
       } catch (error) {
         return { file, error };
       }
     }));
-    imageUploadControllersRef.current.delete(controller);
-    imageUploadPendingRef.current = false;
+    attachmentUploadControllersRef.current.delete(controller);
+    attachmentUploadPendingRef.current = false;
     if (!mountedRef.current || controller.signal.aborted) return;
-    setImageUploadPending(false);
+    setAttachmentUploadPending(false);
 
     const successful = completed.filter((result) => "uploaded" in result) as Array<{
       file: File;
-      uploaded: UploadedSessionImage;
+      uploaded: UploadedSessionAttachment;
     }>;
     const failed = completed.filter((result) => "error" in result) as Array<{
       file: File;
@@ -615,19 +598,21 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }>;
     const previews = successful.map(({ file, uploaded }) => {
       let previewUrl: string | undefined;
-      try {
-        previewUrl = URL.createObjectURL(file);
-        previewUrlsRef.current.add(previewUrl);
-      } catch {
-        previewUrl = undefined;
+      if (file.type.startsWith("image/")) {
+        try {
+          previewUrl = URL.createObjectURL(file);
+          previewUrlsRef.current.add(previewUrl);
+        } catch {
+          previewUrl = undefined;
+        }
       }
       return { ...uploaded, previewUrl };
     });
     if (previews.length > 0) {
-      setStagedImages((current) => {
+      setStagedAttachments((current) => {
         const combined = [...current, ...previews];
-        const retained = combined.slice(-MAX_IMAGE_UPLOAD_BATCH);
-        for (const removed of combined.slice(0, -MAX_IMAGE_UPLOAD_BATCH)) {
+        const retained = combined.slice(-MAX_ATTACHMENT_UPLOAD_BATCH);
+        for (const removed of combined.slice(0, -MAX_ATTACHMENT_UPLOAD_BATCH)) {
           if (removed.previewUrl) {
             URL.revokeObjectURL(removed.previewUrl);
             previewUrlsRef.current.delete(removed.previewUrl);
@@ -637,90 +622,90 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       });
     }
 
-    const staged = stageUploadedImages(successful.map((result) => result.uploaded));
+    const staged = stageUploadedAttachments(successful.map((result) => result.uploaded));
     if (failed.length > 0) {
       const firstError = failed[0].error;
       const detail = firstError instanceof Error
         ? firstError.message
         : `Unable to upload ${failed[0].file.name}`;
-      setImageUploadError(true);
-      setImageUploadMessage(successful.length > 0
+      setAttachmentUploadError(true);
+      setAttachmentUploadMessage(successful.length > 0
         ? `${successful.length} staged; ${failed.length} failed: ${detail}`
         : detail);
       return;
     }
     if (!staged) {
-      setImageUploadError(true);
-      setImageUploadMessage(
-        "Image uploaded, but the draft is too full for its path. Copy the path from the image card.",
+      setAttachmentUploadError(true);
+      setAttachmentUploadMessage(
+        "File uploaded, but the draft is too full for its path. Copy the path from the file card.",
       );
       return;
     }
-    const skipped = imageFiles.length - selected.length;
-    setImageUploadMessage(
-      `${successful.length === 1 ? "Image path" : `${successful.length} image paths`} staged at the cursor. Add instructions, then send.${skipped > 0 ? ` ${skipped} extra files were skipped.` : ""}`,
+    const skipped = files.length - selected.length;
+    setAttachmentUploadMessage(
+      `${successful.length === 1 ? "File path" : `${successful.length} file paths`} staged at the cursor. Add instructions, then send.${skipped > 0 ? ` ${skipped} extra files were skipped.` : ""}`,
     );
   };
 
-  const handleImagePaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+  const handleAttachmentPaste = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (
       files.length === 0
-      || !onUploadImage
-      || !desktopImageUploadsAvailable()
+      || !onUploadAttachment
+      || !desktopAttachmentsAvailable()
     ) return;
     event.preventDefault();
-    void uploadImageFiles(files);
+    void uploadAttachmentFiles(files);
   };
 
-  const handleImageDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+  const handleAttachmentDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
     if (
-      !onUploadImage
-      || !desktopImageUploadsAvailable()
+      !onUploadAttachment
+      || !desktopAttachmentsAvailable()
       || !transferHasFiles(event.dataTransfer)
     ) return;
     event.preventDefault();
-    imageDragDepthRef.current += 1;
-    setImageDragActive(true);
+    attachmentDragDepthRef.current += 1;
+    setAttachmentDragActive(true);
   };
 
-  const handleImageDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+  const handleAttachmentDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
     if (
-      !onUploadImage
-      || !desktopImageUploadsAvailable()
+      !onUploadAttachment
+      || !desktopAttachmentsAvailable()
       || !transferHasFiles(event.dataTransfer)
     ) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
 
-  const handleImageDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!imageDragActive) return;
+  const handleAttachmentDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!attachmentDragActive) return;
     event.preventDefault();
-    imageDragDepthRef.current = Math.max(0, imageDragDepthRef.current - 1);
-    if (imageDragDepthRef.current === 0) setImageDragActive(false);
+    attachmentDragDepthRef.current = Math.max(0, attachmentDragDepthRef.current - 1);
+    if (attachmentDragDepthRef.current === 0) setAttachmentDragActive(false);
   };
 
-  const handleImageDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+  const handleAttachmentDrop = (event: ReactDragEvent<HTMLDivElement>) => {
     if (
-      !onUploadImage
-      || !desktopImageUploadsAvailable()
+      !onUploadAttachment
+      || !desktopAttachmentsAvailable()
       || !transferHasFiles(event.dataTransfer)
     ) return;
     event.preventDefault();
-    imageDragDepthRef.current = 0;
-    setImageDragActive(false);
-    void uploadImageFiles(Array.from(event.dataTransfer.files));
+    attachmentDragDepthRef.current = 0;
+    setAttachmentDragActive(false);
+    void uploadAttachmentFiles(Array.from(event.dataTransfer.files));
   };
 
-  const copyImagePath = async (image: StagedImageUpload) => {
+  const copyAttachmentPath = async (attachment: StagedAttachmentUpload) => {
     try {
-      await navigator.clipboard.writeText(image.terminalText || image.path);
-      setImageUploadError(false);
-      setImageUploadMessage(`Copied the server path for ${image.name}.`);
+      await navigator.clipboard.writeText(attachment.terminalText || attachment.path);
+      setAttachmentUploadError(false);
+      setAttachmentUploadMessage(`Copied the server path for ${attachment.name}.`);
     } catch {
-      setImageUploadError(true);
-      setImageUploadMessage("Clipboard access was unavailable; select the path from the card.");
+      setAttachmentUploadError(true);
+      setAttachmentUploadMessage("Clipboard access was unavailable; select the path from the card.");
     }
   };
 
@@ -731,7 +716,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       || !textarea.value
       || !enabled
       || actionPendingRef.current
-      || imageUploadPendingRef.current
+      || attachmentUploadPendingRef.current
     ) return;
     if (composingRef.current) {
       textarea.blur();
@@ -777,7 +762,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setActionPending(false);
     if (memoCleanupFailed) setStatus("sent-memo-cleanup-error");
     else if (draftCleared) setStatus("sent");
-    clearImagePreviews();
+    clearAttachmentPreviews();
     resizeTextarea(textarea);
     textarea.focus();
   };
@@ -788,7 +773,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       !textarea
       || !onAddToMemo
       || actionPendingRef.current
-      || imageUploadPendingRef.current
+      || attachmentUploadPendingRef.current
     ) return;
     if (composingRef.current) {
       textarea.blur();
@@ -841,7 +826,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       !enabled
       || !event.currentTarget.value
       || actionPendingRef.current
-      || imageUploadPendingRef.current
+      || attachmentUploadPendingRef.current
     ) return;
 
     event.preventDefault();
@@ -855,7 +840,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     textarea.value = "";
     memoSourceRef.current = null;
     recordDraft("");
-    clearImagePreviews();
+    clearAttachmentPreviews();
     resizeTextarea(textarea);
     textarea.focus();
   };
@@ -915,7 +900,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       ? "Nothing goes to tmux or memoranda until you choose an action."
       : "Compose now; memoranda remain available while terminal sending reconnects.";
   }
-  const draftActionPending = actionPending || imageUploadPending;
+  const draftActionPending = actionPending || attachmentUploadPending;
 
   return (
     <section
@@ -926,13 +911,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       {shortcutPanelHeader}
       <div
         id="muxdeck-staged-input"
-        className={imageDragActive ? "staged-composer image-drag-active" : "staged-composer"}
-        data-image-uploading={imageUploadPending ? "true" : "false"}
+        className={attachmentDragActive ? "staged-composer attachment-drag-active" : "staged-composer"}
+        data-attachment-uploading={attachmentUploadPending ? "true" : "false"}
         hidden={!composerVisible}
-        onDragEnter={handleImageDragEnter}
-        onDragOver={handleImageDragOver}
-        onDragLeave={handleImageDragLeave}
-        onDrop={handleImageDrop}
+        onDragEnter={handleAttachmentDragEnter}
+        onDragOver={handleAttachmentDragOver}
+        onDragLeave={handleAttachmentDragLeave}
+        onDrop={handleAttachmentDrop}
       >
         <div className="composer-heading">
           <label htmlFor="terminal-staged-input">Staged input</label>
@@ -952,27 +937,26 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             </button>
             <button
               type="button"
-              className="composer-image-trigger"
-              aria-label="Attach images to staged input"
-              title="Upload PNG, JPEG, GIF, or WebP images to this host and stage their paths"
-              disabled={!onUploadImage || imageUploadPending}
+              className="composer-attachment-trigger"
+              aria-label="Attach files to staged input"
+              title="Upload files to this host and stage their private server paths"
+              disabled={!onUploadAttachment || attachmentUploadPending}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => imageInputRef.current?.click()}
+              onClick={() => attachmentInputRef.current?.click()}
             >
-              <ImageIcon />
-              <span>{imageUploadPending ? "Uploading..." : "Attach image"}</span>
+              <AttachmentIcon />
+              <span>{attachmentUploadPending ? "Uploading..." : "Attach files"}</span>
             </button>
             <input
-              ref={imageInputRef}
+              ref={attachmentInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp"
               multiple
               hidden
               tabIndex={-1}
               onChange={(event) => {
                 const files = Array.from(event.currentTarget.files || []);
                 event.currentTarget.value = "";
-                if (files.length > 0) void uploadImageFiles(files);
+                if (files.length > 0) void uploadAttachmentFiles(files);
               }}
             />
           </div>
@@ -1024,10 +1008,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           </div>
           <span>{draftLength.toLocaleString()} / {MAX_DRAFT_LENGTH.toLocaleString()}</span>
         </div>
-        {imageDragActive && (
-          <div className="composer-image-drop" role="status">
-            <ImageIcon />
-            <strong>Drop to stage image paths</strong>
+        {attachmentDragActive && (
+          <div className="composer-attachment-drop" role="status">
+            <AttachmentIcon />
+            <strong>Drop to stage file paths</strong>
             <span>Files stay on the Muxdeck host for your terminal agent.</span>
           </div>
         )}
@@ -1045,7 +1029,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             spellCheck={false}
             placeholder="Dictate, type, or insert a snippet or memorandum..."
             onKeyDown={handleDraftKeyDown}
-            onPaste={handleImagePaste}
+            onPaste={handleAttachmentPaste}
             onCompositionStart={() => { composingRef.current = true; }}
             onCompositionEnd={(event) => {
               composingRef.current = false;
@@ -1142,39 +1126,39 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             </button>
           </div>
         </div>
-        {stagedImages.length > 0 && (
+        {stagedAttachments.length > 0 && (
           <div
-            className="composer-image-tray"
+            className="composer-attachment-tray"
             role="region"
-            aria-label="Uploaded images"
+            aria-label="Uploaded files"
           >
-            {stagedImages.map((image) => (
-              <article className="composer-image-card" key={image.path}>
-                {image.previewUrl ? (
-                  <img src={image.previewUrl} alt="" />
+            {stagedAttachments.map((attachment) => (
+              <article className="composer-attachment-card" key={attachment.path}>
+                {attachment.previewUrl ? (
+                  <img src={attachment.previewUrl} alt="" />
                 ) : (
-                  <span className="composer-image-fallback" aria-hidden="true">
-                    <ImageIcon />
+                  <span className="composer-attachment-fallback" aria-hidden="true">
+                    <AttachmentIcon />
                   </span>
                 )}
                 <div>
-                  <strong>{image.name}</strong>
+                  <strong>{attachment.name}</strong>
                   <button
                     type="button"
-                    title={image.path}
-                    aria-label={`Copy server path for ${image.name}`}
-                    onClick={() => void copyImagePath(image)}
+                    title={attachment.path}
+                    aria-label={`Copy server path for ${attachment.name}`}
+                    onClick={() => void copyAttachmentPath(attachment)}
                   >
-                    <code>{image.path}</code>
+                    <code>{attachment.path}</code>
                     <span>Copy path</span>
                   </button>
                 </div>
                 <button
                   type="button"
-                  className="composer-image-dismiss"
-                  aria-label={`Dismiss preview for ${image.name}`}
-                  title="Dismiss this preview; the staged path and host file remain"
-                  onClick={() => dismissImagePreview(image.path)}
+                  className="composer-attachment-dismiss"
+                  aria-label={`Dismiss file card for ${attachment.name}`}
+                  title="Dismiss this card; the staged path and host file remain"
+                  onClick={() => dismissAttachmentPreview(attachment.path)}
                 >
                   <CloseIcon />
                 </button>
@@ -1182,16 +1166,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             ))}
           </div>
         )}
-        {imageUploadMessage && (
+        {attachmentUploadMessage && (
           <p
-            className={imageUploadError
-              ? "composer-image-status error"
-              : "composer-image-status"}
+            className={attachmentUploadError
+              ? "composer-attachment-status error"
+              : "composer-attachment-status"}
             role="status"
             aria-live="polite"
           >
-            {imageUploadPending && <span className="composer-image-spinner" aria-hidden="true" />}
-            {imageUploadMessage}
+            {attachmentUploadPending && <span className="composer-attachment-spinner" aria-hidden="true" />}
+            {attachmentUploadMessage}
           </p>
         )}
         <p className={`composer-status ${status}`} aria-live="polite">

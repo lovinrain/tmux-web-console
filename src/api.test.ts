@@ -28,7 +28,7 @@ import {
   subscribeToSessions,
   terminateSession,
   transferSessionToWorkspace,
-  uploadSessionImage,
+  uploadSessionAttachment,
   updateSessionIgnored,
   updateSessionStar,
   updateSessionWorkspacePin,
@@ -285,13 +285,13 @@ describe("session creation API", () => {
   });
 });
 
-describe("session image upload API", () => {
-  it("uploads the exact browser file against the stable session identity", async () => {
+describe("session attachment upload API", () => {
+  it("uploads any exact browser file against the stable session identity", async () => {
     const payload = {
-      name: "Screen shot.png",
-      path: "/var/lib/muxdeck/uploads/session/screen-shot.png",
-      terminalText: "/var/lib/muxdeck/uploads/session/screen-shot.png",
-      contentType: "image/png",
+      name: "build context.log",
+      path: "/var/lib/muxdeck/uploads/session/build-context.log",
+      terminalText: "/var/lib/muxdeck/uploads/session/build-context.log",
+      contentType: "text/plain",
       size: 12,
     };
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
@@ -299,43 +299,45 @@ describe("session image upload API", () => {
       headers: { "Content-Type": "application/json" },
     }));
     vi.stubGlobal("fetch", fetchMock);
-    const image = new File(["image-bytes"], "Screen shot.png", { type: "image/png" });
+    const attachment = new File(["log contents"], "build context.log", {
+      type: "text/plain",
+    });
     const controller = new AbortController();
 
-    await expect(uploadSessionImage(
+    await expect(uploadSessionAttachment(
       "work/name #1",
       "$7",
-      image,
+      attachment,
       controller.signal,
     )).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledWith(
-      `${BASE_PATH}/api/sessions/work%2Fname%20%231/images?filename=Screen+shot.png&sessionId=%247`,
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/attachments?filename=build+context.log&sessionId=%247`,
       expect.objectContaining({
         method: "POST",
-        body: image,
+        body: attachment,
         signal: controller.signal,
         headers: expect.objectContaining({
           Accept: "application/json",
-          "Content-Type": "image/png",
+          "Content-Type": "text/plain",
         }),
       }),
     );
   });
 
-  it("preserves an image validation error", async () => {
+  it("preserves an attachment validation error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      error: "image must be PNG, JPEG, GIF, or WebP",
+      error: "attachment file cannot be empty",
     }), { status: 400, headers: { "Content-Type": "application/json" } })));
 
-    const error = await uploadSessionImage(
+    const error = await uploadSessionAttachment(
       "work",
       "$1",
-      new File(["<svg />"], "drawing.svg", { type: "image/svg+xml" }),
+      new File([], "empty.txt", { type: "text/plain" }),
     ).catch((failure: unknown) => failure);
 
     expect(error).toBeInstanceOf(ApiRequestError);
     expect(error).toMatchObject({
-      message: "image must be PNG, JPEG, GIF, or WebP",
+      message: "attachment file cannot be empty",
       status: 400,
     });
   });

@@ -60,7 +60,7 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
-  indicators, reusable snippets, and desktop image attachments
+  indicators, reusable snippets, and desktop file attachments
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
@@ -112,11 +112,11 @@ For frontend development, run `npm run dev`. Vite serves
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not
   that a command or agent turn completed. Uncertain deliveries are never
   retried automatically.
-- Desktop staged input accepts PNG, JPEG, GIF, and WebP images from its picker,
-  clipboard, or drag-and-drop target. Muxdeck stores each file privately on the
-  host and inserts its absolute path at the draft cursor for review; it never
-  submits an image automatically. The active CLI agent runs as the same Unix
-  user and can read that path directly.
+- Desktop staged input accepts any non-empty file from its picker, clipboard, or
+  drag-and-drop target (12 MiB per file, six at once). Composer attachments
+  stage shell-safe paths for review; dropping files over the live terminal
+  pastes those paths at its cursor without pressing Enter. The active CLI agent
+  runs as the same Unix user and can read the private host files directly.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck
@@ -167,7 +167,7 @@ MUXDECK_TRUSTED_ORIGINS=https://console.example.test
 
 Origin validation prevents cross-site requests and DNS rebinding; it is not
 authentication. Titles, session names, memos, snippets, workspace state, and
-uploaded images can contain sensitive information and should remain outside the
+uploaded files can contain sensitive information and should remain outside the
 source tree.
 
 ## Configuration

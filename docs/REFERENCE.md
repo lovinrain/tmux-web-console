@@ -198,22 +198,33 @@ automatically. The same picker is available on every dashboard card/list row
 and inside memorandum editors. From a dashboard row, choosing a snippet saves
 it as that session's local draft and opens the console for review.
 
-`Attach image` is the adjacent desktop-only attachment flow. The file picker,
-an image pasted into the staged textarea, and images dropped over the composer
-all use the same behavior. Muxdeck verifies the file signature as PNG, JPEG,
-GIF, or WebP, limits each file to 12 MiB, and stores it with private permissions
-under `MUXDECK_UPLOADS_DIR`. A selection can contain up to six images. Their
-shell-safe absolute host paths are inserted at the textarea's current cursor;
-nothing is sent to tmux until the user reviews the draft and chooses a send
-action. Compact preview cards show the original name and full host path. Closing
-a card dismisses only its preview, while `Copy path` copies the exact staged
-token. The host file remains available to the CLI agent and is not deleted when
-the draft is cleared or sent.
+`Attach files` is the adjacent desktop-only attachment flow. The file picker, a
+file pasted into the staged textarea, and files dropped over the composer all
+use the same behavior. Muxdeck accepts any non-empty file, limits each file to
+12 MiB, and stores it with private permissions under `MUXDECK_UPLOADS_DIR`. A
+selection can contain up to six files. Their shell-safe absolute host paths are
+inserted at the textarea's current cursor; nothing is sent to tmux until the
+user reviews the draft and chooses a send action. Compact cards show the
+original name and full host path; browser-recognized images get a thumbnail and
+other file types get an attachment icon. Closing a card dismisses only the card,
+while `Copy path` copies the exact staged token. The host file remains available
+to the CLI agent and is not deleted when the draft is cleared or sent.
+
+The live terminal is a second desktop-only drop target. Dropping files over it
+performs the same private upload, then sends the returned shell-safe paths
+through the acknowledged terminal-input channel. Muxdeck adds
+a trailing space for the next word but deliberately sends no Enter key, so the
+path remains at the active shell or agent cursor for review. The terminal drop
+overlay reports upload progress and keeps a copyable path if delivery loses its
+connection. Switching sessions aborts an in-flight drop rather than inserting
+an old session's path into the newly selected terminal. A browser cannot put
+file bytes directly into a generic PTY; the host-readable path is the portable
+handoff supported across shells and coding-agent TUIs.
 
 The upload directory has a 512 MiB application cap. Muxdeck refuses additional
 uploads with a visible storage error instead of deleting referenced files
 automatically. An operator can archive or remove old files directly from the
-configured directory. Image attachments are deliberately hidden in compact
+configured directory. File attachments are deliberately hidden in compact
 mobile layouts.
 
 Use the top-level `Snippets` section to configure the shared tree. The virtual
@@ -693,13 +704,15 @@ instead of being replaced; repair the configured file and restart Muxdeck.
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
 
-`MUXDECK_UPLOADS_DIR` stores images attached from desktop staged input. The
-directory and per-session subdirectories use mode `0700`; image files use mode
+`MUXDECK_UPLOADS_DIR` stores files attached from the desktop console. The legacy
+variable and `uploads` directory names remain for compatibility. The directory
+and per-session subdirectories use mode `0700`; attachment files use mode
 `0600`. Names are generated from a timestamp, random token, safe filename slug,
 and a hash of the native tmux session name. The API returns only an absolute path
 inside this managed directory and never accepts a browser-selected destination.
-Uploaded images are binary runtime state, may contain sensitive information,
-and require their own backup or retention policy.
+Uploaded files are runtime state, may contain sensitive information, and remain
+until an operator removes them; they require their own backup or retention
+policy.
 
 `MUXDECK_WORKSPACES_FILE` stores the global saved-workspace list and ordered
 global session pins. Tabs are keyed by native tmux session name. Each workspace

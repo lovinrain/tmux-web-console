@@ -99,23 +99,23 @@ export async function copySession(
   }, `/api/sessions/${encodeURIComponent(sourceSession)}/copy`);
 }
 
-export interface UploadedSessionImage {
+export interface UploadedSessionAttachment {
   name: string;
   path: string;
   terminalText: string;
-  contentType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  contentType: string;
   size: number;
 }
 
-export async function uploadSessionImage(
+export async function uploadSessionAttachment(
   session: string,
   sessionId: string,
   file: File,
   signal?: AbortSignal,
-): Promise<UploadedSessionImage> {
+): Promise<UploadedSessionAttachment> {
   const query = new URLSearchParams({ filename: file.name, sessionId });
-  return jsonRequest<UploadedSessionImage>(
-    `/api/sessions/${encodeURIComponent(session)}/images?${query.toString()}`,
+  return jsonRequest<UploadedSessionAttachment>(
+    `/api/sessions/${encodeURIComponent(session)}/attachments?${query.toString()}`,
     {
       method: "POST",
       headers: { "Content-Type": file.type || "application/octet-stream" },

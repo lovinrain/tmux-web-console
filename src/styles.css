@@ -5505,7 +5505,7 @@ span.workspace-tab-group-toggle {
     #111511;
 }
 
-.staged-composer.image-drag-active {
+.staged-composer.attachment-drag-active {
   background:
     linear-gradient(90deg, rgba(255, 190, 92, 0.08), rgba(104, 223, 208, 0.04)),
     #111511;
@@ -5543,7 +5543,7 @@ span.workspace-tab-group-toggle {
 }
 
 .composer-snippet-trigger,
-.composer-image-trigger {
+.composer-attachment-trigger {
   display: inline-flex;
   min-height: 26px;
   align-items: center;
@@ -5560,7 +5560,7 @@ span.workspace-tab-group-toggle {
   letter-spacing: 0.01em;
 }
 
-.composer-image-trigger {
+.composer-attachment-trigger {
   color: #ffd18a;
   background: rgba(255, 174, 66, 0.07);
   border-color: rgba(255, 183, 77, 0.24);
@@ -5568,33 +5568,33 @@ span.workspace-tab-group-toggle {
 
 .composer-snippet-trigger:hover,
 .composer-snippet-trigger:focus-visible,
-.composer-image-trigger:hover,
-.composer-image-trigger:focus-visible {
+.composer-attachment-trigger:hover,
+.composer-attachment-trigger:focus-visible {
   color: #e1fff9;
   background: rgba(104, 223, 208, 0.11);
   border-color: rgba(104, 223, 208, 0.48);
 }
 
-.composer-image-trigger:hover,
-.composer-image-trigger:focus-visible {
+.composer-attachment-trigger:hover,
+.composer-attachment-trigger:focus-visible {
   color: #fff0ce;
   background: rgba(255, 174, 66, 0.13);
   border-color: rgba(255, 193, 94, 0.56);
 }
 
 .composer-snippet-trigger:disabled,
-.composer-image-trigger:disabled {
+.composer-attachment-trigger:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
 .composer-snippet-trigger svg,
-.composer-image-trigger svg {
+.composer-attachment-trigger svg {
   width: 13px;
   height: 13px;
 }
 
-.composer-image-drop {
+.composer-attachment-drop {
   position: absolute;
   z-index: 4;
   inset: 38px max(10px, env(safe-area-inset-right, 0px)) 7px max(10px, env(safe-area-inset-left, 0px));
@@ -5614,16 +5614,16 @@ span.workspace-tab-group-toggle {
   font-family: "JetBrains Mono Variable", monospace;
 }
 
-.composer-image-drop svg {
+.composer-attachment-drop svg {
   width: 22px;
   height: 22px;
 }
 
-.composer-image-drop strong {
+.composer-attachment-drop strong {
   font-size: 11px;
 }
 
-.composer-image-drop span {
+.composer-attachment-drop span {
   color: #8f998b;
   font-size: 9px;
 }
@@ -5667,7 +5667,7 @@ span.workspace-tab-group-toggle {
   box-shadow: 0 0 0 2px rgba(104, 223, 208, 0.08);
 }
 
-.composer-image-tray {
+.composer-attachment-tray {
   display: flex;
   gap: 6px;
   margin-top: 6px;
@@ -5675,7 +5675,7 @@ span.workspace-tab-group-toggle {
   scrollbar-width: thin;
 }
 
-.composer-image-card {
+.composer-attachment-card {
   display: grid;
   min-width: 250px;
   max-width: 360px;
@@ -5689,35 +5689,35 @@ span.workspace-tab-group-toggle {
   border-radius: 4px;
 }
 
-.composer-image-card > img,
-.composer-image-fallback {
+.composer-attachment-card > img,
+.composer-attachment-fallback {
   width: 38px;
   height: 34px;
   border-radius: 3px;
 }
 
-.composer-image-card > img {
+.composer-attachment-card > img {
   object-fit: cover;
   background: #050705;
 }
 
-.composer-image-fallback {
+.composer-attachment-fallback {
   display: grid;
   place-items: center;
   color: #e4b86e;
   background: rgba(255, 190, 92, 0.08);
 }
 
-.composer-image-fallback svg {
+.composer-attachment-fallback svg {
   width: 18px;
   height: 18px;
 }
 
-.composer-image-card > div {
+.composer-attachment-card > div {
   min-width: 0;
 }
 
-.composer-image-card strong {
+.composer-attachment-card strong {
   display: block;
   overflow: hidden;
   font-size: 9px;
@@ -5725,7 +5725,7 @@ span.workspace-tab-group-toggle {
   white-space: nowrap;
 }
 
-.composer-image-card > div > button {
+.composer-attachment-card > div > button {
   display: grid;
   width: 100%;
   min-width: 0;
@@ -5740,21 +5740,21 @@ span.workspace-tab-group-toggle {
   text-align: left;
 }
 
-.composer-image-card code {
+.composer-attachment-card code {
   overflow: hidden;
   font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.composer-image-card > div > button span {
+.composer-attachment-card > div > button span {
   color: #d7a851;
   font-family: "JetBrains Mono Variable", monospace;
   font-size: 8px;
   font-weight: 700;
 }
 
-.composer-image-dismiss {
+.composer-attachment-dismiss {
   display: grid;
   width: 24px;
   height: 24px;
@@ -5767,18 +5767,18 @@ span.workspace-tab-group-toggle {
   cursor: pointer;
 }
 
-.composer-image-dismiss:hover,
-.composer-image-dismiss:focus-visible {
+.composer-attachment-dismiss:hover,
+.composer-attachment-dismiss:focus-visible {
   color: #f2d6a7;
   background: rgba(255, 190, 92, 0.09);
 }
 
-.composer-image-dismiss svg {
+.composer-attachment-dismiss svg {
   width: 14px;
   height: 14px;
 }
 
-.composer-image-status {
+.composer-attachment-status {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -5788,11 +5788,11 @@ span.workspace-tab-group-toggle {
   font-size: 9px;
 }
 
-.composer-image-status.error {
+.composer-attachment-status.error {
   color: #ffb4a0;
 }
 
-.composer-image-spinner {
+.composer-attachment-spinner {
   width: 9px;
   height: 9px;
   flex: 0 0 auto;
@@ -7444,6 +7444,172 @@ html.scoped-note-resizing * {
   background:
     linear-gradient(90deg, rgba(187, 244, 81, 0.025), transparent 20%, transparent 80%, rgba(255, 182, 72, 0.02)),
     #0b0e0c;
+}
+
+.terminal-stage[data-attachment-drag-active="true"],
+.terminal-stage[data-attachment-uploading="true"] {
+  box-shadow: inset 0 0 0 2px rgba(255, 190, 92, 0.5);
+}
+
+.terminal-attachment-drop-overlay {
+  position: absolute;
+  z-index: 6;
+  inset: 14px;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  gap: 5px 12px;
+  color: #ffe1aa;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(255, 190, 92, 0.13), transparent 42%),
+    rgba(9, 13, 10, 0.93);
+  border: 1px dashed rgba(255, 193, 94, 0.78);
+  border-radius: 7px;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(7px);
+  pointer-events: none;
+  font-family: "JetBrains Mono Variable", monospace;
+}
+
+.terminal-attachment-drop-overlay svg {
+  width: 31px;
+  height: 31px;
+  grid-row: 1 / span 2;
+  color: var(--amber);
+}
+
+.terminal-attachment-drop-overlay strong {
+  align-self: end;
+  font-size: 13px;
+  letter-spacing: 0.015em;
+}
+
+.terminal-attachment-drop-overlay span {
+  max-width: 580px;
+  align-self: start;
+  color: #9ca696;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.terminal-attachment-feedback {
+  position: absolute;
+  z-index: 6;
+  bottom: 16px;
+  left: 16px;
+  display: grid;
+  width: min(680px, calc(100% - 110px));
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  color: #dce5d9;
+  background: rgba(14, 20, 15, 0.95);
+  border: 1px solid rgba(104, 223, 208, 0.42);
+  border-left: 3px solid var(--cyan);
+  border-radius: 5px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  font-family: "JetBrains Mono Variable", monospace;
+  animation: fade-in 130ms ease-out both;
+}
+
+.terminal-attachment-feedback.error {
+  color: #ffe0dc;
+  background: rgba(37, 18, 17, 0.96);
+  border-color: rgba(255, 115, 104, 0.45);
+  border-left-color: var(--red);
+}
+
+.terminal-attachment-feedback > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--cyan);
+}
+
+.terminal-attachment-feedback.error > svg {
+  color: var(--red);
+}
+
+.terminal-attachment-feedback > div:not(.terminal-attachment-feedback-actions) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.terminal-attachment-feedback strong {
+  font-size: 10px;
+}
+
+.terminal-attachment-feedback span,
+.terminal-attachment-feedback code {
+  overflow: hidden;
+  color: #929d8f;
+  font-size: 8px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-attachment-feedback.error span,
+.terminal-attachment-feedback.error code {
+  color: #c9a6a1;
+}
+
+.terminal-attachment-feedback code {
+  user-select: text;
+}
+
+.terminal-attachment-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.terminal-attachment-feedback-actions button {
+  min-height: 28px;
+  padding: 0 8px;
+  color: #b9d8d2;
+  background: rgba(104, 223, 208, 0.08);
+  border: 1px solid rgba(104, 223, 208, 0.3);
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 8px;
+}
+
+.terminal-attachment-feedback.error .terminal-attachment-feedback-actions button {
+  color: #ffd0cb;
+  background: rgba(255, 115, 104, 0.08);
+  border-color: rgba(255, 115, 104, 0.34);
+}
+
+.terminal-attachment-feedback-actions button:hover,
+.terminal-attachment-feedback-actions button:focus-visible {
+  color: var(--ink);
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
+.terminal-attachment-feedback.error .terminal-attachment-feedback-actions button:hover,
+.terminal-attachment-feedback.error .terminal-attachment-feedback-actions button:focus-visible {
+  color: #1a0908;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.terminal-attachment-feedback-actions .terminal-attachment-feedback-dismiss {
+  display: grid;
+  width: 28px;
+  padding: 0;
+  place-items: center;
+}
+
+.terminal-attachment-feedback-dismiss svg {
+  width: 12px;
+  height: 12px;
 }
 
 .terminal-host {
@@ -10546,6 +10712,11 @@ html.history-resizing * {
 @media (max-width: 640px),
   (max-width: 1024px) and (pointer: coarse),
   (max-width: 1024px) and (max-height: 500px) {
+  .terminal-attachment-drop-overlay,
+  .terminal-attachment-feedback {
+    display: none !important;
+  }
+
   .workspace-tab-search-button,
   .workspace-tab-search-backdrop {
     display: none !important;
@@ -10577,10 +10748,10 @@ html.history-resizing * {
   }
 
   .composer-snippet-trigger,
-  .composer-image-trigger,
-  .composer-image-drop,
-  .composer-image-tray,
-  .composer-image-status {
+  .composer-attachment-trigger,
+  .composer-attachment-drop,
+  .composer-attachment-tray,
+  .composer-attachment-status {
     display: none;
   }
 

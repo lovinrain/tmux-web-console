@@ -85,7 +85,7 @@ must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
 - titles, predefined session tags, starred/ignored session names, memoranda, the
-  snippet library, saved workspaces, and uploaded images stored outside the
+  snippet library, saved workspaces, and uploaded attachments stored outside the
   source folder;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
@@ -122,13 +122,13 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | tmux | 3.x | 3.2+ enables Grok startup appearance hints; `xterm-256color` terminfo must exist. |
 | Base path | `/mux` | No trailing slash at runtime; build value is `/mux/`. |
 | Loopback port | `7683` | Must not conflict with an unrelated service. |
-| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains four JSON files and private uploaded images. |
+| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains four JSON files and private uploaded attachments. |
 | tmux socket | default or `-L NAME` | `MUXDECK_TMUX_SOCKET` is a name, never a filesystem path. |
 | `TMUX_TMPDIR` | usually unset | If the real server uses it, reproduce it in the service. |
 | Public host | optional | Must be protected by a VPN, trusted network, tunnel, or proxy access control. |
 | Browser origins | empty for loopback-only | Exact external `http://` or `https://` origins, comma-separated; required for a reverse proxy. |
 | Proxy | Caddy, existing proxy, or none | Proxy must preserve the base path and support WebSocket + streaming SSE. |
-| State migration | yes/no | Runtime JSON files and uploaded images are separate from the source archive. |
+| State migration | yes/no | Runtime JSON files and uploaded attachments are separate from the source archive. |
 
 A useful working set is:
 
@@ -337,7 +337,7 @@ MUXDECK_PLAYWRIGHT_BROWSER=/absolute/path/to/chrome npm run test:e2e
 
 The Playwright configuration uses the project `.venv` when present and creates
 a unique disposable tmux socket plus title, memorandum, snippet, workspace, and
-image-upload state paths per run. Do not run browser validation against valuable
+attachment-upload state paths per run. Do not run browser validation against valuable
 target sessions, and do not remove those state-path overrides.
 
 ## 6. Optional runtime-state migration
@@ -361,11 +361,11 @@ tab-group names/colors/membership, common, workspace-specific, and
 session-specific quick links, Common/Workspace/Session notes, global session
 pins and their per-workspace inherited-membership provenance, and activity times.
 Notes may contain sensitive commands or prose. The upload directory contains
-PNG, JPEG, GIF, and WebP files attached from desktop staged input; it is capped
-at 512 MiB by the application but has no automatic deletion policy. Images may
-be sensitive and remain after their staged path is sent or cleared. An existing
-unit may override any path; inspect its environment rather than assuming
-defaults.
+arbitrary files attached from the desktop console; it is capped at 512 MiB by
+the application but has no automatic deletion policy. Attachments may be
+sensitive and remain after their path is pasted, sent, or cleared from a draft.
+An existing unit may override any path; inspect its environment rather than
+assuming defaults.
 
 The workspace file uses schema version 7. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
@@ -401,14 +401,14 @@ Migration procedure:
 1. Stop only Muxdeck on the source if a consistent final copy is needed. This
    disconnects web clients but does not stop tmux sessions.
 2. Copy the four JSON files that exist separately from the source archive. An
-   older release may not have created `workspaces.json` yet. If image retention
+   older release may not have created `workspaces.json` yet. If attachment retention
    is in scope, copy the configured upload directory without following or
    introducing symlinks; an older release may not have one.
 3. Create the target state directory with owner/group equal to the run user and
    mode `0700`.
 4. Install migrated JSON files with mode `0600` and the same owner/group. Keep
-   the upload directory and its per-session subdirectories at `0700`, and image
-   files at `0600`.
+   the upload directory and its per-session subdirectories at `0700`, and
+   attachment files at `0600`.
 5. Point the rendered unit at their absolute target paths, including
    `MUXDECK_UPLOADS_DIR`.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
@@ -450,8 +450,9 @@ rename itself has already succeeded; keep all affected state files and resolve
 the warned migration before deleting old-name records.
 
 Not migrated: tmux sessions, browser local storage, page-local workspace
-Recents, history snapshots, and state-change observation times. Uploaded images
-are migrated only when the upload directory is explicitly copied in step 2.
+Recents, history snapshots, and state-change observation times. Uploaded
+attachments are migrated only when the upload directory is explicitly copied
+in step 2.
 
 ## 7. Render and install the systemd unit
 
@@ -661,12 +662,14 @@ From a client allowed by the chosen access controls, verify:
     session switches, and restores its browser-local state per saved workspace.
     A disposable short countdown should visibly alarm and mark the browser-tab
     title; audio depends on the browser allowing Web Audio after the Start click.
-14. Against a deliberately disposable session, `Attach image` accepts a small
-    PNG through the picker, shows a preview, and inserts an absolute path under
-    the configured upload directory without sending it automatically. Confirm
-    that the run user can read the file, the file is `0600`, and the control is
-    hidden at compact mobile width. Do not upload sensitive material merely for
-    a smoke test.
+14. Against a deliberately disposable session, `Attach files` accepts a small
+    text or binary file through the picker and inserts an absolute path under
+    the configured upload directory without sending it automatically. An image
+    should additionally show a preview. Confirm that dropping another arbitrary
+    file over the live desktop terminal uploads it and pastes its shell-safe path
+    without Enter, the run user can read both files, each file is `0600`, and all
+    attachment affordances are hidden at compact mobile width. Do not upload
+    sensitive material merely for a smoke test.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux
@@ -683,7 +686,7 @@ The deployment agent should report:
 - base path, port, trusted browser origins, and proxy/access-control choice;
 - whether state was migrated and its target directory (not memorandum, snippet,
   workspace-name, workspace-tab, quick-link, or note content);
-- source/unit/Caddy, state-file, and uploaded-image backups retained for rollback;
+- source/unit/Caddy, state-file, and uploaded-attachment backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
 - pre/post tmux identity comparison;
@@ -720,7 +723,7 @@ For a failed replacement:
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
    Preserve the upload directory separately. An older release ignores it; do not
-   delete images created after the pre-deployment backup merely to roll back
+   delete attachments created after the pre-deployment backup merely to roll back
    application code.
 5. Run `systemctl daemon-reload` and start only `muxdeck.service`.
 6. Recheck local health, external routing, persistent session organization, and
@@ -760,8 +763,8 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
 | Console WebSocket returns 403 | External browser origin is absent from `MUXDECK_TRUSTED_ORIGINS`, or proxy rewrote `Host`/`Origin` | Configure the exact scheme and authority, preserve both headers, then retry without typing into a valuable pane. |
 | Console WebSocket otherwise fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
-| Titles/tags/starred/ignored organization, memoranda, snippets, saved workspaces, or images do not persist | State path or ownership/mode is wrong | Inspect all configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal. |
-| Image attachment returns `400`, `507`, or `503` | Unsupported/malformed image, 12 MiB file limit, 512 MiB directory cap, or unwritable upload path | Try a known PNG in a disposable session, inspect `MUXDECK_UPLOADS_DIR` and the journal, then archive/remove old uploads or repair ownership without changing tmux. |
+| Titles/tags/starred/ignored organization, memoranda, snippets, saved workspaces, or attachments do not persist | State path or ownership/mode is wrong | Inspect all configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal. |
+| File attachment returns `400`, `413`, `507`, or `503` | Empty file, 12 MiB file limit, 512 MiB directory cap, or unwritable upload path | Try a small non-empty file in a disposable session, inspect `MUXDECK_UPLOADS_DIR` and the journal, then archive/remove old uploads or repair ownership without changing tmux. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Workspace API returns `503` | The configured workspace file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. Do not delete tmux sessions. |
 | Another terminal layout changes | Browser opened in `Fit active` | This is tmux shared-size behavior; use `Size protected` for observation. |

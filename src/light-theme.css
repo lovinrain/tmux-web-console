@@ -2662,6 +2662,69 @@ html[data-theme="light"] .terminal-stage {
     #fbfaf5;
 }
 
+html[data-theme="light"] .terminal-stage[data-attachment-drag-active="true"],
+html[data-theme="light"] .terminal-stage[data-attachment-uploading="true"] {
+  box-shadow: inset 0 0 0 2px rgba(180, 123, 34, 0.48);
+}
+
+html[data-theme="light"] .terminal-attachment-drop-overlay {
+  color: #6f4000;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(190, 112, 7, 0.12), transparent 42%),
+    rgba(255, 252, 245, 0.94);
+  border-color: #b47b22;
+  box-shadow: 0 18px 48px rgba(80, 58, 25, 0.18);
+}
+
+html[data-theme="light"] .terminal-attachment-drop-overlay span {
+  color: #675f52;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback {
+  color: #30382e;
+  background: rgba(255, 253, 248, 0.96);
+  border-color: #8bb6ad;
+  border-left-color: #087a70;
+  box-shadow: 0 14px 38px rgba(65, 55, 38, 0.2);
+}
+
+html[data-theme="light"] .terminal-attachment-feedback.error {
+  color: #6e2620;
+  background: rgba(255, 248, 244, 0.97);
+  border-color: #cf8e87;
+  border-left-color: #b4493f;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback > svg {
+  color: #087a70;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback.error > svg {
+  color: #b4493f;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback span,
+html[data-theme="light"] .terminal-attachment-feedback code {
+  color: #606a5e;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback.error span,
+html[data-theme="light"] .terminal-attachment-feedback.error code {
+  color: #89534d;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback-actions button {
+  color: #17685f;
+  background: #edf7f4;
+  border-color: #9ec8c0;
+}
+
+html[data-theme="light"] .terminal-attachment-feedback.error .terminal-attachment-feedback-actions button {
+  color: #8d2f27;
+  background: #fff0ed;
+  border-color: #d6a19b;
+}
+
 html[data-theme="light"] .terminal-host,
 html[data-theme="light"] .terminal-host .xterm {
   background: #fbfaf5;
@@ -2857,7 +2920,7 @@ html[data-theme="light"] .staged-composer {
     #f5f1e9;
 }
 
-html[data-theme="light"] .staged-composer.image-drag-active {
+html[data-theme="light"] .staged-composer.attachment-drag-active {
   background:
     linear-gradient(90deg, rgba(190, 112, 7, 0.11), rgba(8, 122, 112, 0.05)),
     #f5f1e9;
@@ -2885,27 +2948,27 @@ html[data-theme="light"] .composer-snippet-trigger:focus-visible {
   border-color: #829e59;
 }
 
-html[data-theme="light"] .composer-image-trigger {
+html[data-theme="light"] .composer-attachment-trigger {
   color: #8a5205;
   background: #fff3dc;
   border-color: #d5ae6f;
 }
 
-html[data-theme="light"] .composer-image-trigger:hover,
-html[data-theme="light"] .composer-image-trigger:focus-visible {
+html[data-theme="light"] .composer-attachment-trigger:hover,
+html[data-theme="light"] .composer-attachment-trigger:focus-visible {
   color: #6f4000;
   background: #ffe9bd;
   border-color: #b47b22;
 }
 
-html[data-theme="light"] .composer-image-drop {
+html[data-theme="light"] .composer-attachment-drop {
   color: #6f4000;
   background: rgba(255, 252, 245, 0.97);
   border-color: #b47b22;
   box-shadow: 0 12px 28px rgba(80, 58, 25, 0.16);
 }
 
-html[data-theme="light"] .composer-image-drop span {
+html[data-theme="light"] .composer-attachment-drop span {
   color: #675f52;
 }
 
@@ -2925,40 +2988,40 @@ html[data-theme="light"] .composer-body textarea:focus {
   box-shadow: 0 0 0 3px rgba(8, 122, 112, 0.11);
 }
 
-html[data-theme="light"] .composer-image-card {
+html[data-theme="light"] .composer-attachment-card {
   color: #30382e;
   background: #fffdf8;
   border-color: #d2b889;
 }
 
-html[data-theme="light"] .composer-image-fallback {
+html[data-theme="light"] .composer-attachment-fallback {
   color: #8a5205;
   background: #fff1d8;
 }
 
-html[data-theme="light"] .composer-image-card > div > button {
+html[data-theme="light"] .composer-attachment-card > div > button {
   color: #655e51;
 }
 
-html[data-theme="light"] .composer-image-card > div > button span {
+html[data-theme="light"] .composer-attachment-card > div > button span {
   color: #8a5205;
 }
 
-html[data-theme="light"] .composer-image-dismiss {
+html[data-theme="light"] .composer-attachment-dismiss {
   color: #6d7569;
 }
 
-html[data-theme="light"] .composer-image-dismiss:hover,
-html[data-theme="light"] .composer-image-dismiss:focus-visible {
+html[data-theme="light"] .composer-attachment-dismiss:hover,
+html[data-theme="light"] .composer-attachment-dismiss:focus-visible {
   color: #6f4000;
   background: #fff1d8;
 }
 
-html[data-theme="light"] .composer-image-status {
+html[data-theme="light"] .composer-attachment-status {
   color: #386f60;
 }
 
-html[data-theme="light"] .composer-image-status.error {
+html[data-theme="light"] .composer-attachment-status.error {
   color: #a13f2c;
 }
 

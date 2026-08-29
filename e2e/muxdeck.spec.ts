@@ -1105,55 +1105,83 @@ test("terminal HTTP links require Ctrl-click and do not send a mouse frame", asy
   }
 });
 
-test("desktop image attachment uploads, stages, and sends a host-readable path", async ({
+test("desktop file attachments stage or paste host-readable paths", async ({
   page,
 }) => {
   test.setTimeout(45_000);
-  const imageBytes = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "base64",
-  );
+  const attachmentBytes = Buffer.from("compile ok\nwarning: sample context\n", "utf8");
+  const terminalAttachmentBytes = Buffer.from('{"task":"inspect terminal drop"}\n', "utf8");
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
   await expect(page.locator(".connection-badge")).toContainText("Live", {
     timeout: 10_000,
   });
 
-  const attach = page.getByRole("button", { name: "Attach images to staged input" });
+  const attach = page.getByRole("button", { name: "Attach files to staged input" });
   const stagedInput = page.getByRole("textbox", { name: "Staged input" });
-  const command = "printf 'IMAGE_UPLOAD_E2E=%s\\n' ";
+  const command = "printf 'FILE_UPLOAD_E2E=%s\\n' ";
   await expect(attach).toBeVisible();
   await stagedInput.fill(command);
   await page.locator('.composer-heading-tools input[type="file"]').setInputFiles({
-    name: "Portal screenshot.png",
-    mimeType: "image/png",
-    buffer: imageBytes,
+    name: "build.log",
+    mimeType: "text/plain",
+    buffer: attachmentBytes,
   });
 
   const pathButton = page.getByRole("button", {
-    name: "Copy server path for Portal screenshot.png",
+    name: "Copy server path for build.log",
   });
   await expect(pathButton).toBeVisible();
   const uploadedPath = await pathButton.getAttribute("title");
   expect(uploadedPath).not.toBeNull();
   expect(uploadedPath).toContain(`${uploadsDirectory}/`);
-  expect(uploadedPath).toMatch(/Portal-screenshot\.png$/);
+  expect(uploadedPath).toMatch(/build\.log$/);
   await expect(stagedInput).toHaveValue(`${command}${uploadedPath}`);
   expect(existsSync(uploadedPath!)).toBe(true);
-  expect(readFileSync(uploadedPath!)).toEqual(imageBytes);
-  await expect(page.locator(".composer-image-status")).toContainText(
-    "Image path staged at the cursor",
+  expect(readFileSync(uploadedPath!)).toEqual(attachmentBytes);
+  await expect(page.locator(".composer-attachment-status")).toContainText(
+    "File path staged at the cursor",
   );
-  await page.screenshot({ path: "artifacts/desktop-image-attachment.png" });
+  await page.screenshot({ path: "artifacts/desktop-file-attachment.png" });
 
   await page.getByRole("button", { name: "Send + Enter" }).click();
   await expect(stagedInput).toHaveValue("");
   await expect.poll(() => workspaceTmuxContentSnapshot(sessionName)).toContain(
-    `IMAGE_UPLOAD_E2E=${uploadedPath}`,
+    `FILE_UPLOAD_E2E=${uploadedPath}`,
   );
+
+  const terminal = page.getByRole("tabpanel", { name: `${sessionName} live terminal` });
+  const terminalDropTransfer = await page.evaluateHandle(({ attachmentBase64 }) => {
+    const bytes = Uint8Array.from(atob(attachmentBase64), (character) => character.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], "context.json", { type: "application/json" }));
+    return transfer;
+  }, { attachmentBase64: terminalAttachmentBytes.toString("base64") });
+  await terminal.dispatchEvent("dragenter", { dataTransfer: terminalDropTransfer });
+  await expect(page.getByText("Drop files into terminal input")).toBeVisible();
+  await page.screenshot({ path: "artifacts/desktop-terminal-file-drop.png" });
+  await terminal.dispatchEvent("drop", { dataTransfer: terminalDropTransfer });
+
+  await expect(page.getByText("File path pasted", { exact: true })).toBeVisible();
+  await expect(page.getByText("Inserted at the live terminal cursor without Enter."))
+    .toBeVisible();
+  const terminalPathButton = page.getByRole("button", {
+    name: "Copy uploaded file path",
+  });
+  const terminalPath = await terminalPathButton.getAttribute("title");
+  expect(terminalPath).not.toBeNull();
+  expect(terminalPath).toContain(`${uploadsDirectory}/`);
+  expect(terminalPath).toMatch(/context\.json$/);
+  expect(existsSync(terminalPath!)).toBe(true);
+  expect(readFileSync(terminalPath!)).toEqual(terminalAttachmentBytes);
+  await expect.poll(() => workspaceTmuxContentSnapshot(sessionName)).toContain(terminalPath!);
+  expect(workspaceTmuxContentSnapshot(sessionName)).not.toContain("Permission denied");
+  await page.screenshot({ path: "artifacts/desktop-terminal-file-pasted.png" });
+  await page.locator(".terminal-host .xterm-helper-textarea").press("Control+C");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(attach).toBeHidden();
+  await expect(page.locator(".terminal-attachment-feedback")).toBeHidden();
 });
 
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({

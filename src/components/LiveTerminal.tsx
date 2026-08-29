@@ -5,12 +5,20 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
 } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl } from "../api";
+import {
+  desktopAttachmentsAvailable,
+  MAX_ATTACHMENT_UPLOAD_BATCH,
+  transferHasFiles,
+  type SessionAttachmentUploader,
+} from "../attachments";
+import { CloseIcon, AttachmentIcon } from "../icons";
 import {
   prepareTerminalSubmission,
   type TerminalSubmissionTerminator,
@@ -35,8 +43,17 @@ interface LiveTerminalProps {
   layoutSuspended?: boolean;
   layoutRefreshToken?: string;
   theme: TerminalThemeMode;
+  onUploadAttachment?: SessionAttachmentUploader;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
+}
+
+interface TerminalAttachmentFeedback {
+  tone: "success" | "error";
+  title: string;
+  detail: string;
+  terminalText?: string;
+  retry?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -96,6 +113,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     layoutSuspended = false,
     layoutRefreshToken = "default",
     theme,
+    onUploadAttachment,
     onStateChange,
     onPaneChange,
   }, ref) {
@@ -108,6 +126,11 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const layoutSuspendedRef = useRef(layoutSuspended);
     const scheduleFitAndResizeRef = useRef<(() => void) | null>(null);
     const redrawRef = useRef<(() => boolean) | null>(null);
+    const attachmentUploadControllersRef = useRef(new Set<AbortController>());
+    const attachmentUploadPendingRef = useRef(false);
+    const attachmentDragDepthRef = useRef(0);
+    const attachmentUploadGenerationRef = useRef(0);
+    const attachmentFeedbackTimerRef = useRef<number | undefined>(undefined);
     const submitRef = useRef<(
       data: string,
       terminator: TerminalSubmissionTerminator,
@@ -115,6 +138,231 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       async () => false,
     );
     const [awayFromLive, setAwayFromLive] = useState(false);
+    const [attachmentDragActive, setAttachmentDragActive] = useState(false);
+    const [attachmentUploadPending, setAttachmentUploadPending] = useState(false);
+    const [attachmentFeedback, setAttachmentFeedback] = useState<TerminalAttachmentFeedback | null>(null);
+
+    const clearAttachmentFeedback = () => {
+      window.clearTimeout(attachmentFeedbackTimerRef.current);
+      attachmentFeedbackTimerRef.current = undefined;
+      setAttachmentFeedback(null);
+    };
+
+    const showAttachmentFeedback = (
+      feedback: TerminalAttachmentFeedback,
+      dismissAfter = 0,
+    ) => {
+      window.clearTimeout(attachmentFeedbackTimerRef.current);
+      setAttachmentFeedback(feedback);
+      attachmentFeedbackTimerRef.current = dismissAfter > 0
+        ? window.setTimeout(() => {
+          attachmentFeedbackTimerRef.current = undefined;
+          setAttachmentFeedback(null);
+        }, dismissAfter)
+        : undefined;
+    };
+
+    const canHandleTerminalAttachmentDrop = () => (
+      Boolean(onUploadAttachment)
+      && desktopAttachmentsAvailable()
+    );
+
+    const uploadAttachmentsIntoTerminal = async (files: File[]) => {
+      const uploader = onUploadAttachment;
+      if (!uploader || attachmentUploadPendingRef.current || !desktopAttachmentsAvailable()) return;
+      if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        showAttachmentFeedback({
+          tone: "error",
+          title: "Terminal is not live",
+          detail: "Reconnect before dropping an attachment into terminal input.",
+        });
+        return;
+      }
+
+      if (files.length === 0) {
+        showAttachmentFeedback({
+          tone: "error",
+          title: "No file attached",
+          detail: "Drop at least one file into the terminal.",
+        });
+        return;
+      }
+
+      const selected = files.slice(0, MAX_ATTACHMENT_UPLOAD_BATCH);
+      const ignoredCount = files.length - selected.length;
+      const controller = new AbortController();
+      const generation = attachmentUploadGenerationRef.current;
+      attachmentUploadControllersRef.current.add(controller);
+      attachmentUploadPendingRef.current = true;
+      setAttachmentUploadPending(true);
+      clearAttachmentFeedback();
+
+      const completed = await Promise.all(selected.map(async (file) => {
+        try {
+          return { file, uploaded: await uploader(file, controller.signal) };
+        } catch (error) {
+          return { file, error };
+        }
+      }));
+      attachmentUploadControllersRef.current.delete(controller);
+      if (controller.signal.aborted || generation !== attachmentUploadGenerationRef.current) return;
+
+      const successful = completed.filter((result) => "uploaded" in result) as Array<{
+        file: File;
+        uploaded: Awaited<ReturnType<SessionAttachmentUploader>>;
+      }>;
+      const failed = completed.filter((result) => "error" in result) as Array<{
+        file: File;
+        error: unknown;
+      }>;
+      if (successful.length === 0) {
+        attachmentUploadPendingRef.current = false;
+        setAttachmentUploadPending(false);
+        const firstError = failed[0]?.error;
+        showAttachmentFeedback({
+          tone: "error",
+          title: "File upload failed",
+          detail: firstError instanceof Error
+            ? firstError.message
+            : `Unable to upload ${failed[0]?.file.name || "the file"}.`,
+        });
+        return;
+      }
+
+      const terminalText = successful
+        .map(({ uploaded }) => uploaded.terminalText || uploaded.path)
+        .join(" ");
+      const accepted = await submitRef.current(`${terminalText} `, "none");
+      if (controller.signal.aborted || generation !== attachmentUploadGenerationRef.current) return;
+      attachmentUploadPendingRef.current = false;
+      setAttachmentUploadPending(false);
+
+      if (!accepted) {
+        showAttachmentFeedback({
+          tone: "error",
+          title: successful.length === 1 ? "File uploaded" : "Files uploaded",
+          detail: "The terminal disconnected before the path was pasted. Reconnect, then paste again.",
+          terminalText,
+          retry: true,
+        });
+        return;
+      }
+
+      terminalRef.current?.focus();
+      const ignoredDetail = ignoredCount > 0
+        ? ` ${ignoredCount} other ${ignoredCount === 1 ? "file was" : "files were"} ignored.`
+        : "";
+      if (failed.length > 0) {
+        const firstError = failed[0].error;
+        showAttachmentFeedback({
+          tone: "error",
+          title: `${successful.length} ${successful.length === 1 ? "path" : "paths"} pasted; ${failed.length} failed`,
+          detail: `${firstError instanceof Error ? firstError.message : "A file could not be uploaded."} No Enter was sent.${ignoredDetail}`,
+          terminalText,
+        });
+        return;
+      }
+      showAttachmentFeedback({
+        tone: "success",
+        title: successful.length === 1 ? "File path pasted" : "File paths pasted",
+        detail: `Inserted at the live terminal cursor without Enter.${ignoredDetail}`,
+        terminalText,
+      }, 7_000);
+    };
+
+    const handleAttachmentDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!canHandleTerminalAttachmentDrop() || !transferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      attachmentDragDepthRef.current += 1;
+      setAttachmentDragActive(true);
+    };
+
+    const handleAttachmentDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!canHandleTerminalAttachmentDrop() || !transferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    };
+
+    const handleAttachmentDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+      if (attachmentDragDepthRef.current === 0) return;
+      event.preventDefault();
+      attachmentDragDepthRef.current = Math.max(0, attachmentDragDepthRef.current - 1);
+      if (attachmentDragDepthRef.current === 0) setAttachmentDragActive(false);
+    };
+
+    const handleAttachmentDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!canHandleTerminalAttachmentDrop() || !transferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      attachmentDragDepthRef.current = 0;
+      setAttachmentDragActive(false);
+      void uploadAttachmentsIntoTerminal(Array.from(event.dataTransfer.files));
+    };
+
+    const copyUploadedAttachmentPaths = async () => {
+      if (!attachmentFeedback?.terminalText) return;
+      try {
+        await navigator.clipboard.writeText(attachmentFeedback.terminalText);
+        showAttachmentFeedback({
+          ...attachmentFeedback,
+          tone: "success",
+          title: "File path copied",
+          detail: "Paste it wherever you need it; the server file remains private.",
+        }, 5_000);
+      } catch {
+        showAttachmentFeedback({
+          ...attachmentFeedback,
+          tone: "error",
+          title: "Clipboard unavailable",
+          detail: "Select the path shown here and copy it manually.",
+        });
+      }
+    };
+
+    const retryUploadedAttachmentPaths = async () => {
+      if (!attachmentFeedback?.terminalText || attachmentUploadPendingRef.current) return;
+      const generation = attachmentUploadGenerationRef.current;
+      const terminalText = attachmentFeedback.terminalText;
+      attachmentUploadPendingRef.current = true;
+      setAttachmentUploadPending(true);
+      const accepted = await submitRef.current(`${terminalText} `, "none");
+      if (generation !== attachmentUploadGenerationRef.current) return;
+      attachmentUploadPendingRef.current = false;
+      setAttachmentUploadPending(false);
+      if (accepted) {
+        terminalRef.current?.focus();
+        showAttachmentFeedback({
+          tone: "success",
+          title: "File path pasted",
+          detail: "Inserted at the live terminal cursor without Enter.",
+          terminalText,
+        }, 7_000);
+      } else {
+        showAttachmentFeedback({
+          ...attachmentFeedback,
+          tone: "error",
+          title: "Terminal still unavailable",
+          detail: "The file is safe on the server. Reconnect and try pasting again.",
+          retry: true,
+        });
+      }
+    };
+
+    useEffect(() => {
+      attachmentUploadGenerationRef.current += 1;
+      attachmentDragDepthRef.current = 0;
+      attachmentUploadPendingRef.current = false;
+      setAttachmentDragActive(false);
+      setAttachmentUploadPending(false);
+      setAttachmentFeedback(null);
+      return () => {
+        attachmentUploadGenerationRef.current += 1;
+        for (const controller of attachmentUploadControllersRef.current) controller.abort();
+        attachmentUploadControllersRef.current.clear();
+        window.clearTimeout(attachmentFeedbackTimerRef.current);
+        attachmentFeedbackTimerRef.current = undefined;
+      };
+    }, [session]);
 
     useLayoutEffect(() => {
       const wasEnabled = browserCopyModeRef.current;
@@ -577,8 +825,15 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         id="muxdeck-active-console"
         className="terminal-stage"
         data-copy-mode={browserCopyMode ? "true" : "false"}
+        data-attachment-drag-active={attachmentDragActive ? "true" : "false"}
+        data-attachment-uploading={attachmentUploadPending ? "true" : "false"}
         role="tabpanel"
         aria-label={`${session} live terminal`}
+        aria-busy={attachmentUploadPending}
+        onDragEnterCapture={handleAttachmentDragEnter}
+        onDragOverCapture={handleAttachmentDragOver}
+        onDragLeaveCapture={handleAttachmentDragLeave}
+        onDropCapture={handleAttachmentDrop}
       >
         <div
           ref={hostRef}
@@ -594,6 +849,56 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           }}>
             Jump to live
           </button>
+        )}
+        {(attachmentDragActive || attachmentUploadPending) && (
+          <div className="terminal-attachment-drop-overlay" role="status" aria-live="polite">
+            <AttachmentIcon />
+            <strong>{attachmentUploadPending ? "Uploading files..." : "Drop files into terminal input"}</strong>
+            <span>{attachmentUploadPending
+              ? "The private server path will be pasted when the upload finishes."
+              : "Uploads to this host, pastes the path at the cursor, and never presses Enter."}</span>
+          </div>
+        )}
+        {!attachmentDragActive && !attachmentUploadPending && attachmentFeedback && (
+          <aside
+            className={`terminal-attachment-feedback ${attachmentFeedback.tone}`}
+            role={attachmentFeedback.tone === "error" ? "alert" : "status"}
+            aria-live="polite"
+          >
+            <AttachmentIcon />
+            <div>
+              <strong>{attachmentFeedback.title}</strong>
+              <span>{attachmentFeedback.detail}</span>
+              {attachmentFeedback.terminalText && (
+                <code title={attachmentFeedback.terminalText}>{attachmentFeedback.terminalText}</code>
+              )}
+            </div>
+            <div className="terminal-attachment-feedback-actions">
+              {attachmentFeedback.retry && (
+                <button type="button" onClick={() => void retryUploadedAttachmentPaths()}>
+                  Paste again
+                </button>
+              )}
+              {attachmentFeedback.terminalText && (
+                <button
+                  type="button"
+                  title={attachmentFeedback.terminalText}
+                  aria-label="Copy uploaded file path"
+                  onClick={() => void copyUploadedAttachmentPaths()}
+                >
+                  Copy path
+                </button>
+              )}
+              <button
+                type="button"
+                className="terminal-attachment-feedback-dismiss"
+                aria-label="Dismiss file attachment status"
+                onClick={clearAttachmentFeedback}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          </aside>
         )}
       </div>
     );
