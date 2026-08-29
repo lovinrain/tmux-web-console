@@ -828,6 +828,33 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onMoveTab).toHaveBeenCalledWith("beta", 0);
   });
 
+  it("offers a side-rail-only stable status sort and announces its ordering", () => {
+    const onSortTabsByWorkingState = vi.fn();
+    const props = navigationProps({
+      openSessions: ["beta", "alpha", "zulu"],
+      onSortTabsByWorkingState,
+    });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+
+    expect(screen.queryByRole("button", {
+      name: "Stable sort tabs: non-working first, then working",
+    })).not.toBeInTheDocument();
+
+    view.rerender(<SessionWorkspaceNavigation {...props} orientation="vertical" />);
+    const sortButton = screen.getByRole("button", {
+      name: "Stable sort tabs: non-working first, then working",
+    });
+    expect(sortButton).toHaveTextContent("Non-working first");
+    expect(sortButton).toHaveTextContent("Stable");
+
+    fireEvent.click(sortButton);
+
+    expect(onSortTabsByWorkingState).toHaveBeenCalledOnce();
+    expect(screen.getByText(
+      "Tabs sorted with non-working sessions first and working sessions second. Relative order within each status was preserved.",
+    )).toBeInTheDocument();
+  });
+
   it("centers the active vertical tab by scrolling only the tab viewport", () => {
     const props = navigationProps({
       activeSession: "alpha",

@@ -635,6 +635,19 @@ From a client allowed by the chosen access controls, verify:
     one destination tab; moving to a destination that already contains the
     session removes only the source tab. A globally pinned session explains why
     Move is unavailable until it is unpinned.
+11. On desktop, the workspace quick switcher's Previous and Next buttons replace
+    the current page's saved workspace without opening the landing page, wrap in
+    stable alphabetical order, and its searchable chooser opens the selected
+    workspace in the same browser tab.
+12. In desktop Side tabs, `Non-working first` stably moves every non-Working tab
+    before Working tabs, preserves relative order inside each partition, keeps
+    tab groups intact, and writes the resulting order to the URL or saved
+    workspace without changing the active session.
+13. On desktop, the workspace timer opens as a draggable floating window, runs
+    both countdown and stopwatch modes, keeps a pinned window visible across
+    session switches, and restores its browser-local state per saved workspace.
+    A disposable short countdown should visibly alarm and mark the browser-tab
+    title; audio depends on the browser allowing Web Audio after the Start click.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux

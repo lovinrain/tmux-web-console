@@ -104,6 +104,11 @@ For frontend development, run `npm run dev`. Vite serves
   and Workspace windows stay visible while switching session tabs. The browser
   remembers the open, pinned, and position state separately for each saved
   workspace and restores that arrangement when the workspace is resumed.
+- The adjacent desktop timer card provides countdown and stopwatch modes in a
+  draggable floating window. Pinning keeps it visible while switching sessions;
+  saved workspaces restore its browser-local clock, layout, and pin state. An
+  expired countdown rings, stays visibly alarmed, and marks the browser-tab title
+  until dismissed.
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not
   that a command or agent turn completed. Uncertain deliveries are never
   retried automatically.

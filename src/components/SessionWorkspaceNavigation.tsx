@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import type { SavedWorkspace } from "../api";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
   ArrowDownIcon,
@@ -23,6 +24,7 @@ import {
   GridIcon,
   HistoryIcon,
   KeyboardIcon,
+  ListIcon,
   PlusIcon,
   SaveIcon,
   SearchIcon,
@@ -39,6 +41,7 @@ import {
 } from "../workspaceState";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
+import { WorkspaceQuickSwitcher } from "./WorkspaceQuickSwitcher";
 import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 
@@ -58,6 +61,7 @@ export interface SessionWorkspaceNavigationProps {
   onSelect: (sessionName: string) => void;
   onCloseTab: (sessionName: string) => void;
   onMoveTab?: (sessionName: string, targetIndex: number) => void;
+  onSortTabsByWorkingState?: () => void;
   onOpenTabInNewWindow?: (
     sessionName: string,
     mode: OpenTabInNewWindowMode,
@@ -74,7 +78,9 @@ export interface SessionWorkspaceNavigationProps {
   onNewSession?: () => void;
   onOpenTabSearch?: () => void;
   workspacePersistenceState?: WorkspacePersistenceState;
+  activeWorkspaceId?: string | null;
   workspaceName?: string | null;
+  onSwitchWorkspace?: (workspace: SavedWorkspace) => void;
   onSaveWorkspace?: (name: string) => Promise<void>;
   onSessionTerminated?: (
     sessionName: string,
@@ -1561,6 +1567,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onSelect,
     onCloseTab,
     onMoveTab,
+    onSortTabsByWorkingState,
     onOpenTabInNewWindow,
     onSaveTabGroup,
     onDeleteTabGroup,
@@ -1573,7 +1580,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onNewSession,
     onOpenTabSearch,
     workspacePersistenceState = "unsaved",
+    activeWorkspaceId = null,
     workspaceName,
+    onSwitchWorkspace,
     onSaveWorkspace,
     onSessionTerminated,
   } = props;
@@ -2236,6 +2245,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     );
   };
 
+  const sortTabsByWorkingState = () => {
+    if (!onSortTabsByWorkingState) return;
+    onSortTabsByWorkingState();
+    setReorderAnnouncement(
+      "Tabs sorted with non-working sessions first and working sessions second. Relative order within each status was preserved.",
+    );
+  };
+
   const openGroupDialog = (
     groupId: string | null,
     initialSession: string | null,
@@ -2528,6 +2545,20 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <span>New session</span>
             </button>
           )}
+          {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (
+            <button
+              type="button"
+              className="workspace-tab-status-sort"
+              onClick={sortTabsByWorkingState}
+              aria-label="Stable sort tabs: non-working first, then working"
+              aria-description="Preserves the existing relative order within each status. Tab groups stay together."
+              title="Stable sort: non-working first, then working"
+            >
+              <ListIcon />
+              <span>Non-working first</span>
+              <small>Stable</small>
+            </button>
+          )}
           <div className="workspace-tab-viewport">
             <div
               className="workspace-tab-list"
@@ -2745,6 +2776,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 <span className="workspace-identity-state">{persistenceCopy.label}</span>
               </span>
             </span>
+          )}
+          {!compactViewport && onSwitchWorkspace && (
+            <WorkspaceQuickSwitcher
+              activeWorkspaceId={activeWorkspaceId}
+              activeWorkspaceName={identityName}
+              disabled={workspacePersistenceState === "loading"}
+              onSwitch={onSwitchWorkspace}
+            />
           )}
           {onOpenTabSearch && openSessions.length > 0 && (
             <button

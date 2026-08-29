@@ -376,6 +376,15 @@ URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
 or `Sync issue` state reports whether later tab-order and active-session changes
 are synchronizing automatically.
 
+On desktop, the compact workspace quick switcher beside that identity changes
+the saved workspace in the current browser tab. Its left and right buttons move
+to the alphabetically adjacent workspace and wrap at either end, so activity
+updates cannot reshuffle the sequence during repeated switching. `Switch` opens
+a searchable chooser that matches both workspace names and member-session names;
+Up/Down, Home/End, Enter, and Escape keep the whole flow keyboard-friendly. The
+current workspace is marked explicitly, and a temporary workspace can jump to
+the first or last saved workspace without visiting the landing page first.
+
 Each saved workspace keeps its name, ordered open tabs, tab groups,
 workspace-scoped quick links, active session, global-pin provenance, and
 server-generated creation, update, and last-active times in
@@ -485,6 +494,15 @@ tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
 
+The side rail includes a `Non-working first` sort action. Each click performs a
+one-time stable partition of the real workspace order: every state other than
+`Working` stays first, `Working` sessions move after them, and tabs retain their
+relative positions inside those two partitions. Explicit tab groups remain
+atomic, sort as blocks, and receive the same stable ordering among their own
+members. The resulting order updates the URL and synchronizes to a saved
+workspace; later status changes do not silently reshuffle tabs until clicked
+again.
+
 The primary desktop `VIEW` toolbar also contains a link shelf split into three
 regions: `Common`, the current workspace, and the active native tmux session. It
 stays in that first row beside `Tabs`, `Input`, and `Keys`, including when the
@@ -509,6 +527,16 @@ and Session cards remain available. Selecting a card opens a focused editor;
 changes autosave after a short pause and are flushed before the editor closes.
 Each scope holds up to 8,000 characters. The cards and editor are desktop-only,
 and concurrent editors use last-write-wins replacement.
+
+A compact `Countdown` / `Stopwatch` card sits beside those note cards on desktop.
+It opens a non-modal floating timer that moves by dragging its title strip and can
+be pinned across session-tab switches. Countdown duration can be entered exactly
+or selected from 5, 15, 25, and 45 minute presets; completion rings for up to one
+minute, keeps a visible `TIME'S UP` state, and prefixes the browser-tab title until
+the alarm is dismissed. Stopwatch and countdown progress use wall-clock timestamps,
+so they remain accurate through background-tab throttling and reloads. Timer state,
+the pin/open choice, and window position are browser-local and isolated by saved
+workspace ID; they do not alter tmux or the server-side workspace record.
 
 `Actions` in the same desktop `VIEW` toolbar shows or hides the repeated controls
 on every quick tab. Turning it off removes the directional reorder, new-window,

@@ -16,7 +16,7 @@ COMMAND_WAIT_PATTERN = re.compile(
 )
 # Claude prints settled/active transcript headlines with these symbols. Looking
 # only at the latest headline avoids treating an older wait banner as current.
-CLAUDE_HEADLINE_SYMBOLS = "\u273b\u273d\u2736\u2733"
+CLAUDE_HEADLINE_SYMBOLS = "\u273b\u273d\u2736\u2733\u2722"
 CLAUDE_ACTIVITY_HEADLINE_PATTERN = re.compile(
     rf"^[\u25cf{CLAUDE_HEADLINE_SYMBOLS}](?:\s|$)"
 )
@@ -63,6 +63,14 @@ CLAUDE_WORKING_TITLE_FRAMES = frozenset({"\u25d0", "\u25d3", "\u25d1", "\u25d2"}
 # active, so its rendered footer must disambiguate the state.
 CLAUDE_AMBIGUOUS_TITLE_FRAME = "\u2733"
 CLAUDE_ACTIVE_TURN_PATTERN = re.compile(r"\besc to interrupt\b", re.IGNORECASE)
+CLAUDE_ACTIVE_STATUS_PATTERN = re.compile(
+    r"^\s*[^\w\s]\s+.+(?:\u2026|\.\.\.)\s+"
+    r"\([^\n)]*\btokens\b[^\n)]*\)\s*$",
+    re.IGNORECASE,
+)
+CLAUDE_PROMPT_MARKER = "\u276f"
+CLAUDE_STATUS_LOOKBACK = 5
+CLAUDE_FOOTER_LINES = 12
 # Cursor's interrupt hint sits in the footer during a live turn, but it is drawn
 # as a placeholder, so typing a follow-up mid-turn hides it again.
 CURSOR_RUNNING_PATTERN = re.compile(
@@ -114,7 +122,7 @@ def _activity_is_stale(pane: Pane, now: float | None) -> bool:
     return age > ACTIVITY_STALE_SECONDS
 
 
-def _claude_is_waiting_for_background_work(screen: str) -> bool:
+def _claude_background_work_state(screen: str) -> AgentState | None:
     # capture_visible already excludes scrollback. Scan the whole pane so a
     # dense task panel cannot push the current headline past an arbitrary tail.
     visible_lines = _rendered_lines(screen)
@@ -132,17 +140,39 @@ def _claude_is_waiting_for_background_work(screen: str) -> bool:
                 break
             parts.append(continuation.strip())
         headline = " ".join(parts)
-        return bool(
-            CLAUDE_BACKGROUND_WAIT_PATTERN.fullmatch(headline)
-            or CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline)
-        )
-    return False
+        if CLAUDE_BACKGROUND_WAIT_PATTERN.fullmatch(headline):
+            # Numbered agents and workflows are still executing even when the
+            # foreground Claude process is waiting for their result.
+            return AgentState("working", "Claude has active background work")
+        if CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline):
+            return AgentState("waiting_command", "Agent is waiting for background work")
+        return None
+    return None
 
 
 def _claude_turn_is_live(screen: str) -> bool:
     # capture_visible joins wrapped terminal rows, leaving Claude's status bar
     # as the final rendered line. Do not match the same words in the transcript.
-    return bool(CLAUDE_ACTIVE_TURN_PATTERN.search(_tail(screen, 1)))
+    if CLAUDE_ACTIVE_TURN_PATTERN.search(_tail(screen, 1)):
+        return True
+
+    # Typing a follow-up while Claude is still running replaces the interrupt
+    # hint. The animated status row remains immediately above the current input
+    # prompt and includes Claude's token counter, which keeps this check from
+    # mistaking old transcript prose for live activity.
+    footer = _rendered_lines(screen)[-CLAUDE_FOOTER_LINES:]
+    prompt = next(
+        (
+            index
+            for index in reversed(range(len(footer)))
+            if footer[index].lstrip().startswith(CLAUDE_PROMPT_MARKER)
+        ),
+        -1,
+    )
+    if prompt < 0:
+        return False
+    status_rows = footer[max(0, prompt - CLAUDE_STATUS_LOOKBACK) : prompt]
+    return any(CLAUDE_ACTIVE_STATUS_PATTERN.fullmatch(line) for line in status_rows)
 
 
 def _title_has_live_activity(command: str, title: str) -> bool:
@@ -245,13 +275,11 @@ def classify_agent_state(
 
     title = pane.title.strip()
     if _title_has_live_activity(command, title):
-        if (
-            command == "claude"
-            and visible_screen
-            and _claude_is_waiting_for_background_work(visible_screen)
-        ):
+        if command == "claude" and visible_screen:
             # Long background waits can stop updating tmux's activity timestamp.
-            return AgentState("waiting_command", "Agent is waiting for background work")
+            background_state = _claude_background_work_state(visible_screen)
+            if background_state:
+                return background_state
         if _activity_is_stale(pane, now):
             return AgentState("unknown", "Agent activity indicator is stale")
         if visible_screen:
@@ -265,8 +293,10 @@ def classify_agent_state(
         return AgentState("working", "Live agent activity indicator")
 
     if command == "claude" and title.startswith(CLAUDE_AMBIGUOUS_TITLE_FRAME):
-        if visible_screen and _claude_is_waiting_for_background_work(visible_screen):
-            return AgentState("waiting_command", "Agent is waiting for background work")
+        if visible_screen:
+            background_state = _claude_background_work_state(visible_screen)
+            if background_state:
+                return background_state
         if visible_screen and _claude_turn_is_live(visible_screen):
             if _activity_is_stale(pane, now):
                 return AgentState("unknown", "Agent activity indicator is stale")

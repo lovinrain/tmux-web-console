@@ -363,6 +363,51 @@ export function moveWorkspaceSession(
   };
 }
 
+export function stableSortWorkspaceSessionsByWorkingState(
+  workspace: SessionWorkspaceState,
+  workingSessionNames: ReadonlySet<string>,
+): SessionWorkspaceState {
+  const groupsBySession = new Map<string, WorkspaceTabGroup>();
+  for (const group of workspace.groups) {
+    for (const sessionName of group.tabs) groupsBySession.set(sessionName, group);
+  }
+
+  const blocks: Array<{
+    tabs: string[];
+    group: WorkspaceTabGroup | null;
+    hasWorkingSession: boolean;
+  }> = [];
+  for (const sessionName of workspace.openSessions) {
+    const group = groupsBySession.get(sessionName);
+    if (group && group.tabs[0] !== sessionName) continue;
+    const originalTabs = group?.tabs ?? [sessionName];
+    const tabs = [
+      ...originalTabs.filter((name) => !workingSessionNames.has(name)),
+      ...originalTabs.filter((name) => workingSessionNames.has(name)),
+    ];
+    blocks.push({
+      tabs,
+      group: group ? { ...group, tabs } : null,
+      hasWorkingSession: originalTabs.some((name) => workingSessionNames.has(name)),
+    });
+  }
+
+  // Explicit tab groups remain atomic; a group with any working member joins the
+  // working partition, while its own members receive the same stable partition.
+  const sortedBlocks = [
+    ...blocks.filter((block) => !block.hasWorkingSession),
+    ...blocks.filter((block) => block.hasWorkingSession),
+  ];
+  const openSessions = sortedBlocks.flatMap((block) => block.tabs);
+  const groups = sortedBlocks.flatMap((block) => block.group ? [block.group] : []);
+
+  if (
+    sameSessions(openSessions, workspace.openSessions)
+    && sameGroups(groups, workspace.groups)
+  ) return workspace;
+  return { ...workspace, openSessions, groups };
+}
+
 export function setWorkspaceTabGroup(
   workspace: SessionWorkspaceState,
   candidate: WorkspaceTabGroup,

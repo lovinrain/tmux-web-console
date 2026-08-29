@@ -1005,10 +1005,35 @@ CLAUDE_RUNNING_SCREEN = (
 )
 
 
+CLAUDE_RUNNING_WITH_TYPED_FOLLOW_UP_SCREEN = (
+    "\u25cf Running 1 shell command\u2026\n"
+    "\n"
+    "\u2722 Forging\u2026 (9m 39s \u00b7 \u2193 29.4k tokens)\n"
+    "  \u2714 Update installed \u00b7 Restart to update\n"
+    "\u276f keep the same behavior in both annotation views\n"
+    "  and collapse both sidebars\n"
+    "\u23f5\u23f5 bypass permissions on (shift+tab to cycle)"
+)
+
+
 def test_claude_ambiguous_title_uses_the_active_footer_signal():
     pane = agent_pane(command="claude", title="\u2733 Active task")
 
     state = classify_agent_state(pane, visible_screen=CLAUDE_RUNNING_SCREEN, now=1000)
+
+    assert state.name == "working"
+    assert state.reason == "Claude is running a turn"
+
+
+def test_claude_turn_survives_a_follow_up_typed_mid_turn():
+    pane = agent_pane(command="claude", title="\u2733 Active task")
+
+    assert "esc to interrupt" not in CLAUDE_RUNNING_WITH_TYPED_FOLLOW_UP_SCREEN
+    state = classify_agent_state(
+        pane,
+        visible_screen=CLAUDE_RUNNING_WITH_TYPED_FOLLOW_UP_SCREEN,
+        now=1000,
+    )
 
     assert state.name == "working"
     assert state.reason == "Claude is running a turn"
@@ -1028,7 +1053,7 @@ def test_claude_ambiguous_title_without_an_active_footer_is_waiting_for_input():
     assert state.name == "waiting_human"
 
 
-def test_claude_ambiguous_title_preserves_background_wait_precedence():
+def test_claude_ambiguous_title_reports_active_background_work():
     pane = agent_pane(
         command="claude", title="\u2733 Coordinating agents", activity=900
     )
@@ -1042,7 +1067,8 @@ def test_claude_ambiguous_title_preserves_background_wait_precedence():
 
     state = classify_agent_state(pane, visible_screen=screen, now=1000)
 
-    assert state.name == "waiting_command"
+    assert state.name == "working"
+    assert state.reason == "Claude has active background work"
 
 
 def test_claude_ambiguous_title_requires_fresh_activity_for_a_live_footer():
@@ -1065,6 +1091,23 @@ def test_claude_ambiguous_title_ignores_interrupt_text_outside_the_footer():
     assert state.name == "waiting_human"
 
 
+def test_claude_ambiguous_title_ignores_old_status_rows_above_the_prompt():
+    pane = agent_pane(command="claude", title="\u2733 Finished task")
+    screen = (
+        "\u2722 Forging\u2026 (2m 1s \u00b7 \u2193 8.2k tokens)\n"
+        "\u25cf Finished the requested update.\n"
+        "  Detail one\n"
+        "  Detail two\n"
+        "  Detail three\n"
+        "  Detail four\n"
+        "\u276f "
+    )
+
+    state = classify_agent_state(pane, visible_screen=screen, now=1000)
+
+    assert state.name == "waiting_human"
+
+
 @pytest.mark.parametrize(
     "headline",
     [
@@ -1075,7 +1118,7 @@ def test_claude_ambiguous_title_ignores_interrupt_text_outside_the_footer():
         "\u273b Waiting for 2 background agents and 1 dynamic workflow to finish",
     ],
 )
-def test_claude_background_work_banners_are_distinct_from_active_work(
+def test_claude_numbered_background_work_banners_are_active_work(
     headline: str,
 ):
     working = agent_pane(command="claude", title="\u25d0 Claude Code")
@@ -1088,13 +1131,13 @@ def test_claude_background_work_banners_are_distinct_from_active_work(
 
     state = classify_agent_state(working, visible_screen=screen, now=1000)
 
-    assert state.name == "waiting_command"
-    assert state.reason == "Agent is waiting for background work"
+    assert state.name == "working"
+    assert state.reason == "Claude has active background work"
     assert (
         classify_agent_state(
             replace(working, activity=900), visible_screen=screen, now=1000
         ).name
-        == "waiting_command"
+        == "working"
     )
 
 
@@ -1111,7 +1154,7 @@ def test_claude_background_work_banner_can_wrap_across_terminal_lines():
             visible_screen=screen,
             now=1000,
         ).name
-        == "waiting_command"
+        == "working"
     )
 
 
@@ -1124,7 +1167,7 @@ def test_claude_background_work_banner_survives_a_dense_visible_task_panel():
     for pane in (working, replace(working, activity=900)):
         assert (
             classify_agent_state(pane, visible_screen=screen, now=1000).name
-            == "waiting_command"
+            == "working"
         )
 
 
@@ -1147,7 +1190,7 @@ def test_claude_uses_only_the_latest_activity_headline_for_background_work():
     )
     assert (
         classify_agent_state(working, visible_screen=waiting_again, now=1000).name
-        == "waiting_command"
+        == "working"
     )
 
 
@@ -1174,7 +1217,7 @@ def test_claude_ignores_indented_headline_glyphs_in_nested_output():
             ),
             now=1000,
         ).name
-        == "waiting_command"
+        == "working"
     )
 
 
@@ -1555,7 +1598,7 @@ async def test_detect_sessions_captures_the_screen_for_cursor_panes():
     assert tmux.captured == [cursor.id]
 
 
-async def test_detect_sessions_captures_claude_background_waits_after_activity_stales():
+async def test_detect_sessions_keeps_active_claude_background_work_after_activity_stales():
     claude = agent_pane(
         id="%44",
         command="claude",
@@ -1586,7 +1629,7 @@ async def test_detect_sessions_captures_claude_background_waits_after_activity_s
         cast(TmuxClient, tmux), sessions
     )
 
-    assert states["claude-working"].name == "waiting_command"
+    assert states["claude-working"].name == "working"
     assert tmux.captured == [claude.id]
 
 

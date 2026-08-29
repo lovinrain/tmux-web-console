@@ -29,6 +29,7 @@ import { SessionDashboard } from "./components/SessionDashboard";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
 import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
+import { WorkspaceTimer } from "./components/WorkspaceTimer";
 import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import {
   SessionWorkspaceNavigation,
@@ -60,6 +61,7 @@ import {
   setWorkspaceTabGroup,
   setWorkspaceTabGroupCollapsed,
   sessionAfterClose,
+  stableSortWorkspaceSessionsByWorkingState,
   visitWorkspaceSession,
   workspaceGroupsFromSearch,
   workspaceTabsFromSearch,
@@ -1935,6 +1937,18 @@ function AppRoutes() {
     commitWorkspaceStructure(nextWorkspace);
   }, [commitWorkspaceStructure]);
 
+  const sortSessionTabsByWorkingState = useCallback(() => {
+    const workingSessionNames = new Set(
+      knownSessionsRef.current
+        .filter((session) => session.agentState === "working")
+        .map((session) => session.name),
+    );
+    commitWorkspaceStructure(stableSortWorkspaceSessionsByWorkingState(
+      workspaceRef.current,
+      workingSessionNames,
+    ));
+  }, [commitWorkspaceStructure]);
+
   const saveTabGroup = useCallback((group: WorkspaceTabGroup) => {
     commitWorkspaceStructure(setWorkspaceTabGroup(workspaceRef.current, group));
   }, [commitWorkspaceStructure]);
@@ -2803,13 +2817,22 @@ function AppRoutes() {
           : null}
         workspaceName={workspaceName}
         headerNotes={(
-          <ScopedStickyNotes
-            sessionName={sessionName}
-            workspaceId={hydratedWorkspaceId === locationWorkspaceId
-              ? locationWorkspaceId
-              : null}
-            workspaceName={workspaceName}
-          />
+          <div className="workspace-header-widgets">
+            <ScopedStickyNotes
+              sessionName={sessionName}
+              workspaceId={hydratedWorkspaceId === locationWorkspaceId
+                ? locationWorkspaceId
+                : null}
+              workspaceName={workspaceName}
+            />
+            <WorkspaceTimer
+              sessionName={sessionName}
+              workspaceId={hydratedWorkspaceId === locationWorkspaceId
+                ? locationWorkspaceId
+                : null}
+              workspaceName={workspaceName}
+            />
+          </div>
         )}
         workspaceLinks={(
           <WorkspaceQuickLinks
@@ -2863,6 +2886,7 @@ function AppRoutes() {
             onDesktopTabRailWidthChange={setDesktopTabRailWidth}
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
+            onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onSaveTabGroup={saveTabGroup}
             onDeleteTabGroup={deleteTabGroup}
             onToggleTabGroup={toggleTabGroup}
@@ -2876,7 +2900,9 @@ function AppRoutes() {
             onNewSession={openNewSession}
             onOpenTabSearch={openTabSearch}
             workspacePersistenceState={workspacePersistenceState}
+            activeWorkspaceId={locationWorkspaceId}
             workspaceName={workspaceName}
+            onSwitchWorkspace={openSavedWorkspace}
             onSaveWorkspace={saveCurrentWorkspace}
             onSessionTerminated={terminateOpenSession}
           />
@@ -2908,6 +2934,7 @@ function AppRoutes() {
             onDesktopTabRailWidthChange={setDesktopTabRailWidth}
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
+            onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onSaveTabGroup={saveTabGroup}
             onDeleteTabGroup={deleteTabGroup}
             onToggleTabGroup={toggleTabGroup}
@@ -2922,7 +2949,9 @@ function AppRoutes() {
             onNewSession={openNewSession}
             onOpenTabSearch={openTabSearch}
             workspacePersistenceState={workspacePersistenceState}
+            activeWorkspaceId={locationWorkspaceId}
             workspaceName={workspaceName}
+            onSwitchWorkspace={openSavedWorkspace}
             onSaveWorkspace={saveCurrentWorkspace}
             onSessionTerminated={terminateOpenSession}
           />

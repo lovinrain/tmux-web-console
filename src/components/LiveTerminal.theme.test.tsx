@@ -19,9 +19,21 @@ interface MockTerminalInstance {
   dispose: ReturnType<typeof vi.fn>;
 }
 
+interface MockWebLinksAddonInstance {
+  handler: (event: MouseEvent, uri: string) => void;
+  options: {
+    hover?: (event: MouseEvent, uri: string) => void;
+    leave?: (event: MouseEvent, uri: string) => void;
+  };
+}
+
 const terminalMocks = vi.hoisted(() => ({
   instances: [] as MockTerminalInstance[],
   fit: vi.fn(),
+}));
+
+const webLinkMocks = vi.hoisted(() => ({
+  instances: [] as MockWebLinksAddonInstance[],
 }));
 
 vi.mock("@xterm/xterm", () => ({
@@ -74,6 +86,17 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class MockFitAddon {
     fit = terminalMocks.fit;
+  },
+}));
+
+vi.mock("@xterm/addon-web-links", () => ({
+  WebLinksAddon: class MockWebLinksAddon {
+    constructor(
+      readonly handler: (event: MouseEvent, uri: string) => void,
+      readonly options: MockWebLinksAddonInstance["options"],
+    ) {
+      webLinkMocks.instances.push(this);
+    }
   },
 }));
 
@@ -154,6 +177,7 @@ function LayoutPhaseProbe({
 beforeEach(() => {
   terminalMocks.instances.length = 0;
   terminalMocks.fit.mockClear();
+  webLinkMocks.instances.length = 0;
   socketMocks.instances.length = 0;
   resizeObserverMocks.instances.length = 0;
   callbacks.onStateChange.mockClear();
@@ -326,6 +350,126 @@ describe("LiveTerminal browser copy mode", () => {
       key: "c",
       ctrlKey: true,
     }))).toBe(true);
+  });
+});
+
+describe("LiveTerminal web links", () => {
+  it("opens HTTP links only with Ctrl-click and exposes the full target on hover", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const links = webLinkMocks.instances[0];
+    const uri = "https://example.test/review?id=42";
+    const plainClick = new MouseEvent("mouseup", { button: 0 });
+    const metaClick = new MouseEvent("mouseup", { button: 0, metaKey: true });
+    const ctrlClick = new MouseEvent("mouseup", { button: 0, ctrlKey: true });
+
+    links.options.hover?.(new MouseEvent("mousemove"), uri);
+    expect(terminal.element).toHaveAttribute("title", `Ctrl+click to open ${uri}`);
+
+    links.handler(plainClick, uri);
+    links.handler(metaClick, uri);
+    links.handler(ctrlClick, "javascript:alert(1)");
+    expect(open).not.toHaveBeenCalled();
+
+    links.handler(ctrlClick, uri);
+    expect(open).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith(uri, "_blank", "noopener,noreferrer");
+
+    const oscLinkHandler = terminal.options.linkHandler as {
+      activate: (event: MouseEvent, uri: string) => void;
+    };
+    oscLinkHandler.activate(ctrlClick, "https://osc.example.test/path");
+    expect(open).toHaveBeenLastCalledWith(
+      "https://osc.example.test/path",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    links.options.leave?.(new MouseEvent("mouseleave"), uri);
+    expect(terminal.element).not.toHaveAttribute("title");
+  });
+
+  it("uses Cmd-click on macOS", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const links = webLinkMocks.instances[0];
+    const uri = "https://example.test/mac";
+
+    links.options.hover?.(new MouseEvent("mousemove"), uri);
+    expect(terminal.element).toHaveAttribute("title", `Cmd+click to open ${uri}`);
+    links.handler(new MouseEvent("mouseup", { button: 0, ctrlKey: true }), uri);
+    expect(open).not.toHaveBeenCalled();
+    links.handler(new MouseEvent("mouseup", { button: 0, metaKey: true }), uri);
+    expect(open).toHaveBeenCalledWith(uri, "_blank", "noopener,noreferrer");
+  });
+
+  it("does not send modified link clicks into the terminal application", async () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    const links = webLinkMocks.instances[0];
+    const terminalElement = terminal.element!;
+    const terminalScreen = terminalElement.querySelector<HTMLElement>(".xterm-screen")!;
+    socket.emit("open");
+    socket.send.mockClear();
+    links.options.hover?.(new MouseEvent("mousemove"), "https://example.test/safe");
+    terminalElement.addEventListener("mousedown", () => terminal.emitData("mouse-down"));
+    terminalElement.addEventListener("mouseup", () => terminal.emitData("mouse-up"));
+
+    terminalScreen.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      ctrlKey: true,
+    }));
+    terminalScreen.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ctrlKey: true,
+    }));
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith(
+      "https://example.test/safe",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    await act(async () => Promise.resolve());
+    terminalScreen.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      button: 0,
+      buttons: 1,
+    }));
+    expect(socket.send).toHaveBeenCalledOnce();
   });
 });
 

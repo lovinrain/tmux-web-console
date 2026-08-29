@@ -918,6 +918,100 @@ html[data-theme="light"] .scoped-sticky-note.window-pinned {
     0 0 0 1px color-mix(in srgb, var(--note-accent) 20%, transparent);
 }
 
+html[data-theme="light"] .workspace-timer-card {
+  color: #344a43;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--timer-accent) 13%, transparent), transparent 58%),
+    #e5f4f0;
+  border-color: color-mix(in srgb, var(--timer-accent) 48%, #aaa99d);
+  box-shadow: 0 3px 9px rgba(65, 55, 38, 0.13);
+}
+
+html[data-theme="light"] .workspace-timer-card small {
+  color: #3f5b52;
+}
+
+html[data-theme="light"] .workspace-timer-card.alarm {
+  background: linear-gradient(145deg, rgba(210, 65, 54, 0.18), transparent 62%), #fff0ed;
+}
+
+html[data-theme="light"] .workspace-timer-panel {
+  --timer-panel: #f5fbf8;
+  color: #2b3b35;
+  border-color: color-mix(in srgb, var(--timer-accent) 45%, #aaa99d);
+  box-shadow:
+    0 22px 65px rgba(65, 55, 38, 0.26),
+    0 3px 0 color-mix(in srgb, var(--timer-accent) 24%, transparent);
+}
+
+html[data-theme="light"] .workspace-timer-panel.alarm {
+  --timer-panel: #fff3f0;
+}
+
+html[data-theme="light"] .workspace-timer-panel-header {
+  background: color-mix(in srgb, var(--timer-panel) 90%, #ddd8cd);
+  border-color: color-mix(in srgb, var(--timer-accent) 24%, #c2beb5);
+}
+
+html[data-theme="light"] .workspace-timer-panel-header span {
+  color: #637a71;
+}
+
+html[data-theme="light"] .workspace-timer-panel-header h2 {
+  color: #26342f;
+}
+
+html[data-theme="light"] .workspace-timer-panel-header button {
+  color: color-mix(in srgb, var(--timer-accent) 74%, #34443e);
+  background: color-mix(in srgb, var(--timer-accent) 7%, #fff);
+  border-color: color-mix(in srgb, var(--timer-accent) 34%, #b8b6ae);
+}
+
+html[data-theme="light"] .workspace-timer-mode {
+  background: rgba(225, 232, 228, 0.7);
+  border-color: #c7d0cc;
+}
+
+html[data-theme="light"] .workspace-timer-mode button,
+html[data-theme="light"] .workspace-timer-presets button,
+html[data-theme="light"] .workspace-timer-actions button {
+  color: #52665f;
+  background: #f9fcfa;
+  border-color: #bbc7c2;
+}
+
+html[data-theme="light"] .workspace-timer-mode button[aria-pressed="true"],
+html[data-theme="light"] .workspace-timer-actions .primary {
+  color: #10201b;
+  background: var(--timer-accent);
+  border-color: var(--timer-accent);
+}
+
+html[data-theme="light"] .workspace-timer-readout {
+  background:
+    repeating-linear-gradient(0deg, transparent 0, transparent 10px, rgba(35, 116, 106, 0.04) 11px),
+    rgba(245, 252, 249, 0.82);
+  border-color: color-mix(in srgb, var(--timer-accent) 34%, #c5cfca);
+}
+
+html[data-theme="light"] .workspace-timer-readout output {
+  color: #183e37;
+}
+
+html[data-theme="light"] .workspace-timer-readout[data-phase="alarm"] output {
+  color: #9d2e25;
+}
+
+html[data-theme="light"] .workspace-timer-duration label span {
+  color: #61756e;
+}
+
+html[data-theme="light"] .workspace-timer-duration input {
+  color: #263a33;
+  background: #fff;
+  border-color: #b9c7c1;
+}
+
 html[data-theme="light"] .console-bar-toolbar {
   color: #4e594c;
   background:
@@ -1176,6 +1270,8 @@ html[data-theme="light"] .workspace-dashboard-button,
 html[data-theme="light"] .workspace-new-session-button,
 html[data-theme="light"] .workspace-save-button,
 html[data-theme="light"] .workspace-saved-indicator,
+html[data-theme="light"] .workspace-quick-switcher-cycle,
+html[data-theme="light"] .workspace-quick-switcher-toggle,
 html[data-theme="light"] .workspace-tab-search-button,
 html[data-theme="light"] .workspace-keymap-toggle,
 html[data-theme="light"] .workspace-recents-button {
@@ -1190,6 +1286,11 @@ html[data-theme="light"] .workspace-new-session-button:hover:not(:disabled),
 html[data-theme="light"] .workspace-new-session-button:focus-visible,
 html[data-theme="light"] .workspace-save-button:hover,
 html[data-theme="light"] .workspace-save-button:focus-visible,
+html[data-theme="light"] .workspace-quick-switcher-cycle:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-switcher-cycle:focus-visible,
+html[data-theme="light"] .workspace-quick-switcher-toggle:hover:not(:disabled),
+html[data-theme="light"] .workspace-quick-switcher-toggle:focus-visible,
+html[data-theme="light"] .workspace-quick-switcher-toggle.active,
 html[data-theme="light"] .workspace-tab-search-button:hover,
 html[data-theme="light"] .workspace-tab-search-button:focus-visible,
 html[data-theme="light"] .workspace-keymap-toggle:hover,
@@ -1203,6 +1304,102 @@ html[data-theme="light"] .workspace-recents-button.active {
 
 html[data-theme="light"] .workspace-recents-button.active {
   color: #426d0b;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-toggle small {
+  color: #426d0b;
+  background: #f3efe7;
+  border-color: #bdb6aa;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-toggle.active {
+  color: #426d0b;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-panel {
+  color: #283126;
+  background:
+    linear-gradient(145deg, rgba(85, 124, 29, 0.075), transparent 32%),
+    linear-gradient(320deg, rgba(8, 122, 112, 0.055), transparent 45%),
+    rgba(255, 253, 248, 0.99);
+  border-color: #aaa397;
+  box-shadow: 0 22px 58px rgba(65, 55, 38, 0.22);
+}
+
+html[data-theme="light"] .workspace-quick-switcher-panel > header {
+  border-color: #d5cfc4;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-panel > header span {
+  color: #087a70;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-panel > header strong {
+  color: #426d0b;
+  background: #f0f4e9;
+  border-color: #b6c2a5;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-search {
+  color: #687365;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-search input {
+  color: #283126;
+  background: #fffdf8;
+  border-color: #bdb6aa;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-search input:focus {
+  border-color: #718b4c;
+  box-shadow: 0 0 0 3px rgba(85, 124, 29, 0.12);
+}
+
+html[data-theme="light"] .workspace-quick-switcher-search button {
+  color: #52604e;
+  background: #ece8df;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-option {
+  color: #536050;
+  background: #f2eee6;
+  border-color: #d0c9bd;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-option[data-highlighted="true"] {
+  color: #20261e;
+  background:
+    linear-gradient(90deg, rgba(85, 124, 29, 0.1), transparent 72%),
+    #fffdf8;
+  border-color: #879778;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-option.current {
+  border-left-color: #557c1d;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-index,
+html[data-theme="light"] .workspace-quick-switcher-option-copy small,
+html[data-theme="light"] .workspace-quick-switcher-option > svg,
+html[data-theme="light"] .workspace-quick-switcher-message {
+  color: #687365;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-option em {
+  color: #426d0b;
+  background: rgba(85, 124, 29, 0.09);
+}
+
+html[data-theme="light"] .workspace-quick-switcher-message button {
+  color: #283126;
+  background: #f0ece4;
+  border-color: #bdb6aa;
+}
+
+html[data-theme="light"] .workspace-quick-switcher-panel > footer {
+  color: #687365;
+  background: #f0ece4;
+  border-color: #d5cfc4;
 }
 
 html[data-theme="light"] .workspace-keymap-panel {
@@ -1264,6 +1461,33 @@ html[data-theme="light"] .workspace-new-session-button {
 html[data-theme="light"] .workspace-new-session-button.active,
 html[data-theme="light"] .workspace-new-session-button:disabled {
   color: #426d0b;
+}
+
+html[data-theme="light"] .workspace-tab-status-sort {
+  color: #4f5b4b;
+  background:
+    linear-gradient(90deg, rgba(8, 122, 112, 0.07), transparent 72%),
+    #f0ece4;
+  border-color: #bcb5a9;
+}
+
+html[data-theme="light"] .workspace-tab-status-sort:hover,
+html[data-theme="light"] .workspace-tab-status-sort:focus-visible {
+  color: #20261e;
+  background:
+    linear-gradient(90deg, rgba(8, 122, 112, 0.11), transparent 72%),
+    #fffdf8;
+  border-color: #879778;
+}
+
+html[data-theme="light"] .workspace-tab-status-sort svg {
+  color: #087a70;
+}
+
+html[data-theme="light"] .workspace-tab-status-sort small {
+  color: #596356;
+  background: #e2ded5;
+  border-color: #c2bbaf;
 }
 
 html[data-theme="light"] .workspace-saved-indicator {

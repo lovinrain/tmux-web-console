@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl } from "../api";
@@ -44,6 +45,20 @@ let submissionCounter = 0;
 
 function isMacBrowser(): boolean {
   return ["Macintosh", "MacIntel", "MacPPC", "Mac68K"].includes(navigator.platform);
+}
+
+function hasTerminalLinkModifier(event: MouseEvent, macBrowser: boolean): boolean {
+  return macBrowser ? event.metaKey : event.ctrlKey;
+}
+
+function openTerminalWebLink(uri: string): void {
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    window.open(url.href, "_blank", "noopener,noreferrer");
+  } catch {
+    // Terminal output is untrusted; malformed links stay inert.
+  }
 }
 
 function copyMouseEvent(event: MouseEvent, forceMacSelection = false): MouseEvent {
@@ -181,10 +196,36 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       let resizeTimer: number | undefined;
       let attempts = 0;
       let lastResize: { socket: WebSocket; cols: number; rows: number } | null = null;
+      let terminalElement: HTMLElement | undefined;
+      let hoveredTerminalLink: string | null = null;
+      let pressedTerminalLink: string | null = null;
       const pendingSubmissions = new Map<string, {
         resolve: (accepted: boolean) => void;
         timer: number;
       }>();
+      const macBrowser = isMacBrowser();
+      const linkModifierLabel = macBrowser ? "Cmd" : "Ctrl";
+      const activateTerminalLink = (event: MouseEvent, uri: string) => {
+        if (
+          browserCopyModeRef.current
+          || event.button !== 0
+          || !hasTerminalLinkModifier(event, macBrowser)
+        ) return;
+        openTerminalWebLink(uri);
+      };
+      const hoverTerminalLink = (_event: MouseEvent, uri: string) => {
+        hoveredTerminalLink = uri;
+        terminalElement?.setAttribute(
+          "title",
+          `${linkModifierLabel}+click to open ${uri}`,
+        );
+      };
+      const leaveTerminalLink = (_event: MouseEvent, uri: string) => {
+        if (hoveredTerminalLink !== uri) return;
+        hoveredTerminalLink = null;
+        pressedTerminalLink = null;
+        terminalElement?.removeAttribute("title");
+      };
 
       const terminal = new Terminal({
         cursorBlink: true,
@@ -196,6 +237,11 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         letterSpacing: 0,
         scrollback: 5000,
         allowTransparency: true,
+        linkHandler: {
+          activate: activateTerminalLink,
+          hover: hoverTerminalLink,
+          leave: leaveTerminalLink,
+        },
         theme: TERMINAL_THEMES[theme],
       });
       const fit = new FitAddon();
@@ -203,10 +249,13 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       terminal.open(hostRef.current);
       terminalRef.current = terminal;
       let suppressTerminalInput = false;
-      const terminalElement = terminal.element;
+      terminalElement = terminal.element;
+      terminal.loadAddon(new WebLinksAddon(activateTerminalLink, {
+        hover: hoverTerminalLink,
+        leave: leaveTerminalLink,
+      }));
       const terminalDocument = terminalElement?.ownerDocument;
       const replayedMouseEvents = new WeakSet<MouseEvent>();
-      const macBrowser = isMacBrowser();
 
       terminal.attachCustomKeyEventHandler((event) => {
         if (!browserCopyModeRef.current || event.altKey) return true;
@@ -226,6 +275,29 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         } finally {
           suppressTerminalInput = false;
         }
+      };
+
+      const handleModifiedLinkMouseEvent = (event: MouseEvent) => {
+        if (browserCopyModeRef.current || event.button !== 0) return;
+        if (event.type === "mousedown") {
+          if (
+            hoveredTerminalLink === null
+            || !hasTerminalLinkModifier(event, macBrowser)
+          ) return;
+          pressedTerminalLink = hoveredTerminalLink;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (pressedTerminalLink === null) return;
+        const uri = pressedTerminalLink;
+        pressedTerminalLink = null;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (
+          hoveredTerminalLink === uri
+          && hasTerminalLinkModifier(event, macBrowser)
+        ) openTerminalWebLink(uri);
       };
 
       const handleCopyMouseDown = (event: MouseEvent) => {
@@ -291,6 +363,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         }
       };
 
+      terminalElement?.addEventListener("mousedown", handleModifiedLinkMouseEvent, true);
+      terminalElement?.addEventListener("mouseup", handleModifiedLinkMouseEvent, true);
       terminalElement?.addEventListener("mousedown", handleCopyMouseDown, true);
       terminalElement?.addEventListener("mousemove", blockCopyMouseMove, true);
       terminalElement?.addEventListener("click", blockCopyClick, true);
@@ -472,6 +546,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         if (redrawRef.current === redraw) redrawRef.current = null;
         copySelectionActiveRef.current = false;
         copyWheelRemainderRef.current = 0;
+        terminalElement?.removeEventListener("mousedown", handleModifiedLinkMouseEvent, true);
+        terminalElement?.removeEventListener("mouseup", handleModifiedLinkMouseEvent, true);
         terminalElement?.removeEventListener("mousedown", handleCopyMouseDown, true);
         terminalElement?.removeEventListener("mousemove", blockCopyMouseMove, true);
         terminalElement?.removeEventListener("click", blockCopyClick, true);

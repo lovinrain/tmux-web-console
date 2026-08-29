@@ -17,6 +17,7 @@ import {
   setWorkspaceTabGroup,
   setWorkspaceTabGroupCollapsed,
   sessionAfterClose,
+  stableSortWorkspaceSessionsByWorkingState,
   visitWorkspaceSession,
   workspaceGroupsFromSearch,
   workspaceTabsFromSearch,
@@ -384,6 +385,78 @@ describe("session workspace state", () => {
     expect(moveWorkspaceSession(workspace, "beta", 1.5)).toBe(workspace);
     expect(moveWorkspaceSession(workspace, "beta", Number.NaN)).toBe(workspace);
     expect(moveWorkspaceSession(workspace, "beta", Number.POSITIVE_INFINITY)).toBe(workspace);
+  });
+
+  it("stable-sorts non-working tabs before working tabs without changing visit history", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["working-a", "idle-a", "working-b", "idle-b"],
+      recentSessions: ["working-b", "idle-a", "closed"],
+      groups: [],
+    };
+
+    const sorted = stableSortWorkspaceSessionsByWorkingState(
+      workspace,
+      new Set(["working-a", "working-b"]),
+    );
+
+    expect(sorted.openSessions).toEqual([
+      "idle-a",
+      "idle-b",
+      "working-a",
+      "working-b",
+    ]);
+    expect(sorted.recentSessions).toBe(workspace.recentSessions);
+    expect(stableSortWorkspaceSessionsByWorkingState(
+      sorted,
+      new Set(["working-a", "working-b"]),
+    )).toBe(sorted);
+  });
+
+  it("keeps tab groups atomic while stable-sorting their blocks and members", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: [
+        "working-a",
+        "group-working",
+        "group-idle",
+        "idle-a",
+        "idle-group",
+        "working-b",
+      ],
+      recentSessions: ["group-working"],
+      groups: [
+        {
+          id: "mixed",
+          name: "Mixed",
+          color: "cyan",
+          collapsed: false,
+          tabs: ["group-working", "group-idle"],
+        },
+        {
+          id: "idle",
+          name: "Idle",
+          color: "gray",
+          collapsed: true,
+          tabs: ["idle-group"],
+        },
+      ],
+    };
+
+    const sorted = stableSortWorkspaceSessionsByWorkingState(
+      workspace,
+      new Set(["working-a", "group-working", "working-b"]),
+    );
+
+    expect(sorted.openSessions).toEqual([
+      "idle-a",
+      "idle-group",
+      "working-a",
+      "group-idle",
+      "group-working",
+      "working-b",
+    ]);
+    expect(sorted.groups.map((group) => group.id)).toEqual(["idle", "mixed"]);
+    expect(sorted.groups[1].tabs).toEqual(["group-idle", "group-working"]);
+    expect(sorted.groups[0].collapsed).toBe(true);
   });
 
   it("renames a real session everywhere without changing tab or visit order", () => {

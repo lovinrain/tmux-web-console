@@ -10,6 +10,7 @@ import {
   getWorkspace,
   getWorkspaceQuickLinks,
   listSessions,
+  listWorkspaces,
   terminateSession,
   transferSessionToWorkspace,
   updateWorkspaceActivity,
@@ -31,6 +32,7 @@ vi.mock("./api", async (importOriginal) => {
     getWorkspace: vi.fn(),
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
+    listWorkspaces: vi.fn(),
     terminateSession: vi.fn(),
     transferSessionToWorkspace: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
@@ -43,6 +45,7 @@ const getSessionQuickLinksMock = vi.mocked(getSessionQuickLinks);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const getWorkspaceQuickLinksMock = vi.mocked(getWorkspaceQuickLinks);
 const listSessionsMock = vi.mocked(listSessions);
+const listWorkspacesMock = vi.mocked(listWorkspaces);
 const terminateSessionMock = vi.mocked(terminateSession);
 const transferSessionToWorkspaceMock = vi.mocked(transferSessionToWorkspace);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
@@ -575,6 +578,7 @@ describe("App routing", () => {
     getWorkspaceMock.mockReset();
     getWorkspaceQuickLinksMock.mockReset();
     listSessionsMock.mockReset();
+    listWorkspacesMock.mockReset();
     terminateSessionMock.mockReset();
     transferSessionToWorkspaceMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
@@ -584,6 +588,7 @@ describe("App routing", () => {
     getWorkspaceMock.mockResolvedValue(savedWorkspace());
     getWorkspaceQuickLinksMock.mockResolvedValue([]);
     listSessionsMock.mockResolvedValue([]);
+    listWorkspacesMock.mockResolvedValue([savedWorkspace()]);
     terminateSessionMock.mockResolvedValue(undefined);
     updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace());
     pendingNewSessionCompletion = null;
@@ -2050,6 +2055,33 @@ describe("App routing", () => {
     expectWorkspaceSearch(search, ["beta", "alpha", "gamma"]);
   });
 
+  it("stable-sorts side tabs with non-working sessions before working sessions", () => {
+    window.localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
+    replaceUrl(sessionUrl(
+      "working-a",
+      "?tab=working-a&tab=idle-a&tab=working-b&tab=idle-b",
+    ));
+    render(<App />);
+    act(() => reportKnownSessions?.([
+      { ...session("working-a", "$working-a"), agentState: "working" },
+      { ...session("idle-a", "$idle-a"), agentState: "waiting_human" },
+      { ...session("working-b", "$working-b"), agentState: "working" },
+      session("idle-b", "$idle-b"),
+    ]));
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Stable sort tabs: non-working first, then working",
+    }));
+
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/working-a`);
+    expect(renderedTabs()).toEqual(["idle-a", "idle-b", "working-a", "working-b"]);
+    expectWorkspaceSearch("", ["idle-a", "idle-b", "working-a", "working-b"]);
+    expect(screen.getByRole("tab", { name: /idle-a/ }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+1");
+    expect(screen.getByRole("tab", { name: /working-a/ }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+3");
+  });
+
   it("copies a tab into an isolated browser workspace without changing the source", () => {
     const sessionName = "work/name #1";
     const sourceGroup = encodeURIComponent(JSON.stringify({
@@ -3322,6 +3354,56 @@ describe("App routing", () => {
       });
       expect(screen.getByRole("main", { name: "Console" }))
         .toHaveAttribute("data-workspace-name", "Incident response");
+    });
+
+    it("switches to adjacent saved workspaces in the same browser tab", async () => {
+      const alphaWorkspace = savedWorkspace({
+        id: "workspace-alpha",
+        name: "Alpha room",
+        tabs: ["alpha"],
+        activeSession: "alpha",
+      });
+      const betaWorkspace = savedWorkspace({
+        id: "workspace-beta",
+        name: "Beta room",
+        tabs: ["beta"],
+        activeSession: "beta",
+      });
+      listWorkspacesMock.mockResolvedValue([betaWorkspace, alphaWorkspace]);
+      getWorkspaceMock.mockImplementation((workspaceId) => Promise.resolve(
+        workspaceId === betaWorkspace.id ? betaWorkspace : alphaWorkspace,
+      ));
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(
+        `${BASE_PATH}/session/alpha?workspace=${alphaWorkspace.id}&tab=alpha`,
+      );
+      const historyLength = window.history.length;
+
+      render(<App />);
+      await screen.findByTitle("Alpha room - Saved");
+      const next = await screen.findByRole("button", {
+        name: "Switch to next workspace: Beta room",
+      });
+      fireEvent.click(next);
+
+      await waitFor(() => expect(getWorkspaceMock).toHaveBeenCalledWith("workspace-beta"));
+      await screen.findByTitle("Beta room - Saved");
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+      expect(new URLSearchParams(window.location.search).get("workspace"))
+        .toBe("workspace-beta");
+      expect(window.history.length).toBe(historyLength);
+
+      fireEvent.click(screen.getByRole("button", {
+        name: "Switch to previous workspace: Alpha room",
+      }));
+      await screen.findByTitle("Alpha room - Saved");
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      expect(new URLSearchParams(window.location.search).get("workspace"))
+        .toBe("workspace-alpha");
+      expect(window.history.length).toBe(historyLength);
     });
 
     it("updates the active workspace identity after a landing-page rename", async () => {

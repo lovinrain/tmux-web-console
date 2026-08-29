@@ -94,6 +94,15 @@ function workspacePaneHeight(name: string): number {
   return Number(height);
 }
 
+function workspacePaneWidth(name: string): number {
+  const width = execFileSync(
+    "tmux",
+    [...tmux, "list-panes", "-t", `=${name}`, "-F", "#{pane_width}"],
+    { encoding: "utf8" },
+  ).trim().split("\n", 1)[0];
+  return Number(width);
+}
+
 if (!titlesFile || !messagesFile || !snippetsFile || !workspacesFile) {
   throw new Error("Playwright state paths were not configured");
 }
@@ -1000,6 +1009,97 @@ test("desktop scrollback width is adjustable for the current browser tab", async
   await expect(page.getByRole("button", { name: "Pane scrollback" })).toBeEnabled();
   await page.getByRole("button", { name: "Pane scrollback" }).click();
   await expect(panel).toHaveCSS("width", "680px");
+});
+
+test("terminal HTTP links require Ctrl-click and do not send a mouse frame", async ({ page }) => {
+  test.setTimeout(45_000);
+  const uri = "https://example.test/muxdeck-link-check";
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live", {
+    timeout: 10_000,
+  });
+  await page.evaluate(() => {
+    const terminalFrames: number[][] = [];
+    const openedLinks: unknown[][] = [];
+    const nativeSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (this.url.includes("/ws/terminal")) {
+        if (data instanceof ArrayBuffer) {
+          terminalFrames.push([...new Uint8Array(data)]);
+        } else if (ArrayBuffer.isView(data)) {
+          terminalFrames.push([
+            ...new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+          ]);
+        }
+      }
+      return nativeSend.call(this, data);
+    };
+    window.open = ((...args: unknown[]) => {
+      openedLinks.push(args);
+      return null;
+    }) as typeof window.open;
+    Object.defineProperties(window, {
+      __muxdeckLinkTerminalFrames: { value: terminalFrames },
+      __muxdeckOpenedTerminalLinks: { value: openedLinks },
+    });
+  });
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "send-keys",
+      "-t",
+      paneId,
+      "-l",
+      `printf '\\033[2J\\033[H\\033[?1000h%s\\n' '${uri}'`,
+    ]);
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
+    await expect.poll(() => workspaceTmuxContentSnapshot(sessionName)).toContain(uri);
+
+    const terminalScreen = page.locator(".terminal-host .xterm-screen");
+    const screenBox = await terminalScreen.boundingBox();
+    expect(screenBox).not.toBeNull();
+    const cellWidth = screenBox!.width / workspacePaneWidth(sessionName);
+    const cellHeight = screenBox!.height / workspacePaneHeight(sessionName);
+    const linkX = screenBox!.x + (cellWidth * 12);
+    const linkY = screenBox!.y + (cellHeight / 2);
+    await page.mouse.move(linkX, linkY);
+    await expect(page.locator(".terminal-host .xterm")).toHaveAttribute(
+      "title",
+      `Ctrl+click to open ${uri}`,
+    );
+
+    await page.keyboard.down("Control");
+    const framesBeforeClick = await page.evaluate(() => (
+      window as Window & { __muxdeckLinkTerminalFrames: number[][] }
+    ).__muxdeckLinkTerminalFrames.length);
+    await page.mouse.click(linkX, linkY);
+    await expect.poll(() => page.evaluate(() => (
+      window as Window & { __muxdeckOpenedTerminalLinks: unknown[][] }
+    ).__muxdeckOpenedTerminalLinks)).toEqual([
+      [uri, "_blank", "noopener,noreferrer"],
+    ]);
+    const framesAfterClick = await page.evaluate(() => (
+      window as Window & { __muxdeckLinkTerminalFrames: number[][] }
+    ).__muxdeckLinkTerminalFrames);
+    expect(framesAfterClick.slice(framesBeforeClick)).toEqual([]);
+    await page.keyboard.up("Control");
+    await expect(page).toHaveURL(
+      `/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`,
+    );
+  } finally {
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "C-c"]);
+    execFileSync("tmux", [
+      ...tmux,
+      "send-keys",
+      "-t",
+      paneId,
+      "-l",
+      "printf '\\033[?1000l'",
+    ]);
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
+  }
 });
 
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({
@@ -3372,6 +3472,158 @@ test("global session pin deduplicates saved, inherited, and future workspaces", 
   }
 });
 
+test("desktop quick switcher moves between adjacent saved workspaces in one tab", async ({
+  page,
+  request,
+}) => {
+  const workspaceIds: string[] = [];
+  const createWorkspace = async (name: string): Promise<string> => {
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name,
+        tabs: [sessionName],
+        groups: [],
+        activeSession: sessionName,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as { id: string };
+    workspaceIds.push(workspace.id);
+    return workspace.id;
+  };
+
+  const prefix = `Quick switch ${process.pid}`;
+  const alphaName = `${prefix} A`;
+  const middleName = `${prefix} B`;
+  const zuluName = `${prefix} C`;
+
+  try {
+    const alphaId = await createWorkspace(alphaName);
+    const middleId = await createWorkspace(middleName);
+    const zuluId = await createWorkspace(zuluName);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+        + `?workspace=${encodeURIComponent(middleId)}`
+        + `&tab=${encodeURIComponent(sessionName)}`,
+    );
+    await expect(page.getByTitle(`${middleName} - Saved`)).toBeVisible();
+
+    await page.getByRole("button", {
+      name: `Switch to next workspace: ${zuluName}`,
+    }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("workspace"))
+      .toBe(zuluId);
+    await expect(page.getByTitle(`${zuluName} - Saved`)).toBeVisible();
+
+    await page.getByRole("button", {
+      name: `Switch to previous workspace: ${middleName}`,
+    }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("workspace"))
+      .toBe(middleId);
+    await expect(page.getByTitle(`${middleName} - Saved`)).toBeVisible();
+
+    await page.getByRole("button", { name: "Choose workspace" }).click();
+    const dialog = page.getByRole("dialog", { name: "Switch workspace" });
+    await dialog.getByRole("combobox", { name: "Search saved workspaces" })
+      .fill(alphaName);
+    await dialog.getByRole("option", { name: new RegExp(alphaName) }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("workspace"))
+      .toBe(alphaId);
+    await expect(page.getByTitle(`${alphaName} - Saved`)).toBeVisible();
+  } finally {
+    for (const workspaceId of workspaceIds) {
+      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    }
+  }
+});
+
+test("desktop side-rail status sort keeps stable order inside both partitions", async ({
+  page,
+}) => {
+  const workingSession = `${sessionName}-sort-working`;
+  const idleSession = `${sessionName}-sort-idle`;
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    workingSession,
+    "node",
+    "-e",
+    'process.stdout.write("\\u25c9 Working \\u00b7 697 B esc interrupt\\n");'
+      + 'require("node:child_process").spawnSync("/bin/sleep", ["120"], {stdio: "inherit"})',
+  ]);
+  const workingPane = execFileSync(
+    "tmux",
+    [...tmux, "list-panes", "-t", `=${workingSession}`, "-F", "#{pane_id}"],
+    { encoding: "utf8" },
+  ).trim();
+  execFileSync("tmux", [
+    ...tmux,
+    "select-pane",
+    "-t",
+    workingPane,
+    "-T",
+    "Stable sort status - GitHub Copilot",
+  ]);
+  execFileSync("tmux", [
+    ...tmux,
+    "new-session",
+    "-d",
+    "-s",
+    idleSession,
+    "bash",
+    "--noprofile",
+    "--norc",
+  ]);
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(workingSession)}`
+        + `?tab=${encodeURIComponent(workingSession)}`
+        + `&tab=${encodeURIComponent(sessionName)}`
+        + `&tab=${encodeURIComponent(idleSession)}`,
+    );
+    await expect(page.getByRole("tab", {
+      name: new RegExp(`${workingSession}, Working`),
+    })).toBeVisible();
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+
+    const sort = page.getByRole("button", {
+      name: "Stable sort tabs: non-working first, then working",
+    });
+    await expect(sort).toBeVisible();
+    await expect(sort).toContainText("Non-working first");
+    await sort.click();
+
+    await expectRoute(
+      page,
+      `/mux/session/${workingSession}`,
+      [sessionName, idleSession, workingSession],
+    );
+    await expect(page.locator(".workspace-tab-list [role='tab']")).toHaveCount(3);
+    await expect(page.locator(".workspace-tab-list [role='tab']").nth(0))
+      .toContainText(sessionName);
+    await expect(page.locator(".workspace-tab-list [role='tab']").nth(1))
+      .toContainText(idleSession);
+    await expect(page.locator(".workspace-tab-list [role='tab']").nth(2))
+      .toContainText(workingSession);
+  } finally {
+    for (const name of [workingSession, idleSession]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to this test's disposable tmux server.
+      }
+    }
+  }
+});
+
 test("desktop Move / Copy transfers a session and deduplicates existing destinations", async ({
   page,
   request,
@@ -4002,6 +4254,115 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
       });
     } catch {
       // Cleanup stays scoped to the helper session on this test's disposable socket.
+    }
+  }
+});
+
+test("desktop workspace timer floats, pins, persists, and alarms", async ({
+  page,
+  request,
+}) => {
+  const helperSession = `${sessionName}-workspace-timer`;
+  const workspaceName = `Timer workspace ${process.pid}`;
+  let workspaceId = "";
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name: workspaceName,
+        tabs: [sessionName, helperSession],
+        groups: [],
+        activeSession: sessionName,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    workspaceId = (await response.json()).workspace.id as string;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceId)}`
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
+    );
+    const card = page.getByRole("button", { name: "Show workspace timer" });
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("25:00");
+    const actionsBox = await page.locator(".console-actions").boundingBox();
+    expect(actionsBox).not.toBeNull();
+    expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(1441);
+    await card.click();
+
+    const timer = page.getByRole("dialog", { name: "Timer" });
+    await expect(timer).toBeVisible();
+    await expect(timer).not.toHaveAttribute("aria-modal", "true");
+    await timer.getByRole("spinbutton", { name: "Countdown minutes" }).fill("0");
+    await timer.getByRole("spinbutton", { name: "Countdown seconds" }).fill("1");
+    await timer.getByRole("button", { name: "Pin workspace timer" }).click();
+
+    const titleStrip = timer.getByLabel("Move workspace timer window");
+    const initialBox = await timer.boundingBox();
+    expect(initialBox).not.toBeNull();
+    await titleStrip.press("ArrowRight");
+    await expect.poll(async () => (await timer.boundingBox())?.x)
+      .toBeCloseTo(initialBox!.x + 12, 0);
+
+    await timer.getByRole("button", { name: "Start" }).click();
+    await expect(timer.getByRole("timer")).toHaveText("TIME'S UP", {
+      timeout: 4_000,
+    });
+    await expect(page).toHaveTitle(/^\[TIMER\] /);
+
+    await page.getByRole("tab", {
+      name: new RegExp(`^${helperSession},`),
+    }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      [sessionName, helperSession],
+      { workspace: workspaceId },
+    );
+    await expect(timer).toBeVisible();
+    await expect(timer).toHaveAttribute("data-pinned", "true");
+    await expect(page).toHaveTitle(new RegExp(`^\\[TIMER\\] ${workspaceName}`));
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(timer).toBeVisible();
+    await expect(timer.getByRole("timer")).toHaveText("TIME'S UP");
+    await page.screenshot({
+      path: "artifacts/workspace-timer-desktop.png",
+      animations: "disabled",
+    });
+    await timer.getByRole("button", { name: "Dismiss alarm" }).click();
+    await expect(page).not.toHaveTitle(/^\[TIMER\] /);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(card).toBeHidden();
+    await expect(timer).toBeHidden();
+  } finally {
+    if (workspaceId) {
+      try {
+        await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      } catch {
+        // Cleanup stays scoped to the disposable workspace created by this test.
+      }
+    }
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the helper session on the disposable test socket.
     }
   }
 });
