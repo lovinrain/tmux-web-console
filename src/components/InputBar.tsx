@@ -113,6 +113,12 @@ const ESSENTIAL_KEYS: TerminalKey[] = [
     ariaLabel: "Ctrl+K - delete to end of input",
     title: "Delete from the cursor to the end of input in supported shells and agents (Ctrl+K)",
   },
+  {
+    label: "^Q",
+    data: "\x11",
+    ariaLabel: "Ctrl+Q - enqueue in Copilot CLI",
+    title: "Enqueue the current prompt in Copilot CLI (Ctrl+Q)",
+  },
 ];
 
 const KEYS: TerminalKey[] = [

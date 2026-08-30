@@ -1859,7 +1859,7 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   });
   await expect(moveShortcutPanel).toBeVisible();
   await expect(moveShortcutPanel).toHaveCSS("cursor", "grab");
-  await expect(shortcutStrip.getByRole("button")).toHaveCount(21);
+  await expect(shortcutStrip.getByRole("button")).toHaveCount(22);
   await expect(shortcutStrip.getByRole("button", { name: "Raw terminal keyboard" }))
     .toBeVisible();
   await expect(shortcutStrip.getByRole("button", { name: "Edit title and tags" }))
@@ -3916,6 +3916,29 @@ test("saved workspace survives reload and device handoff without touching tmux p
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.screenshot({ path: "artifacts/workspace-window-navigation-console.png" });
 
+    const tabBarLandingWindowLink = page.getByRole("link", {
+      name: "Open all sessions in new window",
+      exact: true,
+    });
+    await expect(tabBarLandingWindowLink).toHaveAttribute("target", "_blank");
+    await expect(tabBarLandingWindowLink).toHaveAttribute("rel", "noopener noreferrer");
+    const [tabBarLandingWindow] = await Promise.all([
+      page.waitForEvent("popup"),
+      tabBarLandingWindowLink.click(),
+    ]);
+    await expectRoute(
+      tabBarLandingWindow,
+      "/mux/",
+      orderedTabs,
+      { kind: "shells", view: "list", workspace: workspaceId },
+    );
+    await expect(tabBarLandingWindow.getByRole("heading", {
+      name: workspaceName,
+      exact: true,
+    })).toBeVisible();
+    expect(await tabBarLandingWindow.evaluate(() => window.opener === null)).toBe(true);
+    await tabBarLandingWindow.close();
+
     const landingWindowLink = page.getByRole("link", {
       name: "Open sessions and workspaces in new window",
     });
@@ -5784,6 +5807,14 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await page.getByRole("button", { name: "Ctrl+K - delete to end of input" }).click();
   await expect.poll(captureJoinedPane).toContain(String.raw`CTRL_K_KEY=$'\v'`);
 
+  await stagedInput.fill(
+    "stty -ixon; IFS= read -rsn1 key; printf 'CTRL_Q_KEY=%q\\n' \"$key\"; stty ixon",
+  );
+  await page.getByRole("button", { name: "Send + Enter" }).click();
+  await expect.poll(captureJoinedPane).toContain("CTRL_Q_KEY=%q");
+  await page.getByRole("button", { name: "Ctrl+Q - enqueue in Copilot CLI" }).click();
+  await expect.poll(captureJoinedPane).toContain(String.raw`CTRL_Q_KEY=$'\021'`);
+
   const terminalClearProbe = `/tmp/muxdeck-terminal-clear-${process.pid}`;
   rmSync(terminalClearProbe, { force: true });
   try {
@@ -6057,6 +6088,7 @@ test("native tmux rename preserves alias, workspace order, draft, and metadata",
       terminalShortcuts.getByRole("button", { name: "^C", exact: true }),
       terminalShortcuts.getByRole("button", { name: "Enter", exact: true }),
       terminalShortcuts.getByRole("button", { name: "Ctrl+K - delete to end of input" }),
+      terminalShortcuts.getByRole("button", { name: "Ctrl+Q - enqueue in Copilot CLI" }),
     ];
     const primaryShortcutBoxes = [];
     for (const button of primaryShortcuts) {

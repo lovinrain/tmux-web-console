@@ -100,9 +100,17 @@ describe("InputBar", () => {
     const deleteToEndButton = screen.getByRole("button", {
       name: "Ctrl+K - delete to end of input",
     });
+    const copilotEnqueueButton = screen.getByRole("button", {
+      name: "Ctrl+Q - enqueue in Copilot CLI",
+    });
     expect(startButton).toHaveTextContent(/^\^A$/);
     expect(endButton).toHaveTextContent(/^\^E$/);
     expect(deleteToEndButton).toHaveTextContent(/^\^K$/);
+    expect(copilotEnqueueButton).toHaveTextContent(/^\^Q$/);
+    expect(copilotEnqueueButton).toHaveAttribute(
+      "title",
+      "Enqueue the current prompt in Copilot CLI (Ctrl+Q)",
+    );
     expect(screen.getByRole("button", { name: "Raw terminal keyboard" })).toHaveAttribute(
       "title",
       expect.stringContaining("directly to tmux"),
@@ -125,6 +133,7 @@ describe("InputBar", () => {
     fireEvent.click(startButton);
     fireEvent.click(endButton);
     fireEvent.click(deleteToEndButton);
+    fireEvent.click(copilotEnqueueButton);
     fireEvent.click(screen.getByRole("button", { name: "Clear terminal input" }));
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
     fireEvent.click(screen.getByRole("button", { name: "PgDn" }));
@@ -143,6 +152,7 @@ describe("InputBar", () => {
       ["\x01"],
       ["\x05"],
       ["\x0b"],
+      ["\x11"],
       ["\x01\x0b"],
       ["\x1b[5~"],
       ["\x1b[6~"],

@@ -20,6 +20,7 @@ import {
   CheckIcon,
   CloseIcon,
   EditIcon,
+  ExternalLinkIcon,
   FolderIcon,
   GridIcon,
   HistoryIcon,
@@ -89,6 +90,7 @@ export interface SessionWorkspaceNavigationProps {
   onCloseRecents: () => void;
   onClearRecents: () => void;
   onOpenDashboard: () => void;
+  dashboardWindowHref?: string;
   onNewSession?: () => void;
   onOpenTabSearch?: () => void;
   workspacePersistenceState?: WorkspacePersistenceState;
@@ -1801,6 +1803,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onOpenRecents,
     onCloseRecents,
     onOpenDashboard,
+    dashboardWindowHref,
     onNewSession,
     onOpenTabSearch,
     workspacePersistenceState = "unsaved",
@@ -2774,16 +2777,34 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           aria-label="Session workspace"
           hidden={!tabsVisible}
         >
-          <button
-            type="button"
-            className="workspace-dashboard-button"
-            onClick={onOpenDashboard}
-            aria-label="All sessions"
-            title="All sessions"
+          <div
+            className="workspace-dashboard-actions"
+            role="group"
+            aria-label="Sessions page actions"
           >
-            <GridIcon />
-            <span>Sessions</span>
-          </button>
+            <button
+              type="button"
+              className="workspace-dashboard-button"
+              onClick={onOpenDashboard}
+              aria-label="All sessions"
+              title="Open Sessions in this window"
+            >
+              <GridIcon />
+              <span>Sessions</span>
+            </button>
+            {dashboardWindowHref && (
+              <a
+                className="workspace-dashboard-window-button"
+                href={dashboardWindowHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open all sessions in new window"
+                title="Open Sessions in new window"
+              >
+                <ExternalLinkIcon />
+              </a>
+            )}
+          </div>
           {onNewSession && (
             <button
               type="button"

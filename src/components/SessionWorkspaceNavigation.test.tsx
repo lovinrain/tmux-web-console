@@ -1267,18 +1267,32 @@ describe("SessionWorkspaceNavigation", () => {
   });
 
   it.each(["horizontal", "vertical"] as const)(
-    "keeps the New session action beside Sessions in the %s tab layout",
+    "splits Sessions by window target beside New session in the %s tab layout",
     (orientation) => {
+      const onOpenDashboard = vi.fn();
       render(
         <SessionWorkspaceNavigation
-          {...navigationProps({ onNewSession: vi.fn() })}
+          {...navigationProps({ onNewSession: vi.fn(), onOpenDashboard })}
           orientation={orientation}
+          dashboardWindowHref="/mux/?workspace=release&tab=alpha&tab=beta"
         />,
       );
 
-      const sessionsButton = screen.getByRole("button", { name: "All sessions" });
+      const dashboardActions = screen.getByRole("group", { name: "Sessions page actions" });
+      const sessionsButton = within(dashboardActions)
+        .getByRole("button", { name: "All sessions" });
+      const sessionsWindowLink = within(dashboardActions)
+        .getByRole("link", { name: "Open all sessions in new window" });
       const newSessionButton = screen.getByRole("button", { name: "New session" });
-      expect(sessionsButton.nextElementSibling).toBe(newSessionButton);
+      expect(sessionsWindowLink).toHaveAttribute(
+        "href",
+        "/mux/?workspace=release&tab=alpha&tab=beta",
+      );
+      expect(sessionsWindowLink).toHaveAttribute("target", "_blank");
+      expect(sessionsWindowLink).toHaveAttribute("rel", "noopener noreferrer");
+      fireEvent.click(sessionsButton);
+      expect(onOpenDashboard).toHaveBeenCalledOnce();
+      expect(dashboardActions.nextElementSibling).toBe(newSessionButton);
       expect(newSessionButton.nextElementSibling).toHaveClass("workspace-tab-viewport");
     },
   );

@@ -2825,6 +2825,15 @@ function AppRoutes() {
     </>
   );
 
+  const dashboardWindowHref = targetUrl(
+    "/",
+    searchWithWorkspaceState(
+      location.search,
+      workspace.openSessions,
+      workspace.groups,
+    ),
+  );
+
   if (activeRoute) {
     const { sessionName, recentsOpen } = activeRoute;
     const liveSession = knownSessions.find((session) => session.name === sessionName);
@@ -2868,14 +2877,7 @@ function AppRoutes() {
           />
         )}
         onBack={returnToDashboard}
-        dashboardWindowHref={targetUrl(
-          "/",
-          searchWithWorkspaceState(
-            location.search,
-            workspace.openSessions,
-            workspace.groups,
-          ),
-        )}
+        dashboardWindowHref={dashboardWindowHref}
         workspaceOverlayOpen={recentsOpen}
         mobileMode={mobileConsoleMode}
         onMobileModeChange={setMobileConsoleMode}
@@ -2932,6 +2934,7 @@ function AppRoutes() {
             onCloseRecents={closeRecents}
             onClearRecents={clearRecents}
             onOpenDashboard={returnToDashboard}
+            dashboardWindowHref={dashboardWindowHref}
             onNewSession={openNewSession}
             onOpenTabSearch={openTabSearch}
             workspacePersistenceState={workspacePersistenceState}
@@ -2984,6 +2987,7 @@ function AppRoutes() {
             onCloseRecents={closeRecents}
             onClearRecents={clearRecents}
             onOpenDashboard={returnToDashboard}
+            dashboardWindowHref={dashboardWindowHref}
             onNewSession={openNewSession}
             onOpenTabSearch={openTabSearch}
             workspacePersistenceState={workspacePersistenceState}

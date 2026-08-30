@@ -2702,8 +2702,37 @@ a:focus-visible {
   text-transform: uppercase;
 }
 
-.workspace-dashboard-button {
+.workspace-dashboard-actions {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: stretch;
   border-right: 1px solid #30382e;
+}
+
+.workspace-dashboard-button {
+  border-right: 0;
+}
+
+.workspace-dashboard-window-button {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: 40px;
+  min-width: 40px;
+  min-height: 44px;
+  flex: 0 0 40px;
+  place-items: center;
+  padding: 0;
+  color: var(--cyan);
+  background:
+    linear-gradient(135deg, rgba(104, 223, 208, 0.08), transparent 72%),
+    #171d1a;
+  border: 0;
+  border-left: 1px solid #30382e;
+  cursor: pointer;
 }
 
 .workspace-new-session-button {
@@ -2720,7 +2749,7 @@ a:focus-visible {
   border-right: 1px solid #30382e;
 }
 
-.workspace-dashboard-button + .workspace-new-session-button {
+.workspace-dashboard-actions + .workspace-new-session-button {
   border-left: 0;
 }
 
@@ -3190,6 +3219,8 @@ a:focus-visible {
 
 .workspace-dashboard-button:hover,
 .workspace-dashboard-button:focus-visible,
+.workspace-dashboard-window-button:hover,
+.workspace-dashboard-window-button:focus-visible,
 .workspace-new-session-button:hover:not(:disabled),
 .workspace-new-session-button:focus-visible,
 .workspace-save-button:hover,
@@ -3210,6 +3241,7 @@ a:focus-visible {
 }
 
 .workspace-dashboard-button svg,
+.workspace-dashboard-window-button svg,
 .workspace-new-session-button svg,
 .workspace-save-button svg,
 .workspace-saved-indicator svg,
@@ -8874,7 +8906,7 @@ html.scoped-note-resizing * {
     box-shadow: 0 0 0 3px rgba(190, 255, 84, 0.2), 0 5px 18px rgba(0, 0, 0, 0.4);
   }
 
-  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-dashboard-button,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-dashboard-actions,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-new-session-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-save-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-saved-indicator,
@@ -8892,6 +8924,33 @@ html.scoped-note-resizing * {
     border-right: 0;
     border-bottom: 1px solid #30382e;
     border-left: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-dashboard-actions {
+    display: flex;
+    padding: 0;
+    border-right: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-dashboard-actions .workspace-dashboard-button {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    min-height: 44px;
+    flex: 1 1 auto;
+    justify-content: flex-start;
+    padding: 0 12px;
+    border: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-dashboard-window-button {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
   }
 
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical
@@ -9223,6 +9282,15 @@ html.scoped-note-resizing * {
 
   /* With the compact 8px gutter, 103px of query width is a 112px rail. */
   @container workspace-tab-rail (max-width: 103px) {
+    .workspace-navigation-vertical[data-orientation="vertical"]
+      .workspace-dashboard-actions .workspace-dashboard-button,
+    .workspace-navigation-vertical[data-orientation="vertical"]
+      .workspace-dashboard-window-button {
+      width: 50%;
+      min-width: 0;
+      flex: 1 1 50%;
+    }
+
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-group {
       padding-inline: 3px;
     }
@@ -10826,6 +10894,7 @@ html.history-resizing * {
   }
 
   .workspace-dashboard-button,
+  .workspace-dashboard-window-button,
   .workspace-new-session-button,
   .workspace-save-button,
   .workspace-saved-indicator,
@@ -10848,6 +10917,7 @@ html.history-resizing * {
   }
 
   .workspace-dashboard-button svg,
+  .workspace-dashboard-window-button svg,
   .workspace-new-session-button svg,
   .workspace-save-button svg,
   .workspace-saved-indicator svg,

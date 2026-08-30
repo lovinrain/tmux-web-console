@@ -121,9 +121,10 @@ but resets on reload; phone layouts keep Scrollback full-width.
 
 `^A`, `^E`, and `^K` send `Ctrl+A`, `Ctrl+E`, and `Ctrl+K` respectively, letting
 compatible shells and agents move to the beginning or end of their active input,
-or delete from the cursor to the end. The `Other Keys` control reveals `Up`,
-`Down`, `Left`, and `Right` in a secondary row so those less-frequent controls do
-not crowd the main shortcut strip.
+or delete from the cursor to the end. `^Q` sends a literal `Ctrl+Q` byte, which
+Copilot CLI uses to enqueue its current prompt. The `Other Keys` control reveals
+`Up`, `Down`, `Left`, and `Right` in a secondary row so those less-frequent
+controls do not crowd the main shortcut strip.
 
 `Raw keys` focuses the live xterm input. It does not enable a separate mode or
 send a control sequence; subsequent keyboard input goes directly to the
@@ -468,6 +469,9 @@ choice explicit: the left arrow returns to Sessions and Workspaces in the
 current browser window, while the adjacent external-window segment opens that
 landing page separately without changing the console. The latter preserves the
 dashboard query and the complete current quick-tab or saved-workspace context.
+The fixed `Sessions` control in the horizontal tab bar or vertical tab rail is
+split the same way: its labeled segment navigates this window, and its external
+link segment opens the same preserved landing-page URL in a new window.
 
 The landing page lists named saved workspaces in rough last-active order. `New
 workspace` starts with an empty tab set by default; choose `Copy current tabs`

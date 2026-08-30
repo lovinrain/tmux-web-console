@@ -102,7 +102,8 @@ For frontend development, run `npm run dev`. Vite serves
 - Landing-page workspace cards can resume in place or open the same saved
   workspace in a separate browser window. The console header uses a joined
   back/new-window control so the Sessions and Workspaces landing page can also
-  be opened without replacing the active console.
+  be opened without replacing the active console. The fixed `Sessions` action
+  in the horizontal tab bar or vertical tab rail offers the same split choice.
 - New Session can start in an absolute server directory. Its browser-local
   Workspace Memory ranks paths learned from tmux sessions and successful
   launches by recency and frequency; paths can also be pinned, hidden, restored,

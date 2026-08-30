@@ -1284,6 +1284,7 @@ html[data-theme="light"].workspace-tab-rail-resizing [data-desktop-tabs="vertica
 }
 
 html[data-theme="light"] .workspace-dashboard-button,
+html[data-theme="light"] .workspace-dashboard-window-button,
 html[data-theme="light"] .workspace-new-session-button,
 html[data-theme="light"] .workspace-save-button,
 html[data-theme="light"] .workspace-saved-indicator,
@@ -1299,6 +1300,8 @@ html[data-theme="light"] .workspace-recents-button {
 
 html[data-theme="light"] .workspace-dashboard-button:hover,
 html[data-theme="light"] .workspace-dashboard-button:focus-visible,
+html[data-theme="light"] .workspace-dashboard-window-button:hover,
+html[data-theme="light"] .workspace-dashboard-window-button:focus-visible,
 html[data-theme="light"] .workspace-new-session-button:hover:not(:disabled),
 html[data-theme="light"] .workspace-new-session-button:focus-visible,
 html[data-theme="light"] .workspace-save-button:hover,
