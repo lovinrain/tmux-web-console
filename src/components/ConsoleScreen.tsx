@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  BASE_PATH,
   copySession,
   createQueuedMessage,
   deleteQueuedMessage,
@@ -28,6 +29,7 @@ import {
   ArrowUpIcon,
   ContractIcon,
   ExpandIcon,
+  ExternalLinkIcon,
   FolderIcon,
   GridIcon,
   HistoryIcon,
@@ -90,6 +92,7 @@ interface ConsoleScreenProps {
   workspaceId?: string | null;
   workspaceName?: string | null;
   onBack: () => void;
+  dashboardWindowHref?: string;
   headerNotes?: ReactNode;
   workspaceLinks?: ReactNode;
   sessionNavigation?: ReactNode;
@@ -404,6 +407,7 @@ export function ConsoleScreen({
   workspaceId = null,
   workspaceName = null,
   onBack,
+  dashboardWindowHref,
   headerNotes,
   workspaceLinks,
   sessionNavigation,
@@ -435,6 +439,8 @@ export function ConsoleScreen({
 }: ConsoleScreenProps) {
   const { theme } = useTheme();
   const { bindings: shortcutBindings } = useShortcutSettings();
+  const resolvedDashboardWindowHref = dashboardWindowHref
+    ?? `${BASE_PATH}/${window.location.search}`;
   const consoleShellRef = useRef<HTMLElement>(null);
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
@@ -1495,7 +1501,31 @@ export function ConsoleScreen({
         </button>
       </nav>
       <header className="console-header">
-        <button type="button" className="icon-button back-button" onClick={onBack} aria-label="Back to sessions"><ArrowLeftIcon /></button>
+        <div
+          className="console-dashboard-navigation"
+          role="group"
+          aria-label="Sessions and workspaces navigation"
+        >
+          <button
+            type="button"
+            className="icon-button back-button"
+            onClick={onBack}
+            aria-label="Back to sessions"
+            title="Open landing page in this window"
+          >
+            <ArrowLeftIcon />
+          </button>
+          <a
+            className="icon-button console-dashboard-new-window"
+            href={resolvedDashboardWindowHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open sessions and workspaces in new window"
+            title="Open landing page in new window"
+          >
+            <ExternalLinkIcon />
+          </a>
+        </div>
         <div className="console-identity">
           <div className="console-title-line">
             <h1>{session?.customTitle || sessionName}</h1>

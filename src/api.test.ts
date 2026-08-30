@@ -30,6 +30,7 @@ import {
   saveSnippetTree,
   saveShortcutSettings,
   sessionFileDownloadUrl,
+  sessionFileImageUrl,
   subscribeToSessions,
   terminateSession,
   transferSessionToWorkspace,
@@ -422,6 +423,14 @@ describe("session file browser API", () => {
       "src/main file.ts",
     )).toBe(
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/download?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
+    );
+    expect(sessionFileImageUrl(
+      "work/name #1",
+      "$7",
+      "%3",
+      "src/main file.ts",
+    )).toBe(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/image?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
     );
     const upload = new File(["payload"], "drop me.txt", { type: "text/plain" });
     await expect(uploadSessionFile(

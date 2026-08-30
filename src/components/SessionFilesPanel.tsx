@@ -14,6 +14,7 @@ import {
   listSessionFiles,
   previewSessionFile,
   sessionFileDownloadUrl,
+  sessionFileImageUrl,
   uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
@@ -30,7 +31,9 @@ import {
   ArrowUpIcon,
   ChevronRightIcon,
   CloseIcon,
+  ExternalLinkIcon,
   FolderIcon,
+  ImageIcon,
   RefreshIcon,
   SearchIcon,
   TerminalIcon,
@@ -62,6 +65,7 @@ interface PathTarget {
 }
 
 type FileUploadStatus = "queued" | "uploading" | "uploaded" | "error";
+type ImagePreviewStatus = "loading" | "ready" | "error";
 
 interface FileUploadItem {
   id: string;
@@ -179,6 +183,7 @@ export function SessionFilesPanel({
   const [preview, setPreview] = useState<SessionFilePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [imagePreviewStatus, setImagePreviewStatus] = useState<ImagePreviewStatus>("loading");
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
   const [actionStatus, setActionStatus] = useState<string | null>(null);
@@ -274,6 +279,10 @@ export function SessionFilesPanel({
   }, [identity, paneId, selected, sessionId, sessionName]);
 
   useEffect(() => {
+    setImagePreviewStatus("loading");
+  }, [preview?.kind, preview?.path]);
+
+  useEffect(() => {
     const panel = panelRef.current;
     const observer = panel && typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(keepVisible)
@@ -316,6 +325,9 @@ export function SessionFilesPanel({
   }, [directoryPath]);
 
   const pathTarget: PathTarget | null = selected ?? listing;
+  const imagePreviewUrl = preview?.kind === "image" && !preview.truncated
+    ? sessionFileImageUrl(sessionName, sessionId, paneId, preview.path)
+    : null;
 
   const navigateTo = useCallback((path: string) => {
     if (uploading) {
@@ -756,7 +768,10 @@ export function SessionFilesPanel({
                 : entry.absolutePath}
               onClick={() => {
                 if (entry.kind === "directory") navigateTo(entry.path);
-                else setSelected(entry);
+                else {
+                  setSelected(entry);
+                  setActionStatus(null);
+                }
               }}
             >
               <span className="session-file-kind" aria-hidden="true">
@@ -863,13 +878,65 @@ export function SessionFilesPanel({
               </div>
               {preview.kind === "text" ? (
                 <pre tabIndex={0}>{preview.content || ""}</pre>
+              ) : preview.kind === "image" ? (
+                preview.truncated ? (
+                  <div className="session-file-preview-empty image-limit">
+                    <ImageIcon />
+                    <strong>Image is too large to preview</strong>
+                    <span>
+                      Inline viewing is limited to {formatBytes(preview.previewBytes)}.
+                      Download the original file instead.
+                    </span>
+                  </div>
+                ) : imagePreviewUrl ? (
+                  <div
+                    className="session-file-image-preview"
+                    data-image-status={imagePreviewStatus}
+                  >
+                    <a
+                      className="session-file-image-link"
+                      href={imagePreviewUrl}
+                      target="_blank"
+                      rel="noopener"
+                      aria-label={`Open ${preview.name} full size`}
+                      title="Open the original image in a new tab"
+                    >
+                      <img
+                        src={imagePreviewUrl}
+                        alt={`Preview of ${preview.name}`}
+                        draggable={false}
+                        decoding="async"
+                        onLoad={() => setImagePreviewStatus("ready")}
+                        onError={() => setImagePreviewStatus("error")}
+                      />
+                      {imagePreviewStatus === "ready" && (
+                        <span className="session-file-image-open">
+                          <ExternalLinkIcon /> Open full size
+                        </span>
+                      )}
+                    </a>
+                    {imagePreviewStatus === "loading" && (
+                      <div className="session-file-image-message" role="status">
+                        <span className="session-files-spinner" />
+                        <strong>Decoding image</strong>
+                      </div>
+                    )}
+                    {imagePreviewStatus === "error" && (
+                      <div className="session-file-image-message error" role="alert">
+                        <ImageIcon />
+                        <strong>Image preview unavailable</strong>
+                        <span>The file may have changed or the browser cannot decode it. Download remains available.</span>
+                      </div>
+                    )}
+                  </div>
+                ) : null
               ) : (
                 <div className="session-file-preview-empty binary">
                   <strong>Binary file</strong>
                   <span>Preview is disabled; download it or copy and stage its path.</span>
                 </div>
               )}
-              {preview.truncated && (
+              {preview.kind === "text" && preview.truncated && (
                 <p className="session-file-preview-truncated" role="status">
                   Preview capped at {formatBytes(preview.previewBytes)} of {formatBytes(preview.size)}.
                 </p>

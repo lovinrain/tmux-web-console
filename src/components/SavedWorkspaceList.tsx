@@ -16,6 +16,7 @@ import {
 import {
   ChevronRightIcon,
   EditIcon,
+  ExternalLinkIcon,
   GridIcon,
   RefreshIcon,
   TrashIcon,
@@ -38,6 +39,7 @@ export interface SavedWorkspaceListProps {
   activeSession?: string | null;
   activeWorkspaceId?: string | null;
   onOpen: (workspace: SavedWorkspace) => void;
+  getOpenInNewWindowHref?: (workspace: SavedWorkspace) => string;
   onDeleted?: (workspaceId: string) => void;
   onUpdated?: (workspace: SavedWorkspace) => void;
 }
@@ -82,6 +84,7 @@ export function SavedWorkspaceList({
   activeSession = null,
   activeWorkspaceId = null,
   onOpen,
+  getOpenInNewWindowHref,
   onDeleted,
   onUpdated,
 }: SavedWorkspaceListProps) {
@@ -529,17 +532,37 @@ export function SavedWorkspaceList({
                     </div>
                   ) : (
                     <div className="saved-workspace-card-actions">
-                      <button
-                        type="button"
-                        className="saved-workspace-open"
-                        onClick={() => onOpen(workspace)}
-                        disabled={busy}
-                        aria-label={`${workspace.tabs.length > 0 ? "Resume" : "Open"} workspace ${workspace.name}`}
-                      >
-                        {workspace.tabs.length > 0 ? "Resume" : "Open empty"}
-                        <ChevronRightIcon />
-                      </button>
-                      <div>
+                      <div className="saved-workspace-launch-actions">
+                        <button
+                          type="button"
+                          className="saved-workspace-open"
+                          onClick={() => onOpen(workspace)}
+                          disabled={busy}
+                          aria-label={`${workspace.tabs.length > 0 ? "Resume" : "Open"} workspace ${workspace.name}`}
+                        >
+                          {workspace.tabs.length > 0 ? "Resume" : "Open empty"}
+                          <ChevronRightIcon />
+                        </button>
+                        {getOpenInNewWindowHref && (
+                          <a
+                            className="saved-workspace-open-window"
+                            href={getOpenInNewWindowHref(workspace)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Open workspace ${workspace.name} in new window`}
+                            aria-disabled={busy || undefined}
+                            tabIndex={busy ? -1 : undefined}
+                            title="Open workspace in new window"
+                            onClick={(event) => {
+                              if (busy) event.preventDefault();
+                            }}
+                          >
+                            <ExternalLinkIcon />
+                            <span>New window</span>
+                          </a>
+                        )}
+                      </div>
+                      <div className="saved-workspace-management-actions">
                         <button
                           type="button"
                           onClick={() => {

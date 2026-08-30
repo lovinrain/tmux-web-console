@@ -1290,7 +1290,7 @@ test("desktop file attachments stage or paste host-readable paths", async ({
   await expect(page.locator(".terminal-attachment-feedback")).toBeHidden();
 });
 
-test("desktop CWD browser previews and stages pane-scoped files", async ({ page }) => {
+test("desktop CWD browser previews text and images and stages pane-scoped files", async ({ page }) => {
   test.setTimeout(45_000);
   const panePath = execFileSync(
     "tmux",
@@ -1300,9 +1300,12 @@ test("desktop CWD browser previews and stages pane-scoped files", async ({ page 
   const fixtureName = `muxdeck-file-browser-${process.pid}`;
   const fixtureDirectory = `${panePath}/${fixtureName}`;
   const fixtureFile = `${fixtureDirectory}/read me.txt`;
+  const fixtureImageName = "workspace preview.png";
+  const fixtureImage = `${fixtureDirectory}/${fixtureImageName}`;
   const fixtureContent = "FILE_BROWSER_E2E\nsecond line\n";
   mkdirSync(fixtureDirectory, { recursive: true });
   writeFileSync(fixtureFile, fixtureContent, "utf8");
+  copyFileSync("docs/images/muxdeck-dashboard.png", fixtureImage);
 
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -1345,6 +1348,20 @@ test("desktop CWD browser previews and stages pane-scoped files", async ({ page 
     expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
     await page.screenshot({ path: "artifacts/desktop-cwd-file-browser.png" });
     await stagedInput.fill("");
+
+    await browser.getByRole("button", { name: `File ${fixtureImageName}` }).click();
+    const imagePreview = browser.getByRole("img", {
+      name: `Preview of ${fixtureImageName}`,
+    });
+    await expect(imagePreview).toBeVisible();
+    await expect.poll(() => imagePreview.evaluate((image: HTMLImageElement) => (
+      image.naturalWidth
+    ))).toBeGreaterThan(0);
+    await expect(browser.getByRole("link", {
+      name: `Open ${fixtureImageName} full size`,
+    })).toBeVisible();
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
+    await page.screenshot({ path: "artifacts/desktop-cwd-image-preview.png" });
 
     const pickerBytes = Buffer.from("\x00MUXDECK_BROWSER_UPLOAD\n", "binary");
     const pickerName = "browser upload.bin";
@@ -3688,6 +3705,29 @@ test("saved workspace survives reload and device handoff without touching tmux p
       { kind: "shells", view: "list", workspace: workspaceId },
     );
     await page.setViewportSize({ width: 1280, height: 720 });
+    await page.screenshot({ path: "artifacts/workspace-window-navigation-console.png" });
+
+    const landingWindowLink = page.getByRole("link", {
+      name: "Open sessions and workspaces in new window",
+    });
+    await expect(landingWindowLink).toHaveAttribute("target", "_blank");
+    await expect(landingWindowLink).toHaveAttribute("rel", "noopener noreferrer");
+    const [landingWindow] = await Promise.all([
+      page.waitForEvent("popup"),
+      landingWindowLink.click(),
+    ]);
+    await expectRoute(
+      landingWindow,
+      "/mux/",
+      orderedTabs,
+      { kind: "shells", view: "list", workspace: workspaceId },
+    );
+    await expect(landingWindow.getByRole("heading", {
+      name: workspaceName,
+      exact: true,
+    })).toBeVisible();
+    expect(await landingWindow.evaluate(() => window.opener === null)).toBe(true);
+    await landingWindow.close();
 
     await page.getByRole("button", { name: "Back to sessions" }).click();
     const firstDeviceCard = page.locator(".saved-workspace-card").filter({
@@ -3696,6 +3736,33 @@ test("saved workspace survives reload and device handoff without touching tmux p
     const firstActivity = firstDeviceCard.locator(".saved-workspace-activity");
     await expect(firstActivity).toHaveText(/^Active /);
     await expect(firstActivity).toHaveAttribute("title", /.+/);
+    await page.screenshot({
+      path: "artifacts/workspace-window-navigation-landing.png",
+      fullPage: true,
+    });
+
+    const workspaceWindowLink = firstDeviceCard.getByRole("link", {
+      name: `Open workspace ${workspaceName} in new window`,
+      exact: true,
+    });
+    await expect(workspaceWindowLink).toHaveAttribute("target", "_blank");
+    await expect(workspaceWindowLink).toHaveAttribute("rel", "noopener noreferrer");
+    const [workspaceWindow] = await Promise.all([
+      page.waitForEvent("popup"),
+      workspaceWindowLink.click(),
+    ]);
+    await expectRoute(
+      workspaceWindow,
+      `/mux/session/${sharedSession}`,
+      orderedTabs,
+      { kind: "shells", view: "list", workspace: workspaceId },
+    );
+    await expect(workspaceWindow.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await expect(workspaceWindow).toHaveTitle(`${workspaceName} - ${sharedSession}`);
+    expect(await workspaceWindow.evaluate(() => window.opener === null)).toBe(true);
+    await workspaceWindow.close();
 
     const origin = new URL(page.url()).origin;
     secondContext = await browser.newContext();

@@ -64,8 +64,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
   indicators, reusable snippets, and desktop file attachments
-- A desktop, read-only pane-CWD browser with folder navigation, safe text
-  previews, and shell-safe path staging
+- A desktop pane-CWD browser with folder navigation, safe text and raster-image
+  previews, uploads/downloads, and shell-safe path staging
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
@@ -96,6 +96,10 @@ For frontend development, run `npm run dev`. Vite serves
   that client but leaves the tmux session and foreground process running.
 - A tab's `X` and workspace deletion only remove Muxdeck navigation records.
   `End` terminates the entire tmux session after confirmation.
+- Landing-page workspace cards can resume in place or open the same saved
+  workspace in a separate browser window. The console header uses a joined
+  back/new-window control so the Sessions and Workspaces landing page can also
+  be opened without replacing the active console.
 - New Session can start in an absolute server directory. Its browser-local
   Workspace Memory ranks paths learned from tmux sessions and successful
   launches by recency and frequency; paths can also be pinned, hidden, restored,
@@ -125,12 +129,15 @@ For frontend development, run `npm run dev`. Vite serves
 - On desktop, click the working-directory line beneath the session title to open
   a movable, resizable file browser. Its root is always derived from
   the live tmux pane; requests cannot select an arbitrary server root or follow
-  a symlink outside that CWD. Text previews are UTF-8 and capped at 1 MiB;
-  binary files show metadata. Selected regular files can be downloaded without
-  a preview-size limit. `Upload` and drag-and-drop write up to six files at once
-  into the folder shown (12 MiB each, mode `0600`) and refuse to overwrite an
-  existing name. `Copy path` copies the absolute server path, while `Stage path`
-  inserts its shell-quoted form into the composer without sending.
+  a symlink outside that CWD. Text previews are UTF-8 and capped at 1 MiB.
+  Signature-verified PNG, JPEG, GIF, WebP, AVIF, BMP, and ICO files render in a
+  fitted viewer up to 25 MiB and can be opened full size; active formats such as
+  SVG are never embedded. Other binary files show metadata. Selected regular
+  files can be downloaded without a preview-size limit. `Upload` and
+  drag-and-drop write up to six files at once into the folder shown (12 MiB
+  each, mode `0600`) and refuse to overwrite an existing name. `Copy path`
+  copies the absolute server path, while `Stage path` inserts its shell-quoted
+  form into the composer without sending.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck

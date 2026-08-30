@@ -40,6 +40,7 @@ const liveTerminalState = vi.hoisted(() => ({
 }));
 
 vi.mock("../api", () => ({
+  BASE_PATH: "/mux",
   copySession: vi.fn(),
   listSessions: vi.fn(),
   listQueuedMessages: vi.fn(),
@@ -167,6 +168,37 @@ beforeEach(() => {
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("splits landing-page navigation between this window and a new window", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onBack = vi.fn();
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={onBack}
+        dashboardWindowHref="/mux/?q=deploy&workspace=workspace-1&tab=test"
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    const navigation = screen.getByRole("group", {
+      name: "Sessions and workspaces navigation",
+    });
+    fireEvent.click(within(navigation).getByRole("button", {
+      name: "Back to sessions",
+    }));
+    expect(onBack).toHaveBeenCalledOnce();
+
+    const newWindow = within(navigation).getByRole("link", {
+      name: "Open sessions and workspaces in new window",
+    });
+    expect(newWindow).toHaveAttribute(
+      "href",
+      "/mux/?q=deploy&workspace=workspace-1&tab=test",
+    );
+    expect(newWindow).toHaveAttribute("target", "_blank");
+    expect(newWindow).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
   it("opens the desktop CWD browser and stages its path without sending", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);

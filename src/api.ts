@@ -138,7 +138,7 @@ export interface SessionFilePreview {
   path: string;
   absolutePath: string;
   terminalText: string;
-  kind: "text" | "binary";
+  kind: "text" | "image" | "binary";
   mediaType: string;
   size: number;
   modified: number;
@@ -181,6 +181,16 @@ export async function previewSessionFile(
     `/api/sessions/${encodeURIComponent(session)}/files/preview?${query}`,
     { signal },
   );
+}
+
+export function sessionFileImageUrl(
+  session: string,
+  sessionId: string,
+  paneId: string,
+  path: string,
+): string {
+  const query = sessionFileQuery(sessionId, paneId, path);
+  return `${BASE_PATH}/api/sessions/${encodeURIComponent(session)}/files/image?${query}`;
 }
 
 export function sessionFileDownloadUrl(

@@ -437,7 +437,8 @@
 .saved-workspace-card-topline,
 .saved-workspace-tab-heading,
 .saved-workspace-card-actions,
-.saved-workspace-card-actions > div,
+.saved-workspace-launch-actions,
+.saved-workspace-management-actions,
 .saved-workspace-delete-confirm > div {
   display: flex;
   align-items: center;
@@ -544,9 +545,24 @@
 }
 
 .saved-workspace-card-actions {
+  flex-wrap: wrap;
   margin-top: auto;
   padding-top: 13px;
   border-top: 1px solid #30382e;
+}
+
+.saved-workspace-launch-actions {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.saved-workspace-management-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .saved-workspace-open {
@@ -574,7 +590,44 @@
   width: 15px;
 }
 
-.saved-workspace-card-actions > div > button {
+.saved-workspace-open-window {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  color: #91cfc4;
+  background: rgba(104, 223, 208, 0.055);
+  border: 1px solid rgba(104, 223, 208, 0.2);
+  border-radius: 3px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.saved-workspace-open-window:hover,
+.saved-workspace-open-window:focus-visible {
+  color: #d8fff8;
+  background: rgba(104, 223, 208, 0.09);
+  border-color: rgba(104, 223, 208, 0.46);
+}
+
+.saved-workspace-open-window[aria-disabled="true"] {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.saved-workspace-open-window svg {
+  width: 14px;
+  flex: 0 0 14px;
+}
+
+.saved-workspace-management-actions > button {
   display: grid;
   width: 40px;
   height: 40px;
@@ -587,8 +640,8 @@
   cursor: pointer;
 }
 
-.saved-workspace-card-actions > div > button:hover:not(:disabled),
-.saved-workspace-card-actions > div > button:focus-visible {
+.saved-workspace-management-actions > button:hover:not(:disabled),
+.saved-workspace-management-actions > button:focus-visible {
   color: #e8eee5;
   border-color: #657461;
 }
@@ -598,7 +651,7 @@
   cursor: default;
 }
 
-.saved-workspace-card-actions > div svg {
+.saved-workspace-management-actions svg {
   width: 16px;
 }
 
@@ -748,7 +801,7 @@ html[data-theme="light"] .saved-workspace-rename-form input {
 }
 
 html[data-theme="light"] .saved-workspace-tab-summary > ol > li,
-html[data-theme="light"] .saved-workspace-card-actions > div > button,
+html[data-theme="light"] .saved-workspace-management-actions > button,
 html[data-theme="light"] .saved-workspace-rename-form button,
 html[data-theme="light"] .saved-workspace-delete-confirm button {
   color: #465043;
@@ -760,6 +813,12 @@ html[data-theme="light"] .saved-workspace-open {
   color: #315b08;
   background: var(--light-green-wash);
   border-color: #a6ba89;
+}
+
+html[data-theme="light"] .saved-workspace-open-window {
+  color: #176158;
+  background: #eef8f4;
+  border-color: #a8c9c0;
 }
 
 html[data-theme="light"] .saved-workspace-card-actions,
@@ -846,10 +905,21 @@ html[data-theme="light"] .saved-workspace-delete-confirm button.danger {
     flex-wrap: wrap;
   }
 
-  .saved-workspace-open {
-    min-width: 124px;
-    flex: 1;
+  .saved-workspace-launch-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .saved-workspace-open,
+  .saved-workspace-open-window {
+    width: 100%;
+    min-width: 0;
     justify-content: center;
+  }
+
+  .saved-workspace-management-actions {
+    margin-left: auto;
   }
 
   .saved-workspace-delete-confirm button {

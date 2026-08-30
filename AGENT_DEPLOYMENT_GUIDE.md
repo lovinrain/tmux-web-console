@@ -724,7 +724,10 @@ merely to test that the application itself has no login.
    action controls, autosave edits, survive reload, and remain isolated by scope;
    a temporary workspace disables only the Workspace note. Its approximate
    last-active label updates after an explicit workspace interaction; merely
-   listing workspaces, links, or notes must not mutate tmux.
+   listing workspaces, links, or notes must not mutate tmux. The workspace
+   card's `New window` link must restore the same workspace in a no-opener tab,
+   while the console header's split landing-page control must leave the console
+   intact when it opens Sessions and Workspaces in a new window.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
 10. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
@@ -756,8 +759,11 @@ merely to test that the application itself has no login.
     small file into a disposable folder with both the picker and drag-and-drop.
     Confirm the files land in the folder shown with mode `0600`, a repeated name
     is rejected without changing the original bytes, and downloading returns the
-    same bytes. Delete only those disposable fixtures afterward; none of these
-    file operations should send terminal input or change tmux identities.
+    same bytes. Add a small PNG or JPEG and confirm it renders in the fitted
+    preview and opens through the protected full-size link; an SVG must remain a
+    non-embedded text or binary preview. Delete only those disposable fixtures
+    afterward; none of these file operations should send terminal input or
+    change tmux identities.
 16. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
     Change one unused test binding, save, reload, and confirm the visible hint
     and handler both use it; then restore the original binding. A duplicate key
@@ -867,6 +873,7 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | Titles/tags/starred/ignored organization, memoranda, snippets, saved workspaces, shortcuts, authentication devices, or attachments do not persist | State path or ownership/mode is wrong | Inspect all configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal without printing credential state. |
 | File attachment returns `400`, `413`, `507`, or `503` | Empty file, 12 MiB file limit, 512 MiB directory cap, or unwritable upload path | Try a small non-empty file in a disposable session, inspect `MUXDECK_UPLOADS_DIR` and the journal, then archive/remove old uploads or repair ownership without changing tmux. |
 | Pane-CWD upload returns `403`, `409`, or `413` | Destination is not writable/root-confined, the name already exists, or the file exceeds 12 MiB | Refresh the live pane identity and folder, choose a new filename, and inspect only that disposable destination's ownership/permissions; Muxdeck deliberately never overwrites. |
+| Pane-CWD image preview returns `413` or `415` | The raster image exceeds 25 MiB, has an unsupported or active format, or its signature does not match a supported image | Use Download for large files; convert trusted content to PNG, JPEG, GIF, WebP, AVIF, BMP, or ICO rather than weakening the inline allowlist. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Workspace API returns `503` | The configured workspace file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. Do not delete tmux sessions. |
 | Another terminal layout changes | Browser opened in `Fit active` | This is tmux shared-size behavior; use `Size protected` for observation. |

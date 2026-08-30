@@ -4,6 +4,7 @@ import {
   listSessionFiles,
   previewSessionFile,
   sessionFileDownloadUrl,
+  sessionFileImageUrl,
   uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
@@ -14,6 +15,7 @@ vi.mock("../api", () => ({
   listSessionFiles: vi.fn(),
   previewSessionFile: vi.fn(),
   sessionFileDownloadUrl: vi.fn(),
+  sessionFileImageUrl: vi.fn(),
   uploadSessionFile: vi.fn(),
 }));
 
@@ -74,6 +76,7 @@ function renderPanel(overrides: {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(sessionFileDownloadUrl).mockReturnValue("/files/download");
+  vi.mocked(sessionFileImageUrl).mockReturnValue("/files/image");
   document.documentElement.classList.remove("session-files-panel-moving");
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -194,6 +197,84 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "File archive.bin" }));
     expect(await within(panel).findByText("Binary file")).toBeInTheDocument();
     expect(within(panel).getByText(/Preview is disabled/)).toBeInTheDocument();
+  });
+
+  it("renders raster images with a full-size link and a decode failure state", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("diagram.png", "diagram.png", "file", { size: 4_096 }),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/project",
+      name: "diagram.png",
+      path: "diagram.png",
+      absolutePath: "/work/project/diagram.png",
+      terminalText: "/work/project/diagram.png",
+      kind: "image",
+      mediaType: "image/png",
+      size: 4_096,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 4_096,
+      content: null,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File diagram.png" }));
+    const image = await within(panel).findByRole("img", {
+      name: "Preview of diagram.png",
+    });
+    expect(image).toHaveAttribute("src", "/files/image");
+    expect(sessionFileImageUrl).toHaveBeenCalledWith(
+      "agent",
+      "$7",
+      "%3",
+      "diagram.png",
+    );
+    expect(within(panel).getByText("Decoding image")).toBeInTheDocument();
+
+    fireEvent.load(image);
+    expect(within(panel).getByRole("link", { name: "Open diagram.png full size" }))
+      .toHaveAttribute("href", "/files/image");
+    expect(within(panel).getByText("Open full size")).toBeInTheDocument();
+    expect(within(panel).queryByText("Decoding image")).not.toBeInTheDocument();
+
+    fireEvent.error(image);
+    expect(within(panel).getByRole("alert")).toHaveTextContent(
+      "Image preview unavailable",
+    );
+  });
+
+  it("keeps oversized raster images downloadable without requesting inline content", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("huge.webp", "huge.webp", "file", { size: 40 * 1_024 * 1_024 }),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/project",
+      name: "huge.webp",
+      path: "huge.webp",
+      absolutePath: "/work/project/huge.webp",
+      terminalText: "/work/project/huge.webp",
+      kind: "image",
+      mediaType: "image/webp",
+      size: 40 * 1_024 * 1_024,
+      modified: 1_700_000_000,
+      truncated: true,
+      previewBytes: 25 * 1_024 * 1_024,
+      content: null,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File huge.webp" }));
+    expect(await within(panel).findByText("Image is too large to preview"))
+      .toBeInTheDocument();
+    expect(within(panel).getByText(/Inline viewing is limited to 25 MiB/))
+      .toBeInTheDocument();
+    expect(within(panel).queryByRole("img")).not.toBeInTheDocument();
+    expect(sessionFileImageUrl).not.toHaveBeenCalled();
+    expect(within(panel).getByRole("link", { name: "Download selected file" }))
+      .toHaveAttribute("href", "/files/download");
   });
 
   it("is movable from its title strip and closes with Escape", async () => {

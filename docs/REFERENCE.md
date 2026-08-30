@@ -230,11 +230,15 @@ mobile layouts.
 
 The working-directory line beneath the desktop session title opens a separate
 movable and resizable file browser rooted at the live pane CWD. Folder listing,
-UTF-8 previews, downloads, and uploads all repeat the live tmux session and pane
-identity check; callers cannot choose a different server root or traverse above
-the CWD, and symlinks that resolve outside it remain inaccessible. Downloads
-stream the selected regular file with an attachment filename and are not bound
-by the 1 MiB text-preview limit.
+UTF-8 previews, raster-image streams, downloads, and uploads all repeat the live
+tmux session and pane identity check; callers cannot choose a different server
+root or traverse above the CWD, and symlinks that resolve outside it remain
+inaccessible. Text preview remains capped at 1 MiB. Signature-verified PNG,
+JPEG, GIF, WebP, AVIF, BMP, and ICO images render in a fitted viewer up to 25 MiB
+and link to the same protected inline stream for full-size viewing. SVG, HTML,
+and other active or unsupported formats are never embedded. Downloads stream
+the selected regular file with an attachment filename and have no preview-size
+limit.
 
 `Upload` selects as many as six files, and dropping files anywhere over the
 browser opens the same queue with an overlay naming the exact destination
@@ -407,15 +411,22 @@ window. Use the adjacent `New window` link to open that console in a separate
 browser context instead. The link carries the current dashboard query, so its
 Back action returns to the same filters, view, grouping, and sort priority. A
 new window starts with only the selected session in its quick-tab workspace.
+Inside a console, the joined landing-page control in the header makes the same
+choice explicit: the left arrow returns to Sessions and Workspaces in the
+current browser window, while the adjacent external-window segment opens that
+landing page separately without changing the console. The latter preserves the
+dashboard query and the complete current quick-tab or saved-workspace context.
 
 The landing page lists named saved workspaces in rough last-active order. `New
 workspace` starts with an empty tab set by default; choose `Copy current tabs`
 when the new workspace should instead inherit this browser page's open tabs and
 their order. Creating either kind writes a separate server record before opening
 it, so the workspace you came from is unchanged. A saved workspace can be
-resumed, renamed, or deleted from that list. Deleting one removes only the saved
-workspace record; none of these workspace actions stops, renames, or sends input to a
-tmux session.
+resumed, opened in a new window, renamed, or deleted from that list. Its `New
+window` link carries the workspace's stable ID, ordered tabs, groups, active
+session, and current dashboard filters, then opens with no `window.opener`
+relationship. Deleting one removes only the saved workspace record; none of
+these workspace actions stops, renames, or sends input to a tmux session.
 
 An unsaved multi-tab console identifies itself as `Temporary workspace` and
 exposes `Save workspace` directly in its tab bar. On phone layouts, the identity

@@ -10,6 +10,8 @@ from tmux_console import file_browser
 from tmux_console.app import create_app
 from tmux_console.tmux import Pane, Session, TmuxClient, TmuxError
 
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"preview payload"
+
 
 def make_pane(path: Path, pane_id: str = "%3") -> Pane:
     return Pane(
@@ -106,6 +108,73 @@ def test_preview_is_capped_without_splitting_invalid_utf8(tmp_path, monkeypatch)
     assert preview["previewBytes"] == 5
     assert preview["truncated"] is True
     assert preview["size"] == 10
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "media_type"),
+    [
+        ("pixel.png", PNG_BYTES, "image/png"),
+        ("photo.jpg", b"\xff\xd8\xff\xe0jpeg", "image/jpeg"),
+        ("motion.gif", b"GIF89aimage", "image/gif"),
+        ("tile.webp", b"RIFF\x08\x00\x00\x00WEBPimage", "image/webp"),
+        ("frame.bmp", b"BMimage", "image/bmp"),
+        ("favicon.ico", b"\x00\x00\x01\x00image", "image/x-icon"),
+        (
+            "still.avif",
+            b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avif",
+            "image/avif",
+        ),
+    ],
+)
+def test_raster_images_are_detected_by_signature(
+    tmp_path,
+    name,
+    content,
+    media_type,
+):
+    image = tmp_path / name
+    image.write_bytes(content)
+
+    preview = file_browser.preview_file(str(tmp_path), name)
+    resolved = file_browser.resolve_file_image_preview(str(tmp_path), name)
+
+    assert preview["kind"] == "image"
+    assert preview["mediaType"] == media_type
+    assert preview["content"] is None
+    assert preview["previewBytes"] == len(content)
+    assert preview["truncated"] is False
+    assert resolved.path == image
+    assert resolved.name == name
+    assert resolved.media_type == media_type
+
+
+def test_image_preview_rejects_unsupported_and_oversized_content(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "disguised.png").write_text(
+        "<html>not an image</html>",
+        encoding="utf-8",
+    )
+    oversized = tmp_path / "oversized.png"
+    oversized.write_bytes(PNG_BYTES)
+    monkeypatch.setattr(file_browser, "MAX_IMAGE_PREVIEW_BYTES", 8)
+
+    with pytest.raises(
+        file_browser.FileBrowserUnsupportedImageError,
+        match="supported raster image",
+    ):
+        file_browser.resolve_file_image_preview(str(tmp_path), "disguised.png")
+
+    preview = file_browser.preview_file(str(tmp_path), "oversized.png")
+    assert preview["kind"] == "image"
+    assert preview["previewBytes"] == 8
+    assert preview["truncated"] is True
+    with pytest.raises(
+        file_browser.FileBrowserImageTooLargeError,
+        match="inline preview limit",
+    ):
+        file_browser.resolve_file_image_preview(str(tmp_path), "oversized.png")
 
 
 def test_upload_writes_a_private_file_and_resolves_it_for_download(tmp_path):
@@ -244,6 +313,8 @@ async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
 ):
     nested = tmp_path / "incoming"
     nested.mkdir()
+    image_name = "preview image.png"
+    (nested / image_name).write_bytes(PNG_BYTES)
     client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
     try:
         filename = 'r\u00e9sum\u00e9 "draft".txt'
@@ -294,6 +365,22 @@ async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
             "filename*=UTF-8''r%C3%A9sum%C3%A9%20%22draft%22.txt"
             in download.headers["Content-Disposition"]
         )
+
+        image = await client.get(
+            "/api/sessions/files-agent/files/image",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": f"incoming/{image_name}",
+            },
+        )
+        assert image.status == 200
+        assert await image.read() == PNG_BYTES
+        assert image.headers["Content-Type"] == "image/png"
+        assert image.headers["Cache-Control"] == "private, no-store"
+        assert image.headers["Content-Disposition"].startswith("inline;")
+        assert image.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert image.headers["X-Content-Type-Options"] == "nosniff"
     finally:
         await client.close()
 
@@ -360,6 +447,13 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path, monk
         assert missing_download_path.status == 400
         assert await missing_download_path.json() == {"error": "path is required"}
 
+        missing_image_path = await client.get(
+            "/api/sessions/files-agent/files/image",
+            params={"sessionId": "$7", "paneId": "%3"},
+        )
+        assert missing_image_path.status == 400
+        assert await missing_image_path.json() == {"error": "path is required"}
+
         escaped_download = await client.get(
             "/api/sessions/files-agent/files/download",
             params={
@@ -369,6 +463,39 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path, monk
             },
         )
         assert escaped_download.status == 403
+
+        escaped_image = await client.get(
+            "/api/sessions/files-agent/files/image",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "outside-link/secret.txt",
+            },
+        )
+        assert escaped_image.status == 403
+
+        (tmp_path / "not-image.bin").write_bytes(b"plain binary")
+        unsupported_image = await client.get(
+            "/api/sessions/files-agent/files/image",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "not-image.bin",
+            },
+        )
+        assert unsupported_image.status == 415
+
+        (tmp_path / "large.png").write_bytes(PNG_BYTES)
+        monkeypatch.setattr(file_browser, "MAX_IMAGE_PREVIEW_BYTES", 8)
+        oversized_image = await client.get(
+            "/api/sessions/files-agent/files/image",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "large.png",
+            },
+        )
+        assert oversized_image.status == 413
 
         missing_upload_name = await client.post(
             "/api/sessions/files-agent/files/upload",

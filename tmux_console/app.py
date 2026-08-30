@@ -34,10 +34,14 @@ from .file_browser import (
     MAX_FILE_UPLOAD_BYTES,
     FileBrowserDestinationExistsError,
     FileBrowserDownload,
+    FileBrowserImagePreview,
+    FileBrowserImageTooLargeError,
     FileBrowserPathOutsideRootError,
+    FileBrowserUnsupportedImageError,
     list_directory,
     preview_file,
     resolve_file_download,
+    resolve_file_image_preview,
     upload_file,
 )
 from .history import SnapshotStore
@@ -122,6 +126,25 @@ AUTH_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60
 BASIC_AUTH_CHALLENGE = 'Basic realm="Muxdeck", charset="UTF-8"'
 NormalizedOrigin = tuple[str, str, int | None]
 NormalizedHost = tuple[str, int | None]
+
+
+def _file_content_disposition(
+    name: str,
+    disposition: str,
+    *,
+    fallback: str,
+) -> str:
+    ascii_name = name.encode("ascii", "ignore").decode("ascii")
+    fallback_name = "".join(
+        character
+        if character.isalnum() or character in {" ", ".", "_", "-"}
+        else "_"
+        for character in ascii_name
+    ).strip() or fallback
+    return (
+        f'{disposition}; filename="{fallback_name}"; '
+        f"filename*=UTF-8''{quote(name, safe='')}"
+    )
 
 
 class SessionSnapshotBuilder:
@@ -1329,6 +1352,10 @@ def create_app(
             return await asyncio.to_thread(operation, root_path, relative_path)
         except FileBrowserDestinationExistsError as error:
             return json_error(str(error), 409)
+        except FileBrowserImageTooLargeError as error:
+            return json_error(str(error), 413)
+        except FileBrowserUnsupportedImageError as error:
+            return json_error(str(error), 415)
         except FileBrowserPathOutsideRootError as error:
             return json_error(str(error), 403)
         except FileNotFoundError:
@@ -1401,22 +1428,48 @@ def create_app(
         if not isinstance(result, FileBrowserDownload):
             raise TypeError("file download operation returned an invalid result")
 
-        ascii_name = result.name.encode("ascii", "ignore").decode("ascii")
-        fallback_name = "".join(
-            character
-            if character.isalnum() or character in {" ", ".", "_", "-"}
-            else "_"
-            for character in ascii_name
-        ).strip() or "download"
-        disposition = (
-            f'attachment; filename="{fallback_name}"; '
-            f"filename*=UTF-8''{quote(result.name, safe='')}"
-        )
         return web.FileResponse(
             result.path,
             headers={
                 "Cache-Control": "private, no-store",
-                "Content-Disposition": disposition,
+                "Content-Disposition": _file_content_disposition(
+                    result.name,
+                    "attachment",
+                    fallback="download",
+                ),
+            },
+        )
+
+    async def preview_session_file_image(request: web.Request) -> web.StreamResponse:
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            resolve_file_image_preview,
+        )
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, FileBrowserImagePreview):
+            raise TypeError("image preview operation returned an invalid result")
+
+        return web.FileResponse(
+            result.path,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": _file_content_disposition(
+                    result.name,
+                    "inline",
+                    fallback="image",
+                ),
+                "Content-Type": result.media_type,
+                "Cross-Origin-Resource-Policy": "same-origin",
             },
         )
 
@@ -2977,6 +3030,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/preview",
         preview_session_file,
+    )
+    app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/image",
+        preview_session_file_image,
     )
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/download",

@@ -2868,6 +2868,14 @@ function AppRoutes() {
           />
         )}
         onBack={returnToDashboard}
+        dashboardWindowHref={targetUrl(
+          "/",
+          searchWithWorkspaceState(
+            location.search,
+            workspace.openSessions,
+            workspace.groups,
+          ),
+        )}
         workspaceOverlayOpen={recentsOpen}
         mobileMode={mobileConsoleMode}
         onMobileModeChange={setMobileConsoleMode}

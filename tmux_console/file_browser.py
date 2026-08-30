@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 MAX_DIRECTORY_ENTRIES = 1_000
 MAX_PREVIEW_BYTES = 1 * 1024 * 1024
+MAX_IMAGE_PREVIEW_BYTES = 25 * 1024 * 1024
 MAX_FILE_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_FILE_NAME_BYTES = 255
 MAX_RELATIVE_PATH_LENGTH = 4_096
@@ -24,6 +25,14 @@ class FileBrowserUnsupportedFileError(ValueError):
     pass
 
 
+class FileBrowserUnsupportedImageError(ValueError):
+    pass
+
+
+class FileBrowserImageTooLargeError(ValueError):
+    pass
+
+
 class FileBrowserDestinationExistsError(FileExistsError):
     pass
 
@@ -32,6 +41,13 @@ class FileBrowserDestinationExistsError(FileExistsError):
 class FileBrowserDownload:
     path: Path
     name: str
+
+
+@dataclass(frozen=True)
+class FileBrowserImagePreview:
+    path: Path
+    name: str
+    media_type: str
 
 
 def _relative_parts(value: str) -> tuple[str, ...]:
@@ -103,6 +119,37 @@ def _path_payload(display_root: Path, parts: tuple[str, ...]) -> dict[str, str]:
         "absolutePath": str(display_path),
         "terminalText": shlex.quote(str(display_path)),
     }
+
+
+def _raster_image_media_type(target: Path) -> str | None:
+    with target.open("rb") as handle:
+        header = handle.read(64)
+
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if (
+        len(header) >= 12
+        and header.startswith(b"RIFF")
+        and header[8:12] == b"WEBP"
+    ):
+        return "image/webp"
+    if header.startswith(b"BM"):
+        return "image/bmp"
+    if header.startswith(b"\x00\x00\x01\x00"):
+        return "image/x-icon"
+    if len(header) >= 16 and header[4:8] == b"ftyp":
+        brands = {header[8:12]}
+        brands.update(
+            header[offset : offset + 4]
+            for offset in range(16, len(header) - 3, 4)
+        )
+        if brands & {b"avif", b"avis"}:
+            return "image/avif"
+    return None
 
 
 def _upload_name(value: str) -> str:
@@ -203,6 +250,21 @@ def preview_file(root_path: str, relative_path: str) -> dict[str, object]:
     if not stat.S_ISREG(target_stat.st_mode):
         raise FileBrowserUnsupportedFileError("path is not a regular file")
 
+    image_media_type = _raster_image_media_type(target)
+    if image_media_type is not None:
+        return {
+            "root": str(display_root),
+            **_path_payload(display_root, parts),
+            "name": target.name,
+            "kind": "image",
+            "mediaType": image_media_type,
+            "size": target_stat.st_size,
+            "modified": target_stat.st_mtime,
+            "truncated": target_stat.st_size > MAX_IMAGE_PREVIEW_BYTES,
+            "previewBytes": min(target_stat.st_size, MAX_IMAGE_PREVIEW_BYTES),
+            "content": None,
+        }
+
     with target.open("rb") as handle:
         content = handle.read(MAX_PREVIEW_BYTES + 1)
     truncated = len(content) > MAX_PREVIEW_BYTES
@@ -248,6 +310,36 @@ def resolve_file_download(
     if not stat.S_ISREG(target_stat.st_mode):
         raise FileBrowserUnsupportedFileError("path is not a regular file")
     return FileBrowserDownload(path=target, name=parts[-1])
+
+
+def resolve_file_image_preview(
+    root_path: str,
+    relative_path: str,
+) -> FileBrowserImagePreview:
+    _display_root, _resolved_root, target, parts = _resolve_target(
+        root_path,
+        relative_path,
+    )
+    target_stat = target.stat()
+    if stat.S_ISDIR(target_stat.st_mode):
+        raise IsADirectoryError("path is a directory")
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise FileBrowserUnsupportedFileError("path is not a regular file")
+
+    media_type = _raster_image_media_type(target)
+    if media_type is None:
+        raise FileBrowserUnsupportedImageError(
+            "path is not a supported raster image"
+        )
+    if target_stat.st_size > MAX_IMAGE_PREVIEW_BYTES:
+        raise FileBrowserImageTooLargeError(
+            "image exceeds the 25 MiB inline preview limit"
+        )
+    return FileBrowserImagePreview(
+        path=target,
+        name=parts[-1],
+        media_type=media_type,
+    )
 
 
 def upload_file(

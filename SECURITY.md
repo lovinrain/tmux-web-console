@@ -58,3 +58,10 @@ each body at 12 MiB, and refuse existing names instead of overwriting them. They
 still modify the real host working tree and persist independently of Muxdeck's
 private attachment store, so access to this feature should be treated with the
 same trust as terminal input access.
+
+Inline CWD image previews repeat the same live pane identity and root-containment
+checks. They are capped at 25 MiB, detected from raster signatures rather than
+filename extensions, served with `nosniff`, same-origin resource policy, and
+private no-store caching, and restricted to PNG, JPEG, GIF, WebP, AVIF, BMP, and
+ICO. SVG, HTML, PDF, and arbitrary binary content are not embedded; Download
+remains available separately with attachment disposition.

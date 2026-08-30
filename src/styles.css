@@ -6668,6 +6668,34 @@ span.workspace-tab-group-toggle {
   width: 19px;
 }
 
+.console-dashboard-navigation {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.console-dashboard-navigation .back-button {
+  border-radius: 3px 0 0 3px;
+}
+
+.console-dashboard-new-window {
+  width: 32px;
+  color: #78b9ae;
+  border-left: 0;
+  border-radius: 0 3px 3px 0;
+  text-decoration: none;
+}
+
+.console-dashboard-new-window:hover,
+.console-dashboard-new-window:focus-visible {
+  color: var(--cyan);
+  background: #263029;
+}
+
+.console-dashboard-new-window svg {
+  width: 15px;
+}
+
 .console-identity {
   min-width: 0;
   flex: 1;
@@ -11084,6 +11112,11 @@ html.history-resizing * {
 
   .back-button {
     width: 38px;
+    height: 38px;
+  }
+
+  .console-dashboard-new-window {
+    width: 30px;
     height: 38px;
   }
 

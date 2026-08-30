@@ -90,6 +90,7 @@ describe("SavedWorkspaceList", () => {
       <SavedWorkspaceList
         activeWorkspaceId="newer"
         onOpen={onOpen}
+        getOpenInNewWindowHref={(item) => `/mux/?workspace=${item.id}`}
       />,
     );
 
@@ -112,6 +113,14 @@ describe("SavedWorkspaceList", () => {
     expect(within(orderedSessions).getAllByRole("listitem").map((item) => item.textContent))
       .toEqual(["01missing-session", "02logs"]);
     expect(within(olderCard).getByText("Resume / missing-session")).toBeVisible();
+
+    const newWindow = within(olderCard).getByRole("link", {
+      name: "Open workspace Earlier investigation in new window",
+    });
+    expect(newWindow).toHaveAttribute("href", "/mux/?workspace=older");
+    expect(newWindow).toHaveAttribute("target", "_blank");
+    expect(newWindow).toHaveAttribute("rel", "noopener noreferrer");
+    expect(newWindow).toHaveTextContent("New window");
 
     fireEvent.click(screen.getByRole("button", { name: "Resume workspace Release room" }));
     expect(onOpen).toHaveBeenCalledWith(newer);

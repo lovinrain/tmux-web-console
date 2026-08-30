@@ -714,7 +714,8 @@
 }
 
 .session-file-preview-empty.binary,
-.session-file-preview-empty.locked {
+.session-file-preview-empty.locked,
+.session-file-preview-empty.image-limit {
   margin: 8px;
   background: repeating-linear-gradient(
     -45deg,
@@ -724,6 +725,10 @@
     transparent 12px
   );
   border: 1px dashed #35463f;
+}
+
+.session-file-preview-empty.image-limit > svg {
+  color: #8d7449;
 }
 
 .session-file-preview-meta {
@@ -769,6 +774,125 @@
   white-space: pre;
   scrollbar-color: #40544c #0d1411;
   scrollbar-width: thin;
+}
+
+.session-file-image-preview {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  place-items: stretch;
+  background-color: #0b110e;
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.025) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.025) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.session-file-image-link {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.session-file-image-link img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  border: 1px solid rgba(177, 214, 200, 0.15);
+  border-radius: 3px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42);
+  transition: opacity 140ms ease;
+  user-select: none;
+}
+
+.session-file-image-preview[data-image-status="loading"] .session-file-image-link,
+.session-file-image-preview[data-image-status="error"] .session-file-image-link {
+  pointer-events: none;
+}
+
+.session-file-image-preview[data-image-status="ready"] .session-file-image-link img {
+  opacity: 1;
+}
+
+.session-file-image-open {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  display: inline-flex;
+  min-height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: #d9eee7;
+  background: rgba(9, 17, 13, 0.9);
+  border: 1px solid rgba(104, 223, 208, 0.28);
+  border-radius: 3px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.session-file-image-open svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-file-image-message {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 20px;
+  color: #75867e;
+  text-align: center;
+  pointer-events: none;
+}
+
+.session-file-image-message > svg {
+  width: 38px;
+  height: 38px;
+  color: #385b51;
+}
+
+.session-file-image-message strong {
+  color: #bac9c1;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 13px;
+}
+
+.session-file-image-message span:last-child {
+  max-width: 40ch;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.session-file-image-message.error {
+  color: #d68d86;
 }
 
 .session-file-preview-truncated {
@@ -1033,9 +1157,38 @@ html[data-theme="light"] .session-files-drop-overlay > span {
 }
 
 html[data-theme="light"] .session-file-preview-empty.binary,
-html[data-theme="light"] .session-file-preview-empty.locked {
+html[data-theme="light"] .session-file-preview-empty.locked,
+html[data-theme="light"] .session-file-preview-empty.image-limit {
   background-color: #f4f1e9;
   border-color: #bdb7ab;
+}
+
+html[data-theme="light"] .session-file-image-preview {
+  background-color: #e8e4db;
+  background-image:
+    linear-gradient(45deg, rgba(42, 53, 46, 0.055) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(42, 53, 46, 0.055) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(42, 53, 46, 0.055) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(42, 53, 46, 0.055) 75%);
+}
+
+html[data-theme="light"] .session-file-image-link img {
+  border-color: rgba(46, 67, 56, 0.18);
+  box-shadow: 0 12px 30px rgba(37, 44, 39, 0.2);
+}
+
+html[data-theme="light"] .session-file-image-open {
+  color: #203a32;
+  background: rgba(250, 248, 242, 0.92);
+  border-color: rgba(8, 127, 117, 0.3);
+}
+
+html[data-theme="light"] .session-file-image-message {
+  color: #6c766e;
+}
+
+html[data-theme="light"] .session-file-image-message strong {
+  color: #3b463e;
 }
 
 @container (max-width: 570px) {

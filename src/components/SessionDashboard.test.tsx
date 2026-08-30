@@ -203,6 +203,11 @@ describe("session classification", () => {
   });
 
   it("renders server workspaces between the intro and sessions and forwards actions", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/mux/?q=release&tab=stale-tab&workspace=stale-workspace",
+    );
     const savedWorkspace: SavedWorkspace = {
       id: "saved-id",
       name: "Release room",
@@ -254,6 +259,23 @@ describe("session classification", () => {
     expect(within(workspaceSection as HTMLElement).queryByLabelText("1 tab group"))
       .not.toBeInTheDocument();
     expect(screen.getByText("03 / SESSIONS")).toBeVisible();
+
+    const workspaceWindowLink = screen.getByRole("link", {
+      name: "Open workspace Release room in new window",
+    });
+    const workspaceWindowUrl = new URL(
+      workspaceWindowLink.getAttribute("href") || "",
+      "https://muxdeck.test",
+    );
+    expect(workspaceWindowUrl.pathname).toBe("/mux/session/web");
+    expect(workspaceWindowUrl.searchParams.get("q")).toBe("release");
+    expect(workspaceWindowUrl.searchParams.getAll("tab")).toEqual(["api", "web"]);
+    expect(workspaceWindowUrl.searchParams.get("workspace")).toBe("saved-id");
+    expect(workspaceWindowUrl.searchParams.getAll("tab-group").map((value) => (
+      JSON.parse(value)
+    ))).toEqual(savedWorkspace.groups);
+    expect(workspaceWindowLink).toHaveAttribute("target", "_blank");
+    expect(workspaceWindowLink).toHaveAttribute("rel", "noopener noreferrer");
 
     fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
     expect(screen.getByRole("radio", { name: /Start fresh/ })).toBeChecked();

@@ -63,6 +63,7 @@ import {
 import {
   isolatedWorkspaceSearch,
   searchWithSavedWorkspaceId,
+  searchWithWorkspaceState,
   searchWithWorkspaceTabs,
   workspaceTabsFromSearch,
   type WorkspaceTabGroup,
@@ -251,6 +252,24 @@ function isolatedWorkspaceHref(href: string): string {
 function sessionConsoleHref(sessionName: string): string {
   const search = isolatedWorkspaceSearch(window.location.search);
   return `${BASE_PATH}/session/${encodeURIComponent(sessionName)}${search}`;
+}
+
+function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
+  const activeSession = workspace.activeSession && workspace.tabs.includes(workspace.activeSession)
+    ? workspace.activeSession
+    : workspace.tabs[0];
+  const path = activeSession
+    ? `/session/${encodeURIComponent(activeSession)}`
+    : "/";
+  const search = searchWithSavedWorkspaceId(
+    searchWithWorkspaceState(
+      window.location.search,
+      workspace.tabs,
+      workspace.groups ?? [],
+    ),
+    workspace.id,
+  );
+  return `${BASE_PATH}${path}${search}`;
 }
 
 interface SessionItemProps {
@@ -1007,6 +1026,7 @@ export function SessionDashboard({
         activeSession={activeSession}
         activeWorkspaceId={activeWorkspaceId}
         onOpen={(workspace) => onOpenSavedWorkspace?.(workspace)}
+        getOpenInNewWindowHref={savedWorkspaceConsoleHref}
         onDeleted={onSavedWorkspaceDeleted}
         onUpdated={onSavedWorkspaceUpdated}
       />
