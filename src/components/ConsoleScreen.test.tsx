@@ -162,6 +162,7 @@ beforeEach(() => {
     entries: [],
     truncated: false,
     limit: 1_000,
+    rootParent: null,
   });
   vi.mocked(listWorkspaces).mockResolvedValue([]);
   document.title = "Muxdeck";
@@ -210,9 +211,7 @@ describe("ConsoleScreen session identity", () => {
     const files = await screen.findByRole("dialog", { name: "Files" });
     expect(cwd).toHaveAttribute("aria-expanded", "true");
     expect(listSessionFiles).toHaveBeenCalledWith(
-      "test",
-      "$1",
-      "%1",
+      { session: "test", sessionId: "$1", paneId: "%1" },
       "",
       expect.any(AbortSignal),
     );

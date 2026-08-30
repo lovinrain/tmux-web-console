@@ -407,11 +407,11 @@
   border-radius: 2px;
 }
 
-.session-file-upload-item.uploading {
+.session-file-upload-item.running {
   border-left-color: var(--amber);
 }
 
-.session-file-upload-item.uploaded {
+.session-file-upload-item.done {
   border-left-color: var(--files-accent);
 }
 
@@ -480,23 +480,26 @@
   width: 100%;
   min-height: 41px;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 4px 7px;
   color: #bdcbc4;
   background: rgba(16, 24, 20, 0.92);
   border: 1px solid transparent;
   border-bottom-color: #202c27;
   border-radius: 2px;
-  cursor: pointer;
   text-align: left;
 }
 
-.session-file-row:hover:not(:disabled),
-.session-file-row:focus-visible {
+.session-file-row:hover,
+.session-file-row:focus-within {
   color: #f2faf6;
   background: #19251f;
   border-color: #3d554c;
-  outline: 0;
+}
+
+.session-file-row.checked {
+  background: rgba(104, 223, 208, 0.06);
+  border-color: rgba(104, 223, 208, 0.24);
 }
 
 .session-file-row.selected {
@@ -505,16 +508,112 @@
   border-color: rgba(104, 223, 208, 0.38);
 }
 
-.session-file-row:disabled {
-  cursor: not-allowed;
+.session-file-row.drop-target {
+  background: rgba(255, 182, 72, 0.12);
+  border-color: rgba(255, 182, 72, 0.6);
+  border-style: dashed;
+}
+
+.session-file-row.inert {
   opacity: 0.45;
 }
 
-.session-file-row > svg {
+.session-file-open {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.session-file-open:disabled {
+  cursor: not-allowed;
+}
+
+.session-file-open:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid var(--files-accent);
+  outline-offset: 2px;
+}
+
+.session-file-open > svg {
   width: 13px;
   height: 13px;
   flex: 0 0 auto;
   color: #617269;
+}
+
+.session-file-check {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--files-accent);
+  cursor: pointer;
+}
+
+.session-file-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.session-file-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+.session-file-row:hover .session-file-row-actions,
+.session-file-row:focus-within .session-file-row-actions,
+.session-file-row.selected .session-file-row-actions,
+.session-file-row.checked .session-file-row-actions {
+  opacity: 1;
+}
+
+.session-file-row-actions > button {
+  display: inline-flex;
+  width: 23px;
+  height: 23px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #93a79e;
+  background: #16201c;
+  border: 1px solid #30413b;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.session-file-row-actions > button:hover:not(:disabled) {
+  color: #effff9;
+  background: #223229;
+  border-color: #5a7c72;
+}
+
+.session-file-row-actions > button.danger:hover:not(:disabled) {
+  color: #ffe4e2;
+  background: rgba(255, 107, 99, 0.16);
+  border-color: rgba(255, 107, 99, 0.6);
+}
+
+.session-file-row-actions > button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.session-file-row-actions > button svg {
+  width: 12px;
+  height: 12px;
 }
 
 .session-file-kind {
@@ -996,6 +1095,431 @@ html.session-files-panel-moving * {
   user-select: none !important;
 }
 
+.session-files-toolbar > .session-files-new {
+  width: auto;
+  gap: 1px;
+  padding: 0 7px;
+}
+
+.session-files-toolbar > .session-files-new svg:last-child {
+  width: 10px;
+  height: 10px;
+}
+
+.session-files-breadcrumbs button.drop-target,
+.session-files-toolbar button.drop-target {
+  color: var(--amber);
+  background: rgba(255, 182, 72, 0.12);
+  border-color: rgba(255, 182, 72, 0.6);
+}
+
+/* Overrides the shared `.session-files-tools > label` field chrome, which is
+   more specific than a lone class and would stretch this into a text box. */
+.session-files-tools > .session-files-select-all {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  background: transparent;
+  border: 0;
+}
+
+.session-files-tools > .session-files-select-all input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--files-accent);
+  cursor: pointer;
+}
+
+.session-files-tools > .session-files-select-all input:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.session-files-tools > button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-files-tools > .session-files-sort {
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 8px;
+}
+
+.session-files-address {
+  display: flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  background: rgba(16, 24, 20, 0.96);
+  border-bottom: 1px solid #28362f;
+}
+
+.session-files-address > label {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: #0c120f;
+  border: 1px solid #2b3933;
+  border-radius: 3px;
+}
+
+.session-files-address > label:focus-within {
+  border-color: rgba(104, 223, 208, 0.58);
+}
+
+.session-files-address > label > span {
+  flex: 0 0 auto;
+  color: #62766d;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.session-files-address input {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  color: #e5eee9;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.session-files-address input::placeholder {
+  color: #5e6c65;
+}
+
+.session-files-address > button {
+  display: inline-flex;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-files-address > button:hover:not(:disabled) {
+  color: #effff9;
+  background: #21312b;
+  border-color: #5a7c72;
+}
+
+.session-files-address > button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.session-files-address > button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-files-prompt,
+.session-files-confirm,
+.session-files-bulk {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px;
+  background: rgba(16, 24, 20, 0.96);
+  border-bottom: 1px solid #28362f;
+}
+
+.session-files-prompt > label {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-files-prompt > label > span {
+  flex: 0 0 auto;
+  color: #8fa79d;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.session-files-prompt input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 5px 7px;
+  color: #effff9;
+  background: #0f1714;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+}
+
+.session-files-prompt input:focus-visible {
+  border-color: var(--files-accent);
+  outline: 0;
+}
+
+.session-files-prompt > button,
+.session-files-confirm > button,
+.session-files-bulk > button {
+  display: inline-flex;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-files-prompt > button:hover:not(:disabled),
+.session-files-confirm > button:hover:not(:disabled),
+.session-files-bulk > button:hover:not(:disabled) {
+  color: #effff9;
+  background: #21312b;
+  border-color: #5a7c72;
+}
+
+.session-files-prompt > button:disabled,
+.session-files-confirm > button:disabled,
+.session-files-bulk > button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.session-files-prompt > button.primary {
+  color: #07130f;
+  background: var(--files-accent);
+  border-color: var(--files-accent);
+}
+
+.session-files-prompt > button.primary:hover:not(:disabled) {
+  color: #06100d;
+  background: #9cf2e5;
+  border-color: #b9fff5;
+}
+
+.session-files-prompt > button svg,
+.session-files-confirm > button svg,
+.session-files-bulk > button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-files-prompt > p[role="alert"] {
+  width: 100%;
+  margin: 0;
+  color: #ff9d96;
+  font-size: 9px;
+}
+
+.session-files-confirm {
+  background: rgba(58, 24, 24, 0.72);
+  border-bottom-color: rgba(255, 107, 99, 0.4);
+}
+
+.session-files-confirm > strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: #ffd9d6;
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.session-files-confirm > button.danger,
+.session-files-bulk > button.danger {
+  color: #ffe4e2;
+  background: rgba(255, 107, 99, 0.18);
+  border-color: rgba(255, 107, 99, 0.5);
+}
+
+.session-files-confirm > button.danger:hover:not(:disabled),
+.session-files-bulk > button.danger:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 107, 99, 0.32);
+  border-color: rgba(255, 107, 99, 0.86);
+}
+
+.session-files-bulk > strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--files-accent);
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-file-preview-meta > .session-file-edit {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  margin-left: auto;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-file-preview-meta > .session-file-edit:hover:not(:disabled) {
+  color: #effff9;
+  background: #21312b;
+  border-color: #5a7c72;
+}
+
+.session-file-preview-meta > .session-file-edit:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.session-file-preview-meta > .session-file-edit svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-file-editor {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+}
+
+.session-file-editor textarea {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 8px;
+  color: #d7e7e0;
+  background: #0c1310;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  resize: none;
+  tab-size: 2;
+}
+
+.session-file-editor textarea:focus-visible {
+  border-color: var(--files-accent);
+  outline: 0;
+}
+
+.session-file-editor textarea:disabled {
+  opacity: 0.65;
+}
+
+.session-file-editor-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-file-editor-actions > button {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-file-editor-actions > button.primary {
+  color: #07130f;
+  background: var(--files-accent);
+  border-color: var(--files-accent);
+}
+
+.session-file-editor-actions > button:hover:not(:disabled) {
+  color: #effff9;
+  background: #21312b;
+  border-color: #5a7c72;
+}
+
+.session-file-editor-actions > button.primary:hover:not(:disabled) {
+  color: #06100d;
+  background: #9cf2e5;
+  border-color: #b9fff5;
+}
+
+.session-file-editor-actions > button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.session-file-editor-actions > button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-file-editor-actions > p[role="alert"] {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  overflow: hidden;
+  color: #ff9d96;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
 html[data-theme="light"] .console-cwd-button {
   color: #6c7568;
 }
@@ -1025,9 +1549,22 @@ html[data-theme="light"] .session-file-path-actions {
   border-color: #c9c3b7;
 }
 
-html[data-theme="light"] .session-files-heading-icon,
+html[data-theme="light"] .session-files-heading-icon {
+  color: #f6fffc;
+}
+
+/* The shared light button fill below also matches this button, so the accent
+   fill is restated here where the extra .primary class wins on specificity. */
 html[data-theme="light"] .session-file-path-actions > button.primary {
   color: #f6fffc;
+  background: #087f75;
+  border-color: #087f75;
+}
+
+html[data-theme="light"] .session-file-path-actions > button.primary:hover:not(:disabled) {
+  color: #ffffff;
+  background: #0a968a;
+  border-color: #0a968a;
 }
 
 html[data-theme="light"] .session-files-header h2,
@@ -1082,11 +1619,11 @@ html[data-theme="light"] .session-file-row {
   border-bottom-color: #e0dcd3;
 }
 
-html[data-theme="light"] .session-file-row:hover:not(:disabled),
-html[data-theme="light"] .session-file-row:focus-visible {
-  color: #202a23;
-  background: #eef3ed;
-  border-color: #9bb3a8;
+/* Needs the same specificity as the light base rule above, which would
+   otherwise repaint a checked row as an ordinary one. */
+html[data-theme="light"] .session-file-row.checked {
+  background: #e4f4f1;
+  border-color: #8fc9c0;
 }
 
 html[data-theme="light"] .session-file-row.selected {
@@ -1249,4 +1786,131 @@ html[data-theme="light"] .session-file-image-message strong {
 
 @keyframes session-files-spin {
   to { transform: rotate(360deg); }
+}
+
+html[data-theme="light"] .session-files-address {
+  background: #f2f6f3;
+  border-bottom-color: #d3ddd7;
+}
+
+html[data-theme="light"] .session-files-address > label {
+  background: #fff;
+  border-color: #c4d2ca;
+}
+
+html[data-theme="light"] .session-files-address > label > span {
+  color: #4d6259;
+}
+
+html[data-theme="light"] .session-files-address input {
+  color: #12201a;
+}
+
+html[data-theme="light"] .session-files-address > button {
+  color: #33473f;
+  background: #fff;
+  border-color: #c4d2ca;
+}
+
+html[data-theme="light"] .session-files-address > button:hover:not(:disabled) {
+  color: #0c1a14;
+  background: #e4ece7;
+  border-color: #93aaa0;
+}
+
+html[data-theme="light"] .session-files-prompt,
+html[data-theme="light"] .session-files-bulk {
+  background: #f2f6f3;
+  border-bottom-color: #d3ddd7;
+}
+
+html[data-theme="light"] .session-files-prompt > label > span {
+  color: #4d6259;
+}
+
+html[data-theme="light"] .session-files-prompt input {
+  color: #12201a;
+  background: #fff;
+  border-color: #c4d2ca;
+}
+
+html[data-theme="light"] .session-files-tools > .session-files-sort,
+html[data-theme="light"] .session-files-prompt > button,
+html[data-theme="light"] .session-files-confirm > button,
+html[data-theme="light"] .session-files-bulk > button,
+html[data-theme="light"] .session-file-row-actions > button,
+html[data-theme="light"] .session-file-preview-meta > .session-file-edit,
+html[data-theme="light"] .session-file-editor-actions > button {
+  color: #33473f;
+  background: #fff;
+  border-color: #c4d2ca;
+}
+
+html[data-theme="light"] .session-files-prompt > button:hover:not(:disabled),
+html[data-theme="light"] .session-files-confirm > button:hover:not(:disabled),
+html[data-theme="light"] .session-files-bulk > button:hover:not(:disabled),
+html[data-theme="light"] .session-file-row-actions > button:hover:not(:disabled),
+html[data-theme="light"] .session-file-preview-meta > .session-file-edit:hover:not(:disabled),
+html[data-theme="light"] .session-file-editor-actions > button:hover:not(:disabled) {
+  color: #0c1a14;
+  background: #e4ece7;
+  border-color: #93aaa0;
+}
+
+html[data-theme="light"] .session-files-prompt > button.primary,
+html[data-theme="light"] .session-file-editor-actions > button.primary {
+  color: #04120d;
+  background: var(--files-accent);
+  border-color: var(--files-accent);
+}
+
+html[data-theme="light"] .session-files-confirm {
+  background: #fdeceb;
+  border-bottom-color: #efb2ad;
+}
+
+html[data-theme="light"] .session-files-confirm > strong {
+  color: #7c1d17;
+}
+
+html[data-theme="light"] .session-files-confirm > button.danger,
+html[data-theme="light"] .session-files-bulk > button.danger,
+html[data-theme="light"] .session-file-row-actions > button.danger:hover:not(:disabled) {
+  color: #7c1d17;
+  background: #fbdedc;
+  border-color: #e79c96;
+}
+
+html[data-theme="light"] .session-files-bulk > strong {
+  color: #14655a;
+}
+
+html[data-theme="light"] .session-file-row:hover,
+html[data-theme="light"] .session-file-row:focus-within {
+  color: #202a23;
+  background: #eef3ed;
+  border-color: #9bb3a8;
+}
+
+html[data-theme="light"] .session-file-row.drop-target {
+  background: #fdf3e0;
+  border-color: #d79a2f;
+}
+
+html[data-theme="light"] .session-files-breadcrumbs button.drop-target,
+html[data-theme="light"] .session-files-toolbar button.drop-target {
+  color: #8a5a06;
+  background: #fdf3e0;
+  border-color: #d79a2f;
+}
+
+html[data-theme="light"] .session-file-editor textarea {
+  color: #12201a;
+  background: #fff;
+  border-color: #c4d2ca;
+}
+
+html[data-theme="light"] .session-files-prompt > p[role="alert"],
+html[data-theme="light"] .session-file-editor-actions > p[role="alert"] {
+  color: #a02a22;
 }

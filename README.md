@@ -64,8 +64,11 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
   indicators, reusable snippets, and desktop file attachments
-- A desktop pane-CWD browser with folder navigation, safe text and raster-image
-  previews, uploads/downloads, and shell-safe path staging
+- A desktop file manager that opens at the pane CWD and browses anywhere inside
+  a configurable boundary, with an absolute-path address bar, safe text and
+  raster-image previews, uploads/downloads, shell-safe path staging, in-place
+  text editing, and confirmed create/rename/move/duplicate/delete including
+  multi-select bulk actions
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots

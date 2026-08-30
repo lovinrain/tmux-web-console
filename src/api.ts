@@ -130,6 +130,8 @@ export interface SessionDirectoryListing {
   entries: SessionFileEntry[];
   truncated: boolean;
   limit: number;
+  /** Directory above this root, or null when the boundary stops here. */
+  rootParent?: string | null;
 }
 
 export interface SessionFilePreview {
@@ -145,80 +147,102 @@ export interface SessionFilePreview {
   truncated: boolean;
   previewBytes: number;
   content: string | null;
+  editable?: boolean;
 }
 
-function sessionFileQuery(
-  sessionId: string,
-  paneId: string,
+export interface SessionFileRemoval {
+  name: string;
+  path: string;
+  absolutePath: string;
+  terminalText: string;
+  kind: SessionFileKind;
+  symlink: boolean;
+  removedEntries: number;
+}
+
+export interface SessionFileTarget {
+  session: string;
+  sessionId: string;
+  paneId: string;
+  /**
+   * Absolute directory to browse instead of the live pane working directory.
+   * Omitted while the browser sits at the pane's own directory, so an older
+   * backend that does not know the field still serves the default view.
+   */
+  root?: string;
+}
+
+function sessionFileQuery(target: SessionFileTarget, path: string): string {
+  const query = new URLSearchParams({
+    sessionId: target.sessionId,
+    paneId: target.paneId,
+    path,
+  });
+  if (target.root) query.set("root", target.root);
+  return query.toString();
+}
+
+function sessionFileUrl(
+  target: SessionFileTarget,
+  route: string,
   path: string,
 ): string {
-  return new URLSearchParams({ sessionId, paneId, path }).toString();
+  const base = `/api/sessions/${encodeURIComponent(target.session)}/files`;
+  const query = sessionFileQuery(target, path);
+  return route ? `${base}/${route}?${query}` : `${base}?${query}`;
 }
 
 export async function listSessionFiles(
-  session: string,
-  sessionId: string,
-  paneId: string,
+  target: SessionFileTarget,
   path = "",
   signal?: AbortSignal,
 ): Promise<SessionDirectoryListing> {
-  const query = sessionFileQuery(sessionId, paneId, path);
   return jsonRequest<SessionDirectoryListing>(
-    `/api/sessions/${encodeURIComponent(session)}/files?${query}`,
+    sessionFileUrl(target, "", path),
     { signal },
   );
 }
 
 export async function previewSessionFile(
-  session: string,
-  sessionId: string,
-  paneId: string,
+  target: SessionFileTarget,
   path: string,
   signal?: AbortSignal,
 ): Promise<SessionFilePreview> {
-  const query = sessionFileQuery(sessionId, paneId, path);
   return jsonRequest<SessionFilePreview>(
-    `/api/sessions/${encodeURIComponent(session)}/files/preview?${query}`,
+    sessionFileUrl(target, "preview", path),
     { signal },
   );
 }
 
 export function sessionFileImageUrl(
-  session: string,
-  sessionId: string,
-  paneId: string,
+  target: SessionFileTarget,
   path: string,
 ): string {
-  const query = sessionFileQuery(sessionId, paneId, path);
-  return `${BASE_PATH}/api/sessions/${encodeURIComponent(session)}/files/image?${query}`;
+  return `${BASE_PATH}${sessionFileUrl(target, "image", path)}`;
 }
 
 export function sessionFileDownloadUrl(
-  session: string,
-  sessionId: string,
-  paneId: string,
+  target: SessionFileTarget,
   path: string,
 ): string {
-  const query = sessionFileQuery(sessionId, paneId, path);
-  return `${BASE_PATH}/api/sessions/${encodeURIComponent(session)}/files/download?${query}`;
+  return `${BASE_PATH}${sessionFileUrl(target, "download", path)}`;
 }
 
 export async function uploadSessionFile(
-  session: string,
-  sessionId: string,
-  paneId: string,
+  target: SessionFileTarget,
   directoryPath: string,
   file: File,
   signal?: AbortSignal,
 ): Promise<SessionFileEntry> {
   const query = new URLSearchParams({
-    sessionId,
-    paneId,
+    sessionId: target.sessionId,
+    paneId: target.paneId,
     path: directoryPath,
     filename: file.name,
   });
+  if (target.root) query.set("root", target.root);
   return jsonRequest<SessionFileEntry>(
-    `/api/sessions/${encodeURIComponent(session)}/files/upload?${query.toString()}`,
+    `/api/sessions/${encodeURIComponent(target.session)}/files/upload?${query.toString()}`,
     {
       method: "POST",
       headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -227,6 +251,105 @@ export async function uploadSessionFile(
     },
   );
 }
+
+async function sessionFileMutation<T>(
+  target: SessionFileTarget,
+  route: string,
+  path: string,
+  body: Record<string, unknown>,
+  method: "POST" | "PUT",
+  signal?: AbortSignal,
+): Promise<T> {
+  return jsonRequest<T>(sessionFileUrl(target, route, path), {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+export async function createSessionFileEntry(
+  target: SessionFileTarget,
+  directoryPath: string,
+  name: string,
+  kind: "directory" | "file",
+  signal?: AbortSignal,
+): Promise<SessionFileEntry> {
+  return sessionFileMutation<SessionFileEntry>(
+    target,
+    "create",
+    directoryPath,
+    { name, kind },
+    "POST",
+    signal,
+  );
+}
+
+export async function moveSessionFileEntry(
+  target: SessionFileTarget,
+  path: string,
+  destination: string,
+  signal?: AbortSignal,
+): Promise<SessionFileEntry> {
+  return sessionFileMutation<SessionFileEntry>(
+    target,
+    "move",
+    path,
+    { destination },
+    "POST",
+    signal,
+  );
+}
+
+export async function copySessionFileEntry(
+  target: SessionFileTarget,
+  path: string,
+  destination: string,
+  signal?: AbortSignal,
+): Promise<SessionFileEntry> {
+  return sessionFileMutation<SessionFileEntry>(
+    target,
+    "copy",
+    path,
+    { destination },
+    "POST",
+    signal,
+  );
+}
+
+export async function deleteSessionFileEntry(
+  target: SessionFileTarget,
+  path: string,
+  recursive = false,
+  signal?: AbortSignal,
+): Promise<SessionFileRemoval> {
+  return sessionFileMutation<SessionFileRemoval>(
+    target,
+    "delete",
+    path,
+    { recursive },
+    "POST",
+    signal,
+  );
+}
+
+export async function saveSessionFileContent(
+  target: SessionFileTarget,
+  path: string,
+  content: string,
+  expectedModified?: number,
+  signal?: AbortSignal,
+): Promise<SessionFileEntry> {
+  return sessionFileMutation<SessionFileEntry>(
+    target,
+    "content",
+    path,
+    expectedModified === undefined ? { content } : { content, expectedModified },
+    "PUT",
+    signal,
+  );
+}
+
 
 export async function uploadSessionAttachment(
   session: string,

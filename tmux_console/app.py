@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import ipaddress
 import json
 import logging
+import math
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -31,18 +33,33 @@ from .auth_views import (
     render_login_page,
 )
 from .file_browser import (
+    ENTRY_KINDS,
     MAX_FILE_UPLOAD_BYTES,
+    MAX_TEXT_WRITE_BODY_BYTES,
+    MAX_TEXT_WRITE_BYTES,
+    FileBrowserConflictError,
+    FileBrowserContentTooLargeError,
     FileBrowserDestinationExistsError,
+    FileBrowserDirectoryNotEmptyError,
     FileBrowserDownload,
     FileBrowserImagePreview,
     FileBrowserImageTooLargeError,
+    FileBrowserPartialDeleteError,
     FileBrowserPathOutsideRootError,
+    FileBrowserUnsupportedFileError,
     FileBrowserUnsupportedImageError,
+    copy_entry,
+    create_entry,
+    delete_entry,
     list_directory,
+    move_entry,
     preview_file,
+    resolve_browse_boundary,
+    resolve_browse_root,
     resolve_file_download,
     resolve_file_image_preview,
     upload_file,
+    write_text_file,
 )
 from .history import SnapshotStore
 from .messages import (
@@ -117,6 +134,7 @@ LOGIN_SEMAPHORE_KEY = web.AppKey("login_semaphore", asyncio.Semaphore)
 AUTH_DEVICE_REQUEST_KEY = web.RequestKey("muxdeck_auth_device", RememberedDevice)
 AUTH_COOKIE_VALUE_REQUEST_KEY = web.RequestKey("muxdeck_auth_cookie_value", str)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
+FILE_BROWSER_ROOT_KEY = web.AppKey("file_browser_root", Path)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -697,6 +715,10 @@ async def add_browser_security_headers(
     response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    # GET is a safe method, so the request-origin guard does not run on reads.
+    # This stops another origin embedding a response and using load/error as an
+    # oracle for what exists on the host.
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     # Chromium otherwise serializes same-origin form POSTs as Origin: null,
     # which prevents the request-origin guard from authenticating the form.
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -732,6 +754,7 @@ def create_app(
     auth: AuthStore | None = None,
     auth_mode: str | AuthMode | None = None,
     auth_cookie_secure: bool | None = None,
+    file_browser_root: str | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -746,6 +769,9 @@ def create_app(
     else:
         configured_origins = trusted_origins
     app[TRUSTED_ORIGINS_KEY] = _parse_trusted_origins(configured_origins)
+    # Resolved here so a misconfigured boundary stops startup instead of
+    # quietly changing how far the file browser reaches.
+    app[FILE_BROWSER_ROOT_KEY] = resolve_browse_boundary(file_browser_root)
     configured_auth_path = default_auth_path()
     configured_auth_mode = (
         os.environ.get("MUXDECK_AUTH_MODE") if auth_mode is None else auth_mode
@@ -1285,7 +1311,9 @@ def create_app(
     async def session_file_context(
         request: web.Request,
         *,
-        allowed_fields: frozenset[str] = frozenset({"sessionId", "paneId", "path"}),
+        allowed_fields: frozenset[str] = frozenset(
+            {"sessionId", "paneId", "path", "root"}
+        ),
         required_fields: tuple[str, ...] = ("sessionId", "paneId"),
     ) -> tuple[str, str, str] | web.Response:
         session_name = request.match_info["session"]
@@ -1340,7 +1368,33 @@ def create_app(
             )
         if not pane.path:
             return json_error("tmux pane has no working directory", 409)
-        return pane.path, relative_path, pane_id
+
+        requested_root = request.query.get("root")
+        if requested_root is None:
+            return pane.path, relative_path, pane_id
+        # An explicit root replaces the pane working directory, so the pane
+        # identity above still proves the caller is looking at a live pane while
+        # the configured boundary is what confines the request.
+        try:
+            resolved_root = await asyncio.to_thread(
+                resolve_browse_root,
+                requested_root,
+                app[FILE_BROWSER_ROOT_KEY],
+            )
+        except FileBrowserPathOutsideRootError as error:
+            return json_error(str(error), 403)
+        except FileNotFoundError:
+            return json_error("directory no longer exists", 404)
+        except PermissionError:
+            return json_error("directory is not accessible", 403)
+        except (NotADirectoryError, TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError as error:
+            if error.errno in {errno.ENAMETOOLONG, errno.ELOOP}:
+                return json_error("path is too long or cannot be resolved", 400)
+            LOGGER.exception("Unable to resolve a requested browse root")
+            return json_error("unable to browse files", 500)
+        return str(resolved_root), relative_path, pane_id
 
     async def execute_session_file_operation(
         root_path: str,
@@ -1352,7 +1406,18 @@ def create_app(
             return await asyncio.to_thread(operation, root_path, relative_path)
         except FileBrowserDestinationExistsError as error:
             return json_error(str(error), 409)
-        except FileBrowserImageTooLargeError as error:
+        except FileBrowserDirectoryNotEmptyError as error:
+            return json_error(str(error), 409)
+        except FileBrowserPartialDeleteError as error:
+            return json_error(str(error), 409)
+        except FileBrowserConflictError as error:
+            return json_error(str(error), 409)
+        except FileBrowserUnsupportedFileError as error:
+            return json_error(str(error), 415)
+        except (
+            FileBrowserImageTooLargeError,
+            FileBrowserContentTooLargeError,
+        ) as error:
             return json_error(str(error), 413)
         except FileBrowserUnsupportedImageError as error:
             return json_error(str(error), 415)
@@ -1364,7 +1429,13 @@ def create_app(
             return json_error("file or directory is not accessible", 403)
         except (IsADirectoryError, NotADirectoryError, TypeError, ValueError) as error:
             return json_error(str(error), 400)
-        except OSError:
+        except OSError as error:
+            # A relative path that fits our own limits can still push the
+            # absolute path past PATH_MAX, or run into a symlink loop. Those are
+            # bad requests, not server faults, and must not log a traceback
+            # carrying the caller's multi-kilobyte path on every attempt.
+            if error.errno in {errno.ENAMETOOLONG, errno.ELOOP}:
+                return json_error("path is too long or cannot be resolved", 400)
             LOGGER.exception(
                 "Unable to access pane-scoped files for pane %s",
                 pane_id,
@@ -1399,13 +1470,28 @@ def create_app(
             return payload
         return web.json_response(payload)
 
+    def within_boundary(
+        operation: Callable[..., object],
+    ) -> Callable[[str, str], object]:
+        """Bind the configured boundary to a file-browser operation.
+
+        Each operation re-checks the boundary against its own resolution of the
+        root, so a directory swapped after validation cannot redirect the work.
+        """
+        boundary = app[FILE_BROWSER_ROOT_KEY]
+        return lambda operation_root, operation_path: operation(
+            operation_root,
+            operation_path,
+            boundary=boundary,
+        )
+
     async def list_session_files(request: web.Request) -> web.Response:
-        return await session_file_request(request, list_directory)
+        return await session_file_request(request, within_boundary(list_directory))
 
     async def preview_session_file(request: web.Request) -> web.Response:
         return await session_file_request(
             request,
-            preview_file,
+            within_boundary(preview_file),
             path_required=True,
         )
 
@@ -1421,7 +1507,7 @@ def create_app(
             root_path,
             relative_path,
             pane_id,
-            resolve_file_download,
+            within_boundary(resolve_file_download),
         )
         if isinstance(result, web.Response):
             return result
@@ -1452,7 +1538,7 @@ def create_app(
             root_path,
             relative_path,
             pane_id,
-            resolve_file_image_preview,
+            within_boundary(resolve_file_image_preview),
         )
         if isinstance(result, web.Response):
             return result
@@ -1474,7 +1560,9 @@ def create_app(
         )
 
     async def upload_session_file(request: web.Request) -> web.Response:
-        allowed_fields = frozenset({"sessionId", "paneId", "path", "filename"})
+        allowed_fields = frozenset(
+            {"sessionId", "paneId", "path", "root", "filename"}
+        )
         context = await session_file_context(
             request,
             allowed_fields=allowed_fields,
@@ -1511,11 +1599,211 @@ def create_app(
                 operation_path,
                 filename,
                 bytes(body),
+                boundary=app[FILE_BROWSER_ROOT_KEY],
             ),
         )
         if isinstance(result, web.Response):
             return result
         return web.json_response(result, status=201)
+
+    async def session_file_mutation_body(
+        request: web.Request,
+        allowed_fields: frozenset[str],
+        required_fields: tuple[str, ...],
+        *,
+        max_body_bytes: int | None = None,
+        oversize_error: str = "request body is too large",
+    ) -> dict[str, object] | web.Response:
+        try:
+            if max_body_bytes is None:
+                payload = await request.json()
+            else:
+                # aiohttp caps request.json() at the application-wide
+                # client_max_size, which is smaller than a maximum-size edit
+                # once JSON escaping is applied, so this body is read directly.
+                body = bytearray()
+                async for chunk in request.content.iter_chunked(64 * 1024):
+                    if len(body) + len(chunk) > max_body_bytes:
+                        return json_error(oversize_error, 413)
+                    body.extend(chunk)
+                payload = json.loads(bytes(body))
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        missing_fields = sorted(set(required_fields) - set(payload))
+        if missing_fields:
+            return json_error(f"{missing_fields[0]} is required", 400)
+        unknown_fields = sorted(set(payload) - allowed_fields)
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+        return payload
+
+    async def run_session_file_mutation(
+        request: web.Request,
+        operation: Callable[[str, str], object],
+        *,
+        path_required: bool,
+        status: int = 200,
+    ) -> web.Response:
+        required_fields = (
+            ("sessionId", "paneId", "path")
+            if path_required
+            else ("sessionId", "paneId")
+        )
+        context = await session_file_context(
+            request,
+            required_fields=required_fields,
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            operation,
+        )
+        if isinstance(result, web.Response):
+            return result
+        return web.json_response(result, status=status)
+
+    async def create_session_file_entry(request: web.Request) -> web.Response:
+        payload = await session_file_mutation_body(
+            request,
+            frozenset({"name", "kind"}),
+            ("name",),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        name = payload["name"]
+        kind = payload.get("kind", "directory")
+        if not isinstance(name, str):
+            return json_error("name must be a string", 400)
+        if not isinstance(kind, str) or kind not in ENTRY_KINDS:
+            return json_error("kind must be directory or file", 400)
+        return await run_session_file_mutation(
+            request,
+            lambda operation_root, operation_path: create_entry(
+                operation_root,
+                operation_path,
+                name,
+                kind,
+                boundary=app[FILE_BROWSER_ROOT_KEY],
+            ),
+            path_required=False,
+            status=201,
+        )
+
+    async def move_session_file_entry(request: web.Request) -> web.Response:
+        payload = await session_file_mutation_body(
+            request,
+            frozenset({"destination"}),
+            ("destination",),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        destination = payload["destination"]
+        if not isinstance(destination, str):
+            return json_error("destination must be a string", 400)
+        return await run_session_file_mutation(
+            request,
+            lambda operation_root, operation_path: move_entry(
+                operation_root,
+                operation_path,
+                destination,
+                boundary=app[FILE_BROWSER_ROOT_KEY],
+            ),
+            path_required=True,
+        )
+
+    async def copy_session_file_entry(request: web.Request) -> web.Response:
+        payload = await session_file_mutation_body(
+            request,
+            frozenset({"destination"}),
+            ("destination",),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        destination = payload["destination"]
+        if not isinstance(destination, str):
+            return json_error("destination must be a string", 400)
+        return await run_session_file_mutation(
+            request,
+            lambda operation_root, operation_path: copy_entry(
+                operation_root,
+                operation_path,
+                destination,
+                boundary=app[FILE_BROWSER_ROOT_KEY],
+            ),
+            path_required=True,
+            status=201,
+        )
+
+    async def delete_session_file_entry(request: web.Request) -> web.Response:
+        payload = await session_file_mutation_body(
+            request,
+            frozenset({"recursive"}),
+            (),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        recursive = payload.get("recursive", False)
+        if not isinstance(recursive, bool):
+            return json_error("recursive must be a boolean", 400)
+        return await run_session_file_mutation(
+            request,
+            lambda operation_root, operation_path: delete_entry(
+                operation_root,
+                operation_path,
+                recursive=recursive,
+                boundary=app[FILE_BROWSER_ROOT_KEY],
+            ),
+            path_required=True,
+        )
+
+    async def save_session_file_content(request: web.Request) -> web.Response:
+        oversize_error = (
+            f"file must be {MAX_TEXT_WRITE_BYTES // (1024 * 1024)} MiB or smaller to save"
+        )
+        if (
+            request.content_length is not None
+            and request.content_length > MAX_TEXT_WRITE_BODY_BYTES
+        ):
+            return json_error(oversize_error, 413)
+        payload = await session_file_mutation_body(
+            request,
+            frozenset({"content", "expectedModified"}),
+            ("content",),
+            max_body_bytes=MAX_TEXT_WRITE_BODY_BYTES,
+            oversize_error=oversize_error,
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        content = payload["content"]
+        expected_modified = payload.get("expectedModified")
+        if not isinstance(content, str):
+            return json_error("content must be a string", 400)
+        if expected_modified is not None and (
+            isinstance(expected_modified, bool)
+            or not isinstance(expected_modified, (int, float))
+        ):
+            return json_error("expectedModified must be a number", 400)
+        if isinstance(expected_modified, float) and not math.isfinite(
+            expected_modified
+        ):
+            return json_error("expectedModified must be a number", 400)
+        return await run_session_file_mutation(
+            request,
+            lambda operation_root, operation_path: write_text_file(
+                operation_root,
+                operation_path,
+                content,
+                expected_modified=expected_modified,
+                boundary=app[FILE_BROWSER_ROOT_KEY],
+            ),
+            path_required=True,
+        )
 
     async def terminate_session(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -3042,6 +3330,26 @@ def create_app(
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/files/upload",
         upload_session_file,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/create",
+        create_session_file_entry,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/move",
+        move_session_file_entry,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/copy",
+        copy_session_file_entry,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/delete",
+        delete_session_file_entry,
+    )
+    app.router.add_put(
+        f"{prefix}/api/sessions/{session_segment}/files/content",
+        save_session_file_content,
     )
     app.router.add_delete(f"{prefix}/api/sessions/{session_segment}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)

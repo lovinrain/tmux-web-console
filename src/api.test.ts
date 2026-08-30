@@ -402,41 +402,34 @@ describe("session file browser API", () => {
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
 
+    const target = { session: "work/name #1", sessionId: "$7", paneId: "%3" };
     await expect(listSessionFiles(
-      "work/name #1",
-      "$7",
-      "%3",
+      target,
       "src",
       controller.signal,
     )).resolves.toEqual(listing);
     await expect(previewSessionFile(
-      "work/name #1",
-      "$7",
-      "%3",
+      target,
       "src/main file.ts",
       controller.signal,
     )).resolves.toEqual(preview);
-    expect(sessionFileDownloadUrl(
-      "work/name #1",
-      "$7",
-      "%3",
-      "src/main file.ts",
-    )).toBe(
+    expect(sessionFileDownloadUrl(target, "src/main file.ts")).toBe(
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/download?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
     );
-    expect(sessionFileImageUrl(
-      "work/name #1",
-      "$7",
-      "%3",
-      "src/main file.ts",
-    )).toBe(
+    expect(sessionFileImageUrl(target, "src/main file.ts")).toBe(
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/image?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
+    );
+    // An explicit root travels with every request once the browser leaves the
+    // pane's own directory.
+    expect(sessionFileDownloadUrl(
+      { ...target, root: "/srv/data" },
+      "notes.txt",
+    )).toBe(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/download?sessionId=%247&paneId=%253&path=notes.txt&root=%2Fsrv%2Fdata`,
     );
     const upload = new File(["payload"], "drop me.txt", { type: "text/plain" });
     await expect(uploadSessionFile(
-      "work/name #1",
-      "$7",
-      "%3",
+      target,
       "src",
       upload,
       controller.signal,

@@ -229,11 +229,18 @@ configured directory. File attachments are deliberately hidden in compact
 mobile layouts.
 
 The working-directory line beneath the desktop session title opens a separate
-movable and resizable file browser rooted at the live pane CWD. Folder listing,
-UTF-8 previews, raster-image streams, downloads, and uploads all repeat the live
-tmux session and pane identity check; callers cannot choose a different server
-root or traverse above the CWD, and symlinks that resolve outside it remain
-inaccessible. Text preview remains capped at 1 MiB. Signature-verified PNG,
+movable and resizable file browser. It opens at the live pane CWD and can be
+pointed elsewhere: `Go up` keeps stepping above that directory, and the address
+row takes an absolute path (`~` is expanded by the server) and jumps straight to
+it. `Pane cwd` returns to the pane's own directory, and the first breadcrumb
+shows `cwd` only while the browser is actually there. How far it may be pointed
+is set by `MUXDECK_FILE_BROWSER_ROOT`, which defaults to the whole filesystem;
+`Go up` stops being offered at that boundary, a path outside it is refused, and a
+pane whose own working directory sits outside it cannot be browsed either.
+Folder listing, UTF-8 previews, raster-image streams, downloads, uploads, and
+every edit repeat the live tmux session and pane identity check, and each one is
+confined to the directory currently being browsed, so symlinks that resolve
+outside it remain inaccessible. Text preview remains capped at 1 MiB. Signature-verified PNG,
 JPEG, GIF, WebP, AVIF, BMP, and ICO images render in a fitted viewer up to 25 MiB
 and link to the same protected inline stream for full-size viewing. SVG, HTML,
 and other active or unsupported formats are never embedded. Downloads stream
@@ -250,6 +257,45 @@ These are project/CWD files, not temporary attachments: they are outside
 `MUXDECK_UPLOADS_DIR`, have no application storage-total cap or cleanup policy,
 and remain until the user or another host process removes them. Uploading changes
 the host filesystem but never inserts terminal input or presses Enter.
+
+The browser also edits the tree in place. The toolbar creates an empty folder
+(mode `0700`) or an empty file (mode `0600`) in the folder currently shown. Each
+row reveals rename, duplicate, move, and delete actions on hover or keyboard
+focus; `F2` renames the focused row, `Delete` asks to remove it, and `Backspace`
+goes up one folder. Renaming and moving are the same server operation and refuse
+to replace an existing name rather than overwriting it, so a conflict is reported
+instead of silently losing a file. Duplicating copies one regular file, preserves
+its mode, and is capped at 256 MiB. Dragging a row onto a folder row or onto a
+breadcrumb moves it there; dragging a checked row moves the whole checked set.
+
+Deleting always asks first. Files, symlinks, and empty folders are removed on the
+first confirmation. A folder with contents returns a conflict naming how many
+entries it holds and needs a second, explicit recursive confirmation; trees above
+20,000 entries are refused outright and left for the terminal. Deletes act on the
+named entry itself, so removing a symlink never touches what it points at.
+
+Row checkboxes select several entries at once, and the tools row toggles only
+the rows currently on screen, so a checked entry hidden by the filter keeps its
+state. The bulk bar then moves or deletes the whole selection, running one entry
+at a time and reporting each result in the same per-item list the upload queue
+uses, so a partial failure stays visible instead of being collapsed into a single
+error. A bulk move whose destination folder is itself selected moves everything
+else and says how many it skipped. Renaming an entry carries its checkbox along.
+Entries can also be sorted by name, size, or modification time in either
+direction, with folders kept first.
+
+A text preview under 1 MiB that is not a symlink can be edited in place. `Edit`
+swaps the preview for a textarea, `Save` (or `Ctrl`/`Cmd`+`S`) writes the file
+through a temporary file and an atomic rename that preserves the original mode,
+and the save carries the modification time the preview was read at. If the file
+changed on disk in between, the save is refused with a conflict and the editor
+keeps the unsaved text. Navigating, refreshing, or uploading while an edit is
+unsaved is blocked with a visible reminder, and only `Discard` throws the text
+away. `Escape` unwinds one layer at a time - an open name prompt, then a delete
+confirmation, then a clean editor - and closes the browser only once nothing is
+left to dismiss. The key is consumed only while such a layer is open, so with
+the browser merely open `Escape` still reaches the pane and can leave a Vim
+insert mode or interrupt an agent as usual.
 
 Use the top-level `Snippets` section to configure the shared tree. The virtual
 library root can contain snippets or folders, folders can nest, and snippets are
@@ -873,6 +919,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, scoped quick links and notes, and activity times |
 | `MUXDECK_SHORTCUTS_FILE` | `~/.local/state/muxdeck/shortcuts.json` | Persistent global desktop shortcut keymap |
 | `MUXDECK_UPLOADS_DIR` | `~/.local/state/muxdeck/uploads` | Private host files uploaded from desktop staged input |
+| `MUXDECK_FILE_BROWSER_ROOT` | `/` | Absolute directory the file browser may never be pointed above; a relative, missing, or non-directory value fails startup |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
 Loopback Hosts are accepted by default. Every non-loopback Host must correspond

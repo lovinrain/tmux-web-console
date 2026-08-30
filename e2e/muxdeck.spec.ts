@@ -1415,6 +1415,176 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
   }
 });
 
+test("desktop CWD browser creates, renames, edits, and bulk deletes real files", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const panePath = execFileSync(
+    "tmux",
+    [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"],
+    { encoding: "utf8" },
+  ).trim();
+  const fixtureName = `muxdeck-file-manager-${process.pid}`;
+  const fixtureDirectory = `${panePath}/${fixtureName}`;
+  mkdirSync(fixtureDirectory, { recursive: true });
+  writeFileSync(`${fixtureDirectory}/notes.txt`, "first line\n", "utf8");
+  writeFileSync(`${fixtureDirectory}/scratch a.txt`, "a\n", "utf8");
+  writeFileSync(`${fixtureDirectory}/scratch b.txt`, "b\n", "utf8");
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    const terminalBefore = workspaceTmuxContentSnapshot(sessionName);
+    await page.getByRole("button", { name: `Browse files in ${panePath}` }).click();
+    const browser = page.getByRole("dialog", { name: "Files" });
+    await expect(browser).toBeVisible();
+    await browser.getByRole("button", { name: `Folder ${fixtureName}` }).click();
+    await expect(browser.getByRole("button", { name: "File notes.txt" })).toBeVisible();
+
+    // Create a folder and an empty file in the shown directory.
+    await browser.getByRole("button", { name: "Create a folder here" }).click();
+    await browser.getByLabel("New folder name").fill("archive");
+    await browser.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(browser.getByRole("button", { name: "Folder archive" })).toBeVisible();
+    expect(statSync(`${fixtureDirectory}/archive`).isDirectory()).toBe(true);
+    expect(statSync(`${fixtureDirectory}/archive`).mode & 0o777).toBe(0o700);
+
+    await browser.getByRole("button", { name: "Create an empty file here" }).click();
+    await browser.getByLabel("New file name").fill("todo.md");
+    await browser.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(browser.getByRole("button", { name: "File todo.md" })).toBeVisible();
+    expect(readFileSync(`${fixtureDirectory}/todo.md`, "utf8")).toBe("");
+    expect(statSync(`${fixtureDirectory}/todo.md`).mode & 0o777).toBe(0o600);
+
+    // Rename an existing file through the row action.
+    await browser.getByRole("button", { name: "Rename notes.txt" }).click();
+    await browser.getByLabel("New name for notes.txt").fill("renamed notes.txt");
+    await browser.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(browser.getByRole("button", { name: "File renamed notes.txt" }))
+      .toBeVisible();
+    expect(existsSync(`${fixtureDirectory}/notes.txt`)).toBe(false);
+    expect(readFileSync(`${fixtureDirectory}/renamed notes.txt`, "utf8"))
+      .toBe("first line\n");
+
+    // Edit that file in place and save it.
+    await browser.getByRole("button", { name: "File renamed notes.txt" }).click();
+    await browser.getByRole("button", { name: "Edit renamed notes.txt" }).click();
+    const editor = browser.getByLabel("Contents of renamed notes.txt");
+    await expect(editor).toHaveValue("first line\n");
+    await editor.fill("edited from the browser\n");
+    await page.screenshot({ path: "artifacts/desktop-cwd-file-editor.png" });
+    await browser.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(browser.getByText(/Saved renamed notes.txt/)).toBeVisible();
+    expect(readFileSync(`${fixtureDirectory}/renamed notes.txt`, "utf8"))
+      .toBe("edited from the browser\n");
+
+    // Move a file into the new folder and confirm it left the current one.
+    await browser.getByRole("button", { name: "Move todo.md" }).click();
+    await browser.getByLabel("Destination folder for todo.md")
+      .fill(`${fixtureName}/archive`);
+    await browser.getByRole("button", { name: "Move", exact: true }).click();
+    await expect(browser.getByRole("button", { name: "File todo.md" })).toBeHidden();
+    expect(existsSync(`${fixtureDirectory}/archive/todo.md`)).toBe(true);
+
+    // A folder with contents needs a second, explicit recursive confirmation.
+    await browser.getByRole("button", { name: "Delete archive" }).click();
+    await expect(browser.getByText(/Permanently delete archive/)).toBeVisible();
+    await browser.getByRole("button", { name: "Delete permanently" }).click();
+    await expect(browser.getByText(/Delete it and everything inside/)).toBeVisible();
+    expect(existsSync(`${fixtureDirectory}/archive/todo.md`)).toBe(true);
+    await page.screenshot({ path: "artifacts/desktop-cwd-recursive-delete.png" });
+    await browser.getByRole("button", { name: "Delete everything" }).click();
+    await expect(browser.getByRole("button", { name: "Folder archive" })).toBeHidden();
+    expect(existsSync(`${fixtureDirectory}/archive`)).toBe(false);
+
+    // Bulk-select the two scratch files and delete them in one action.
+    await browser.getByRole("checkbox", { name: "Select scratch a.txt" }).check();
+    await browser.getByRole("checkbox", { name: "Select scratch b.txt" }).check();
+    await expect(browser.getByText("2 selected")).toBeVisible();
+    await page.screenshot({ path: "artifacts/desktop-cwd-bulk-selection.png" });
+    await browser.getByRole("button", { name: "Delete selected" }).click();
+    await browser.getByRole("button", { name: "Delete permanently" }).click();
+    await expect(browser.getByText("Deleted 2 items.")).toBeVisible();
+    expect(existsSync(`${fixtureDirectory}/scratch a.txt`)).toBe(false);
+    expect(existsSync(`${fixtureDirectory}/scratch b.txt`)).toBe(false);
+
+    // None of this may reach the terminal.
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
+    await browser.getByRole("button", { name: "Close file browser" }).click();
+  } finally {
+    rmSync(fixtureDirectory, { recursive: true, force: true });
+  }
+});
+
+test("desktop CWD browser navigates above the pane directory and by absolute path", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const panePath = execFileSync(
+    "tmux",
+    [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"],
+    { encoding: "utf8" },
+  ).trim();
+  const parentPath = panePath.replace(/\/[^/]+$/, "") || "/";
+  const parentName = parentPath.split("/").filter(Boolean).pop() ?? "/";
+  const elsewhere = `/tmp/muxdeck-nav-${process.pid}`;
+  mkdirSync(`${elsewhere}/child`, { recursive: true });
+  writeFileSync(`${elsewhere}/note.txt`, "outside the pane tree\n", "utf8");
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", {
+      timeout: 10_000,
+    });
+    await page.getByRole("button", { name: `Browse files in ${panePath}` }).click();
+    const browser = page.getByRole("dialog", { name: "Files" });
+    await expect(browser).toBeVisible();
+    await expect(browser.getByLabel("Directory path")).toHaveValue(panePath);
+
+    // Step above the pane working directory, which used to be the hard root.
+    await browser.getByRole("button", { name: "Go to parent directory" }).click();
+    await expect(browser.getByLabel("Directory path")).toHaveValue(parentPath);
+    // Scoped to the breadcrumb: entries in the parent directory can share its name.
+    await expect(
+      browser.locator(".session-files-breadcrumbs").getByRole("button", { name: parentName }),
+    ).toBeVisible();
+    await page.screenshot({ path: "artifacts/desktop-cwd-above-pane.png" });
+
+    // Jump straight to an unrelated absolute path.
+    await browser.getByLabel("Directory path").fill(elsewhere);
+    await browser.getByRole("button", { name: "Go", exact: true }).click();
+    await expect(browser.getByRole("button", { name: "File note.txt" })).toBeVisible();
+    await expect(browser.getByRole("button", { name: "Folder child" })).toBeVisible();
+    await page.screenshot({ path: "artifacts/desktop-cwd-address-bar.png" });
+
+    // Operations follow the browsed root, not the pane directory.
+    await browser.getByRole("button", { name: "Create a folder here" }).click();
+    await browser.getByLabel("New folder name").fill("made-here");
+    await browser.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(browser.getByRole("button", { name: "Folder made-here" })).toBeVisible();
+    expect(existsSync(`${elsewhere}/made-here`)).toBe(true);
+    expect(existsSync(`${panePath}/made-here`)).toBe(false);
+
+    await browser.getByRole("button", { name: "File note.txt" }).click();
+    await expect(browser.locator(".session-file-preview pre"))
+      .toHaveText("outside the pane tree\n");
+
+    // And back to where the pane actually is.
+    await browser.getByRole("button", { name: "Pane cwd" }).click();
+    await expect(browser.getByLabel("Directory path")).toHaveValue(panePath);
+    await expect(
+      browser.locator(".session-files-breadcrumbs").getByRole("button", { name: "cwd" }),
+    ).toBeVisible();
+    await browser.getByRole("button", { name: "Close file browser" }).click();
+  } finally {
+    rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
+
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({
   context,
   page,
