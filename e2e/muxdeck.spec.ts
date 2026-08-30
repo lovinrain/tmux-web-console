@@ -1585,6 +1585,45 @@ test("desktop CWD browser navigates above the pane directory and by absolute pat
   }
 });
 
+test("desktop CWD browser hands over the path when there is no clipboard", async ({
+  page,
+}) => {
+  test.setTimeout(45_000);
+  const panePath = execFileSync(
+    "tmux",
+    [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"],
+    { encoding: "utf8" },
+  ).trim();
+
+  // A console reached over plain HTTP is not a secure context, so the async
+  // clipboard is absent. Playwright serves over loopback, which is secure, so
+  // the condition has to be recreated.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live", {
+    timeout: 10_000,
+  });
+  await page.getByRole("button", { name: `Browse files in ${panePath}` }).click();
+  const browser = page.getByRole("dialog", { name: "Files" });
+  await expect(browser).toBeVisible();
+
+  await browser.getByRole("button", { name: "Copy server path" }).click();
+
+  const field = browser.getByLabel("Full path, selected for copying");
+  await expect(field).toHaveValue(panePath);
+  await expect(field).toBeFocused();
+  // The whole path must be readable, not truncated behind an ellipsis.
+  expect(await field.inputValue()).toBe(panePath);
+  await page.screenshot({ path: "artifacts/desktop-cwd-manual-copy.png" });
+
+  await browser.getByRole("button", { name: "Dismiss the path to copy" }).click();
+  await expect(field).toBeHidden();
+  await browser.getByRole("button", { name: "Close file browser" }).click();
+});
+
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({
   context,
   page,

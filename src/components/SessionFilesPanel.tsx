@@ -225,11 +225,17 @@ function describeEntries(entries: SessionFileEntry[]): string {
   return `${entries.length} items`;
 }
 
-async function copyPath(text: string): Promise<void> {
-  if (!navigator.clipboard?.writeText) {
-    throw new Error("Clipboard access is unavailable in this browser");
+async function copyPath(text: string): Promise<boolean> {
+  // The async clipboard needs a secure context, which a console reached over
+  // plain HTTP on a LAN or tunnel does not have. Report that rather than
+  // throwing, so the caller can offer the path instead of an error.
+  if (!navigator.clipboard?.writeText) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
   }
-  await navigator.clipboard.writeText(text);
 }
 
 export function SessionFilesPanel({
@@ -245,6 +251,7 @@ export function SessionFilesPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const promptInputRef = useRef<HTMLInputElement>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
+  const manualCopyRef = useRef<HTMLInputElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const layerTriggerRef = useRef<HTMLElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
@@ -260,6 +267,7 @@ export function SessionFilesPanel({
   const [browseRoot, setBrowseRoot] = useState(panePath);
   const [addressValue, setAddressValue] = useState(panePath);
   const [addressEdited, setAddressEdited] = useState(false);
+  const [manualCopyPath, setManualCopyPath] = useState<string | null>(null);
   const [directoryPath, setDirectoryPath] = useState("");
   const [listing, setListing] = useState<SessionDirectoryListing | null>(null);
   const [listingLoading, setListingLoading] = useState(true);
@@ -371,6 +379,7 @@ export function SessionFilesPanel({
     setEditing(false);
     setEditorError(null);
     setDropFolderPath(null);
+    setManualCopyPath(null);
   }, [identity, panePath]);
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
@@ -479,6 +488,13 @@ export function SessionFilesPanel({
   useEffect(() => {
     if (confirm) confirmCancelRef.current?.focus();
   }, [confirm?.entries, confirm?.recursive]);
+
+  useEffect(() => {
+    if (!manualCopyPath) return;
+    const field = manualCopyRef.current;
+    field?.focus();
+    field?.select();
+  }, [manualCopyPath]);
 
   useEffect(() => {
     const panel = panelRef.current;
@@ -612,6 +628,7 @@ export function SessionFilesPanel({
     setPrompt(null);
     setConfirm(null);
     setCheckedPaths([]);
+    setManualCopyPath(null);
     // Navigating elsewhere abandons a half-typed path rather than leaving the
     // field showing somewhere the browser is not.
     setAddressEdited(false);
@@ -636,6 +653,7 @@ export function SessionFilesPanel({
     setPrompt(null);
     setConfirm(null);
     setCheckedPaths([]);
+    setManualCopyPath(null);
     setAddressEdited(false);
   }, [guardBusy, guardEditor]);
 
@@ -1271,12 +1289,16 @@ export function SessionFilesPanel({
   const copyCurrentPath = async () => {
     if (!pathTarget) return;
     setActionStatus(null);
-    try {
-      await copyPath(pathTarget.absolutePath);
+    const absolute = pathTarget.absolutePath;
+    if (await copyPath(absolute)) {
+      setManualCopyPath(null);
       setActionStatus("Path copied");
-    } catch (error) {
-      setActionStatus(errorMessage(error, "Unable to copy the path"));
+      return;
     }
+    // Nothing was copied, so hand over the path itself instead of an error the
+    // user can do nothing about.
+    setManualCopyPath(absolute);
+    setActionStatus(null);
   };
 
   const insertCurrentPath = () => {
@@ -1911,6 +1933,33 @@ export function SessionFilesPanel({
           </div>
           {actionStatus && (
             <p className="session-file-action-status" role="status">{actionStatus}</p>
+          )}
+          {manualCopyPath && (
+            <div className="session-file-manual-copy" role="group" aria-label="Copy this path">
+              <label>
+                <span>COPY THIS PATH</span>
+                <input
+                  ref={manualCopyRef}
+                  type="text"
+                  readOnly
+                  aria-label="Full path, selected for copying"
+                  value={manualCopyPath}
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+              </label>
+              <p>
+                This browser will not copy for you - a console served over plain
+                HTTP has no clipboard access. The path is selected; press
+                Ctrl/Cmd+C.
+              </p>
+              <button
+                type="button"
+                aria-label="Dismiss the path to copy"
+                onClick={() => setManualCopyPath(null)}
+              >
+                <CloseIcon />
+              </button>
+            </div>
           )}
 
           {!selected && (

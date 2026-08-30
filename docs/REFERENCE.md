@@ -247,6 +247,12 @@ and other active or unsupported formats are never embedded. Downloads stream
 the selected regular file with an attachment filename and have no preview-size
 limit.
 
+`Copy path` puts the absolute server path on the clipboard. A console reached
+over plain HTTP is not a secure context and has no clipboard, so instead of
+reporting a failure the browser shows the full path in a selected read-only
+field, ready for `Ctrl`/`Cmd`+`C`. The same fallback appears when a clipboard
+exists but refuses the write.
+
 `Upload` selects as many as six files, and dropping files anywhere over the
 browser opens the same queue with an overlay naming the exact destination
 folder. Each file is capped at 12 MiB and created directly in that displayed

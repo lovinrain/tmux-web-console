@@ -1519,4 +1519,95 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Choose another folder" }));
     expect(within(panel).getByLabelText("Directory path")).toHaveFocus();
   });
+
+  it("offers the path as selectable text when the browser has no clipboard", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(
+      listing("", [entry("main.py", "main.py", "file")]),
+    );
+    // A console served over plain HTTP is not a secure context, so the async
+    // clipboard is simply absent.
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
+
+    const field = await within(panel).findByLabelText(
+      "Full path, selected for copying",
+    );
+    expect(field).toHaveValue("/work/project");
+    expect(field).toHaveFocus();
+    // The old behaviour was an error the user could do nothing about.
+    expect(within(panel).queryByText(/Clipboard access is unavailable/))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Dismiss the path to copy" }));
+    expect(within(panel).queryByLabelText("Full path, selected for copying"))
+      .not.toBeInTheDocument();
+  });
+
+  it("offers the path when a present clipboard refuses the write", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(
+      listing("", [entry("main.py", "main.py", "file")]),
+    );
+    const writeText = vi.fn(async () => {
+      throw new Error("Write permission denied.");
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("/work/project"));
+    expect(await within(panel).findByLabelText("Full path, selected for copying"))
+      .toHaveValue("/work/project");
+  });
+
+  it("keeps the plain copy path when the clipboard works", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(
+      listing("", [entry("main.py", "main.py", "file")]),
+    );
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
+
+    expect(await within(panel).findByText("Path copied")).toBeInTheDocument();
+    expect(within(panel).queryByLabelText("Full path, selected for copying"))
+      .not.toBeInTheDocument();
+  });
+
+  it("stops offering a path that no longer matches the selection", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("src", "src", "directory"),
+      entry("main.py", "main.py", "file"),
+    ]));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
+    expect(await within(panel).findByLabelText("Full path, selected for copying"))
+      .toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Folder src" }));
+
+    await waitFor(() => expect(
+      within(panel).queryByLabelText("Full path, selected for copying"),
+    ).not.toBeInTheDocument());
+  });
 });
