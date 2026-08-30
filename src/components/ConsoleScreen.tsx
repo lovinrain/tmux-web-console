@@ -49,8 +49,18 @@ import {
   type AgentScrollMode,
 } from "../agentScrollPreferences";
 import { paneCommandKind } from "../sessionDashboardModel";
+import {
+  SHORTCUT_ACTION_EVENT,
+  directShortcutAria,
+  directShortcutLabel,
+  matchesDirectShortcut,
+  useShortcutSettings,
+  type ShortcutActionId,
+  type ShortcutBindings,
+} from "../shortcutSettings";
 import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
+import { AccountLink } from "./AccountLink";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
 import {
   handoffRenamedSessionDraft,
@@ -194,6 +204,27 @@ interface DesktopFocusShortcutsDrag {
   maxDeltaY: number;
 }
 
+type DesktopSessionShortcut = "end" | "rename";
+type DesktopConsoleShortcutAction =
+  | "view-terminal-focus"
+  | "view-session-tabs"
+  | "session-end"
+  | "session-rename"
+  | "terminal-return-live"
+  | "terminal-copy-mode"
+  | "session-copy-new"
+  | "terminal-page-up"
+  | "terminal-page-down";
+
+function desktopSessionShortcut(
+  event: KeyboardEvent,
+  bindings: ShortcutBindings,
+): DesktopSessionShortcut | null {
+  if (matchesDirectShortcut(event, bindings["session-end"])) return "end";
+  if (matchesDirectShortcut(event, bindings["session-rename"])) return "rename";
+  return null;
+}
+
 function clampDelta(value: number, minimum: number, maximum: number): number {
   if (minimum > maximum) return 0;
   return Math.min(maximum, Math.max(minimum, value));
@@ -252,6 +283,11 @@ function ConsoleBarToolbar({
   tabActionsVisible = true,
   onTabActionsVisibilityChange,
 }: ConsoleBarToolbarProps) {
+  const { bindings: shortcutBindings } = useShortcutSettings();
+  const sessionTabsShortcut = directShortcutLabel(shortcutBindings["view-session-tabs"]);
+  const tabActionsShortcut = directShortcutLabel(shortcutBindings["view-tab-actions"]);
+  const copyModeShortcut = directShortcutLabel(shortcutBindings["terminal-copy-mode"]);
+  const focusShortcut = directShortcutLabel(shortcutBindings["view-terminal-focus"]);
   return (
     <div
       className={workspaceLinks
@@ -269,7 +305,7 @@ function ConsoleBarToolbar({
           const visible = visibility[bar];
           const available = availability?.[bar] ?? true;
           const shortcut = bar === "sessionTabs" && available
-            ? "Control+Shift+S"
+            ? directShortcutAria(shortcutBindings["view-session-tabs"])
             : undefined;
           return (
             <button
@@ -283,7 +319,7 @@ function ConsoleBarToolbar({
               disabled={!available}
               title={available
                 ? `${visible ? "Hide" : "Show"} ${label.toLowerCase()}${shortcut
-                  ? " (Ctrl+Shift+S)"
+                  ? ` (${sessionTabsShortcut})`
                   : ""}`
                 : `${label} unavailable for this session`}
               onClick={() => onChange(bar, !visible)}
@@ -318,10 +354,10 @@ function ConsoleBarToolbar({
           aria-label="Tab action buttons"
           aria-controls="muxdeck-session-tabs"
           aria-pressed={tabActionsVisible}
-          aria-keyshortcuts="Control+Shift+A"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["view-tab-actions"])}
           title={tabActionsVisible
-            ? "Hide action buttons on every session tab (Ctrl+Shift+A)"
-            : "Show action buttons on every session tab (Ctrl+Shift+A)"}
+            ? `Hide action buttons on every session tab${tabActionsShortcut ? ` (${tabActionsShortcut})` : ""}`
+            : `Show action buttons on every session tab${tabActionsShortcut ? ` (${tabActionsShortcut})` : ""}`}
           onClick={() => onTabActionsVisibilityChange(!tabActionsVisible)}
         >
           <span>Actions</span>
@@ -334,10 +370,10 @@ function ConsoleBarToolbar({
           aria-label="Browser terminal copy mode"
           aria-controls="muxdeck-active-console"
           aria-pressed={desktopCopyMode}
-          aria-keyshortcuts="Control+Shift+C"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-copy-mode"])}
           title={desktopCopyMode
-            ? "Browser selection is active. Click to return mouse control to the terminal application (Ctrl+Shift+C)"
-            : "Select terminal text with the browser; TUI mouse actions are temporarily blocked (Ctrl+Shift+C)"}
+            ? `Browser selection is active. Click to return mouse control to the terminal application${copyModeShortcut ? ` (${copyModeShortcut})` : ""}`
+            : `Select terminal text with the browser; TUI mouse actions are temporarily blocked${copyModeShortcut ? ` (${copyModeShortcut})` : ""}`}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onDesktopCopyModeChange(!desktopCopyMode)}
         >
@@ -352,8 +388,8 @@ function ConsoleBarToolbar({
           aria-label="Enter desktop terminal focus"
           aria-controls="muxdeck-active-console"
           aria-pressed="false"
-          aria-keyshortcuts="Control+Shift+F"
-          title="Fill the browser viewport with this live terminal (Ctrl+Shift+F)"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["view-terminal-focus"])}
+          title={`Fill the browser viewport with this live terminal${focusShortcut ? ` (${focusShortcut})` : ""}`}
           onMouseDown={(event) => event.preventDefault()}
         >
           <ExpandIcon /> <span>Focus</span>
@@ -398,6 +434,7 @@ export function ConsoleScreen({
   onDismissRenameWarning,
 }: ConsoleScreenProps) {
   const { theme } = useTheme();
+  const { bindings: shortcutBindings } = useShortcutSettings();
   const consoleShellRef = useRef<HTMLElement>(null);
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
@@ -455,6 +492,7 @@ export function ConsoleScreen({
   >({ x: 0, y: 0 });
   const desktopFocusShortcutsPositionRef = useRef(desktopFocusShortcutsPosition);
   const desktopFocusShortcutsDragRef = useRef<DesktopFocusShortcutsDrag | null>(null);
+  const handledSessionShortcutRef = useRef<DesktopSessionShortcut | null>(null);
   const copyingSessionRef = useRef(false);
   const sessionNameRef = useRef(sessionName);
   sessionNameRef.current = sessionName;
@@ -1084,83 +1122,135 @@ export function ConsoleScreen({
     setRenameEditorOpen(true);
   }, [onSessionRenamed, session]);
   useEffect(() => {
+    const blockedDesktopShortcut = () => (
+      workspaceOverlayOpen
+      || Boolean(document.querySelector('[aria-modal="true"]'))
+      || (window.matchMedia?.(MOBILE_CONSOLE_LAYOUT_QUERY).matches ?? false)
+    );
+    const actionForKeyboardEvent = (
+      event: KeyboardEvent,
+    ): DesktopConsoleShortcutAction | null => {
+      const candidates: DesktopConsoleShortcutAction[] = [
+        "view-terminal-focus",
+        "view-session-tabs",
+        "session-end",
+        "session-rename",
+        "terminal-return-live",
+        "terminal-copy-mode",
+        "session-copy-new",
+        "terminal-page-up",
+        "terminal-page-down",
+      ];
+      return candidates.find((action) => (
+        matchesDirectShortcut(event, shortcutBindings[action])
+      )) ?? null;
+    };
+    const runDesktopAction = (
+      action: DesktopConsoleShortcutAction,
+      repeated = false,
+      rememberKeyDown = false,
+    ) => {
+      if (action === "view-session-tabs") {
+        if (sessionNavigation) setBarVisible("sessionTabs", !visibleBars.sessionTabs);
+        return;
+      }
+      if (action === "session-end") {
+        if (repeated) return;
+        if (rememberKeyDown) handledSessionShortcutRef.current = "end";
+        openTerminateEditor();
+        return;
+      }
+      if (action === "session-rename") {
+        if (repeated || !session || !onSessionRenamed) return;
+        if (rememberKeyDown) handledSessionShortcutRef.current = "rename";
+        openRenameEditor();
+        return;
+      }
+      if (action === "terminal-return-live") {
+        returnToLiveTerminal();
+        return;
+      }
+      if (action === "terminal-copy-mode") {
+        setDesktopCopyMode((enabled) => !enabled);
+        return;
+      }
+      if (action === "session-copy-new") {
+        if (!repeated && onSessionCopied) void copyNewSession();
+        return;
+      }
+      if (action === "terminal-page-up" || action === "terminal-page-down") {
+        scrollTerminalWithPreference(
+          action === "terminal-page-up" ? "up" : "down",
+        );
+        return;
+      }
+      if (desktopTerminalFocus) exitDesktopTerminalFocus();
+      else enterDesktopTerminalFocus();
+    };
     const handleDesktopViewShortcut = (event: KeyboardEvent) => {
+      const sessionShortcut = desktopSessionShortcut(event, shortcutBindings);
+      if ((event.isComposing || event.keyCode === 229) && !sessionShortcut) return;
+      const action = actionForKeyboardEvent(event);
+      if (!action) return;
+      if (action === "view-session-tabs" && !sessionNavigation) return;
+      if (action === "session-rename" && (!session || !onSessionRenamed)) return;
+      if (action === "session-copy-new" && !onSessionCopied) return;
+      if (blockedDesktopShortcut()) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      runDesktopAction(action, event.repeat, true);
+    };
+
+    const handleDesktopSessionShortcutKeyUp = (event: KeyboardEvent) => {
+      const sessionShortcut = desktopSessionShortcut(event, shortcutBindings);
+      if (!sessionShortcut) return;
+      if (handledSessionShortcutRef.current === sessionShortcut) {
+        handledSessionShortcutRef.current = null;
+        return;
+      }
       if (
-        event.defaultPrevented
-        || event.isComposing
-        || event.keyCode === 229
-        || !event.ctrlKey
+        !event.ctrlKey
         || !event.shiftKey
         || event.altKey
         || event.metaKey
-      ) return;
-
-      const togglesFocus = event.code === "KeyF";
-      const togglesSessionTabs = event.code === "KeyS" && Boolean(sessionNavigation);
-      const endsSession = event.code === "KeyE";
-      const renamesSession = event.code === "KeyR" && Boolean(session && onSessionRenamed);
-      const returnsLive = event.code === "KeyL";
-      const togglesCopyMode = event.code === "KeyC";
-      const copiesSession = event.code === "KeyM" && Boolean(onSessionCopied);
-      const scrollsUp = event.code === "KeyU";
-      const scrollsDown = event.code === "KeyD";
-      if (
-        !togglesFocus
-        && !togglesSessionTabs
-        && !endsSession
-        && !renamesSession
-        && !returnsLive
-        && !togglesCopyMode
-        && !copiesSession
-        && !scrollsUp
-        && !scrollsDown
-      ) return;
-      if (
-        workspaceOverlayOpen
-        || document.querySelector('[aria-modal="true"]')
-        || (window.matchMedia?.(MOBILE_CONSOLE_LAYOUT_QUERY).matches ?? false)
+        || blockedDesktopShortcut()
+        || (sessionShortcut === "rename" && (!session || !onSessionRenamed))
       ) return;
 
       event.preventDefault();
       event.stopPropagation();
+      if (sessionShortcut === "end") openTerminateEditor();
+      else openRenameEditor();
+    };
 
-      if (togglesSessionTabs) {
-        setBarVisible("sessionTabs", !visibleBars.sessionTabs);
-        return;
-      }
-
-      if (endsSession) {
-        openTerminateEditor();
-        return;
-      }
-      if (renamesSession) {
-        openRenameEditor();
-        return;
-      }
-      if (returnsLive) {
-        returnToLiveTerminal();
-        return;
-      }
-      if (togglesCopyMode) {
-        setDesktopCopyMode((enabled) => !enabled);
-        return;
-      }
-      if (copiesSession) {
-        if (!event.repeat) void copyNewSession();
-        return;
-      }
-      if (scrollsUp || scrollsDown) {
-        scrollTerminalWithPreference(scrollsUp ? "up" : "down");
-        return;
-      }
-
-      if (desktopTerminalFocus) exitDesktopTerminalFocus();
-      else enterDesktopTerminalFocus();
+    const handleShortcutAction = (event: Event) => {
+      const action = (event as CustomEvent<ShortcutActionId>).detail;
+      const supportedActions: DesktopConsoleShortcutAction[] = [
+        "view-terminal-focus",
+        "view-session-tabs",
+        "session-end",
+        "session-rename",
+        "terminal-return-live",
+        "terminal-copy-mode",
+        "session-copy-new",
+        "terminal-page-up",
+        "terminal-page-down",
+      ];
+      if (!supportedActions.includes(action as DesktopConsoleShortcutAction)) return;
+      if (blockedDesktopShortcut()) return;
+      runDesktopAction(action as DesktopConsoleShortcutAction);
     };
 
     // Capture app-level view chords before xterm turns them into terminal input.
     window.addEventListener("keydown", handleDesktopViewShortcut, true);
-    return () => window.removeEventListener("keydown", handleDesktopViewShortcut, true);
+    window.addEventListener("keyup", handleDesktopSessionShortcutKeyUp, true);
+    window.addEventListener(SHORTCUT_ACTION_EVENT, handleShortcutAction);
+    return () => {
+      window.removeEventListener("keydown", handleDesktopViewShortcut, true);
+      window.removeEventListener("keyup", handleDesktopSessionShortcutKeyUp, true);
+      window.removeEventListener(SHORTCUT_ACTION_EVENT, handleShortcutAction);
+    };
   }, [
     desktopTerminalFocus,
     enterDesktopTerminalFocus,
@@ -1173,6 +1263,7 @@ export function ConsoleScreen({
     scrollTerminalWithPreference,
     sessionNavigation,
     setBarVisible,
+    shortcutBindings,
     visibleBars.sessionTabs,
     workspaceOverlayOpen,
   ]);
@@ -1450,10 +1541,12 @@ export function ConsoleScreen({
             <button
               type="button"
               className="copy-new-button"
-              aria-keyshortcuts="Control+Shift+M"
+              aria-keyshortcuts={directShortcutAria(shortcutBindings["session-copy-new"])}
               aria-busy={copyingSource === sessionName}
               disabled={copySessionDisabled || !session || copyingSource !== null}
-              title="Create and open a fresh session in this pane's working directory (Ctrl+Shift+M)"
+              title={`Create and open a fresh session in this pane's working directory${directShortcutLabel(shortcutBindings["session-copy-new"])
+                ? ` (${directShortcutLabel(shortcutBindings["session-copy-new"])})`
+                : ""}`}
               onClick={() => void copyNewSession()}
             >
               <WindowCopyIcon />
@@ -1496,6 +1589,7 @@ export function ConsoleScreen({
               <span>Move / Copy</span>
             </button>
           )}
+          <AccountLink />
           <ThemeToggle />
           {pane?.command === "grok" && !pane.dead && (
             <button
@@ -1590,11 +1684,13 @@ export function ConsoleScreen({
             aria-label="Raw terminal Page Up"
             aria-controls="muxdeck-active-console"
             aria-keyshortcuts={preferredScrollMode === "application"
-              ? "Control+Shift+U"
+              ? directShortcutAria(shortcutBindings["terminal-page-up"])
               : undefined}
             data-scroll-preferred={preferredScrollMode === "application" ? "true" : undefined}
             title={preferredScrollMode === "application"
-              ? `Send Page Up to the foreground terminal application; preferred for ${classification.label} (Ctrl+Shift+U)`
+              ? `Send Page Up to the foreground terminal application; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-up"])
+                ? ` (${directShortcutLabel(shortcutBindings["terminal-page-up"])})`
+                : ""}`
               : "Send Page Up to the foreground terminal application"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
@@ -1611,11 +1707,13 @@ export function ConsoleScreen({
             aria-label="Raw terminal Page Down"
             aria-controls="muxdeck-active-console"
             aria-keyshortcuts={preferredScrollMode === "application"
-              ? "Control+Shift+D"
+              ? directShortcutAria(shortcutBindings["terminal-page-down"])
               : undefined}
             data-scroll-preferred={preferredScrollMode === "application" ? "true" : undefined}
             title={preferredScrollMode === "application"
-              ? `Send Page Down to the foreground terminal application; preferred for ${classification.label} (Ctrl+Shift+D)`
+              ? `Send Page Down to the foreground terminal application; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-down"])
+                ? ` (${directShortcutLabel(shortcutBindings["terminal-page-down"])})`
+                : ""}`
               : "Send Page Down to the foreground terminal application"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
@@ -1632,11 +1730,13 @@ export function ConsoleScreen({
             aria-label="Tmux Page Up"
             aria-controls="muxdeck-active-console"
             aria-keyshortcuts={preferredScrollMode === "tmux"
-              ? "Control+Shift+U"
+              ? directShortcutAria(shortcutBindings["terminal-page-up"])
               : undefined}
             data-scroll-preferred={preferredScrollMode === "tmux" ? "true" : undefined}
             title={preferredScrollMode === "tmux"
-              ? `Enter tmux copy mode one page up; preferred for ${classification.label} (Ctrl+Shift+U)`
+              ? `Enter tmux copy mode one page up; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-up"])
+                ? ` (${directShortcutLabel(shortcutBindings["terminal-page-up"])})`
+                : ""}`
               : "Enter tmux copy mode one page up"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
@@ -1653,11 +1753,13 @@ export function ConsoleScreen({
             aria-label="Tmux Page Down"
             aria-controls="muxdeck-active-console"
             aria-keyshortcuts={preferredScrollMode === "tmux"
-              ? "Control+Shift+D"
+              ? directShortcutAria(shortcutBindings["terminal-page-down"])
               : undefined}
             data-scroll-preferred={preferredScrollMode === "tmux" ? "true" : undefined}
             title={preferredScrollMode === "tmux"
-              ? `Page down while tmux copy mode is active; preferred for ${classification.label} (Ctrl+Shift+D)`
+              ? `Page down while tmux copy mode is active; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-down"])
+                ? ` (${directShortcutLabel(shortcutBindings["terminal-page-down"])})`
+                : ""}`
               : "Page down while tmux copy mode is active"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
@@ -1671,8 +1773,10 @@ export function ConsoleScreen({
             className="terminal-view-control live-toggle"
             aria-label="Return to live terminal"
             aria-controls="muxdeck-active-console"
-            aria-keyshortcuts="Control+Shift+L"
-            title="Leave tmux copy mode and return to live output (Ctrl+Shift+L)"
+            aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
+            title={`Leave tmux copy mode and return to live output${directShortcutLabel(shortcutBindings["terminal-return-live"])
+              ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
+              : ""}`}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
             onClick={returnToLiveTerminal}
@@ -1685,8 +1789,10 @@ export function ConsoleScreen({
             className="terminal-view-control terminate-session-control"
             aria-label="Terminate tmux session"
             aria-haspopup="dialog"
-            aria-keyshortcuts="Control+Shift+E"
-            title="End this entire tmux session and all of its panes (Ctrl+Shift+E)"
+            aria-keyshortcuts={directShortcutAria(shortcutBindings["session-end"])}
+            title={`End this entire tmux session and all of its panes${directShortcutLabel(shortcutBindings["session-end"])
+              ? ` (${directShortcutLabel(shortcutBindings["session-end"])})`
+              : ""}`}
             disabled={!session || !onSessionTerminated}
             onMouseDown={(event) => event.preventDefault()}
             onClick={openTerminateEditor}
@@ -1755,8 +1861,10 @@ export function ConsoleScreen({
               aria-label="Exit desktop terminal focus"
               aria-controls="muxdeck-active-console"
               aria-pressed="true"
-              aria-keyshortcuts="Control+Shift+F"
-              title="Return to the full console (Ctrl+Shift+F)"
+              aria-keyshortcuts={directShortcutAria(shortcutBindings["view-terminal-focus"])}
+              title={`Return to the full console${directShortcutLabel(shortcutBindings["view-terminal-focus"])
+                ? ` (${directShortcutLabel(shortcutBindings["view-terminal-focus"])})`
+                : ""}`}
               onMouseDown={(event) => event.preventDefault()}
               onClick={exitDesktopTerminalFocus}
             >

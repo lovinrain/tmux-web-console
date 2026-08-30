@@ -9,10 +9,13 @@ workspaces, session organization, and status detection for Claude Code, Codex,
 GitHub Copilot CLI, Cursor Agent, and Grok Build.
 
 > [!CAUTION]
-> Muxdeck has no application-level authentication. Anyone who can reach it can
-> control shells with the tmux owner's privileges. Keep it bound to loopback and
-> use only a private tunnel/network or an authenticated, access-controlled
-> reverse proxy. Do not publish its HTTP port directly to the internet.
+> `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none`. Without an explicit
+> mode, Muxdeck keeps its legacy behavior: a configured `MUXDECK_AUTH_FILE`
+> enables the remembered-browser login and no file means no authentication.
+> Anyone who can reach a `none` instance can control shells with the tmux
+> owner's privileges. Keep the service bound to loopback, enable authentication
+> or another access-control layer before exposing it, and never publish its HTTP
+> port directly to the internet.
 
 ## Screenshots
 
@@ -120,11 +123,14 @@ For frontend development, run `npm run dev`. Vite serves
   pastes those paths at its cursor without pressing Enter. The active CLI agent
   runs as the same Unix user and can read the private host files directly.
 - On desktop, click the working-directory line beneath the session title to open
-  a movable, resizable, read-only file browser. Its root is always derived from
+  a movable, resizable file browser. Its root is always derived from
   the live tmux pane; requests cannot select an arbitrary server root or follow
   a symlink outside that CWD. Text previews are UTF-8 and capped at 1 MiB;
-  binary files show metadata. `Copy path` copies the absolute server path, while
-  `Stage path` inserts its shell-quoted form into the composer without sending.
+  binary files show metadata. Selected regular files can be downloaded without
+  a preview-size limit. `Upload` and drag-and-drop write up to six files at once
+  into the folder shown (12 MiB each, mode `0600`) and refuse to overwrite an
+  existing name. `Copy path` copies the absolute server path, while `Stage path`
+  inserts its shell-quoted form into the composer without sending.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck
@@ -132,14 +138,13 @@ For frontend development, run `npm run dev`. Vite serves
 
 ## Workspace shortcuts
 
-`Ctrl+Shift+H` toggles the saved light/dark theme from any Muxdeck screen,
-including the landing page and compact mobile layout.
-
-These shortcuts are active in the desktop multi-tab view, not on the landing
-page or compact mobile layout.
+These are the default shortcuts for the desktop multi-tab view. They are not
+active on the landing page or compact mobile layout.
 
 | Shortcut | Action |
 | --- | --- |
+| `Ctrl+Shift+H` | Open fuzzy command search |
+| `Ctrl+Shift+Z` | Open the shortcut window; then press one action key |
 | `Ctrl+Shift+B` | Open New session in the current workspace |
 | `Ctrl+Shift+,` | Previous tab |
 | `Ctrl+Shift+.` | Next tab |
@@ -154,6 +159,15 @@ page or compact mobile layout.
 | `Ctrl+Shift+M` | Create and open a numbered session in the active pane's directory |
 | `Ctrl+Shift+R` | Rename the active tmux session |
 | `Ctrl+Shift+E` | Open the End-session confirmation |
+| `Ctrl+Shift+Z`, then `T` | Toggle the saved light/dark theme |
+
+The shortcut window provides a browser-safe second route to known actions. In
+particular, the defaults `Z` then `E`, `R`, or `H` open End confirmation, Rename,
+or fuzzy command search. Open `Shortcuts`, then `Customize`, to change every
+direct `Ctrl+Shift` chord and every one-key shortcut-window action. The keymap is
+stored by the backend and shared by every browser using this Muxdeck instance;
+all visible hints update after saving. Browsers and operating systems may still
+reserve a direct chord, so keep a shortcut-window binding as a fallback.
 
 Use `Keymap` in the desktop workspace strip to see these chords in the app.
 Muxdeck highlights whether raw Page Up/Page Down or tmux history is preferred for
@@ -174,9 +188,44 @@ MUXDECK_TRUSTED_ORIGINS=https://console.example.test
 ~~~
 
 Origin validation prevents cross-site requests and DNS rebinding; it is not
-authentication. Titles, session names, memos, snippets, workspace state, and
-uploaded files can contain sensitive information and should remain outside the
-source tree.
+authentication. To enable Muxdeck's remembered-browser login, provision its
+state interactively outside the repository, then select `server` mode and set
+the resulting absolute path in the service environment:
+
+~~~bash
+.venv/bin/python -m tmux_console.auth provision \
+  --path /var/lib/muxdeck/auth.json \
+  --username console-admin
+export MUXDECK_AUTH_FILE=/var/lib/muxdeck/auth.json
+export MUXDECK_AUTH_MODE=server
+~~~
+
+The command prompts for the password without echoing it. The file contains only
+a salted scrypt password hash and hashes of random remembered-device tokens; it
+uses mode `0600` and must never be committed, copied into a source archive, or
+placed directly in a systemd unit. The browser receives an `HttpOnly`, `Secure`,
+`SameSite=Strict` cookie shared across tabs in that browser profile. Server-side
+device tokens have no fixed expiration, while the browser cookie uses the
+maximum broadly supported lifetime and is renewed on authenticated requests.
+Clearing browser data still removes it. Use **Account** to revoke remembered
+browsers or log out.
+
+The same private credential file can instead back standard HTTP Basic
+authentication with `MUXDECK_AUTH_MODE=basic`. Muxdeck validates the Basic
+credentials but does not issue device cookies or create remembered-browser
+records. The browser decides how long to cache those credentials, and HTTP Basic
+has no reliable application-level logout; close the browser or clear its saved
+site credentials to forget them. A Basic-auth username cannot contain `:`.
+
+Set `MUXDECK_AUTH_MODE=none` only when deliberately relying on loopback, a
+private tunnel/network, or a separate authentication layer. Explicit `none`
+ignores `MUXDECK_AUTH_FILE`. Explicit `server` and `basic` modes require a valid
+private auth file and fail startup closed if it is absent or unsafe. An unknown
+mode also prevents startup.
+
+Titles, session names, memos, snippets, workspace state, authentication state,
+and uploaded files can contain sensitive information and should remain outside
+the source tree.
 
 ## Configuration
 
@@ -186,6 +235,9 @@ source tree.
 | `MUXDECK_PORT` | `7683` | HTTP listen port |
 | `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
 | `MUXDECK_TRUSTED_ORIGINS` | unset | Exact external origins allowed through a proxy |
+| `MUXDECK_AUTH_MODE` | inferred | `server`, `basic`, or `none`; when omitted, an auth file selects `server` and no file selects `none` |
+| `MUXDECK_AUTH_FILE` | unset | Absolute path to provisioned credential and remembered-device state; required by `server` and `basic` |
+| `MUXDECK_AUTH_COOKIE_SECURE` | `true` | Require HTTPS for the `server`-mode remembered-browser cookie; disable only for intentional direct loopback HTTP development |
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name |
 

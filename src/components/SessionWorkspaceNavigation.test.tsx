@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
+import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
+import { SHORTCUT_ACTION_EVENT, type ShortcutActionId } from "../shortcutSettings";
 import type { Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import {
@@ -436,48 +438,135 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onOpenRecents).toHaveBeenCalledOnce();
   });
 
-  it("shows the complete desktop keymap from the workspace strip", () => {
-    render(<SessionWorkspaceNavigation {...navigationProps()} />);
+  it("fuzzy-searches and runs desktop commands and open tabs", async () => {
+    const props = navigationProps();
+    const shortcutActions: ShortcutActionId[] = [];
+    const captureShortcut = (event: Event) => {
+      shortcutActions.push((event as CustomEvent<ShortcutActionId>).detail);
+    };
+    window.addEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
+    render(<SessionWorkspaceNavigation {...props} />);
 
-    const trigger = screen.getByRole("button", { name: "Show desktop keymap" });
+    const trigger = screen.getByRole("button", { name: "Open command palette" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger).toHaveAttribute("aria-controls", "muxdeck-workspace-keymap");
+    expect(trigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+H");
+
+    fireEvent.keyDown(window, {
+      code: "KeyH",
+      key: "H",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    const palette = screen.getByRole("dialog", { name: "Run a command" });
+    const search = within(palette).getByRole("combobox", { name: "Search commands" });
+    await waitFor(() => expect(search).toHaveFocus());
+    expect(document.body.style.overflow).toBe("hidden");
+
+    fireEvent.change(search, { target: { value: "rn ssn" } });
+    expect(within(palette).getByRole("option", { name: /Rename tmux session/ }))
+      .toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(search, { key: "Enter" });
+
+    expect(screen.queryByRole("dialog", { name: "Run a command" })).not.toBeInTheDocument();
+    expect(shortcutActions).toContain("session-rename");
+    expect(document.body.style.overflow).toBe("");
+
     fireEvent.click(trigger);
+    const reopened = screen.getByRole("dialog", { name: "Run a command" });
+    const reopenedSearch = within(reopened).getByRole("combobox", { name: "Search commands" });
+    fireEvent.change(reopenedSearch, { target: { value: "bta" } });
+    expect(within(reopened).getByRole("option", { name: /Switch to beta/ }))
+      .toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(reopenedSearch, { key: "Enter" });
+    expect(props.onSelect).toHaveBeenCalledWith("beta");
 
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    const keymap = screen.getByRole("dialog", { name: "Desktop workspace keymap" });
-    for (const mapping of [
-      ["Ctrl+Shift+E", "Open End session confirmation"],
-      ["Ctrl+Shift+R", "Rename tmux session"],
-      ["Ctrl+Shift+M", "Create session from current directory"],
-      ["Ctrl+Shift+L", "Return to live output"],
-      ["Ctrl+Shift+C", "Toggle browser Copy mode"],
-      ["Ctrl+Shift+A", "Toggle tab Actions"],
-      ["Ctrl+Shift+U", "Preferred page up"],
-      ["Ctrl+Shift+D", "Preferred page down"],
-      ["Ctrl+Shift+S", "Show or hide session tabs"],
-      ["Ctrl+Shift+F", "Enter or exit terminal Focus"],
-      ["Ctrl+Shift+H", "Toggle light or dark theme"],
-      ["Ctrl+Shift+B", "Open New session"],
-      ["Ctrl+Shift+,", "Previous tab"],
-      ["Ctrl+Shift+.", "Next tab"],
-      ["Ctrl+Shift+1-9", "Jump to numbered tab"],
-      ["Ctrl+Shift+;", "Find an open tab"],
-    ]) {
-      expect(within(keymap).getByText(mapping[0], { selector: "kbd" })).toBeVisible();
-      expect(within(keymap).getByText(mapping[1])).toBeVisible();
-    }
-    expect(keymap).toHaveTextContent("teaches Muxdeck which paging style");
-
+    trigger.focus();
+    fireEvent.click(trigger);
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Desktop workspace keymap" }))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Run a command" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
 
-    fireEvent.click(trigger);
-    fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole("dialog", { name: "Desktop workspace keymap" }))
+    const blockingModal = document.createElement("div");
+    blockingModal.setAttribute("aria-modal", "true");
+    document.body.append(blockingModal);
+    fireEvent.keyDown(window, {
+      code: "KeyH",
+      key: "H",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(screen.queryByRole("dialog", { name: "Run a command" })).not.toBeInTheDocument();
+    blockingModal.remove();
+    window.removeEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
+  });
+
+  it("opens a shortcut layer and runs End, Rename, or fuzzy search by follow-up key", async () => {
+    const shortcutActions: ShortcutActionId[] = [];
+    const captureShortcut = (event: Event) => {
+      shortcutActions.push((event as CustomEvent<ShortcutActionId>).detail);
+    };
+    window.addEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
+    render(<SessionWorkspaceNavigation {...navigationProps()} />);
+
+    const trigger = screen.getByRole("button", { name: "Open shortcut window" });
+    expect(trigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Z");
+
+    fireEvent.keyDown(window, {
+      code: "KeyZ",
+      key: "Z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    let shortcuts = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(shortcuts).toHaveTextContent("Release the opening chord");
+    expect(within(shortcuts).getByRole("button", {
+      name: /Open End session confirmation/,
+    })).toHaveTextContent("E");
+
+    fireEvent.keyDown(window, { code: "KeyE", key: "e" });
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" }))
       .not.toBeInTheDocument();
+    expect(shortcutActions).toContain("session-end");
+
+    fireEvent.keyDown(window, {
+      code: "KeyZ",
+      key: "Z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(window, { code: "KeyR", key: "r" });
+    expect(shortcutActions).toContain("session-rename");
+
+    fireEvent.keyDown(window, {
+      code: "KeyZ",
+      key: "Z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    shortcuts = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(shortcuts).getByRole("button", { name: /Fuzzy command search/ }))
+      .toHaveTextContent("H");
+    fireEvent.keyDown(window, { code: "KeyH", key: "h" });
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Run a command" })).toBeVisible();
+    });
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" }))
+      .not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    const themeRequest = vi.fn();
+    window.addEventListener(THEME_TOGGLE_REQUEST_EVENT, themeRequest);
+    fireEvent.keyDown(window, {
+      code: "KeyZ",
+      key: "Z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(window, { code: "KeyT", key: "t" });
+    expect(themeRequest).toHaveBeenCalledOnce();
+
+    window.removeEventListener(THEME_TOGGLE_REQUEST_EVENT, themeRequest);
+    window.removeEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
   });
 
   it("exposes distinct Move and Copy window actions with exact accessible text", () => {

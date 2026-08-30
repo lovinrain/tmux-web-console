@@ -21,10 +21,12 @@ is locked by `package-lock.json`, while Python currently allows compatible
    machine/path-specific artifacts. Create them again on the target.
 5. Keep `MUXDECK_HOST=127.0.0.1`. Remote access should go through a trusted
    tunnel, VPN, or authenticated/restricted reverse proxy.
-6. Muxdeck has no application authentication or controller lease. Anyone who
-   can reach it can type into shells with the tmux owner's privileges. Do not
-   create an unprotected public route without the human explicitly accepting
-   that risk.
+6. Set `MUXDECK_AUTH_MODE` explicitly. Use `server` for the persistent Muxdeck
+   login, `basic` for browser-managed HTTP Basic authentication, or `none` only
+   behind an intentional separate trust boundary. Anyone who reaches a `none`
+   instance can type into shells with the tmux owner's privileges. Do not create
+   an unprotected public route. Protected modes require a valid private
+   `MUXDECK_AUTH_FILE` and must fail startup closed when it is unavailable.
 7. Preserve an existing release, unit, proxy configuration, and state files
    until the replacement passes all validation gates.
 8. Restart only `muxdeck.service` during a normal deployment. Validate Caddy
@@ -85,8 +87,8 @@ must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
 - titles, predefined session tags, starred/ignored session names, memoranda, the
-  snippet library, saved workspaces, and uploaded attachments stored outside the
-  source folder;
+  snippet library, saved workspaces, shortcut keymap, authentication state, and
+  uploaded attachments stored outside the source folder;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -122,7 +124,9 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | tmux | 3.x | 3.2+ enables Grok startup appearance hints; `xterm-256color` terminfo must exist. |
 | Base path | `/mux` | No trailing slash at runtime; build value is `/mux/`. |
 | Loopback port | `7683` | Must not conflict with an unrelated service. |
-| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains four JSON files and private uploaded attachments. |
+| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains six JSON files and private uploaded attachments. |
+| Authentication mode | `server` | Use `basic` only when browser-managed credentials are intended; use `none` only behind another explicit trust boundary. |
+| Application login | required for `server` or `basic` | Provision interactively; never put a plaintext password in source, a unit, an environment file, or command-line arguments. |
 | tmux socket | default or `-L NAME` | `MUXDECK_TMUX_SOCKET` is a name, never a filesystem path. |
 | `TMUX_TMPDIR` | usually unset | If the real server uses it, reproduce it in the service. |
 | Public host | optional | Must be protected by a VPN, trusted network, tunnel, or proxy access control. |
@@ -142,12 +146,23 @@ MUXDEPLOY_TRUSTED_ORIGINS=
 MUXDEPLOY_STATE_DIR=/var/lib/muxdeck
 MUXDEPLOY_TMUX_BIN=/usr/bin/tmux
 MUXDEPLOY_TMUX_SOCKET_NAME=
+MUXDEPLOY_AUTH_MODE=server
+MUXDEPLOY_AUTH_USERNAME=replace_me
 ```
 
 Before using these variables in `sed` or a unit, ensure usernames contain only
 normal account characters and paths contain only letters, digits, `_`, `-`,
 `.`, and `/`. The base path must begin with `/`, must not end with `/`, and the
 provided Caddy template expects a non-root path such as `/mux`.
+
+Reject any authentication mode other than the three exact launch values:
+
+```bash
+case "$MUXDEPLOY_AUTH_MODE" in
+  server|basic|none) ;;
+  *) echo 'Invalid MUXDEPLOY_AUTH_MODE' >&2; exit 1 ;;
+esac
+```
 
 `MUXDEPLOY_TRUSTED_ORIGINS` is not an authentication setting. It prevents
 cross-site browser requests and DNS rebinding by listing the exact public origins
@@ -252,8 +267,8 @@ journalctl -u muxdeck.service -n 100 --no-pager
 caddy validate --config /etc/caddy/Caddyfile
 ```
 
-Back up the existing unit, the relevant Caddy configuration, all four state
-JSON files, the upload directory when present, and the old release path. Use
+Back up the existing unit, the relevant Caddy configuration, all six state JSON
+files, the upload directory when present, and the old release path. Use
 timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
@@ -336,9 +351,10 @@ MUXDECK_PLAYWRIGHT_BROWSER=/absolute/path/to/chrome npm run test:e2e
 ```
 
 The Playwright configuration uses the project `.venv` when present and creates
-a unique disposable tmux socket plus title, memorandum, snippet, workspace, and
-attachment-upload state paths per run. Do not run browser validation against valuable
-target sessions, and do not remove those state-path overrides.
+a unique disposable tmux socket plus title, memorandum, snippet, workspace,
+shortcut, authentication, and attachment-upload state paths per run. Do not run browser
+validation against valuable target sessions, and do not remove those state-path
+overrides.
 
 ## 6. Optional runtime-state migration
 
@@ -349,6 +365,8 @@ The default source paths are under the old service user's state directory:
 ~/.local/state/muxdeck/session-messages.json
 ~/.local/state/muxdeck/snippets.json
 ~/.local/state/muxdeck/workspaces.json
+~/.local/state/muxdeck/shortcuts.json
+~/.local/state/muxdeck/auth.json
 ~/.local/state/muxdeck/uploads/
 ```
 
@@ -364,6 +382,11 @@ Notes may contain sensitive commands or prose. The upload directory contains
 arbitrary files attached from the desktop console; it is capped at 512 MiB by
 the application but has no automatic deletion policy. Attachments may be
 sensitive and remain after their path is pasted, sent, or cleared from a draft.
+The fifth file contains the global desktop keymap shared by every browser. The
+sixth file contains the salted login password hash and hashes of remembered
+browser tokens. It is security-sensitive even though it contains neither the
+plaintext password nor bearer tokens. Keep it mode `0600`, never include it in a
+source archive, and do not print its contents in deployment evidence.
 An existing unit may override any path; inspect its environment rather than
 assuming defaults.
 
@@ -400,27 +423,30 @@ Migration procedure:
 
 1. Stop only Muxdeck on the source if a consistent final copy is needed. This
    disconnects web clients but does not stop tmux sessions.
-2. Copy the four JSON files that exist separately from the source archive. An
-   older release may not have created `workspaces.json` yet. If attachment retention
-   is in scope, copy the configured upload directory without following or
-   introducing symlinks; an older release may not have one.
+2. Copy the six JSON files that exist separately from the source archive. An
+   older release may not have created `workspaces.json`, `shortcuts.json`, or
+   `auth.json` yet. Treat `auth.json` as credential state and never print or
+   archive its contents with ordinary source/deployment evidence.
+   If attachment retention is in scope, copy the configured upload directory
+   without following or introducing symlinks; an older release may not have one.
 3. Create the target state directory with owner/group equal to the run user and
    mode `0700`.
 4. Install migrated JSON files with mode `0600` and the same owner/group. Keep
    the upload directory and its per-session subdirectories at `0700`, and
    attachment files at `0600`.
 5. Point the rendered unit at their absolute target paths, including
-   `MUXDECK_UPLOADS_DIR`.
+   `MUXDECK_SHORTCUTS_FILE`, `MUXDECK_AUTH_FILE`, and `MUXDECK_UPLOADS_DIR`.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
 Title, tag, star, ignored, memorandum, saved-workspace tab, session-link, and
 session-note entries are keyed by tmux session name, so old entries may remain
 dormant until a session with the same name exists. A new session that reuses that
 name inherits the stored metadata, workspace position, link shelf, or note. The
-snippet tree and saved-workspace collection are global to the Muxdeck instance
-rather than per browser. Do not run two Muxdeck processes against the same state
-files; persistence is atomic within one process, not coordinated between
-processes.
+snippet tree, saved-workspace collection, shortcut keymap, login account, and
+remembered-device list are global to the Muxdeck instance rather than per
+browser. Do not run two Muxdeck processes
+against the same state files; persistence is atomic within one process, not
+coordinated between processes.
 
 Saved workspaces are server-global and shared by every browser that can reach
 this Muxdeck instance. Their stable `workspace=` URL identifier is independent
@@ -465,6 +491,38 @@ install -d -m 0700 \
   "$MUXDEPLOY_STATE_DIR"
 ```
 
+If a valid `auth.json` was not migrated, provision it interactively as the run
+user before installing or starting the unit:
+
+```bash
+sudo -u "$MUXDEPLOY_RUN_USER" -- \
+  "$MUXDEPLOY_APP_DIR/.venv/bin/python" -m tmux_console.auth provision \
+  --path "$MUXDEPLOY_STATE_DIR/auth.json" \
+  --username "$MUXDEPLOY_AUTH_USERNAME"
+```
+
+The command prompts twice without echoing the password and refuses to overwrite
+an existing file. Never put the password in a command-line argument, shell
+history, environment or unit file, source patch, deployment archive, log, or
+evidence bundle. The resulting file is mode `0600` and contains only a salted
+scrypt password hash plus hashes of later remembered-device tokens. The unit
+template applies the selected `MUXDEPLOY_AUTH_MODE` and points
+`MUXDECK_AUTH_FILE` at this path; missing or unsafe state in a protected mode
+makes Muxdeck fail startup instead of falling back to unauthenticated access.
+
+Change the rendered mode to `basic` only when standard browser-managed HTTP
+Basic authentication is intended. It uses the same auth file but does not issue
+remembered-device cookies and has no reliable application logout; the browser
+controls credential caching. A Basic username cannot contain `:`. Select `none`
+only when an explicitly reviewed private network, tunnel, or external access
+layer is the authentication boundary. Explicit `none` ignores the auth file.
+Never rely on the omitted-mode compatibility inference in a deployed unit.
+
+The remembered-browser cookie is Secure by default. Keep that default behind
+HTTPS. Only an intentional direct-loopback HTTP development deployment may add
+`Environment=MUXDECK_AUTH_COOKIE_SECURE=false`; never use that setting for a
+public or plain-LAN route.
+
 Render the template to a temporary file. The values must already have passed
 the restricted-character checks in section 3:
 
@@ -478,6 +536,7 @@ sed \
   -e "s|@@BASE_PATH@@|$MUXDEPLOY_BASE_PATH|g" \
   -e "s|@@TRUSTED_ORIGINS@@|$MUXDEPLOY_TRUSTED_ORIGINS|g" \
   -e "s|@@STATE_DIR@@|$MUXDEPLOY_STATE_DIR|g" \
+  -e "s|@@AUTH_MODE@@|$MUXDEPLOY_AUTH_MODE|g" \
   -e "s|@@TMUX_BIN@@|$MUXDEPLOY_TMUX_BIN|g" \
   deploy/muxdeck.service.template > "$MUXDEPLOY_RENDERED_UNIT"
 ```
@@ -538,41 +597,48 @@ systemctl is-active muxdeck.service
 systemctl show muxdeck.service \
   -p MainPID -p User -p Group -p WorkingDirectory -p Environment --no-pager
 journalctl -u muxdeck.service -n 100 --no-pager
-curl -fsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health"
+case "$MUXDEPLOY_AUTH_MODE" in
+  server)
+    curl -fsS \
+      "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/login" >/dev/null
+    test "$(curl -sS -o /dev/null -w '%{http_code}' \
+      "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health")" = 401
+    test "$(curl -sS -o /dev/null -w '%{http_code}' \
+      -H 'Accept: text/html' -H 'Sec-Fetch-Mode: navigate' \
+      "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/")" = 303
+    ;;
+  basic)
+    test "$(curl -sS -o /dev/null -w '%{http_code}' \
+      "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health")" = 401
+    curl -sS -D - -o /dev/null \
+      "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health" \
+      | tr -d '\r' | grep -Fx 'WWW-Authenticate: Basic realm="Muxdeck", charset="UTF-8"'
+    ;;
+  none)
+    test "$(curl -sS -o /dev/null -w '%{http_code}' \
+      "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health")" = 200
+    ;;
+esac
 test "$(curl -sS -o /dev/null -w '%{http_code}' \
   -H 'Host: untrusted.invalid' \
   "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/health")" = 403
-curl -fsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/" >/dev/null
-curl -fsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/workspaces" \
-  >/dev/null
-curl -fsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/workspace-quick-links" \
-  >/dev/null
-curl -fsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/common-note" \
-  >/dev/null
-curl -fsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/session/nonexistent" \
-  >/dev/null
-curl --max-time 5 -NsS \
-  "http://127.0.0.1:$MUXDEPLOY_PORT$MUXDEPLOY_BASE_PATH/api/sessions/stream"
 ```
 
 Expected results:
 
 - service is `active`;
-- health returns `{"ok": true, "sessions": N}`;
+- `server` returns its login HTML, denies unauthenticated API health with `401`,
+  and redirects browser navigation to login; `basic` returns a `401` Basic
+  challenge; or intentional `none` allows health without application credentials;
 - a request with an untrusted Host returns `403`;
-- `N` matches the intended tmux server, not merely any tmux server;
-- dashboard and deep-link routes return the built SPA;
-- the workspace APIs return JSON workspace, common-link, and Common-note state
-  rather than a storage `503`;
-- the SSE request emits a `sessions` event (the command may end at its timeout);
-- logs contain no import, permission, socket, or malformed-state errors,
-  including errors loading the saved-workspace file.
+- direct tmux identity checks still show the expected server and session count;
+- logs contain no import, authentication-state, permission, socket, or
+  malformed-state errors, including errors loading the saved-workspace file.
+
+Do not put the login password or a browser bearer cookie into a curl command or
+evidence file merely to automate this gate. Section 10 validates authenticated
+health, API, SSE, WebSocket, dashboard, and deep-link behavior through the
+intended HTTPS route.
 
 Compare the recorded pre-deployment session/pane identities now. Session IDs,
 pane IDs, pane PIDs, commands, and dead/alive flags should remain unchanged.
@@ -623,6 +689,22 @@ without touching tmux or the healthy local Muxdeck service.
 
 From a client allowed by the chosen access controls, verify:
 
+For `server`, use a fresh browser profile to confirm the site shows the Muxdeck
+login instead of the SPA, a wrong password produces only a generic error, and
+the provisioned credentials open the original deep link. Open a second tab in
+the same profile and confirm it is already authenticated. Reload both tabs, then
+open **Account** and confirm the current browser is listed. Do not revoke that
+only test browser until the remaining checks finish. A separate private profile
+must still see the login page. This demonstrates that the cookie is
+browser-profile-wide rather than tab-local.
+
+For `basic`, confirm a fresh profile receives the browser's Basic prompt, wrong
+credentials do not reveal which field failed, valid credentials open the deep
+link, and **Account** explains that credential caching and logout are controlled
+by the browser. For `none`, verify the reviewed tunnel, network policy, or
+external authentication boundary before continuing; do not expose the route
+merely to test that the application itself has no login.
+
 1. `/mux` redirects to `/mux/` and retains a query string.
 2. The dashboard loads and the header reaches `live`, not permanent `polling`.
 3. API health works through the proxy.
@@ -670,6 +752,16 @@ From a client allowed by the chosen access controls, verify:
     without Enter, the run user can read both files, each file is `0600`, and all
     attachment affordances are hidden at compact mobile width. Do not upload
     sensitive material merely for a smoke test.
+15. In that disposable session, open the desktop pane-CWD browser and upload a
+    small file into a disposable folder with both the picker and drag-and-drop.
+    Confirm the files land in the folder shown with mode `0600`, a repeated name
+    is rejected without changing the original bytes, and downloading returns the
+    same bytes. Delete only those disposable fixtures afterward; none of these
+    file operations should send terminal input or change tmux identities.
+16. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
+    Change one unused test binding, save, reload, and confirm the visible hint
+    and handler both use it; then restore the original binding. A duplicate key
+    in either layer must be identified and must keep Save disabled.
 
 Merely viewing the dashboard is read-only with respect to tmux. Opening a
 console creates an attach client, and `Fit active` may resize the shared tmux
@@ -685,7 +777,11 @@ The deployment agent should report:
 - Python, Node, npm, and tmux versions;
 - base path, port, trusted browser origins, and proxy/access-control choice;
 - whether state was migrated and its target directory (not memorandum, snippet,
-  workspace-name, workspace-tab, quick-link, or note content);
+  workspace-name, workspace-tab, quick-link, note, password-hash, or
+  remembered-device content);
+- the selected authentication mode and its expected unauthenticated result;
+  for `server`, whether same-profile tabs shared the login; for `basic`, whether
+  the browser challenge succeeded; never report a password or bearer cookie;
 - source/unit/Caddy, state-file, and uploaded-attachment backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
@@ -707,7 +803,7 @@ For a failed replacement:
 2. Validate the restored Caddy configuration, then reload Caddy.
 3. Stop only `muxdeck.service`, then restore the prior systemd unit or point it
    back to the prior release.
-4. Restore all four state JSON files only while Muxdeck is stopped; preserve
+4. Restore all six state JSON files only while Muxdeck is stopped; preserve
    owner and modes. Preserve `workspaces.json` even when the rollback release
    does not understand it, so a later compatible release can recover the saved
    workspace list.
@@ -725,6 +821,10 @@ For a failed replacement:
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back
    application code.
+   Preserve `auth.json` separately even when the rollback release does not
+   support it. Before exposing an older unauthenticated release, remove the
+   public route or add a separate authenticated proxy/access layer; retaining an
+   ignored auth file does not protect old application code.
 5. Run `systemctl daemon-reload` and start only `muxdeck.service`.
 6. Recheck local health, external routing, persistent session organization, and
    the recorded tmux identities.
@@ -740,7 +840,7 @@ tree:
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
 4. retain the external state directory unchanged and keep timestamped
-   pre-upgrade copies of all four state files plus the upload directory when it
+   pre-upgrade copies of all six state files plus the upload directory when it
    exists;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
@@ -763,8 +863,10 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
 | Console WebSocket returns 403 | External browser origin is absent from `MUXDECK_TRUSTED_ORIGINS`, or proxy rewrote `Host`/`Origin` | Configure the exact scheme and authority, preserve both headers, then retry without typing into a valuable pane. |
 | Console WebSocket otherwise fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
-| Titles/tags/starred/ignored organization, memoranda, snippets, saved workspaces, or attachments do not persist | State path or ownership/mode is wrong | Inspect all configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal. |
+| Login page loops, a Basic prompt repeats, or the service fails during startup | Invalid `MUXDECK_AUTH_MODE`, missing/malformed `MUXDECK_AUTH_FILE`, wrong ownership/mode, wrong credentials, or a Secure server-mode cookie used over intentional direct HTTP | Inspect the selected mode without exposing credentials; keep the auth file outside source, owned by the run user and mode `0600`; use HTTPS, or set `MUXDECK_AUTH_COOKIE_SECURE=false` only for direct loopback HTTP development. Never fall back to an unprotected public route. |
+| Titles/tags/starred/ignored organization, memoranda, snippets, saved workspaces, shortcuts, authentication devices, or attachments do not persist | State path or ownership/mode is wrong | Inspect all configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal without printing credential state. |
 | File attachment returns `400`, `413`, `507`, or `503` | Empty file, 12 MiB file limit, 512 MiB directory cap, or unwritable upload path | Try a small non-empty file in a disposable session, inspect `MUXDECK_UPLOADS_DIR` and the journal, then archive/remove old uploads or repair ownership without changing tmux. |
+| Pane-CWD upload returns `403`, `409`, or `413` | Destination is not writable/root-confined, the name already exists, or the file exceeds 12 MiB | Refresh the live pane identity and folder, choose a new filename, and inspect only that disposable destination's ownership/permissions; Muxdeck deliberately never overwrites. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Workspace API returns `503` | The configured workspace file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. Do not delete tmux sessions. |
 | Another terminal layout changes | Browser opened in `Fit active` | This is tmux shared-size behavior; use `Size protected` for observation. |

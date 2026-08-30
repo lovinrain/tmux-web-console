@@ -7,6 +7,7 @@ import {
   createWorkspace,
   getCommonWorkspaceQuickLinks,
   getSessionQuickLinks,
+  getShortcutSettings,
   getWorkspace,
   getWorkspaceQuickLinks,
   listSessions,
@@ -19,6 +20,7 @@ import {
   type WorkspaceSessionTransferResult,
 } from "./api";
 import { App } from "./App";
+import { DEFAULT_SHORTCUT_BINDINGS, cloneShortcutBindings } from "./shortcutSettings";
 import type { Session } from "./types";
 import { searchWithoutWorkspaceTabs } from "./workspaceState";
 
@@ -29,6 +31,7 @@ vi.mock("./api", async (importOriginal) => {
     createWorkspace: vi.fn(),
     getCommonWorkspaceQuickLinks: vi.fn(),
     getSessionQuickLinks: vi.fn(),
+    getShortcutSettings: vi.fn(),
     getWorkspace: vi.fn(),
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
@@ -42,6 +45,7 @@ vi.mock("./api", async (importOriginal) => {
 const createWorkspaceMock = vi.mocked(createWorkspace);
 const getCommonWorkspaceQuickLinksMock = vi.mocked(getCommonWorkspaceQuickLinks);
 const getSessionQuickLinksMock = vi.mocked(getSessionQuickLinks);
+const getShortcutSettingsMock = vi.mocked(getShortcutSettings);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const getWorkspaceQuickLinksMock = vi.mocked(getWorkspaceQuickLinks);
 const listSessionsMock = vi.mocked(listSessions);
@@ -575,6 +579,7 @@ describe("App routing", () => {
     createWorkspaceMock.mockReset();
     getCommonWorkspaceQuickLinksMock.mockReset();
     getSessionQuickLinksMock.mockReset();
+    getShortcutSettingsMock.mockReset();
     getWorkspaceMock.mockReset();
     getWorkspaceQuickLinksMock.mockReset();
     listSessionsMock.mockReset();
@@ -585,6 +590,10 @@ describe("App routing", () => {
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
     getSessionQuickLinksMock.mockResolvedValue([]);
+    getShortcutSettingsMock.mockResolvedValue({
+      revision: 0,
+      bindings: cloneShortcutBindings(DEFAULT_SHORTCUT_BINDINGS),
+    });
     getWorkspaceMock.mockResolvedValue(savedWorkspace());
     getWorkspaceQuickLinksMock.mockResolvedValue([]);
     listSessionsMock.mockResolvedValue([]);
@@ -2011,6 +2020,43 @@ describe("App routing", () => {
     window.dispatchEvent(repeatedShortcut);
     expect(repeatedShortcut.defaultPrevented).toBe(true);
     expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
+  });
+
+  it("applies backend-configured workspace chords and updates button hints", async () => {
+    const bindings = cloneShortcutBindings(DEFAULT_SHORTCUT_BINDINGS);
+    bindings["workspace-new-session"].direct = "KeyK";
+    getShortcutSettingsMock.mockResolvedValueOnce({ revision: 7, bindings });
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+
+    const newSessionButton = screen.getByRole("button", { name: "New session" });
+    await waitFor(() => expect(newSessionButton)
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+K"));
+
+    const oldShortcut = new KeyboardEvent("keydown", {
+      code: "KeyB",
+      key: "B",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(oldShortcut);
+    expect(oldShortcut.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("main", { name: "New session view" }))
+      .not.toBeInTheDocument();
+
+    const configuredShortcut = new KeyboardEvent("keydown", {
+      code: "KeyK",
+      key: "K",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => window.dispatchEvent(configuredShortcut));
+    expect(configuredShortcut.defaultPrevented).toBe(true);
+    expect(screen.getByRole("main", { name: "New session view" })).toBeVisible();
   });
 
   it("reorders tabs in the URL without changing the active route and remaps direct shortcuts", () => {

@@ -149,6 +149,26 @@ export function KeyboardIcon(props: IconProps) {
   );
 }
 
+export function ShieldIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path
+        d="M12 3 19 6v5.2c0 4.4-2.8 7.8-7 9.8-4.2-2-7-5.4-7-9.8V6l7-3Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9.2 12.1 11 14l3.9-4.2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </IconBase>
+  );
+}
+
 export function EditIcon(props: IconProps) {
   return (
     <IconBase {...props}>

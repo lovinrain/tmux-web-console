@@ -19,6 +19,7 @@ import {
   uploadSessionAttachment,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
+import { dispatchShortcutAction } from "../shortcutSettings";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
 import { ThemeProvider, type Theme } from "../theme";
 import type { Pane, Session } from "../types";
@@ -703,6 +704,67 @@ describe("ConsoleScreen session identity", () => {
       shiftKey: true,
     })).toBe(true);
     expect(shell).toHaveAttribute("data-desktop-copy-mode", "true");
+  });
+
+  it("recovers End and Rename when the browser consumes keydown or reports the typed key", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const consumeEndShortcut = (event: KeyboardEvent) => {
+      if (event.code === "KeyE") event.preventDefault();
+    };
+    window.addEventListener("keydown", consumeEndShortcut, true);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionRenamed={vi.fn()}
+        onSessionTerminated={vi.fn(async () => {})}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "Browse files in /work" });
+
+    fireEvent.keyDown(window, {
+      code: "KeyE",
+      key: "E",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    window.removeEventListener("keydown", consumeEndShortcut, true);
+    expect(screen.getByRole("alertdialog", { name: "Terminate tmux session?" }))
+      .toBeVisible();
+    fireEvent.keyUp(window, {
+      code: "KeyE",
+      key: "E",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.keyDown(window, {
+      code: "Unidentified",
+      key: "r",
+      ctrlKey: true,
+      shiftKey: true,
+      isComposing: true,
+      keyCode: 229,
+    });
+    expect(screen.getByRole("dialog", { name: "Rename tmux session" })).toBeVisible();
+    fireEvent.keyUp(window, {
+      code: "Unidentified",
+      key: "r",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    fireEvent.keyUp(window, {
+      code: "KeyE",
+      key: "E",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(screen.getByRole("alertdialog", { name: "Terminate tmux session?" }))
+      .toBeVisible();
   });
 
   it("fills the desktop viewport without remounting the terminal or losing its draft", async () => {
@@ -1877,6 +1939,27 @@ describe("ConsoleScreen session identity", () => {
     expect(updateSessionTitle).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Rename tmux session" }))
       .not.toBeInTheDocument();
+  });
+
+  it("runs session commands dispatched from the configurable shortcut window", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session("Display alias")]);
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionRenamed={vi.fn()}
+        onSessionTerminated={vi.fn(async () => {})}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Display alias" });
+    act(() => dispatchShortcutAction("session-rename"));
+    expect(screen.getByRole("dialog", { name: "Rename tmux session" })).toBeVisible();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    act(() => dispatchShortcutAction("session-end"));
+    expect(screen.getByRole("alertdialog", { name: "Terminate tmux session?" }))
+      .toBeVisible();
   });
 
   it("offers guarded termination from the bottom controls without requiring a live PTY", async () => {

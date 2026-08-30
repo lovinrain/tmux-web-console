@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listSessionFiles,
   previewSessionFile,
+  sessionFileDownloadUrl,
+  uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
 } from "../api";
@@ -11,6 +13,8 @@ import { SessionFilesPanel } from "./SessionFilesPanel";
 vi.mock("../api", () => ({
   listSessionFiles: vi.fn(),
   previewSessionFile: vi.fn(),
+  sessionFileDownloadUrl: vi.fn(),
+  uploadSessionFile: vi.fn(),
 }));
 
 function entry(
@@ -69,6 +73,7 @@ function renderPanel(overrides: {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(sessionFileDownloadUrl).mockReturnValue("/files/download");
   document.documentElement.classList.remove("session-files-panel-moving");
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -135,6 +140,15 @@ describe("SessionFilesPanel", () => {
       "%3",
       "src/main file.ts",
       expect.any(AbortSignal),
+    );
+    const download = within(panel).getByRole("link", { name: "Download selected file" });
+    expect(download).toHaveAttribute("href", "/files/download");
+    expect(download).toHaveAttribute("download", "main file.ts");
+    expect(sessionFileDownloadUrl).toHaveBeenCalledWith(
+      "agent",
+      "$7",
+      "%3",
+      "src/main file.ts",
     );
 
     fireEvent.click(within(panel).getByRole("button", {
@@ -213,5 +227,79 @@ describe("SessionFilesPanel", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("uploads picked files into the shown folder and selects the new entry", async () => {
+    const uploaded = entry("notes.txt", "notes.txt", "file", { size: 8 });
+    vi.mocked(listSessionFiles)
+      .mockResolvedValueOnce(listing("", []))
+      .mockResolvedValue(listing("", [uploaded]));
+    vi.mocked(uploadSessionFile).mockResolvedValue(uploaded);
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/project",
+      name: "notes.txt",
+      path: "notes.txt",
+      absolutePath: "/work/project/notes.txt",
+      terminalText: "/work/project/notes.txt",
+      kind: "text",
+      mediaType: "text/plain",
+      size: 8,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 8,
+      content: "new note",
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    const picker = panel.querySelector<HTMLInputElement>("input[type='file']");
+    expect(picker).not.toBeNull();
+    const file = new File(["new note"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.change(picker!, { target: { files: [file] } });
+
+    await waitFor(() => expect(uploadSessionFile).toHaveBeenCalledWith(
+      "agent",
+      "$7",
+      "%3",
+      "",
+      file,
+      expect.any(AbortSignal),
+    ));
+    expect(await within(panel).findByText("8 B uploaded")).toBeInTheDocument();
+    const uploadedRow = await within(panel).findByRole("button", { name: "File notes.txt" });
+    expect(uploadedRow).toHaveAttribute("aria-pressed", "true");
+    expect(await within(panel).findByText("new note")).toBeInTheDocument();
+  });
+
+  it("accepts file drops and keeps a per-file conflict visible", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    vi.mocked(uploadSessionFile).mockRejectedValue(
+      new Error("a file or directory with this name already exists"),
+    );
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    const file = new File(["duplicate"], "existing.txt", { type: "text/plain" });
+    const dataTransfer = {
+      files: [file],
+      items: [{ kind: "file" }],
+      dropEffect: "none",
+    } as unknown as DataTransfer;
+
+    fireEvent.dragEnter(panel, { dataTransfer });
+    expect(within(panel).getByText("Drop to upload")).toBeInTheDocument();
+    fireEvent.drop(panel, { dataTransfer });
+
+    await waitFor(() => expect(uploadSessionFile).toHaveBeenCalledWith(
+      "agent",
+      "$7",
+      "%3",
+      "",
+      file,
+      expect.any(AbortSignal),
+    ));
+    expect(await within(panel).findByText(
+      "a file or directory with this name already exists",
+    )).toBeInTheDocument();
+    expect(within(panel).getByText("0 uploaded, 1 failed.")).toBeInTheDocument();
   });
 });

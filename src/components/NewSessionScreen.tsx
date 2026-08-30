@@ -29,6 +29,7 @@ import {
 } from "../newSessionWorkspaceMemory";
 import { useTheme } from "../theme";
 import type { Session } from "../types";
+import { AccountLink } from "./AccountLink";
 import type { WorkspaceTabOrientation } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -271,7 +272,10 @@ export function NewSessionScreen({
         role={sessionNavigation ? "tabpanel" : undefined}
         aria-labelledby="new-session-heading"
       >
-        <div className="new-session-theme"><ThemeToggle /></div>
+        <div className="new-session-theme">
+          <AccountLink />
+          <ThemeToggle />
+        </div>
         <div className="new-session-card">
           <header className="new-session-card-header">
             <span className="new-session-mark"><TerminalIcon /></span>

@@ -10,14 +10,35 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import SplitResult, quote, urlsplit
 
 from aiohttp import WSMsgType, web
 
+from .auth import (
+    AuthConfigurationError,
+    AuthMode,
+    AuthPersistenceError,
+    AuthStore,
+    BasicAuthVerifier,
+    RememberedDevice,
+    default_auth_path,
+    resolve_auth_mode,
+)
+from .auth_views import (
+    describe_browser,
+    render_account_page,
+    render_auth_mode_page,
+    render_login_page,
+)
 from .file_browser import (
+    MAX_FILE_UPLOAD_BYTES,
+    FileBrowserDestinationExistsError,
+    FileBrowserDownload,
     FileBrowserPathOutsideRootError,
     list_directory,
     preview_file,
+    resolve_file_download,
+    upload_file,
 )
 from .history import SnapshotStore
 from .messages import (
@@ -29,6 +50,11 @@ from .messages import (
 )
 from .metadata import SessionTitleStore, normalize_tags, normalize_title
 from .pty_bridge import PtyBridge, clamp_size
+from .shortcuts import (
+    ShortcutRevisionConflict,
+    ShortcutStore,
+    ShortcutStoreUnavailable,
+)
 from .snippets import (
     SnippetRevisionConflict,
     SnippetStore,
@@ -73,16 +99,27 @@ SNAPSHOTS_KEY = web.AppKey("snapshots", SnapshotStore)
 TITLES_KEY = web.AppKey("titles", SessionTitleStore)
 MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
 SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
+SHORTCUTS_KEY = web.AppKey("shortcuts", ShortcutStore)
 WORKSPACES_KEY = web.AppKey("workspaces", WorkspaceStore)
 ATTACHMENTS_KEY = web.AppKey("attachments", AttachmentStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
 TRUSTED_ORIGINS_KEY = web.AppKey("trusted_origins", frozenset)
+AUTH_KEY = web.AppKey("auth", AuthStore)
+AUTH_MODE_KEY = web.AppKey("auth_mode", AuthMode)
+BASIC_AUTH_KEY = web.AppKey("basic_auth", BasicAuthVerifier)
+AUTH_COOKIE_SECURE_KEY = web.AppKey("auth_cookie_secure", bool)
+LOGIN_SEMAPHORE_KEY = web.AppKey("login_semaphore", asyncio.Semaphore)
+AUTH_DEVICE_REQUEST_KEY = web.RequestKey("muxdeck_auth_device", RememberedDevice)
+AUTH_COOKIE_VALUE_REQUEST_KEY = web.RequestKey("muxdeck_auth_cookie_value", str)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 DEFAULT_ORIGIN_PORTS = {"http": 80, "https": 443}
+AUTH_COOKIE_NAME = "muxdeck_device"
+AUTH_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60
+BASIC_AUTH_CHALLENGE = 'Basic realm="Muxdeck", charset="UTF-8"'
 NormalizedOrigin = tuple[str, str, int | None]
 NormalizedHost = tuple[str, int | None]
 
@@ -323,7 +360,9 @@ def _split_origin(value: str, *, allow_path: bool = False) -> SplitResult | None
     return parsed
 
 
-def _normalize_origin(value: str, *, allow_path: bool = False) -> NormalizedOrigin | None:
+def _normalize_origin(
+    value: str, *, allow_path: bool = False
+) -> NormalizedOrigin | None:
     parsed = _split_origin(value, allow_path=allow_path)
     if parsed is None:
         return None
@@ -386,9 +425,7 @@ def _is_loopback_host(host: NormalizedHost) -> bool:
     if address.is_loopback:
         return True
     return bool(
-        address.version == 6
-        and address.ipv4_mapped
-        and address.ipv4_mapped.is_loopback
+        address.version == 6 and address.ipv4_mapped and address.ipv4_mapped.is_loopback
     )
 
 
@@ -446,6 +483,93 @@ def _browser_origin_is_trusted(
     return not fetch_site or fetch_site in {"same-origin", "none"}
 
 
+def _configured_bool(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("boolean configuration must be true/false, yes/no, on/off, or 1/0")
+
+
+def _auth_cookie_path(prefix: str) -> str:
+    return prefix or "/"
+
+
+def _set_auth_cookie(
+    response: web.StreamResponse,
+    value: str,
+    *,
+    prefix: str,
+    secure: bool,
+) -> None:
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        value,
+        max_age=AUTH_COOKIE_MAX_AGE_SECONDS,
+        path=_auth_cookie_path(prefix),
+        secure=secure,
+        httponly=True,
+        samesite="Strict",
+    )
+
+
+def _clear_auth_cookie(
+    response: web.StreamResponse, *, prefix: str, secure: bool
+) -> None:
+    response.del_cookie(
+        AUTH_COOKIE_NAME,
+        path=_auth_cookie_path(prefix),
+        secure=secure,
+        httponly=True,
+        samesite="Strict",
+    )
+
+
+def _see_other(location: str) -> web.Response:
+    return web.Response(status=303, headers={"Location": location})
+
+
+def _default_auth_destination(prefix: str) -> str:
+    return f"{prefix}/" if prefix else "/"
+
+
+def _safe_auth_destination(value: object, prefix: str) -> str:
+    fallback = _default_auth_destination(prefix)
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        return fallback
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return fallback
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+    ):
+        return fallback
+    if prefix and parsed.path != prefix and not parsed.path.startswith(f"{prefix}/"):
+        return fallback
+    public_auth_paths = {
+        f"{prefix}/login",
+        f"{prefix}/api/auth/login",
+        f"{prefix}/logout",
+    }
+    if parsed.path in public_auth_paths:
+        return fallback
+    return value
+
+
+def _request_wants_html(request: web.Request) -> bool:
+    return request.method in {"GET", "HEAD"} and (
+        request.headers.get("Sec-Fetch-Mode", "").casefold() == "navigate"
+        or "text/html" in request.headers.get("Accept", "").casefold()
+    )
+
+
 @web.middleware
 async def request_security_middleware(
     request: web.Request,
@@ -465,12 +589,94 @@ async def request_security_middleware(
     return await handler(request)
 
 
+@web.middleware
+async def authentication_middleware(
+    request: web.Request,
+    handler: Callable[[web.Request], Any],
+) -> web.StreamResponse:
+    mode = request.app[AUTH_MODE_KEY]
+    if mode is AuthMode.NONE:
+        return await handler(request)
+    if mode is AuthMode.BASIC:
+        authorization_values = request.headers.getall("Authorization", [])
+        authenticated = len(authorization_values) == 1 and await asyncio.to_thread(
+            request.app[BASIC_AUTH_KEY].verify,
+            authorization_values[0],
+        )
+        if authenticated:
+            return await handler(request)
+        if _request_wants_html(request):
+            response = web.Response(
+                text="Authentication required.",
+                content_type="text/plain",
+                status=401,
+            )
+        else:
+            response = json_error("authentication required", 401)
+        response.headers["WWW-Authenticate"] = BASIC_AUTH_CHALLENGE
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    store = request.app.get(AUTH_KEY)
+    if store is None:  # Defensive: secure modes must always have a store.
+        return json_error("authentication is unavailable", 503)
+
+    prefix = request.app[BASE_PATH_KEY]
+    secure = request.app[AUTH_COOKIE_SECURE_KEY]
+    cookie_value = request.cookies.get(AUTH_COOKIE_NAME)
+    device = await asyncio.to_thread(store.authenticate_cookie, cookie_value)
+    if device is not None and cookie_value is not None:
+        request[AUTH_DEVICE_REQUEST_KEY] = device
+        request[AUTH_COOKIE_VALUE_REQUEST_KEY] = cookie_value
+        response = await handler(request)
+        if AUTH_COOKIE_NAME not in response.cookies and not response.prepared:
+            _set_auth_cookie(
+                response,
+                cookie_value,
+                prefix=prefix,
+                secure=secure,
+            )
+        return response
+
+    public_paths = {f"{prefix}/login", f"{prefix}/api/auth/login"}
+    if request.path in public_paths:
+        response = await handler(request)
+        if (
+            cookie_value
+            and AUTH_COOKIE_NAME not in response.cookies
+            and not response.prepared
+        ):
+            _clear_auth_cookie(response, prefix=prefix, secure=secure)
+        return response
+
+    if _request_wants_html(request):
+        destination = _safe_auth_destination(str(request.rel_url), prefix)
+        location = f"{prefix}/login?next={quote(destination, safe='')}"
+        response = _see_other(location)
+    else:
+        response = web.json_response(
+            {
+                "error": "authentication required",
+                "login": f"{prefix}/login",
+            },
+            status=401,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    if cookie_value:
+        _clear_auth_cookie(response, prefix=prefix, secure=secure)
+    return response
+
+
 async def add_browser_security_headers(
     _: web.Request,
     response: web.StreamResponse,
 ) -> None:
     response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    # Chromium otherwise serializes same-origin form POSTs as Origin: null,
+    # which prevents the request-origin guard from authenticating the form.
+    response.headers.setdefault("Referrer-Policy", "same-origin")
 
 
 async def _close_terminal_bridge(sender: asyncio.Task[None], bridge: PtyBridge) -> None:
@@ -495,14 +701,18 @@ def create_app(
     base_path: str | None = None,
     messages: SessionMessageStore | None = None,
     snippets: SnippetStore | None = None,
+    shortcuts: ShortcutStore | None = None,
     workspaces: WorkspaceStore | None = None,
     attachments: AttachmentStore | None = None,
     uploads: AttachmentStore | None = None,
     trusted_origins: Iterable[str] | str | None = None,
+    auth: AuthStore | None = None,
+    auth_mode: str | AuthMode | None = None,
+    auth_cookie_secure: bool | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
-        middlewares=[request_security_middleware],
+        middlewares=[request_security_middleware, authentication_middleware],
     )
     if trusted_origins is None:
         configured_origins: Iterable[str] = os.environ.get(
@@ -513,11 +723,40 @@ def create_app(
     else:
         configured_origins = trusted_origins
     app[TRUSTED_ORIGINS_KEY] = _parse_trusted_origins(configured_origins)
+    configured_auth_path = default_auth_path()
+    configured_auth_mode = (
+        os.environ.get("MUXDECK_AUTH_MODE") if auth_mode is None else auth_mode
+    )
+    resolved_auth_mode = resolve_auth_mode(
+        configured_auth_mode,
+        credentials_configured=auth is not None or configured_auth_path is not None,
+    )
+    resolved_auth = auth if resolved_auth_mode is not AuthMode.NONE else None
+    if (
+        resolved_auth_mode is not AuthMode.NONE
+        and resolved_auth is None
+        and configured_auth_path is not None
+    ):
+        resolved_auth = AuthStore(configured_auth_path)
+    app[AUTH_MODE_KEY] = resolved_auth_mode
+    if resolved_auth is not None:
+        app[AUTH_KEY] = resolved_auth
+    if resolved_auth_mode is AuthMode.BASIC:
+        if resolved_auth is None:  # resolve_auth_mode already guards this path.
+            raise AuthConfigurationError("basic authentication credentials are missing")
+        app[BASIC_AUTH_KEY] = BasicAuthVerifier(resolved_auth)
+    app[AUTH_COOKIE_SECURE_KEY] = (
+        _configured_bool(os.environ.get("MUXDECK_AUTH_COOKIE_SECURE"), default=True)
+        if auth_cookie_secure is None
+        else auth_cookie_secure
+    )
+    app[LOGIN_SEMAPHORE_KEY] = asyncio.Semaphore(1)
     app[TMUX_KEY] = tmux or TmuxClient()
     app[SNAPSHOTS_KEY] = snapshots or SnapshotStore()
     app[TITLES_KEY] = titles or SessionTitleStore()
     app[MESSAGES_KEY] = messages or SessionMessageStore()
     app[SNIPPETS_KEY] = snippets or SnippetStore()
+    app[SHORTCUTS_KEY] = shortcuts or ShortcutStore()
     app[WORKSPACES_KEY] = workspaces or WorkspaceStore()
     if attachments is not None and uploads is not None:
         raise ValueError("provide attachments or uploads, not both")
@@ -548,6 +787,283 @@ def create_app(
 
     app.on_cleanup.append(close_session_stream_broker)
     app.on_response_prepare.append(add_browser_security_headers)
+
+    def auth_html_response(document: str, *, status: int = 200) -> web.Response:
+        response = web.Response(text=document, content_type="text/html", status=status)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+            "base-uri 'none'; frame-ancestors 'none'"
+        )
+        return response
+
+    def auth_store() -> AuthStore | None:
+        return app.get(AUTH_KEY)
+
+    def authenticated_device(request: web.Request) -> RememberedDevice | None:
+        device = request.get(AUTH_DEVICE_REQUEST_KEY)
+        return device if isinstance(device, RememberedDevice) else None
+
+    async def request_auth_still_valid(request: web.Request) -> bool:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            return True
+        store = auth_store()
+        if store is None:
+            return True
+        cookie_value = request.get(AUTH_COOKIE_VALUE_REQUEST_KEY)
+        if not isinstance(cookie_value, str):
+            return False
+        return (
+            await asyncio.to_thread(store.authenticate_cookie, cookie_value)
+        ) is not None
+
+    async def create_remembered_device(
+        request: web.Request, username: object, password: object
+    ) -> tuple[RememberedDevice, str] | None:
+        store = auth_store()
+        if store is None:
+            return None
+        async with app[LOGIN_SEMAPHORE_KEY]:
+            valid = await asyncio.to_thread(
+                store.verify_credentials, username, password
+            )
+            if not valid:
+                await asyncio.sleep(0.45)
+                return None
+            label = describe_browser(request.headers.get("User-Agent"))
+            return await asyncio.to_thread(store.issue_device, label)
+
+    async def login_page(request: web.Request) -> web.StreamResponse:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            return _see_other(_default_auth_destination(prefix))
+        store = auth_store()
+        if store is None:
+            return _see_other(_default_auth_destination(prefix))
+        destination = _safe_auth_destination(request.query.get("next"), prefix)
+        if authenticated_device(request) is not None:
+            return _see_other(destination)
+        return auth_html_response(
+            render_login_page(prefix=prefix, next_path=destination)
+        )
+
+    async def login_form(request: web.Request) -> web.StreamResponse:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            raise web.HTTPNotFound()
+        store = auth_store()
+        if store is None:
+            raise web.HTTPNotFound()
+        username: object = None
+        password: object = None
+        next_value: object = None
+        try:
+            form = await request.post()
+        except (ValueError, TypeError, OSError):
+            pass
+        else:
+            username = form.get("username")
+            password = form.get("password")
+            next_value = form.get("next")
+        destination = _safe_auth_destination(next_value, prefix)
+        try:
+            issued = await create_remembered_device(request, username, password)
+        except AuthPersistenceError:
+            return auth_html_response(
+                render_login_page(
+                    prefix=prefix,
+                    next_path=destination,
+                    username=username if isinstance(username, str) else "",
+                    error="Authentication storage is unavailable. Try again after the server state is repaired.",
+                ),
+                status=503,
+            )
+        if issued is None:
+            return auth_html_response(
+                render_login_page(
+                    prefix=prefix,
+                    next_path=destination,
+                    username=username if isinstance(username, str) else "",
+                    error="The username or password is not correct.",
+                ),
+                status=401,
+            )
+        _, cookie_value = issued
+        response = _see_other(destination)
+        response.headers["Cache-Control"] = "no-store"
+        _set_auth_cookie(
+            response,
+            cookie_value,
+            prefix=prefix,
+            secure=app[AUTH_COOKIE_SECURE_KEY],
+        )
+        return response
+
+    async def api_login(request: web.Request) -> web.Response:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            return json_error("server authentication is not enabled", 404)
+        store = auth_store()
+        if store is None:
+            return json_error("authentication is not configured", 404)
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict) or set(payload) != {"username", "password"}:
+            return json_error("request must contain username and password", 400)
+        try:
+            issued = await create_remembered_device(
+                request, payload["username"], payload["password"]
+            )
+        except AuthPersistenceError:
+            return json_error("authentication storage is unavailable", 503)
+        if issued is None:
+            return json_error("invalid username or password", 401)
+        device, cookie_value = issued
+        response = web.json_response(
+            {
+                "authenticated": True,
+                "username": store.username,
+                "device": device.public_dict(current=True),
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        _set_auth_cookie(
+            response,
+            cookie_value,
+            prefix=prefix,
+            secure=app[AUTH_COOKIE_SECURE_KEY],
+        )
+        return response
+
+    async def auth_session(request: web.Request) -> web.Response:
+        mode = app[AUTH_MODE_KEY]
+        store = auth_store()
+        device = authenticated_device(request)
+        if mode is AuthMode.NONE:
+            return web.json_response(
+                {"mode": mode.value, "enabled": False, "authenticated": False}
+            )
+        if mode is AuthMode.BASIC:
+            if store is None:
+                return json_error("authentication is unavailable", 503)
+            return web.json_response(
+                {
+                    "mode": mode.value,
+                    "enabled": True,
+                    "authenticated": True,
+                    "username": store.username,
+                }
+            )
+        if store is None:
+            return json_error("authentication is unavailable", 503)
+        if device is None:
+            return json_error("authentication required", 401)
+        return web.json_response(
+            {
+                "mode": mode.value,
+                "enabled": True,
+                "authenticated": True,
+                "username": store.username,
+                "device": device.public_dict(current=True),
+                "devices": [
+                    item.public_dict(current=item.id == device.id)
+                    for item in store.list_devices()
+                ],
+            }
+        )
+
+    async def account_page(request: web.Request) -> web.Response:
+        mode = app[AUTH_MODE_KEY]
+        store = auth_store()
+        device = authenticated_device(request)
+        if mode is AuthMode.BASIC:
+            if store is None:
+                raise web.HTTPServiceUnavailable()
+            return auth_html_response(
+                render_auth_mode_page(
+                    prefix=prefix,
+                    mode=mode.value,
+                    username=store.username,
+                )
+            )
+        if mode is AuthMode.NONE:
+            return auth_html_response(
+                render_auth_mode_page(prefix=prefix, mode=mode.value)
+            )
+        if store is None or device is None:
+            raise web.HTTPNotFound()
+        return auth_html_response(
+            render_account_page(
+                prefix=prefix,
+                username=store.username,
+                devices=store.list_devices(),
+                current_id=device.id,
+            )
+        )
+
+    async def revoke_auth_device(request: web.Request) -> web.StreamResponse:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            raise web.HTTPNotFound()
+        store = auth_store()
+        current = authenticated_device(request)
+        if store is None or current is None:
+            raise web.HTTPNotFound()
+        device_id = request.match_info["device_id"]
+        try:
+            await asyncio.to_thread(store.revoke_device, device_id)
+        except AuthPersistenceError:
+            return web.Response(
+                text="Unable to revoke the remembered browser because authentication storage is unavailable.",
+                status=503,
+            )
+        if device_id == current.id:
+            response = _see_other(f"{prefix}/login")
+            _clear_auth_cookie(
+                response,
+                prefix=prefix,
+                secure=app[AUTH_COOKIE_SECURE_KEY],
+            )
+            return response
+        return _see_other(f"{prefix}/account")
+
+    async def logout(request: web.Request) -> web.StreamResponse:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            raise web.HTTPNotFound()
+        store = auth_store()
+        current = authenticated_device(request)
+        if store is None or current is None:
+            raise web.HTTPNotFound()
+        try:
+            await asyncio.to_thread(store.revoke_device, current.id)
+        except AuthPersistenceError:
+            return json_error("authentication storage is unavailable", 503)
+        response = _see_other(f"{prefix}/login")
+        response.headers["Cache-Control"] = "no-store"
+        _clear_auth_cookie(
+            response,
+            prefix=prefix,
+            secure=app[AUTH_COOKIE_SECURE_KEY],
+        )
+        return response
+
+    async def api_logout(request: web.Request) -> web.Response:
+        if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
+            return json_error("server authentication is not enabled", 404)
+        store = auth_store()
+        current = authenticated_device(request)
+        if store is None or current is None:
+            return json_error("authentication required", 401)
+        try:
+            await asyncio.to_thread(store.revoke_device, current.id)
+        except AuthPersistenceError:
+            return json_error("authentication storage is unavailable", 503)
+        response = web.json_response({"authenticated": False})
+        response.headers["Cache-Control"] = "no-store"
+        _clear_auth_cookie(
+            response,
+            prefix=prefix,
+            secure=app[AUTH_COOKIE_SECURE_KEY],
+        )
+        return response
 
     async def health(_: web.Request) -> web.Response:
         try:
@@ -595,9 +1111,7 @@ def create_app(
             if not isinstance(requested_directory, str):
                 return json_error("directory must be a string", 400)
             try:
-                requested_directory = validate_tmux_start_directory(
-                    requested_directory
-                )
+                requested_directory = validate_tmux_start_directory(requested_directory)
             except ValueError as error:
                 return json_error(str(error), 400)
 
@@ -745,27 +1259,24 @@ def create_app(
             return json_error("unable to store attachment", 503)
         return web.json_response(uploaded.to_dict(), status=201)
 
-    async def session_file_request(
+    async def session_file_context(
         request: web.Request,
-        operation: Callable[[str, str], dict[str, object]],
         *,
-        path_required: bool = False,
-    ) -> web.Response:
+        allowed_fields: frozenset[str] = frozenset({"sessionId", "paneId", "path"}),
+        required_fields: tuple[str, ...] = ("sessionId", "paneId"),
+    ) -> tuple[str, str, str] | web.Response:
         session_name = request.match_info["session"]
         try:
             session_name = validate_tmux_session_name(session_name)
         except ValueError as error:
             return json_error(str(error), 400)
 
-        allowed_fields = {"sessionId", "paneId", "path"}
         unknown_fields = sorted(set(request.query) - allowed_fields)
         if unknown_fields:
             return json_error(f"unknown query field: {unknown_fields[0]}", 400)
-        for required_field in ("sessionId", "paneId"):
+        for required_field in required_fields:
             if required_field not in request.query:
                 return json_error(f"{required_field} is required", 400)
-        if path_required and "path" not in request.query:
-            return json_error("path is required", 400)
         for field in allowed_fields:
             values = request.query.getall(field, [])
             if len(values) > 1:
@@ -792,7 +1303,11 @@ def create_app(
                 409,
             )
         pane = next(
-            (candidate for candidate in current_session.panes if candidate.id == pane_id),
+            (
+                candidate
+                for candidate in current_session.panes
+                if candidate.id == pane_id
+            ),
             None,
         )
         if pane is None:
@@ -802,9 +1317,18 @@ def create_app(
             )
         if not pane.path:
             return json_error("tmux pane has no working directory", 409)
+        return pane.path, relative_path, pane_id
 
+    async def execute_session_file_operation(
+        root_path: str,
+        relative_path: str,
+        pane_id: str,
+        operation: Callable[[str, str], object],
+    ) -> object | web.Response:
         try:
-            payload = await asyncio.to_thread(operation, pane.path, relative_path)
+            return await asyncio.to_thread(operation, root_path, relative_path)
+        except FileBrowserDestinationExistsError as error:
+            return json_error(str(error), 409)
         except FileBrowserPathOutsideRootError as error:
             return json_error(str(error), 403)
         except FileNotFoundError:
@@ -815,11 +1339,37 @@ def create_app(
             return json_error(str(error), 400)
         except OSError:
             LOGGER.exception(
-                "Unable to browse files for tmux session %s pane %s",
-                session_name,
+                "Unable to access pane-scoped files for pane %s",
                 pane_id,
             )
             return json_error("unable to browse files", 500)
+
+    async def session_file_request(
+        request: web.Request,
+        operation: Callable[[str, str], object],
+        *,
+        path_required: bool = False,
+    ) -> web.Response:
+        required_fields = (
+            ("sessionId", "paneId", "path")
+            if path_required
+            else ("sessionId", "paneId")
+        )
+        context = await session_file_context(
+            request,
+            required_fields=required_fields,
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        payload = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            operation,
+        )
+        if isinstance(payload, web.Response):
+            return payload
         return web.json_response(payload)
 
     async def list_session_files(request: web.Request) -> web.Response:
@@ -831,6 +1381,88 @@ def create_app(
             preview_file,
             path_required=True,
         )
+
+    async def download_session_file(request: web.Request) -> web.StreamResponse:
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            resolve_file_download,
+        )
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, FileBrowserDownload):
+            raise TypeError("file download operation returned an invalid result")
+
+        ascii_name = result.name.encode("ascii", "ignore").decode("ascii")
+        fallback_name = "".join(
+            character
+            if character.isalnum() or character in {" ", ".", "_", "-"}
+            else "_"
+            for character in ascii_name
+        ).strip() or "download"
+        disposition = (
+            f'attachment; filename="{fallback_name}"; '
+            f"filename*=UTF-8''{quote(result.name, safe='')}"
+        )
+        return web.FileResponse(
+            result.path,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": disposition,
+            },
+        )
+
+    async def upload_session_file(request: web.Request) -> web.Response:
+        allowed_fields = frozenset({"sessionId", "paneId", "path", "filename"})
+        context = await session_file_context(
+            request,
+            allowed_fields=allowed_fields,
+            required_fields=("sessionId", "paneId", "filename"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        if (
+            request.content_length is not None
+            and request.content_length > MAX_FILE_UPLOAD_BYTES
+        ):
+            return json_error(
+                f"file must be {MAX_FILE_UPLOAD_BYTES // (1024 * 1024)} MiB or smaller",
+                413,
+            )
+
+        body = bytearray()
+        async for chunk in request.content.iter_chunked(64 * 1024):
+            if len(body) + len(chunk) > MAX_FILE_UPLOAD_BYTES:
+                return json_error(
+                    f"file must be {MAX_FILE_UPLOAD_BYTES // (1024 * 1024)} MiB or smaller",
+                    413,
+                )
+            body.extend(chunk)
+
+        filename = request.query["filename"]
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            lambda operation_root, operation_path: upload_file(
+                operation_root,
+                operation_path,
+                filename,
+                bytes(body),
+            ),
+        )
+        if isinstance(result, web.Response):
+            return result
+        return web.json_response(result, status=201)
 
     async def terminate_session(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -854,8 +1486,7 @@ def create_app(
         if "serverPid" not in payload:
             return json_error("serverPid is required", 400)
         unknown_fields = sorted(
-            set(payload)
-            - {"sessionId", "sessionCreated", "serverStarted", "serverPid"}
+            set(payload) - {"sessionId", "sessionCreated", "serverStarted", "serverPid"}
         )
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
@@ -898,7 +1529,11 @@ def create_app(
             except TmuxError as error:
                 return json_error(str(error), 503)
             target = next(
-                (session for session in current_sessions if session.name == session_name),
+                (
+                    session
+                    for session in current_sessions
+                    if session.name == session_name
+                ),
                 None,
             )
             if target is None:
@@ -911,7 +1546,8 @@ def create_app(
                 )
                 if target_was_renamed:
                     return json_error(
-                        "tmux session identity changed; refresh before terminating it", 409
+                        "tmux session identity changed; refresh before terminating it",
+                        409,
                     )
                 # Retrying a committed termination should preserve the successful
                 # postcondition without risking a same-name replacement.
@@ -1095,6 +1731,12 @@ def create_app(
             while True:
                 transport = request.transport
                 if transport is None or transport.is_closing():
+                    break
+                if not await request_auth_still_valid(request):
+                    with contextlib.suppress(ConnectionError, RuntimeError):
+                        await response.write(
+                            b'event: auth\ndata: {"authenticated":false}\n\n'
+                        )
                     break
 
                 try:
@@ -1313,9 +1955,7 @@ def create_app(
         if not isinstance(session_name, str):
             return json_error("session must be a string", 400)
         source_workspace_id = payload.get("sourceWorkspaceId")
-        if source_workspace_id is not None and not isinstance(
-            source_workspace_id, str
-        ):
+        if source_workspace_id is not None and not isinstance(source_workspace_id, str):
             return json_error("sourceWorkspaceId must be a string or null", 400)
         destination_workspace_id = payload["destinationWorkspaceId"]
         if not isinstance(destination_workspace_id, str):
@@ -1621,6 +2261,51 @@ def create_app(
         except OSError:
             LOGGER.exception("Unable to save snippet tree")
             return json_error("unable to save snippets", 500)
+        return web.json_response(snapshot)
+
+    async def list_shortcuts(_: web.Request) -> web.Response:
+        try:
+            snapshot = app[SHORTCUTS_KEY].get_snapshot()
+        except ShortcutStoreUnavailable as error:
+            return json_error(str(error), 503)
+        return web.json_response(snapshot)
+
+    async def replace_shortcuts(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        missing = sorted({"revision", "bindings"} - set(payload))
+        if missing:
+            return json_error(f"{missing[0]} is required", 400)
+        unknown = sorted(
+            str(field) for field in set(payload) - {"revision", "bindings"}
+        )
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        revision = payload["revision"]
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            return json_error("revision must be an integer", 400)
+        try:
+            snapshot = app[SHORTCUTS_KEY].replace_bindings(
+                payload["bindings"], expected_revision=revision
+            )
+        except ShortcutRevisionConflict as error:
+            return web.json_response(
+                {"error": str(error), "revision": error.current_revision},
+                status=409,
+            )
+        except ShortcutStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception("Unable to save shortcut settings")
+            return json_error("unable to save shortcuts", 500)
         return web.json_response(snapshot)
 
     async def list_workspaces(_: web.Request) -> web.Response:
@@ -2127,9 +2812,30 @@ def create_app(
                 )
                 await websocket.close()
 
+        async def close_when_auth_is_revoked() -> None:
+            while not websocket.closed:
+                await asyncio.sleep(1)
+                if not await request_auth_still_valid(request):
+                    await websocket.close(
+                        code=4003,
+                        message=b"Remembered browser access was revoked",
+                    )
+                    return
+
         sender = asyncio.create_task(send_output())
+        auth_monitor = (
+            asyncio.create_task(close_when_auth_is_revoked())
+            if auth_store() is not None
+            else None
+        )
         try:
             async for message in websocket:
+                if not await request_auth_still_valid(request):
+                    await websocket.close(
+                        code=4003,
+                        message=b"Remembered browser access was revoked",
+                    )
+                    break
                 if message.type == WSMsgType.BINARY:
                     if len(message.data) <= MAX_INPUT_BYTES:
                         await bridge.write(message.data)
@@ -2219,7 +2925,12 @@ def create_app(
                 elif message.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                     break
         finally:
-            await _close_terminal_bridge(sender, bridge)
+            try:
+                if auth_monitor is not None:
+                    auth_monitor.cancel()
+                    await asyncio.gather(auth_monitor, return_exceptions=True)
+            finally:
+                await _close_terminal_bridge(sender, bridge)
         return websocket
 
     async def spa(_: web.Request) -> web.StreamResponse:
@@ -2231,45 +2942,71 @@ def create_app(
             )
         return web.FileResponse(index)
 
+    app.router.add_get(f"{prefix}/login", login_page)
+    app.router.add_post(f"{prefix}/login", login_form)
+    app.router.add_post(f"{prefix}/api/auth/login", api_login)
+    app.router.add_get(f"{prefix}/api/auth/session", auth_session)
+    app.router.add_post(f"{prefix}/api/auth/logout", api_logout)
+    app.router.add_get(f"{prefix}/account", account_page)
+    app.router.add_post(
+        f"{prefix}/account/devices/{{device_id}}/revoke",
+        revoke_auth_device,
+    )
+    app.router.add_post(f"{prefix}/logout", logout)
+    # aiohttp's default dynamic-segment pattern excludes literal braces, even
+    # though they are valid tmux session-name characters. Keep the segment
+    # slash-bounded while accepting every name allowed by our validators.
+    session_segment = "{session:[^/]+}"
+
     app.router.add_get(f"{prefix}/api/health", health)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
-    app.router.add_post(f"{prefix}/api/sessions/{{session}}/copy", copy_session)
+    app.router.add_post(f"{prefix}/api/sessions/{session_segment}/copy", copy_session)
     app.router.add_post(
-        f"{prefix}/api/sessions/{{session}}/attachments",
+        f"{prefix}/api/sessions/{session_segment}/attachments",
         upload_session_attachment,
     )
     app.router.add_post(
-        f"{prefix}/api/sessions/{{session}}/images",
+        f"{prefix}/api/sessions/{session_segment}/images",
         upload_session_attachment,
     )
     app.router.add_get(
-        f"{prefix}/api/sessions/{{session}}/files",
+        f"{prefix}/api/sessions/{session_segment}/files",
         list_session_files,
     )
     app.router.add_get(
-        f"{prefix}/api/sessions/{{session}}/files/preview",
+        f"{prefix}/api/sessions/{session_segment}/files/preview",
         preview_session_file,
     )
-    app.router.add_delete(f"{prefix}/api/sessions/{{session}}", terminate_session)
+    app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/download",
+        download_session_file,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/upload",
+        upload_session_file,
+    )
+    app.router.add_delete(f"{prefix}/api/sessions/{session_segment}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
     app.router.add_get(
-        f"{prefix}/api/sessions/{{session}}/messages", list_session_messages
+        f"{prefix}/api/sessions/{session_segment}/messages", list_session_messages
     )
     app.router.add_post(
-        f"{prefix}/api/sessions/{{session}}/messages", add_session_message
+        f"{prefix}/api/sessions/{session_segment}/messages", add_session_message
     )
     app.router.add_patch(
-        f"{prefix}/api/sessions/{{session}}/messages/{{message_id}}",
+        f"{prefix}/api/sessions/{session_segment}/messages/{{message_id}}",
         update_session_message,
     )
     app.router.add_delete(
-        f"{prefix}/api/sessions/{{session}}/messages/{{message_id}}",
+        f"{prefix}/api/sessions/{session_segment}/messages/{{message_id}}",
         delete_session_message,
     )
     app.router.add_get(f"{prefix}/api/snippets", list_snippets)
     app.router.add_put(f"{prefix}/api/snippets", replace_snippets)
+    app.router.add_get(f"{prefix}/api/shortcuts", list_shortcuts)
+    app.router.add_put(f"{prefix}/api/shortcuts", replace_shortcuts)
     app.router.add_get(
         f"{prefix}/api/workspace-quick-links",
         list_common_workspace_quick_links,
@@ -2281,19 +3018,19 @@ def create_app(
     app.router.add_get(f"{prefix}/api/common-note", get_common_note)
     app.router.add_put(f"{prefix}/api/common-note", replace_common_note)
     app.router.add_get(
-        f"{prefix}/api/sessions/{{session}}/quick-links",
+        f"{prefix}/api/sessions/{session_segment}/quick-links",
         get_session_quick_links,
     )
     app.router.add_put(
-        f"{prefix}/api/sessions/{{session}}/quick-links",
+        f"{prefix}/api/sessions/{session_segment}/quick-links",
         replace_session_quick_links,
     )
     app.router.add_get(
-        f"{prefix}/api/sessions/{{session}}/note",
+        f"{prefix}/api/sessions/{session_segment}/note",
         get_session_note,
     )
     app.router.add_put(
-        f"{prefix}/api/sessions/{{session}}/note",
+        f"{prefix}/api/sessions/{session_segment}/note",
         replace_session_note,
     )
     app.router.add_get(f"{prefix}/api/workspaces", list_workspaces)

@@ -1,4 +1,5 @@
 import { SnippetIcon, TerminalIcon } from "../icons";
+import { AccountLink } from "./AccountLink";
 
 interface AppTabsProps {
   active: "sessions" | "snippets";
@@ -27,6 +28,7 @@ export function AppTabs({ active, onSessions, onSnippets }: AppTabsProps) {
         <SnippetIcon />
         <span>Snippets</span>
       </button>
+      <AccountLink />
     </nav>
   );
 }

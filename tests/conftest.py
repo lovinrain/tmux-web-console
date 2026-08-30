@@ -11,7 +11,12 @@ def isolate_default_state_files(
     """Keep stores created implicitly by API tests away from live user state."""
     state_dir = tmp_path / "default-state"
     monkeypatch.setenv("MUXDECK_TITLES_FILE", str(state_dir / "session-titles.json"))
-    monkeypatch.setenv("MUXDECK_MESSAGES_FILE", str(state_dir / "session-messages.json"))
+    monkeypatch.setenv(
+        "MUXDECK_MESSAGES_FILE", str(state_dir / "session-messages.json")
+    )
     monkeypatch.setenv("MUXDECK_SNIPPETS_FILE", str(state_dir / "snippets.json"))
     monkeypatch.setenv("MUXDECK_WORKSPACES_FILE", str(state_dir / "workspaces.json"))
     monkeypatch.setenv("MUXDECK_UPLOADS_DIR", str(state_dir / "uploads"))
+    monkeypatch.delenv("MUXDECK_AUTH_FILE", raising=False)
+    monkeypatch.delenv("MUXDECK_AUTH_MODE", raising=False)
+    monkeypatch.delenv("MUXDECK_AUTH_COOKIE_SECURE", raising=False)

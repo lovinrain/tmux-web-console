@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import codecs
 import mimetypes
+import os
 import shlex
 import stat
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 MAX_DIRECTORY_ENTRIES = 1_000
 MAX_PREVIEW_BYTES = 1 * 1024 * 1024
+MAX_FILE_UPLOAD_BYTES = 12 * 1024 * 1024
+MAX_FILE_NAME_BYTES = 255
 MAX_RELATIVE_PATH_LENGTH = 4_096
 MAX_RELATIVE_PATH_PARTS = 128
 
@@ -18,6 +22,16 @@ class FileBrowserPathOutsideRootError(PermissionError):
 
 class FileBrowserUnsupportedFileError(ValueError):
     pass
+
+
+class FileBrowserDestinationExistsError(FileExistsError):
+    pass
+
+
+@dataclass(frozen=True)
+class FileBrowserDownload:
+    path: Path
+    name: str
 
 
 def _relative_parts(value: str) -> tuple[str, ...]:
@@ -89,6 +103,26 @@ def _path_payload(display_root: Path, parts: tuple[str, ...]) -> dict[str, str]:
         "absolutePath": str(display_path),
         "terminalText": shlex.quote(str(display_path)),
     }
+
+
+def _upload_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("filename must be a string")
+    if not value:
+        raise ValueError("filename is required")
+    if value in {".", ".."}:
+        raise ValueError("filename must name a file")
+    if "/" in value or "\\" in value:
+        raise ValueError("filename cannot contain path separators")
+    if "\x00" in value or any(
+        ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise ValueError("filename cannot contain control characters")
+    if len(value.encode("utf-8")) > MAX_FILE_NAME_BYTES:
+        raise ValueError(
+            f"filename must be {MAX_FILE_NAME_BYTES} UTF-8 bytes or fewer"
+        )
+    return value
 
 
 def list_directory(root_path: str, relative_path: str = "") -> dict[str, object]:
@@ -197,4 +231,87 @@ def preview_file(root_path: str, relative_path: str) -> dict[str, object]:
         "truncated": truncated,
         "previewBytes": len(preview_bytes),
         "content": text,
+    }
+
+
+def resolve_file_download(
+    root_path: str,
+    relative_path: str,
+) -> FileBrowserDownload:
+    _display_root, _resolved_root, target, parts = _resolve_target(
+        root_path,
+        relative_path,
+    )
+    target_stat = target.stat()
+    if stat.S_ISDIR(target_stat.st_mode):
+        raise IsADirectoryError("path is a directory")
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise FileBrowserUnsupportedFileError("path is not a regular file")
+    return FileBrowserDownload(path=target, name=parts[-1])
+
+
+def upload_file(
+    root_path: str,
+    relative_directory: str,
+    filename: str,
+    content: bytes,
+) -> dict[str, object]:
+    if not isinstance(content, bytes):
+        raise TypeError("file content must be bytes")
+    if len(content) > MAX_FILE_UPLOAD_BYTES:
+        raise ValueError(
+            f"file must be {MAX_FILE_UPLOAD_BYTES // (1024 * 1024)} MiB or smaller"
+        )
+    filename = _upload_name(filename)
+    display_root, _resolved_root, target, directory_parts = _resolve_target(
+        root_path,
+        relative_directory,
+    )
+    if not stat.S_ISDIR(target.stat().st_mode):
+        raise NotADirectoryError("upload destination is not a directory")
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    file_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_descriptor = os.open(target, directory_flags)
+    try:
+        try:
+            descriptor = os.open(
+                filename,
+                file_flags,
+                0o600,
+                dir_fd=directory_descriptor,
+            )
+        except FileExistsError as error:
+            raise FileBrowserDestinationExistsError(
+                "a file or directory with this name already exists"
+            ) from error
+
+        try:
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(content)
+                output.flush()
+                os.fchmod(output.fileno(), 0o600)
+                os.fsync(output.fileno())
+                uploaded_stat = os.fstat(output.fileno())
+        except BaseException:
+            try:
+                os.unlink(filename, dir_fd=directory_descriptor)
+            except FileNotFoundError:
+                pass
+            raise
+    finally:
+        os.close(directory_descriptor)
+
+    file_parts = (*directory_parts, filename)
+    return {
+        "name": filename,
+        "kind": "file",
+        "size": uploaded_stat.st_size,
+        "modified": uploaded_stat.st_mtime,
+        "hidden": filename.startswith("."),
+        "symlink": False,
+        "accessible": True,
+        **_path_payload(display_root, file_parts),
     }

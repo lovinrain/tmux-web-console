@@ -23,7 +23,6 @@ import {
   FolderIcon,
   GridIcon,
   HistoryIcon,
-  KeyboardIcon,
   ListIcon,
   PlusIcon,
   SaveIcon,
@@ -34,6 +33,14 @@ import {
   WindowMoveIcon,
 } from "../icons";
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
+import { requestThemeToggle } from "../theme";
+import {
+  directShortcutAria,
+  directShortcutLabel,
+  dispatchShortcutAction,
+  useShortcutSettings,
+  type ShortcutActionId,
+} from "../shortcutSettings";
 import type { AgentState, Pane, Session } from "../types";
 import {
   MAX_WORKSPACE_TAB_GROUPS,
@@ -41,6 +48,12 @@ import {
 } from "../workspaceState";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
+import {
+  DESKTOP_COMMAND_PALETTE_SHORTCUT,
+  DESKTOP_SHORTCUT_LAUNCHER_SHORTCUT,
+  WorkspaceCommandPalette,
+  type WorkspaceCommand,
+} from "./WorkspaceCommandPalette";
 import { WorkspaceQuickSwitcher } from "./WorkspaceQuickSwitcher";
 import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
@@ -62,6 +75,7 @@ export interface SessionWorkspaceNavigationProps {
   onCloseTab: (sessionName: string) => void;
   onMoveTab?: (sessionName: string, targetIndex: number) => void;
   onSortTabsByWorkingState?: () => void;
+  onToggleTabActions?: () => void;
   onOpenTabInNewWindow?: (
     sessionName: string,
     mode: OpenTabInNewWindowMode,
@@ -131,6 +145,8 @@ export const WORKSPACE_TAB_SHORTCUTS = {
 } as const;
 
 export const DESKTOP_CONSOLE_SHORTCUTS = {
+  commandPalette: DESKTOP_COMMAND_PALETTE_SHORTCUT,
+  shortcutLauncher: DESKTOP_SHORTCUT_LAUNCHER_SHORTCUT,
   newSession: "Ctrl+Shift+B",
   endSession: "Ctrl+Shift+E",
   renameSession: "Ctrl+Shift+R",
@@ -141,7 +157,7 @@ export const DESKTOP_CONSOLE_SHORTCUTS = {
   pageDown: "Ctrl+Shift+D",
   sessionTabs: "Ctrl+Shift+S",
   focus: "Ctrl+Shift+F",
-  theme: "Ctrl+Shift+H",
+  theme: "Ctrl+Shift+Z, then T",
   copyNew: "Ctrl+Shift+M",
 } as const;
 
@@ -153,137 +169,6 @@ export function isCompactWorkspaceViewport(): boolean {
   const coarsePointer = window.matchMedia?.("(pointer: coarse)").matches ?? false;
   return viewportWidth <= 640
     || (viewportWidth <= 1024 && (coarsePointer || viewportHeight <= 500));
-}
-
-const WORKSPACE_KEYMAP_GROUPS = [
-  {
-    label: "Terminal",
-    shortcuts: [
-      [DESKTOP_CONSOLE_SHORTCUTS.pageUp, "Preferred page up"],
-      [DESKTOP_CONSOLE_SHORTCUTS.pageDown, "Preferred page down"],
-      [DESKTOP_CONSOLE_SHORTCUTS.returnLive, "Return to live output"],
-      [DESKTOP_CONSOLE_SHORTCUTS.copyMode, "Toggle browser Copy mode"],
-      [DESKTOP_CONSOLE_SHORTCUTS.endSession, "Open End session confirmation"],
-      [DESKTOP_CONSOLE_SHORTCUTS.renameSession, "Rename tmux session"],
-      [DESKTOP_CONSOLE_SHORTCUTS.copyNew, "Create session from current directory"],
-    ],
-  },
-  {
-    label: "Workspace",
-    shortcuts: [
-      [DESKTOP_CONSOLE_SHORTCUTS.newSession, "Open New session"],
-      [WORKSPACE_TAB_SHORTCUTS.previous, "Previous tab"],
-      [WORKSPACE_TAB_SHORTCUTS.next, "Next tab"],
-      [WORKSPACE_TAB_SHORTCUTS.direct, "Jump to numbered tab"],
-      [WORKSPACE_TAB_SHORTCUTS.search, "Find an open tab"],
-    ],
-  },
-  {
-    label: "View",
-    shortcuts: [
-      [DESKTOP_CONSOLE_SHORTCUTS.tabActions, "Toggle tab Actions"],
-      [DESKTOP_CONSOLE_SHORTCUTS.sessionTabs, "Show or hide session tabs"],
-      [DESKTOP_CONSOLE_SHORTCUTS.focus, "Enter or exit terminal Focus"],
-      [DESKTOP_CONSOLE_SHORTCUTS.theme, "Toggle light or dark theme"],
-    ],
-  },
-] as const;
-
-function WorkspaceKeymap({ orientation }: { orientation: WorkspaceTabOrientation }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-
-  const close = useCallback((restoreFocus = false) => {
-    setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const closeFromOutside = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node
-        && !containerRef.current?.contains(event.target)
-      ) close();
-    };
-    const closeFromEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || document.querySelector('[aria-modal="true"]')) return;
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    };
-    window.addEventListener("pointerdown", closeFromOutside, true);
-    window.addEventListener("keydown", closeFromEscape, true);
-    return () => {
-      window.removeEventListener("pointerdown", closeFromOutside, true);
-      window.removeEventListener("keydown", closeFromEscape, true);
-    };
-  }, [close, open]);
-
-  return (
-    <div
-      ref={containerRef}
-      className={`workspace-keymap workspace-keymap-${orientation}`}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        className="workspace-keymap-toggle"
-        aria-label={open ? "Hide desktop keymap" : "Show desktop keymap"}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls="muxdeck-workspace-keymap"
-        title="Desktop keyboard shortcuts"
-        onClick={() => setOpen((visible) => !visible)}
-      >
-        <KeyboardIcon />
-        <span>Keymap</span>
-      </button>
-      {open && (
-        <section
-          id="muxdeck-workspace-keymap"
-          className="workspace-keymap-panel"
-          role="dialog"
-          aria-label="Desktop workspace keymap"
-        >
-          <header>
-            <div>
-              <span>Exact chords</span>
-              <h2>Desktop keymap</h2>
-            </div>
-            <button
-              type="button"
-              className="workspace-keymap-close"
-              aria-label="Close keymap"
-              onClick={() => close(true)}
-            >
-              <CloseIcon />
-            </button>
-          </header>
-          <div className="workspace-keymap-groups">
-            {WORKSPACE_KEYMAP_GROUPS.map((group) => (
-              <section key={group.label} aria-label={`${group.label} shortcuts`}>
-                <h3>{group.label}</h3>
-                <ul>
-                  {group.shortcuts.map(([shortcut, action]) => (
-                    <li key={shortcut}>
-                      <kbd>{shortcut}</kbd>
-                      <span>{action}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </div>
-          <p>
-            Page shortcuts follow the highlighted controls. Using PgUp or Tmux PgUp
-            teaches Muxdeck which paging style that agent needs.
-          </p>
-        </section>
-      )}
-    </div>
-  );
 }
 
 function useWorkspaceTabOrientation(
@@ -464,6 +349,328 @@ function tabTitle(sessionName: string, sessionsByName: Map<string, Session>): st
   return session ? sessionDisplayTitle(session) : sessionName;
 }
 
+interface WorkspaceCommandContext {
+  activeSession: string | null;
+  newSessionActive: boolean;
+  openSessions: readonly string[];
+  sessionsByName: Map<string, Session>;
+  tabsVisible: boolean;
+  tabActionsVisible: boolean;
+  workspacePersistenceState: WorkspacePersistenceState;
+  newSessionDisabled: boolean;
+  onNewSession?: () => void;
+  onOpenTabSearch?: () => void;
+  onOpenRecents: () => void;
+  onOpenDashboard: () => void;
+  onSelect: (sessionName: string) => void;
+  onRequestSaveWorkspace?: () => void;
+  onCreateTabGroup?: () => void;
+  onSortTabsByWorkingState?: () => void;
+  onToggleTabActions?: () => void;
+  onCloseActiveTab?: () => void;
+}
+
+function shortcutCommand(
+  command: Omit<WorkspaceCommand, "run">,
+  shortcutId: ShortcutActionId,
+): WorkspaceCommand {
+  return {
+    ...command,
+    shortcutId,
+    run: () => dispatchShortcutAction(shortcutId),
+  };
+}
+
+function buildWorkspaceCommands({
+  activeSession,
+  newSessionActive,
+  openSessions,
+  sessionsByName,
+  tabsVisible,
+  tabActionsVisible,
+  workspacePersistenceState,
+  newSessionDisabled,
+  onNewSession,
+  onOpenTabSearch,
+  onOpenRecents,
+  onOpenDashboard,
+  onSelect,
+  onRequestSaveWorkspace,
+  onCreateTabGroup,
+  onSortTabsByWorkingState,
+  onToggleTabActions,
+  onCloseActiveTab,
+}: WorkspaceCommandContext): WorkspaceCommand[] {
+  const activeSessionLoaded = Boolean(
+    activeSession
+    && !newSessionActive
+    && sessionsByName.has(activeSession),
+  );
+  const activeTitle = activeSession ? tabTitle(activeSession, sessionsByName) : "this session";
+  const commands: WorkspaceCommand[] = [
+    {
+      id: "workspace-new-session",
+      label: "Open New session",
+      description: "Create another tmux session from the workspace.",
+      category: "Workspace",
+      shortcutId: "workspace-new-session",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.newSession,
+      launcherKey: "B",
+      keywords: ["create", "start", "tmux"],
+      disabled: !onNewSession || newSessionDisabled,
+      disabledReason: newSessionActive
+        ? "The New session view is already open."
+        : "Wait for the workspace to finish loading.",
+      run: () => onNewSession?.(),
+    },
+    shortcutCommand({
+      id: "session-copy-new",
+      label: "Create session from current directory",
+      description: `Copy New beside ${activeTitle}.`,
+      category: "Session",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.copyNew,
+      keywords: ["copy new", "clone", "duplicate", "cwd", "pwd"],
+      disabled: !activeSessionLoaded || workspacePersistenceState === "loading",
+      disabledReason: "Open a live session and wait for the workspace to finish loading.",
+    }, "session-copy-new"),
+    {
+      id: "workspace-find-tab",
+      label: "Find an open tab",
+      description: "Search the sessions already open in this workspace.",
+      category: "Workspace",
+      shortcutId: "workspace-find-tab",
+      shortcut: WORKSPACE_TAB_SHORTCUTS.search,
+      launcherKey: ";",
+      keywords: ["switch", "jump", "search session"],
+      disabled: !onOpenTabSearch || openSessions.length === 0,
+      disabledReason: "There are no open session tabs to search.",
+      run: () => onOpenTabSearch?.(),
+    },
+    shortcutCommand({
+      id: "terminal-return-live",
+      label: "Return to live output",
+      description: "Leave tmux scrollback and follow current terminal output.",
+      category: "Terminal",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.returnLive,
+      keywords: ["exit scrollback", "bottom", "follow"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "terminal-return-live"),
+    shortcutCommand({
+      id: "terminal-page-up",
+      label: "Preferred page up",
+      description: "Use the highlighted paging method for the current agent.",
+      category: "Terminal",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.pageUp,
+      keywords: ["scroll up", "tmux page up", "pgup", "history"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "terminal-page-up"),
+    shortcutCommand({
+      id: "terminal-page-down",
+      label: "Preferred page down",
+      description: "Use the highlighted paging method for the current agent.",
+      category: "Terminal",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.pageDown,
+      keywords: ["scroll down", "tmux page down", "pgdn", "history"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "terminal-page-down"),
+    shortcutCommand({
+      id: "session-rename",
+      label: "Rename tmux session",
+      description: `Change the native tmux name for ${activeTitle}.`,
+      category: "Session",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.renameSession,
+      keywords: ["rename session", "change name", "tmux name"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "session-rename"),
+    shortcutCommand({
+      id: "session-end",
+      label: "Open End session confirmation",
+      description: `Review before terminating ${activeTitle} and all of its panes.`,
+      category: "Session",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.endSession,
+      keywords: ["end", "terminate", "kill", "stop session"],
+      danger: true,
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "session-end"),
+    shortcutCommand({
+      id: "terminal-copy-mode",
+      label: "Toggle browser Copy mode",
+      description: "Switch mouse handling between text selection and the terminal app.",
+      category: "Terminal",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.copyMode,
+      keywords: ["select", "clipboard", "mouse"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "terminal-copy-mode"),
+    {
+      id: "view-tab-actions",
+      label: tabActionsVisible ? "Hide tab action buttons" : "Show tab action buttons",
+      description: "Toggle move, copy, reorder, terminate, and close controls on tabs.",
+      category: "View",
+      shortcutId: "view-tab-actions",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.tabActions,
+      keywords: ["toggle actions", "tab buttons", "controls"],
+      disabled: !onToggleTabActions,
+      disabledReason: "Tab action controls are unavailable in this view.",
+      run: () => onToggleTabActions?.(),
+    },
+    shortcutCommand({
+      id: "view-session-tabs",
+      label: tabsVisible ? "Hide session tabs" : "Show session tabs",
+      description: "Toggle the workspace tab strip or side rail.",
+      category: "View",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.sessionTabs,
+      keywords: ["sidebar", "tab strip", "rail"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "view-session-tabs"),
+    shortcutCommand({
+      id: "view-terminal-focus",
+      label: "Enter or exit terminal Focus",
+      description: "Fill the desktop viewport with the live terminal.",
+      category: "View",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.focus,
+      keywords: ["fullscreen", "distraction free", "terminal"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "view-terminal-focus"),
+    {
+      id: "view-theme",
+      label: "Toggle light or dark theme",
+      description: "Switch the Muxdeck color theme.",
+      category: "View",
+      shortcutId: "view-theme",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.theme,
+      launcherKey: "T",
+      keywords: ["appearance", "light", "dark"],
+      run: requestThemeToggle,
+    },
+    {
+      id: "workspace-previous-tab",
+      label: "Previous tab",
+      description: "Move to the previous open session, wrapping at the start.",
+      category: "Workspace",
+      shortcutId: "workspace-previous-tab",
+      shortcut: WORKSPACE_TAB_SHORTCUTS.previous,
+      keywords: ["back", "cycle", "switch session"],
+      disabled: openSessions.length < 2,
+      disabledReason: "Open at least two session tabs first.",
+      run: () => {
+        const currentIndex = activeSession ? openSessions.indexOf(activeSession) : -1;
+        const nextIndex = currentIndex < 0 ? openSessions.length - 1 : (
+          currentIndex - 1 + openSessions.length
+        ) % openSessions.length;
+        if (openSessions[nextIndex]) onSelect(openSessions[nextIndex]);
+      },
+    },
+    {
+      id: "workspace-next-tab",
+      label: "Next tab",
+      description: "Move to the next open session, wrapping at the end.",
+      category: "Workspace",
+      shortcutId: "workspace-next-tab",
+      shortcut: WORKSPACE_TAB_SHORTCUTS.next,
+      keywords: ["forward", "cycle", "switch session"],
+      disabled: openSessions.length < 2,
+      disabledReason: "Open at least two session tabs first.",
+      run: () => {
+        const currentIndex = activeSession ? openSessions.indexOf(activeSession) : -1;
+        const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % openSessions.length;
+        if (openSessions[nextIndex]) onSelect(openSessions[nextIndex]);
+      },
+    },
+    {
+      id: "workspace-recents",
+      label: "Open session overview",
+      description: "Browse open, recent, and other live tmux sessions.",
+      category: "Workspace",
+      keywords: ["recents", "switcher", "overview", "tmux server"],
+      run: onOpenRecents,
+    },
+    {
+      id: "workspace-all-sessions",
+      label: "Browse all sessions",
+      description: "Return to the full session dashboard.",
+      category: "Workspace",
+      keywords: ["dashboard", "home", "landing page"],
+      run: onOpenDashboard,
+    },
+  ];
+  if (onRequestSaveWorkspace) {
+    commands.push({
+      id: "workspace-save",
+      label: "Save this workspace",
+      description: "Name and persist the current tabs and groups.",
+      category: "Workspace",
+      keywords: ["persist", "resume", "workspace name"],
+      run: onRequestSaveWorkspace,
+    });
+  }
+  if (onCreateTabGroup) {
+    commands.push({
+      id: "workspace-new-tab-group",
+      label: "Create tab group",
+      description: "Organize contiguous workspace tabs into a named group.",
+      category: "Workspace",
+      keywords: ["group tabs", "organize", "folder"],
+      run: onCreateTabGroup,
+    });
+  }
+  if (onSortTabsByWorkingState) {
+    commands.push({
+      id: "workspace-sort-working-state",
+      label: "Sort non-working tabs first",
+      description: "Stable-sort tabs by working state while preserving groups.",
+      category: "Workspace",
+      keywords: ["status", "stable sort", "working last"],
+      run: onSortTabsByWorkingState,
+    });
+  }
+  if (onCloseActiveTab) {
+    commands.push({
+      id: "workspace-close-active-tab",
+      label: "Close current workspace tab",
+      description: `Remove ${activeTitle} from this tab list without ending tmux.`,
+      category: "Workspace",
+      keywords: ["hide tab", "remove tab", "keep session running"],
+      run: onCloseActiveTab,
+    });
+  }
+  openSessions.forEach((sessionName, index) => {
+    const title = tabTitle(sessionName, sessionsByName);
+    const session = sessionsByName.get(sessionName);
+    commands.push({
+      id: `open-tab-${sessionName}`,
+      label: `Switch to ${title}`,
+      description: title === sessionName
+        ? `Open workspace tab ${index + 1}.`
+        : `${sessionName} - workspace tab ${index + 1}.`,
+      category: "Open tabs",
+      shortcutId: index < 9
+        ? `workspace-tab-${index + 1}` as ShortcutActionId
+        : undefined,
+      shortcut: index < 9 ? `Ctrl+Shift+${index + 1}` : undefined,
+      launcherKey: index < 9 ? String(index + 1) : undefined,
+      keywords: [
+        sessionName,
+        session?.agentState || "",
+        session ? activePane(session)?.command || "" : "",
+        "open tab",
+        "switch session",
+      ],
+      disabled: sessionName === activeSession && !newSessionActive,
+      disabledReason: "This session is already active.",
+      run: () => onSelect(sessionName),
+    });
+  });
+  return commands;
+}
+
 function tabMoveResultIndex(
   openSessions: readonly string[],
   groups: readonly WorkspaceTabGroup[],
@@ -566,6 +773,17 @@ export function WorkspaceTabSearchDialog({
   onSelect,
   onClose,
 }: WorkspaceTabSearchDialogProps) {
+  const { bindings: shortcutBindings } = useShortcutSettings();
+  const findTabShortcut = directShortcutLabel(shortcutBindings["workspace-find-tab"]);
+  const previousTabShortcut = directShortcutLabel(
+    shortcutBindings["workspace-previous-tab"],
+  );
+  const nextTabShortcut = directShortcutLabel(shortcutBindings["workspace-next-tab"]);
+  const directTabShortcuts = Array.from({ length: 9 }, (_, index) => (
+    directShortcutLabel(shortcutBindings[
+      `workspace-tab-${index + 1}` as keyof typeof shortcutBindings
+    ])
+  )).filter((shortcut): shortcut is string => Boolean(shortcut));
   const [query, setQuery] = useState("");
   const [highlightedSession, setHighlightedSession] = useState<string | null>(activeSession);
   const dialogRef = useRef<HTMLElement>(null);
@@ -721,7 +939,7 @@ export function WorkspaceTabSearchDialog({
             <h2 id="workspace-tab-search-title">Jump to tab</h2>
           </div>
           <div className="workspace-tab-search-header-actions">
-            <kbd>{WORKSPACE_TAB_SHORTCUTS.search}</kbd>
+            <kbd>{findTabShortcut || "Button only"}</kbd>
             <button type="button" className="icon-button" onClick={onClose} aria-label="Close tab search">
               <CloseIcon />
             </button>
@@ -811,11 +1029,16 @@ export function WorkspaceTabSearchDialog({
 
         <footer className="workspace-tab-search-footer">
           <span>
-            <kbd>{WORKSPACE_TAB_SHORTCUTS.previous}</kbd>
-            <kbd>{WORKSPACE_TAB_SHORTCUTS.next}</kbd>
+            {previousTabShortcut && <kbd>{previousTabShortcut}</kbd>}
+            {nextTabShortcut && <kbd>{nextTabShortcut}</kbd>}
             cycle tabs
           </span>
-          <span><kbd>{WORKSPACE_TAB_SHORTCUTS.direct}</kbd> direct</span>
+          {directTabShortcuts.length > 0 && (
+            <span className="workspace-tab-direct-shortcuts">
+              {directTabShortcuts.map((shortcut) => <kbd key={shortcut}>{shortcut}</kbd>)}
+              direct
+            </span>
+          )}
           <span><kbd>↑</kbd><kbd>↓</kbd> choose</span>
           <span><kbd>Enter</kbd> jump</span>
           <span><kbd>Esc</kbd> close</span>
@@ -1568,6 +1791,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseTab,
     onMoveTab,
     onSortTabsByWorkingState,
+    onToggleTabActions,
     onOpenTabInNewWindow,
     onSaveTabGroup,
     onDeleteTabGroup,
@@ -1589,6 +1813,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const { orientation, compactViewport } = useWorkspaceTabOrientation(
     preferredOrientation,
   );
+  const { bindings: shortcutBindings } = useShortcutSettings();
   const desktopTabRailMaxWidth = useDesktopTabRailMaxWidth();
   const [internalDesktopTabRailWidth, setInternalDesktopTabRailWidth] = useState(() => (
     clampDesktopTabRailWidth(desktopTabRailWidth ?? DEFAULT_DESKTOP_TAB_RAIL_WIDTH)
@@ -2362,6 +2587,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       && workspaceTabDrag.target.id === sessionName
       ? workspaceTabDrag.target.edge
       : undefined;
+    const tabShortcutBinding = index < 9
+      ? shortcutBindings[
+        `workspace-tab-${index + 1}` as keyof typeof shortcutBindings
+      ]
+      : undefined;
+    const tabShortcut = directShortcutLabel(tabShortcutBinding);
     return (
       <div
         className={active ? "workspace-tab active" : "workspace-tab"}
@@ -2386,8 +2617,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           aria-selected={active}
           aria-controls={active ? "muxdeck-active-console" : undefined}
           aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}`}
-          aria-keyshortcuts={index < 9 ? `Control+Shift+${index + 1}` : undefined}
-          title={index < 9 ? `${title} (Ctrl+Shift+${index + 1})` : title}
+          aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
+          title={tabShortcut ? `${title} (${tabShortcut})` : title}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
           aria-description={canDragTab
@@ -2493,6 +2724,35 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     );
   };
 
+  const commandPaletteCommands = buildWorkspaceCommands({
+    activeSession,
+    newSessionActive,
+    openSessions,
+    sessionsByName,
+    tabsVisible,
+    tabActionsVisible,
+    workspacePersistenceState,
+    newSessionDisabled,
+    onNewSession,
+    onOpenTabSearch,
+    onOpenRecents,
+    onOpenDashboard,
+    onSelect,
+    onRequestSaveWorkspace: workspacePersistenceState === "unsaved" && onSaveWorkspace
+      ? () => setSaveDialogOpen(true)
+      : undefined,
+    onCreateTabGroup: canCreateGroup
+      ? () => openGroupDialog(null, activeSession, null)
+      : undefined,
+    onSortTabsByWorkingState: onSortTabsByWorkingState && openSessions.length > 1
+      ? sortTabsByWorkingState
+      : undefined,
+    onToggleTabActions,
+    onCloseActiveTab: activeSession && onCloseTab
+      ? () => onCloseTab(activeSession)
+      : undefined,
+  });
+
   return (
     <>
       <div
@@ -2533,13 +2793,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               onClick={onNewSession}
               disabled={newSessionDisabled}
               aria-label="New session"
-              aria-keyshortcuts="Control+Shift+B"
+              aria-keyshortcuts={directShortcutAria(
+                shortcutBindings["workspace-new-session"],
+              )}
               aria-current={newSessionActive ? "page" : undefined}
               title={newSessionActive
                 ? "New session is already open"
                 : workspacePersistenceState === "loading"
                   ? "Wait for workspace to finish opening"
-                  : `New session (${DESKTOP_CONSOLE_SHORTCUTS.newSession})`}
+                  : `New session${directShortcutLabel(
+                    shortcutBindings["workspace-new-session"],
+                  ) ? ` (${directShortcutLabel(
+                      shortcutBindings["workspace-new-session"],
+                    )})` : ""}`}
             >
               <PlusIcon />
               <span>New session</span>
@@ -2791,15 +3057,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               className="workspace-tab-search-button"
               onClick={onOpenTabSearch}
               aria-label="Search open tabs"
-              aria-keyshortcuts="Control+Shift+;"
-              title={`Search open tabs (${WORKSPACE_TAB_SHORTCUTS.search})`}
+              aria-keyshortcuts={directShortcutAria(
+                shortcutBindings["workspace-find-tab"],
+              )}
+              title={`Search open tabs${directShortcutLabel(
+                shortcutBindings["workspace-find-tab"],
+              ) ? ` (${directShortcutLabel(shortcutBindings["workspace-find-tab"])})` : ""}`}
             >
               <SearchIcon />
               <span>Find tab</span>
-              <kbd>{WORKSPACE_TAB_SHORTCUTS.search}</kbd>
+              {directShortcutLabel(shortcutBindings["workspace-find-tab"]) && (
+                <kbd>{directShortcutLabel(shortcutBindings["workspace-find-tab"])}</kbd>
+              )}
             </button>
           )}
-          <WorkspaceKeymap orientation={orientation} />
+          <WorkspaceCommandPalette
+            commands={commandPaletteCommands}
+            compactViewport={compactViewport}
+          />
           <button
             type="button"
             className={recentsOpen ? "workspace-recents-button active" : "workspace-recents-button"}

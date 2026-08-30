@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeToggle } from "./components/ThemeToggle";
 import {
   DEFAULT_THEME,
   THEME_STORAGE_KEY,
   ThemeProvider,
+  requestThemeToggle,
   useTheme,
 } from "./theme";
 
@@ -52,12 +53,10 @@ describe("ThemeProvider", () => {
     expect(screen.getByRole("button", { name: "Light theme" })).not.toBePressed();
     expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute(
       "title",
-      "Switch to light theme (Ctrl+Shift+H)",
+      "Switch to light theme",
     );
-    expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute(
-      "aria-keyshortcuts",
-      "Control+Shift+H",
-    );
+    expect(screen.getByRole("button", { name: "Light theme" }))
+      .not.toHaveAttribute("aria-keyshortcuts");
   });
 
   it("restores a valid persisted theme", () => {
@@ -69,20 +68,14 @@ describe("ThemeProvider", () => {
     expect(screen.getByRole("button", { name: "Light theme" })).toBePressed();
     expect(screen.getByRole("button", { name: "Light theme" })).toHaveAttribute(
       "title",
-      "Switch to dark theme (Ctrl+Shift+H)",
+      "Switch to dark theme",
     );
   });
 
-  it("toggles globally with the exact Ctrl+Shift+H chord", () => {
+  it("toggles when an app command requests a theme change", () => {
     renderTheme();
-    const shortcut = {
-      key: "T",
-      code: "KeyH",
-      ctrlKey: true,
-      shiftKey: true,
-    };
 
-    expect(fireEvent.keyDown(window, shortcut)).toBe(false);
+    act(() => requestThemeToggle());
     expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("light");
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(document.documentElement.style.colorScheme).toBe("light");
@@ -92,23 +85,9 @@ describe("ThemeProvider", () => {
     );
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
 
-    expect(fireEvent.keyDown(window, { ...shortcut, repeat: true })).toBe(false);
-    expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("light");
-
-    expect(fireEvent.keyDown(window, shortcut)).toBe(false);
+    act(() => requestThemeToggle());
     expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("dark");
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
-
-    for (const modifiers of [
-      { ctrlKey: false },
-      { shiftKey: false },
-      { altKey: true },
-      { metaKey: true },
-      { isComposing: true },
-    ]) {
-      expect(fireEvent.keyDown(window, { ...shortcut, ...modifiers })).toBe(true);
-      expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("dark");
-    }
   });
 
   it("toggles the theme and persists the new selection", () => {

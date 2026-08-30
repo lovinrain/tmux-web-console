@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -12,12 +13,21 @@ import { createPortal } from "react-dom";
 import {
   listSessionFiles,
   previewSessionFile,
+  sessionFileDownloadUrl,
+  uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
   type SessionFilePreview,
 } from "../api";
 import {
+  MAX_ATTACHMENT_UPLOAD_BATCH,
+  MAX_ATTACHMENT_UPLOAD_BYTES,
+  transferHasFiles,
+} from "../attachments";
+import {
+  ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowUpIcon,
   ChevronRightIcon,
   CloseIcon,
   FolderIcon,
@@ -49,6 +59,15 @@ interface PanelDrag {
 interface PathTarget {
   absolutePath: string;
   terminalText: string;
+}
+
+type FileUploadStatus = "queued" | "uploading" | "uploaded" | "error";
+
+interface FileUploadItem {
+  id: string;
+  name: string;
+  status: FileUploadStatus;
+  message: string;
 }
 
 interface SessionFilesPanelProps {
@@ -147,6 +166,10 @@ export function SessionFilesPanel({
 }: SessionFilesPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const dragRef = useRef<PanelDrag | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const fileDragDepthRef = useRef(0);
+  const pendingSelectionPathRef = useRef<string | null>(null);
   const [position, setPosition] = useState(defaultPosition);
   const [directoryPath, setDirectoryPath] = useState("");
   const [listing, setListing] = useState<SessionDirectoryListing | null>(null);
@@ -159,6 +182,9 @@ export function SessionFilesPanel({
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [uploadItems, setUploadItems] = useState<FileUploadItem[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [fileDropActive, setFileDropActive] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const identity = `${sessionName}\u0000${sessionId}\u0000${paneId}\u0000${panePath}`;
 
@@ -167,6 +193,10 @@ export function SessionFilesPanel({
   }, []);
 
   useEffect(() => {
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
+    fileDragDepthRef.current = 0;
+    pendingSelectionPathRef.current = null;
     setDirectoryPath("");
     setListing(null);
     setSelected(null);
@@ -175,7 +205,12 @@ export function SessionFilesPanel({
     setPreviewError(null);
     setFilter("");
     setActionStatus(null);
+    setUploadItems([]);
+    setUploading(false);
+    setFileDropActive(false);
   }, [identity]);
+
+  useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -184,7 +219,6 @@ export function SessionFilesPanel({
     setSelected(null);
     setPreview(null);
     setPreviewError(null);
-    setActionStatus(null);
     void listSessionFiles(
       sessionName,
       sessionId,
@@ -194,6 +228,14 @@ export function SessionFilesPanel({
     ).then((nextListing) => {
       setListing(nextListing);
       setDirectoryPath(nextListing.path);
+      const pendingPath = pendingSelectionPathRef.current;
+      if (pendingPath) {
+        const uploadedEntry = nextListing.entries.find(
+          (entry) => entry.path === pendingPath,
+        );
+        pendingSelectionPathRef.current = null;
+        if (uploadedEntry) setSelected(uploadedEntry);
+      }
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       setListing(null);
@@ -276,13 +318,170 @@ export function SessionFilesPanel({
   const pathTarget: PathTarget | null = selected ?? listing;
 
   const navigateTo = useCallback((path: string) => {
+    if (uploading) {
+      setActionStatus("Wait for the current upload to finish before changing folders");
+      return;
+    }
     setDirectoryPath(path);
     setFilter("");
-  }, []);
+    setActionStatus(null);
+    setUploadItems([]);
+  }, [uploading]);
 
   const refresh = useCallback(() => {
     setRefreshToken((current) => current + 1);
   }, []);
+
+  const uploadFiles = useCallback(async (files: File[]) => {
+    if (!listing || listingLoading || listingError) {
+      setActionStatus("Open a readable folder before uploading files");
+      return;
+    }
+    if (uploading) {
+      setActionStatus("Wait for the current upload to finish");
+      return;
+    }
+    if (files.length === 0) return;
+
+    const selectedFiles = files.slice(0, MAX_ATTACHMENT_UPLOAD_BATCH);
+    const omittedCount = files.length - selectedFiles.length;
+    const items = selectedFiles.map((file, index): FileUploadItem => ({
+      id: `${index}:${file.name}:${file.lastModified}`,
+      name: file.name,
+      status: "queued",
+      message: "Waiting",
+    }));
+    const controller = new AbortController();
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = controller;
+    setUploadItems(items);
+    setUploading(true);
+    setActionStatus(null);
+
+    const destinationPath = directoryPath;
+    const uploadedEntries: SessionFileEntry[] = [];
+    let failureCount = 0;
+    const updateItem = (
+      id: string,
+      status: FileUploadStatus,
+      message: string,
+    ) => {
+      setUploadItems((current) => current.map((item) => (
+        item.id === id ? { ...item, status, message } : item
+      )));
+    };
+
+    try {
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        if (controller.signal.aborted) break;
+        const file = selectedFiles[index];
+        const item = items[index];
+        if (file.size > MAX_ATTACHMENT_UPLOAD_BYTES) {
+          failureCount += 1;
+          updateItem(
+            item.id,
+            "error",
+            `Too large; maximum ${formatBytes(MAX_ATTACHMENT_UPLOAD_BYTES)}`,
+          );
+          continue;
+        }
+
+        updateItem(
+          item.id,
+          "uploading",
+          `Uploading ${index + 1} of ${selectedFiles.length}`,
+        );
+        try {
+          const uploaded = await uploadSessionFile(
+            sessionName,
+            sessionId,
+            paneId,
+            destinationPath,
+            file,
+            controller.signal,
+          );
+          uploadedEntries.push(uploaded);
+          updateItem(item.id, "uploaded", `${formatBytes(uploaded.size)} uploaded`);
+        } catch (error) {
+          if (controller.signal.aborted) break;
+          failureCount += 1;
+          updateItem(
+            item.id,
+            "error",
+            error instanceof Error ? error.message : "Upload failed",
+          );
+        }
+      }
+
+      if (controller.signal.aborted) return;
+      if (uploadedEntries.length > 0) {
+        const lastUploaded = uploadedEntries[uploadedEntries.length - 1];
+        pendingSelectionPathRef.current = lastUploaded.path;
+        if (lastUploaded.hidden) setShowHidden(true);
+        setFilter("");
+        setRefreshToken((current) => current + 1);
+      }
+
+      const uploadedCount = uploadedEntries.length;
+      const skippedText = omittedCount > 0
+        ? ` ${omittedCount} more skipped; upload at most ${MAX_ATTACHMENT_UPLOAD_BATCH} at once.`
+        : "";
+      if (failureCount > 0) {
+        setActionStatus(
+          `${uploadedCount} uploaded, ${failureCount} failed.${skippedText}`,
+        );
+      } else {
+        setActionStatus(
+          `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} uploaded.${skippedText}`,
+        );
+      }
+    } finally {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
+      if (!controller.signal.aborted) setUploading(false);
+    }
+  }, [
+    directoryPath,
+    listing,
+    listingError,
+    listingLoading,
+    paneId,
+    sessionId,
+    sessionName,
+    uploading,
+  ]);
+
+  const handleFileDragEnter = (event: ReactDragEvent<HTMLElement>) => {
+    if (!transferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    fileDragDepthRef.current += 1;
+    if (listing && !listingLoading && !listingError && !uploading) {
+      setFileDropActive(true);
+    }
+  };
+
+  const handleFileDragOver = (event: ReactDragEvent<HTMLElement>) => {
+    if (!transferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleFileDragLeave = (event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
+    if (fileDragDepthRef.current === 0) setFileDropActive(false);
+  };
+
+  const handleFileDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!transferHasFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    fileDragDepthRef.current = 0;
+    setFileDropActive(false);
+    void uploadFiles(Array.from(event.dataTransfer.files));
+  };
 
   const beginDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (
@@ -375,6 +574,11 @@ export function SessionFilesPanel({
       role="dialog"
       aria-modal="false"
       aria-labelledby="session-files-title"
+      aria-busy={listingLoading || uploading}
+      onDragEnter={handleFileDragEnter}
+      onDragOver={handleFileDragOver}
+      onDragLeave={handleFileDragLeave}
+      onDrop={handleFileDrop}
     >
       <header
         className="session-files-header"
@@ -389,7 +593,7 @@ export function SessionFilesPanel({
       >
         <span className="session-files-heading-icon"><FolderIcon /></span>
         <div>
-          <span>READ-ONLY / PANE CWD</span>
+          <span>LIVE FILES / PANE CWD</span>
           <h2 id="session-files-title">Files</h2>
         </div>
         <code title={rootName}>{rootName}</code>
@@ -402,7 +606,7 @@ export function SessionFilesPanel({
         <button
           type="button"
           className="session-files-up"
-          disabled={!directoryPath || listingLoading}
+          disabled={!directoryPath || listingLoading || uploading}
           aria-label="Go to parent directory"
           title="Go up"
           onClick={() => navigateTo(parentPath(directoryPath))}
@@ -412,6 +616,7 @@ export function SessionFilesPanel({
         <nav className="session-files-breadcrumbs" aria-label="Current directory">
           <button
             type="button"
+            disabled={uploading}
             aria-current={!directoryPath ? "page" : undefined}
             onClick={() => navigateTo("")}
           >
@@ -423,6 +628,7 @@ export function SessionFilesPanel({
               <ChevronRightIcon />
               <button
                 type="button"
+                disabled={uploading}
                 aria-current={crumb.path === directoryPath ? "page" : undefined}
                 onClick={() => navigateTo(crumb.path)}
               >
@@ -431,12 +637,35 @@ export function SessionFilesPanel({
             </span>
           ))}
         </nav>
+        <input
+          ref={fileInputRef}
+          className="session-files-upload-input"
+          type="file"
+          multiple
+          tabIndex={-1}
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            void uploadFiles(files);
+          }}
+        />
+        <button
+          type="button"
+          className="session-files-upload"
+          aria-label="Upload files to current directory"
+          title="Upload files here (no overwrite)"
+          disabled={!listing || listingLoading || Boolean(listingError) || uploading}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ArrowUpIcon />
+          <span>Upload</span>
+        </button>
         <button
           type="button"
           className="session-files-refresh"
           aria-label="Refresh directory"
           title="Refresh"
-          disabled={listingLoading}
+          disabled={listingLoading || uploading}
           onClick={refresh}
         >
           <RefreshIcon />
@@ -462,6 +691,33 @@ export function SessionFilesPanel({
           {showHidden ? "Hide dotfiles" : "Show dotfiles"}
         </button>
       </div>
+
+      {uploadItems.length > 0 && (
+        <div className="session-file-uploads" role="status" aria-live="polite">
+          <div className="session-file-uploads-heading">
+            <span>{uploading ? "UPLOADING" : "UPLOAD RESULTS"}</span>
+            <code title={listing?.absolutePath || panePath}>
+              {listing?.absolutePath || panePath}
+            </code>
+          </div>
+          <div className="session-file-upload-items">
+            {uploadItems.map((item) => (
+              <div key={item.id} className={`session-file-upload-item ${item.status}`}>
+                <strong title={item.name}>{item.name}</strong>
+                <span>{item.message}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss upload results"
+            disabled={uploading}
+            onClick={() => setUploadItems([])}
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      )}
 
       <div className="session-files-content">
         <div className="session-files-list" aria-label="Directory contents">
@@ -492,7 +748,7 @@ export function SessionFilesPanel({
               key={entry.path}
               type="button"
               className={`session-file-row ${entry.kind}${selected?.path === entry.path ? " selected" : ""}`}
-              disabled={!entry.accessible}
+              disabled={!entry.accessible || uploading}
               aria-label={`${entry.kind === "directory" ? "Folder" : "File"} ${entry.name}${entry.symlink ? ", symbolic link" : ""}`}
               aria-pressed={entry.kind === "file" ? selected?.path === entry.path : undefined}
               title={!entry.accessible
@@ -538,6 +794,24 @@ export function SessionFilesPanel({
               <WindowCopyIcon />
               <span>Copy path</span>
             </button>
+            {selected?.kind === "file" && selected.accessible && (
+              <a
+                className="session-file-download"
+                href={sessionFileDownloadUrl(
+                  sessionName,
+                  sessionId,
+                  paneId,
+                  selected.path,
+                )}
+                download={selected.name}
+                aria-label="Download selected file"
+                title={`Download ${selected.name}`}
+                onClick={() => setActionStatus(`Download started for ${selected.name}`)}
+              >
+                <ArrowDownIcon />
+                <span>Download</span>
+              </a>
+            )}
             <button
               type="button"
               className="primary"
@@ -558,7 +832,7 @@ export function SessionFilesPanel({
             <div className="session-file-preview-empty">
               <FolderIcon />
               <strong>Select a file to preview</strong>
-              <span>Folders open in place. Nothing here can modify the server.</span>
+              <span>Folders open in place. Upload writes only to the folder shown.</span>
             </div>
           )}
           {selected && previewLoading && (
@@ -592,7 +866,7 @@ export function SessionFilesPanel({
               ) : (
                 <div className="session-file-preview-empty binary">
                   <strong>Binary file</strong>
-                  <span>Preview is disabled; you can still copy or stage its path.</span>
+                  <span>Preview is disabled; download it or copy and stage its path.</span>
                 </div>
               )}
               {preview.truncated && (
@@ -604,6 +878,15 @@ export function SessionFilesPanel({
           )}
         </div>
       </div>
+
+      {fileDropActive && (
+        <div className="session-files-drop-overlay" role="status">
+          <ArrowUpIcon />
+          <strong>Drop to upload</strong>
+          <code>{listing?.absolutePath || panePath}</code>
+          <span>Up to {MAX_ATTACHMENT_UPLOAD_BATCH} files, 12 MiB each. Existing names stay untouched.</span>
+        </div>
+      )}
 
       <div className="session-files-resize-corner" aria-hidden="true" />
     </section>,

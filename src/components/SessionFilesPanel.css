@@ -152,6 +152,8 @@
 .session-files-breadcrumbs button,
 .session-files-tools > button,
 .session-file-path-actions > button,
+.session-file-path-actions > a,
+.session-file-uploads > button,
 .session-files-state button {
   display: inline-flex;
   align-items: center;
@@ -168,6 +170,8 @@
 .session-files-breadcrumbs button:hover:not(:disabled),
 .session-files-tools > button:hover:not(:disabled),
 .session-file-path-actions > button:hover:not(:disabled),
+.session-file-path-actions > a:hover,
+.session-file-uploads > button:hover:not(:disabled),
 .session-files-state button:hover:not(:disabled) {
   color: #effff9;
   background: #21312b;
@@ -178,7 +182,8 @@
 .session-files-toolbar > button:disabled,
 .session-files-breadcrumbs button:disabled,
 .session-files-tools > button:disabled,
-.session-file-path-actions > button:disabled {
+.session-file-path-actions > button:disabled,
+.session-file-uploads > button:disabled {
   cursor: default;
   opacity: 0.42;
 }
@@ -212,6 +217,27 @@
   height: 30px;
   flex: 0 0 auto;
   padding: 0;
+}
+
+.session-files-toolbar > .session-files-upload {
+  width: auto;
+  gap: 5px;
+  padding: 0 8px;
+  color: #07130f;
+  background: var(--files-accent);
+  border-color: var(--files-accent);
+  font-size: 8px;
+  font-weight: 760;
+}
+
+.session-files-toolbar > .session-files-upload:hover:not(:disabled) {
+  color: #06100d;
+  background: #9cf2e5;
+  border-color: #b9fff5;
+}
+
+.session-files-upload-input {
+  display: none;
 }
 
 .session-files-breadcrumbs {
@@ -320,6 +346,111 @@
   color: var(--files-accent);
   background: rgba(104, 223, 208, 0.09);
   border-color: rgba(104, 223, 208, 0.38);
+}
+
+.session-file-uploads {
+  display: grid;
+  min-height: 42px;
+  max-height: 94px;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(90px, 0.45fr) minmax(0, 1.55fr) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 7px;
+  overflow: hidden;
+  background: #101a16;
+  border-bottom: 1px solid #2c4037;
+}
+
+.session-file-uploads-heading {
+  min-width: 0;
+}
+
+.session-file-uploads-heading > span,
+.session-file-uploads-heading > code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-file-uploads-heading > span {
+  color: var(--files-accent);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.session-file-uploads-heading > code {
+  margin-top: 2px;
+  color: #70877d;
+  font-size: 7px;
+}
+
+.session-file-upload-items {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.session-file-upload-item {
+  min-width: 112px;
+  max-width: 170px;
+  flex: 1 0 112px;
+  padding: 4px 6px;
+  overflow: hidden;
+  background: #17231e;
+  border: 1px solid #30453c;
+  border-left: 3px solid #6d7d76;
+  border-radius: 2px;
+}
+
+.session-file-upload-item.uploading {
+  border-left-color: var(--amber);
+}
+
+.session-file-upload-item.uploaded {
+  border-left-color: var(--files-accent);
+}
+
+.session-file-upload-item.error {
+  border-left-color: #dc786f;
+}
+
+.session-file-upload-item strong,
+.session-file-upload-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-file-upload-item strong {
+  color: #d5e1db;
+  font-size: 8px;
+}
+
+.session-file-upload-item span {
+  margin-top: 2px;
+  color: #72867c;
+  font-size: 7px;
+}
+
+.session-file-upload-item.error span {
+  color: #e09a93;
+}
+
+.session-file-uploads > button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.session-file-uploads > button svg {
+  width: 13px;
+  height: 13px;
 }
 
 .session-files-content {
@@ -497,7 +628,7 @@
 .session-file-path-actions {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 5px;
   padding: 6px;
   background: #151e1a;
@@ -527,12 +658,14 @@
   white-space: nowrap;
 }
 
-.session-file-path-actions > button {
+.session-file-path-actions > button,
+.session-file-path-actions > a {
   min-height: 34px;
   gap: 5px;
   padding: 0 8px;
   font-size: 8px;
   font-weight: 720;
+  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -548,9 +681,15 @@
   border-color: #b9fff5;
 }
 
-.session-file-path-actions button svg {
+.session-file-path-actions button svg,
+.session-file-path-actions a svg {
   width: 14px;
   height: 14px;
+}
+
+.session-file-download {
+  color: #d6ba80 !important;
+  border-color: rgba(255, 182, 72, 0.34) !important;
 }
 
 .session-file-action-status {
@@ -654,6 +793,61 @@
   animation: session-files-spin 700ms linear infinite;
 }
 
+.session-files-drop-overlay {
+  position: absolute;
+  z-index: 9;
+  inset: 48px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 24px;
+  pointer-events: none;
+  color: #dffcf5;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(104, 223, 208, 0.055),
+      rgba(104, 223, 208, 0.055) 8px,
+      rgba(8, 16, 13, 0.04) 8px,
+      rgba(8, 16, 13, 0.04) 16px
+    ),
+    rgba(7, 14, 11, 0.94);
+  border: 2px dashed var(--files-accent);
+  border-radius: 0 0 8px 4px;
+  text-align: center;
+  backdrop-filter: blur(4px);
+}
+
+.session-files-drop-overlay > svg {
+  width: 42px;
+  height: 42px;
+  padding: 9px;
+  color: #07130f;
+  background: var(--files-accent);
+  border-radius: 50%;
+}
+
+.session-files-drop-overlay > strong {
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 21px;
+}
+
+.session-files-drop-overlay > code {
+  max-width: min(100%, 62ch);
+  overflow: hidden;
+  color: #a6c8be;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-files-drop-overlay > span {
+  color: #829d94;
+  font-size: 8px;
+}
+
 .session-files-resize-corner {
   position: absolute;
   z-index: 5;
@@ -729,10 +923,18 @@ html[data-theme="light"] .session-files-toolbar > button,
 html[data-theme="light"] .session-files-breadcrumbs button,
 html[data-theme="light"] .session-files-tools > button,
 html[data-theme="light"] .session-file-path-actions > button,
+html[data-theme="light"] .session-file-path-actions > a,
+html[data-theme="light"] .session-file-uploads > button,
 html[data-theme="light"] .session-files-state button {
   color: #4d5c54;
   background: #faf8f2;
   border-color: #beb9ad;
+}
+
+html[data-theme="light"] .session-files-toolbar > .session-files-upload {
+  color: #f6fffc;
+  background: #087f75;
+  border-color: #087f75;
 }
 
 html[data-theme="light"] .session-files-tools > label,
@@ -798,6 +1000,38 @@ html[data-theme="light"] .session-file-action-status {
   border-color: #b8d8d1;
 }
 
+html[data-theme="light"] .session-file-uploads {
+  background: #eef1ea;
+  border-color: #c7cdc3;
+}
+
+html[data-theme="light"] .session-file-upload-item {
+  background: #faf8f2;
+  border-color: #c4cbc2;
+}
+
+html[data-theme="light"] .session-file-upload-item strong {
+  color: #344139;
+}
+
+html[data-theme="light"] .session-files-drop-overlay {
+  color: #173b34;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(8, 127, 117, 0.06),
+      rgba(8, 127, 117, 0.06) 8px,
+      rgba(250, 248, 242, 0.08) 8px,
+      rgba(250, 248, 242, 0.08) 16px
+    ),
+    rgba(246, 244, 236, 0.95);
+}
+
+html[data-theme="light"] .session-files-drop-overlay > code,
+html[data-theme="light"] .session-files-drop-overlay > span {
+  color: #567169;
+}
+
 html[data-theme="light"] .session-file-preview-empty.binary,
 html[data-theme="light"] .session-file-preview-empty.locked {
   background-color: #f4f1e9;
@@ -810,20 +1044,25 @@ html[data-theme="light"] .session-file-preview-empty.locked {
   }
 
   .session-file-path-actions {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .session-file-path-actions > button span {
+  .session-file-path-actions > div {
+    grid-column: 1 / -1;
+  }
+
+  .session-file-path-actions > button span,
+  .session-file-path-actions > a span {
     display: none;
   }
 
   .session-file-path-actions > button {
-    width: 34px;
+    width: auto;
     padding: 0;
   }
 
-  .session-file-path-actions > button:last-child {
-    grid-column: 2;
+  .session-file-path-actions > a {
+    padding: 0;
   }
 }
 

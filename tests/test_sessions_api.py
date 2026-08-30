@@ -934,7 +934,7 @@ async def test_terminate_session_api_preserves_persistent_session_state(
 
 @pytest.mark.asyncio
 async def test_session_quick_links_api_isolates_live_sessions_and_persists(tmp_path):
-    first_name = "agent-one"
+    first_name = "agent-#{one}"
     second_name = "agent-two"
     tmux = FakeTmux([[make_session(first_name), make_session(second_name)]])
     path = tmp_path / "workspaces.json"
@@ -948,18 +948,19 @@ async def test_session_quick_links_api_isolates_live_sessions_and_persists(tmp_p
 
     try:
         await client.start_server()
-        response = await client.get(f"/api/sessions/{first_name}/quick-links")
+        first_endpoint = f"/api/sessions/{quote(first_name, safe='')}/quick-links"
+        response = await client.get(first_endpoint)
         assert response.status == 200
         assert await response.json() == {"links": []}
 
         response = await client.put(
-            f"/api/sessions/{first_name}/quick-links",
+            first_endpoint,
             json={"links": links},
         )
         assert response.status == 200
         assert await response.json() == {"links": links}
         assert await (
-            await client.get(f"/api/sessions/{first_name}/quick-links")
+            await client.get(first_endpoint)
         ).json() == {"links": links}
         assert await (
             await client.get(f"/api/sessions/{second_name}/quick-links")

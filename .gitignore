@@ -25,10 +25,14 @@ session-titles.json
 session-messages.json
 snippets.json
 workspaces.json
+shortcuts.json
+auth.json
 .session-titles.json.*.tmp
 .session-messages.json.*.tmp
 .snippets.json.*.tmp
 .workspaces.json.*.tmp
+.shortcuts.json.*.tmp
+.auth.json.*.tmp
 
 # Keep credentials and machine-local editor files out of commits.
 *.pem

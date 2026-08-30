@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,71 @@ def test_preview_is_capped_without_splitting_invalid_utf8(tmp_path, monkeypatch)
     assert preview["size"] == 10
 
 
+def test_upload_writes_a_private_file_and_resolves_it_for_download(tmp_path):
+    nested = tmp_path / "incoming"
+    nested.mkdir()
+
+    uploaded = file_browser.upload_file(
+        str(tmp_path),
+        "incoming",
+        "build notes.txt",
+        b"ready\n",
+    )
+
+    destination = nested / "build notes.txt"
+    assert destination.read_bytes() == b"ready\n"
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert uploaded == {
+        "name": "build notes.txt",
+        "kind": "file",
+        "size": 6,
+        "modified": destination.stat().st_mtime,
+        "hidden": False,
+        "symlink": False,
+        "accessible": True,
+        "path": "incoming/build notes.txt",
+        "absolutePath": str(destination),
+        "terminalText": f"'{destination}'",
+    }
+    download = file_browser.resolve_file_download(
+        str(tmp_path),
+        "incoming/build notes.txt",
+    )
+    assert download.path == destination
+    assert download.name == "build notes.txt"
+
+
+def test_upload_refuses_overwrites_unsafe_names_and_escaped_directories(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    existing = root / "existing.txt"
+    existing.write_text("keep me", encoding="utf-8")
+    (root / "outside-link").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(
+        file_browser.FileBrowserDestinationExistsError,
+        match="already exists",
+    ):
+        file_browser.upload_file(str(root), "", "existing.txt", b"replace me")
+    assert existing.read_text(encoding="utf-8") == "keep me"
+
+    for unsafe_name in ("../secret", "nested/file", r"nested\file", ".", "bad\nname"):
+        with pytest.raises(ValueError):
+            file_browser.upload_file(str(root), "", unsafe_name, b"data")
+    with pytest.raises(file_browser.FileBrowserPathOutsideRootError):
+        file_browser.upload_file(str(root), "outside-link", "escaped.txt", b"data")
+    assert not (outside / "escaped.txt").exists()
+
+    monkeypatch.setattr(file_browser, "MAX_FILE_UPLOAD_BYTES", 3)
+    with pytest.raises(ValueError, match="smaller"):
+        file_browser.upload_file(str(root), "", "large.bin", b"1234")
+
+
 def test_paths_cannot_escape_the_pane_working_directory(tmp_path):
     root = tmp_path / "root"
     outside = tmp_path / "outside"
@@ -173,6 +239,65 @@ async def test_file_browser_api_uses_live_session_and_pane_identity(tmp_path):
         await client.close()
 
 
+async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
+    tmp_path,
+):
+    nested = tmp_path / "incoming"
+    nested.mkdir()
+    client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
+    try:
+        filename = 'r\u00e9sum\u00e9 "draft".txt'
+        upload = await client.post(
+            "/api/sessions/files-agent/files/upload",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "incoming",
+                "filename": filename,
+            },
+            data=b"candidate\n",
+        )
+        assert upload.status == 201
+        uploaded = await upload.json()
+        assert uploaded["path"] == f"incoming/{filename}"
+        assert uploaded["absolutePath"] == str(nested / filename)
+        assert uploaded["size"] == 10
+        assert stat.S_IMODE((nested / filename).stat().st_mode) == 0o600
+
+        conflict = await client.post(
+            "/api/sessions/files-agent/files/upload",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "incoming",
+                "filename": filename,
+            },
+            data=b"replacement",
+        )
+        assert conflict.status == 409
+        assert "already exists" in (await conflict.json())["error"]
+        assert (nested / filename).read_bytes() == b"candidate\n"
+
+        download = await client.get(
+            "/api/sessions/files-agent/files/download",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": f"incoming/{filename}",
+            },
+        )
+        assert download.status == 200
+        assert await download.read() == b"candidate\n"
+        assert download.headers["Cache-Control"] == "private, no-store"
+        assert download.headers["Content-Disposition"].startswith("attachment;")
+        assert (
+            "filename*=UTF-8''r%C3%A9sum%C3%A9%20%22draft%22.txt"
+            in download.headers["Content-Disposition"]
+        )
+    finally:
+        await client.close()
+
+
 async def test_file_browser_api_rejects_stale_or_invalid_identity(tmp_path):
     scenarios = [
         ({"sessionId": "$8", "paneId": "%3"}, 409, "session identity changed"),
@@ -193,7 +318,11 @@ async def test_file_browser_api_rejects_stale_or_invalid_identity(tmp_path):
         await client.close()
 
 
-async def test_file_browser_api_validates_queries_and_containment(tmp_path):
+async def test_file_browser_api_validates_queries_and_containment(tmp_path, monkeypatch):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("private", encoding="utf-8")
+    (tmp_path / "outside-link").symlink_to(outside, target_is_directory=True)
     client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
     try:
         missing = await client.get(
@@ -223,5 +352,55 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path):
         )
         assert missing_preview_path.status == 400
         assert await missing_preview_path.json() == {"error": "path is required"}
+
+        missing_download_path = await client.get(
+            "/api/sessions/files-agent/files/download",
+            params={"sessionId": "$7", "paneId": "%3"},
+        )
+        assert missing_download_path.status == 400
+        assert await missing_download_path.json() == {"error": "path is required"}
+
+        escaped_download = await client.get(
+            "/api/sessions/files-agent/files/download",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "outside-link/secret.txt",
+            },
+        )
+        assert escaped_download.status == 403
+
+        missing_upload_name = await client.post(
+            "/api/sessions/files-agent/files/upload",
+            params={"sessionId": "$7", "paneId": "%3"},
+            data=b"data",
+        )
+        assert missing_upload_name.status == 400
+        assert await missing_upload_name.json() == {"error": "filename is required"}
+
+        stale_upload = await client.post(
+            "/api/sessions/files-agent/files/upload",
+            params={
+                "sessionId": "$8",
+                "paneId": "%3",
+                "filename": "stale.txt",
+            },
+            data=b"data",
+        )
+        assert stale_upload.status == 409
+        assert not (tmp_path / "stale.txt").exists()
+
+        monkeypatch.setattr("tmux_console.app.MAX_FILE_UPLOAD_BYTES", 3)
+        oversized_upload = await client.post(
+            "/api/sessions/files-agent/files/upload",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "filename": "large.bin",
+            },
+            data=b"1234",
+        )
+        assert oversized_upload.status == 413
+        assert not (tmp_path / "large.bin").exists()
     finally:
         await client.close()

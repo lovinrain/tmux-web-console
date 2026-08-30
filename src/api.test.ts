@@ -16,6 +16,7 @@ import {
   getWorkspaceNote,
   getWorkspaceQuickLinks,
   getSnippetTree,
+  getShortcutSettings,
   listSessionFiles,
   listQueuedMessages,
   previewSessionFile,
@@ -27,10 +28,13 @@ import {
   replaceWorkspaceNote,
   replaceWorkspaceQuickLinks,
   saveSnippetTree,
+  saveShortcutSettings,
+  sessionFileDownloadUrl,
   subscribeToSessions,
   terminateSession,
   transferSessionToWorkspace,
   uploadSessionAttachment,
+  uploadSessionFile,
   updateSessionIgnored,
   updateSessionStar,
   updateSessionWorkspacePin,
@@ -346,7 +350,7 @@ describe("session attachment upload API", () => {
 });
 
 describe("session file browser API", () => {
-  it("encodes session, pane, and relative paths for listing and preview", async () => {
+  it("encodes session, pane, and relative paths for browse, download, and upload", async () => {
     const listing = {
       root: "/work/project",
       path: "src",
@@ -378,6 +382,21 @@ describe("session file browser API", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(preview), {
         status: 200,
         headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        name: "drop me.txt",
+        path: "src/drop me.txt",
+        absolutePath: "/work/project/src/drop me.txt",
+        terminalText: "'/work/project/src/drop me.txt'",
+        kind: "file",
+        size: 7,
+        modified: 1_700_000_001,
+        hidden: false,
+        symlink: false,
+        accessible: true,
+      }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
       }));
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
@@ -396,6 +415,27 @@ describe("session file browser API", () => {
       "src/main file.ts",
       controller.signal,
     )).resolves.toEqual(preview);
+    expect(sessionFileDownloadUrl(
+      "work/name #1",
+      "$7",
+      "%3",
+      "src/main file.ts",
+    )).toBe(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/download?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
+    );
+    const upload = new File(["payload"], "drop me.txt", { type: "text/plain" });
+    await expect(uploadSessionFile(
+      "work/name #1",
+      "$7",
+      "%3",
+      "src",
+      upload,
+      controller.signal,
+    )).resolves.toMatchObject({
+      name: "drop me.txt",
+      path: "src/drop me.txt",
+      size: 7,
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -406,6 +446,19 @@ describe("session file browser API", () => {
       2,
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/preview?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
       expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/upload?sessionId=%247&paneId=%253&path=src&filename=drop+me.txt`,
+      expect.objectContaining({
+        method: "POST",
+        body: upload,
+        signal: controller.signal,
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "text/plain",
+        }),
+      }),
     );
   });
 });
@@ -1172,6 +1225,41 @@ describe("snippet library API", () => {
     const error = await saveSnippetTree(tree, 3).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(ApiRequestError);
     expect(error).toMatchObject({ message: "snippet tree changed", status: 409 });
+  });
+});
+
+describe("shortcut settings API", () => {
+  const bindings = {
+    "command-palette": { direct: "KeyH", launcher: "KeyH" },
+    "shortcut-launcher": { direct: "KeyZ", launcher: null },
+  };
+
+  it("loads and revision-saves the backend keymap", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, bindings }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 3, bindings }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getShortcutSettings()).resolves.toEqual({ revision: 2, bindings });
+    await expect(saveShortcutSettings(bindings, 2)).resolves.toEqual({
+      revision: 3,
+      bindings,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/shortcuts`);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      `${BASE_PATH}/api/shortcuts`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ bindings, revision: 2 }),
+      }),
+    ]);
   });
 });
 

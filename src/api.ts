@@ -183,6 +183,41 @@ export async function previewSessionFile(
   );
 }
 
+export function sessionFileDownloadUrl(
+  session: string,
+  sessionId: string,
+  paneId: string,
+  path: string,
+): string {
+  const query = sessionFileQuery(sessionId, paneId, path);
+  return `${BASE_PATH}/api/sessions/${encodeURIComponent(session)}/files/download?${query}`;
+}
+
+export async function uploadSessionFile(
+  session: string,
+  sessionId: string,
+  paneId: string,
+  directoryPath: string,
+  file: File,
+  signal?: AbortSignal,
+): Promise<SessionFileEntry> {
+  const query = new URLSearchParams({
+    sessionId,
+    paneId,
+    path: directoryPath,
+    filename: file.name,
+  });
+  return jsonRequest<SessionFileEntry>(
+    `/api/sessions/${encodeURIComponent(session)}/files/upload?${query.toString()}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+      signal,
+    },
+  );
+}
+
 export async function uploadSessionAttachment(
   session: string,
   sessionId: string,
@@ -795,6 +830,33 @@ export async function saveSnippetTree(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tree, revision }),
+  });
+}
+
+export interface ShortcutBindingPayload {
+  direct: string | null;
+  launcher: string | null;
+}
+
+export interface ShortcutSettingsPayload {
+  revision: number;
+  bindings: Record<string, ShortcutBindingPayload>;
+}
+
+export async function getShortcutSettings(
+  signal?: AbortSignal,
+): Promise<ShortcutSettingsPayload> {
+  return jsonRequest<ShortcutSettingsPayload>("/api/shortcuts", { signal });
+}
+
+export async function saveShortcutSettings(
+  bindings: Record<string, ShortcutBindingPayload>,
+  revision: number,
+): Promise<ShortcutSettingsPayload> {
+  return jsonRequest<ShortcutSettingsPayload>("/api/shortcuts", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bindings, revision }),
   });
 }
 

@@ -43,6 +43,11 @@ import {
   type WorkspacePersistenceState,
 } from "./components/SessionWorkspaceNavigation";
 import { SnippetLibrary } from "./components/SnippetLibrary";
+import {
+  ShortcutSettingsProvider,
+  matchesDirectShortcut,
+  useShortcutSettings,
+} from "./shortcutSettings";
 import { ThemeProvider } from "./theme";
 import type { Session } from "./types";
 import {
@@ -652,6 +657,7 @@ function RoutedNewSessionScreen({
 }
 
 function AppRoutes() {
+  const { bindings: shortcutBindings } = useShortcutSettings();
   const [location, setLocation] = useState(currentLocation);
   const [consoleBars, setConsoleBars] = useState(DEFAULT_CONSOLE_BAR_VISIBILITY);
   const [desktopTabOrientation, setDesktopTabOrientationState] =
@@ -2006,16 +2012,34 @@ function AppRoutes() {
       const current = currentLocation();
       if (!parseSessionRoute(current.path) && !parseNewSessionRoute(current.path)) return;
 
-      const searchRequested = event.code === "Semicolon";
-      const togglesTabActions = event.code === "KeyA";
-      const opensNewSession = event.code === "KeyB";
-      const direction = event.code === "Comma"
+      const searchRequested = matchesDirectShortcut(
+        event,
+        shortcutBindings["workspace-find-tab"],
+      );
+      const togglesTabActions = matchesDirectShortcut(
+        event,
+        shortcutBindings["view-tab-actions"],
+      );
+      const opensNewSession = matchesDirectShortcut(
+        event,
+        shortcutBindings["workspace-new-session"],
+      );
+      const direction = matchesDirectShortcut(
+        event,
+        shortcutBindings["workspace-previous-tab"],
+      )
         ? -1
-        : event.code === "Period"
+        : matchesDirectShortcut(event, shortcutBindings["workspace-next-tab"])
           ? 1
           : 0;
-      const directMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
-      const directIndex = directMatch ? Number(directMatch[1]) - 1 : null;
+      const directIndex = Array.from({ length: 9 }, (_, index) => index).find((index) => (
+        matchesDirectShortcut(
+          event,
+          shortcutBindings[
+            `workspace-tab-${index + 1}` as keyof typeof shortcutBindings
+          ],
+        )
+      )) ?? null;
       if (
         !searchRequested
         && !togglesTabActions
@@ -2074,6 +2098,7 @@ function AppRoutes() {
     desktopTabActionsVisible,
     openNewSession,
     setDesktopTabActionsVisible,
+    shortcutBindings,
     switchSession,
     tabSearchOpen,
     workspacePersistenceState,
@@ -2886,6 +2911,9 @@ function AppRoutes() {
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
+            onToggleTabActions={() => setDesktopTabActionsVisible(
+              !desktopTabActionsVisible,
+            )}
             onSaveTabGroup={saveTabGroup}
             onDeleteTabGroup={deleteTabGroup}
             onToggleTabGroup={toggleTabGroup}
@@ -2934,6 +2962,9 @@ function AppRoutes() {
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
+            onToggleTabActions={() => setDesktopTabActionsVisible(
+              !desktopTabActionsVisible,
+            )}
             onSaveTabGroup={saveTabGroup}
             onDeleteTabGroup={deleteTabGroup}
             onToggleTabGroup={toggleTabGroup}
@@ -3002,7 +3033,9 @@ function AppRoutes() {
 export function App() {
   return (
     <ThemeProvider>
-      <AppRoutes />
+      <ShortcutSettingsProvider>
+        <AppRoutes />
+      </ShortcutSettingsProvider>
     </ThemeProvider>
   );
 }

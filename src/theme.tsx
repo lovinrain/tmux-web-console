@@ -12,6 +12,7 @@ export type Theme = "dark" | "light";
 
 export const DEFAULT_THEME: Theme = "dark";
 export const THEME_STORAGE_KEY = "muxdeck-theme";
+export const THEME_TOGGLE_REQUEST_EVENT = "muxdeck:toggle-theme";
 
 const THEME_COLORS: Record<Theme, string> = {
   dark: "#151914",
@@ -60,6 +61,11 @@ function applyTheme(theme: Theme): void {
     ?.setAttribute("content", THEME_COLORS[theme]);
 }
 
+export function requestThemeToggle(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(THEME_TOGGLE_REQUEST_EVENT));
+}
+
 export function ThemeProvider({ children }: PropsWithChildren) {
   const [theme, setThemeState] = useState<Theme>(readStoredTheme);
 
@@ -77,25 +83,8 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    const handleThemeShortcut = (event: KeyboardEvent) => {
-      if (
-        event.code !== "KeyH"
-        || !event.ctrlKey
-        || !event.shiftKey
-        || event.altKey
-        || event.metaKey
-        || event.isComposing
-        || event.keyCode === 229
-      ) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) toggleTheme();
-    };
-
-    // Capture the global chord before focused controls or xterm consume it.
-    window.addEventListener("keydown", handleThemeShortcut, true);
-    return () => window.removeEventListener("keydown", handleThemeShortcut, true);
+    window.addEventListener(THEME_TOGGLE_REQUEST_EVENT, toggleTheme);
+    return () => window.removeEventListener(THEME_TOGGLE_REQUEST_EVENT, toggleTheme);
   }, [toggleTheme]);
 
   return (

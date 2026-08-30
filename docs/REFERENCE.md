@@ -53,9 +53,10 @@ Tmux cannot render the same pane at two independent responsive sizes.
 
 The `Theme` control switches the full browser UI and xterm ANSI palette together.
 Dark remains the default, and the selected appearance is stored only in that
-browser. `Ctrl+Shift+H` toggles the theme globally, including on the landing page
-and compact layouts. The Theme toggle never sends terminal input, resizes tmux,
-or reconnects the PTY client.
+browser. In a desktop workspace it is also available through fuzzy command search
+or `Ctrl+Shift+Z`, then `T`; the visible Theme button remains available on the
+landing page and compact layouts. The Theme toggle never sends terminal input,
+resizes tmux, or reconnects the PTY client.
 
 On desktop, `Copy New` starts a fresh detached shell in the active pane's current
 working directory and immediately opens it as the active workspace tab. The
@@ -226,6 +227,25 @@ uploads with a visible storage error instead of deleting referenced files
 automatically. An operator can archive or remove old files directly from the
 configured directory. File attachments are deliberately hidden in compact
 mobile layouts.
+
+The working-directory line beneath the desktop session title opens a separate
+movable and resizable file browser rooted at the live pane CWD. Folder listing,
+UTF-8 previews, downloads, and uploads all repeat the live tmux session and pane
+identity check; callers cannot choose a different server root or traverse above
+the CWD, and symlinks that resolve outside it remain inaccessible. Downloads
+stream the selected regular file with an attachment filename and are not bound
+by the 1 MiB text-preview limit.
+
+`Upload` selects as many as six files, and dropping files anywhere over the
+browser opens the same queue with an overlay naming the exact destination
+folder. Each file is capped at 12 MiB and created directly in that displayed
+folder with mode `0600`. Empty files are allowed. An existing file, directory,
+or symlink with the same name causes a visible per-file conflict instead of an
+overwrite; successful files refresh the listing and select the last upload.
+These are project/CWD files, not temporary attachments: they are outside
+`MUXDECK_UPLOADS_DIR`, have no application storage-total cap or cleanup policy,
+and remain until the user or another host process removes them. Uploading changes
+the host filesystem but never inserts terminal input or presses Enter.
 
 Use the top-level `Snippets` section to configure the shared tree. The virtual
 library root can contain snippets or folders, folders can nest, and snippets are
@@ -632,7 +652,7 @@ adds whole-group up/down controls. Tab groups are a multi-tab-view concern: the
 landing page does not show group badges, counts, names, editors, or group-aware
 tab search results.
 
-On desktop, `Ctrl+Shift+,` and `Ctrl+Shift+.` select the previous or next open
+By default, on desktop, `Ctrl+Shift+,` and `Ctrl+Shift+.` select the previous or next open
 tab and wrap at either end. `Ctrl+Shift+1` through `Ctrl+Shift+9` select that
 numbered open tab directly; both the number row and numeric keypad work, and a
 position that is not open is a no-op. `Ctrl+Shift+;` opens the `Find tab`
@@ -646,21 +666,31 @@ mobile layout, where Overview remains the session-switching surface. They are
 also inactive on the landing page, even when its URL retains a workspace
 snapshot for Back/Forward navigation.
 
-The live console adds exact `Ctrl+Shift` chords for session and terminal actions:
+The live console defaults to exact `Ctrl+Shift` chords for session and terminal actions:
 `E` opens the existing End-session confirmation, `R` opens the native tmux
 session rename dialog, `L` returns to live output, `C` toggles browser Copy mode,
 and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
 creates a numbered session in the active pane's directory, `B` opens New session,
 `F` enters or exits terminal Focus, and `S` shows or hides the session strip. The
-desktop keymap also lists the global `H` theme chord. The console-only
+desktop command palette uses `Ctrl+Shift+H`. The console-only
 chords are captured before xterm can turn them into terminal input, keep unrelated
 modifier combinations untouched, and pause while a modal dialog or mobile
 workspace layout is active.
 
-`Keymap` in the desktop workspace strip opens a non-modal reference containing
-all tab, view, paging, Copy, Live, and End chords. Escape or clicking outside
-closes it. The paging entries intentionally say `Preferred page up/down` because
+`Shortcuts` in the desktop workspace strip, or `Ctrl+Shift+Z` by default, opens a modal
+shortcut layer containing the known tab, view, paging, Copy, Live, Rename, and
+End actions. After releasing the opening chord, a single displayed key runs the
+action: notably `E` opens End confirmation, `R` opens Rename, and `H` switches to
+fuzzy command search. `T` toggles the theme. Escape or clicking outside closes
+the layer. The paging entries intentionally say `Preferred page up/down` because
 their raw-application or tmux implementation follows the remembered agent choice.
+`Customize` opens the global keymap editor. Each action has an independently
+editable direct `Ctrl+Shift` key and shortcut-window key where that layer applies;
+duplicate keys within one layer cannot be saved. Clearing a binding removes its
+hint and handler. Saving writes the versioned keymap to the backend, immediately
+updates buttons, command results, and both shortcut windows, and makes the same
+map available to every browser. Browser- or OS-reserved direct chords may never
+reach the page, so the shortcut-window layer remains the dependable fallback.
 
 `Recents` opens the route `/session/:name/recents`. The sheet separates open
 quick tabs, closed recently visited sessions, and other sessions currently on
@@ -703,6 +733,52 @@ instead of being replaced; repair the configured file and restart Muxdeck.
 
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
+
+`MUXDECK_SHORTCUTS_FILE` stores the global desktop keymap. It is shared across
+browsers, uses revision-checked whole-document writes, and defaults to the
+built-in bindings until the first save. An unreadable, malformed, conflicting,
+or unsupported document makes shortcut persistence unavailable rather than
+overwriting the file; the browser continues with built-in defaults and exposes a
+retry state in the editor.
+
+`MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.
+`server` uses the Muxdeck form login and remembered-device cookies. `basic` uses
+the browser's standard HTTP Basic prompt without device cookies. `none`
+deliberately bypasses application authentication, even when an auth-file path is
+present. Explicit `server` and `basic` modes require valid credential state;
+unknown modes and incomplete protected modes fail startup closed. When the mode
+is omitted, compatibility behavior infers `server` if `MUXDECK_AUTH_FILE` is set
+and `none` otherwise.
+
+`MUXDECK_AUTH_FILE` stores the global account record and remembered browsers.
+Create it interactively with
+`python -m tmux_console.auth provision --path ABSOLUTE_PATH --username NAME`;
+the password is read without echo and is never accepted as a command-line
+argument. The versioned JSON document contains the username, a salted scrypt
+password hash, and hashes of random device tokens. It never contains the
+plaintext password or the bearer token held by a browser. The file must be a
+regular, non-symlink file owned by the service user with mode `0600` or stricter.
+If the configured file is missing, malformed, publicly readable, or otherwise
+unavailable, application creation fails closed in a protected mode. Keep this
+path outside the source tree for both protected modes.
+
+A successful login sets an `HttpOnly`, `Secure`, `SameSite=Strict` cookie scoped
+to the Muxdeck base path. Cookies are shared by tabs in the same browser profile.
+The server-side remembered-device token has no fixed expiration; the browser
+cookie uses a rolling 400-day lifetime because browsers cap persistent cookies.
+Each normal authenticated response renews that lifetime, so an actively used
+profile remains signed in. Browser data removal, private browsing, or explicit
+revocation still removes access. The Account page lists, revokes, and logs out
+remembered browsers. `MUXDECK_AUTH_COOKIE_SECURE=false` exists only for deliberate
+direct-loopback HTTP development; keep the default for every HTTPS deployment.
+These cookies and account revocation controls apply only to `server` mode.
+
+In `basic` mode, Muxdeck validates the same stored username and password hash but
+never issues a device cookie or changes the remembered-browser list. The Basic
+username cannot contain `:`. Credentials are merely Base64-encoded on the wire,
+so use HTTPS. Credential caching and prompts belong to the browser, and there is
+no dependable application logout; close the browser or clear its saved site
+credentials to forget the login.
 
 `MUXDECK_UPLOADS_DIR` stores files attached from the desktop console. The legacy
 variable and `uploads` directory names remain for compatibility. The directory
@@ -775,12 +851,16 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_PORT` | `7683` | HTTP listen port |
 | `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
 | `MUXDECK_TRUSTED_ORIGINS` | unset | Comma-separated exact external browser origins allowed through a reverse proxy |
+| `MUXDECK_AUTH_MODE` | inferred | `server`, `basic`, or `none`; omitted infers `server` with an auth file and `none` without one |
+| `MUXDECK_AUTH_FILE` | unset | Absolute path to private credential and remembered-device state; required by `server` and `basic` |
+| `MUXDECK_AUTH_COOKIE_SECURE` | `true` | Mark the `server`-mode remembered-browser cookie Secure; use `false` only for intentional direct loopback HTTP development |
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name, used to isolate tests |
 | `MUXDECK_TITLES_FILE` | `~/.local/state/muxdeck/session-titles.json` | Persistent titles, predefined tags, and starred/ignored session names |
 | `MUXDECK_MESSAGES_FILE` | `~/.local/state/muxdeck/session-messages.json` | Persistent per-session notes and queued memo input |
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, scoped quick links and notes, and activity times |
+| `MUXDECK_SHORTCUTS_FILE` | `~/.local/state/muxdeck/shortcuts.json` | Persistent global desktop shortcut keymap |
 | `MUXDECK_UPLOADS_DIR` | `~/.local/state/muxdeck/uploads` | Private host files uploaded from desktop staged input |
 | `LOG_LEVEL` | `INFO` | Python log level |
 
@@ -795,6 +875,7 @@ MUXDECK_TRUSTED_ORIGINS=https://console.example.test
 
 The reverse proxy must preserve the browser's `Host` and `Origin` headers. These
 checks protect the local service from cross-site browser requests and DNS
-rebinding; they are not authentication. Muxdeck intentionally has no
-application-level authentication, so keep it behind a private
-network/tunnel or an authenticated, access-controlled reverse proxy.
+rebinding; they are not authentication. Select a protected
+`MUXDECK_AUTH_MODE`, keep the site behind a private network/tunnel, or use
+another authenticated access layer before making the route reachable by
+untrusted clients.

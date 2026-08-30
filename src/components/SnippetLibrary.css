@@ -48,7 +48,8 @@
   border-radius: 5px;
 }
 
-.app-tabs button {
+.app-tabs button,
+.app-tabs .account-link {
   display: flex;
   min-height: 40px;
   align-items: center;
@@ -67,8 +68,17 @@
 }
 
 .app-tabs button:hover,
-.app-tabs button:focus-visible {
+.app-tabs button:focus-visible,
+.app-tabs .account-link:hover,
+.app-tabs .account-link:focus-visible {
   color: var(--paper);
+}
+
+.app-tabs .account-link {
+  min-width: auto;
+  background: transparent;
+  border-color: transparent;
+  text-decoration: none;
 }
 
 .app-tabs button.active {
@@ -926,14 +936,16 @@
     font-size: 20px;
   }
 
-  .app-tabs button {
+  .app-tabs button,
+  .app-tabs .account-link {
     width: 43px;
     min-height: 43px;
     justify-content: center;
     padding: 0;
   }
 
-  .app-tabs button span {
+  .app-tabs button span,
+  .app-tabs .account-link span {
     position: absolute;
     width: 1px;
     height: 1px;

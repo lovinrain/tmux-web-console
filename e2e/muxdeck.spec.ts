@@ -6,9 +6,16 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { test, expect, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
+import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 
 const sessionName = `muxdeck-browser-${process.pid}`;
 const alternateSessionName = `${sessionName}-alternate`;
@@ -18,11 +25,33 @@ const titlesFile = process.env.MUXDECK_PLAYWRIGHT_TITLES_FILE;
 const messagesFile = process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE;
 const snippetsFile = process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE;
 const workspacesFile = process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE;
+const shortcutsFile = process.env.MUXDECK_PLAYWRIGHT_SHORTCUTS_FILE;
+const authFile = process.env.MUXDECK_PLAYWRIGHT_AUTH_FILE;
 const uploadsDirectory = process.env.MUXDECK_PLAYWRIGHT_UPLOADS_DIR;
 const originalQueuedCommand = "printf 'MEMO_QUEUE_ORIGINAL\\n'";
 const editedQueuedCommand = "printf 'MEMO_QUEUE_EDITED\\n'";
 const CSS_PIXEL_TOLERANCE = 0.01;
+const E2E_ORIGIN = "http://127.0.0.1:7684";
 let paneId = "";
+
+async function authenticatePage(page: Page): Promise<void> {
+  await page.goto(`${E2E_ORIGIN}/mux/login`);
+  await page.getByLabel("Username").fill(E2E_AUTH_USERNAME);
+  await page.getByLabel("Password").fill(E2E_AUTH_PASSWORD);
+  await page.getByRole("button", { name: "Unlock Muxdeck" }).click();
+  await expect(page).toHaveURL(/\/mux\/$/);
+  await page.evaluate(() => document.fonts.ready);
+}
+
+async function authenticateRequest(request: APIRequestContext): Promise<void> {
+  const response = await request.post("/mux/api/auth/login", {
+    data: {
+      username: E2E_AUTH_USERNAME,
+      password: E2E_AUTH_PASSWORD,
+    },
+  });
+  expect(response.ok()).toBe(true);
+}
 
 async function expectRoute(
   page: Page,
@@ -112,7 +141,15 @@ function workspacePaneWidth(name: string): number {
   return Number(width);
 }
 
-if (!titlesFile || !messagesFile || !snippetsFile || !workspacesFile || !uploadsDirectory) {
+if (
+  !titlesFile
+  || !messagesFile
+  || !snippetsFile
+  || !workspacesFile
+  || !shortcutsFile
+  || !authFile
+  || !uploadsDirectory
+) {
   throw new Error("Playwright state paths were not configured");
 }
 
@@ -121,6 +158,7 @@ test.beforeAll(() => {
   rmSync(messagesFile, { force: true });
   rmSync(snippetsFile, { force: true });
   rmSync(workspacesFile, { force: true });
+  rmSync(shortcutsFile, { force: true });
   rmSync(uploadsDirectory, { recursive: true, force: true });
   try {
     execFileSync("tmux", [...tmux, "kill-server"], { stdio: "ignore" });
@@ -130,6 +168,11 @@ test.beforeAll(() => {
   execFileSync("tmux", [...tmux, "new-session", "-d", "-s", sessionName, "bash", "--noprofile", "--norc"]);
   paneId = execFileSync("tmux", [...tmux, "list-panes", "-t", `=${sessionName}`, "-F", "#{pane_id}"], { encoding: "utf8" }).trim();
   mkdirSync("artifacts", { recursive: true });
+});
+
+test.beforeEach(async ({ page, request }) => {
+  await authenticatePage(page);
+  await authenticateRequest(request);
 });
 
 test.afterAll(() => {
@@ -142,7 +185,50 @@ test.afterAll(() => {
   rmSync(messagesFile, { force: true });
   rmSync(snippetsFile, { force: true });
   rmSync(workspacesFile, { force: true });
+  rmSync(shortcutsFile, { force: true });
+  rmSync(authFile, { force: true });
   rmSync(uploadsDirectory, { recursive: true, force: true });
+});
+
+test("remembered login is shared across tabs and remains revocable", async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: "http://127.0.0.1:7684" });
+  const page = await context.newPage();
+  let terminalSocketClosed = false;
+  page.on("websocket", (socket) => {
+    socket.on("close", () => {
+      terminalSocketClosed = true;
+    });
+  });
+  try {
+    await page.goto(`/mux/session/${encodeURIComponent(sessionName)}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(page).toHaveURL(/\/mux\/login\?next=/);
+    await expect(page.getByText("shared across tabs")).toBeVisible();
+
+    await page.getByLabel("Username").fill(E2E_AUTH_USERNAME);
+    await page.getByLabel("Password").fill(E2E_AUTH_PASSWORD);
+    await page.getByRole("button", { name: "Unlock Muxdeck" }).click();
+    await expect(page).toHaveURL(new RegExp(`/mux/session/${sessionName}`));
+
+    const [cookie] = await context.cookies("http://127.0.0.1:7684/mux/");
+    expect(cookie.name).toBe("muxdeck_device");
+    expect(cookie.httpOnly).toBe(true);
+    expect(cookie.sameSite).toBe("Strict");
+    expect(cookie.expires).toBeGreaterThan(Date.now() / 1000 + 300 * 24 * 60 * 60);
+
+    const secondTab = await context.newPage();
+    await secondTab.goto("/mux/account");
+    await expect(secondTab).toHaveURL(/\/mux\/account$/);
+    await expect(secondTab.getByRole("heading", { name: "Remembered browsers." })).toBeVisible();
+    await expect(secondTab.getByText("(this browser)", { exact: true })).toBeVisible();
+
+    await secondTab.getByRole("button", { name: "Log out this browser" }).click();
+    await expect(secondTab).toHaveURL(/\/mux\/login$/);
+    await expect.poll(() => terminalSocketClosed, { timeout: 3_000 }).toBe(true);
+    await page.reload();
+    await expect(page).toHaveURL(/\/mux\/login\?next=/);
+  } finally {
+    await context.close();
+  }
 });
 
 test("desktop dashboard renders a three-column session grid", async ({ page }) => {
@@ -333,11 +419,11 @@ test("light theme persists across dashboard, snippets, overlays, and console", a
 
   const themeToggle = page.getByRole("button", { name: "Light theme" });
   await expect(themeToggle).toHaveAttribute("aria-pressed", "false");
-  await expect(themeToggle).toHaveAttribute("aria-keyshortcuts", "Control+Shift+H");
+  await expect(themeToggle).not.toHaveAttribute("aria-keyshortcuts");
   const darkToggleBox = await themeToggle.boundingBox();
   expect(darkToggleBox?.width).toBeGreaterThanOrEqual(40);
   expect(darkToggleBox?.height).toBeGreaterThanOrEqual(40);
-  await page.keyboard.press("Control+Shift+H");
+  await themeToggle.click();
   await expect(themeToggle).toHaveAttribute("aria-pressed", "true");
   const lightToggleBox = await themeToggle.boundingBox();
   expect(lightToggleBox?.width).toBe(darkToggleBox?.width);
@@ -1260,6 +1346,45 @@ test("desktop CWD browser previews and stages pane-scoped files", async ({ page 
     await page.screenshot({ path: "artifacts/desktop-cwd-file-browser.png" });
     await stagedInput.fill("");
 
+    const pickerBytes = Buffer.from("\x00MUXDECK_BROWSER_UPLOAD\n", "binary");
+    const pickerName = "browser upload.bin";
+    const pickerPath = `${fixtureDirectory}/${pickerName}`;
+    await browser.locator(".session-files-upload-input").setInputFiles({
+      name: pickerName,
+      mimeType: "application/octet-stream",
+      buffer: pickerBytes,
+    });
+    const pickerRow = browser.getByRole("button", { name: `File ${pickerName}` });
+    await expect(pickerRow).toHaveAttribute("aria-pressed", "true");
+    await expect(browser.getByText("Binary file", { exact: true })).toBeVisible();
+    expect(readFileSync(pickerPath)).toEqual(pickerBytes);
+    expect(statSync(pickerPath).mode & 0o777).toBe(0o600);
+
+    const downloadPromise = page.waitForEvent("download");
+    await browser.getByRole("link", { name: "Download selected file" }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe(pickerName);
+    const downloadedPath = await download.path();
+    expect(downloadedPath).not.toBeNull();
+    expect(readFileSync(downloadedPath!)).toEqual(pickerBytes);
+
+    const droppedBytes = Buffer.from("dropped through the CWD browser\n", "utf8");
+    const dropTransfer = await page.evaluateHandle(({ fileBase64 }) => {
+      const bytes = Uint8Array.from(atob(fileBase64), (character) => character.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], "dropped.txt", { type: "text/plain" }));
+      return transfer;
+    }, { fileBase64: droppedBytes.toString("base64") });
+    await browser.dispatchEvent("dragenter", { dataTransfer: dropTransfer });
+    await expect(browser.getByText("Drop to upload")).toBeVisible();
+    await page.screenshot({ path: "artifacts/desktop-cwd-file-drop.png" });
+    await browser.dispatchEvent("drop", { dataTransfer: dropTransfer });
+    await expect(browser.getByRole("button", { name: "File dropped.txt" }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(readFileSync(`${fixtureDirectory}/dropped.txt`)).toEqual(droppedBytes);
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
+    await page.screenshot({ path: "artifacts/desktop-cwd-file-transfer.png" });
+
     await browser.getByRole("button", { name: "Close file browser" }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator(".console-cwd-button")).toBeDisabled();
@@ -1987,7 +2112,7 @@ test("vertical tabs scroll their rail without displacing the console toolbar", a
   }
 });
 
-test("desktop workspace shortcuts cycle, jump by number, and search tabs", async ({
+test("desktop workspace shortcuts cycle, fuzzy-run commands, and search tabs", async ({
   page,
   request,
 }) => {
@@ -2196,12 +2321,19 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     await page.keyboard.press("Escape");
     await expect(jumpDialog).toBeHidden();
 
-    const keymapTrigger = page.getByRole("button", { name: "Show desktop keymap" });
-    await expect(keymapTrigger).toBeVisible();
-    await keymapTrigger.click();
-    const keymap = page.getByRole("dialog", { name: "Desktop workspace keymap" });
-    await expect(keymap).toBeVisible();
+    const commandPaletteTrigger = page.getByRole("button", { name: "Open command palette" });
+    await expect(commandPaletteTrigger).toBeVisible();
+    await expect(commandPaletteTrigger).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Control+Shift+H",
+    );
+    await page.keyboard.press("Control+Shift+H");
+    let commandPalette = page.getByRole("dialog", { name: "Run a command" });
+    await expect(commandPalette).toBeVisible();
+    let commandSearch = commandPalette.getByRole("combobox", { name: "Search commands" });
+    await expect(commandSearch).toBeFocused();
     for (const shortcut of [
+      "Ctrl+Shift+H",
       "Ctrl+Shift+E",
       "Ctrl+Shift+R",
       "Ctrl+Shift+B",
@@ -2213,13 +2345,57 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
       "Ctrl+Shift+D",
       "Ctrl+Shift+S",
       "Ctrl+Shift+F",
-      "Ctrl+Shift+H",
+      "Ctrl+Shift+Z, then T",
     ]) {
-      await expect(keymap.getByText(shortcut, { exact: true })).toBeVisible();
+      await expect(commandPalette.getByText(shortcut, { exact: true }).first()).toBeVisible();
     }
-    await page.screenshot({ path: "artifacts/workspace-keymap-desktop.png" });
+    await commandSearch.fill("rn ssn");
+    await expect(commandPalette.locator('[role="option"][aria-selected="true"] strong'))
+      .toHaveText("Rename tmux session");
+    await page.screenshot({ path: "artifacts/workspace-command-palette-desktop.png" });
+    await commandSearch.press("Enter");
+    await expect(commandPalette).toBeHidden();
+    const renameDialog = page.getByRole("dialog", { name: "Rename tmux session" });
+    await expect(renameDialog).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(keymap).toBeHidden();
+    await expect(renameDialog).toBeHidden();
+
+    const shortcutTrigger = page.getByRole("button", { name: "Open shortcut window" });
+    await expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Z");
+    await page.keyboard.press("Control+Shift+Z");
+    let shortcutDialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(shortcutDialog).toBeVisible();
+    await expect(shortcutDialog.getByRole("button", {
+      name: /Open End session confirmation/,
+    })).toContainText("E");
+    await page.screenshot({ path: "artifacts/workspace-shortcut-layer-desktop.png" });
+    await page.keyboard.press("r");
+    await expect(renameDialog).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(renameDialog).toBeHidden();
+
+    await page.keyboard.press("Control+Shift+Z");
+    shortcutDialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(shortcutDialog).toBeVisible();
+    await page.keyboard.press("h");
+    commandPalette = page.getByRole("dialog", { name: "Run a command" });
+    await expect(commandPalette).toBeVisible();
+    commandSearch = commandPalette.getByRole("combobox", { name: "Search commands" });
+    await commandSearch.fill("emr dpl ln");
+    await expect(commandPalette.locator('[role="option"][aria-selected="true"] strong'))
+      .toHaveText(`Switch to ${shortcutTitle}`);
+    await commandSearch.press("Enter");
+    await expectRoute(
+      page,
+      `/mux/session/${shortcutSession}`,
+      [sessionName, shortcutSession],
+    );
+    await page.keyboard.press("Control+Shift+,");
+    await expectRoute(
+      page,
+      `/mux/session/${sessionName}`,
+      [sessionName, shortcutSession],
+    );
 
     const shell = page.locator(".console-shell");
     const actionsToggle = page.getByRole("button", { name: "Tab action buttons" });
@@ -2271,7 +2447,9 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     await expect.poll(paneInMode).toBe("0");
 
     const identityBeforeEndShortcut = workspaceTmuxIdentity(sessionName);
-    await page.keyboard.press("Control+Shift+E");
+    await page.keyboard.press("Control+Shift+Z");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await page.keyboard.press("e");
     const endDialog = page.getByRole("alertdialog", { name: "Terminate tmux session?" });
     await expect(endDialog).toBeVisible();
     expect(workspaceTmuxIdentity(sessionName)).toBe(identityBeforeEndShortcut);
@@ -2284,7 +2462,7 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
 
     await page.setViewportSize({ width: 390, height: 700 });
     await expect(tabSearchButton).toBeHidden();
-    await expect(keymapTrigger).toBeHidden();
+    await expect(commandPaletteTrigger).toBeHidden();
     await expect(desktopLiveButton).toBeHidden();
     await expect(desktopFocusButton).toBeHidden();
     await page.keyboard.press("Control+Shift+.");
@@ -2301,6 +2479,10 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
     );
     await page.keyboard.press("Control+Shift+;");
     await expect(page.getByRole("dialog", { name: "Jump to tab" })).toBeHidden();
+    await page.keyboard.press("Control+Shift+H");
+    await expect(page.getByRole("dialog", { name: "Run a command" })).toBeHidden();
+    await page.keyboard.press("Control+Shift+Z");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeHidden();
   } finally {
     try {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${shortcutSession}`], {
@@ -2308,6 +2490,104 @@ test("desktop workspace shortcuts cycle, jump by number, and search tabs", async
       });
     } catch {
       // Cleanup remains scoped to this test's disposable tmux server.
+    }
+  }
+});
+
+test("desktop shortcut editor validates, persists, and updates visible key hints", async ({
+  page,
+  request,
+}) => {
+  const originalResponse = await request.get("/mux/api/shortcuts");
+  expect(originalResponse.ok()).toBe(true);
+  const originalSettings = await originalResponse.json();
+
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${encodeURIComponent(sessionName)}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+
+    const shortcutTrigger = page.getByRole("button", { name: "Open shortcut window" });
+    await shortcutTrigger.click();
+    const shortcutDialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await shortcutDialog.getByRole("button", { name: "Customize" }).click();
+
+    const settings = page.getByRole("dialog", { name: "Customize shortcuts" });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole("button", {
+      name: "Shortcut window direct key",
+      exact: true,
+    })).toBeInViewport();
+    const paletteDirect = settings.getByRole("button", {
+      name: "Fuzzy command search direct key",
+      exact: true,
+    });
+
+    await paletteDirect.click();
+    await page.keyboard.press("z");
+    await expect(settings.getByText("Resolve duplicate keys before saving.")).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Save keymap" })).toBeDisabled();
+
+    await paletteDirect.click();
+    await page.keyboard.press("k");
+    await expect(settings.getByText("Resolve duplicate keys before saving.")).toBeHidden();
+
+    const launcherDirect = settings.getByRole("button", {
+      name: "Shortcut window direct key",
+      exact: true,
+    });
+    await launcherDirect.click();
+    await page.keyboard.press("x");
+
+    const endWindowKey = settings.getByRole("button", {
+      name: "End session launcher key",
+      exact: true,
+    });
+    await endWindowKey.click();
+    await page.keyboard.press("w");
+
+    await page.screenshot({ path: "artifacts/shortcut-settings-desktop.png" });
+    await settings.getByRole("button", { name: "Save keymap" }).click();
+    await expect(settings.getByText("Saved for every browser.")).toBeVisible();
+    await settings.getByRole("button", { name: "Close shortcut settings" }).click();
+
+    const commandTrigger = page.getByRole("button", { name: "Open command palette" });
+    await expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    await expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    await expect(page.getByRole("button", { name: "Open command palette" }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    await expect(page.getByRole("button", { name: "Open shortcut window" }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
+
+    await page.keyboard.press("Control+Shift+H");
+    await expect(page.getByRole("dialog", { name: "Run a command" })).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+K");
+    await expect(page.getByRole("dialog", { name: "Run a command" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.keyboard.press("Control+Shift+X");
+    const remappedShortcutDialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(remappedShortcutDialog).toBeVisible();
+    await expect(remappedShortcutDialog.getByRole("button", {
+      name: /Open End session confirmation/,
+    })).toContainText("W");
+    await page.keyboard.press("w");
+    const endDialog = page.getByRole("alertdialog", { name: "Terminate tmux session?" });
+    await expect(endDialog).toBeVisible();
+    await endDialog.getByRole("button", { name: "Cancel" }).click();
+  } finally {
+    const currentResponse = await request.get("/mux/api/shortcuts");
+    if (currentResponse.ok()) {
+      const currentSettings = await currentResponse.json();
+      await request.put("/mux/api/shortcuts", {
+        data: {
+          revision: currentSettings.revision,
+          bindings: originalSettings.bindings,
+        },
+      });
     }
   }
 });
@@ -2504,6 +2784,7 @@ test("workspace tabs copy and move into isolated browser windows", async ({ brow
     });
     try {
       const touchPage = await touchContext.newPage();
+      await authenticatePage(touchPage);
       await touchPage.goto(page.url());
       await touchPage.evaluate(() => {
         window.localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
@@ -3283,6 +3564,7 @@ test("saved workspace survives reload and device handoff without touching tmux p
 
   try {
     await page.goto("/mux/?kind=shells&view=list");
+    await page.evaluate(() => document.fonts.ready);
     await page.getByRole("button", { name: `Open ${sessionName}`, exact: true }).click();
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
     await page.getByRole("button", { name: /Open session switcher/ }).click();
@@ -3418,6 +3700,7 @@ test("saved workspace survives reload and device handoff without touching tmux p
     const origin = new URL(page.url()).origin;
     secondContext = await browser.newContext();
     const secondPage = await secondContext.newPage();
+    await authenticatePage(secondPage);
     await secondPage.goto(`${origin}/mux/`);
     await expect(secondPage.getByRole("heading", { name: workspaceName, exact: true })).toBeVisible();
     const beforeResumeResponse = await request.get(

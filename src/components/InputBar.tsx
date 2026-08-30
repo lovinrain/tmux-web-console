@@ -32,6 +32,11 @@ import {
   type SessionAttachmentUploader,
 } from "../attachments";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
+import {
+  directShortcutAria,
+  directShortcutLabel,
+  useShortcutSettings,
+} from "../shortcutSettings";
 
 export const MAX_DRAFT_LENGTH = 65_536;
 const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
@@ -182,15 +187,22 @@ function TerminalKeyButton({
   preferredScrollLabel,
   onScrollModeUsed,
 }: TerminalKeyButtonProps) {
+  const { bindings: shortcutBindings } = useShortcutSettings();
   const preferred = Boolean(
     terminalKey.scrollMode && terminalKey.scrollMode === preferredScrollMode,
   );
+  const scrollBinding = terminalKey.scrollDirection === "up"
+    ? shortcutBindings["terminal-page-up"]
+    : shortcutBindings["terminal-page-down"];
   const shortcut = preferred && terminalKey.scrollDirection
-    ? `Control+Shift+${terminalKey.scrollDirection === "up" ? "U" : "D"}`
+    ? directShortcutAria(scrollBinding)
     : undefined;
+  const shortcutLabel = preferred && terminalKey.scrollDirection
+    ? directShortcutLabel(scrollBinding)
+    : null;
   const title = preferred
     ? `${terminalKey.title}. Preferred for ${preferredScrollLabel || "this agent"}${
-      shortcut ? ` (${shortcut.replace("Control", "Ctrl")})` : ""
+      shortcutLabel ? ` (${shortcutLabel})` : ""
     }`
     : terminalKey.title;
   return (
@@ -374,6 +386,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   messageCount = 0,
   queuedMessageCount = 0,
 }, ref) {
+  const { bindings: shortcutBindings } = useShortcutSettings();
   const [initialDraftState] = useState(() => {
     const pendingHandoff = renamedSessionDraftHandoffs.get(sessionName);
     const handoff = pendingHandoff?.sessionId === sessionId ? pendingHandoff : undefined;
@@ -1229,8 +1242,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           disabled={!enabled}
           aria-label="Focus live terminal input"
           aria-controls="muxdeck-active-console"
-          aria-keyshortcuts="Control+Shift+L"
-          title="Exit scrollback and focus raw terminal input (Ctrl+Shift+L)"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
+          title={`Exit scrollback and focus raw terminal input${directShortcutLabel(shortcutBindings["terminal-return-live"])
+            ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
+            : ""}`}
           onMouseDown={(event) => event.preventDefault()}
         >
           <TerminalIcon /> <span>Live</span>
@@ -1254,8 +1269,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           disabled={!onTerminateSession}
           aria-label="Terminate tmux session"
           aria-haspopup="dialog"
-          aria-keyshortcuts="Control+Shift+E"
-          title="End this entire tmux session and all of its panes (Ctrl+Shift+E)"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["session-end"])}
+          title={`End this entire tmux session and all of its panes${directShortcutLabel(shortcutBindings["session-end"])
+            ? ` (${directShortcutLabel(shortcutBindings["session-end"])})`
+            : ""}`}
         >
           <TrashIcon /> <span>End</span>
         </button>
@@ -1309,8 +1326,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onClick={onRenameSession}
           disabled={!onRenameSession}
           aria-label="Rename tmux session"
-          aria-keyshortcuts="Control+Shift+R"
-          title="Rename the real tmux session (Ctrl+Shift+R; tmux: Ctrl+B, then $)"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["session-rename"])}
+          title={`Rename the real tmux session (${[
+            directShortcutLabel(shortcutBindings["session-rename"]),
+            "tmux: Ctrl+B, then $",
+          ].filter(Boolean).join("; ")})`}
         >
           <TerminalIcon /> <span>Tmux</span>
         </button>
