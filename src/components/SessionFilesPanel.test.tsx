@@ -17,7 +17,10 @@ import {
   type SessionFileEntry,
   type SessionFilePreview,
 } from "../api";
-import { SessionFilesPanel } from "./SessionFilesPanel";
+import {
+  SESSION_FILES_LAYOUT_STORAGE_KEY,
+  SessionFilesPanel,
+} from "./SessionFilesPanel";
 
 vi.mock("../api", () => ({
   ApiRequestError: class ApiRequestError extends Error {
@@ -142,8 +145,31 @@ function renderPanel(overrides: {
   return { onClose, onInsertPath };
 }
 
+function dispatchPointer(
+  element: Element,
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  pointerId: number,
+  clientX: number,
+  clientY: number,
+) {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    clientX,
+    clientY,
+  });
+  Object.defineProperties(event, {
+    pointerId: { value: pointerId },
+    pointerType: { value: "mouse" },
+    isPrimary: { value: true },
+  });
+  fireEvent(element, event);
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
+  window.localStorage.clear();
   vi.mocked(sessionFileDownloadUrl).mockReturnValue("/files/download");
   vi.mocked(sessionFileImageUrl).mockReturnValue("/files/image");
   vi.mocked(resolveSessionFilePath).mockImplementation(async (_target, path) => ({
@@ -347,30 +373,146 @@ describe("SessionFilesPanel", () => {
     const header = within(panel).getByRole("heading", { name: "Files" }).closest("header");
     expect(header).not.toBeNull();
 
-    const dispatchPointer = (type: string, clientX: number, clientY: number) => {
-      const event = new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        clientX,
-        clientY,
-      });
-      Object.defineProperties(event, {
-        pointerId: { value: 11 },
-        pointerType: { value: "mouse" },
-        isPrimary: { value: true },
-      });
-      fireEvent(header!, event);
-    };
-    dispatchPointer("pointerdown", 500, 100);
-    dispatchPointer("pointermove", 420, 150);
+    dispatchPointer(header!, "pointerdown", 11, 500, 100);
+    dispatchPointer(header!, "pointermove", 11, 420, 150);
     expect(document.documentElement).toHaveClass("session-files-panel-moving");
     expect(panel.getAttribute("style")).toContain("--session-files-y:");
-    dispatchPointer("pointerup", 420, 150);
+    dispatchPointer(header!, "pointerup", 11, 420, 150);
     expect(document.documentElement).not.toHaveClass("session-files-panel-moving");
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("resizes the outer window by pointer and keyboard and remembers it", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    const handle = within(panel).getByRole("button", {
+      name: "Resize file browser window",
+    });
+
+    expect(panel).toHaveStyle({ width: "760px", height: "560px" });
+    dispatchPointer(handle, "pointerdown", 21, 760, 560);
+    dispatchPointer(handle, "pointermove", 21, 840, 620);
+    expect(document.documentElement).toHaveClass("session-files-panel-resizing");
+    expect(panel).toHaveStyle({ width: "840px", height: "620px" });
+    dispatchPointer(handle, "pointerup", 21, 840, 620);
+    expect(document.documentElement).not.toHaveClass("session-files-panel-resizing");
+
+    await waitFor(() => expect(JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_LAYOUT_STORAGE_KEY) || "null",
+    ).size).toEqual({ width: 840, height: 620 }));
+
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(panel).toHaveStyle({ width: "340px", height: "260px" });
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(panel).toHaveStyle({ width: "760px", height: "560px" });
+    fireEvent.keyDown(handle, { key: "ArrowLeft", shiftKey: true });
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    expect(panel).toHaveStyle({ width: "724px", height: "548px" });
+  });
+
+  it("resizes from the left edge and bottom-left corner with the right edge anchored", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    const leftEdge = within(panel).getByRole("button", {
+      name: "Resize file browser from left edge",
+    });
+    const bottomLeft = within(panel).getByRole("button", {
+      name: "Resize file browser from bottom-left corner",
+    });
+    const initialX = Number.parseFloat(
+      panel.style.getPropertyValue("--session-files-x"),
+    );
+    const initialRight = initialX + 760;
+
+    dispatchPointer(leftEdge, "pointerdown", 25, initialX, 300);
+    dispatchPointer(leftEdge, "pointermove", 25, initialX - 80, 340);
+    expect(document.documentElement).toHaveClass("session-files-panel-resizing-left");
+    expect(panel).toHaveStyle({ width: "840px", height: "560px" });
+    expect(Number.parseFloat(panel.style.getPropertyValue("--session-files-x")))
+      .toBe(initialX - 80);
+    dispatchPointer(leftEdge, "pointerup", 25, initialX - 80, 340);
+    expect(document.documentElement).not.toHaveClass("session-files-panel-resizing");
+
+    fireEvent.keyDown(leftEdge, { key: "ArrowRight", shiftKey: true });
+    expect(panel).toHaveStyle({ width: "804px", height: "560px" });
+    expect(
+      Number.parseFloat(panel.style.getPropertyValue("--session-files-x")) + 804,
+    ).toBe(initialRight);
+    fireEvent.keyDown(leftEdge, { key: "Enter" });
+    expect(panel).toHaveStyle({ width: "760px", height: "560px" });
+    expect(
+      Number.parseFloat(panel.style.getPropertyValue("--session-files-x")) + 760,
+    ).toBe(initialRight);
+
+    const resetX = Number.parseFloat(
+      panel.style.getPropertyValue("--session-files-x"),
+    );
+    dispatchPointer(bottomLeft, "pointerdown", 26, resetX, 644);
+    dispatchPointer(bottomLeft, "pointermove", 26, resetX - 40, 694);
+    expect(document.documentElement)
+      .toHaveClass("session-files-panel-resizing-bottom-left");
+    expect(panel).toHaveStyle({ width: "800px", height: "610px" });
+    expect(
+      Number.parseFloat(panel.style.getPropertyValue("--session-files-x")) + 800,
+    ).toBe(initialRight);
+    dispatchPointer(bottomLeft, "pointerup", 26, resetX - 40, 694);
+
+    await waitFor(() => expect(JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_LAYOUT_STORAGE_KEY) || "null",
+    ).size).toEqual({ width: 800, height: 610 }));
+  });
+
+  it("adjusts and remembers the file-list and preview split", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    const splitter = within(panel).getByRole("separator", {
+      name: "Resize file list and preview",
+    });
+
+    expect(splitter).toHaveAttribute("aria-valuenow", "40");
+    fireEvent.keyDown(splitter, { key: "ArrowRight" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "42");
+    fireEvent.keyDown(splitter, { key: "ArrowRight", shiftKey: true });
+    expect(splitter).toHaveAttribute("aria-valuenow", "50");
+    fireEvent.keyDown(splitter, { key: "Home" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "18");
+    fireEvent.keyDown(splitter, { key: "End" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "82");
+    fireEvent.keyDown(splitter, { key: "Enter" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "40");
+
+    dispatchPointer(splitter, "pointerdown", 31, 400, 300);
+    dispatchPointer(splitter, "pointermove", 31, 476, 300);
+    expect(document.documentElement).toHaveClass("session-files-panel-splitting");
+    expect(splitter).toHaveAttribute("aria-valuenow", "50");
+    dispatchPointer(splitter, "pointerup", 31, 476, 300);
+    expect(document.documentElement).not.toHaveClass("session-files-panel-splitting");
+
+    await waitFor(() => expect(JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_LAYOUT_STORAGE_KEY) || "null",
+    ).split).toBeCloseTo(0.5));
+    fireEvent.doubleClick(splitter);
+    expect(splitter).toHaveAttribute("aria-valuenow", "40");
+  });
+
+  it("restores a saved outer size and internal split", async () => {
+    window.localStorage.setItem(SESSION_FILES_LAYOUT_STORAGE_KEY, JSON.stringify({
+      size: { width: 640, height: 420 },
+      split: 0.65,
+    }));
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    expect(panel).toHaveStyle({ width: "640px", height: "420px" });
+    expect(within(panel).getByRole("separator", {
+      name: "Resize file list and preview",
+    })).toHaveAttribute("aria-valuenow", "65");
   });
 
   it("uploads picked files into the shown folder and selects the new entry", async () => {
@@ -1675,6 +1817,62 @@ describe("SessionFilesPanel", () => {
     expect(within(panel).getByLabelText("File or directory path")).toHaveFocus();
   });
 
+  it("copies row full and pane-relative paths without opening the entry", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("src", "src", "directory"),
+    ]));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "Folder src" });
+    const listingCalls = vi.mocked(listSessionFiles).mock.calls.length;
+    const address = within(panel).getByLabelText("File or directory path");
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Copy full path for src",
+    }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "/work/project/src",
+    ));
+    expect(address).toHaveValue("/work/project/src");
+    expect(within(panel).getByText("Full path copied")).toBeInTheDocument();
+    expect(vi.mocked(listSessionFiles).mock.calls).toHaveLength(listingCalls);
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Copy relative path for src",
+    }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith(
+      "src",
+    ));
+    expect(address).toHaveValue("src");
+    expect(within(panel).getByText("Relative path copied")).toBeInTheDocument();
+    expect(vi.mocked(listSessionFiles).mock.calls).toHaveLength(listingCalls);
+  });
+
+  it("uses the full row path when the entry is outside the pane cwd", async () => {
+    const outside = entry("report.txt", "report.txt", "file", {
+      absolutePath: "/srv/data/report.txt",
+      terminalText: "/srv/data/report.txt",
+    });
+    vi.mocked(listSessionFiles).mockResolvedValue(
+      listingAt("/srv/data", [outside], "/srv"),
+    );
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File report.txt" });
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Copy relative path for report.txt",
+    }));
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "/srv/data/report.txt",
+    ));
+    expect(within(panel).getByLabelText("File or directory path"))
+      .toHaveValue("/srv/data/report.txt");
+    expect(within(panel).getByText("Outside pane cwd; full path copied"))
+      .toBeInTheDocument();
+  });
+
   it("offers the path as selectable text when the browser has no clipboard", async () => {
     vi.mocked(listSessionFiles).mockResolvedValue(
       listing("", [entry("main.py", "main.py", "file")]),
@@ -1689,19 +1887,25 @@ describe("SessionFilesPanel", () => {
     const panel = await screen.findByRole("dialog", { name: "Files" });
     await within(panel).findByRole("button", { name: "File main.py" });
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Copy relative path for main.py",
+    }));
 
     const field = await within(panel).findByLabelText(
-      "Full path, selected for copying",
+      "Path, selected for copying",
     );
-    expect(field).toHaveValue("/work/project");
+    expect(field).toHaveValue("main.py");
     expect(field).toHaveFocus();
+    expect(within(panel).getByLabelText("File or directory path"))
+      .toHaveValue("main.py");
+    expect(within(panel).getByText("Relative path is ready in the PATH bar"))
+      .toBeInTheDocument();
     // The old behaviour was an error the user could do nothing about.
     expect(within(panel).queryByText(/Clipboard access is unavailable/))
       .not.toBeInTheDocument();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Dismiss the path to copy" }));
-    expect(within(panel).queryByLabelText("Full path, selected for copying"))
+    expect(within(panel).queryByLabelText("Path, selected for copying"))
       .not.toBeInTheDocument();
   });
 
@@ -1723,7 +1927,7 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("/work/project"));
-    expect(await within(panel).findByLabelText("Full path, selected for copying"))
+    expect(await within(panel).findByLabelText("Path, selected for copying"))
       .toHaveValue("/work/project");
   });
 
@@ -1738,7 +1942,7 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
 
     expect(await within(panel).findByText("Path copied")).toBeInTheDocument();
-    expect(within(panel).queryByLabelText("Full path, selected for copying"))
+    expect(within(panel).queryByLabelText("Path, selected for copying"))
       .not.toBeInTheDocument();
   });
 
@@ -1756,13 +1960,13 @@ describe("SessionFilesPanel", () => {
     await within(panel).findByRole("button", { name: "File main.py" });
 
     fireEvent.click(within(panel).getByRole("button", { name: "Copy server path" }));
-    expect(await within(panel).findByLabelText("Full path, selected for copying"))
+    expect(await within(panel).findByLabelText("Path, selected for copying"))
       .toBeInTheDocument();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Folder src" }));
 
     await waitFor(() => expect(
-      within(panel).queryByLabelText("Full path, selected for copying"),
+      within(panel).queryByLabelText("Path, selected for copying"),
     ).not.toBeInTheDocument());
   });
 });

@@ -59,13 +59,34 @@ import "./SessionFilesPanel.css";
 const PANEL_MARGIN = 12;
 const PANEL_DEFAULT_WIDTH = 760;
 const PANEL_DEFAULT_HEIGHT = 560;
+const PANEL_MIN_WIDTH = 340;
+const PANEL_MIN_HEIGHT = 260;
 const PANEL_KEY_STEP = 16;
 const PANEL_KEY_LARGE_STEP = 48;
+const PANEL_RESIZE_STEP = 12;
+const PANEL_RESIZE_LARGE_STEP = 36;
+const PANEL_DEFAULT_SPLIT = 0.4;
+const PANEL_MIN_SPLIT = 0.18;
+const PANEL_MAX_SPLIT = 0.82;
+const PANEL_SPLIT_STEP = 0.02;
+const PANEL_SPLIT_LARGE_STEP = 0.08;
 const INTERNAL_DRAG_TYPE = "application/x-muxdeck-file-path";
+
+export const SESSION_FILES_LAYOUT_STORAGE_KEY = "muxdeck.session-files-layout.v1";
 
 interface PanelPosition {
   x: number;
   y: number;
+}
+
+interface PanelSize {
+  width: number;
+  height: number;
+}
+
+interface PanelLayout {
+  size: PanelSize;
+  split: number;
 }
 
 interface PanelDrag {
@@ -73,6 +94,24 @@ interface PanelDrag {
   startClientX: number;
   startClientY: number;
   startPosition: PanelPosition;
+}
+
+type PanelResizeDirection = "bottom-right" | "left" | "bottom-left";
+
+interface PanelResizeDrag {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPosition: PanelPosition;
+  startSize: PanelSize;
+  direction: PanelResizeDirection;
+}
+
+interface PanelSplitDrag {
+  pointerId: number;
+  startClientX: number;
+  startSplit: number;
+  contentWidth: number;
 }
 
 interface PathTarget {
@@ -133,11 +172,88 @@ function viewportSize(): { width: number; height: number } {
   };
 }
 
-function defaultPosition(): PanelPosition {
+function clampPanelSize(size: PanelSize): PanelSize {
+  const viewport = viewportSize();
+  const maxWidth = Math.max(1, viewport.width - PANEL_MARGIN * 2);
+  const maxHeight = Math.max(1, viewport.height - PANEL_MARGIN * 2);
+  const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
+  const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
+  return {
+    width: Math.round(Math.min(Math.max(minWidth, size.width), maxWidth)),
+    height: Math.round(Math.min(Math.max(minHeight, size.height), maxHeight)),
+  };
+}
+
+function clampSplit(split: number): number {
+  return Math.min(PANEL_MAX_SPLIT, Math.max(PANEL_MIN_SPLIT, split));
+}
+
+function defaultPanelLayout(): PanelLayout {
+  return {
+    size: clampPanelSize({
+      width: PANEL_DEFAULT_WIDTH,
+      height: PANEL_DEFAULT_HEIGHT,
+    }),
+    split: PANEL_DEFAULT_SPLIT,
+  };
+}
+
+function readPanelLayout(): PanelLayout {
+  const fallback = defaultPanelLayout();
+  try {
+    const raw = window.localStorage.getItem(SESSION_FILES_LAYOUT_STORAGE_KEY);
+    if (!raw) return fallback;
+    const saved = JSON.parse(raw) as Partial<PanelLayout>;
+    const width = saved.size?.width;
+    const height = saved.size?.height;
+    const split = saved.split;
+    return {
+      size: typeof width === "number" && Number.isFinite(width)
+        && typeof height === "number" && Number.isFinite(height)
+        ? clampPanelSize({ width, height })
+        : fallback.size,
+      split: typeof split === "number" && Number.isFinite(split)
+        ? clampSplit(split)
+        : fallback.split,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writePanelLayout(layout: PanelLayout): void {
+  try {
+    window.localStorage.setItem(
+      SESSION_FILES_LAYOUT_STORAGE_KEY,
+      JSON.stringify(layout),
+    );
+  } catch {
+    // Resizing remains available when browser storage is disabled.
+  }
+}
+
+function defaultPosition(size: PanelSize): PanelPosition {
   const viewport = viewportSize();
   return {
-    x: Math.max(PANEL_MARGIN, viewport.width - PANEL_DEFAULT_WIDTH - 24),
+    x: Math.max(PANEL_MARGIN, viewport.width - size.width - 24),
     y: Math.max(PANEL_MARGIN, Math.min(84, viewport.height - PANEL_MARGIN)),
+  };
+}
+
+function clampPositionForSize(
+  position: PanelPosition,
+  size: PanelSize,
+): PanelPosition {
+  const viewport = viewportSize();
+  return {
+    x: Math.round(Math.min(
+      Math.max(PANEL_MARGIN, position.x),
+      Math.max(PANEL_MARGIN, viewport.width - size.width - PANEL_MARGIN),
+    )),
+    y: Math.round(Math.min(
+      Math.max(PANEL_MARGIN, position.y),
+      Math.max(PANEL_MARGIN, viewport.height - size.height - PANEL_MARGIN),
+    )),
   };
 }
 
@@ -149,16 +265,7 @@ function clampPosition(
   const rect = panel?.getBoundingClientRect();
   const width = Math.min(rect?.width || PANEL_DEFAULT_WIDTH, viewport.width - 2 * PANEL_MARGIN);
   const height = Math.min(rect?.height || PANEL_DEFAULT_HEIGHT, viewport.height - 2 * PANEL_MARGIN);
-  return {
-    x: Math.round(Math.min(
-      Math.max(PANEL_MARGIN, position.x),
-      Math.max(PANEL_MARGIN, viewport.width - width - PANEL_MARGIN),
-    )),
-    y: Math.round(Math.min(
-      Math.max(PANEL_MARGIN, position.y),
-      Math.max(PANEL_MARGIN, viewport.height - height - PANEL_MARGIN),
-    )),
-  };
+  return clampPositionForSize(position, { width, height });
 }
 
 function parentPath(path: string): string {
@@ -226,6 +333,23 @@ function describeEntries(entries: SessionFileEntry[]): string {
   return `${entries.length} items`;
 }
 
+function pathRelativeToPaneCwd(
+  absolutePath: string,
+  panePath: string,
+): { text: string; relative: boolean } {
+  const cwd = panePath.replace(/\/+$/, "") || "/";
+  if (!absolutePath.startsWith("/") || !cwd.startsWith("/")) {
+    return { text: absolutePath, relative: false };
+  }
+  if (absolutePath === cwd) return { text: ".", relative: true };
+
+  const cwdPrefix = cwd === "/" ? "/" : `${cwd}/`;
+  if (!absolutePath.startsWith(cwdPrefix)) {
+    return { text: absolutePath, relative: false };
+  }
+  return { text: absolutePath.slice(cwdPrefix.length), relative: true };
+}
+
 async function copyPath(text: string): Promise<boolean> {
   // The async clipboard needs a secure context, which a console reached over
   // plain HTTP on a LAN or tunnel does not have. Report that rather than
@@ -248,7 +372,10 @@ export function SessionFilesPanel({
   onInsertPath,
 }: SessionFilesPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<PanelDrag | null>(null);
+  const resizeRef = useRef<PanelResizeDrag | null>(null);
+  const splitRef = useRef<PanelSplitDrag | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const promptInputRef = useRef<HTMLInputElement>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
@@ -263,7 +390,10 @@ export function SessionFilesPanel({
   const internalDragRef = useRef<SessionFileEntry | null>(null);
   const selectedPathRef = useRef<string | null>(null);
   const identityRef = useRef("");
-  const [position, setPosition] = useState(defaultPosition);
+  const [panelLayout, setPanelLayout] = useState(readPanelLayout);
+  const [position, setPosition] = useState(
+    () => defaultPosition(panelLayout.size),
+  );
   // Absolute directory the relative paths below are resolved against. It
   // starts at the pane's own working directory and can be pointed anywhere the
   // server's configured boundary still contains.
@@ -326,6 +456,10 @@ export function SessionFilesPanel({
   const keepVisible = useCallback(() => {
     setPosition((current) => clampPosition(current, panelRef.current));
   }, []);
+
+  useEffect(() => {
+    writePanelLayout(panelLayout);
+  }, [panelLayout]);
 
   // The panel is a portal at the end of <body>, so leaving focus on <body>
   // after a layer closes restarts tabbing at the top of the document.
@@ -528,7 +662,11 @@ export function SessionFilesPanel({
       observer?.disconnect();
       window.removeEventListener("resize", keepVisible);
       window.visualViewport?.removeEventListener("resize", keepVisible);
-      document.documentElement.classList.remove("session-files-panel-moving");
+      document.documentElement.classList.remove(
+        "session-files-panel-moving",
+        "session-files-panel-resizing",
+        "session-files-panel-splitting",
+      );
     };
   }, [keepVisible]);
 
@@ -1277,6 +1415,223 @@ export function SessionFilesPanel({
     ));
   };
 
+  const applyPanelSize = (requested: PanelSize) => {
+    const size = clampPanelSize(requested);
+    setPanelLayout((current) => ({ ...current, size }));
+    setPosition((current) => clampPositionForSize(current, size));
+  };
+
+  const applyLeftAnchoredPanelSize = (
+    requested: PanelSize,
+    anchoredRight: number,
+    requestedTop: number,
+  ) => {
+    const viewport = viewportSize();
+    const viewportMaxWidth = Math.max(1, viewport.width - PANEL_MARGIN * 2);
+    const maxWidth = Math.max(
+      1,
+      Math.min(viewportMaxWidth, anchoredRight - PANEL_MARGIN),
+    );
+    const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
+    const normalized = clampPanelSize(requested);
+    const size = {
+      width: Math.round(Math.min(Math.max(minWidth, requested.width), maxWidth)),
+      height: normalized.height,
+    };
+    setPanelLayout((current) => ({ ...current, size }));
+    setPosition(clampPositionForSize({
+      x: anchoredRight - size.width,
+      y: requestedTop,
+    }, size));
+  };
+
+  const beginPanelResize = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    direction: PanelResizeDirection,
+  ) => {
+    if (event.button !== 0 || event.isPrimary === false) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPosition: position,
+      startSize: panelLayout.size,
+      direction,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.documentElement.classList.add(
+      "session-files-panel-resizing",
+      `session-files-panel-resizing-${direction}`,
+    );
+  };
+
+  const resizePanel = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = resizeRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    if (drag.direction !== "bottom-right") {
+      applyLeftAnchoredPanelSize({
+        width: drag.startSize.width - deltaX,
+        height: drag.direction === "bottom-left"
+          ? drag.startSize.height + deltaY
+          : drag.startSize.height,
+      }, drag.startPosition.x + drag.startSize.width, drag.startPosition.y);
+      return;
+    }
+    applyPanelSize({
+      width: drag.startSize.width + deltaX,
+      height: drag.startSize.height + deltaY,
+    });
+  };
+
+  const finishPanelResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (resizeRef.current?.pointerId !== event.pointerId) return;
+    resizeRef.current = null;
+    document.documentElement.classList.remove(
+      "session-files-panel-resizing",
+      "session-files-panel-resizing-bottom-right",
+      "session-files-panel-resizing-left",
+      "session-files-panel-resizing-bottom-left",
+    );
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  };
+
+  const resizePanelFromKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (![
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowUp",
+      "ArrowDown",
+      "Home",
+      "End",
+      "Enter",
+    ].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const step = event.shiftKey ? PANEL_RESIZE_LARGE_STEP : PANEL_RESIZE_STEP;
+    const viewport = viewportSize();
+    let size = panelLayout.size;
+    if (event.key === "ArrowLeft") size = { ...size, width: size.width - step };
+    if (event.key === "ArrowRight") size = { ...size, width: size.width + step };
+    if (event.key === "ArrowUp") size = { ...size, height: size.height - step };
+    if (event.key === "ArrowDown") size = { ...size, height: size.height + step };
+    if (event.key === "Home") {
+      size = { width: PANEL_MIN_WIDTH, height: PANEL_MIN_HEIGHT };
+    }
+    if (event.key === "End") {
+      size = {
+        width: viewport.width - PANEL_MARGIN * 2,
+        height: viewport.height - PANEL_MARGIN * 2,
+      };
+    }
+    if (event.key === "Enter") {
+      size = { width: PANEL_DEFAULT_WIDTH, height: PANEL_DEFAULT_HEIGHT };
+    }
+    applyPanelSize(size);
+  };
+
+  const resizePanelFromLeftKeyboard = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    includeHeight: boolean,
+  ) => {
+    const supportedKeys = includeHeight
+      ? ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Enter"]
+      : ["ArrowLeft", "ArrowRight", "Home", "End", "Enter"];
+    if (!supportedKeys.includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const step = event.shiftKey ? PANEL_RESIZE_LARGE_STEP : PANEL_RESIZE_STEP;
+    const viewport = viewportSize();
+    const anchoredRight = position.x + panelLayout.size.width;
+    let size = panelLayout.size;
+    if (event.key === "ArrowLeft") size = { ...size, width: size.width + step };
+    if (event.key === "ArrowRight") size = { ...size, width: size.width - step };
+    if (event.key === "ArrowUp") size = { ...size, height: size.height - step };
+    if (event.key === "ArrowDown") size = { ...size, height: size.height + step };
+    if (event.key === "Home") {
+      size = {
+        width: PANEL_MIN_WIDTH,
+        height: includeHeight ? PANEL_MIN_HEIGHT : size.height,
+      };
+    }
+    if (event.key === "End") {
+      size = {
+        width: anchoredRight - PANEL_MARGIN,
+        height: includeHeight
+          ? viewport.height - PANEL_MARGIN * 2
+          : size.height,
+      };
+    }
+    if (event.key === "Enter") {
+      size = {
+        width: PANEL_DEFAULT_WIDTH,
+        height: includeHeight ? PANEL_DEFAULT_HEIGHT : size.height,
+      };
+    }
+    applyLeftAnchoredPanelSize(size, anchoredRight, position.y);
+  };
+
+  const beginSplitResize = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || event.isPrimary === false) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const contentWidth = contentRef.current?.getBoundingClientRect().width
+      || panelLayout.size.width;
+    splitRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startSplit: panelLayout.split,
+      contentWidth,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    document.documentElement.classList.add("session-files-panel-splitting");
+  };
+
+  const resizeSplit = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = splitRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const split = clampSplit(
+      drag.startSplit + (event.clientX - drag.startClientX) / drag.contentWidth,
+    );
+    setPanelLayout((current) => ({ ...current, split }));
+  };
+
+  const finishSplitResize = (event: ReactPointerEvent<HTMLElement>) => {
+    if (splitRef.current?.pointerId !== event.pointerId) return;
+    splitRef.current = null;
+    document.documentElement.classList.remove("session-files-panel-splitting");
+    try {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  };
+
+  const resizeSplitFromKeyboard = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End", "Enter"].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const step = event.shiftKey ? PANEL_SPLIT_LARGE_STEP : PANEL_SPLIT_STEP;
+    let split = panelLayout.split;
+    if (event.key === "ArrowLeft") split -= step;
+    if (event.key === "ArrowRight") split += step;
+    if (event.key === "Home") split = PANEL_MIN_SPLIT;
+    if (event.key === "End") split = PANEL_MAX_SPLIT;
+    if (event.key === "Enter") split = PANEL_DEFAULT_SPLIT;
+    setPanelLayout((current) => ({ ...current, split: clampSplit(split) }));
+  };
+
   const handleRowKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
     entry: SessionFileEntry,
@@ -1312,19 +1667,57 @@ export function SessionFilesPanel({
     });
   };
 
-  const copyCurrentPath = async () => {
-    if (!pathTarget) return;
+  const copyPathIntoAddress = async (
+    text: string,
+    copiedMessage: string,
+    fallbackMessage: string,
+  ) => {
+    // The address field doubles as an always-available handoff when browser
+    // clipboard APIs are missing or reject the write.
+    setAddressValue(text);
+    setAddressEdited(true);
     setActionStatus(null);
-    const absolute = pathTarget.absolutePath;
-    if (await copyPath(absolute)) {
+    if (await copyPath(text)) {
       setManualCopyPath(null);
-      setActionStatus("Path copied");
+      setActionStatus(copiedMessage);
       return;
     }
-    // Nothing was copied, so hand over the path itself instead of an error the
-    // user can do nothing about.
-    setManualCopyPath(absolute);
-    setActionStatus(null);
+    setManualCopyPath(text);
+    setActionStatus(fallbackMessage);
+  };
+
+  const copyCurrentPath = async () => {
+    if (!pathTarget) return;
+    await copyPathIntoAddress(
+      pathTarget.absolutePath,
+      "Path copied",
+      "Path is ready in the PATH bar",
+    );
+  };
+
+  const copyEntryPath = async (
+    entry: SessionFileEntry,
+    mode: "full" | "relative",
+  ) => {
+    if (mode === "full") {
+      await copyPathIntoAddress(
+        entry.absolutePath,
+        "Full path copied",
+        "Full path is ready in the PATH bar",
+      );
+      return;
+    }
+
+    const relativePath = pathRelativeToPaneCwd(entry.absolutePath, panePath);
+    await copyPathIntoAddress(
+      relativePath.text,
+      relativePath.relative
+        ? "Relative path copied"
+        : "Outside pane cwd; full path copied",
+      relativePath.relative
+        ? "Relative path is ready in the PATH bar"
+        : "Outside pane cwd; full path is ready in the PATH bar",
+    );
   };
 
   const insertCurrentPath = () => {
@@ -1454,6 +1847,10 @@ export function SessionFilesPanel({
   const panelStyle = {
     "--session-files-x": `${position.x}px`,
     "--session-files-y": `${position.y}px`,
+    "--session-files-list-share": `${panelLayout.split}fr`,
+    "--session-files-preview-share": `${1 - panelLayout.split}fr`,
+    width: `${panelLayout.size.width}px`,
+    height: `${panelLayout.size.height}px`,
   } as CSSProperties;
   const rootName = listing?.root || panePath;
   const listReady = Boolean(listing) && !listingLoading && !listingError;
@@ -1802,7 +2199,7 @@ export function SessionFilesPanel({
         </div>
       )}
 
-      <div className="session-files-content">
+      <div ref={contentRef} className="session-files-content">
         <div className="session-files-list" aria-label="Directory contents">
           {listingLoading && (
             <div className="session-files-state" role="status">Reading directory...</div>
@@ -1844,123 +2241,173 @@ export function SessionFilesPanel({
                 : "Nothing to show here."}</span>
             </div>
           )}
-          {!listingLoading && !listingError && visibleEntries.map((entry) => (
-            <div
-              key={entry.path}
-              className={[
-                "session-file-row",
-                entry.kind,
-                selected?.path === entry.path ? "selected" : "",
-                checkedPaths.includes(entry.path) ? "checked" : "",
-                entry.kind === "directory" && dropFolderPath === entry.path
-                  ? "drop-target"
-                  : "",
-                !entry.accessible || busy ? "inert" : "",
-              ].filter(Boolean).join(" ")}
-              draggable={entry.accessible && !busy}
-              onDragStart={(event) => beginEntryDrag(event, entry)}
-              onDragEnd={() => {
-                internalDragRef.current = null;
-                setDropFolderPath(null);
-              }}
-              onDragOver={(event) => {
-                if (entry.kind !== "directory") return;
-                allowEntryDrop(event, entry.path);
-              }}
-              onDragLeave={() => {
-                if (dropFolderPath === entry.path) setDropFolderPath(null);
-              }}
-              onDrop={(event) => {
-                if (entry.kind !== "directory") return;
-                handleEntryDrop(event, entry.path);
-              }}
-            >
-              <input
-                type="checkbox"
-                className="session-file-check"
-                aria-label={`Select ${entry.name}`}
-                checked={checkedPaths.includes(entry.path)}
-                disabled={!entry.accessible || busy}
-                onChange={() => toggleChecked(entry)}
-              />
-              <button
-                type="button"
-                className="session-file-open"
-                disabled={!entry.accessible || busy}
-                aria-label={`${entry.kind === "directory" ? "Folder" : "File"} ${entry.name}${entry.symlink ? ", symbolic link" : ""}`}
-                aria-pressed={entry.kind === "file" ? selected?.path === entry.path : undefined}
-                title={!entry.accessible
-                  ? "This link or special file cannot be opened from the pane working directory"
-                  : entry.absolutePath}
-                onKeyDown={(event) => handleRowKeyDown(event, entry)}
-                onClick={() => {
-                  if (entry.kind === "directory") navigateTo(entry.path);
-                  else if (guardEditor()) {
-                    directSelectionEntryRef.current = null;
-                    setSelected(entry);
-                    setActionStatus(null);
-                  }
+          {!listingLoading && !listingError && visibleEntries.map((entry) => {
+            const relativePath = pathRelativeToPaneCwd(entry.absolutePath, panePath);
+            return (
+              <div
+                key={entry.path}
+                className={[
+                  "session-file-row",
+                  entry.kind,
+                  selected?.path === entry.path ? "selected" : "",
+                  checkedPaths.includes(entry.path) ? "checked" : "",
+                  entry.kind === "directory" && dropFolderPath === entry.path
+                    ? "drop-target"
+                    : "",
+                  !entry.accessible || busy ? "inert" : "",
+                ].filter(Boolean).join(" ")}
+                draggable={entry.accessible && !busy}
+                onDragStart={(event) => beginEntryDrag(event, entry)}
+                onDragEnd={() => {
+                  internalDragRef.current = null;
+                  setDropFolderPath(null);
+                }}
+                onDragOver={(event) => {
+                  if (entry.kind !== "directory") return;
+                  allowEntryDrop(event, entry.path);
+                }}
+                onDragLeave={() => {
+                  if (dropFolderPath === entry.path) setDropFolderPath(null);
+                }}
+                onDrop={(event) => {
+                  if (entry.kind !== "directory") return;
+                  handleEntryDrop(event, entry.path);
                 }}
               >
-                <span className="session-file-kind" aria-hidden="true">
-                  {entry.kind === "directory" ? <FolderIcon /> : fileBadge(entry)}
-                </span>
-                <span className="session-file-name">
-                  <strong>{entry.name}</strong>
-                  <small>{entry.kind === "directory"
-                    ? entry.symlink ? "linked folder" : "folder"
-                    : `${formatBytes(entry.size)}${entry.symlink ? " / link" : ""}`}</small>
-                </span>
-                {entry.kind === "directory" && <ChevronRightIcon />}
-              </button>
-              <span className="session-file-row-actions">
+                <input
+                  type="checkbox"
+                  className="session-file-check"
+                  aria-label={`Select ${entry.name}`}
+                  checked={checkedPaths.includes(entry.path)}
+                  disabled={!entry.accessible || busy}
+                  onChange={() => toggleChecked(entry)}
+                />
                 <button
                   type="button"
-                  aria-label={`Rename ${entry.name}`}
-                  title="Rename (F2)"
-                  disabled={busy}
-                  onClick={() => openPrompt("rename", [entry])}
+                  className="session-file-open"
+                  disabled={!entry.accessible || busy}
+                  aria-label={`${entry.kind === "directory" ? "Folder" : "File"} ${entry.name}${entry.symlink ? ", symbolic link" : ""}`}
+                  aria-pressed={entry.kind === "file" ? selected?.path === entry.path : undefined}
+                  title={!entry.accessible
+                    ? "This link or special file cannot be opened from the pane working directory"
+                    : entry.absolutePath}
+                  onKeyDown={(event) => handleRowKeyDown(event, entry)}
+                  onClick={() => {
+                    if (entry.kind === "directory") navigateTo(entry.path);
+                    else if (guardEditor()) {
+                      directSelectionEntryRef.current = null;
+                      setSelected(entry);
+                      setActionStatus(null);
+                    }
+                  }}
                 >
-                  <EditIcon />
+                  <span className="session-file-kind" aria-hidden="true">
+                    {entry.kind === "directory" ? <FolderIcon /> : fileBadge(entry)}
+                  </span>
+                  <span className="session-file-name">
+                    <strong>{entry.name}</strong>
+                    <small>{entry.kind === "directory"
+                      ? entry.symlink ? "linked folder" : "folder"
+                      : `${formatBytes(entry.size)}${entry.symlink ? " / link" : ""}`}</small>
+                  </span>
+                  {entry.kind === "directory" && <ChevronRightIcon />}
                 </button>
-                {entry.kind === "file" && (
+                <span className="session-file-row-actions">
                   <button
                     type="button"
-                    aria-label={`Duplicate ${entry.name}`}
-                    title="Duplicate"
-                    disabled={busy || !entry.accessible}
-                    onClick={() => openPrompt("duplicate", [entry])}
+                    className="session-file-copy-path"
+                    aria-label={`Copy full path for ${entry.name}`}
+                    title={`Copy full path: ${entry.absolutePath}`}
+                    disabled={busy}
+                    onClick={() => void copyEntryPath(entry, "full")}
                   >
-                    <WindowCopyIcon />
+                    <span aria-hidden="true">FULL</span>
                   </button>
-                )}
-                <button
-                  type="button"
-                  aria-label={`Move ${entry.name}`}
-                  title="Move to another folder"
-                  disabled={busy}
-                  onClick={() => openPrompt("move", [entry])}
-                >
-                  <MoveIcon />
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  aria-label={`Delete ${entry.name}`}
-                  title="Delete (Del)"
-                  disabled={busy}
-                  onClick={() => requestDelete([entry])}
-                >
-                  <TrashIcon />
-                </button>
-              </span>
-            </div>
-          ))}
+                  <button
+                    type="button"
+                    className="session-file-copy-path"
+                    aria-label={`Copy relative path for ${entry.name}`}
+                    title={relativePath.relative
+                      ? `Copy relative to pane cwd: ${relativePath.text}`
+                      : `Outside pane cwd - copy full path: ${relativePath.text}`}
+                    disabled={busy}
+                    onClick={() => void copyEntryPath(entry, "relative")}
+                  >
+                    <span aria-hidden="true">REL</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Rename ${entry.name}`}
+                    title="Rename (F2)"
+                    disabled={busy}
+                    onClick={() => openPrompt("rename", [entry])}
+                  >
+                    <EditIcon />
+                  </button>
+                  {entry.kind === "file" && (
+                    <button
+                      type="button"
+                      aria-label={`Duplicate ${entry.name}`}
+                      title="Duplicate"
+                      disabled={busy || !entry.accessible}
+                      onClick={() => openPrompt("duplicate", [entry])}
+                    >
+                      <WindowCopyIcon />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`Move ${entry.name}`}
+                    title="Move to another folder"
+                    disabled={busy}
+                    onClick={() => openPrompt("move", [entry])}
+                  >
+                    <MoveIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    aria-label={`Delete ${entry.name}`}
+                    title="Delete (Del)"
+                    disabled={busy}
+                    onClick={() => requestDelete([entry])}
+                  >
+                    <TrashIcon />
+                  </button>
+                </span>
+              </div>
+            );
+          })}
           {listing?.truncated && !listingLoading && (
             <p className="session-files-limit" role="status">
               Showing the first {listing.limit.toLocaleString()} entries.
             </p>
           )}
+        </div>
+
+        <div
+          className="session-files-splitter"
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize file list and preview"
+          aria-orientation="vertical"
+          aria-valuemin={Math.round(PANEL_MIN_SPLIT * 100)}
+          aria-valuemax={Math.round(PANEL_MAX_SPLIT * 100)}
+          aria-valuenow={Math.round(panelLayout.split * 100)}
+          aria-valuetext={`${Math.round(panelLayout.split * 100)}% file list`}
+          title="Drag to resize the file list and preview. Arrow keys adjust; Enter resets."
+          onPointerDown={beginSplitResize}
+          onPointerMove={resizeSplit}
+          onPointerUp={finishSplitResize}
+          onPointerCancel={finishSplitResize}
+          onLostPointerCapture={finishSplitResize}
+          onDoubleClick={() => setPanelLayout((current) => ({
+            ...current,
+            split: PANEL_DEFAULT_SPLIT,
+          }))}
+          onKeyDown={resizeSplitFromKeyboard}
+        >
+          <span aria-hidden="true" />
         </div>
 
         <div className="session-file-preview">
@@ -2015,7 +2462,7 @@ export function SessionFilesPanel({
                   ref={manualCopyRef}
                   type="text"
                   readOnly
-                  aria-label="Full path, selected for copying"
+                  aria-label="Path, selected for copying"
                   value={manualCopyPath}
                   onFocus={(event) => event.currentTarget.select()}
                 />
@@ -2206,7 +2653,65 @@ export function SessionFilesPanel({
         </div>
       )}
 
-      <div className="session-files-resize-corner" aria-hidden="true" />
+      <button
+        type="button"
+        className="session-files-resize-left-edge"
+        aria-label="Resize file browser from left edge"
+        aria-description="Drag left or right while the right edge stays fixed. Arrow keys resize; Home minimizes, End maximizes, and Enter resets the width."
+        title="Drag the left edge to resize. Arrow keys resize; Enter resets the width."
+        onPointerDown={(event) => beginPanelResize(event, "left")}
+        onPointerMove={resizePanel}
+        onPointerUp={finishPanelResize}
+        onPointerCancel={finishPanelResize}
+        onLostPointerCapture={finishPanelResize}
+        onDoubleClick={() => applyLeftAnchoredPanelSize({
+          width: PANEL_DEFAULT_WIDTH,
+          height: panelLayout.size.height,
+        }, position.x + panelLayout.size.width, position.y)}
+        onKeyDown={(event) => resizePanelFromLeftKeyboard(event, false)}
+      >
+        <span aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
+        className="session-files-resize-bottom-left"
+        aria-label="Resize file browser from bottom-left corner"
+        aria-description="Drag to resize in both directions while the right edge stays fixed. Arrow keys resize; Home minimizes, End maximizes, and Enter resets."
+        title="Drag the bottom-left corner to resize. Arrow keys resize; Enter resets."
+        onPointerDown={(event) => beginPanelResize(event, "bottom-left")}
+        onPointerMove={resizePanel}
+        onPointerUp={finishPanelResize}
+        onPointerCancel={finishPanelResize}
+        onLostPointerCapture={finishPanelResize}
+        onDoubleClick={() => applyLeftAnchoredPanelSize({
+          width: PANEL_DEFAULT_WIDTH,
+          height: PANEL_DEFAULT_HEIGHT,
+        }, position.x + panelLayout.size.width, position.y)}
+        onKeyDown={(event) => resizePanelFromLeftKeyboard(event, true)}
+      >
+        <span aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
+        className="session-files-resize-corner"
+        aria-label="Resize file browser window"
+        aria-description="Drag to resize in both directions. Arrow keys resize one dimension; Home minimizes, End maximizes, and Enter resets."
+        title="Drag to resize. Arrow keys resize; Home minimizes; End maximizes; Enter resets."
+        onPointerDown={(event) => beginPanelResize(event, "bottom-right")}
+        onPointerMove={resizePanel}
+        onPointerUp={finishPanelResize}
+        onPointerCancel={finishPanelResize}
+        onLostPointerCapture={finishPanelResize}
+        onDoubleClick={() => applyPanelSize({
+          width: PANEL_DEFAULT_WIDTH,
+          height: PANEL_DEFAULT_HEIGHT,
+        })}
+        onKeyDown={resizePanelFromKeyboard}
+      >
+        <span aria-hidden="true" />
+      </button>
     </section>,
     document.body,
   );

@@ -1321,6 +1321,17 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     const browser = page.getByRole("dialog", { name: "Files" });
     await expect(browser).toBeVisible();
     await browser.getByRole("button", { name: `Folder ${fixtureName}` }).click();
+    const address = browser.getByLabel("File or directory path");
+    await browser.getByRole("button", { name: "Copy full path for read me.txt" }).click();
+    await expect(address).toHaveValue(fixtureFile);
+    await expect(browser.getByRole("button", { name: "File read me.txt" })).toBeVisible();
+
+    await browser.getByRole("button", {
+      name: "Copy relative path for read me.txt",
+    }).click();
+    await expect(address).toHaveValue(`${fixtureName}/read me.txt`);
+    await expect(browser.getByRole("button", { name: "File read me.txt" })).toBeVisible();
+
     await browser.getByRole("button", { name: "File read me.txt" }).click();
     await expect(browser.locator(".session-file-preview pre")).toHaveText(fixtureContent);
     await expect(browser.locator(".session-file-path-actions code")).toHaveText(fixtureFile);
@@ -1338,7 +1349,98 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     const panelAfterMove = await browser.boundingBox();
     expect(panelAfterMove).not.toBeNull();
     expect(panelAfterMove!.x).not.toBe(panelBeforeMove!.x);
-    await expect(browser).toHaveCSS("resize", "both");
+
+    const resizeHandle = browser.getByRole("button", {
+      name: "Resize file browser window",
+    });
+    const resizeBox = await resizeHandle.boundingBox();
+    expect(resizeBox).not.toBeNull();
+    await page.mouse.move(resizeBox!.x + resizeBox!.width / 2, resizeBox!.y + resizeBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(resizeBox!.x + 100, resizeBox!.y + 75, { steps: 5 });
+    await page.mouse.up();
+    const panelAfterResize = await browser.boundingBox();
+    expect(panelAfterResize).not.toBeNull();
+    expect(panelAfterResize!.width).toBeGreaterThan(panelAfterMove!.width + 60);
+    expect(panelAfterResize!.height).toBeGreaterThan(panelAfterMove!.height + 40);
+
+    const leftResizeHandle = browser.getByRole("button", {
+      name: "Resize file browser from left edge",
+    });
+    const leftResizeBox = await leftResizeHandle.boundingBox();
+    expect(leftResizeBox).not.toBeNull();
+    const rightBeforeLeftResize = panelAfterResize!.x + panelAfterResize!.width;
+    await page.mouse.move(
+      leftResizeBox!.x + leftResizeBox!.width / 2,
+      leftResizeBox!.y + leftResizeBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      leftResizeBox!.x - 70,
+      leftResizeBox!.y + leftResizeBox!.height / 2,
+      { steps: 5 },
+    );
+    await page.mouse.up();
+    const panelAfterLeftResize = await browser.boundingBox();
+    expect(panelAfterLeftResize).not.toBeNull();
+    expect(panelAfterLeftResize!.x).toBeLessThan(panelAfterResize!.x - 50);
+    expect(panelAfterLeftResize!.width).toBeGreaterThan(panelAfterResize!.width + 50);
+    expect(panelAfterLeftResize!.height).toBeCloseTo(panelAfterResize!.height, 0);
+    expect(panelAfterLeftResize!.x + panelAfterLeftResize!.width)
+      .toBeCloseTo(rightBeforeLeftResize, 0);
+
+    const bottomLeftResizeHandle = browser.getByRole("button", {
+      name: "Resize file browser from bottom-left corner",
+    });
+    const bottomLeftResizeBox = await bottomLeftResizeHandle.boundingBox();
+    expect(bottomLeftResizeBox).not.toBeNull();
+    await page.mouse.move(
+      bottomLeftResizeBox!.x + bottomLeftResizeBox!.width / 2,
+      bottomLeftResizeBox!.y + bottomLeftResizeBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      bottomLeftResizeBox!.x - 45,
+      bottomLeftResizeBox!.y + 35,
+      { steps: 5 },
+    );
+    await page.mouse.up();
+    const panelAfterBottomLeftResize = await browser.boundingBox();
+    expect(panelAfterBottomLeftResize).not.toBeNull();
+    expect(panelAfterBottomLeftResize!.width)
+      .toBeGreaterThan(panelAfterLeftResize!.width + 30);
+    expect(panelAfterBottomLeftResize!.height)
+      .toBeGreaterThan(panelAfterLeftResize!.height + 20);
+    expect(panelAfterBottomLeftResize!.x + panelAfterBottomLeftResize!.width)
+      .toBeCloseTo(rightBeforeLeftResize, 0);
+
+    const fileList = browser.locator(".session-files-list");
+    const previewPane = browser.locator(".session-file-preview");
+    const splitter = browser.getByRole("separator", {
+      name: "Resize file list and preview",
+    });
+    const listBeforeSplit = await fileList.boundingBox();
+    const previewBeforeSplit = await previewPane.boundingBox();
+    const splitterBox = await splitter.boundingBox();
+    expect(listBeforeSplit).not.toBeNull();
+    expect(previewBeforeSplit).not.toBeNull();
+    expect(splitterBox).not.toBeNull();
+    await page.mouse.move(
+      splitterBox!.x + splitterBox!.width / 2,
+      splitterBox!.y + splitterBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(splitterBox!.x + 80, splitterBox!.y + splitterBox!.height / 2, {
+      steps: 5,
+    });
+    await page.mouse.up();
+    const listAfterSplit = await fileList.boundingBox();
+    const previewAfterSplit = await previewPane.boundingBox();
+    expect(listAfterSplit).not.toBeNull();
+    expect(previewAfterSplit).not.toBeNull();
+    expect(listAfterSplit!.width).toBeGreaterThan(listBeforeSplit!.width + 50);
+    expect(previewAfterSplit!.width).toBeLessThan(previewBeforeSplit!.width - 50);
+    await expect(splitter).toHaveAttribute("aria-valuenow", /4[5-9]/);
 
     await browser.getByRole("button", {
       name: "Insert server path into staged input",
@@ -1348,6 +1450,20 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
     await page.screenshot({ path: "artifacts/desktop-cwd-file-browser.png" });
     await stagedInput.fill("");
+
+    await resizeHandle.press("Home");
+    const compactPanel = await browser.boundingBox();
+    expect(compactPanel).not.toBeNull();
+    expect(compactPanel!.width).toBeCloseTo(340, 0);
+    expect(compactPanel!.height).toBeCloseTo(260, 0);
+    await expect(splitter).toBeVisible();
+    await expect(browser.getByRole("button", { name: "File read me.txt" })).toBeVisible();
+    await page.screenshot({ path: "artifacts/desktop-cwd-file-browser-compact.png" });
+    await resizeHandle.press("Enter");
+    const resetPanel = await browser.boundingBox();
+    expect(resetPanel).not.toBeNull();
+    expect(resetPanel!.width).toBeCloseTo(760, 0);
+    expect(resetPanel!.height).toBeCloseTo(560, 0);
 
     await browser.getByRole("button", { name: `File ${fixtureImageName}` }).click();
     const imagePreview = browser.getByRole("img", {
@@ -1561,6 +1677,21 @@ test("desktop CWD browser navigates above the pane directory and by absolute pat
     await expect(browser.getByRole("button", { name: "Folder child" })).toBeVisible();
     await page.screenshot({ path: "artifacts/desktop-cwd-address-bar.png" });
 
+    // Relative copy is anchored to the pane cwd, not the folder now being
+    // browsed. Outside that tree it deliberately hands over the full path.
+    await browser.getByRole("button", {
+      name: "Copy relative path for note.txt",
+    }).click();
+    await expect(browser.getByLabel("File or directory path"))
+      .toHaveValue(`${elsewhere}/note.txt`);
+    await expect(browser.getByText(/Outside pane cwd; full path/)).toBeVisible();
+    await expect(browser.getByRole("button", { name: "File note.txt" })).toBeVisible();
+
+    await browser.getByRole("button", { name: "Copy full path for note.txt" }).click();
+    await expect(browser.getByLabel("File or directory path"))
+      .toHaveValue(`${elsewhere}/note.txt`);
+    await expect(browser.getByRole("button", { name: "File note.txt" })).toBeVisible();
+
     // The same address accepts a file and opens its preview directly.
     await browser.getByLabel("File or directory path").fill(`${elsewhere}/note.txt`);
     await browser.getByRole("button", { name: "Go", exact: true }).click();
@@ -1615,9 +1746,11 @@ test("desktop CWD browser hands over the path when there is no clipboard", async
   const browser = page.getByRole("dialog", { name: "Files" });
   await expect(browser).toBeVisible();
 
+  await browser.getByLabel("File or directory path").fill("/not-opened");
   await browser.getByRole("button", { name: "Copy server path" }).click();
 
-  const field = browser.getByLabel("Full path, selected for copying");
+  await expect(browser.getByLabel("File or directory path")).toHaveValue(panePath);
+  const field = browser.getByLabel("Path, selected for copying");
   await expect(field).toHaveValue(panePath);
   await expect(field).toBeFocused();
   // The whole path must be readable, not truncated behind an ellipsis.
