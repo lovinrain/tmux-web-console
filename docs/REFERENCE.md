@@ -64,6 +64,14 @@ server tries `<source>_1`, then increments the suffix until it can atomically
 claim an available tmux session name. `Ctrl+Shift+M` invokes the same action.
 The button and shortcut are unavailable in compact mobile layouts.
 
+`Split workspace` is the non-mutating browser-workspace counterpart beside that
+control. It opens the current native session alone in a separate no-opener
+window, removes the saved-workspace ID and tab groups from the destination URL,
+and leaves the source tab exactly where it was. The new window is temporary
+until its own `Save workspace` action is used; splitting never creates, copies,
+renames, resizes, or sends input to a tmux session. A blocked pop-up leaves the
+source unchanged and produces a dismissible error.
+
 When Muxdeck creates a session with tmux 3.2 or newer, it gives the new shell
 `GROK_THEME=auto` and the browser's current `GROK_APPEARANCE=dark|light` value.
 Grok Build launched from that shell therefore follows the selected appearance
@@ -493,7 +501,10 @@ and save action are repeated in `Overview`. After naming the workspace, the
 current console stays open, its saved name replaces the temporary label, and its
 URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
 or `Sync issue` state reports whether later tab-order and active-session changes
-are synchronizing automatically.
+are synchronizing automatically. On desktop, a saved identity has an adjacent
+`Rename` action in both the horizontal strip and vertical rail. Renaming changes
+the shared server name in place; the stable workspace ID, current URL, tabs,
+groups, links, notes, timers, and activity history remain attached.
 
 On desktop, the compact workspace quick switcher beside that identity changes
 the saved workspace in the current browser tab. Its left and right buttons move

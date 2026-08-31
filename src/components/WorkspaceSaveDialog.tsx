@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
-import { CloseIcon, SaveIcon } from "../icons";
+import { CloseIcon, EditIcon, SaveIcon } from "../icons";
 import {
   MAX_WORKSPACE_NAME_LENGTH,
   MAX_WORKSPACE_TABS,
@@ -15,6 +15,8 @@ interface WorkspaceSaveDialogProps {
   onClose: () => void;
   onSave: (name: string) => Promise<void>;
   onFallbackFocus?: () => void;
+  variant?: "save" | "rename";
+  initialName?: string;
 }
 
 export function WorkspaceSaveDialog({
@@ -23,7 +25,11 @@ export function WorkspaceSaveDialog({
   onClose,
   onSave,
   onFallbackFocus,
+  variant = "save",
+  initialName = "",
 }: WorkspaceSaveDialogProps) {
+  const renaming = variant === "rename";
+  const dialogPrefix = renaming ? "workspace-rename" : "workspace-save";
   const dialogRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(
@@ -31,13 +37,17 @@ export function WorkspaceSaveDialog({
   );
   const fallbackFocusRef = useRef(onFallbackFocus);
   fallbackFocusRef.current = onFallbackFocus;
-  const [name, setName] = useState("");
+  const [name, setName] = useState(renaming ? initialName : "");
   const [saving, setSaving] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const orderedTabs = uniqueWorkspaceTabs(tabs);
   const nameError = name.length > 0 ? workspaceNameError(name) : null;
   const tooManyTabs = orderedTabs.length > MAX_WORKSPACE_TABS;
-  const canSave = !workspaceNameError(name) && !tooManyTabs && !saving;
+  const unchangedName = renaming && name.trim() === initialName.trim();
+  const canSave = !workspaceNameError(name)
+    && (!tooManyTabs || renaming)
+    && !unchangedName
+    && !saving;
   const savedActiveSession = activeSession && orderedTabs.includes(activeSession)
     ? activeSession
     : null;
@@ -51,18 +61,22 @@ export function WorkspaceSaveDialog({
       else dialog.focus();
     };
     document.addEventListener("focusin", containFocus);
-    inputRef.current?.focus();
+    if (renaming) inputRef.current?.select();
+    else inputRef.current?.focus();
 
     return () => {
       document.removeEventListener("focusin", containFocus);
       releaseBodyScroll();
-      if (restoreFocusRef.current?.isConnected) {
+      if (
+        restoreFocusRef.current?.isConnected
+        && restoreFocusRef.current !== document.body
+      ) {
         restoreFocusRef.current.focus();
       } else if (fallbackFocusRef.current) {
         window.requestAnimationFrame(fallbackFocusRef.current);
       }
     };
-  }, []);
+  }, [renaming]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -111,7 +125,11 @@ export function WorkspaceSaveDialog({
       await onSave(name.trim());
       onClose();
     } catch (error) {
-      setRequestError(error instanceof Error ? error.message : "Unable to save the workspace");
+      setRequestError(error instanceof Error
+        ? error.message
+        : renaming
+          ? "Unable to rename the workspace"
+          : "Unable to save the workspace");
       setSaving(false);
       window.requestAnimationFrame(() => inputRef.current?.focus());
     }
@@ -122,15 +140,19 @@ export function WorkspaceSaveDialog({
   };
 
   return createPortal(
-    <div className="title-backdrop workspace-save-backdrop" role="presentation" onMouseDown={close}>
+    <div
+      className={`title-backdrop workspace-save-backdrop ${dialogPrefix}-backdrop`}
+      role="presentation"
+      onMouseDown={close}
+    >
       <form
         ref={dialogRef}
-        id="workspace-save-dialog"
+        id={`${dialogPrefix}-dialog`}
         className="title-sheet workspace-save-sheet"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="workspace-save-heading"
-        aria-describedby="workspace-save-description"
+        aria-labelledby={`${dialogPrefix}-heading`}
+        aria-describedby={`${dialogPrefix}-description`}
         aria-busy={saving}
         tabIndex={-1}
         onSubmit={(event) => void submit(event)}
@@ -140,49 +162,62 @@ export function WorkspaceSaveDialog({
       >
         <header>
           <div>
-            <p className="eyebrow">SERVER-SAVED WORKSPACE</p>
-            <h2 id="workspace-save-heading">Save this workspace</h2>
+            <p className="eyebrow">
+              {renaming ? "WORKSPACE IDENTITY" : "SERVER-SAVED WORKSPACE"}
+            </p>
+            <h2 id={`${dialogPrefix}-heading`}>
+              {renaming ? "Rename workspace" : "Save this workspace"}
+            </h2>
           </div>
           <button
             type="button"
             className="icon-button"
             onClick={close}
             disabled={saving}
-            aria-label="Close workspace save"
+            aria-label={renaming ? "Close workspace rename" : "Close workspace save"}
           >
             <CloseIcon />
           </button>
         </header>
         <div className="title-form-body">
-          <label htmlFor="workspace-save-name">Workspace name</label>
+          <label htmlFor={`${dialogPrefix}-name`}>
+            {renaming ? "New workspace name" : "Workspace name"}
+          </label>
           <input
             ref={inputRef}
-            id="workspace-save-name"
+            id={`${dialogPrefix}-name`}
             value={name}
             maxLength={MAX_WORKSPACE_NAME_LENGTH}
             autoComplete="off"
             autoFocus
             disabled={saving}
             placeholder="Release room"
-            aria-invalid={Boolean(nameError) || tooManyTabs || undefined}
-            aria-describedby="workspace-save-description workspace-save-hint"
+            aria-invalid={Boolean(nameError) || (!renaming && tooManyTabs) || undefined}
+            aria-describedby={`${dialogPrefix}-description ${dialogPrefix}-hint`}
             onChange={(event) => {
               setName(event.target.value);
               setRequestError(null);
             }}
           />
-          <p id="workspace-save-description">
-            Save {orderedTabs.length} open {orderedTabs.length === 1 ? "tab" : "tabs"} in
-            their current order. Future tab and active-session changes will sync automatically.
+          <p id={`${dialogPrefix}-description`}>
+            {renaming
+              ? "Change the shared workspace name. Its tabs, groups, links, notes, and activity history stay attached."
+              : (
+                <>Save {orderedTabs.length} open {orderedTabs.length === 1 ? "tab" : "tabs"} in
+                  their current order. Future tab and active-session changes will sync automatically.</>
+              )}
           </p>
-          <p id="workspace-save-hint" className={nameError || tooManyTabs ? "title-error" : undefined}>
-            {tooManyTabs
+          <p
+            id={`${dialogPrefix}-hint`}
+            className={nameError || (!renaming && tooManyTabs) ? "title-error" : undefined}
+          >
+            {!renaming && tooManyTabs
               ? `A saved workspace can contain up to ${MAX_WORKSPACE_TABS} tabs.`
               : nameError
                 || `${name.trim().length} / ${MAX_WORKSPACE_NAME_LENGTH} characters`
             }
           </p>
-          {savedActiveSession && (
+          {!renaming && savedActiveSession && (
             <p className="workspace-save-active-session">
               Resume tab: <code>{savedActiveSession}</code>
             </p>
@@ -194,7 +229,10 @@ export function WorkspaceSaveDialog({
             Cancel
           </button>
           <button type="submit" className="primary-button" disabled={!canSave}>
-            <SaveIcon /> {saving ? "Saving..." : "Save workspace"}
+            {renaming ? <EditIcon /> : <SaveIcon />}
+            {renaming
+              ? saving ? "Renaming..." : "Rename workspace"
+              : saving ? "Saving..." : "Save workspace"}
           </button>
         </div>
       </form>

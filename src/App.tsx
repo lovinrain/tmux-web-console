@@ -14,6 +14,7 @@ import {
   listSessions,
   terminateSession,
   transferSessionToWorkspace,
+  updateWorkspace,
   updateWorkspaceActivity,
   type SavedWorkspace,
   type WorkspaceSessionTransferOperation,
@@ -1122,6 +1123,22 @@ function AppRoutes() {
     setHydratedWorkspaceBinding,
     setWorkspaceIdentity,
   ]);
+
+  const renameCurrentWorkspace = useCallback(async (name: string) => {
+    const startingLocation = currentLocation();
+    const workspaceId = savedWorkspaceIdFromSearch(startingLocation.search);
+    if (!workspaceId || hydratedWorkspaceIdRef.current !== workspaceId) {
+      throw new Error("This saved workspace is not ready to rename yet.");
+    }
+
+    const updated = await updateWorkspace(workspaceId, { name: name.trim() });
+    if (
+      !appMounted.current
+      || savedWorkspaceIdFromSearch(currentLocation().search) !== workspaceId
+      || hydratedWorkspaceIdRef.current !== workspaceId
+    ) return;
+    setWorkspaceIdentity({ id: updated.id, name: updated.name });
+  }, [setWorkspaceIdentity]);
 
   const syncLocation = useCallback(() => {
     const restoredLocation = currentLocation();
@@ -2267,6 +2284,12 @@ function AppRoutes() {
     }
   }, [currentWorkspaceActivitySnapshot]);
 
+  const splitSessionIntoNewWorkspace = useCallback((
+    sessionName: string,
+  ): OpenTabInNewWindowResult => (
+    openSessionInNewWindow(sessionName, "copy")
+  ), [openSessionInNewWindow]);
+
   const closeSessionTab = useCallback((sessionName: string) => {
     const route = parseSessionRoute(currentLocation().path);
     const currentWorkspace = workspaceRef.current;
@@ -2919,6 +2942,7 @@ function AppRoutes() {
         onSessionRenamed={renameOpenSession}
         onSessionTerminated={terminateOpenSession}
         onSessionCopied={completeCopiedSession}
+        onSplitWorkspace={splitSessionIntoNewWorkspace}
         copySessionDisabled={workspacePersistenceState === "loading"}
         renameWarning={renameWarning}
         onDismissRenameWarning={dismissRenameWarning}
@@ -2960,6 +2984,7 @@ function AppRoutes() {
             workspaceName={workspaceName}
             onSwitchWorkspace={openSavedWorkspace}
             onSaveWorkspace={saveCurrentWorkspace}
+            onRenameWorkspace={renameCurrentWorkspace}
             onSessionTerminated={terminateOpenSession}
           />
         )}
@@ -3014,6 +3039,7 @@ function AppRoutes() {
             workspaceName={workspaceName}
             onSwitchWorkspace={openSavedWorkspace}
             onSaveWorkspace={saveCurrentWorkspace}
+            onRenameWorkspace={renameCurrentWorkspace}
             onSessionTerminated={terminateOpenSession}
           />
         )}

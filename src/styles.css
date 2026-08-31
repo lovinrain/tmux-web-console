@@ -2678,6 +2678,7 @@ a:focus-visible {
 .workspace-new-session-button,
 .workspace-save-button,
 .workspace-saved-indicator,
+.workspace-rename-button,
 .workspace-tab-search-button,
 .workspace-keymap-toggle,
 .workspace-recents-button {
@@ -2700,6 +2701,18 @@ a:focus-visible {
   font-weight: 680;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.workspace-rename-button {
+  width: 86px;
+  min-width: 86px;
+  flex: 0 0 86px;
+  border-right: 1px solid #30382e;
+  border-left: 1px solid #30382e;
+  color: var(--cyan);
+  background:
+    linear-gradient(135deg, rgba(104, 223, 208, 0.08), transparent 72%),
+    #171d1a;
 }
 
 .workspace-dashboard-actions {
@@ -3225,6 +3238,8 @@ a:focus-visible {
 .workspace-new-session-button:focus-visible,
 .workspace-save-button:hover,
 .workspace-save-button:focus-visible,
+.workspace-rename-button:hover,
+.workspace-rename-button:focus-visible,
 .workspace-tab-search-button:hover,
 .workspace-tab-search-button:focus-visible,
 .workspace-keymap-toggle:hover,
@@ -3245,6 +3260,7 @@ a:focus-visible {
 .workspace-new-session-button svg,
 .workspace-save-button svg,
 .workspace-saved-indicator svg,
+.workspace-rename-button svg,
 .workspace-tab-search-button svg,
 .workspace-keymap-toggle svg,
 .workspace-recents-button svg {
@@ -8518,6 +8534,7 @@ html.scoped-note-resizing * {
 .history-button,
 .size-mode,
 .copy-new-button,
+.split-workspace-button,
 .workspace-pin-button,
 .workspace-transfer-button {
   display: flex;
@@ -8538,6 +8555,7 @@ html.scoped-note-resizing * {
 .history-button:hover,
 .size-mode:hover,
 .copy-new-button:hover,
+.split-workspace-button:hover,
 .workspace-pin-button:hover,
 .workspace-transfer-button:hover {
   color: var(--paper);
@@ -8546,6 +8564,7 @@ html.scoped-note-resizing * {
 
 .history-button:disabled,
 .copy-new-button:disabled,
+.split-workspace-button:disabled,
 .workspace-pin-button:disabled,
 .workspace-transfer-button:disabled {
   opacity: 0.45;
@@ -8554,6 +8573,7 @@ html.scoped-note-resizing * {
 
 .history-button svg,
 .copy-new-button svg,
+.split-workspace-button svg,
 .workspace-pin-button svg,
 .workspace-transfer-button svg {
   width: 17px;
@@ -8563,6 +8583,12 @@ html.scoped-note-resizing * {
   display: none;
   color: var(--cyan);
   border-color: rgba(104, 223, 208, 0.34);
+}
+
+.split-workspace-button {
+  display: none;
+  color: var(--acid);
+  border-color: rgba(187, 244, 81, 0.34);
 }
 
 .workspace-pin-button {
@@ -9390,6 +9416,7 @@ html.scoped-note-resizing * {
 @media (min-width: 1025px),
   (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
   .copy-new-button,
+  .split-workspace-button,
   .workspace-pin-button,
   .workspace-transfer-button,
   .copy-new-error {
@@ -9969,6 +9996,7 @@ html.scoped-note-resizing * {
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-new-session-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-save-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-saved-indicator,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-rename-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-tab-selection-status,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-quick-switcher,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-tab-search-button,
@@ -10268,6 +10296,7 @@ html.scoped-note-resizing * {
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-new-session-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-save-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-saved-indicator,
+    .workspace-navigation-vertical[data-orientation="vertical"] .workspace-rename-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-quick-switcher,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-search-button,
@@ -11342,6 +11371,23 @@ html.history-resizing * {
 }
 
 @media (max-width: 1100px) {
+  .workspace-navigation-horizontal .workspace-rename-button {
+    width: 44px;
+    min-width: 44px;
+    flex-basis: 44px;
+    padding: 0;
+  }
+
+  .workspace-navigation-horizontal .workspace-rename-button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
   .workspace-quick-switcher-toggle {
     min-width: 62px;
   }
@@ -11404,7 +11450,7 @@ html.history-resizing * {
   }
 }
 
-@media (min-width: 801px) and (max-width: 1400px) {
+@media (min-width: 801px) and (max-width: 1600px) {
   .workspace-header-widgets {
     max-width: 356px;
     flex-basis: 356px;
@@ -11451,6 +11497,26 @@ html.history-resizing * {
 
   .host-pulse-card strong {
     font-size: 8px;
+  }
+
+  .copy-new-button,
+  .workspace-pin-button,
+  .workspace-transfer-button {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .copy-new-button span,
+  .workspace-pin-button span,
+  .workspace-transfer-button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 }
 
@@ -11589,6 +11655,12 @@ html.history-resizing * {
     justify-content: center;
   }
 
+  .split-workspace-button {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
   .workspace-pin-button {
     width: 40px;
     padding: 0;
@@ -11602,6 +11674,7 @@ html.history-resizing * {
   }
 
   .copy-new-button span,
+  .split-workspace-button span,
   .workspace-pin-button span,
   .workspace-transfer-button span {
     position: absolute;

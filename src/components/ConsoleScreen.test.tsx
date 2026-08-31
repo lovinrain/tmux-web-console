@@ -1661,6 +1661,44 @@ describe("ConsoleScreen session identity", () => {
     ));
   });
 
+  it("opens the active session alone in a new temporary workspace", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onSplitWorkspace = vi.fn()
+      .mockReturnValueOnce("blocked")
+      .mockReturnValueOnce("opened");
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSessionCopied={vi.fn()}
+        onSplitWorkspace={onSplitWorkspace}
+      />,
+    );
+
+    const split = await screen.findByRole("button", {
+      name: "Split test into a new temporary workspace",
+    });
+    expect(split).toHaveAttribute(
+      "title",
+      "Open this session alone in a new temporary workspace window",
+    );
+    const copyNew = screen.getByRole("button", { name: "Copy New" });
+    expect(copyNew.nextElementSibling).toBe(split);
+
+    fireEvent.click(split);
+    expect(onSplitWorkspace).toHaveBeenCalledWith("test");
+    const error = screen.getByRole("alert");
+    expect(error).toHaveTextContent(
+      "The browser blocked the new workspace window. Allow pop-ups and try again.",
+    );
+    fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(split);
+    expect(onSplitWorkspace).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("creates a focused session copy from the desktop header and exact shortcut", async () => {
     const firstCreation = deferred<{ name: string; id: string }>();
     const onSessionCopied = vi.fn();

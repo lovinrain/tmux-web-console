@@ -107,6 +107,10 @@ For frontend development, run `npm run dev`. Vite serves
   back/new-window control so the Sessions and Workspaces landing page can also
   be opened without replacing the active console. The fixed `Sessions` action
   in the horizontal tab bar or vertical tab rail offers the same split choice.
+- Desktop consoles can `Split workspace` from the header to open the active
+  session alone in a new no-opener window. The destination starts as an unsaved
+  temporary workspace: `Save workspace` gives it a persistent server identity,
+  and saved workspaces can be renamed directly from the same tab strip.
 - New Session can start in an absolute server directory. Its browser-local
   Workspace Memory ranks paths learned from tmux sessions and successful
   launches by recency and frequency; paths can also be pinned, hidden, restored,

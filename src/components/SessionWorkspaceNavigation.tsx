@@ -102,6 +102,7 @@ export interface SessionWorkspaceNavigationProps {
   workspaceName?: string | null;
   onSwitchWorkspace?: (workspace: SavedWorkspace) => void;
   onSaveWorkspace?: (name: string) => Promise<void>;
+  onRenameWorkspace?: (name: string) => Promise<void>;
   onSessionTerminated?: (
     sessionName: string,
     sessionId: string,
@@ -1821,6 +1822,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     workspaceName,
     onSwitchWorkspace,
     onSaveWorkspace,
+    onRenameWorkspace,
     onSessionTerminated,
   } = props;
   const { orientation, compactViewport } = useWorkspaceTabOrientation(
@@ -1852,6 +1854,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const activeTabRef = useRef<HTMLButtonElement>(null);
   const navigationRef = useRef<HTMLElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
   const persistenceStatusRef = useRef<HTMLSpanElement>(null);
   const recentsOpenRef = useRef(recentsOpen);
   recentsOpenRef.current = recentsOpen;
@@ -1870,6 +1873,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const workspaceTabSelectionAnchorRef = useRef<string | null>(activeSession);
   const workspaceTabDragSessionsRef = useRef<string[]>([]);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [recentsQuery, setRecentsQuery] = useState("");
@@ -1912,6 +1916,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     ? null
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
   const identityName = workspaceIdentityName(workspacePersistenceState, workspaceName);
+  const canRenameWorkspace = Boolean(
+    !compactViewport
+    && activeWorkspaceId
+    && onRenameWorkspace
+    && ["saved", "limited"].includes(workspacePersistenceState),
+  );
   const newSessionDisabled = newSessionActive || workspacePersistenceState === "loading";
   const windowMoveDisabledReason = moveToNewWindowDisabledReason(
     workspacePersistenceState,
@@ -2492,6 +2502,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     target?.focus();
   }, []);
 
+  const focusRenameReplacement = useCallback(() => {
+    renameButtonRef.current?.focus();
+  }, []);
+
   const focusTerminateDestination = useCallback((): boolean => {
     const focusAvailable = (target: HTMLElement | null | undefined): boolean => {
       if (!target?.isConnected || target.hasAttribute("disabled")) return false;
@@ -2547,6 +2561,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     setSaveDialogOpen(false);
     setSaveAfterRecents(false);
   }, [workspacePersistenceState]);
+
+  useEffect(() => {
+    if (canRenameWorkspace) return;
+    setRenameDialogOpen(false);
+  }, [canRenameWorkspace]);
+
+  useEffect(() => {
+    setRenameDialogOpen(false);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     if (
@@ -3325,6 +3348,22 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               </span>
             </span>
           )}
+          {canRenameWorkspace && (
+            <button
+              ref={renameButtonRef}
+              type="button"
+              className="workspace-rename-button"
+              onClick={() => setRenameDialogOpen(true)}
+              aria-haspopup="dialog"
+              aria-controls="workspace-rename-dialog"
+              aria-expanded={renameDialogOpen}
+              aria-label={`Rename workspace ${identityName}`}
+              title={`Rename ${identityName}`}
+            >
+              <EditIcon />
+              <span>Rename</span>
+            </button>
+          )}
           {!compactViewport && onSwitchWorkspace && (
             <WorkspaceQuickSwitcher
               activeWorkspaceId={activeWorkspaceId}
@@ -3453,6 +3492,18 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           onSave={onSaveWorkspace}
           onClose={() => setSaveDialogOpen(false)}
           onFallbackFocus={focusSaveReplacement}
+        />
+      )}
+
+      {renameDialogOpen && onRenameWorkspace && canRenameWorkspace && (
+        <WorkspaceSaveDialog
+          variant="rename"
+          initialName={identityName}
+          tabs={openSessions}
+          activeSession={activeSession}
+          onSave={onRenameWorkspace}
+          onClose={() => setRenameDialogOpen(false)}
+          onFallbackFocus={focusRenameReplacement}
         />
       )}
 

@@ -2353,6 +2353,75 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onSaveWorkspace).toHaveBeenLastCalledWith("Release room");
   });
 
+  it("renames a saved workspace directly from the desktop tab bar", async () => {
+    const onRenameWorkspace = vi.fn()
+      .mockRejectedValueOnce(new Error("workspace storage is temporarily unavailable"))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          workspacePersistenceState: "saved",
+          activeWorkspaceId: "workspace-one",
+          workspaceName: "Release command center",
+          onRenameWorkspace,
+        })}
+      />,
+    );
+
+    const openRename = screen.getByRole("button", {
+      name: "Rename workspace Release command center",
+    });
+    expect(openRename).toHaveAttribute("aria-controls", "workspace-rename-dialog");
+    expect(openRename).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(openRename);
+
+    const dialog = screen.getByRole("dialog", { name: "Rename workspace" });
+    const name = within(dialog).getByRole("textbox", { name: "New workspace name" });
+    const submit = within(dialog).getByRole("button", { name: "Rename workspace" });
+    expect(openRename).toHaveAttribute("aria-expanded", "true");
+    expect(name).toHaveValue("Release command center");
+    expect(name).toHaveFocus();
+    expect(submit).toBeDisabled();
+    expect(dialog).toHaveTextContent(
+      "Its tabs, groups, links, notes, and activity history stay attached.",
+    );
+
+    fireEvent.change(name, { target: { value: "  Release train  " } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "workspace storage is temporarily unavailable",
+    );
+    expect(onRenameWorkspace).toHaveBeenLastCalledWith("Release train");
+    expect(name).toHaveFocus();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rename workspace" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Rename workspace" }))
+        .not.toBeInTheDocument();
+    });
+    expect(onRenameWorkspace).toHaveBeenCalledTimes(2);
+    expect(openRename).toHaveFocus();
+  });
+
+  it("keeps workspace rename out of the compact mobile navigation", () => {
+    vi.stubGlobal("innerWidth", 390);
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          workspacePersistenceState: "saved",
+          activeWorkspaceId: "workspace-one",
+          workspaceName: "Release command center",
+          onRenameWorkspace: vi.fn(),
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole("button", {
+      name: "Rename workspace Release command center",
+    })).not.toBeInTheDocument();
+  });
+
   it.each([
     ["saved", "Workspace saved automatically", "Saved"],
     ["loading", "Opening saved workspace", "Opening"],

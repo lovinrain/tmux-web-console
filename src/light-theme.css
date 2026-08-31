@@ -1450,6 +1450,7 @@ html[data-theme="light"] .workspace-dashboard-window-button,
 html[data-theme="light"] .workspace-new-session-button,
 html[data-theme="light"] .workspace-save-button,
 html[data-theme="light"] .workspace-saved-indicator,
+html[data-theme="light"] .workspace-rename-button,
 html[data-theme="light"] .workspace-quick-switcher-cycle,
 html[data-theme="light"] .workspace-quick-switcher-toggle,
 html[data-theme="light"] .workspace-tab-search-button,
@@ -1468,6 +1469,8 @@ html[data-theme="light"] .workspace-new-session-button:hover:not(:disabled),
 html[data-theme="light"] .workspace-new-session-button:focus-visible,
 html[data-theme="light"] .workspace-save-button:hover,
 html[data-theme="light"] .workspace-save-button:focus-visible,
+html[data-theme="light"] .workspace-rename-button:hover,
+html[data-theme="light"] .workspace-rename-button:focus-visible,
 html[data-theme="light"] .workspace-quick-switcher-cycle:hover:not(:disabled),
 html[data-theme="light"] .workspace-quick-switcher-cycle:focus-visible,
 html[data-theme="light"] .workspace-quick-switcher-toggle:hover:not(:disabled),
@@ -2934,6 +2937,7 @@ html[data-theme="light"] .connection-badge.live > span {
 html[data-theme="light"] .history-button,
 html[data-theme="light"] .size-mode,
 html[data-theme="light"] .copy-new-button,
+html[data-theme="light"] .split-workspace-button,
 html[data-theme="light"] .workspace-pin-button,
 html[data-theme="light"] .workspace-transfer-button {
   color: #424c40;
@@ -2944,6 +2948,7 @@ html[data-theme="light"] .workspace-transfer-button {
 html[data-theme="light"] .history-button:hover,
 html[data-theme="light"] .size-mode:hover,
 html[data-theme="light"] .copy-new-button:hover,
+html[data-theme="light"] .split-workspace-button:hover,
 html[data-theme="light"] .workspace-pin-button:hover,
 html[data-theme="light"] .workspace-transfer-button:hover {
   color: #20261e;
@@ -2954,6 +2959,11 @@ html[data-theme="light"] .workspace-transfer-button:hover {
 html[data-theme="light"] .copy-new-button {
   color: #087a70;
   border-color: #8ebcb6;
+}
+
+html[data-theme="light"] .split-workspace-button {
+  color: #557c1d;
+  border-color: #a9c185;
 }
 
 html[data-theme="light"] .workspace-transfer-button {

@@ -14,6 +14,7 @@ import {
   listWorkspaces,
   terminateSession,
   transferSessionToWorkspace,
+  updateWorkspace,
   updateWorkspaceActivity,
   type SavedWorkspace,
   type WorkspaceSessionTransferOperation,
@@ -38,6 +39,7 @@ vi.mock("./api", async (importOriginal) => {
     listWorkspaces: vi.fn(),
     terminateSession: vi.fn(),
     transferSessionToWorkspace: vi.fn(),
+    updateWorkspace: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
   };
 });
@@ -52,6 +54,7 @@ const listSessionsMock = vi.mocked(listSessions);
 const listWorkspacesMock = vi.mocked(listWorkspaces);
 const terminateSessionMock = vi.mocked(terminateSession);
 const transferSessionToWorkspaceMock = vi.mocked(transferSessionToWorkspace);
+const updateWorkspaceMock = vi.mocked(updateWorkspace);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
 
 let pendingNewSessionCompletion: ((session: string, sessionId?: string) => void) | null = null;
@@ -249,6 +252,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onSessionRenamed,
     onSessionTerminated,
     onSessionCopied,
+    onSplitWorkspace,
     renameWarning,
     onDismissRenameWarning,
   }: {
@@ -307,6 +311,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       sessionName: string,
       sessionId: string,
     ) => void;
+    onSplitWorkspace?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
     renameWarning?: {
       sessionId: string;
       sessionName: string;
@@ -438,6 +443,11 @@ vi.mock("./components/ConsoleScreen", () => ({
             onClick={() => onSessionCopied(sessionName, `${sessionName}_1`, "$copy")}
           >
             Copy New
+          </button>
+        )}
+        {onSplitWorkspace && (
+          <button type="button" onClick={() => onSplitWorkspace(sessionName)}>
+            Split workspace
           </button>
         )}
       </main>
@@ -586,6 +596,7 @@ describe("App routing", () => {
     listWorkspacesMock.mockReset();
     terminateSessionMock.mockReset();
     transferSessionToWorkspaceMock.mockReset();
+    updateWorkspaceMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
@@ -600,6 +611,7 @@ describe("App routing", () => {
     listWorkspacesMock.mockResolvedValue([savedWorkspace()]);
     terminateSessionMock.mockResolvedValue(undefined);
     updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace());
+    updateWorkspaceMock.mockResolvedValue(savedWorkspace());
     pendingNewSessionCompletion = null;
     reportSessionRename = null;
     reportSessionTerminate = null;
@@ -2128,7 +2140,7 @@ describe("App routing", () => {
       .toHaveAttribute("aria-keyshortcuts", "Control+Shift+3");
   });
 
-  it("copies a tab into an isolated browser workspace without changing the source", () => {
+  it("splits the active session into an isolated temporary workspace without changing the source", () => {
     const sessionName = "work/name #1";
     const sourceGroup = encodeURIComponent(JSON.stringify({
       id: "source-group",
@@ -2152,9 +2164,7 @@ describe("App routing", () => {
     const open = vi.spyOn(window, "open").mockReturnValue(child);
 
     render(<App />);
-    fireEvent.click(screen.getByRole("button", {
-      name: `Copy ${sessionName} tab to new window`,
-    }));
+    fireEvent.click(screen.getByRole("button", { name: "Split workspace" }));
 
     expect(open).toHaveBeenCalledWith("about:blank", "_blank");
     expect(child.opener).toBeNull();
@@ -3114,6 +3124,52 @@ describe("App routing", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+    });
+
+    it("renames the active saved workspace without leaving the multi-tab view", async () => {
+      const current = savedWorkspace({
+        id: "workspace-one",
+        name: "Workspace one",
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+      });
+      const renamed = { ...current, name: "Release train", updatedAt: 2_000 };
+      getWorkspaceMock.mockResolvedValue(current);
+      updateWorkspaceMock.mockResolvedValue(renamed);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(sessionUrl(
+        "alpha",
+        "?workspace=workspace-one&tab=alpha&tab=beta",
+      ));
+
+      render(<App />);
+      const rename = await screen.findByRole("button", {
+        name: "Rename workspace Workspace one",
+      });
+      fireEvent.click(rename);
+      const dialog = screen.getByRole("dialog", { name: "Rename workspace" });
+      fireEvent.change(within(dialog).getByRole("textbox", {
+        name: "New workspace name",
+      }), { target: { value: "  Release train  " } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Rename workspace" }));
+
+      await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledWith(
+        "workspace-one",
+        { name: "Release train" },
+      ));
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog", { name: "Rename workspace" }))
+          .not.toBeInTheDocument();
+      });
+      expect(screen.getByRole("main", { name: "Console" }))
+        .toHaveAttribute("data-workspace-name", "Release train");
+      expect(screen.getByTitle("Release train - Saved")).toBeVisible();
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      expect(new URLSearchParams(window.location.search).get("workspace"))
+        .toBe("workspace-one");
     });
 
     it("keeps groups local without a save loop when workspace creation uses a legacy backend", async () => {

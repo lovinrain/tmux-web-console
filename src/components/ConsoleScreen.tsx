@@ -83,6 +83,7 @@ import {
   DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
   MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
   clampDesktopTabRailWidth,
+  type OpenTabInNewWindowResult,
   type WorkspaceTabOrientation,
 } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
@@ -143,6 +144,7 @@ interface ConsoleScreenProps {
     sessionName: string,
     sessionId: string,
   ) => void;
+  onSplitWorkspace?: (sessionName: string) => OpenTabInNewWindowResult;
   copySessionDisabled?: boolean;
   renameWarning?: SessionRenameWarning | null;
   onDismissRenameWarning?: (sessionId: string) => void;
@@ -433,6 +435,7 @@ export function ConsoleScreen({
   onSessionRenamed,
   onSessionTerminated,
   onSessionCopied,
+  onSplitWorkspace,
   copySessionDisabled = false,
   renameWarning,
   onDismissRenameWarning,
@@ -467,6 +470,10 @@ export function ConsoleScreen({
   const [copyingSource, setCopyingSource] = useState<string | null>(null);
   const [copySessionError, setCopySessionError] = useState<{
     sourceName: string;
+    message: string;
+  } | null>(null);
+  const [splitWorkspaceError, setSplitWorkspaceError] = useState<{
+    sessionName: string;
     message: string;
   } | null>(null);
   const [workspacePinSource, setWorkspacePinSource] = useState<string | null>(null);
@@ -577,6 +584,25 @@ export function ConsoleScreen({
     setCopyingSource(null);
     onSessionCopied(sourceName, created.name, created.id);
   }, [copySessionDisabled, onSessionCopied, session, theme]);
+
+  const splitIntoNewWorkspace = useCallback(() => {
+    if (!session || mobileLayout || !onSplitWorkspace) return;
+    const sourceName = session.name;
+    setSplitWorkspaceError(null);
+    let result: OpenTabInNewWindowResult;
+    try {
+      result = onSplitWorkspace(sourceName);
+    } catch {
+      result = "failed";
+    }
+    if (result === "opened") return;
+    const message = result === "blocked"
+      ? "The browser blocked the new workspace window. Allow pop-ups and try again."
+      : result === "workspace-sync-pending"
+        ? "Wait for the current workspace to finish syncing, then try again."
+        : "Muxdeck could not open the temporary workspace. The current workspace is unchanged.";
+    setSplitWorkspaceError({ sessionName: sourceName, message });
+  }, [mobileLayout, onSplitWorkspace, session]);
 
   const toggleWorkspacePin = useCallback(async () => {
     if (workspacePinSource !== null || !session) return;
@@ -961,6 +987,7 @@ export function ConsoleScreen({
     setMessagesOpen(false);
     setSnippetsOpen(false);
     setWorkspaceTransferOpen(false);
+    setSplitWorkspaceError(null);
   }, [resetDesktopFocusShortcutsPosition, sessionName]);
 
   useEffect(() => {
@@ -1583,6 +1610,19 @@ export function ConsoleScreen({
               <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
             </button>
           )}
+          {!mobileLayout && onSplitWorkspace && (
+            <button
+              type="button"
+              className="split-workspace-button"
+              disabled={!session}
+              aria-label={`Split ${sessionName} into a new temporary workspace`}
+              title="Open this session alone in a new temporary workspace window"
+              onClick={splitIntoNewWorkspace}
+            >
+              <ExternalLinkIcon />
+              <span>Split workspace</span>
+            </button>
+          )}
           <button
             type="button"
             className={session?.workspacePinned
@@ -1645,6 +1685,13 @@ export function ConsoleScreen({
         <aside className="copy-new-error" role="alert">
           <span>Copy New failed: {copySessionError.message}</span>
           <button type="button" onClick={() => setCopySessionError(null)}>Dismiss</button>
+        </aside>
+      )}
+
+      {splitWorkspaceError?.sessionName === sessionName && (
+        <aside className="copy-new-error split-workspace-error" role="alert">
+          <span>{splitWorkspaceError.message}</span>
+          <button type="button" onClick={() => setSplitWorkspaceError(null)}>Dismiss</button>
         </aside>
       )}
 

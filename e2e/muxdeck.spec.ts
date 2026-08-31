@@ -2946,7 +2946,11 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
   }
 });
 
-test("workspace tabs copy and move into isolated browser windows", async ({ browser, page }) => {
+test("workspace tabs split, copy, and move into isolated browser windows", async ({
+  browser,
+  page,
+  request,
+}) => {
   test.setTimeout(60_000);
   const helperSession = `${sessionName}-window-actions`;
   const sourceTabs = [sessionName, helperSession];
@@ -2959,6 +2963,10 @@ test("workspace tabs copy and move into isolated browser windows", async ({ brow
   }));
   let copiedPage: Page | null = null;
   let movedPage: Page | null = null;
+  let splitPage: Page | null = null;
+  let splitWorkspaceId = "";
+  const splitWorkspaceName = `Split workspace ${process.pid}`;
+  const renamedSplitWorkspaceName = `${splitWorkspaceName} renamed`;
 
   execFileSync("tmux", [
     ...tmux,
@@ -2983,6 +2991,64 @@ test("workspace tabs copy and move into isolated browser windows", async ({ brow
     await expect(page.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
     });
+
+    const [openedSplit] = await Promise.all([
+      page.context().waitForEvent("page"),
+      page.getByRole("button", {
+        name: `Split ${helperSession} into a new temporary workspace`,
+      }).click(),
+    ]);
+    splitPage = openedSplit;
+    await expectRoute(
+      splitPage,
+      `/mux/session/${helperSession}`,
+      [helperSession],
+      { kind: "shells", view: "list" },
+    );
+    expect(await splitPage.evaluate(() => window.opener === null)).toBe(true);
+    expect(new URL(splitPage.url()).searchParams.has("workspace")).toBe(false);
+    expect(new URL(splitPage.url()).searchParams.has("tab-group")).toBe(false);
+    await expect(splitPage.getByRole("button", { name: "Save workspace" })).toBeVisible();
+    await expect(splitPage.getByRole("button", { name: /Rename workspace/ })).toHaveCount(0);
+
+    await splitPage.getByRole("button", { name: "Save workspace" }).click();
+    const saveSplitDialog = splitPage.getByRole("dialog", { name: "Save this workspace" });
+    await saveSplitDialog.getByRole("textbox", { name: "Workspace name" })
+      .fill(splitWorkspaceName);
+    await saveSplitDialog.getByRole("button", { name: "Save workspace" }).click();
+    await expect.poll(() => new URL(splitPage!.url()).searchParams.get("workspace"))
+      .toMatch(/.+/);
+    splitWorkspaceId = new URL(splitPage.url()).searchParams.get("workspace") ?? "";
+    expect(splitWorkspaceId).not.toBe("");
+
+    const renameSplit = splitPage.getByRole("button", {
+      name: `Rename workspace ${splitWorkspaceName}`,
+    });
+    await expect(renameSplit).toBeVisible();
+    await renameSplit.click();
+    const renameSplitDialog = splitPage.getByRole("dialog", { name: "Rename workspace" });
+    await renameSplitDialog.getByRole("textbox", { name: "New workspace name" })
+      .fill(renamedSplitWorkspaceName);
+    await renameSplitDialog.getByRole("button", { name: "Rename workspace" }).click();
+    await expect(splitPage.getByTitle(`${renamedSplitWorkspaceName} - Saved`)).toBeVisible();
+    await splitPage.screenshot({ path: "artifacts/workspace-split-save-rename.png" });
+    await expect.poll(async () => {
+      const response = await request.get(
+        `/mux/api/workspaces/${encodeURIComponent(splitWorkspaceId)}`,
+      );
+      if (!response.ok()) return null;
+      return (await response.json()).workspace.name;
+    }).toBe(renamedSplitWorkspaceName);
+    expect(new URL(splitPage.url()).searchParams.get("workspace")).toBe(splitWorkspaceId);
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      sourceTabs,
+      { kind: "shells", view: "list" },
+    );
+    expect(workspaceTmuxIdentity(helperSession)).toBe(helperIdentity);
+    await splitPage.close();
+    splitPage = null;
 
     const [openedCopy] = await Promise.all([
       page.context().waitForEvent("page"),
@@ -3125,6 +3191,9 @@ test("workspace tabs copy and move into isolated browser windows", async ({ brow
     );
 
     await page.setViewportSize({ width: 390, height: 664 });
+    await expect(page.getByRole("button", {
+      name: `Split ${helperSession} into a new temporary workspace`,
+    })).toHaveCount(0);
     await page.getByRole("navigation", { name: "Mobile console focus" })
       .getByRole("button", { name: "Overview" })
       .click();
@@ -3196,8 +3265,16 @@ test("workspace tabs copy and move into isolated browser windows", async ({ brow
     expect(workspaceTmuxIdentity(sessionName)).toBe(primaryIdentity);
     expect(workspaceTmuxIdentity(helperSession)).toBe(helperIdentity);
   } finally {
+    if (splitPage && !splitPage.isClosed()) await splitPage.close();
     if (copiedPage && !copiedPage.isClosed()) await copiedPage.close();
     if (movedPage && !movedPage.isClosed()) await movedPage.close();
+    if (splitWorkspaceId) {
+      try {
+        await request.delete(`/mux/api/workspaces/${encodeURIComponent(splitWorkspaceId)}`);
+      } catch {
+        // Cleanup remains scoped to the workspace created by this test.
+      }
+    }
     try {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
         stdio: "ignore",

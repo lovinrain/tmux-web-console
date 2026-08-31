@@ -727,7 +727,11 @@ merely to test that the application itself has no login.
    listing workspaces, links, or notes must not mutate tmux. The workspace
    card's `New window` link must restore the same workspace in a no-opener tab,
    while the console header's split landing-page control must leave the console
-   intact when it opens Sessions and Workspaces in a new window.
+   intact when it opens Sessions and Workspaces in a new window. The desktop
+   `Split workspace` action must open only the active session in a no-opener
+   temporary workspace without changing the source. Save that destination from
+   its tab strip, then rename it there; confirm its stable ID, membership, and
+   tmux identities remain unchanged through the rename.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
 10. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
