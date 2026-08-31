@@ -390,6 +390,65 @@ export function moveWorkspaceSession(
   };
 }
 
+export function expandWorkspaceTabSelection(
+  openSessions: readonly string[],
+  groups: readonly WorkspaceTabGroup[],
+  sessionNames: readonly string[],
+): string[] {
+  const openSet = new Set(openSessions);
+  const selected = new Set(sessionNames.filter((sessionName) => openSet.has(sessionName)));
+  for (const group of groups) {
+    if (!group.tabs.some((sessionName) => selected.has(sessionName))) continue;
+    group.tabs.forEach((sessionName) => {
+      if (openSet.has(sessionName)) selected.add(sessionName);
+    });
+  }
+  return openSessions.filter((sessionName) => selected.has(sessionName));
+}
+
+export function moveWorkspaceSessions(
+  workspace: SessionWorkspaceState,
+  sessionNames: readonly string[],
+  targetIndex: number,
+): SessionWorkspaceState {
+  if (!Number.isInteger(targetIndex)) return workspace;
+  const selectedTabs = expandWorkspaceTabSelection(
+    workspace.openSessions,
+    workspace.groups,
+    sessionNames,
+  );
+  if (selectedTabs.length === 0) return workspace;
+
+  const selected = new Set(selectedTabs);
+  const remainingTabs = workspace.openSessions.filter((sessionName) => !selected.has(sessionName));
+  let insertionIndex = Math.max(0, Math.min(targetIndex, remainingTabs.length));
+
+  // A caller cannot split a non-selected named group. Snap to the side the
+  // selected block approaches from if an insertion lands inside one.
+  const firstSelectedIndex = workspace.openSessions.indexOf(selectedTabs[0]);
+  for (const group of workspace.groups) {
+    if (selected.has(group.tabs[0])) continue;
+    const start = remainingTabs.indexOf(group.tabs[0]);
+    const end = start + group.tabs.length;
+    if (start < 0 || insertionIndex <= start || insertionIndex >= end) continue;
+    const originalGroupStart = workspace.openSessions.indexOf(group.tabs[0]);
+    insertionIndex = originalGroupStart > firstSelectedIndex ? end : start;
+    break;
+  }
+
+  const openSessions = [
+    ...remainingTabs.slice(0, insertionIndex),
+    ...selectedTabs,
+    ...remainingTabs.slice(insertionIndex),
+  ];
+  if (sameSessions(openSessions, workspace.openSessions)) return workspace;
+  return {
+    ...workspace,
+    openSessions,
+    groups: normalizeWorkspaceTabGroups(workspace.groups, openSessions),
+  };
+}
+
 export function stableSortWorkspaceSessionsByWorkingState(
   workspace: SessionWorkspaceState,
   workingSessionNames: ReadonlySet<string>,

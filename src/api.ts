@@ -43,6 +43,39 @@ export async function listSessions(signal?: AbortSignal): Promise<Session[]> {
   return result.sessions;
 }
 
+export type HostMetricRange = "15m" | "1h" | "24h";
+
+export interface HostMetricPoint {
+  observedAt: number;
+  cpuPercent: number | null;
+  memoryUsedBytes: number;
+}
+
+export interface HostMetricLatest extends HostMetricPoint {
+  memoryTotalBytes: number;
+  memoryAvailableBytes: number;
+  swapTotalBytes: number;
+  swapUsedBytes: number;
+  loadAverage: [number, number, number];
+}
+
+export interface HostMetricsSnapshot {
+  hostname: string;
+  cpuCount: number;
+  sampleSeconds: number;
+  range: HostMetricRange;
+  latest: HostMetricLatest;
+  history: HostMetricPoint[];
+}
+
+export async function getHostMetrics(
+  range: HostMetricRange = "15m",
+  signal?: AbortSignal,
+): Promise<HostMetricsSnapshot> {
+  const query = new URLSearchParams({ range });
+  return jsonRequest<HostMetricsSnapshot>(`/api/host-metrics?${query}`, { signal });
+}
+
 export interface CreatedSession {
   name: string;
   id: string;
@@ -134,6 +167,14 @@ export interface SessionDirectoryListing {
   rootParent?: string | null;
 }
 
+export interface ResolvedSessionFilePath {
+  kind: "directory" | "file";
+  root: string;
+  path: string;
+  absolutePath: string;
+  entry: SessionFileEntry | null;
+}
+
 export interface SessionFilePreview {
   root: string;
   name: string;
@@ -199,6 +240,24 @@ export async function listSessionFiles(
 ): Promise<SessionDirectoryListing> {
   return jsonRequest<SessionDirectoryListing>(
     sessionFileUrl(target, "", path),
+    { signal },
+  );
+}
+
+export async function resolveSessionFilePath(
+  target: SessionFileTarget,
+  absolutePath: string,
+  signal?: AbortSignal,
+): Promise<ResolvedSessionFilePath> {
+  // Resolution is against the server's configured browse boundary, not the
+  // directory currently displayed by the client, so an old root is omitted.
+  const query = new URLSearchParams({
+    sessionId: target.sessionId,
+    paneId: target.paneId,
+    path: absolutePath,
+  });
+  return jsonRequest<ResolvedSessionFilePath>(
+    `/api/sessions/${encodeURIComponent(target.session)}/files/resolve?${query}`,
     { signal },
   );
 }

@@ -7,6 +7,7 @@ import {
   isolatedWorkspaceSearch,
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
+  moveWorkspaceSessions,
   removeWorkspaceTabGroup,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
@@ -416,6 +417,78 @@ describe("session workspace state", () => {
     expect(moveWorkspaceSession(workspace, "beta", 1.5)).toBe(workspace);
     expect(moveWorkspaceSession(workspace, "beta", Number.NaN)).toBe(workspace);
     expect(moveWorkspaceSession(workspace, "beta", Number.POSITIVE_INFINITY)).toBe(workspace);
+  });
+
+  it("moves multiple selected tabs as one stable block", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma", "delta", "epsilon"],
+      recentSessions: ["delta", "beta", "alpha"],
+      groups: [],
+    };
+
+    expect(moveWorkspaceSessions(workspace, ["beta", "delta"], 3)).toEqual({
+      openSessions: ["alpha", "gamma", "epsilon", "beta", "delta"],
+      recentSessions: workspace.recentSessions,
+      groups: [],
+    });
+    expect(moveWorkspaceSessions(workspace, ["delta", "beta"], 0).openSessions).toEqual([
+      "beta",
+      "delta",
+      "alpha",
+      "gamma",
+      "epsilon",
+    ]);
+    expect(moveWorkspaceSessions(workspace, ["missing"], 0)).toBe(workspace);
+    expect(moveWorkspaceSessions(workspace, ["beta"], 1)).toBe(workspace);
+    expect(moveWorkspaceSessions(workspace, ["beta"], Number.NaN)).toBe(workspace);
+  });
+
+  it("expands partial group selections and never splits an unselected group", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
+      recentSessions: [],
+      groups: [
+        {
+          id: "workers",
+          name: "Workers",
+          color: "green",
+          collapsed: false,
+          tabs: ["beta", "gamma"],
+        },
+        {
+          id: "review",
+          name: "Review",
+          color: "orange",
+          collapsed: false,
+          tabs: ["delta", "epsilon"],
+        },
+      ],
+    };
+
+    const movedGroupAndTab = moveWorkspaceSessions(workspace, ["gamma", "zeta"], 0);
+    expect(movedGroupAndTab.openSessions).toEqual([
+      "beta",
+      "gamma",
+      "zeta",
+      "alpha",
+      "delta",
+      "epsilon",
+    ]);
+    expect(movedGroupAndTab.groups.map((group) => group.tabs)).toEqual([
+      ["beta", "gamma"],
+      ["delta", "epsilon"],
+    ]);
+
+    const snappedAfterReview = moveWorkspaceSessions(workspace, ["alpha"], 3);
+    expect(snappedAfterReview.openSessions).toEqual([
+      "beta",
+      "gamma",
+      "delta",
+      "epsilon",
+      "alpha",
+      "zeta",
+    ]);
+    expect(snappedAfterReview.groups).toEqual(workspace.groups);
   });
 
   it("stable-sorts non-working tabs before working tabs without changing visit history", () => {

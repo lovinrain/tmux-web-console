@@ -741,13 +741,21 @@ merely to test that the application itself has no login.
 12. In desktop Side tabs, `Non-working first` stably moves every non-Working tab
     before Working tabs, preserves relative order inside each partition, keeps
     tab groups intact, and writes the resulting order to the URL or saved
-    workspace without changing the active session.
+    workspace without changing the active session. In both top and side tabs,
+    Shift-click a range, Ctrl/Cmd-click individual tabs, and drag the selection;
+    confirm its relative order is preserved and any selected group moves whole.
 13. On desktop, the workspace timer opens as a draggable floating window, runs
     both countdown and stopwatch modes, keeps a pinned window visible across
     session switches, and restores its browser-local state per saved workspace.
     A disposable short countdown should visibly alarm and mark the browser-tab
     title; audio depends on the browser allowing Web Audio after the Start click.
-14. Against a deliberately disposable session, `Attach files` accepts a small
+14. On desktop, Host Pulse should show live CPU and memory values from
+    `/api/host-metrics`, open a movable/resizable panel, switch among 15-minute,
+    one-hour, and 24-hour history, and restore its pinned layout after switching
+    sessions and reloading the saved workspace. Confirm the card and floating
+    panel disappear at compact mobile width. A fresh service needs two samples
+    before its first aggregate CPU percentage is available.
+15. Against a deliberately disposable session, `Attach files` accepts a small
     text or binary file through the picker and inserts an absolute path under
     the configured upload directory without sending it automatically. An image
     should additionally show a preview. Confirm that dropping another arbitrary
@@ -755,16 +763,18 @@ merely to test that the application itself has no login.
     without Enter, the run user can read both files, each file is `0600`, and all
     attachment affordances are hidden at compact mobile width. Do not upload
     sensitive material merely for a smoke test.
-15. In that disposable session, open the desktop pane-CWD browser and upload a
+16. In that disposable session, open the desktop pane-CWD browser and upload a
     small file into a disposable folder with both the picker and drag-and-drop.
     Confirm the files land in the folder shown with mode `0600`, a repeated name
     is rejected without changing the original bytes, and downloading returns the
     same bytes. Add a small PNG or JPEG and confirm it renders in the fitted
     preview and opens through the protected full-size link; an SVG must remain a
-    non-embedded text or binary preview. Delete only those disposable fixtures
+    non-embedded text or binary preview. Enter one disposable file's absolute path
+    in the address row and confirm its parent opens with that file previewed
+    immediately. Delete only those disposable fixtures
     afterward; none of these file operations should send terminal input or
     change tmux identities.
-16. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
+17. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
     Change one unused test binding, save, reload, and confirm the visible hint
     and handler both use it; then restore the original binding. A duplicate key
     in either layer must be identified and must keep Save disabled.

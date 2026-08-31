@@ -46,6 +46,21 @@ export function ClockIcon(props: IconProps) {
   );
 }
 
+export function HostPulseIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path
+        d="M3 12h4l2.2-5.5 4.1 11 2.2-5.5H21"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <rect x="2.5" y="3.5" width="19" height="17" rx="2.5" stroke="currentColor" strokeWidth="1.4" opacity=".55" />
+    </IconBase>
+  );
+}
+
 export function SearchIcon(props: IconProps) {
   return (
     <IconBase {...props}>

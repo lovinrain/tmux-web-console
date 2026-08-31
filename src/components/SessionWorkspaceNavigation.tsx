@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { SavedWorkspace } from "../api";
@@ -44,7 +45,9 @@ import {
 } from "../shortcutSettings";
 import type { AgentState, Pane, Session } from "../types";
 import {
+  expandWorkspaceTabSelection,
   MAX_WORKSPACE_TAB_GROUPS,
+  moveWorkspaceSessions,
   type WorkspaceTabGroup,
 } from "../workspaceState";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
@@ -75,6 +78,7 @@ export interface SessionWorkspaceNavigationProps {
   onSelect: (sessionName: string) => void;
   onCloseTab: (sessionName: string) => void;
   onMoveTab?: (sessionName: string, targetIndex: number) => void;
+  onMoveTabs?: (sessionNames: string[], targetIndex: number) => void;
   onSortTabsByWorkingState?: () => void;
   onToggleTabActions?: () => void;
   onOpenTabInNewWindow?: (
@@ -700,8 +704,13 @@ interface WorkspaceTabDragTarget {
 }
 
 interface WorkspaceTabDragState {
-  sessionName: string;
+  sessionNames: string[];
   target: WorkspaceTabDragTarget | null;
+}
+
+function sameSessionNames(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length
+    && left.every((sessionName, index) => sessionName === right[index]);
 }
 
 function workspaceTabDropEdge(
@@ -1792,6 +1801,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onSelect,
     onCloseTab,
     onMoveTab,
+    onMoveTabs,
     onSortTabsByWorkingState,
     onToggleTabActions,
     onOpenTabInNewWindow,
@@ -1857,13 +1867,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     direction: "previous" | "next";
   } | null>(null);
   const groupDialogTriggerRef = useRef<HTMLElement | null>(null);
-  const workspaceTabDragSessionRef = useRef<string | null>(null);
+  const workspaceTabSelectionAnchorRef = useRef<string | null>(activeSession);
+  const workspaceTabDragSessionsRef = useRef<string[]>([]);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
   const [recentsQuery, setRecentsQuery] = useState("");
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const [windowActionError, setWindowActionError] = useState("");
+  const [selectedWorkspaceTabs, setSelectedWorkspaceTabs] = useState<string[]>([]);
   const [workspaceTabDrag, setWorkspaceTabDrag] = useState<WorkspaceTabDragState | null>(
     null,
   );
@@ -1915,9 +1927,102 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && !compactViewport
     && tabsVisible,
   );
+  const desktopTabMultiSelectEnabled = desktopTabDragEnabled && Boolean(onMoveTabs);
+  const selectedWorkspaceTabSet = useMemo(
+    () => new Set(selectedWorkspaceTabs),
+    [selectedWorkspaceTabs],
+  );
+
+  const clearWorkspaceTabSelection = useCallback((announce = true) => {
+    if (selectedWorkspaceTabs.length === 0) return;
+    setSelectedWorkspaceTabs([]);
+    if (announce) setReorderAnnouncement("Tab move selection cleared.");
+  }, [selectedWorkspaceTabs.length]);
+
+  const updateWorkspaceTabSelection = useCallback((
+    sessionName: string,
+    range: boolean,
+    additive: boolean,
+  ) => {
+    if (!desktopTabMultiSelectEnabled || !openSessions.includes(sessionName)) return;
+
+    let candidates: string[];
+    if (range) {
+      const currentAnchor = workspaceTabSelectionAnchorRef.current;
+      const anchor = currentAnchor && openSessions.includes(currentAnchor)
+        ? currentAnchor
+        : activeSession && openSessions.includes(activeSession)
+          ? activeSession
+          : sessionName;
+      workspaceTabSelectionAnchorRef.current = anchor;
+      const anchorIndex = openSessions.indexOf(anchor);
+      const targetIndex = openSessions.indexOf(sessionName);
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      const selectedRange = openSessions.slice(start, end + 1);
+      candidates = additive
+        ? [...selectedWorkspaceTabs, ...selectedRange]
+        : selectedRange;
+    } else {
+      workspaceTabSelectionAnchorRef.current = sessionName;
+      const unit = expandWorkspaceTabSelection(openSessions, groups, [sessionName]);
+      const current = new Set(selectedWorkspaceTabs);
+      const remove = unit.every((name) => current.has(name));
+      candidates = remove
+        ? selectedWorkspaceTabs.filter((name) => !unit.includes(name))
+        : [...selectedWorkspaceTabs, ...unit];
+    }
+
+    const next = expandWorkspaceTabSelection(openSessions, groups, candidates);
+    setSelectedWorkspaceTabs(next);
+    setReorderAnnouncement(next.length === 0
+      ? "Tab move selection cleared."
+      : `${next.length} tab${next.length === 1 ? "" : "s"} selected for moving. Drag any selected tab to move ${next.length === 1 ? "it" : "them"} together.`);
+  }, [
+    activeSession,
+    desktopTabMultiSelectEnabled,
+    groups,
+    openSessions,
+    selectedWorkspaceTabs,
+  ]);
+
+  const selectWorkspaceTab = useCallback((
+    event: ReactMouseEvent<HTMLButtonElement>,
+    sessionName: string,
+  ) => {
+    const additive = event.ctrlKey || event.metaKey;
+    if (desktopTabMultiSelectEnabled && (event.shiftKey || additive)) {
+      event.preventDefault();
+      updateWorkspaceTabSelection(sessionName, event.shiftKey, additive);
+      return;
+    }
+    workspaceTabSelectionAnchorRef.current = sessionName;
+    clearWorkspaceTabSelection(false);
+    onSelect(sessionName);
+  }, [
+    clearWorkspaceTabSelection,
+    desktopTabMultiSelectEnabled,
+    onSelect,
+    updateWorkspaceTabSelection,
+  ]);
+
+  useEffect(() => {
+    setSelectedWorkspaceTabs((current) => {
+      if (!desktopTabMultiSelectEnabled) return current.length > 0 ? [] : current;
+      const next = expandWorkspaceTabSelection(openSessions, groups, current);
+      return sameSessionNames(current, next) ? current : next;
+    });
+  }, [desktopTabMultiSelectEnabled, groups, openSessions]);
+
+  useEffect(() => {
+    if (selectedWorkspaceTabs.length > 0) return;
+    workspaceTabSelectionAnchorRef.current = activeSession && openSessions.includes(activeSession)
+      ? activeSession
+      : null;
+  }, [activeSession, openSessions, selectedWorkspaceTabs.length]);
 
   const finishWorkspaceTabDrag = useCallback(() => {
-    workspaceTabDragSessionRef.current = null;
+    workspaceTabDragSessionsRef.current = [];
     setWorkspaceTabDrag(null);
   }, []);
 
@@ -1928,17 +2033,18 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, []);
 
   const previewWorkspaceTabDrop = useCallback((target: WorkspaceTabDragTarget) => {
-    const sessionName = workspaceTabDragSessionRef.current;
-    if (!sessionName) return;
+    const sessionNames = workspaceTabDragSessionsRef.current;
+    if (sessionNames.length === 0) return;
     setWorkspaceTabDrag((current) => {
       if (
-        current?.sessionName === sessionName
+        current
+        && sameSessionNames(current.sessionNames, sessionNames)
         && current.target?.kind === target.kind
         && current.target.id === target.id
         && current.target.edge === target.edge
         && current.target.targetIndex === target.targetIndex
       ) return current;
-      return { sessionName, target };
+      return { sessionNames, target };
     });
   }, []);
 
@@ -1950,11 +2056,28 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       event.preventDefault();
       return;
     }
-    workspaceTabDragSessionRef.current = sessionName;
-    setWorkspaceTabDrag({ sessionName, target: null });
+    const selectedDrag = selectedWorkspaceTabSet.has(sessionName)
+      ? selectedWorkspaceTabs
+      : [];
+    const sessionNames = selectedDrag.length > 1 && onMoveTabs
+      ? selectedDrag
+      : [sessionName];
+    if (selectedDrag.length === 0 && selectedWorkspaceTabs.length > 0) {
+      setSelectedWorkspaceTabs([]);
+    }
+    workspaceTabDragSessionsRef.current = sessionNames;
+    setWorkspaceTabDrag({ sessionNames, target: null });
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", sessionName);
-  }, [desktopTabDragEnabled]);
+    event.dataTransfer.setData("text/plain", sessionNames.join("\n"));
+    if (sessionNames.length > 1) {
+      event.dataTransfer.setData("application/x-muxdeck-tabs", JSON.stringify(sessionNames));
+    }
+  }, [
+    desktopTabDragEnabled,
+    onMoveTabs,
+    selectedWorkspaceTabSet,
+    selectedWorkspaceTabs,
+  ]);
 
   const tabDragTarget = useCallback((
     targetSessionName: string,
@@ -1962,11 +2085,34 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     clientX: number,
     clientY: number,
   ): WorkspaceTabDragTarget | null => {
-    const sourceSessionName = workspaceTabDragSessionRef.current;
+    const sourceSessionNames = workspaceTabDragSessionsRef.current;
+    const sourceSessionName = sourceSessionNames[0];
     if (!sourceSessionName) return null;
     const sourceIndex = openSessions.indexOf(sourceSessionName);
     const targetIndex = openSessions.indexOf(targetSessionName);
     if (sourceIndex < 0 || targetIndex < 0) return null;
+
+    if (sourceSessionNames.length > 1) {
+      const selected = new Set(sourceSessionNames);
+      if (selected.has(targetSessionName)) return null;
+      const targetGroup = groupsBySession.get(targetSessionName);
+      const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
+      const blockStart = targetGroup
+        ? openSessions.indexOf(targetGroup.tabs[0])
+        : targetIndex;
+      const blockEnd = targetGroup
+        ? openSessions.indexOf(targetGroup.tabs.at(-1)!)
+        : targetIndex;
+      const boundaryIndex = edge === "before" ? blockStart : blockEnd + 1;
+      return {
+        kind: targetGroup ? "group" : "tab",
+        id: targetGroup?.id ?? targetSessionName,
+        edge,
+        targetIndex: openSessions
+          .slice(0, boundaryIndex)
+          .filter((sessionName) => !selected.has(sessionName)).length,
+      };
+    }
 
     const sourceGroup = groupsBySession.get(sourceSessionName);
     const targetGroup = groupsBySession.get(targetSessionName);
@@ -1992,8 +2138,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     clientX: number,
     clientY: number,
   ): WorkspaceTabDragTarget | null => {
-    const sourceSessionName = workspaceTabDragSessionRef.current;
-    if (!sourceSessionName || groupsBySession.has(sourceSessionName)) return null;
+    const sourceSessionNames = workspaceTabDragSessionsRef.current;
+    const sourceSessionName = sourceSessionNames[0];
+    if (!sourceSessionName) return null;
     const sourceIndex = openSessions.indexOf(sourceSessionName);
     const groupStart = openSessions.indexOf(group.tabs[0]);
     const groupEnd = openSessions.indexOf(group.tabs.at(-1)!);
@@ -2001,6 +2148,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
 
     const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
     const boundaryIndex = edge === "before" ? groupStart : groupEnd + 1;
+    if (sourceSessionNames.length > 1) {
+      const selected = new Set(sourceSessionNames);
+      if (group.tabs.some((sessionName) => selected.has(sessionName))) return null;
+      return {
+        kind: "group",
+        id: group.id,
+        edge,
+        targetIndex: openSessions
+          .slice(0, boundaryIndex)
+          .filter((sessionName) => !selected.has(sessionName)).length,
+      };
+    }
+    if (groupsBySession.has(sourceSessionName)) return null;
     return {
       kind: "group",
       id: group.id,
@@ -2071,11 +2231,30 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, [groupDragTarget, nudgeWorkspaceTabViewport, previewWorkspaceTabDrop]);
 
   const commitWorkspaceTabDrop = useCallback((target: WorkspaceTabDragTarget) => {
-    const sourceSessionName = workspaceTabDragSessionRef.current;
+    const sourceSessionNames = workspaceTabDragSessionsRef.current;
+    const sourceSessionName = sourceSessionNames[0];
     const sourceIndex = sourceSessionName
       ? openSessions.indexOf(sourceSessionName)
       : -1;
     finishWorkspaceTabDrag();
+    if (sourceSessionNames.length > 1) {
+      if (!onMoveTabs) return;
+      const preview = moveWorkspaceSessions({
+        openSessions: [...openSessions],
+        recentSessions: [],
+        groups: [...groups],
+      }, sourceSessionNames, target.targetIndex);
+      if (sameSessionNames(preview.openSessions, openSessions)) return;
+      onMoveTabs(sourceSessionNames, target.targetIndex);
+      const firstIndex = Math.min(...sourceSessionNames.map((sessionName) => (
+        preview.openSessions.indexOf(sessionName)
+      )));
+      const lastIndex = firstIndex + sourceSessionNames.length - 1;
+      setReorderAnnouncement(
+        `${sourceSessionNames.length} selected tabs moved to positions ${firstIndex + 1} through ${lastIndex + 1} of ${openSessions.length}. Their relative order was preserved.`,
+      );
+      return;
+    }
     if (
       !sourceSessionName
       || !onMoveTab
@@ -2092,7 +2271,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     setReorderAnnouncement(
       `${tabTitle(sourceSessionName, sessionsByName)} moved to position ${resultIndex + 1} of ${openSessions.length}.`,
     );
-  }, [finishWorkspaceTabDrag, groups, onMoveTab, openSessions, sessionsByName]);
+  }, [
+    finishWorkspaceTabDrag,
+    groups,
+    onMoveTab,
+    onMoveTabs,
+    openSessions,
+    sessionsByName,
+  ]);
 
   const dropOnWorkspaceTab = useCallback((
     event: ReactDragEvent<HTMLDivElement>,
@@ -2127,17 +2313,27 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, [commitWorkspaceTabDrop, groupDragTarget]);
 
   useEffect(() => {
-    const draggedSession = workspaceTabDragSessionRef.current;
+    const draggedSessions = workspaceTabDragSessionsRef.current;
+    const draggedSession = draggedSessions[0];
     const draggedGroup = draggedSession
       ? groupsBySession.get(draggedSession)
       : undefined;
     if (
       desktopTabDragEnabled
       && (!draggedSession || openSessions.includes(draggedSession))
-      && (!draggedGroup || (!draggedGroup.collapsed && draggedGroup.tabs.length > 1))
+      && draggedSessions.every((sessionName) => openSessions.includes(sessionName))
+      && (draggedSessions.length > 1
+        ? desktopTabMultiSelectEnabled
+        : !draggedGroup || (!draggedGroup.collapsed && draggedGroup.tabs.length > 1))
     ) return;
     finishWorkspaceTabDrag();
-  }, [desktopTabDragEnabled, finishWorkspaceTabDrag, groupsBySession, openSessions]);
+  }, [
+    desktopTabDragEnabled,
+    desktopTabMultiSelectEnabled,
+    finishWorkspaceTabDrag,
+    groupsBySession,
+    openSessions,
+  ]);
 
   const previewDesktopTabRailWidth = useCallback((width: number) => {
     const nextWidth = clampDesktopTabRailWidthForViewport(width, desktopTabRailMaxWidth);
@@ -2473,6 +2669,31 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     );
   };
 
+  const workspaceTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    sessionName: string,
+  ) => {
+    if (event.key === "Escape" && selectedWorkspaceTabs.length > 0) {
+      event.preventDefault();
+      clearWorkspaceTabSelection();
+      return;
+    }
+    if (
+      event.key === " "
+      && desktopTabMultiSelectEnabled
+      && (event.shiftKey || event.ctrlKey || event.metaKey)
+    ) {
+      event.preventDefault();
+      updateWorkspaceTabSelection(
+        sessionName,
+        event.shiftKey,
+        event.ctrlKey || event.metaKey,
+      );
+      return;
+    }
+    tabKeyDown(event);
+  };
+
   const sortTabsByWorkingState = () => {
     if (!onSortTabsByWorkingState) return;
     onSortTabsByWorkingState();
@@ -2578,13 +2799,17 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const session = sessionsByName.get(sessionName);
     const title = tabTitle(sessionName, sessionsByName);
     const active = !newSessionActive && sessionName === activeSession;
+    const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
+    const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
     const groupTabIndex = group?.tabs.indexOf(sessionName) ?? -1;
     const canMovePrevious = group ? groupTabIndex > 0 : index > 0;
     const canMoveNext = group
       ? groupTabIndex >= 0 && groupTabIndex < group.tabs.length - 1
       : index < openSessions.length - 1;
     const canDragTab = desktopTabDragEnabled && (
-      !group || (!group.collapsed && group.tabs.length > 1)
+      selectedDrag && onMoveTabs
+        ? true
+        : !group || (!group.collapsed && group.tabs.length > 1)
     );
     const dropEdge = workspaceTabDrag?.target?.kind === "tab"
       && workspaceTabDrag.target.id === sessionName
@@ -2601,7 +2826,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
         data-tab-group-color={group?.color}
-        data-tab-dragging={workspaceTabDrag?.sessionName === sessionName
+        data-tab-move-selected={selectedForMove ? "true" : undefined}
+        data-tab-dragging={workspaceTabDrag?.sessionNames.includes(sessionName)
           ? "true"
           : undefined}
         data-tab-drop-edge={dropEdge}
@@ -2619,21 +2845,30 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           role="tab"
           aria-selected={active}
           aria-controls={active ? "muxdeck-active-console" : undefined}
-          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}`}
+          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${selectedForMove ? ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
-          title={tabShortcut ? `${title} (${tabShortcut})` : title}
+          title={`${tabShortcut ? `${title} (${tabShortcut})` : title}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
           aria-description={canDragTab
-            ? "Drag to reorder this tab. Reorder buttons are also available in Actions."
+            ? selectedDrag
+              ? `${selectedWorkspaceTabs.length} tabs selected. Drag to move them together; their relative order is preserved.`
+              : desktopTabMultiSelectEnabled
+                ? "Drag to reorder this tab. Shift-click selects a range; Control or Command-click toggles individual tabs."
+                : "Drag to reorder this tab. Reorder buttons are also available in Actions."
             : undefined}
-          onKeyDown={tabKeyDown}
-          onClick={() => onSelect(sessionName)}
+          onKeyDown={(event) => workspaceTabKeyDown(event, sessionName)}
+          onClick={(event) => selectWorkspaceTab(event, sessionName)}
           onDragStart={canDragTab
             ? (event) => startWorkspaceTabDrag(event, sessionName)
             : undefined}
           onDragEnd={canDragTab ? finishWorkspaceTabDrag : undefined}
         >
+          {selectedForMove && (
+            <span className="workspace-tab-selection-mark" aria-hidden="true">
+              <CheckIcon />
+            </span>
+          )}
           <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
           <span
             className="workspace-tab-compact-index"
@@ -2879,6 +3114,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   && workspaceTabDrag.target.id === group.id
                   ? workspaceTabDrag.target.edge
                   : undefined;
+                const selectedForMove = group.tabs.every((sessionName) => (
+                  selectedWorkspaceTabSet.has(sessionName)
+                ));
                 return (
                   <div
                     className={group.collapsed
@@ -2886,6 +3124,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       : "workspace-tab-group"}
                     data-workspace-tab-group-id={group.id}
                     data-tab-group-color={group.color}
+                    data-tab-move-selected={selectedForMove ? "true" : undefined}
                     data-tab-drop-edge={dropEdge}
                     key={group.id}
                     onDragOver={desktopTabDragEnabled
@@ -3020,6 +3259,28 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           </div>
+          {selectedWorkspaceTabs.length > 0 && (
+            <div
+              className="workspace-tab-selection-status"
+              role="group"
+              aria-label={`${selectedWorkspaceTabs.length} tabs selected for moving`}
+            >
+              <span className="workspace-tab-selection-status-count">
+                <CheckIcon />
+                <strong>{selectedWorkspaceTabs.length}</strong>
+                <span>selected</span>
+              </span>
+              <small>Drag together</small>
+              <button
+                type="button"
+                onClick={() => clearWorkspaceTabSelection()}
+                aria-label="Clear tab move selection"
+                title="Clear tab selection (Escape)"
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          )}
           {workspacePersistenceState === "unsaved" ? onSaveWorkspace && (
             <button
               ref={saveButtonRef}

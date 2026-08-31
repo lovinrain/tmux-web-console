@@ -1029,6 +1029,123 @@ html[data-theme="light"] .workspace-timer-duration input {
   border-color: #b9c7c1;
 }
 
+html[data-theme="light"] .host-pulse-card {
+  color: #29483e;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--host-accent) 12%, transparent), transparent 62%),
+    #e8f3ed;
+  border-color: color-mix(in srgb, var(--host-accent) 43%, #aaa99d);
+  box-shadow: 0 3px 9px rgba(65, 55, 38, 0.13);
+}
+
+html[data-theme="light"] .host-pulse-card-icon,
+html[data-theme="light"] .host-pulse-card > span + span {
+  border-color: #c5d4cc;
+}
+
+html[data-theme="light"] .host-pulse-card small {
+  color: #607a6e;
+}
+
+html[data-theme="light"] .host-pulse-card strong {
+  color: #27473d;
+}
+
+html[data-theme="light"] .host-pulse-panel {
+  --host-panel: #f4faf6;
+  color: #2a3c35;
+  border-color: color-mix(in srgb, var(--host-accent) 42%, #aaa99d);
+  box-shadow:
+    0 22px 65px rgba(65, 55, 38, 0.26),
+    0 3px 0 color-mix(in srgb, var(--host-accent) 22%, transparent);
+}
+
+html[data-theme="light"] .host-pulse-panel.warm {
+  --host-panel: #fff8ea;
+  --host-secondary: #8a5b10;
+}
+
+html[data-theme="light"] .host-pulse-panel.critical {
+  --host-panel: #fff2ef;
+  --host-secondary: #a33329;
+}
+
+html[data-theme="light"] .host-pulse-panel-header {
+  background: color-mix(in srgb, var(--host-panel) 90%, #ddd8cd);
+  border-color: color-mix(in srgb, var(--host-accent) 23%, #c2beb5);
+}
+
+html[data-theme="light"] .host-pulse-panel-icon,
+html[data-theme="light"] .host-pulse-panel-header button {
+  background: color-mix(in srgb, var(--host-accent) 6%, #fff);
+  border-color: color-mix(in srgb, var(--host-accent) 32%, #b8b6ae);
+}
+
+html[data-theme="light"] .host-pulse-panel-header > div > span,
+html[data-theme="light"] .host-pulse-summary > span {
+  color: #637b70;
+}
+
+html[data-theme="light"] .host-pulse-panel-header h2 {
+  color: #26372f;
+}
+
+html[data-theme="light"] .host-pulse-metrics article,
+html[data-theme="light"] .host-pulse-details {
+  background: rgba(250, 253, 251, 0.88);
+  border-color: color-mix(in srgb, var(--host-accent) 24%, #c5d0ca);
+}
+
+html[data-theme="light"] .host-pulse-metrics article > header {
+  color: #5f776b;
+}
+
+html[data-theme="light"] .host-pulse-metrics article > header small,
+html[data-theme="light"] .host-pulse-details small,
+html[data-theme="light"] .host-pulse-footer > span,
+html[data-theme="light"] .host-pulse-footnote {
+  color: #71847a;
+}
+
+html[data-theme="light"] .host-pulse-metrics article > output,
+html[data-theme="light"] .host-pulse-details strong {
+  color: #263b33;
+}
+
+html[data-theme="light"] .host-pulse-sparkline path {
+  stroke: #dce5df;
+}
+
+html[data-theme="light"] .host-pulse-memory-bar {
+  background: #d8e2dc;
+}
+
+html[data-theme="light"] .host-pulse-details > span + span {
+  border-color: #d2ddd7;
+}
+
+html[data-theme="light"] .host-pulse-footer > div {
+  background: #edf4f0;
+  border-color: #c8d3cd;
+}
+
+html[data-theme="light"] .host-pulse-footer button {
+  color: #526b5f;
+  background: #f7fbf9;
+  border-color: #bdcbc4;
+}
+
+html[data-theme="light"] .host-pulse-footer button[aria-pressed="true"] {
+  color: color-mix(in srgb, var(--host-accent) 72%, #22362d);
+  background: color-mix(in srgb, var(--host-accent) 11%, #fff);
+}
+
+html[data-theme="light"] .host-pulse-error {
+  color: #4e5d55;
+  background: #f2f5f3;
+  border-color: #c5cec9;
+}
+
 html[data-theme="light"] .console-bar-toolbar {
   color: #4e594c;
   background:
@@ -1569,6 +1686,11 @@ html[data-theme="light"] .workspace-tab-group.collapsed {
   background: color-mix(in srgb, var(--tab-group-color) 16%, #eeeae2);
 }
 
+html[data-theme="light"] .workspace-tab-group[data-tab-move-selected="true"] {
+  border-color: #087a70;
+  box-shadow: inset 0 0 0 1px rgba(8, 122, 112, 0.22), 0 0 0 2px rgba(8, 122, 112, 0.08);
+}
+
 html[data-theme="light"] .workspace-tab-group-chip {
   background: color-mix(in srgb, var(--tab-group-color) 13%, #f7f4ed);
   border-color: color-mix(in srgb, var(--tab-group-color) 38%, #c5beb2);
@@ -1633,6 +1755,51 @@ html[data-theme="light"] .workspace-tab:hover {
 html[data-theme="light"] .workspace-tab.active {
   background: #fffdf8;
   border-color: #879778;
+}
+
+html[data-theme="light"] .workspace-tab[data-tab-move-selected="true"],
+html[data-theme="light"] .workspace-tab[data-tab-move-selected="true"].active {
+  background:
+    linear-gradient(135deg, rgba(8, 122, 112, 0.12), transparent 72%),
+    #eef8f5;
+  border-color: #087a70;
+  box-shadow: inset 0 0 0 1px rgba(8, 122, 112, 0.12);
+}
+
+html[data-theme="light"] .workspace-tab-selection-mark {
+  color: #fff;
+  background: #087a70;
+  box-shadow: 0 0 0 2px rgba(8, 122, 112, 0.1);
+}
+
+html[data-theme="light"] .workspace-tab-selection-status {
+  color: #075e57;
+  background:
+    linear-gradient(135deg, rgba(8, 122, 112, 0.11), transparent 75%),
+    #eaf5f1;
+  border-color: rgba(8, 122, 112, 0.35);
+}
+
+html[data-theme="light"] .workspace-tab-selection-status-count svg,
+html[data-theme="light"] .workspace-tab-selection-status-count strong {
+  color: #075e57;
+}
+
+html[data-theme="light"] .workspace-tab-selection-status small {
+  color: #547c75;
+}
+
+html[data-theme="light"] .workspace-tab-selection-status > button {
+  color: #256c64;
+  background: rgba(255, 255, 255, 0.58);
+  border-color: rgba(8, 122, 112, 0.25);
+}
+
+html[data-theme="light"] .workspace-tab-selection-status > button:hover,
+html[data-theme="light"] .workspace-tab-selection-status > button:focus-visible {
+  color: #064d47;
+  background: #fff;
+  border-color: #087a70;
 }
 
 html[data-theme="light"] .workspace-tab:focus-within {

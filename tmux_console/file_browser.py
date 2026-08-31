@@ -149,6 +149,70 @@ def resolve_browse_root(value: str, boundary: Path) -> Path:
     return resolved
 
 
+def resolve_browse_target(value: str, boundary: Path) -> dict[str, object]:
+    """Resolve an absolute address-bar target as a directory or regular file."""
+    if not isinstance(value, str):
+        raise TypeError("path must be a string")
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError("path is required")
+    if "\x00" in trimmed:
+        raise ValueError("path cannot contain a null byte")
+    if len(trimmed) > MAX_RELATIVE_PATH_LENGTH:
+        raise ValueError("path is too long")
+    candidate = Path(trimmed).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("path must be an absolute path")
+    unresolved_target = Path(os.path.realpath(candidate, strict=False))
+    if not _is_within(boundary, unresolved_target):
+        raise FileBrowserPathOutsideRootError(
+            "that path is outside the browsable area"
+        )
+    try:
+        resolved = candidate.resolve(strict=True)
+    except RuntimeError as error:
+        raise FileBrowserPathOutsideRootError(
+            "path cannot be resolved safely"
+        ) from error
+    if not _is_within(boundary, resolved):
+        raise FileBrowserPathOutsideRootError(
+            "that path is outside the browsable area"
+        )
+    target_stat = resolved.stat()
+    if stat.S_ISDIR(target_stat.st_mode):
+        return {
+            "kind": "directory",
+            "root": str(resolved),
+            "path": "",
+            "absolutePath": str(resolved),
+            "entry": None,
+        }
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise FileBrowserUnsupportedFileError(
+            "path is not a regular file or directory"
+        )
+
+    display_root = candidate.parent.resolve(strict=True)
+    if not _is_within(boundary, display_root):
+        raise FileBrowserPathOutsideRootError(
+            "that path is outside the browsable area"
+        )
+    parts = (candidate.name,)
+    entry = _stat_entry_payload(
+        display_root,
+        parts,
+        target_stat,
+        symlink=candidate.is_symlink(),
+    )
+    return {
+        "kind": "file",
+        "root": str(display_root),
+        "path": candidate.name,
+        "absolutePath": entry["absolutePath"],
+        "entry": entry,
+    }
+
+
 def browsable_parent(root_path: str, boundary: Path) -> str | None:
     """The directory above ``root_path``, when the boundary still contains it."""
     display_root = Path(root_path)

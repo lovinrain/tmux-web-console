@@ -10,6 +10,7 @@ import {
   deleteWorkspace,
   getCommonNote,
   getCommonWorkspaceQuickLinks,
+  getHostMetrics,
   getSessionNote,
   getSessionQuickLinks,
   getWorkspace,
@@ -20,6 +21,7 @@ import {
   listSessionFiles,
   listQueuedMessages,
   previewSessionFile,
+  resolveSessionFilePath,
   renameSession,
   replaceCommonNote,
   replaceCommonWorkspaceQuickLinks,
@@ -103,6 +105,43 @@ function session(): Session {
 afterEach(() => {
   MockEventSource.instances = [];
   vi.unstubAllGlobals();
+});
+
+describe("host metrics API", () => {
+  it("requests the selected history range", async () => {
+    const payload = {
+      hostname: "mux-host",
+      cpuCount: 8,
+      sampleSeconds: 5,
+      range: "1h",
+      latest: {
+        observedAt: 1_700_000_000,
+        cpuPercent: 27,
+        memoryUsedBytes: 22_400,
+        memoryTotalBytes: 31_300,
+        memoryAvailableBytes: 8_900,
+        swapUsedBytes: 26_000,
+        swapTotalBytes: 64_000,
+        loadAverage: [1.71, 2.37, 2.52],
+      },
+      history: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(getHostMetrics("1h", controller.signal)).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/host-metrics?range=1h`,
+      expect.objectContaining({
+        signal: controller.signal,
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
 });
 
 describe("session creation API", () => {
@@ -461,6 +500,49 @@ describe("session file browser API", () => {
           "Content-Type": "text/plain",
         }),
       }),
+    );
+  });
+
+  it("resolves an absolute file path without carrying the currently browsed root", async () => {
+    const resolved = {
+      kind: "file",
+      root: "/srv/data",
+      path: "notes with space.md",
+      absolutePath: "/srv/data/notes with space.md",
+      entry: {
+        name: "notes with space.md",
+        path: "notes with space.md",
+        absolutePath: "/srv/data/notes with space.md",
+        terminalText: "'/srv/data/notes with space.md'",
+        kind: "file",
+        size: 12,
+        modified: 1_700_000_000,
+        hidden: false,
+        symlink: false,
+        accessible: true,
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(resolved), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(resolveSessionFilePath(
+      {
+        session: "work/name #1",
+        sessionId: "$7",
+        paneId: "%3",
+        root: "/an/old/root",
+      },
+      "/srv/data/notes with space.md",
+      controller.signal,
+    )).resolves.toEqual(resolved);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/resolve?sessionId=%247&paneId=%253&path=%2Fsrv%2Fdata%2Fnotes+with+space.md`,
+      expect.objectContaining({ signal: controller.signal }),
     );
   });
 });

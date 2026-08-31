@@ -8,6 +8,7 @@ import {
   listSessionFiles,
   moveSessionFileEntry,
   previewSessionFile,
+  resolveSessionFilePath,
   saveSessionFileContent,
   sessionFileDownloadUrl,
   sessionFileImageUrl,
@@ -34,6 +35,7 @@ vi.mock("../api", () => ({
   listSessionFiles: vi.fn(),
   moveSessionFileEntry: vi.fn(),
   previewSessionFile: vi.fn(),
+  resolveSessionFilePath: vi.fn(),
   saveSessionFileContent: vi.fn(),
   sessionFileDownloadUrl: vi.fn(),
   sessionFileImageUrl: vi.fn(),
@@ -144,6 +146,13 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(sessionFileDownloadUrl).mockReturnValue("/files/download");
   vi.mocked(sessionFileImageUrl).mockReturnValue("/files/image");
+  vi.mocked(resolveSessionFilePath).mockImplementation(async (_target, path) => ({
+    kind: "directory",
+    root: path,
+    path: "",
+    absolutePath: path,
+    entry: null,
+  }));
   document.documentElement.classList.remove("session-files-panel-moving");
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -1259,12 +1268,12 @@ describe("SessionFilesPanel", () => {
     expect(await within(panel).findByRole("button", { name: "Folder project" }))
       .toBeInTheDocument();
     await waitFor(() => expect(
-      within(panel).getByLabelText("Directory path"),
+      within(panel).getByLabelText("File or directory path"),
     ).toHaveValue("/work"));
 
     fireEvent.click(within(panel).getByRole("button", { name: "Pane cwd" }));
     await waitFor(() => expect(
-      within(panel).getByLabelText("Directory path"),
+      within(panel).getByLabelText("File or directory path"),
     ).toHaveValue("/work/project"));
   });
 
@@ -1282,7 +1291,7 @@ describe("SessionFilesPanel", () => {
     const panel = await screen.findByRole("dialog", { name: "Files" });
     await within(panel).findByRole("button", { name: "File main.py" });
 
-    fireEvent.change(within(panel).getByLabelText("Directory path"), {
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
       target: { value: "/etc/nginx" },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
@@ -1298,6 +1307,152 @@ describe("SessionFilesPanel", () => {
     await waitFor(() => expect(
       within(panel).getByRole("button", { name: "nginx" }),
     ).toBeInTheDocument());
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "/etc/nginx",
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("opens a hidden file path even when its parent listing is truncated", async () => {
+    const paneListing = listing("", [entry("main.py", "main.py", "file")]);
+    const directEntry = entry(".runbook.md", ".runbook.md", "file", {
+      absolutePath: "/srv/data/.runbook.md",
+      terminalText: "/srv/data/.runbook.md",
+      hidden: true,
+    });
+    const truncatedParent = {
+      ...listingAt("/srv/data", [], "/srv"),
+      truncated: true,
+      limit: 1_000,
+    };
+    vi.mocked(listSessionFiles).mockImplementation(async (target) => (
+      target.root === "/srv/data" ? truncatedParent : paneListing
+    ));
+    vi.mocked(resolveSessionFilePath).mockResolvedValue({
+      kind: "file",
+      root: "/srv/data",
+      path: ".runbook.md",
+      absolutePath: "/srv/data/.runbook.md",
+      entry: directEntry,
+    });
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      ".runbook.md",
+      ".runbook.md",
+      "direct file content",
+      {
+        root: "/srv/data",
+        absolutePath: "/srv/data/.runbook.md",
+        terminalText: "/srv/data/.runbook.md",
+      },
+    ));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
+      target: { value: "/srv/data/.runbook.md" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
+
+    expect(await within(panel).findByText("direct file content")).toBeInTheDocument();
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "/srv/data/.runbook.md",
+      expect.any(AbortSignal),
+    );
+    expect(previewSessionFile).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3", root: "/srv/data" },
+      ".runbook.md",
+      expect.any(AbortSignal),
+    );
+    expect(within(panel).getByText("Showing the first 1,000 entries."))
+      .toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "File .runbook.md" }))
+      .not.toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Hide dotfiles" }))
+      .toBeInTheDocument();
+    expect(within(panel).getByText("Opened .runbook.md")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Refresh directory" }));
+    expect(await within(panel).findByText("direct file content")).toBeInTheDocument();
+  });
+
+  it("opens an image entered as an absolute path", async () => {
+    const directEntry = entry("diagram.png", "diagram.png", "file", {
+      absolutePath: "/srv/assets/diagram.png",
+      terminalText: "/srv/assets/diagram.png",
+      size: 4_096,
+    });
+    vi.mocked(listSessionFiles).mockImplementation(async (target) => (
+      target.root === "/srv/assets"
+        ? listingAt("/srv/assets", [directEntry], "/srv")
+        : listing("", [entry("main.py", "main.py", "file")])
+    ));
+    vi.mocked(resolveSessionFilePath).mockResolvedValue({
+      kind: "file",
+      root: "/srv/assets",
+      path: "diagram.png",
+      absolutePath: "/srv/assets/diagram.png",
+      entry: directEntry,
+    });
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/srv/assets",
+      name: "diagram.png",
+      path: "diagram.png",
+      absolutePath: "/srv/assets/diagram.png",
+      terminalText: "/srv/assets/diagram.png",
+      kind: "image",
+      mediaType: "image/png",
+      size: 4_096,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 4_096,
+      content: null,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
+      target: { value: "/srv/assets/diagram.png" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
+
+    const image = await within(panel).findByRole("img", {
+      name: "Preview of diagram.png",
+    });
+    expect(image).toHaveAttribute("src", "/files/image");
+    expect(sessionFileImageUrl).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3", root: "/srv/assets" },
+      "diagram.png",
+    );
+  });
+
+  it("keeps a rejected direct path editable and leaves the current folder open", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(
+      listing("", [entry("main.py", "main.py", "file")]),
+    );
+    vi.mocked(resolveSessionFilePath).mockRejectedValue(
+      apiError("file or directory no longer exists", 404),
+    );
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await within(panel).findByRole("button", { name: "File main.py" });
+    const listingCalls = vi.mocked(listSessionFiles).mock.calls.length;
+
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
+      target: { value: "/missing/readme.md" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
+
+    expect(await within(panel).findByText("file or directory no longer exists"))
+      .toBeInTheDocument();
+    expect(within(panel).getByLabelText("File or directory path"))
+      .toHaveValue("/missing/readme.md");
+    expect(within(panel).getByRole("button", { name: "File main.py" }))
+      .toBeInTheDocument();
+    expect(vi.mocked(listSessionFiles).mock.calls).toHaveLength(listingCalls);
   });
 
   it("refuses a relative path in the address bar without calling the API", async () => {
@@ -1309,7 +1464,7 @@ describe("SessionFilesPanel", () => {
     await within(panel).findByRole("button", { name: "File main.py" });
     const calls = vi.mocked(listSessionFiles).mock.calls.length;
 
-    fireEvent.change(within(panel).getByLabelText("Directory path"), {
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
       target: { value: "relative/path" },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
@@ -1318,7 +1473,7 @@ describe("SessionFilesPanel", () => {
       "Enter an absolute path, starting with / or ~",
     )).toBeInTheDocument();
     // The rejected draft stays put instead of snapping back.
-    expect(within(panel).getByLabelText("Directory path"))
+    expect(within(panel).getByLabelText("File or directory path"))
       .toHaveValue("relative/path");
     expect(vi.mocked(listSessionFiles).mock.calls).toHaveLength(calls);
   });
@@ -1359,7 +1514,7 @@ describe("SessionFilesPanel", () => {
     const panel = await screen.findByRole("dialog", { name: "Files" });
     await within(panel).findByRole("button", { name: "File main.py" });
 
-    fireEvent.change(within(panel).getByLabelText("Directory path"), {
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
       target: { value: "/srv/data" },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
@@ -1383,7 +1538,7 @@ describe("SessionFilesPanel", () => {
     const panel = await screen.findByRole("dialog", { name: "Files" });
     await within(panel).findByRole("button", { name: "File main.py" });
 
-    const address = within(panel).getByLabelText("Directory path");
+    const address = within(panel).getByLabelText("File or directory path");
     address.focus();
     fireEvent.change(address, { target: { value: "/half-typed" } });
     fireEvent.keyDown(address, { key: "Escape" });
@@ -1398,7 +1553,7 @@ describe("SessionFilesPanel", () => {
     );
     renderPanel();
     const panel = await screen.findByRole("dialog", { name: "Files" });
-    const address = within(panel).getByLabelText("Directory path") as HTMLInputElement;
+    const address = within(panel).getByLabelText("File or directory path") as HTMLInputElement;
 
     // Deliberately no settle: this is the window where a synced field let a
     // pending flush land after the keystroke and revert it.
@@ -1406,7 +1561,7 @@ describe("SessionFilesPanel", () => {
     for (const character of "/etc") {
       fireEvent.change(address, { target: { value: address.value + character } });
       seen.push(
-        (within(panel).getByLabelText("Directory path") as HTMLInputElement).value,
+        (within(panel).getByLabelText("File or directory path") as HTMLInputElement).value,
       );
     }
 
@@ -1421,7 +1576,7 @@ describe("SessionFilesPanel", () => {
     // The other common gesture is replacing the whole value at once.
     fireEvent.change(address, { target: { value: "/srv" } });
     await waitFor(() => expect(
-      within(panel).getByLabelText("Directory path"),
+      within(panel).getByLabelText("File or directory path"),
     ).toHaveValue("/srv"));
   });
 
@@ -1440,7 +1595,7 @@ describe("SessionFilesPanel", () => {
       .toBeInTheDocument();
     // The address bar must not keep claiming the folder we navigated away from.
     await waitFor(() => expect(
-      within(panel).getByLabelText("Directory path"),
+      within(panel).getByLabelText("File or directory path"),
     ).toHaveValue("/work"));
     expect(within(panel).getByRole("button", { name: "Pane cwd" })).toBeInTheDocument();
   });
@@ -1460,7 +1615,7 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(await within(panel).findByRole("button", { name: "File README.md" }));
     expect(await within(panel).findByText("pane readme")).toBeInTheDocument();
 
-    fireEvent.change(within(panel).getByLabelText("Directory path"), {
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
       target: { value: "/etc" },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
@@ -1486,7 +1641,7 @@ describe("SessionFilesPanel", () => {
     const panel = await screen.findByRole("dialog", { name: "Files" });
     await within(panel).findByRole("button", { name: "File main.py" });
 
-    fireEvent.change(within(panel).getByLabelText("Directory path"), {
+    fireEvent.change(within(panel).getByLabelText("File or directory path"), {
       target: { value: "/etc" },
     });
     fireEvent.click(within(panel).getByRole("button", { name: "Go" }));
@@ -1496,7 +1651,7 @@ describe("SessionFilesPanel", () => {
       .toBeInTheDocument();
     // The breadcrumbs say etc > nginx, so the address bar must agree.
     await waitFor(() => expect(
-      within(panel).getByLabelText("Directory path"),
+      within(panel).getByLabelText("File or directory path"),
     ).toHaveValue("/etc/nginx"));
   });
 
@@ -1517,7 +1672,7 @@ describe("SessionFilesPanel", () => {
       .toBeDisabled();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Choose another folder" }));
-    expect(within(panel).getByLabelText("Directory path")).toHaveFocus();
+    expect(within(panel).getByLabelText("File or directory path")).toHaveFocus();
   });
 
   it("offers the path as selectable text when the browser has no clipboard", async () => {

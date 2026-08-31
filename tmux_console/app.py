@@ -9,7 +9,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, quote, urlsplit
@@ -56,12 +56,18 @@ from .file_browser import (
     preview_file,
     resolve_browse_boundary,
     resolve_browse_root,
+    resolve_browse_target,
     resolve_file_download,
     resolve_file_image_preview,
     upload_file,
     write_text_file,
 )
 from .history import SnapshotStore
+from .host_metrics import (
+    HOST_METRIC_RANGES,
+    HostMetricsSampler,
+    HostMetricsUnavailableError,
+)
 from .messages import (
     MessageNotFoundError,
     SessionMessageStore,
@@ -135,6 +141,7 @@ AUTH_DEVICE_REQUEST_KEY = web.RequestKey("muxdeck_auth_device", RememberedDevice
 AUTH_COOKIE_VALUE_REQUEST_KEY = web.RequestKey("muxdeck_auth_cookie_value", str)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
 FILE_BROWSER_ROOT_KEY = web.AppKey("file_browser_root", Path)
+HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -755,6 +762,7 @@ def create_app(
     auth_mode: str | AuthMode | None = None,
     auth_cookie_secure: bool | None = None,
     file_browser_root: str | None = None,
+    host_metrics: HostMetricsSampler | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -811,6 +819,7 @@ def create_app(
         raise ValueError("provide attachments or uploads, not both")
     app[ATTACHMENTS_KEY] = attachments or uploads or AttachmentStore()
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
+    app[HOST_METRICS_KEY] = host_metrics or HostMetricsSampler()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
         app[TMUX_KEY],
@@ -834,6 +843,15 @@ def create_app(
     async def close_session_stream_broker(application: web.Application) -> None:
         await application[SESSION_STREAM_BROKER_KEY].close()
 
+    async def sample_host_metrics(
+        application: web.Application,
+    ) -> AsyncIterator[None]:
+        sampler = application[HOST_METRICS_KEY]
+        await sampler.start()
+        yield
+        await sampler.close()
+
+    app.cleanup_ctx.append(sample_host_metrics)
     app.on_cleanup.append(close_session_stream_broker)
     app.on_response_prepare.append(add_browser_security_headers)
 
@@ -1120,6 +1138,22 @@ def create_app(
             return web.json_response({"ok": True, "sessions": len(sessions)})
         except TmuxError as error:
             return web.json_response({"ok": False, "error": str(error)}, status=503)
+
+    async def host_metrics_snapshot(request: web.Request) -> web.Response:
+        unknown_fields = sorted(set(request.query) - {"range"})
+        if unknown_fields:
+            return json_error(f"unknown query field: {unknown_fields[0]}", 400)
+        values = request.query.getall("range", [])
+        if len(values) > 1:
+            return json_error("range must appear at most once", 400)
+        range_name = request.query.get("range", "15m")
+        if range_name not in HOST_METRIC_RANGES:
+            return json_error("range must be 15m, 1h, or 24h", 400)
+        try:
+            payload = app[HOST_METRICS_KEY].snapshot(range_name)
+        except HostMetricsUnavailableError as error:
+            return json_error(str(error), 503)
+        return web.json_response(payload)
 
     async def sessions(_: web.Request) -> web.Response:
         try:
@@ -1487,6 +1521,28 @@ def create_app(
 
     async def list_session_files(request: web.Request) -> web.Response:
         return await session_file_request(request, within_boundary(list_directory))
+
+    async def resolve_session_file_target(request: web.Request) -> web.Response:
+        context = await session_file_context(
+            request,
+            allowed_fields=frozenset({"sessionId", "paneId", "path"}),
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, absolute_path, pane_id = context
+        payload = await execute_session_file_operation(
+            root_path,
+            absolute_path,
+            pane_id,
+            lambda _operation_root, operation_path: resolve_browse_target(
+                operation_path,
+                app[FILE_BROWSER_ROOT_KEY],
+            ),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        return web.json_response(payload)
 
     async def preview_session_file(request: web.Request) -> web.Response:
         return await session_file_request(
@@ -3300,6 +3356,7 @@ def create_app(
     session_segment = "{session:[^/]+}"
 
     app.router.add_get(f"{prefix}/api/health", health)
+    app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
     app.router.add_post(f"{prefix}/api/sessions/{session_segment}/copy", copy_session)
@@ -3314,6 +3371,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files",
         list_session_files,
+    )
+    app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/resolve",
+        resolve_session_file_target,
     )
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/preview",

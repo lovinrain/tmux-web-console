@@ -1247,6 +1247,56 @@ def test_resolve_browse_root_confines_navigation_to_the_boundary(tmp_path):
             file_browser.resolve_browse_root(value, boundary)
 
 
+def test_resolve_browse_target_distinguishes_directories_and_files(tmp_path):
+    boundary = tmp_path / "allowed"
+    folder = boundary / "project"
+    folder.mkdir(parents=True)
+    document = folder / "notes with space.md"
+    document.write_text("hello\n", encoding="utf-8")
+    link = folder / "notes-link.md"
+    link.symlink_to(document.name)
+
+    resolved_folder = file_browser.resolve_browse_target(str(folder), boundary)
+    assert resolved_folder == {
+        "kind": "directory",
+        "root": str(folder),
+        "path": "",
+        "absolutePath": str(folder),
+        "entry": None,
+    }
+
+    resolved_file = file_browser.resolve_browse_target(str(document), boundary)
+    assert resolved_file["kind"] == "file"
+    assert resolved_file["root"] == str(folder)
+    assert resolved_file["path"] == document.name
+    assert resolved_file["entry"] == {
+        "name": document.name,
+        "kind": "file",
+        "size": 6,
+        "modified": document.stat().st_mtime,
+        "hidden": False,
+        "symlink": False,
+        "accessible": True,
+        "path": document.name,
+        "absolutePath": str(document),
+        "terminalText": f"'{document}'",
+    }
+
+    resolved_link = file_browser.resolve_browse_target(str(link), boundary)
+    assert resolved_link["path"] == link.name
+    assert resolved_link["entry"]["symlink"] is True
+    assert resolved_link["entry"]["absolutePath"] == str(link)
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("no", encoding="utf-8")
+    with pytest.raises(file_browser.FileBrowserPathOutsideRootError):
+        file_browser.resolve_browse_target(str(outside), boundary)
+    with pytest.raises(FileNotFoundError):
+        file_browser.resolve_browse_target(str(folder / "missing.txt"), boundary)
+    with pytest.raises(ValueError):
+        file_browser.resolve_browse_target("relative.txt", boundary)
+
+
 def test_browsable_parent_stops_at_the_boundary(tmp_path):
     boundary = tmp_path / "allowed"
     nested = boundary / "one" / "two"
@@ -1320,6 +1370,42 @@ async def test_file_browser_api_browses_above_the_pane_directory(tmp_path):
         )
         assert created.status == 201
         assert (workspace / "archive").is_dir()
+    finally:
+        await client.close()
+
+
+async def test_file_browser_api_resolves_an_absolute_file_for_direct_preview(tmp_path):
+    pane_directory = tmp_path / "workspace"
+    pane_directory.mkdir()
+    document = pane_directory / "README.md"
+    document.write_text("direct file\n", encoding="utf-8")
+    client = await make_client(FileBrowserFakeTmux([make_session(pane_directory)]))
+    identity = {"sessionId": "$7", "paneId": "%3"}
+    try:
+        resolved = await client.get(
+            "/api/sessions/files-agent/files/resolve",
+            params={**identity, "path": str(document)},
+        )
+        assert resolved.status == 200
+        payload = await resolved.json()
+        assert payload["kind"] == "file"
+        assert payload["root"] == str(pane_directory)
+        assert payload["path"] == "README.md"
+        assert payload["entry"]["absolutePath"] == str(document)
+
+        directory = await client.get(
+            "/api/sessions/files-agent/files/resolve",
+            params={**identity, "path": str(pane_directory)},
+        )
+        assert directory.status == 200
+        assert (await directory.json())["kind"] == "directory"
+
+        relative = await client.get(
+            "/api/sessions/files-agent/files/resolve",
+            params={**identity, "path": "README.md"},
+        )
+        assert relative.status == 400
+        assert (await relative.json())["error"] == "path must be an absolute path"
     finally:
         await client.close()
 

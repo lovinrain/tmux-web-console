@@ -30,6 +30,7 @@ import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
 import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
 import { WorkspaceTimer } from "./components/WorkspaceTimer";
+import { HostPulse } from "./components/HostPulse";
 import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import {
   SessionWorkspaceNavigation,
@@ -58,6 +59,7 @@ import {
   isolatedWorkspaceSearch,
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
+  moveWorkspaceSessions,
   removeWorkspaceTabGroup,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
@@ -1942,6 +1944,14 @@ function AppRoutes() {
     commitWorkspaceStructure(nextWorkspace);
   }, [commitWorkspaceStructure]);
 
+  const moveSessionTabs = useCallback((sessionNames: string[], targetIndex: number) => {
+    commitWorkspaceStructure(moveWorkspaceSessions(
+      workspaceRef.current,
+      sessionNames,
+      targetIndex,
+    ));
+  }, [commitWorkspaceStructure]);
+
   const sortSessionTabsByWorkingState = useCallback(() => {
     const workingSessionNames = new Set(
       knownSessionsRef.current
@@ -2865,6 +2875,13 @@ function AppRoutes() {
                 : null}
               workspaceName={workspaceName}
             />
+            <HostPulse
+              sessionName={sessionName}
+              workspaceId={hydratedWorkspaceId === locationWorkspaceId
+                ? locationWorkspaceId
+                : null}
+              workspaceName={workspaceName}
+            />
           </div>
         )}
         workspaceLinks={(
@@ -2920,6 +2937,7 @@ function AppRoutes() {
             onDesktopTabRailWidthChange={setDesktopTabRailWidth}
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
+            onMoveTabs={moveSessionTabs}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onToggleTabActions={() => setDesktopTabActionsVisible(
               !desktopTabActionsVisible,
@@ -2972,6 +2990,7 @@ function AppRoutes() {
             onDesktopTabRailWidthChange={setDesktopTabRailWidth}
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
+            onMoveTabs={moveSessionTabs}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onToggleTabActions={() => setDesktopTabActionsVisible(
               !desktopTabActionsVisible,

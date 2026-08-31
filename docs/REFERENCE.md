@@ -232,8 +232,11 @@ mobile layouts.
 The working-directory line beneath the desktop session title opens a separate
 movable and resizable file browser. It opens at the live pane CWD and can be
 pointed elsewhere: `Go up` keeps stepping above that directory, and the address
-row takes an absolute path (`~` is expanded by the server) and jumps straight to
-it. `Pane cwd` returns to the pane's own directory, and the first breadcrumb
+row takes an absolute file or directory path (`~` is expanded by the server).
+A directory opens in place. A regular file opens its parent directory, selects
+that exact entry, and immediately starts its text, image, or binary preview; this
+still works for a hidden file or when a large parent listing is truncated before
+the requested entry. `Pane cwd` returns to the pane's own directory, and the first breadcrumb
 shows `cwd` only while the browser is actually there. How far it may be pointed
 is set by `MUXDECK_FILE_BROWSER_ROOT`, which defaults to the whole filesystem;
 `Go up` stops being offered at that boundary, a path outside it is refused, and a
@@ -610,6 +613,17 @@ tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
 
+Desktop top and side tabs can also move as a selection. Shift-click selects the
+contiguous range from the active or most recently clicked tab; Ctrl-click on
+Windows/Linux or Cmd-click on macOS toggles individual tabs without changing the
+active session. Selected tabs receive check marks and a compact `N selected`
+tray; drag any selected tab to move the complete set while preserving its
+relative order. Named groups are atomic, so selecting one member selects and
+moves the whole group, including when the group is collapsed. A normal tab click,
+the tray's close button, or Escape clears the browser-local selection. Selection
+itself is intentionally temporary, while a completed move updates the URL and
+synchronizes the new order to a saved workspace.
+
 The side rail includes a `Non-working first` sort action. Each click performs a
 one-time stable partition of the real workspace order: every state other than
 `Working` stays first, `Working` sessions move after them, and tabs retain their
@@ -653,6 +667,24 @@ the alarm is dismissed. Stopwatch and countdown progress use wall-clock timestam
 so they remain accurate through background-tab throttling and reloads. Timer state,
 the pin/open choice, and window position are browser-local and isolated by saved
 workspace ID; they do not alter tmux or the server-side workspace record.
+
+`Host Pulse` is the adjacent desktop server-health card. It always shows the
+latest aggregate CPU and memory percentages; selecting it opens a non-modal panel
+with CPU and memory charts, one/five/fifteen-minute load average, available RAM,
+and swap use. The chart can select 15-minute, one-hour, or 24-hour history, while
+Pause stops only that browser's refresh. The title strip moves the panel, the
+corner grip resizes it, and both also support arrow-key operation. Open, pinned,
+paused, range, position, and size state are browser-local and isolated by saved
+workspace ID. An unpinned panel closes on a session switch; a pinned one remains
+visible and is restored when that workspace is resumed. Host Pulse is not rendered
+in compact/mobile layouts.
+
+The backend owns one Linux host sampler, regardless of how many browser tabs are
+open. It reads aggregate `/proc/stat` and `/proc/meminfo` counters every five
+seconds, keeps a bounded 24-hour in-memory ring, and returns at most 180 chart
+points per request. `GET /api/host-metrics?range=15m|1h|24h` serves cached data,
+so browser polling performs no extra `/proc` sampling. History starts empty after
+a service restart and fills forward; it is intentionally not written to disk.
 
 `Actions` in the same desktop `VIEW` toolbar shows or hides the repeated controls
 on every quick tab. Turning it off removes the directional reorder, new-window,

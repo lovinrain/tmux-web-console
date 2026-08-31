@@ -19,6 +19,7 @@ import {
   listSessionFiles,
   moveSessionFileEntry,
   previewSessionFile,
+  resolveSessionFilePath,
   saveSessionFileContent,
   sessionFileDownloadUrl,
   sessionFileImageUrl,
@@ -255,8 +256,10 @@ export function SessionFilesPanel({
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const layerTriggerRef = useRef<HTMLElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const addressAbortRef = useRef<AbortController | null>(null);
   const fileDragDepthRef = useRef(0);
   const pendingSelectionPathRef = useRef<string | null>(null);
+  const directSelectionEntryRef = useRef<SessionFileEntry | null>(null);
   const internalDragRef = useRef<SessionFileEntry | null>(null);
   const selectedPathRef = useRef<string | null>(null);
   const identityRef = useRef("");
@@ -267,6 +270,7 @@ export function SessionFilesPanel({
   const [browseRoot, setBrowseRoot] = useState(panePath);
   const [addressValue, setAddressValue] = useState(panePath);
   const [addressEdited, setAddressEdited] = useState(false);
+  const [addressResolving, setAddressResolving] = useState(false);
   const [manualCopyPath, setManualCopyPath] = useState<string | null>(null);
   const [directoryPath, setDirectoryPath] = useState("");
   const [listing, setListing] = useState<SessionDirectoryListing | null>(null);
@@ -316,7 +320,7 @@ export function SessionFilesPanel({
     ...(browseRoot === panePath ? {} : { root: browseRoot }),
   }), [browseRoot, paneId, panePath, sessionId, sessionName]);
 
-  const busy = uploading || working;
+  const busy = uploading || working || addressResolving;
   const editorDirty = editing && editorValue !== editorOrigin;
 
   const keepVisible = useCallback(() => {
@@ -355,12 +359,16 @@ export function SessionFilesPanel({
     identityRef.current = identity;
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
+    addressAbortRef.current?.abort();
+    addressAbortRef.current = null;
     fileDragDepthRef.current = 0;
     pendingSelectionPathRef.current = null;
+    directSelectionEntryRef.current = null;
     internalDragRef.current = null;
     setBrowseRoot(panePath);
     setAddressValue(panePath);
     setAddressEdited(false);
+    setAddressResolving(false);
     setDirectoryPath("");
     setListing(null);
     setSelected(null);
@@ -382,7 +390,10 @@ export function SessionFilesPanel({
     setManualCopyPath(null);
   }, [identity, panePath]);
 
-  useEffect(() => () => uploadAbortRef.current?.abort(), []);
+  useEffect(() => () => {
+    uploadAbortRef.current?.abort();
+    addressAbortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -405,18 +416,27 @@ export function SessionFilesPanel({
       setCheckedPaths((current) => current.filter((path) => available.has(path)));
       const pendingPath = pendingSelectionPathRef.current;
       pendingSelectionPathRef.current = null;
+      const directEntry = directSelectionEntryRef.current;
       // Keeping the previous selection across a refresh avoids blanking an open
       // preview; an entry that no longer exists here is dropped instead.
       setSelected((current) => {
         const wantedPath = pendingPath ?? current?.path ?? null;
         if (!wantedPath) return null;
-        const match = available.get(wantedPath);
+        const listedMatch = available.get(wantedPath);
+        const match = listedMatch
+          ?? (directEntry?.path === wantedPath ? directEntry : undefined);
+        if (listedMatch && directEntry?.path === wantedPath) {
+          directSelectionEntryRef.current = listedMatch;
+        }
         return match && match.kind === "file" ? match : null;
       });
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       setListing(null);
-      setSelected(null);
+      setSelected((current) => {
+        const directEntry = directSelectionEntryRef.current;
+        return directEntry && directEntry.path === current?.path ? directEntry : null;
+      });
       setListingError(errorMessage(error, "Unable to list this directory"));
     }).finally(() => {
       if (!controller.signal.aborted) setListingLoading(false);
@@ -622,6 +642,7 @@ export function SessionFilesPanel({
     if (!guardBusy("Wait for the current operation to finish before changing folders")) return;
     if (!guardEditor()) return;
     setDirectoryPath(path);
+    directSelectionEntryRef.current = null;
     setFilter("");
     setActionStatus(null);
     setTaskItems([]);
@@ -646,6 +667,7 @@ export function SessionFilesPanel({
     if (!guardEditor()) return;
     setBrowseRoot(absolute);
     setDirectoryPath("");
+    directSelectionEntryRef.current = null;
     setSelected(null);
     setFilter("");
     setActionStatus(null);
@@ -821,6 +843,10 @@ export function SessionFilesPanel({
     }
     if (succeeded.length > 0) {
       const done = new Set(succeeded.map((entry) => entry.path));
+      if (directSelectionEntryRef.current
+        && done.has(directSelectionEntryRef.current.path)) {
+        directSelectionEntryRef.current = null;
+      }
       setCheckedPaths((current) => current.filter((path) => !done.has(path)));
       // Reloading the listing clears the selection, so an open preview that
       // this batch did not touch is restored once the new entries arrive.
@@ -1370,7 +1396,51 @@ export function SessionFilesPanel({
       setActionStatus("Enter an absolute path, starting with / or ~");
       return;
     }
-    navigateToRoot(trimmed);
+    if (!guardBusy("Wait for the current operation to finish before opening a path")) return;
+    if (!guardEditor()) return;
+
+    const controller = new AbortController();
+    addressAbortRef.current?.abort();
+    addressAbortRef.current = controller;
+    const resolvingIdentity = identityRef.current;
+    setAddressResolving(true);
+    setActionStatus(null);
+    void resolveSessionFilePath(
+      { session: sessionName, sessionId, paneId },
+      trimmed,
+      controller.signal,
+    ).then((resolved) => {
+      if (controller.signal.aborted || identityRef.current !== resolvingIdentity) return;
+      if (resolved.kind === "directory") {
+        navigateToRoot(resolved.root);
+        return;
+      }
+      if (!resolved.entry) {
+        throw new Error("The server did not return the file to open");
+      }
+      directSelectionEntryRef.current = resolved.entry;
+      pendingSelectionPathRef.current = resolved.path;
+      setBrowseRoot(resolved.root);
+      setDirectoryPath("");
+      setSelected(resolved.entry);
+      setFilter("");
+      setTaskItems([]);
+      setPrompt(null);
+      setConfirm(null);
+      setCheckedPaths([]);
+      setManualCopyPath(null);
+      if (resolved.entry.hidden) setShowHidden(true);
+      setAddressEdited(false);
+      setActionStatus(`Opened ${resolved.entry.name}`);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted && identityRef.current === resolvingIdentity) {
+        setActionStatus(errorMessage(error, "Unable to open that path"));
+      }
+    }).finally(() => {
+      if (addressAbortRef.current !== controller) return;
+      addressAbortRef.current = null;
+      setAddressResolving(false);
+    });
   };
 
   const promptIsMove = prompt?.mode === "move" || prompt?.mode === "bulk-move";
@@ -1534,19 +1604,21 @@ export function SessionFilesPanel({
           <input
             ref={addressInputRef}
             type="text"
-            aria-label="Directory path"
+            aria-label="File or directory path"
             spellCheck={false}
             autoComplete="off"
             value={addressShown}
             disabled={busy}
-            placeholder="/absolute/path"
+            placeholder="/absolute/path/to/folder-or-file"
             onChange={(event) => {
               setAddressValue(event.target.value);
               setAddressEdited(true);
             }}
           />
         </label>
-        <button type="submit" disabled={busy}>Go</button>
+        <button type="submit" disabled={busy}>
+          {addressResolving ? "Opening..." : "Go"}
+        </button>
         {!atPaneDirectory && (
           <button
             type="button"
@@ -1824,6 +1896,7 @@ export function SessionFilesPanel({
                 onClick={() => {
                   if (entry.kind === "directory") navigateTo(entry.path);
                   else if (guardEditor()) {
+                    directSelectionEntryRef.current = null;
                     setSelected(entry);
                     setActionStatus(null);
                   }

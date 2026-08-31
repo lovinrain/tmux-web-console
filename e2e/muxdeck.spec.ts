@@ -1543,11 +1543,11 @@ test("desktop CWD browser navigates above the pane directory and by absolute pat
     await page.getByRole("button", { name: `Browse files in ${panePath}` }).click();
     const browser = page.getByRole("dialog", { name: "Files" });
     await expect(browser).toBeVisible();
-    await expect(browser.getByLabel("Directory path")).toHaveValue(panePath);
+    await expect(browser.getByLabel("File or directory path")).toHaveValue(panePath);
 
     // Step above the pane working directory, which used to be the hard root.
     await browser.getByRole("button", { name: "Go to parent directory" }).click();
-    await expect(browser.getByLabel("Directory path")).toHaveValue(parentPath);
+    await expect(browser.getByLabel("File or directory path")).toHaveValue(parentPath);
     // Scoped to the breadcrumb: entries in the parent directory can share its name.
     await expect(
       browser.locator(".session-files-breadcrumbs").getByRole("button", { name: parentName }),
@@ -1555,11 +1555,18 @@ test("desktop CWD browser navigates above the pane directory and by absolute pat
     await page.screenshot({ path: "artifacts/desktop-cwd-above-pane.png" });
 
     // Jump straight to an unrelated absolute path.
-    await browser.getByLabel("Directory path").fill(elsewhere);
+    await browser.getByLabel("File or directory path").fill(elsewhere);
     await browser.getByRole("button", { name: "Go", exact: true }).click();
     await expect(browser.getByRole("button", { name: "File note.txt" })).toBeVisible();
     await expect(browser.getByRole("button", { name: "Folder child" })).toBeVisible();
     await page.screenshot({ path: "artifacts/desktop-cwd-address-bar.png" });
+
+    // The same address accepts a file and opens its preview directly.
+    await browser.getByLabel("File or directory path").fill(`${elsewhere}/note.txt`);
+    await browser.getByRole("button", { name: "Go", exact: true }).click();
+    await expect(browser.locator(".session-file-preview pre"))
+      .toHaveText("outside the pane tree\n");
+    await expect(browser.getByText("Opened note.txt")).toBeVisible();
 
     // Operations follow the browsed root, not the pane directory.
     await browser.getByRole("button", { name: "Create a folder here" }).click();
@@ -1570,12 +1577,10 @@ test("desktop CWD browser navigates above the pane directory and by absolute pat
     expect(existsSync(`${panePath}/made-here`)).toBe(false);
 
     await browser.getByRole("button", { name: "File note.txt" }).click();
-    await expect(browser.locator(".session-file-preview pre"))
-      .toHaveText("outside the pane tree\n");
 
     // And back to where the pane actually is.
     await browser.getByRole("button", { name: "Pane cwd" }).click();
-    await expect(browser.getByLabel("Directory path")).toHaveValue(panePath);
+    await expect(browser.getByLabel("File or directory path")).toHaveValue(panePath);
     await expect(
       browser.locator(".session-files-breadcrumbs").getByRole("button", { name: "cwd" }),
     ).toBeVisible();
@@ -2823,7 +2828,8 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
   const secondSession = `${sessionName}-reorder-second`;
   const thirdSession = `${sessionName}-reorder-third`;
   const initialTabs = [sessionName, secondSession, thirdSession];
-  const reorderedTabs = [sessionName, thirdSession, secondSession];
+  const singleReorderedTabs = [sessionName, thirdSession, secondSession];
+  const batchReorderedTabs = [thirdSession, secondSession, sessionName];
 
   for (const helperSession of [secondSession, thirdSession]) {
     execFileSync("tmux", [
@@ -2856,35 +2862,64 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
     });
     await moveThirdLeft.click();
     await expect(moveThirdLeft).toBeFocused();
-    await expect(visibleTabs).toHaveText(reorderedTabs);
+    await expect(visibleTabs).toHaveText(singleReorderedTabs);
     await expectRoute(
       page,
       `/mux/session/${secondSession}`,
-      reorderedTabs,
+      singleReorderedTabs,
       { kind: "shells", view: "list" },
     );
     await expect(page.getByRole("tab", {
       name: new RegExp(`^${secondSession},`),
     })).toHaveAttribute("aria-selected", "true");
 
+    const thirdTab = page.getByRole("tab", { name: new RegExp(`^${thirdSession},`) });
+    const secondTab = page.getByRole("tab", { name: new RegExp(`^${secondSession},`) });
+    const firstTab = page.getByRole("tab", { name: new RegExp(`^${sessionName},`) });
+    await thirdTab.click({ modifiers: ["Shift"] });
+    await expect(page.getByRole("group", { name: "2 tabs selected for moving" }))
+      .toBeVisible();
+    await expect(thirdTab.locator("xpath=..")).toHaveAttribute("data-tab-move-selected", "true");
+    await expect(secondTab.locator("xpath=..")).toHaveAttribute("data-tab-move-selected", "true");
+    const firstTabBox = await firstTab.locator("xpath=..").boundingBox();
+    expect(firstTabBox).not.toBeNull();
+    const tabDragTransfer = await page.evaluateHandle(() => new DataTransfer());
+    const tabDragPosition = {
+      clientX: firstTabBox!.x + 2,
+      clientY: firstTabBox!.y + firstTabBox!.height / 2,
+      dataTransfer: tabDragTransfer,
+    };
+    await secondTab.dispatchEvent("dragstart", { dataTransfer: tabDragTransfer });
+    await firstTab.dispatchEvent("dragover", tabDragPosition);
+    await firstTab.dispatchEvent("drop", tabDragPosition);
+    await expect(visibleTabs).toHaveText(batchReorderedTabs);
+    await expectRoute(
+      page,
+      `/mux/session/${secondSession}`,
+      batchReorderedTabs,
+      { kind: "shells", view: "list" },
+    );
+
     await page.reload({ waitUntil: "domcontentloaded" });
     await expectRoute(
       page,
       `/mux/session/${secondSession}`,
-      reorderedTabs,
+      batchReorderedTabs,
       { kind: "shells", view: "list" },
     );
-    await expect(visibleTabs).toHaveText(reorderedTabs);
+    await expect(visibleTabs).toHaveText(batchReorderedTabs);
+    await expect(page.getByRole("group", { name: /tabs selected for moving/ }))
+      .toHaveCount(0);
 
     await page.setViewportSize({ width: 390, height: 664 });
     await page.getByRole("navigation", { name: "Mobile console focus" })
       .getByRole("button", { name: "Overview" })
       .click();
-    await page.getByRole("button", { name: `Move ${thirdSession} tab up` }).click();
+    await page.getByRole("button", { name: `Move ${thirdSession} tab down` }).click();
     await expect(page.getByRole("button", {
       name: `Move ${thirdSession} tab down`,
     })).toBeFocused();
-    const mobileReorderedTabs = [thirdSession, sessionName, secondSession];
+    const mobileReorderedTabs = [secondSession, thirdSession, sessionName];
     await expectRoute(
       page,
       `/mux/session/${secondSession}/recents`,
@@ -5102,6 +5137,114 @@ test("desktop workspace timer floats, pins, persists, and alarms", async ({
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(card).toBeHidden();
     await expect(timer).toBeHidden();
+  } finally {
+    if (workspaceId) {
+      try {
+        await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      } catch {
+        // Cleanup stays scoped to the disposable workspace created by this test.
+      }
+    }
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${helperSession}`], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Cleanup stays scoped to the helper session on the disposable test socket.
+    }
+  }
+});
+
+test("desktop Host Pulse samples the server and persists its pinned workspace panel", async ({
+  page,
+  request,
+}) => {
+  const helperSession = `${sessionName}-host-pulse`;
+  const workspaceName = `Host pulse workspace ${process.pid}`;
+  let workspaceId = "";
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      helperSession,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name: workspaceName,
+        tabs: [sessionName, helperSession],
+        groups: [],
+        activeSession: sessionName,
+      },
+    });
+    expect(response.ok()).toBe(true);
+    workspaceId = (await response.json()).workspace.id as string;
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(
+      `/mux/session/${encodeURIComponent(sessionName)}`
+      + `?workspace=${encodeURIComponent(workspaceId)}`
+      + `&tab=${encodeURIComponent(sessionName)}`
+      + `&tab=${encodeURIComponent(helperSession)}`,
+    );
+    const card = page.locator(".host-pulse-card");
+    await expect(card).toBeVisible();
+    await expect(card).toContainText("MEMORY");
+    await expect(card).toContainText(/\d+%/, { timeout: 10_000 });
+    await card.click();
+
+    const pulse = page.getByRole("dialog", { name: "Host Pulse" });
+    await expect(pulse).toBeVisible();
+    await expect(pulse.getByText("LOAD AVERAGE")).toBeVisible();
+    await expect(pulse.getByText("AVAILABLE")).toBeVisible();
+    await expect(pulse.getByText("SWAP")).toBeVisible();
+    await pulse.getByRole("button", { name: "1 H" }).click();
+    await expect(pulse.getByRole("button", { name: "1 H" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await pulse.getByRole("button", { name: "Pin Host Pulse" }).click();
+    await pulse.getByRole("button", { name: "Pause Host Pulse live updates" }).click();
+
+    const initialBox = await pulse.boundingBox();
+    expect(initialBox).not.toBeNull();
+    await pulse.getByLabel("Move Host Pulse window").press("ArrowLeft");
+    await pulse.getByRole("button", { name: "Resize Host Pulse window" })
+      .press("ArrowLeft");
+    await expect.poll(async () => (await pulse.boundingBox())?.x)
+      .toBeCloseTo(initialBox!.x - 12, 0);
+    await expect.poll(async () => (await pulse.boundingBox())?.width)
+      .toBeCloseTo(initialBox!.width - 12, 0);
+
+    await page.getByRole("tab", {
+      name: new RegExp(`^${helperSession},`),
+    }).click();
+    await expectRoute(
+      page,
+      `/mux/session/${helperSession}`,
+      [sessionName, helperSession],
+      { workspace: workspaceId },
+    );
+    await expect(pulse).toBeVisible();
+    await expect(pulse).toHaveAttribute("data-pinned", "true");
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(pulse).toBeVisible();
+    await expect(pulse.getByRole("button", { name: "1 H" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect(pulse.getByRole("button", { name: "Resume Host Pulse live updates" }))
+      .toBeVisible();
+    await page.screenshot({
+      path: "artifacts/host-pulse-desktop.png",
+      animations: "disabled",
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(card).toBeHidden();
+    await expect(pulse).toBeHidden();
   } finally {
     if (workspaceId) {
       try {

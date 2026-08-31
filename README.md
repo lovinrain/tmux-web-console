@@ -58,17 +58,20 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Real xterm.js terminals with direct keyboard input and responsive desktop,
   tablet, and phone layouts
 - Persistent named workspaces with colored, collapsible tab groups, ordered top
-  or side tabs, common/workspace/session quick-link shelves, scoped sticky notes,
-  and cross-device resume
+  or side tabs with desktop multi-select dragging, common/workspace/session
+  quick-link shelves, scoped sticky notes, and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
   indicators, reusable snippets, and desktop file attachments
 - A desktop file manager that opens at the pane CWD and browses anywhere inside
-  a configurable boundary, with an absolute-path address bar, safe text and
-  raster-image previews, uploads/downloads, shell-safe path staging, in-place
-  text editing, and confirmed create/rename/move/duplicate/delete including
-  multi-select bulk actions
+  a configurable boundary, with an address bar that opens absolute file or
+  directory paths, safe text and raster-image previews, uploads/downloads,
+  shell-safe path staging, in-place text editing, and confirmed
+  create/rename/move/duplicate/delete including multi-select bulk actions
+- A desktop Host Pulse card backed by one five-second server sampler, with
+  CPU/memory history, load/swap detail, and a movable, resizable, workspace-pinned
+  panel
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
@@ -122,6 +125,13 @@ For frontend development, run `npm run dev`. Vite serves
   saved workspaces restore its browser-local clock, layout, and pin state. An
   expired countdown rings, stays visibly alarmed, and marks the browser-tab title
   until dismissed.
+- Host Pulse adds a compact live CPU/memory card beside the timer. Its floating
+  panel charts 15 minutes, one hour, or 24 hours of server history and shows load,
+  available memory, and swap. The panel can move, resize, pause browser refreshes,
+  and stay pinned across session switches; layout and pin state persist locally
+  per saved workspace. One backend sampler reads Linux `/proc` every five seconds
+  for all connected browsers, so opening more workspaces does not multiply host
+  sampling work.
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not
   that a command or agent turn completed. Uncertain deliveries are never
   retried automatically.
@@ -131,9 +141,11 @@ For frontend development, run `npm run dev`. Vite serves
   pastes those paths at its cursor without pressing Enter. The active CLI agent
   runs as the same Unix user and can read the private host files directly.
 - On desktop, click the working-directory line beneath the session title to open
-  a movable, resizable file browser. Its root is always derived from
-  the live tmux pane; requests cannot select an arbitrary server root or follow
-  a symlink outside that CWD. Text previews are UTF-8 and capped at 1 MiB.
+  a movable, resizable file browser. It starts at the live tmux pane, while the
+  address row can open an absolute directory or open and preview an absolute file
+  directly anywhere inside `MUXDECK_FILE_BROWSER_ROOT`. Every operation remains
+  scoped to the displayed directory and cannot follow a symlink outside it. Text
+  previews are UTF-8 and capped at 1 MiB.
   Signature-verified PNG, JPEG, GIF, WebP, AVIF, BMP, and ICO files render in a
   fitted viewer up to 25 MiB and can be opened full size; active formats such as
   SVG are never embedded. Other binary files show metadata. Selected regular
