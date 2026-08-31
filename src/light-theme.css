@@ -1091,9 +1091,54 @@ html[data-theme="light"] .host-pulse-panel-header h2 {
 }
 
 html[data-theme="light"] .host-pulse-metrics article,
-html[data-theme="light"] .host-pulse-details {
+html[data-theme="light"] .host-pulse-details,
+html[data-theme="light"] .host-pulse-core-section,
+html[data-theme="light"] .host-pulse-pressure-section {
   background: rgba(250, 253, 251, 0.88);
   border-color: color-mix(in srgb, var(--host-accent) 24%, #c5d0ca);
+}
+
+html[data-theme="light"] .host-pulse-view-switcher,
+html[data-theme="light"] .host-pulse-core-grid article,
+html[data-theme="light"] .host-pulse-pressure-grid article {
+  background: #f8fcfa;
+  border-color: color-mix(in srgb, var(--host-accent) 21%, #c8d3cd);
+}
+
+html[data-theme="light"] .host-pulse-view-switcher button {
+  color: #5c7468;
+}
+
+html[data-theme="light"] .host-pulse-view-switcher button[aria-pressed="true"] {
+  color: color-mix(in srgb, var(--host-accent) 70%, #22362d);
+  background: color-mix(in srgb, var(--host-accent) 10%, #fff);
+  border-color: color-mix(in srgb, var(--host-accent) 32%, #bfcac4);
+}
+
+html[data-theme="light"] .host-pulse-view-switcher > span,
+html[data-theme="light"] .host-pulse-core-section > header small,
+html[data-theme="light"] .host-pulse-pressure-section > header small,
+html[data-theme="light"] .host-pulse-core-grid article > header span,
+html[data-theme="light"] .host-pulse-pressure-grid article > small,
+html[data-theme="light"] .host-pulse-pressure-grid article > p {
+  color: #6d8277;
+}
+
+html[data-theme="light"] .host-pulse-core-section > header h3,
+html[data-theme="light"] .host-pulse-pressure-section > header h3,
+html[data-theme="light"] .host-pulse-core-grid article > header strong,
+html[data-theme="light"] .host-pulse-pressure-grid article > output,
+html[data-theme="light"] .host-pulse-pressure-grid .swap-io > div strong {
+  color: #263b33;
+}
+
+html[data-theme="light"] .host-pulse-core-bar,
+html[data-theme="light"] .host-pulse-pressure-bar {
+  background: #d8e2dc;
+}
+
+html[data-theme="light"] .host-pulse-pressure-grid .swap-io > div {
+  border-color: #d5dfda;
 }
 
 html[data-theme="light"] .host-pulse-metrics article > header {

@@ -69,9 +69,9 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   directory paths, safe text and raster-image previews, uploads/downloads,
   shell-safe path staging, in-place text editing, and confirmed
   create/rename/move/duplicate/delete including multi-select bulk actions
-- A desktop Host Pulse card backed by one five-second server sampler, with
-  CPU/memory history, load/swap detail, and a movable, resizable, workspace-pinned
-  panel
+- A demand-driven desktop Host Pulse card with aggregate and per-core CPU,
+  memory PSI, swap activity, on-view history, and a movable, resizable,
+  workspace-pinned panel
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
@@ -126,12 +126,14 @@ For frontend development, run `npm run dev`. Vite serves
   expired countdown rings, stays visibly alarmed, and marks the browser-tab title
   until dismissed.
 - Host Pulse adds a compact live CPU/memory card beside the timer. Its floating
-  panel charts 15 minutes, one hour, or 24 hours of server history and shows load,
-  available memory, and swap. The panel can move, resize, pause browser refreshes,
-  and stay pinned across session switches; layout and pin state persist locally
-  per saved workspace. One backend sampler reads Linux `/proc` every five seconds
-  for all connected browsers, so opening more workspaces does not multiply host
-  sampling work.
+  panel keeps the existing aggregate overview and adds a detailed view for every
+  logical CPU core, RAM headroom, Linux PSI `some`/`full` memory stalls, swap use,
+  and swap-in/out rates. It can chart 15 minutes, one hour, or 24 hours of history,
+  move, resize, pause, and stay pinned across session switches; layout, view, and
+  pin state persist locally per saved workspace. Sampling is demand-driven: the
+  compact card takes one lightweight sample, and five-second history collection
+  runs only while the floating panel is open and unpaused. The backend coalesces
+  simultaneous requests instead of running a permanent timer.
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not
   that a command or agent turn completed. Uncertain deliveries are never
   retried automatically.

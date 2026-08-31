@@ -670,21 +670,28 @@ workspace ID; they do not alter tmux or the server-side workspace record.
 
 `Host Pulse` is the adjacent desktop server-health card. It always shows the
 latest aggregate CPU and memory percentages; selecting it opens a non-modal panel
-with CPU and memory charts, one/five/fifteen-minute load average, available RAM,
-and swap use. The chart can select 15-minute, one-hour, or 24-hour history, while
-Pause stops only that browser's refresh. The title strip moves the panel, the
-corner grip resizes it, and both also support arrow-key operation. Open, pinned,
-paused, range, position, and size state are browser-local and isolated by saved
-workspace ID. An unpinned panel closes on a session switch; a pinned one remains
-visible and is restored when that workspace is resumed. Host Pulse is not rendered
-in compact/mobile layouts.
+with an `Overview` and `Details` switch. Overview retains the aggregate CPU and
+memory charts, one/five/fifteen-minute load average, available RAM, and swap use.
+Details shows every logical core with its current load and trace, RAM used and
+headroom, Linux memory PSI `some` and `full` stall averages, swap utilization,
+and measured swap-in/out rates. The chart can select 15-minute, one-hour, or
+24-hour history, while Pause stops that browser's sampling. The title strip moves
+the panel, the corner grip resizes it, and both also support arrow-key operation.
+Open, pinned, paused, view, range, position, and size state are browser-local and
+isolated by saved workspace ID. An unpinned panel closes on a session switch; a
+pinned one remains visible and is restored when that workspace is resumed. Host
+Pulse is not rendered in compact/mobile layouts.
 
-The backend owns one Linux host sampler, regardless of how many browser tabs are
-open. It reads aggregate `/proc/stat` and `/proc/meminfo` counters every five
-seconds, keeps a bounded 24-hour in-memory ring, and returns at most 180 chart
-points per request. `GET /api/host-metrics?range=15m|1h|24h` serves cached data,
-so browser polling performs no extra `/proc` sampling. History starts empty after
-a service restart and fills forward; it is intentionally not written to disk.
+Host instrumentation is request-driven. A desktop card makes one initial request;
+then five-second requests and history collection occur only while its floating
+panel is open, visible, and unpaused. The backend reads aggregate and per-core
+`/proc/stat`, `/proc/meminfo`, optional `/proc/pressure/memory`, and optional swap
+counters from `/proc/vmstat` when the API is requested. A short cache and lock
+coalesce near-simultaneous browser requests. The first request takes two closely
+spaced counter reads so CPU and swap rates need not wait five seconds. The bounded
+24-hour in-memory ring returns at most 180 chart points; gaps remain gaps when no
+panel is actively viewing the host, and history is intentionally not written to
+disk. `GET /api/host-metrics?range=15m|1h|24h` performs this on-demand collection.
 
 `Actions` in the same desktop `VIEW` toolbar shows or hides the repeated controls
 on every quick tab. Turning it off removes the directional reorder, new-window,

@@ -41,10 +41,13 @@ interface PanelSize {
   height: number;
 }
 
+type HostPulseMode = "overview" | "details";
+
 interface HostPulsePanelState {
   open: boolean;
   pinned: boolean;
   paused: boolean;
+  mode: HostPulseMode;
   range: HostMetricRange;
   position: Point;
   size: PanelSize;
@@ -121,6 +124,7 @@ function defaultPanelState(): HostPulsePanelState {
     open: false,
     pinned: false,
     paused: false,
+    mode: "overview",
     range: "15m",
     position: defaultPosition(size),
     size,
@@ -151,6 +155,7 @@ function normalizePanelState(value: unknown): HostPulsePanelState {
     open: pinned || candidate.open === true,
     pinned,
     paused: candidate.paused === true,
+    mode: candidate.mode === "details" ? "details" : "overview",
     range,
     position,
     size,
@@ -219,14 +224,35 @@ function formatBytes(value: number): string {
   return `${Math.round(value / (1024 ** 2))} MB`;
 }
 
+function formatRate(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value < 0) return "--";
+  if (value < 1) return "0 B/s";
+  const units = ["B/s", "KB/s", "MB/s", "GB/s"];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits)} ${units[unit]}`;
+}
+
+function formatPressure(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "--";
+  if (value > 0 && value < 0.01) return "<0.01%";
+  return `${value.toFixed(value >= 10 ? 1 : 2)}%`;
+}
+
 function snapshotTone(snapshot: HostMetricsSnapshot | null, error: string | null): HostTone {
   if (!snapshot) return error ? "unavailable" : "nominal";
   const memoryPercent = snapshot.latest.memoryTotalBytes > 0
     ? snapshot.latest.memoryUsedBytes / snapshot.latest.memoryTotalBytes * 100
     : 0;
   const cpu = snapshot.latest.cpuPercent ?? 0;
-  if (cpu >= 92 || memoryPercent >= 94) return "critical";
-  if (cpu >= 78 || memoryPercent >= 86) return "warm";
+  const pressure = snapshot.latest.memoryPressure?.some?.avg10 ?? 0;
+  if (cpu >= 92 || memoryPercent >= 94 || pressure >= 20) return "critical";
+  if (cpu >= 78 || memoryPercent >= 86 || pressure >= 5) return "warm";
   return "nominal";
 }
 
@@ -268,6 +294,22 @@ function Sparkline({ values, kind }: { values: Array<number | null>; kind: "cpu"
   );
 }
 
+function CoreTrace({ values }: { values: Array<number | null> }) {
+  const numeric = values.filter((value): value is number => value !== null && Number.isFinite(value));
+  if (numeric.length < 2) return null;
+  const points = values.map((value, index) => {
+    const safe = value === null ? numeric[numeric.length - 1] : value;
+    const x = values.length === 1 ? 0 : index / (values.length - 1) * 100;
+    const y = 100 - Math.max(0, Math.min(100, safe));
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={points} />
+    </svg>
+  );
+}
+
 export function HostPulse({
   sessionName,
   workspaceId = null,
@@ -292,6 +334,8 @@ export function HostPulse({
   const [refreshToken, setRefreshToken] = useState(0);
   const [now, setNow] = useState(Date.now);
   const previousSessionRef = useRef({ identity: renderIdentity, sessionName });
+  const snapshotKeyRef = useRef("");
+  const samplingStateRef = useRef({ key: "", live: false, refreshToken: -1 });
 
   useEffect(() => {
     if (store.identity === renderIdentity) return;
@@ -329,9 +373,19 @@ export function HostPulse({
   }, [renderIdentity]);
 
   useEffect(() => {
-    if (!desktop || !active) return;
+    if (!desktop || !active) {
+      samplingStateRef.current = { key: "", live: false, refreshToken: -1 };
+      return;
+    }
     let controller: AbortController | null = null;
     let disposed = false;
+    const requestKey = `${renderIdentity}:${panel.range}`;
+    const live = panel.open && !panel.paused;
+    const previous = samplingStateRef.current;
+    const shouldLoad = previous.key !== requestKey
+      || previous.refreshToken !== refreshToken
+      || (live && !previous.live);
+    samplingStateRef.current = { key: requestKey, live, refreshToken };
     const load = () => {
       if (disposed || document.hidden) return;
       controller?.abort();
@@ -340,6 +394,7 @@ export function HostPulse({
       void getHostMetrics(panel.range, requestController.signal).then((next) => {
         if (requestController.signal.aborted) return;
         setSnapshot(next);
+        snapshotKeyRef.current = requestKey;
         setError(null);
         setNow(Date.now());
       }).catch((failure: unknown) => {
@@ -347,10 +402,10 @@ export function HostPulse({
         setError(failure instanceof Error ? failure.message : "Host metrics are unavailable");
       });
     };
-    load();
-    const interval = panel.paused ? null : window.setInterval(load, HOST_POLL_MS);
+    if (shouldLoad) load();
+    const interval = live ? window.setInterval(load, HOST_POLL_MS) : null;
     const visibilityChanged = () => {
-      if (!document.hidden) load();
+      if (!document.hidden && (live || snapshotKeyRef.current !== requestKey)) load();
     };
     document.addEventListener("visibilitychange", visibilityChanged);
     return () => {
@@ -359,7 +414,15 @@ export function HostPulse({
       document.removeEventListener("visibilitychange", visibilityChanged);
       controller?.abort();
     };
-  }, [active, desktop, panel.paused, panel.range, refreshToken]);
+  }, [
+    active,
+    desktop,
+    panel.open,
+    panel.paused,
+    panel.range,
+    refreshToken,
+    renderIdentity,
+  ]);
 
   useEffect(() => {
     if (!active || !panel.open || !snapshot) return;
@@ -515,6 +578,9 @@ export function HostPulse({
   const memoryPercent = snapshot && snapshot.latest.memoryTotalBytes > 0
     ? snapshot.latest.memoryUsedBytes / snapshot.latest.memoryTotalBytes * 100
     : null;
+  const swapPercent = snapshot && snapshot.latest.swapTotalBytes > 0
+    ? snapshot.latest.swapUsedBytes / snapshot.latest.swapTotalBytes * 100
+    : snapshot ? 0 : null;
   const tone = snapshotTone(snapshot, error);
   const cpuValues = useMemo(
     () => snapshot?.history.map((point) => point.cpuPercent) ?? [],
@@ -525,6 +591,13 @@ export function HostPulse({
       ? point.memoryUsedBytes / snapshot.latest.memoryTotalBytes * 100
       : null) ?? [],
     [snapshot],
+  );
+  const coreValues = snapshot?.latest.cpuCores ?? [];
+  const coreHistories = useMemo(
+    () => coreValues.map((_, coreIndex) => snapshot?.history.map((point) => (
+      coreIndex < (point.cpuCores?.length ?? 0) ? point.cpuCores[coreIndex] : null
+    ))) ?? [],
+    [coreValues, snapshot?.history],
   );
   const updatedSeconds = snapshot
     ? Math.max(0, Math.floor(now / 1_000 - snapshot.latest.observedAt))
@@ -570,7 +643,7 @@ export function HostPulse({
           <span>THIS HOST / {panel.paused ? "PAUSED" : "LIVE"}</span>
           <h2 id={headingId}>Host Pulse</h2>
         </div>
-        <em>{snapshot ? `${snapshot.sampleSeconds} SEC` : "5 SEC"}</em>
+        <em>ON DEMAND</em>
         {panel.pinned && <em>PINNED</em>}
         <button
           type="button"
@@ -605,6 +678,19 @@ export function HostPulse({
           <span title={snapshot?.hostname}>{snapshot?.hostname || "HOST METRICS"}</span>
           <strong><i />{toneLabel(tone)}</strong>
         </div>
+        <div className="host-pulse-view-switcher" role="group" aria-label="Host Pulse view">
+          {(["overview", "details"] as const).map((mode) => (
+            <button
+              type="button"
+              key={mode}
+              aria-pressed={panel.mode === mode}
+              onClick={() => updatePanel((current) => ({ ...current, mode }))}
+            >
+              {mode === "overview" ? "Overview" : "Details"}
+            </button>
+          ))}
+          <span>{panel.paused ? "SAMPLING PAUSED" : `${snapshot?.sampleSeconds ?? 5}S WHILE OPEN`}</span>
+        </div>
         {error && !snapshot && (
           <div className="host-pulse-error" role="status">
             <span>{error}</span>
@@ -613,34 +699,112 @@ export function HostPulse({
             </button>
           </div>
         )}
-        <div className="host-pulse-metrics" aria-live="polite">
-          <article>
-            <header><span>CPU</span><small>{snapshot?.cpuCount ?? "--"} CORES</small></header>
-            <output>{percent(snapshot?.latest.cpuPercent ?? null)}</output>
-            <Sparkline values={cpuValues} kind="cpu" />
-          </article>
-          <article>
-            <header><span>MEMORY</span><small>{snapshot
-              ? formatBytes(snapshot.latest.memoryTotalBytes)
-              : "--"}</small></header>
-            <output>{snapshot ? formatBytes(snapshot.latest.memoryUsedBytes) : "--"}</output>
-            <Sparkline values={memoryValues} kind="memory" />
-            <div className="host-pulse-memory-bar" aria-hidden="true">
-              <span style={{ width: `${Math.max(0, Math.min(100, memoryPercent ?? 0))}%` }} />
+        {panel.mode === "overview" ? (
+          <div className="host-pulse-overview">
+            <div className="host-pulse-metrics" aria-live="polite">
+              <article>
+                <header><span>CPU</span><small>{snapshot?.cpuCount ?? "--"} CORES</small></header>
+                <output>{percent(snapshot?.latest.cpuPercent ?? null)}</output>
+                <Sparkline values={cpuValues} kind="cpu" />
+              </article>
+              <article>
+                <header><span>MEMORY</span><small>{snapshot
+                  ? formatBytes(snapshot.latest.memoryTotalBytes)
+                  : "--"}</small></header>
+                <output>{snapshot ? formatBytes(snapshot.latest.memoryUsedBytes) : "--"}</output>
+                <Sparkline values={memoryValues} kind="memory" />
+                <div className="host-pulse-memory-bar" aria-hidden="true">
+                  <span style={{ width: `${Math.max(0, Math.min(100, memoryPercent ?? 0))}%` }} />
+                </div>
+              </article>
             </div>
-          </article>
-        </div>
-        <div className="host-pulse-details">
-          <span><small>LOAD AVERAGE</small><strong>{snapshot
-            ? snapshot.latest.loadAverage.map((value) => value.toFixed(2)).join(" / ")
-            : "-- / -- / --"}</strong></span>
-          <span><small>AVAILABLE</small><strong>{snapshot
-            ? formatBytes(snapshot.latest.memoryAvailableBytes)
-            : "--"}</strong></span>
-          <span><small>SWAP</small><strong>{snapshot
-            ? `${formatBytes(snapshot.latest.swapUsedBytes)} / ${formatBytes(snapshot.latest.swapTotalBytes)}`
-            : "--"}</strong></span>
-        </div>
+            <div className="host-pulse-details">
+              <span><small>LOAD AVERAGE</small><strong>{snapshot
+                ? snapshot.latest.loadAverage.map((value) => value.toFixed(2)).join(" / ")
+                : "-- / -- / --"}</strong></span>
+              <span><small>AVAILABLE</small><strong>{snapshot
+                ? formatBytes(snapshot.latest.memoryAvailableBytes)
+                : "--"}</strong></span>
+              <span><small>SWAP</small><strong>{snapshot
+                ? `${formatBytes(snapshot.latest.swapUsedBytes)} / ${formatBytes(snapshot.latest.swapTotalBytes)}`
+                : "--"}</strong></span>
+            </div>
+          </div>
+        ) : (
+          <div className="host-pulse-deep-dive" aria-live="polite">
+            <section className="host-pulse-core-section" aria-label="Per-core CPU utilization">
+              <header>
+                <div><small>LOGICAL PROCESSORS</small><h3>Every core</h3></div>
+                <strong>{coreValues.length} / {snapshot?.cpuCount ?? "--"}</strong>
+              </header>
+              {coreValues.length ? (
+                <div className="host-pulse-core-grid">
+                  {coreValues.map((value, coreIndex) => (
+                    <article
+                      key={coreIndex}
+                      aria-label={`CPU core ${coreIndex}: ${percent(value)}`}
+                    >
+                      <header><span>CORE {coreIndex}</span><strong>{percent(value)}</strong></header>
+                      <div className="host-pulse-core-bar" aria-hidden="true">
+                        <span style={{ width: `${Math.max(0, Math.min(100, value ?? 0))}%` }} />
+                      </div>
+                      <CoreTrace values={coreHistories[coreIndex] ?? []} />
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="host-pulse-detail-empty">WAITING FOR PER-CORE DELTAS</p>
+              )}
+            </section>
+
+            <section className="host-pulse-pressure-section" aria-label="Memory and swap pressure">
+              <header>
+                <div><small>STALLS + HEADROOM</small><h3>Memory / swap pressure</h3></div>
+                <strong>PSI 10S / 60S</strong>
+              </header>
+              <div className="host-pulse-pressure-grid">
+                <article className="memory">
+                  <small>RAM USED</small>
+                  <output>{percent(memoryPercent)}</output>
+                  <div className="host-pulse-pressure-bar" aria-hidden="true">
+                    <span style={{ width: `${Math.max(0, Math.min(100, memoryPercent ?? 0))}%` }} />
+                  </div>
+                  <p>{snapshot
+                    ? `${formatBytes(snapshot.latest.memoryAvailableBytes)} headroom / ${formatBytes(snapshot.latest.memoryTotalBytes)} total`
+                    : "Waiting for a sample"}</p>
+                </article>
+                <article className="psi">
+                  <small>PSI SOME</small>
+                  <output>{formatPressure(snapshot?.latest.memoryPressure?.some?.avg10)}</output>
+                  <strong>60S {formatPressure(snapshot?.latest.memoryPressure?.some?.avg60)}</strong>
+                  <p>At least one task stalled on memory.</p>
+                </article>
+                <article className="psi">
+                  <small>PSI FULL</small>
+                  <output>{formatPressure(snapshot?.latest.memoryPressure?.full?.avg10)}</output>
+                  <strong>60S {formatPressure(snapshot?.latest.memoryPressure?.full?.avg60)}</strong>
+                  <p>All runnable tasks stalled together.</p>
+                </article>
+                <article className="swap">
+                  <small>SWAP USED</small>
+                  <output>{percent(swapPercent)}</output>
+                  <div className="host-pulse-pressure-bar" aria-hidden="true">
+                    <span style={{ width: `${Math.max(0, Math.min(100, swapPercent ?? 0))}%` }} />
+                  </div>
+                  <p>{snapshot
+                    ? `${formatBytes(snapshot.latest.swapUsedBytes)} / ${formatBytes(snapshot.latest.swapTotalBytes)}`
+                    : "Waiting for a sample"}</p>
+                </article>
+                <article className="swap-io">
+                  <small>ACTIVE SWAP I/O</small>
+                  <div><span>IN</span><strong>{formatRate(snapshot?.latest.swapInBytesPerSecond ?? null)}</strong></div>
+                  <div><span>OUT</span><strong>{formatRate(snapshot?.latest.swapOutBytesPerSecond ?? null)}</strong></div>
+                  <p>Rates measured between requested samples.</p>
+                </article>
+              </div>
+            </section>
+          </div>
+        )}
         <footer className="host-pulse-footer">
           <div role="group" aria-label="Host metric history range">
             {(["15m", "1h", "24h"] as const).map((range) => (
@@ -666,7 +830,7 @@ export function HostPulse({
           </button>
         </footer>
         <p className="host-pulse-footnote">
-          ONE SERVER SAMPLER / SHARED BY EVERY WORKSPACE TAB
+          ON-DEMAND HISTORY / NO BACKGROUND SERVER TIMER WHEN CLOSED
         </p>
       </div>
       <button

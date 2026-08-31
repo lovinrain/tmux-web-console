@@ -9,7 +9,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, quote, urlsplit
@@ -843,15 +843,6 @@ def create_app(
     async def close_session_stream_broker(application: web.Application) -> None:
         await application[SESSION_STREAM_BROKER_KEY].close()
 
-    async def sample_host_metrics(
-        application: web.Application,
-    ) -> AsyncIterator[None]:
-        sampler = application[HOST_METRICS_KEY]
-        await sampler.start()
-        yield
-        await sampler.close()
-
-    app.cleanup_ctx.append(sample_host_metrics)
     app.on_cleanup.append(close_session_stream_broker)
     app.on_response_prepare.append(add_browser_security_headers)
 
@@ -1150,7 +1141,7 @@ def create_app(
         if range_name not in HOST_METRIC_RANGES:
             return json_error("range must be 15m, 1h, or 24h", 400)
         try:
-            payload = app[HOST_METRICS_KEY].snapshot(range_name)
+            payload = await app[HOST_METRICS_KEY].collect_snapshot(range_name)
         except HostMetricsUnavailableError as error:
             return json_error(str(error), 503)
         return web.json_response(payload)

@@ -5203,8 +5203,19 @@ test("desktop Host Pulse samples the server and persists its pinned workspace pa
     await expect(pulse.getByText("LOAD AVERAGE")).toBeVisible();
     await expect(pulse.getByText("AVAILABLE")).toBeVisible();
     await expect(pulse.getByText("SWAP")).toBeVisible();
+    await pulse.getByRole("button", { name: "Details" }).click();
+    const cores = pulse.getByRole("region", { name: "Per-core CPU utilization" });
+    await expect(cores).toBeVisible();
+    await expect(cores.getByLabel(/^CPU core 0:/)).toBeVisible();
+    const pressure = pulse.getByRole("region", { name: "Memory and swap pressure" });
+    await expect(pressure.getByText("PSI SOME")).toBeVisible();
+    await expect(pressure.getByText("PSI FULL")).toBeVisible();
+    await expect(pressure.getByText("SWAP USED")).toBeVisible();
+    await expect(pressure.getByText("ACTIVE SWAP I/O")).toBeVisible();
     await pulse.getByRole("button", { name: "1 H" }).click();
     await expect(pulse.getByRole("button", { name: "1 H" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect(pulse.getByRole("button", { name: "Details" }))
       .toHaveAttribute("aria-pressed", "true");
     await pulse.getByRole("button", { name: "Pin Host Pulse" }).click();
     await pulse.getByRole("button", { name: "Pause Host Pulse live updates" }).click();

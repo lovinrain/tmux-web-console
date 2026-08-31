@@ -749,12 +749,15 @@ merely to test that the application itself has no login.
     session switches, and restores its browser-local state per saved workspace.
     A disposable short countdown should visibly alarm and mark the browser-tab
     title; audio depends on the browser allowing Web Audio after the Start click.
-14. On desktop, Host Pulse should show live CPU and memory values from
-    `/api/host-metrics`, open a movable/resizable panel, switch among 15-minute,
-    one-hour, and 24-hour history, and restore its pinned layout after switching
-    sessions and reloading the saved workspace. Confirm the card and floating
-    panel disappear at compact mobile width. A fresh service needs two samples
-    before its first aggregate CPU percentage is available.
+14. On desktop, Host Pulse should take one initial CPU/memory sample, then remain
+    idle until its movable/resizable panel is open and unpaused. Confirm Overview
+    switches to Details, every logical core appears, and RAM headroom, PSI
+    `some`/`full`, swap use, and swap-in/out rates render. Switch among 15-minute,
+    one-hour, and 24-hour history; restore the selected view and pinned layout
+    after switching sessions and reloading the saved workspace. Closing or pausing
+    the panel must stop five-second sampling, and both card and panel must disappear
+    at compact mobile width. A fresh service should bootstrap its first aggregate
+    and per-core CPU percentages within the initial API request.
 15. Against a deliberately disposable session, `Attach files` accepts a small
     text or binary file through the picker and inserts an absolute path under
     the configured upload directory without sending it automatically. An image

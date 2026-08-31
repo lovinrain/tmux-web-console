@@ -48,14 +48,27 @@ export type HostMetricRange = "15m" | "1h" | "24h";
 export interface HostMetricPoint {
   observedAt: number;
   cpuPercent: number | null;
+  cpuCores: Array<number | null>;
   memoryUsedBytes: number;
+}
+
+export interface HostPressureAverages {
+  avg10: number;
+  avg60: number;
+  avg300: number;
 }
 
 export interface HostMetricLatest extends HostMetricPoint {
   memoryTotalBytes: number;
   memoryAvailableBytes: number;
+  memoryPressure: {
+    some: HostPressureAverages | null;
+    full: HostPressureAverages | null;
+  } | null;
   swapTotalBytes: number;
   swapUsedBytes: number;
+  swapInBytesPerSecond: number | null;
+  swapOutBytesPerSecond: number | null;
   loadAverage: [number, number, number];
 }
 
@@ -63,6 +76,7 @@ export interface HostMetricsSnapshot {
   hostname: string;
   cpuCount: number;
   sampleSeconds: number;
+  collectionMode: "on-demand";
   range: HostMetricRange;
   latest: HostMetricLatest;
   history: HostMetricPoint[];

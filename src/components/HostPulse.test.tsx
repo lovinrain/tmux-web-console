@@ -30,21 +30,44 @@ function snapshot(range: HostMetricsSnapshot["range"] = "15m"): HostMetricsSnaps
     hostname: "mux-host",
     cpuCount: 8,
     sampleSeconds: 5,
+    collectionMode: "on-demand",
     range,
     latest: {
       observedAt: Date.now() / 1_000 - 2,
       cpuPercent: 27,
+      cpuCores: [12, 48, 91, 7, 33, 62, 18, 45],
       memoryUsedBytes: 22.4 * gib,
       memoryTotalBytes: 31.3 * gib,
       memoryAvailableBytes: 8.9 * gib,
+      memoryPressure: {
+        some: { avg10: 1.25, avg60: 0.72, avg300: 0.41 },
+        full: { avg10: 0.08, avg60: 0.03, avg300: 0.01 },
+      },
       swapUsedBytes: 26 * gib,
       swapTotalBytes: 64 * gib,
+      swapInBytesPerSecond: 1.5 * 1024 ** 2,
+      swapOutBytesPerSecond: 512 * 1024,
       loadAverage: [1.71, 2.37, 2.52],
     },
     history: [
-      { observedAt: 1, cpuPercent: 18, memoryUsedBytes: 21.8 * gib },
-      { observedAt: 2, cpuPercent: 35, memoryUsedBytes: 22.1 * gib },
-      { observedAt: 3, cpuPercent: 27, memoryUsedBytes: 22.4 * gib },
+      {
+        observedAt: 1,
+        cpuPercent: 18,
+        cpuCores: [8, 35, 72, 4, 19, 41, 12, 22],
+        memoryUsedBytes: 21.8 * gib,
+      },
+      {
+        observedAt: 2,
+        cpuPercent: 35,
+        cpuCores: [16, 53, 96, 9, 42, 71, 24, 58],
+        memoryUsedBytes: 22.1 * gib,
+      },
+      {
+        observedAt: 3,
+        cpuPercent: 27,
+        cpuCores: [12, 48, 91, 7, 33, 62, 18, 45],
+        memoryUsedBytes: 22.4 * gib,
+      },
     ],
   };
 }
@@ -96,6 +119,54 @@ describe("HostPulse", () => {
     expect(within(panel).getByText("22.4 GB")).toBeInTheDocument();
     expect(within(panel).getByText("8.9 GB")).toBeInTheDocument();
     expect(within(panel).getByText("26.0 GB / 64.0 GB")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Overview" }))
+      .toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows every CPU core with memory PSI and active swap pressure", async () => {
+    renderPulse();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Show host metrics" }))
+      .toHaveTextContent("27%"));
+    fireEvent.click(screen.getByRole("button", { name: "Show host metrics" }));
+    const panel = screen.getByRole("dialog", { name: "Host Pulse" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Details" }));
+
+    expect(within(panel).getByRole("region", { name: "Per-core CPU utilization" }))
+      .toBeInTheDocument();
+    expect(within(panel).getByLabelText("CPU core 0: 12%")).toBeInTheDocument();
+    expect(within(panel).getByLabelText("CPU core 7: 45%")).toBeInTheDocument();
+    expect(within(panel).getByRole("region", { name: "Memory and swap pressure" }))
+      .toBeInTheDocument();
+    expect(within(panel).getByText("PSI SOME")).toBeInTheDocument();
+    expect(within(panel).getByText("1.25%")).toBeInTheDocument();
+    expect(within(panel).getByText("PSI FULL")).toBeInTheDocument();
+    expect(within(panel).getByText("SWAP USED")).toBeInTheDocument();
+    expect(within(panel).getByText("41%")).toBeInTheDocument();
+    expect(within(panel).getByText("ACTIVE SWAP I/O")).toBeInTheDocument();
+    expect(within(panel).getByText("1.50 MB/s")).toBeInTheDocument();
+    expect(storedPulse().panel.mode).toBe("details");
+  });
+
+  it("samples once for the closed card and polls only while the panel is live", async () => {
+    vi.useFakeTimers();
+    renderPulse();
+    await act(async () => Promise.resolve());
+    expect(getHostMetrics).toHaveBeenCalledTimes(1);
+
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(getHostMetrics).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show host metrics" }));
+    await act(async () => Promise.resolve());
+    expect(getHostMetrics).toHaveBeenCalledTimes(2);
+    act(() => vi.advanceTimersByTime(5_000));
+    await act(async () => Promise.resolve());
+    expect(getHostMetrics).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide host metrics" }));
+    act(() => vi.advanceTimersByTime(15_000));
+    expect(getHostMetrics).toHaveBeenCalledTimes(3);
   });
 
   it("changes history range and pauses only browser updates", async () => {
@@ -133,6 +204,7 @@ describe("HostPulse", () => {
     const initialWidth = Number.parseInt(panel.style.width, 10);
 
     fireEvent.click(within(panel).getByRole("button", { name: "Pin Host Pulse" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Details" }));
     fireEvent.keyDown(within(panel).getByLabelText("Move Host Pulse window"), {
       key: "ArrowLeft",
     });
@@ -164,6 +236,7 @@ describe("HostPulse", () => {
     expect(storedPulse().panel).toMatchObject({
       open: true,
       pinned: true,
+      mode: "details",
       position: { x: initialLeft - 12 },
       size: { width: initialWidth - 12 },
     });
