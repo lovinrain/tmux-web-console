@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   BASE_PATH,
+  createSession,
   createWorkspace,
   getCommonWorkspaceQuickLinks,
   getSessionQuickLinks,
@@ -22,6 +23,7 @@ import {
 } from "./api";
 import { App } from "./App";
 import { DEFAULT_SHORTCUT_BINDINGS, cloneShortcutBindings } from "./shortcutSettings";
+import { NEW_SESSION_WORKSPACE_MEMORY_STORAGE_KEY } from "./newSessionWorkspaceMemory";
 import type { Session } from "./types";
 import { searchWithoutWorkspaceTabs } from "./workspaceState";
 
@@ -29,6 +31,7 @@ vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
   return {
     ...actual,
+    createSession: vi.fn(),
     createWorkspace: vi.fn(),
     getCommonWorkspaceQuickLinks: vi.fn(),
     getSessionQuickLinks: vi.fn(),
@@ -45,6 +48,7 @@ vi.mock("./api", async (importOriginal) => {
 });
 
 const createWorkspaceMock = vi.mocked(createWorkspace);
+const createSessionMock = vi.mocked(createSession);
 const getCommonWorkspaceQuickLinksMock = vi.mocked(getCommonWorkspaceQuickLinks);
 const getSessionQuickLinksMock = vi.mocked(getSessionQuickLinks);
 const getShortcutSettingsMock = vi.mocked(getShortcutSettings);
@@ -586,6 +590,7 @@ function readBlobText(blob: Blob): Promise<string> {
 
 describe("App routing", () => {
   beforeEach(() => {
+    createSessionMock.mockReset();
     createWorkspaceMock.mockReset();
     getCommonWorkspaceQuickLinksMock.mockReset();
     getSessionQuickLinksMock.mockReset();
@@ -599,6 +604,7 @@ describe("App routing", () => {
     updateWorkspaceMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
+    createSessionMock.mockResolvedValue({ name: "muxdeck-quick", id: "$quick" });
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
     getSessionQuickLinksMock.mockResolvedValue([]);
     getShortcutSettingsMock.mockResolvedValue({
@@ -2034,16 +2040,80 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
   });
 
+  it("quick-creates an assigned session from pinned workspace memory and focuses it", async () => {
+    window.localStorage.setItem(
+      NEW_SESSION_WORKSPACE_MEMORY_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        entries: [{
+          path: "/srv/pinned-project",
+          pinned: true,
+          pinnedAt: 300,
+          launches: 1,
+          lastUsedAt: 200,
+          lastSeenAt: 100,
+          observedSessions: 1,
+          sessionKeys: ["100:1:$alpha"],
+        }, {
+          path: "/srv/recent-project",
+          pinned: false,
+          pinnedAt: 0,
+          launches: 0,
+          lastUsedAt: 0,
+          lastSeenAt: 400,
+          observedSessions: 1,
+          sessionKeys: ["100:2:$beta"],
+        }],
+        hiddenPaths: [],
+      }),
+    );
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+
+    const quick = screen.getByRole("button", { name: "Quick new temporary session" });
+    expect(quick).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    const shortcut = new KeyboardEvent("keydown", {
+      key: "K",
+      code: "KeyK",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => window.dispatchEvent(shortcut));
+
+    expect(shortcut.defaultPrevented).toBe(true);
+    await waitFor(() => expect(createSessionMock).toHaveBeenCalledWith(
+      undefined,
+      "dark",
+      "/srv/pinned-project",
+    ));
+    await waitFor(() => expect(window.location.pathname)
+      .toBe(`${BASE_PATH}/session/muxdeck-quick`));
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "muxdeck-quick",
+    );
+    expectWorkspaceSearch("", ["alpha", "beta", "muxdeck-quick"]);
+    expect(renderedTabs()).toEqual(["alpha", "beta", "muxdeck-quick"]);
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(NEW_SESSION_WORKSPACE_MEMORY_STORAGE_KEY) || "null",
+    ) as { entries: Array<{ path: string; launches: number }> };
+    expect(stored.entries.find((entry) => entry.path === "/srv/pinned-project")?.launches)
+      .toBe(2);
+  });
+
   it("applies backend-configured workspace chords and updates button hints", async () => {
     const bindings = cloneShortcutBindings(DEFAULT_SHORTCUT_BINDINGS);
-    bindings["workspace-new-session"].direct = "KeyK";
+    bindings["workspace-new-session"].direct = "KeyY";
     getShortcutSettingsMock.mockResolvedValueOnce({ revision: 7, bindings });
     replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
     render(<App />);
 
     const newSessionButton = screen.getByRole("button", { name: "New session" });
     await waitFor(() => expect(newSessionButton)
-      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+K"));
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+Y"));
 
     const oldShortcut = new KeyboardEvent("keydown", {
       code: "KeyB",
@@ -2059,8 +2129,8 @@ describe("App routing", () => {
       .not.toBeInTheDocument();
 
     const configuredShortcut = new KeyboardEvent("keydown", {
-      code: "KeyK",
-      key: "K",
+      code: "KeyY",
+      key: "Y",
       ctrlKey: true,
       shiftKey: true,
       bubbles: true,

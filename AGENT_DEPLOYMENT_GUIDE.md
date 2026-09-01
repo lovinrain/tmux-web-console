@@ -419,6 +419,13 @@ An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
 
+The shortcut file uses schema version 2. Version 1 loads by adding the quick
+temporary-session binding with `KeyK` wherever that key is not already assigned.
+The next keymap save atomically writes version 2. Keep a pre-upgrade copy for
+rollback because a release that only understands version 1 rejects the version-2
+document. An unreadable, malformed, conflicting, or unsupported shortcut file
+makes that store unavailable instead of overwriting it.
+
 Migration procedure:
 
 1. Stop only Muxdeck on the source if a consistent final copy is needed. This
@@ -841,6 +848,9 @@ For a failed replacement:
    `session-titles.json`; tags are unavailable to that older release and would be
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
+   When rolling back to a release that only understands shortcut-file version 1,
+   retain the version-2 file separately and restore the pre-upgrade
+   `shortcuts.json`; the quick temporary-session binding is unavailable there.
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back
    application code.

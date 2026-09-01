@@ -14,6 +14,7 @@ import {
   rankWorkspaceSuggestions,
   recordWorkspaceLaunch,
   restoreHiddenWorkspaces,
+  selectQuickSessionWorkspace,
   workspacePathError,
 } from "./newSessionWorkspaceMemory";
 
@@ -153,6 +154,39 @@ describe("new-session workspace memory", () => {
     memory = restoreHiddenWorkspaces(memory);
     expect(rankWorkspaceSuggestions(memory, sessions, 4_000).map((entry) => entry.path))
       .toEqual(["/work/alpha", "/work/manual"]);
+  });
+
+  it("selects quick-session paths by pin, frequency, recency, then home fallback", () => {
+    let memory = emptyWorkspaceMemory();
+    expect(selectQuickSessionWorkspace(memory)).toBeNull();
+
+    memory = observeSessionWorkspaces(memory, [
+      sessionWorkspace("recent", "$1", "/work/recent", 200),
+      sessionWorkspace("older", "$2", "/work/older", 100),
+    ]);
+    expect(selectQuickSessionWorkspace(memory)).toEqual({
+      path: "/work/recent",
+      reason: "recent",
+    });
+
+    memory = recordWorkspaceLaunch(memory, "/work/older", 250_000);
+    memory = recordWorkspaceLaunch(memory, "/work/older", 260_000);
+    expect(selectQuickSessionWorkspace(memory)).toEqual({
+      path: "/work/older",
+      reason: "frequent",
+    });
+
+    memory = pinWorkspace(memory, "/work/recent", 270_000);
+    expect(selectQuickSessionWorkspace(memory)).toEqual({
+      path: "/work/recent",
+      reason: "pinned",
+    });
+
+    memory = hideWorkspace(memory, "/work/recent");
+    expect(selectQuickSessionWorkspace(memory)).toEqual({
+      path: "/work/older",
+      reason: "frequent",
+    });
   });
 
   it("keeps the ranked list bounded and validates server-style absolute paths", () => {

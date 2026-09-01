@@ -880,8 +880,46 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
     ).trim();
     expect(createdPath).toBe(workingDirectory);
 
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const quickActions = page.getByRole("group", { name: "New session actions" });
+    const quickSession = quickActions.getByRole("button", {
+      name: "Quick new temporary session",
+    });
+    await expect(quickSession).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    await page.keyboard.press("Control+Shift+K");
+    await expect.poll(() => (
+      decodeURIComponent(new URL(page.url()).pathname.replace("/mux/session/", ""))
+    )).toMatch(/^muxdeck-[0-9a-f]{12}$/);
+    const createdQuick = await createdSessionName(page);
+    expect(createdQuick).toMatch(/^muxdeck-[0-9a-f]{12}$/);
+    createdSessions.push(createdQuick);
+    await expectRoute(
+      page,
+      `/mux/session/${encodeURIComponent(createdQuick)}`,
+      [sessionName, createdInSpa, createdQuick],
+      dashboardQuery,
+    );
+    const quickPath = execFileSync(
+      "tmux",
+      [
+        ...tmux,
+        "list-panes",
+        "-t",
+        `=${createdQuick}`,
+        "-F",
+        "#{pane_current_path}",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+    expect(quickPath).toBe(workingDirectory);
+
     await page.getByRole("button", { name: "Back to sessions" }).click();
-    await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
+    await expectRoute(
+      page,
+      "/mux/",
+      [sessionName, createdInSpa, createdQuick],
+      dashboardQuery,
+    );
 
     const [openedPopup] = await Promise.all([
       page.waitForEvent("popup"),
@@ -893,7 +931,12 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
       name: `Use workspace ${workingDirectory}`,
       exact: true,
     })).toBeVisible();
-    await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
+    await expectRoute(
+      page,
+      "/mux/",
+      [sessionName, createdInSpa, createdQuick],
+      dashboardQuery,
+    );
 
     await openedPopup.getByRole("button", { name: "Create session" }).click();
     const createdInWindow = await createdSessionName(openedPopup);
@@ -905,7 +948,12 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
       dashboardQuery,
     );
     await expect(openedPopup.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
-    await expectRoute(page, "/mux/", [sessionName, createdInSpa], dashboardQuery);
+    await expectRoute(
+      page,
+      "/mux/",
+      [sessionName, createdInSpa, createdQuick],
+      dashboardQuery,
+    );
   } finally {
     if (popup && !popup.isClosed()) await popup.close();
     for (const createdSession of createdSessions) {
@@ -1333,7 +1381,10 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     await expect(browser.getByRole("button", { name: "File read me.txt" })).toBeVisible();
 
     await browser.getByRole("button", { name: "File read me.txt" }).click();
-    await expect(browser.locator(".session-file-preview pre")).toHaveText(fixtureContent);
+    const textPreview = browser.locator(".session-file-preview pre");
+    await expect(textPreview).toHaveText(fixtureContent);
+    await expect(textPreview).toHaveCSS("white-space", "pre-wrap");
+    await expect(textPreview).toHaveCSS("overflow-wrap", "anywhere");
     await expect(browser.locator(".session-file-path-actions code")).toHaveText(fixtureFile);
     expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
 

@@ -916,8 +916,9 @@ html.session-files-panel-splitting .session-files-splitter > span {
   font-family: "JetBrains Mono Variable", monospace;
   font-size: 10px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
   tab-size: 4;
-  white-space: pre;
+  white-space: pre-wrap;
   scrollbar-color: #40544c #0d1411;
   scrollbar-width: thin;
 }
@@ -1722,8 +1723,10 @@ html.session-files-panel-splitting * {
   font-family: "JetBrains Mono Variable", monospace;
   font-size: 10px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
   resize: none;
   tab-size: 2;
+  white-space: pre-wrap;
 }
 
 .session-file-editor textarea:focus-visible {

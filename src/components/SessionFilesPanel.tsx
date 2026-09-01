@@ -2540,6 +2540,7 @@ export function SessionFilesPanel({
                     <textarea
                       aria-label={`Contents of ${preview.name}`}
                       spellCheck={false}
+                      wrap="soft"
                       value={editorValue}
                       disabled={editorSaving || busy}
                       onChange={(event) => setEditorValue(event.target.value)}

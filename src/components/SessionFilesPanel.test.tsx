@@ -870,6 +870,7 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(await within(panel).findByRole("button", { name: "Edit notes.md" }));
     const editor = within(panel).getByLabelText("Contents of notes.md");
     expect(editor).toHaveValue("first");
+    expect(editor).toHaveAttribute("wrap", "soft");
     fireEvent.change(editor, { target: { value: "second" } });
     fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
 

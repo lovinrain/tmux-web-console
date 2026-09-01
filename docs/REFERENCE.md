@@ -559,6 +559,14 @@ Muxdeck windows. Unlike named Muxdeck workspaces, it is not written to
 `MUXDECK_WORKSPACES_FILE` or shared across devices. Existing browser-local saved
 directory lists from the earlier picker are migrated as pins.
 
+The workspace strip's split `New session` control also provides a quick action.
+It skips the form, asks the server for a collision-resistant `muxdeck-*` name,
+and focuses the created session immediately. Its starting directory follows a
+strict browser-memory precedence: a pinned path first, then a path with at least
+three observed/explicit launches ranked by frequency, then the most recently
+seen or used path, and finally the service user's home directory when memory is
+empty. A successful quick launch updates the same frequency and recency record.
+
 After creation, Muxdeck replaces the route with `/session/:name`. Existing
 ordered quick tabs stay in place and the created session is appended. `New
 window` opens the same confirmation screen in an isolated browser workspace. The
@@ -724,12 +732,13 @@ session remains in the path. Only the selected terminal is attached: inactive
 quick tabs are lightweight navigation records and cannot resize tmux or consume
 background PTY connections.
 
-The fixed `+` button beside `Sessions` opens `New session` in that
-workspace without a dashboard round trip. Opening or canceling the form does not
-change saved tabs: Cancel or the synthetic tab's `X` returns to the console it
-replaced. A successful creation appends the real session tab and synchronizes it
-when the workspace is saved. If a saved workspace is still opening, creation
-waits until its authoritative tab list has loaded rather than racing that state.
+The fixed split control beside `Sessions` opens `New session` with its `+` side
+or creates the quick temporary session with its terminal side, both without a
+dashboard round trip. Opening or canceling the form does not change saved tabs:
+Cancel or the synthetic tab's `X` returns to the console it replaced. A
+successful creation appends the real session tab and synchronizes it when the
+workspace is saved. If a saved workspace is still opening, creation waits until
+its authoritative tab list has loaded rather than racing that state.
 
 Each desktop quick tab has directional move controls: left/right in the top strip
 and up/down in the side rail. Reordering keeps the active session selected and
@@ -788,6 +797,7 @@ The live console defaults to exact `Ctrl+Shift` chords for session and terminal 
 session rename dialog, `L` returns to live output, `C` toggles browser Copy mode,
 and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
 creates a numbered session in the active pane's directory, `B` opens New session,
+`K` immediately creates a temporary assigned-name session from workspace memory,
 `F` enters or exits terminal Focus, and `S` shows or hides the session strip. The
 desktop command palette uses `Ctrl+Shift+H`. The console-only
 chords are captured before xterm can turn them into terminal input, keep unrelated
@@ -856,7 +866,10 @@ browsers, uses revision-checked whole-document writes, and defaults to the
 built-in bindings until the first save. An unreadable, malformed, conflicting,
 or unsupported document makes shortcut persistence unavailable rather than
 overwriting the file; the browser continues with built-in defaults and exposes a
-retry state in the editor.
+retry state in the editor. Shortcut documents are version 2. Version 1 loads by
+adding the quick-temporary-session action with `K` in each unoccupied layer; its
+first keymap save atomically rewrites the document as version 2. Keep a version-1
+backup when rollback to an older release is possible.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.
 `server` uses the Muxdeck form login and remembered-device cookies. `basic` uses

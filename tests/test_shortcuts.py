@@ -8,6 +8,8 @@ import pytest
 
 from tmux_console.shortcuts import (
     DEFAULT_SHORTCUT_BINDINGS,
+    QUICK_SESSION_ACTION,
+    SHORTCUT_DOCUMENT_VERSION,
     SHORTCUT_STORE_UNAVAILABLE_MESSAGE,
     ShortcutRevisionConflict,
     ShortcutStore,
@@ -27,18 +29,67 @@ def test_shortcut_store_uses_defaults_then_persists_a_revision(tmp_path):
 
     assert store.get_snapshot() == {"revision": 0, "bindings": bindings()}
     updated = bindings()
-    updated["command-palette"]["direct"] = "KeyK"
+    updated["command-palette"]["direct"] = "KeyY"
     updated["terminal-copy-mode"]["direct"] = "KeyH"
     saved = store.replace_bindings(updated, expected_revision=0)
 
     assert saved == {"revision": 1, "bindings": updated}
     assert ShortcutStore(path).get_snapshot() == saved
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "version": 1,
+        "version": SHORTCUT_DOCUMENT_VERSION,
         **saved,
     }
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert list(tmp_path.glob(".shortcuts.json.*.tmp")) == []
+
+
+def test_shortcut_store_upgrades_version_one_with_quick_session_binding(tmp_path):
+    path = tmp_path / "shortcuts.json"
+    legacy = bindings()
+    legacy.pop(QUICK_SESSION_ACTION)
+    legacy["command-palette"]["direct"] = "KeyY"
+    path.write_text(
+        json.dumps({"version": 1, "revision": 7, "bindings": legacy}),
+        encoding="utf-8",
+    )
+
+    store = ShortcutStore(path)
+    snapshot = store.get_snapshot()
+
+    assert snapshot["revision"] == 7
+    assert snapshot["bindings"]["command-palette"]["direct"] == "KeyY"
+    assert snapshot["bindings"][QUICK_SESSION_ACTION] == {
+        "direct": "KeyK",
+        "launcher": "KeyK",
+    }
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
+
+    saved = store.replace_bindings(snapshot["bindings"], expected_revision=7)
+    assert saved["revision"] == 8
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == (
+        SHORTCUT_DOCUMENT_VERSION
+    )
+
+
+def test_shortcut_store_does_not_override_a_legacy_key_k_binding(tmp_path):
+    path = tmp_path / "shortcuts.json"
+    legacy = bindings()
+    legacy.pop(QUICK_SESSION_ACTION)
+    legacy["command-palette"]["direct"] = "KeyK"
+    legacy["terminal-copy-mode"]["direct"] = "KeyH"
+    legacy["command-palette"]["launcher"] = "KeyK"
+    legacy["terminal-copy-mode"]["launcher"] = "KeyH"
+    path.write_text(
+        json.dumps({"version": 1, "revision": 2, "bindings": legacy}),
+        encoding="utf-8",
+    )
+
+    snapshot = ShortcutStore(path).get_snapshot()
+
+    assert snapshot["bindings"][QUICK_SESSION_ACTION] == {
+        "direct": None,
+        "launcher": None,
+    }
 
 
 def test_shortcut_store_rejects_stale_and_conflicting_bindings(tmp_path):

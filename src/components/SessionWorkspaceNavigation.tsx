@@ -96,6 +96,10 @@ export interface SessionWorkspaceNavigationProps {
   onOpenDashboard: () => void;
   dashboardWindowHref?: string;
   onNewSession?: () => void;
+  onQuickNewSession?: () => void | Promise<void>;
+  quickNewSessionBusy?: boolean;
+  quickNewSessionError?: string | null;
+  onDismissQuickNewSessionError?: () => void;
   onOpenTabSearch?: () => void;
   workspacePersistenceState?: WorkspacePersistenceState;
   activeWorkspaceId?: string | null;
@@ -320,15 +324,17 @@ function newWindowFailureMessage(
 function WorkspaceWindowActionError({
   message,
   onDismiss,
+  dismissLabel = "Dismiss new window error",
 }: {
   message: string;
   onDismiss: () => void;
+  dismissLabel?: string;
 }) {
   if (!message) return null;
   return (
     <div className="workspace-window-action-error" role="alert">
       <span>{message}</span>
-      <button type="button" onClick={onDismiss} aria-label="Dismiss new window error">
+      <button type="button" onClick={onDismiss} aria-label={dismissLabel}>
         <CloseIcon />
       </button>
     </div>
@@ -365,7 +371,9 @@ interface WorkspaceCommandContext {
   tabActionsVisible: boolean;
   workspacePersistenceState: WorkspacePersistenceState;
   newSessionDisabled: boolean;
+  quickNewSessionDisabled: boolean;
   onNewSession?: () => void;
+  onQuickNewSession?: () => void | Promise<void>;
   onOpenTabSearch?: () => void;
   onOpenRecents: () => void;
   onOpenDashboard: () => void;
@@ -397,7 +405,9 @@ function buildWorkspaceCommands({
   tabActionsVisible,
   workspacePersistenceState,
   newSessionDisabled,
+  quickNewSessionDisabled,
   onNewSession,
+  onQuickNewSession,
   onOpenTabSearch,
   onOpenRecents,
   onOpenDashboard,
@@ -429,6 +439,19 @@ function buildWorkspaceCommands({
         ? "The New session view is already open."
         : "Wait for the workspace to finish loading.",
       run: () => onNewSession?.(),
+    },
+    {
+      id: "workspace-quick-new-session",
+      label: "Quick temporary session",
+      description: "Start an assigned-name session from the best remembered workspace path.",
+      category: "Workspace",
+      shortcutId: "workspace-quick-new-session",
+      shortcut: "Ctrl+Shift+K",
+      launcherKey: "K",
+      keywords: ["quick create", "temporary", "random name", "workspace memory"],
+      disabled: !onQuickNewSession || quickNewSessionDisabled,
+      disabledReason: "Wait for the current quick session or workspace load to finish.",
+      run: () => void onQuickNewSession?.(),
     },
     shortcutCommand({
       id: "session-copy-new",
@@ -1816,6 +1839,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onOpenDashboard,
     dashboardWindowHref,
     onNewSession,
+    onQuickNewSession,
+    quickNewSessionBusy = false,
+    quickNewSessionError = null,
+    onDismissQuickNewSessionError,
     onOpenTabSearch,
     workspacePersistenceState = "unsaved",
     activeWorkspaceId = null,
@@ -1923,6 +1950,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && ["saved", "limited"].includes(workspacePersistenceState),
   );
   const newSessionDisabled = newSessionActive || workspacePersistenceState === "loading";
+  const quickNewSessionDisabled = quickNewSessionBusy
+    || workspacePersistenceState === "loading";
   const windowMoveDisabledReason = moveToNewWindowDisabledReason(
     workspacePersistenceState,
   );
@@ -2994,7 +3023,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     tabActionsVisible,
     workspacePersistenceState,
     newSessionDisabled,
+    quickNewSessionDisabled,
     onNewSession,
+    onQuickNewSession,
     onOpenTabSearch,
     onOpenRecents,
     onOpenDashboard,
@@ -3064,31 +3095,61 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             )}
           </div>
           {onNewSession && (
-            <button
-              type="button"
-              className={newSessionActive
-                ? "workspace-new-session-button active"
-                : "workspace-new-session-button"}
-              onClick={onNewSession}
-              disabled={newSessionDisabled}
-              aria-label="New session"
-              aria-keyshortcuts={directShortcutAria(
-                shortcutBindings["workspace-new-session"],
-              )}
-              aria-current={newSessionActive ? "page" : undefined}
-              title={newSessionActive
-                ? "New session is already open"
-                : workspacePersistenceState === "loading"
-                  ? "Wait for workspace to finish opening"
-                  : `New session${directShortcutLabel(
-                    shortcutBindings["workspace-new-session"],
-                  ) ? ` (${directShortcutLabel(
-                      shortcutBindings["workspace-new-session"],
-                    )})` : ""}`}
+            <div
+              className="workspace-new-session-actions"
+              role="group"
+              aria-label="New session actions"
             >
-              <PlusIcon />
-              <span>New session</span>
-            </button>
+              <button
+                type="button"
+                className={newSessionActive
+                  ? "workspace-new-session-button active"
+                  : "workspace-new-session-button"}
+                onClick={onNewSession}
+                disabled={newSessionDisabled}
+                aria-label="New session"
+                aria-keyshortcuts={directShortcutAria(
+                  shortcutBindings["workspace-new-session"],
+                )}
+                aria-current={newSessionActive ? "page" : undefined}
+                title={newSessionActive
+                  ? "New session is already open"
+                  : workspacePersistenceState === "loading"
+                    ? "Wait for workspace to finish opening"
+                    : `New session${directShortcutLabel(
+                      shortcutBindings["workspace-new-session"],
+                    ) ? ` (${directShortcutLabel(
+                        shortcutBindings["workspace-new-session"],
+                      )})` : ""}`}
+              >
+                <PlusIcon />
+                <span>New session</span>
+              </button>
+              {onQuickNewSession && (
+                <button
+                  type="button"
+                  className="workspace-quick-new-session-button"
+                  onClick={() => void onQuickNewSession()}
+                  disabled={quickNewSessionDisabled}
+                  aria-label="Quick new temporary session"
+                  aria-busy={quickNewSessionBusy || undefined}
+                  aria-keyshortcuts={directShortcutAria(
+                    shortcutBindings["workspace-quick-new-session"],
+                  )}
+                  title={quickNewSessionBusy
+                    ? "Creating a quick temporary session"
+                    : workspacePersistenceState === "loading"
+                      ? "Wait for workspace to finish opening"
+                      : `Quick temporary session from workspace memory${directShortcutLabel(
+                        shortcutBindings["workspace-quick-new-session"],
+                      ) ? ` (${directShortcutLabel(
+                          shortcutBindings["workspace-quick-new-session"],
+                        )})` : ""}`}
+                >
+                  <TerminalIcon />
+                </button>
+              )}
+            </div>
           )}
           {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (
             <button
@@ -3435,6 +3496,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         message={windowActionError}
         onDismiss={() => setWindowActionError("")}
       />
+
+      {quickNewSessionError && onDismissQuickNewSessionError && (
+        <WorkspaceWindowActionError
+          message={quickNewSessionError}
+          onDismiss={onDismissQuickNewSessionError}
+          dismissLabel="Dismiss quick session error"
+        />
+      )}
 
       <p className="workspace-sr-only" role="status" aria-live="polite" aria-atomic="true">
         {newSessionActive

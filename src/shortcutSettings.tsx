@@ -31,6 +31,7 @@ const CORE_SHORTCUT_DEFINITIONS = [
   { id: "command-palette", label: "Fuzzy command search", group: "Open", direct: "KeyH", launcher: "KeyH" },
   { id: "shortcut-launcher", label: "Shortcut window", group: "Open", direct: "KeyZ", launcher: null, launcherEditable: false },
   { id: "workspace-new-session", label: "New session", group: "Session", direct: "KeyB", launcher: "KeyB" },
+  { id: "workspace-quick-new-session", label: "Quick temporary session", group: "Session", direct: "KeyK", launcher: "KeyK" },
   { id: "session-copy-new", label: "Copy New", group: "Session", direct: "KeyM", launcher: "KeyM" },
   { id: "session-rename", label: "Rename session", group: "Session", direct: "KeyR", launcher: "KeyR" },
   { id: "session-end", label: "End session", group: "Session", direct: "KeyE", launcher: "KeyE" },

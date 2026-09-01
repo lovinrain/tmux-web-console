@@ -1270,9 +1270,10 @@ describe("SessionWorkspaceNavigation", () => {
     "splits Sessions by window target beside New session in the %s tab layout",
     (orientation) => {
       const onOpenDashboard = vi.fn();
+      const onQuickNewSession = vi.fn();
       render(
         <SessionWorkspaceNavigation
-          {...navigationProps({ onNewSession: vi.fn(), onOpenDashboard })}
+          {...navigationProps({ onNewSession: vi.fn(), onQuickNewSession, onOpenDashboard })}
           orientation={orientation}
           dashboardWindowHref="/mux/?workspace=release&tab=alpha&tab=beta"
         />,
@@ -1283,7 +1284,11 @@ describe("SessionWorkspaceNavigation", () => {
         .getByRole("button", { name: "All sessions" });
       const sessionsWindowLink = within(dashboardActions)
         .getByRole("link", { name: "Open all sessions in new window" });
-      const newSessionButton = screen.getByRole("button", { name: "New session" });
+      const newSessionActions = screen.getByRole("group", { name: "New session actions" });
+      const newSessionButton = within(newSessionActions)
+        .getByRole("button", { name: "New session" });
+      const quickSessionButton = within(newSessionActions)
+        .getByRole("button", { name: "Quick new temporary session" });
       expect(sessionsWindowLink).toHaveAttribute(
         "href",
         "/mux/?workspace=release&tab=alpha&tab=beta",
@@ -1292,10 +1297,44 @@ describe("SessionWorkspaceNavigation", () => {
       expect(sessionsWindowLink).toHaveAttribute("rel", "noopener noreferrer");
       fireEvent.click(sessionsButton);
       expect(onOpenDashboard).toHaveBeenCalledOnce();
-      expect(dashboardActions.nextElementSibling).toBe(newSessionButton);
-      expect(newSessionButton.nextElementSibling).toHaveClass("workspace-tab-viewport");
+      expect(dashboardActions.nextElementSibling).toBe(newSessionActions);
+      expect(newSessionButton.nextElementSibling).toBe(quickSessionButton);
+      expect(newSessionActions.nextElementSibling).toHaveClass("workspace-tab-viewport");
+      fireEvent.click(quickSessionButton);
+      expect(onQuickNewSession).toHaveBeenCalledOnce();
     },
   );
+
+  it("labels, disables, and reports errors for quick temporary session creation", () => {
+    const onQuickNewSession = vi.fn();
+    const onDismissQuickNewSessionError = vi.fn();
+    const props = navigationProps({ onNewSession: vi.fn(), onQuickNewSession });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+
+    const quick = screen.getByRole("button", { name: "Quick new temporary session" });
+    expect(quick).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    expect(quick).toHaveAttribute(
+      "title",
+      "Quick temporary session from workspace memory (Ctrl+Shift+K)",
+    );
+    expect(quick).not.toBeDisabled();
+
+    view.rerender(
+      <SessionWorkspaceNavigation
+        {...props}
+        quickNewSessionBusy
+        quickNewSessionError="The remembered directory is unavailable."
+        onDismissQuickNewSessionError={onDismissQuickNewSessionError}
+      />,
+    );
+    expect(quick).toBeDisabled();
+    expect(quick).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The remembered directory is unavailable.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss quick session error" }));
+    expect(onDismissQuickNewSessionError).toHaveBeenCalledOnce();
+  });
 
   it("opens a synthetic New session tab from the fixed tab-bar action", () => {
     const onNewSession = vi.fn();

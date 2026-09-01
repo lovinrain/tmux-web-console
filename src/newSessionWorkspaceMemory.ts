@@ -31,6 +31,13 @@ export interface WorkspaceMemory {
 
 export type WorkspaceSuggestionReason = "pinned" | "active" | "frequent" | "recent";
 
+export type QuickSessionWorkspaceReason = "pinned" | "frequent" | "recent";
+
+export interface QuickSessionWorkspaceSelection {
+  path: string;
+  reason: QuickSessionWorkspaceReason;
+}
+
 export interface WorkspaceSuggestion extends WorkspaceMemoryEntry {
   activeSessions: number;
   lastTouchedAt: number;
@@ -367,6 +374,43 @@ export function rankWorkspaceSuggestions(
       || left.path.localeCompare(right.path)
     ))
     .slice(0, MAX_VISIBLE_WORKSPACES);
+}
+
+export function selectQuickSessionWorkspace(
+  memory: WorkspaceMemory,
+): QuickSessionWorkspaceSelection | null {
+  const hidden = new Set(memory.hiddenPaths);
+  const entries = memory.entries.filter((entry) => !hidden.has(entry.path));
+  const lastTouchedAt = (entry: WorkspaceMemoryEntry) => (
+    Math.max(entry.lastUsedAt, entry.lastSeenAt, entry.pinnedAt)
+  );
+  const frequency = (entry: WorkspaceMemoryEntry) => (
+    entry.observedSessions + entry.launches * 2
+  );
+  const byFrequencyThenRecency = (
+    left: WorkspaceMemoryEntry,
+    right: WorkspaceMemoryEntry,
+  ) => (
+    frequency(right) - frequency(left)
+    || lastTouchedAt(right) - lastTouchedAt(left)
+    || left.path.localeCompare(right.path)
+  );
+  const byRecency = (left: WorkspaceMemoryEntry, right: WorkspaceMemoryEntry) => (
+    lastTouchedAt(right) - lastTouchedAt(left)
+    || frequency(right) - frequency(left)
+    || left.path.localeCompare(right.path)
+  );
+
+  const pinned = entries.filter((entry) => entry.pinned).sort(byFrequencyThenRecency)[0];
+  if (pinned) return { path: pinned.path, reason: "pinned" };
+
+  const frequent = entries
+    .filter((entry) => entry.observedSessions + entry.launches >= 3)
+    .sort(byFrequencyThenRecency)[0];
+  if (frequent) return { path: frequent.path, reason: "frequent" };
+
+  const recent = entries.sort(byRecency)[0];
+  return recent ? { path: recent.path, reason: "recent" } : null;
 }
 
 export function formatWorkspaceRecency(timestamp: number, now = Date.now()): string {

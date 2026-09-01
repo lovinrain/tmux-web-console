@@ -9,6 +9,7 @@ import {
 import {
   ApiRequestError,
   BASE_PATH,
+  createSession,
   createWorkspace,
   getWorkspace,
   listSessions,
@@ -50,8 +51,15 @@ import {
   matchesDirectShortcut,
   useShortcutSettings,
 } from "./shortcutSettings";
-import { ThemeProvider } from "./theme";
+import { ThemeProvider, useTheme } from "./theme";
 import type { Session } from "./types";
+import {
+  loadWorkspaceMemory,
+  observeSessionWorkspaces,
+  persistWorkspaceMemory,
+  recordWorkspaceLaunch,
+  selectQuickSessionWorkspace,
+} from "./newSessionWorkspaceMemory";
 import {
   clearClosedWorkspaceHistory,
   closeWorkspaceSession,
@@ -661,6 +669,7 @@ function RoutedNewSessionScreen({
 
 function AppRoutes() {
   const { bindings: shortcutBindings } = useShortcutSettings();
+  const { theme } = useTheme();
   const [location, setLocation] = useState(currentLocation);
   const [consoleBars, setConsoleBars] = useState(DEFAULT_CONSOLE_BAR_VISIBILITY);
   const [desktopTabOrientation, setDesktopTabOrientationState] =
@@ -697,6 +706,8 @@ function AppRoutes() {
   const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
     useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
+  const [quickSessionBusy, setQuickSessionBusy] = useState(false);
+  const [quickSessionError, setQuickSessionError] = useState<string | null>(null);
   const [tabSearchOpen, setTabSearchOpen] = useState(false);
   const [renameWarnings, setRenameWarnings] = useState<Map<string, SessionRenameWarning>>(
     () => new Map(),
@@ -733,6 +744,7 @@ function AppRoutes() {
   const focusDashboardAfterSessionClose = useRef(false);
   const focusWorkspaceTabAfterNavigation = useRef<string | null>(null);
   const appMounted = useRef(true);
+  const quickSessionCreating = useRef(false);
 
   const setDesktopTabOrientation = useCallback((orientation: WorkspaceTabOrientation) => {
     setDesktopTabOrientationState(orientation);
@@ -1806,6 +1818,71 @@ function AppRoutes() {
     syncLocation();
   }, [replaceLocation, syncLocation]);
 
+  const createQuickSession = useCallback(async () => {
+    if (quickSessionCreating.current || workspacePersistenceState === "loading") return;
+    quickSessionCreating.current = true;
+    setQuickSessionBusy(true);
+    setQuickSessionError(null);
+
+    let memory = loadWorkspaceMemory(window.localStorage);
+    const observedMemory = observeSessionWorkspaces(memory, knownSessionsRef.current);
+    if (observedMemory !== memory) {
+      memory = observedMemory;
+      persistWorkspaceMemory(window.localStorage, memory);
+    }
+    const selection = selectQuickSessionWorkspace(memory);
+
+    try {
+      const created = await createSession(undefined, theme, selection?.path);
+      if (selection) {
+        persistWorkspaceMemory(
+          window.localStorage,
+          recordWorkspaceLaunch(memory, selection.path),
+        );
+      }
+      if (!appMounted.current) return;
+
+      const current = currentLocation();
+      const currentWorkspace = workspaceRef.current;
+      const nextWorkspace = visitWorkspaceSession(currentWorkspace, created.name);
+      workspaceRef.current = nextWorkspace;
+      if (
+        pendingWorkspaceSnapshot.current
+        && !pendingWorkspaceSnapshot.current.openSessions.includes(created.name)
+      ) {
+        pendingWorkspaceSnapshot.current = {
+          ...pendingWorkspaceSnapshot.current,
+          openSessions: [...pendingWorkspaceSnapshot.current.openSessions, created.name],
+        };
+      }
+      setWorkspace(nextWorkspace);
+      replaceLocation(
+        parseNewSessionRoute(current.path)
+          ? withoutNewSessionReturn(window.history.state)
+          : window.history.state,
+        sessionPath(created.name),
+        searchWithWorkspaceState(
+          current.search,
+          nextWorkspace.openSessions,
+          nextWorkspace.groups,
+        ),
+        [{ name: created.name, sessionId: created.id }],
+      );
+      syncLocation();
+    } catch (creationError) {
+      if (appMounted.current) {
+        setQuickSessionError(
+          creationError instanceof Error
+            ? creationError.message
+            : "Unable to create a quick temporary session",
+        );
+      }
+    } finally {
+      quickSessionCreating.current = false;
+      if (appMounted.current) setQuickSessionBusy(false);
+    }
+  }, [replaceLocation, syncLocation, theme, workspacePersistenceState]);
+
   const completeCopiedSession = useCallback((
     sourceName: string,
     sessionName: string,
@@ -2051,6 +2128,10 @@ function AppRoutes() {
         event,
         shortcutBindings["workspace-new-session"],
       );
+      const opensQuickSession = matchesDirectShortcut(
+        event,
+        shortcutBindings["workspace-quick-new-session"],
+      );
       const direction = matchesDirectShortcut(
         event,
         shortcutBindings["workspace-previous-tab"],
@@ -2071,6 +2152,7 @@ function AppRoutes() {
         !searchRequested
         && !togglesTabActions
         && !opensNewSession
+        && !opensQuickSession
         && direction === 0
         && directIndex === null
       ) return;
@@ -2082,6 +2164,13 @@ function AppRoutes() {
 
       if (togglesTabActions) {
         setDesktopTabActionsVisible(!desktopTabActionsVisible);
+        return;
+      }
+
+      if (opensQuickSession) {
+        if (workspacePersistenceState !== "loading" && !event.repeat) {
+          void createQuickSession();
+        }
         return;
       }
 
@@ -2122,6 +2211,7 @@ function AppRoutes() {
     window.addEventListener("keydown", handleWorkspaceShortcut, true);
     return () => window.removeEventListener("keydown", handleWorkspaceShortcut, true);
   }, [
+    createQuickSession,
     desktopTabActionsVisible,
     openNewSession,
     setDesktopTabActionsVisible,
@@ -2978,6 +3068,10 @@ function AppRoutes() {
             onOpenDashboard={returnToDashboard}
             dashboardWindowHref={dashboardWindowHref}
             onNewSession={openNewSession}
+            onQuickNewSession={createQuickSession}
+            quickNewSessionBusy={quickSessionBusy}
+            quickNewSessionError={quickSessionError}
+            onDismissQuickNewSessionError={() => setQuickSessionError(null)}
             onOpenTabSearch={openTabSearch}
             workspacePersistenceState={workspacePersistenceState}
             activeWorkspaceId={locationWorkspaceId}
@@ -3033,6 +3127,10 @@ function AppRoutes() {
             onOpenDashboard={returnToDashboard}
             dashboardWindowHref={dashboardWindowHref}
             onNewSession={openNewSession}
+            onQuickNewSession={createQuickSession}
+            quickNewSessionBusy={quickSessionBusy}
+            quickNewSessionError={quickSessionError}
+            onDismissQuickNewSessionError={() => setQuickSessionError(null)}
             onOpenTabSearch={openTabSearch}
             workspacePersistenceState={workspacePersistenceState}
             activeWorkspaceId={locationWorkspaceId}

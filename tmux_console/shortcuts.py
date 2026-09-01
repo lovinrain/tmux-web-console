@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import logging
 import os
@@ -12,6 +13,9 @@ from typing import Any
 
 LOGGER = logging.getLogger("muxdeck.shortcuts")
 MAX_SHORTCUT_REVISION = (1 << 53) - 1
+SHORTCUT_DOCUMENT_VERSION = 2
+LEGACY_SHORTCUT_DOCUMENT_VERSION = 1
+QUICK_SESSION_ACTION = "workspace-quick-new-session"
 SHORTCUT_STORE_UNAVAILABLE_MESSAGE = (
     "shortcut storage is unavailable; inspect and repair the configured shortcuts "
     "file, then restart Muxdeck"
@@ -44,6 +48,7 @@ DEFAULT_SHORTCUT_BINDINGS: dict[str, dict[str, str | None]] = {
     "command-palette": _binding("KeyH", "KeyH"),
     "shortcut-launcher": _binding("KeyZ", None),
     "workspace-new-session": _binding("KeyB", "KeyB"),
+    QUICK_SESSION_ACTION: _binding("KeyK", "KeyK"),
     "session-copy-new": _binding("KeyM", "KeyM"),
     "workspace-find-tab": _binding("Semicolon", "Semicolon"),
     "terminal-return-live": _binding("KeyL", "KeyL"),
@@ -170,6 +175,40 @@ def validate_bindings(value: object) -> dict[str, ShortcutBinding]:
     return bindings
 
 
+def _validate_stored_bindings(
+    version: int, value: object
+) -> dict[str, ShortcutBinding]:
+    if version == SHORTCUT_DOCUMENT_VERSION:
+        return validate_bindings(value)
+    if version != LEGACY_SHORTCUT_DOCUMENT_VERSION:
+        raise ValueError("unsupported document version")
+    if not isinstance(value, dict):
+        return validate_bindings(value)
+
+    legacy_actions = set(DEFAULT_SHORTCUT_BINDINGS) - {QUICK_SESSION_ACTION}
+    if set(value) == set(DEFAULT_SHORTCUT_BINDINGS):
+        return validate_bindings(value)
+    if set(value) != legacy_actions:
+        return validate_bindings(value)
+
+    upgraded = copy.deepcopy(value)
+    used_direct = {
+        binding.get("direct")
+        for binding in value.values()
+        if isinstance(binding, dict)
+    }
+    used_launcher = {
+        binding.get("launcher")
+        for binding in value.values()
+        if isinstance(binding, dict)
+    }
+    upgraded[QUICK_SESSION_ACTION] = _binding(
+        "KeyK" if "KeyK" not in used_direct else None,
+        "KeyK" if "KeyK" not in used_launcher else None,
+    )
+    return validate_bindings(upgraded)
+
+
 class ShortcutRevisionConflict(LookupError):
     def __init__(self, expected_revision: int, current_revision: int) -> None:
         self.expected_revision = expected_revision
@@ -227,10 +266,11 @@ class ShortcutStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("document must be an object")
-            if payload.get("version") != 1 or isinstance(payload.get("version"), bool):
+            version = payload.get("version")
+            if not isinstance(version, int) or isinstance(version, bool):
                 raise ValueError("unsupported document version")
             revision = _validate_revision(payload.get("revision"))
-            bindings = validate_bindings(payload.get("bindings"))
+            bindings = _validate_stored_bindings(version, payload.get("bindings"))
         except FileNotFoundError as error:
             if not self.path.is_symlink():
                 return 0, validate_bindings(DEFAULT_SHORTCUT_BINDINGS)
@@ -286,7 +326,7 @@ class ShortcutStore:
                 os.chmod(temporary, 0o600)
                 json.dump(
                     {
-                        "version": 1,
+                        "version": SHORTCUT_DOCUMENT_VERSION,
                         **self._serialize(revision, bindings),
                     },
                     handle,

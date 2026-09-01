@@ -2676,6 +2676,7 @@ a:focus-visible {
 
 .workspace-dashboard-button,
 .workspace-new-session-button,
+.workspace-quick-new-session-button,
 .workspace-save-button,
 .workspace-saved-indicator,
 .workspace-rename-button,
@@ -2725,6 +2726,16 @@ a:focus-visible {
   border-right: 1px solid #30382e;
 }
 
+.workspace-new-session-actions {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: stretch;
+  border-right: 1px solid #30382e;
+}
+
 .workspace-dashboard-button {
   border-right: 0;
 }
@@ -2758,12 +2769,22 @@ a:focus-visible {
   background:
     linear-gradient(135deg, rgba(104, 223, 208, 0.07), transparent 70%),
     #171d1a;
-  border-left: 1px solid #30382e;
-  border-right: 1px solid #30382e;
+  border-left: 0;
+  border-right: 0;
 }
 
-.workspace-dashboard-actions + .workspace-new-session-button {
-  border-left: 0;
+.workspace-quick-new-session-button {
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  flex: 0 0 40px;
+  padding: 0;
+  color: var(--acid);
+  background:
+    linear-gradient(135deg, rgba(187, 244, 81, 0.1), transparent 70%),
+    #171d1a;
+  border: 0;
+  border-left: 1px solid #30382e;
 }
 
 .workspace-new-session-button > span {
@@ -2771,7 +2792,8 @@ a:focus-visible {
 }
 
 .workspace-new-session-button.active,
-.workspace-new-session-button:disabled {
+.workspace-new-session-button:disabled,
+.workspace-quick-new-session-button:disabled {
   color: var(--acid);
   cursor: default;
   opacity: 0.72;
@@ -3236,6 +3258,8 @@ a:focus-visible {
 .workspace-dashboard-window-button:focus-visible,
 .workspace-new-session-button:hover:not(:disabled),
 .workspace-new-session-button:focus-visible,
+.workspace-quick-new-session-button:hover:not(:disabled),
+.workspace-quick-new-session-button:focus-visible,
 .workspace-save-button:hover,
 .workspace-save-button:focus-visible,
 .workspace-rename-button:hover,
@@ -3258,6 +3282,7 @@ a:focus-visible {
 .workspace-dashboard-button svg,
 .workspace-dashboard-window-button svg,
 .workspace-new-session-button svg,
+.workspace-quick-new-session-button svg,
 .workspace-save-button svg,
 .workspace-saved-indicator svg,
 .workspace-rename-button svg,
@@ -9993,7 +10018,7 @@ html.scoped-note-resizing * {
   }
 
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-dashboard-actions,
-  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-new-session-button,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-new-session-actions,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-save-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-saved-indicator,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-rename-button,
@@ -10037,6 +10062,33 @@ html.scoped-note-resizing * {
     .workspace-dashboard-window-button {
     width: 44px;
     min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-new-session-actions {
+    display: flex;
+    padding: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-new-session-actions .workspace-new-session-button {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    min-height: 44px;
+    flex: 1 1 auto;
+    justify-content: flex-start;
+    padding: 0 12px;
+    border: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-quick-new-session-button {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
     min-height: 44px;
     flex: 0 0 44px;
   }
@@ -10293,6 +10345,7 @@ html.scoped-note-resizing * {
   /* The rail's query size excludes its 12px gutter and 1px border. */
   @container workspace-tab-rail (max-width: 227px) {
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-dashboard-button,
+    .workspace-navigation-vertical[data-orientation="vertical"] .workspace-quick-new-session-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-new-session-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-save-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-saved-indicator,
@@ -12066,6 +12119,7 @@ html.history-resizing * {
   .workspace-dashboard-button,
   .workspace-dashboard-window-button,
   .workspace-new-session-button,
+  .workspace-quick-new-session-button,
   .workspace-save-button,
   .workspace-saved-indicator,
   .workspace-recents-button {
@@ -12089,6 +12143,7 @@ html.history-resizing * {
   .workspace-dashboard-button svg,
   .workspace-dashboard-window-button svg,
   .workspace-new-session-button svg,
+  .workspace-quick-new-session-button svg,
   .workspace-save-button svg,
   .workspace-saved-indicator svg,
   .workspace-recents-button svg {

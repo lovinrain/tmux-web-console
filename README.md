@@ -151,7 +151,8 @@ For frontend development, run `npm run dev`. Vite serves
   address row can open an absolute directory or open and preview an absolute file
   directly anywhere inside `MUXDECK_FILE_BROWSER_ROOT`. Every operation remains
   scoped to the displayed directory and cannot follow a symlink outside it. Text
-  previews are UTF-8 and capped at 1 MiB.
+  previews are UTF-8, capped at 1 MiB, and wrap long lines without changing the
+  file's content.
   Signature-verified PNG, JPEG, GIF, WebP, AVIF, BMP, and ICO files render in a
   fitted viewer up to 25 MiB and can be opened full size; active formats such as
   SVG are never embedded. Other binary files show metadata. Selected regular
@@ -175,6 +176,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+H` | Open fuzzy command search |
 | `Ctrl+Shift+Z` | Open the shortcut window; then press one action key |
 | `Ctrl+Shift+B` | Open New session in the current workspace |
+| `Ctrl+Shift+K` | Immediately create a temporary assigned-name session from workspace memory |
 | `Ctrl+Shift+,` | Previous tab |
 | `Ctrl+Shift+.` | Next tab |
 | `Ctrl+Shift+1...9` | Jump to a numbered tab |
