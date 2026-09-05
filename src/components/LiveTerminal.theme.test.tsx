@@ -6,6 +6,14 @@ import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
 
 interface MockTerminalInstance {
   options: Record<string, unknown>;
+  buffer: {
+    active: {
+      viewportY: number;
+      baseY: number;
+      getLine: (index: number) => unknown;
+      getNullCell: () => unknown;
+    };
+  };
   cols: number;
   rows: number;
   element?: HTMLElement;
@@ -27,6 +35,20 @@ interface MockWebLinksAddonInstance {
   };
 }
 
+interface MockLinkProvider {
+  provideLinks: (
+    bufferLineNumber: number,
+    callback: (links: MockProvidedLink[] | undefined) => void,
+  ) => void;
+}
+
+interface MockProvidedLink {
+  text: string;
+  activate: (event: MouseEvent, text: string) => void;
+  hover?: (event: MouseEvent, text: string) => void;
+  leave?: (event: MouseEvent, text: string) => void;
+}
+
 const terminalMocks = vi.hoisted(() => ({
   instances: [] as MockTerminalInstance[],
   fit: vi.fn(),
@@ -36,13 +58,25 @@ const webLinkMocks = vi.hoisted(() => ({
   instances: [] as MockWebLinksAddonInstance[],
 }));
 
+const fileLinkMocks = vi.hoisted(() => ({
+  instances: [] as MockLinkProvider[],
+  dispose: vi.fn(),
+}));
+
 vi.mock("@xterm/xterm", () => ({
   Terminal: class MockTerminal {
     options: Record<string, unknown>;
     cols = 80;
     rows = 24;
     modes = { bracketedPasteMode: false };
-    buffer = { active: { viewportY: 0, baseY: 0 } };
+    buffer = {
+      active: {
+        viewportY: 0,
+        baseY: 0,
+        getLine: () => undefined,
+        getNullCell: () => ({ getChars: () => "", getWidth: () => 1 }),
+      },
+    };
     element: HTMLElement | undefined;
     keyHandler: ((event: KeyboardEvent) => boolean) | undefined;
     private dataHandler: ((data: string) => void) | undefined;
@@ -53,6 +87,10 @@ vi.mock("@xterm/xterm", () => ({
     }
 
     loadAddon() {}
+    registerLinkProvider(provider: MockLinkProvider) {
+      fileLinkMocks.instances.push(provider);
+      return { dispose: fileLinkMocks.dispose };
+    }
     open(parent: HTMLElement) {
       this.element = document.createElement("div");
       this.element.className = "xterm";
@@ -161,6 +199,26 @@ const callbacks = {
   onPaneChange: vi.fn(),
 };
 
+function setTerminalBufferLine(terminal: MockTerminalInstance, content: string) {
+  const cell = {
+    chars: "",
+    width: 1,
+    getChars() { return this.chars; },
+    getWidth() { return this.width; },
+  };
+  terminal.buffer.active.getNullCell = () => cell;
+  terminal.buffer.active.getLine = (index: number) => (index === 0 ? {
+    isWrapped: false,
+    length: 80,
+    translateToString: () => content,
+    getCell: (column: number, target: typeof cell) => {
+      target.chars = content[column] || "";
+      target.width = 1;
+      return target;
+    },
+  } : undefined);
+}
+
 function LayoutPhaseProbe({
   active,
   onLayout,
@@ -178,6 +236,8 @@ beforeEach(() => {
   terminalMocks.instances.length = 0;
   terminalMocks.fit.mockClear();
   webLinkMocks.instances.length = 0;
+  fileLinkMocks.instances.length = 0;
+  fileLinkMocks.dispose.mockClear();
   socketMocks.instances.length = 0;
   resizeObserverMocks.instances.length = 0;
   callbacks.onStateChange.mockClear();
@@ -419,6 +479,64 @@ describe("LiveTerminal web links", () => {
     expect(open).not.toHaveBeenCalled();
     links.handler(new MouseEvent("mouseup", { button: 0, metaKey: true }), uri);
     expect(open).toHaveBeenCalledWith(uri, "_blank", "noopener,noreferrer");
+  });
+
+  it("previews detected file paths only with Ctrl-click and blocks terminal mouse input", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const onOpenFilePath = vi.fn();
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        onOpenFilePath={onOpenFilePath}
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    const terminalElement = terminal.element!;
+    const terminalScreen = terminalElement.querySelector<HTMLElement>(".xterm-screen")!;
+    setTerminalBufferLine(terminal, "result: docs/report.md");
+    let links: MockProvidedLink[] | undefined;
+    fileLinkMocks.instances[0].provideLinks(1, (provided) => { links = provided; });
+    const link = links?.[0];
+    expect(link?.text).toBe("docs/report.md");
+
+    link?.hover?.(new MouseEvent("mousemove"), link.text);
+    expect(terminalElement).toHaveAttribute(
+      "title",
+      "Ctrl+click to preview docs/report.md",
+    );
+    link?.activate(new MouseEvent("mouseup", { button: 0 }), link.text);
+    link?.activate(new MouseEvent("mouseup", { button: 0, metaKey: true }), link.text);
+    expect(onOpenFilePath).not.toHaveBeenCalled();
+    link?.activate(new MouseEvent("mouseup", { button: 0, ctrlKey: true }), link.text);
+    expect(onOpenFilePath).toHaveBeenCalledOnce();
+
+    socket.emit("open");
+    socket.send.mockClear();
+    onOpenFilePath.mockClear();
+    terminalElement.addEventListener("mousedown", () => terminal.emitData("mouse-down"));
+    terminalElement.addEventListener("mouseup", () => terminal.emitData("mouse-up"));
+    terminalScreen.dispatchEvent(new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      ctrlKey: true,
+    }));
+    terminalScreen.dispatchEvent(new MouseEvent("mouseup", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ctrlKey: true,
+    }));
+    expect(onOpenFilePath).toHaveBeenCalledWith("docs/report.md");
+    expect(socket.send).not.toHaveBeenCalled();
+
+    link?.leave?.(new MouseEvent("mouseleave"), link.text);
+    expect(terminalElement).not.toHaveAttribute("title");
   });
 
   it("does not send modified link clicks into the terminal application", async () => {

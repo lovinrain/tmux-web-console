@@ -67,6 +67,7 @@ interface InputBarProps {
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
   onUploadAttachment?: SessionAttachmentUploader;
+  onDraftChange?: (value: string) => void;
   messageCount?: number;
   queuedMessageCount?: number;
 }
@@ -79,6 +80,7 @@ export interface MemoDraftSource {
 export interface InputBarHandle {
   loadDraft: (text: string, source?: MemoDraftSource) => boolean;
   insertText: (text: string) => boolean;
+  replaceDraft: (text: string) => boolean;
   getDraft: () => string;
   focus: () => void;
   blur: () => void;
@@ -118,6 +120,12 @@ const ESSENTIAL_KEYS: TerminalKey[] = [
     data: "\x11",
     ariaLabel: "Ctrl+Q - enqueue in Copilot CLI",
     title: "Enqueue the current prompt in Copilot CLI (Ctrl+Q)",
+  },
+  {
+    label: "^T",
+    data: "\x14",
+    ariaLabel: "Ctrl+T - view full transcript in Codex CLI",
+    title: "View earlier messages and the full transcript in Codex CLI (Ctrl+T)",
   },
 ];
 
@@ -389,6 +397,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   onOpenMessages,
   onOpenSnippets,
   onUploadAttachment,
+  onDraftChange,
   messageCount = 0,
   queuedMessageCount = 0,
 }, ref) {
@@ -434,6 +443,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setDraftLength(value.length);
     setDraftHasContent(Boolean(value.trim()));
     setStatus(persisted ? (value ? nextStatus : "idle") : "storage-error");
+    onDraftChange?.(value);
     return persisted;
   };
 
@@ -474,13 +484,33 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     return true;
   };
 
+  const replaceDraft = (text: string): boolean => {
+    const textarea = textareaRef.current;
+    if (
+      !textarea
+      || text.length > MAX_DRAFT_LENGTH
+      || composingRef.current
+      || actionPendingRef.current
+    ) return false;
+    textarea.value = text;
+    memoSourceRef.current = null;
+    recordDraft(textarea.value, "loaded");
+    resizeTextarea(textarea);
+    return true;
+  };
+
   useImperativeHandle(ref, () => ({
     loadDraft,
     insertText,
+    replaceDraft,
     getDraft: () => textareaRef.current?.value ?? initialDraft,
     focus: () => textareaRef.current?.focus(),
     blur: () => textareaRef.current?.blur(),
   }), [initialDraft]);
+
+  useEffect(() => {
+    onDraftChange?.(textareaRef.current?.value ?? initialDraft);
+  }, [initialDraft, onDraftChange]);
 
   useEffect(() => {
     const handoff = initialDraftState.handoff;
@@ -504,10 +534,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       setDraftLength(handoff.draft.length);
       setDraftHasContent(Boolean(handoff.draft.trim()));
       setStatus(handoff.storageError ? "storage-error" : handoff.draft ? "saved" : "idle");
+      onDraftChange?.(handoff.draft);
       resizeTextarea(textarea);
     }
     renamedSessionDraftHandoffs.delete(sessionName);
-  }, [initialDraft, sessionId, sessionName]);
+  }, [initialDraft, onDraftChange, sessionId, sessionName]);
 
   useEffect(() => {
     const textarea = textareaRef.current;

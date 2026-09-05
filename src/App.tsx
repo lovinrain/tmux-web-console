@@ -20,6 +20,7 @@ import {
   type SavedWorkspace,
   type WorkspaceSessionTransferOperation,
 } from "./api";
+import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
 import {
   ConsoleScreen,
   DEFAULT_CONSOLE_BAR_VISIBILITY,
@@ -141,6 +142,9 @@ type PendingWorkspaceSnapshot = Pick<SessionWorkspaceState, "openSessions" | "gr
 interface ActiveWorkspaceIdentity {
   id: string;
   name: string;
+  separators?: string[];
+  separatorsBefore?: string[];
+  updatedAt?: number;
 }
 
 interface WorkspaceSyncProblem {
@@ -698,6 +702,9 @@ function AppRoutes() {
   const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
   const [activeWorkspaceIdentity, setActiveWorkspaceIdentity] =
     useState<ActiveWorkspaceIdentity | null>(null);
+  const workspaceSeparators = useWorkspaceSeparators(
+    savedWorkspaceIdFromSearch(location.search), workspace.openSessions, activeWorkspaceIdentity,
+  );
   const [workspaceSyncProblem, setWorkspaceSyncProblem] = useState<WorkspaceSyncProblem | null>(
     null,
   );
@@ -969,7 +976,7 @@ function AppRoutes() {
         workspaceId,
         value: savedWorkspace.sessionRevision,
       };
-      setWorkspaceIdentity({ id: workspaceId, name: savedWorkspace.name });
+      setWorkspaceIdentity(savedWorkspace);
       setHydratedWorkspaceBinding(workspaceId);
       workspaceHydrationInFlight.current = null;
 
@@ -1028,7 +1035,7 @@ function AppRoutes() {
   ]);
 
   const openSavedWorkspace = useCallback((savedWorkspace: SavedWorkspace) => {
-    setWorkspaceIdentity({ id: savedWorkspace.id, name: savedWorkspace.name });
+    setWorkspaceIdentity(savedWorkspace);
     const current = currentLocation();
     const search = searchWithSavedWorkspaceId(current.search, savedWorkspace.id);
     replaceLocation(window.history.state, current.path, search);
@@ -1056,7 +1063,11 @@ function AppRoutes() {
       ? route.sessionName
       : null;
     const startingNavigationGeneration = navigationGeneration.current;
-    const created = await createWorkspace({ name, tabs, groups, activeSession });
+    const created = await createWorkspace({
+      name, tabs, groups, activeSession,
+      ...(workspaceSeparators.anchors.length ? { separators: workspaceSeparators.anchors } : {}),
+      ...(workspaceSeparators.beforeAnchors.length ? { separatorsBefore: workspaceSeparators.beforeAnchors } : {}),
+    });
     if (!appMounted.current) return;
 
     const latestLocation = currentLocation();
@@ -1115,7 +1126,7 @@ function AppRoutes() {
       activeSession: created.activeSession,
       sessionRevision: created.sessionRevision,
     };
-    setWorkspaceIdentity({ id: created.id, name: created.name });
+    setWorkspaceIdentity(created);
     setHydratedWorkspaceBinding(created.id);
     setWorkspaceSyncProblem(null);
 
@@ -1134,6 +1145,8 @@ function AppRoutes() {
     replaceLocation,
     setHydratedWorkspaceBinding,
     setWorkspaceIdentity,
+    workspaceSeparators.anchors,
+    workspaceSeparators.beforeAnchors,
   ]);
 
   const renameCurrentWorkspace = useCallback(async (name: string) => {
@@ -1149,7 +1162,7 @@ function AppRoutes() {
       || savedWorkspaceIdFromSearch(currentLocation().search) !== workspaceId
       || hydratedWorkspaceIdRef.current !== workspaceId
     ) return;
-    setWorkspaceIdentity({ id: updated.id, name: updated.name });
+    setWorkspaceIdentity(updated);
   }, [setWorkspaceIdentity]);
 
   const syncLocation = useCallback(() => {
@@ -1411,7 +1424,7 @@ function AppRoutes() {
         && sameWorkspaceGroups(savedGroups, snapshot.groups);
       recordWorkspaceGroupsSupport(savedGroupsSupported);
       setWorkspaceGroupsPending(!groupsPersisted && snapshot.groups.length > 0);
-      setWorkspaceIdentity({ id: snapshot.workspaceId, name: savedWorkspace.name });
+      setWorkspaceIdentity(savedWorkspace);
       lastSavedWorkspaceActivity.current = savedGroupsSupported && !groupsPersisted
         ? {
             ...snapshot,
@@ -2595,7 +2608,7 @@ function AppRoutes() {
               workspaceId: sourceWorkspaceId,
               value: result.sessionRevision,
             };
-            setWorkspaceIdentity({ id: sourceWorkspaceId, name: savedSource.name });
+            setWorkspaceIdentity(savedSource);
             setHydratedWorkspaceBinding(sourceWorkspaceId);
 
             const latest = currentLocation();
@@ -2779,7 +2792,7 @@ function AppRoutes() {
 
   const savedWorkspaceUpdated = useCallback((savedWorkspace: SavedWorkspace) => {
     if (savedWorkspaceIdFromSearch(currentLocation().search) !== savedWorkspace.id) return;
-    setWorkspaceIdentity({ id: savedWorkspace.id, name: savedWorkspace.name });
+    setWorkspaceIdentity(savedWorkspace);
   }, [setWorkspaceIdentity]);
 
   const retryWorkspaceSync = useCallback(() => {
@@ -3039,6 +3052,11 @@ function AppRoutes() {
         sessionNavigation={(
           <SessionWorkspaceNavigation
             activeSession={sessionName}
+            separators={workspaceSeparators.anchors}
+            separatorsBefore={workspaceSeparators.beforeAnchors}
+            separatorsBusy={workspaceSeparators.busy}
+            separatorsError={workspaceSeparators.error}
+            onChangeSeparator={workspaceSeparators.change}
             openSessions={workspace.openSessions}
             recentSessions={workspace.recentSessions}
             groups={workspace.groups}
@@ -3097,6 +3115,11 @@ function AppRoutes() {
         sessionNavigation={(
           <SessionWorkspaceNavigation
             activeSession={null}
+            separators={workspaceSeparators.anchors}
+            separatorsBefore={workspaceSeparators.beforeAnchors}
+            separatorsBusy={workspaceSeparators.busy}
+            separatorsError={workspaceSeparators.error}
+            onChangeSeparator={workspaceSeparators.change}
             openSessions={workspace.openSessions}
             recentSessions={workspace.recentSessions}
             groups={workspace.groups}

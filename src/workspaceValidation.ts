@@ -1,5 +1,5 @@
 export const MAX_WORKSPACE_NAME_LENGTH = 80;
-export const MAX_WORKSPACE_TABS = 32;
+export const MAX_WORKSPACE_TABS = 256;
 
 export function uniqueWorkspaceTabs(tabs: readonly string[]): string[] {
   return [...new Set(tabs.filter(Boolean))];

@@ -51,6 +51,7 @@ import {
   type AgentScrollMode,
 } from "../agentScrollPreferences";
 import { paneCommandKind } from "../sessionDashboardModel";
+import { resolveTerminalFileLinkPath } from "../terminalFileLinks";
 import {
   SHORTCUT_ACTION_EVENT,
   directShortcutAria,
@@ -65,6 +66,11 @@ import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { AccountLink } from "./AccountLink";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
 import {
+  FloatingStagedInput,
+  type FloatingStagedInputHandle,
+  type FloatingStagedInputPanelState,
+} from "./FloatingStagedInput";
+import {
   handoffRenamedSessionDraft,
   InputBar,
   type InputBarHandle,
@@ -76,7 +82,10 @@ import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { SessionRenameDialog } from "./SessionRenameDialog";
-import { SessionFilesPanel } from "./SessionFilesPanel";
+import {
+  SessionFilesPanel,
+  type SessionFileOpenRequest,
+} from "./SessionFilesPanel";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
 import {
@@ -212,6 +221,7 @@ interface DesktopFocusShortcutsDrag {
 type DesktopSessionShortcut = "end" | "rename";
 type DesktopConsoleShortcutAction =
   | "view-terminal-focus"
+  | "view-floating-input"
   | "view-session-tabs"
   | "session-end"
   | "session-rename"
@@ -243,6 +253,9 @@ interface ConsoleBarToolbarProps {
   desktopCopyMode?: boolean;
   onDesktopCopyModeChange?: (enabled: boolean) => void;
   onEnterDesktopFocus?: () => void;
+  floatingInputOpen?: boolean;
+  floatingInputPinned?: boolean;
+  onToggleFloatingInput?: () => void;
   desktopTabOrientation?: WorkspaceTabOrientation;
   onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
   tabActionsVisible?: boolean;
@@ -283,6 +296,9 @@ function ConsoleBarToolbar({
   desktopCopyMode = false,
   onDesktopCopyModeChange,
   onEnterDesktopFocus,
+  floatingInputOpen = false,
+  floatingInputPinned = false,
+  onToggleFloatingInput,
   desktopTabOrientation = "horizontal",
   onDesktopTabOrientationChange,
   tabActionsVisible = true,
@@ -293,6 +309,9 @@ function ConsoleBarToolbar({
   const tabActionsShortcut = directShortcutLabel(shortcutBindings["view-tab-actions"]);
   const copyModeShortcut = directShortcutLabel(shortcutBindings["terminal-copy-mode"]);
   const focusShortcut = directShortcutLabel(shortcutBindings["view-terminal-focus"]);
+  const floatingInputShortcut = directShortcutLabel(
+    shortcutBindings["view-floating-input"],
+  );
   return (
     <div
       className={workspaceLinks
@@ -334,6 +353,24 @@ function ConsoleBarToolbar({
           );
         })}
       </div>
+      {onToggleFloatingInput && (
+        <button
+          type="button"
+          className="console-bar-toggle floating-staged-input-toggle"
+          aria-label={floatingInputOpen
+            ? "Hide floating staged input"
+            : "Show floating staged input"}
+          aria-controls="muxdeck-floating-staged-input"
+          aria-expanded={floatingInputOpen}
+          aria-pressed={floatingInputOpen}
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["view-floating-input"])}
+          title={`${floatingInputOpen ? "Hide" : "Show"} the movable staged-input window${floatingInputPinned ? " pinned to this workspace" : ""}${floatingInputShortcut ? ` (${floatingInputShortcut})` : ""}`}
+          onClick={onToggleFloatingInput}
+        >
+          <KeyboardIcon />
+          <span>Float input</span>
+        </button>
+      )}
       {onDesktopTabOrientationChange && (availability?.sessionTabs ?? true) && (
         <button
           type="button"
@@ -447,6 +484,7 @@ export function ConsoleScreen({
   const consoleShellRef = useRef<HTMLElement>(null);
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
+  const floatingInputRef = useRef<FloatingStagedInputHandle>(null);
   const [loadedSession, setLoadedSession] = useState<Session | null>(null);
   const [paneId, setPaneId] = useState<string | null>(null);
   const [connectionSnapshot, setConnectionSnapshot] = useState<{
@@ -455,6 +493,7 @@ export function ConsoleScreen({
   }>({ sessionName, state: "connecting" });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [fileOpenRequest, setFileOpenRequest] = useState<SessionFileOpenRequest | null>(null);
   const [titleEditorOpen, setTitleEditorOpen] = useState(false);
   const [renameEditorOpen, setRenameEditorOpen] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<{
@@ -499,6 +538,13 @@ export function ConsoleScreen({
     loadAgentScrollPreferences,
   );
   const [desktopTerminalFocus, setDesktopTerminalFocus] = useState(false);
+  const [floatingDraftSnapshot, setFloatingDraftSnapshot] = useState({
+    sessionName,
+    value: "",
+  });
+  const [floatingInputPanelState, setFloatingInputPanelState] = useState<
+    FloatingStagedInputPanelState
+  >({ open: false, pinned: false });
   const [desktopFocusShortcutsOpen, setDesktopFocusShortcutsOpen] = useState(false);
   const [desktopFocusShortcutsPosition, setDesktopFocusShortcutsPosition] = useState<
     DesktopFocusShortcutsPosition
@@ -507,6 +553,7 @@ export function ConsoleScreen({
   const desktopFocusShortcutsDragRef = useRef<DesktopFocusShortcutsDrag | null>(null);
   const handledSessionShortcutRef = useRef<DesktopSessionShortcut | null>(null);
   const copyingSessionRef = useRef(false);
+  const fileOpenRequestIdRef = useRef(0);
   const sessionNameRef = useRef(sessionName);
   sessionNameRef.current = sessionName;
   const [localHistoryPanelWidth, setLocalHistoryPanelWidth] = useState(
@@ -551,6 +598,18 @@ export function ConsoleScreen({
   const visibleHistoryPanelWidth = historyPanelWidth ?? localHistoryPanelWidth;
   const memorandumCount = session?.memorandumCount ?? session?.queuedMessageCount ?? 0;
   const queuedMemorandumCount = session?.queuedMessageCount ?? 0;
+  const floatingDraft = floatingDraftSnapshot.sessionName === sessionName
+    ? floatingDraftSnapshot.value
+    : "";
+
+  const openTerminalFilePath = useCallback((candidate: string) => {
+    if (mobileLayout || workspaceOverlayOpen || !pane?.path) return;
+    const path = resolveTerminalFileLinkPath(candidate, pane.path);
+    if (!path) return;
+    fileOpenRequestIdRef.current += 1;
+    setFileOpenRequest({ id: fileOpenRequestIdRef.current, path });
+    setFilesOpen(true);
+  }, [mobileLayout, pane?.path, workspaceOverlayOpen]);
 
   const copyNewSession = useCallback(async () => {
     if (
@@ -829,6 +888,18 @@ export function ConsoleScreen({
     setBarVisible("stagedInput", true);
   }, [resetDesktopFocusShortcutsPosition, setBarVisible]);
 
+  const replaceFloatingDraft = useCallback((value: string) => (
+    inputBarRef.current?.replaceDraft(value) ?? false
+  ), []);
+
+  const mirrorStagedDraft = useCallback((value: string) => {
+    setFloatingDraftSnapshot({ sessionName, value });
+  }, [sessionName]);
+
+  const toggleFloatingInput = useCallback(() => {
+    floatingInputRef.current?.toggle();
+  }, []);
+
   const setHistoryPanelWidth = useCallback((width: number) => {
     if (historyPanelWidth === undefined) setLocalHistoryPanelWidth(width);
     onHistoryPanelWidthChange?.(width);
@@ -993,6 +1064,10 @@ export function ConsoleScreen({
   useEffect(() => {
     setFilesOpen(false);
   }, [pane?.path, paneId, sessionName]);
+
+  useEffect(() => {
+    if (!filesOpen) setFileOpenRequest(null);
+  }, [filesOpen]);
 
   useEffect(() => {
     if (!workspaceOverlayOpen) return;
@@ -1165,6 +1240,7 @@ export function ConsoleScreen({
     ): DesktopConsoleShortcutAction | null => {
       const candidates: DesktopConsoleShortcutAction[] = [
         "view-terminal-focus",
+        "view-floating-input",
         "view-session-tabs",
         "session-end",
         "session-rename",
@@ -1185,6 +1261,10 @@ export function ConsoleScreen({
     ) => {
       if (action === "view-session-tabs") {
         if (sessionNavigation) setBarVisible("sessionTabs", !visibleBars.sessionTabs);
+        return;
+      }
+      if (action === "view-floating-input") {
+        if (!repeated) toggleFloatingInput();
         return;
       }
       if (action === "session-end") {
@@ -1261,6 +1341,7 @@ export function ConsoleScreen({
       const action = (event as CustomEvent<ShortcutActionId>).detail;
       const supportedActions: DesktopConsoleShortcutAction[] = [
         "view-terminal-focus",
+        "view-floating-input",
         "view-session-tabs",
         "session-end",
         "session-rename",
@@ -1297,6 +1378,7 @@ export function ConsoleScreen({
     sessionNavigation,
     setBarVisible,
     shortcutBindings,
+    toggleFloatingInput,
     visibleBars.sessionTabs,
     workspaceOverlayOpen,
   ]);
@@ -1474,6 +1556,9 @@ export function ConsoleScreen({
         desktopCopyMode={desktopCopyMode}
         onDesktopCopyModeChange={setDesktopCopyMode}
         onEnterDesktopFocus={enterDesktopTerminalFocus}
+        floatingInputOpen={floatingInputPanelState.open}
+        floatingInputPinned={floatingInputPanelState.pinned}
+        onToggleFloatingInput={toggleFloatingInput}
       />
       <nav className="mobile-console-focus" aria-label="Mobile console focus">
         <button
@@ -1749,6 +1834,7 @@ export function ConsoleScreen({
           ].join(":")}
           theme={theme}
           onUploadAttachment={uploadAttachment}
+          onOpenFilePath={mobileLayout ? undefined : openTerminalFilePath}
           onStateChange={stateChange}
           onPaneChange={paneChange}
         />
@@ -1912,6 +1998,26 @@ export function ConsoleScreen({
             </button>
             <button
               type="button"
+              className="desktop-terminal-focus-input"
+              aria-label={floatingInputPanelState.open
+                ? "Hide floating staged input"
+                : "Show floating staged input"}
+              aria-controls="muxdeck-floating-staged-input"
+              aria-expanded={floatingInputPanelState.open}
+              aria-keyshortcuts={directShortcutAria(
+                shortcutBindings["view-floating-input"],
+              )}
+              title={`${floatingInputPanelState.open ? "Hide" : "Show"} the movable staged-input window${directShortcutLabel(shortcutBindings["view-floating-input"])
+                ? ` (${directShortcutLabel(shortcutBindings["view-floating-input"])})`
+                : ""}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={toggleFloatingInput}
+            >
+              <KeyboardIcon />
+              <span>{floatingInputPanelState.open ? "Hide input" : "Float input"}</span>
+            </button>
+            <button
+              type="button"
               className="desktop-terminal-focus-shortcuts"
               aria-label={desktopFocusShortcutsOpen
                 ? "Hide all buttons"
@@ -2008,8 +2114,19 @@ export function ConsoleScreen({
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
         onOpenSnippets={() => setSnippetsOpen(true)}
         onUploadAttachment={uploadAttachment}
+        onDraftChange={mirrorStagedDraft}
         messageCount={memorandumCount}
         queuedMessageCount={queuedMemorandumCount}
+      />
+      <FloatingStagedInput
+        ref={floatingInputRef}
+        sessionName={sessionName}
+        workspaceId={workspaceId}
+        workspaceName={workspaceName}
+        value={floatingDraft}
+        onChange={replaceFloatingDraft}
+        onOpenFullInput={revealAndFocusComposer}
+        onPanelStateChange={setFloatingInputPanelState}
       />
       {!workspaceOverlayOpen && filesOpen && session && pane?.path && (
         <SessionFilesPanel
@@ -2017,6 +2134,7 @@ export function ConsoleScreen({
           sessionId={session.id}
           paneId={pane.id}
           panePath={pane.path}
+          openPathRequest={fileOpenRequest}
           onClose={() => setFilesOpen(false)}
           onInsertPath={insertFilePath}
         />

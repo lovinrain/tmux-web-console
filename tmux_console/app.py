@@ -16,6 +16,7 @@ from urllib.parse import SplitResult, quote, urlsplit
 
 from aiohttp import WSMsgType, web
 
+from .agent_reference import AgentReferenceDetector
 from .auth import (
     AuthConfigurationError,
     AuthMode,
@@ -37,6 +38,8 @@ from .file_browser import (
     MAX_FILE_UPLOAD_BYTES,
     MAX_TEXT_WRITE_BODY_BYTES,
     MAX_TEXT_WRITE_BYTES,
+    FileBrowserArchive,
+    FileBrowserArchiveLimitError,
     FileBrowserConflictError,
     FileBrowserContentTooLargeError,
     FileBrowserDestinationExistsError,
@@ -46,9 +49,13 @@ from .file_browser import (
     FileBrowserImageTooLargeError,
     FileBrowserPartialDeleteError,
     FileBrowserPathOutsideRootError,
+    FileBrowserPdfPreview,
+    FileBrowserPdfTooLargeError,
     FileBrowserUnsupportedFileError,
     FileBrowserUnsupportedImageError,
+    FileBrowserUnsupportedPdfError,
     copy_entry,
+    create_download_archive,
     create_entry,
     delete_entry,
     list_directory,
@@ -59,6 +66,8 @@ from .file_browser import (
     resolve_browse_target,
     resolve_file_download,
     resolve_file_image_preview,
+    resolve_file_pdf_preview,
+    search_files,
     upload_file,
     write_text_file,
 )
@@ -77,6 +86,11 @@ from .messages import (
 )
 from .metadata import SessionTitleStore, normalize_tags, normalize_title
 from .pty_bridge import PtyBridge, clamp_size
+from .session_registry import (
+    RecoveryRecordNotFoundError,
+    SessionRegistry,
+    SessionRegistryUnavailable,
+)
 from .shortcuts import (
     ShortcutRevisionConflict,
     ShortcutStore,
@@ -137,17 +151,24 @@ AUTH_MODE_KEY = web.AppKey("auth_mode", AuthMode)
 BASIC_AUTH_KEY = web.AppKey("basic_auth", BasicAuthVerifier)
 AUTH_COOKIE_SECURE_KEY = web.AppKey("auth_cookie_secure", bool)
 LOGIN_SEMAPHORE_KEY = web.AppKey("login_semaphore", asyncio.Semaphore)
+FILE_ARCHIVE_SEMAPHORE_KEY = web.AppKey(
+    "file_archive_semaphore",
+    asyncio.Semaphore,
+)
 AUTH_DEVICE_REQUEST_KEY = web.RequestKey("muxdeck_auth_device", RememberedDevice)
 AUTH_COOKIE_VALUE_REQUEST_KEY = web.RequestKey("muxdeck_auth_cookie_value", str)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
 FILE_BROWSER_ROOT_KEY = web.AppKey("file_browser_root", Path)
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
+SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
+AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 DEFAULT_ORIGIN_PORTS = {"http": 80, "https": 443}
 AUTH_COOKIE_NAME = "muxdeck_device"
 AUTH_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60
+FILE_ARCHIVE_STREAM_CHUNK_BYTES = 512 * 1024
 BASIC_AUTH_CHALLENGE = 'Basic realm="Muxdeck", charset="UTF-8"'
 NormalizedOrigin = tuple[str, str, int | None]
 NormalizedHost = tuple[str, int | None]
@@ -182,6 +203,8 @@ class SessionSnapshotBuilder:
         messages: SessionMessageStore | None = None,
         mutation_lock: asyncio.Lock | None = None,
         workspaces: WorkspaceStore | None = None,
+        registry: SessionRegistry | None = None,
+        agent_references: AgentReferenceDetector | None = None,
     ) -> None:
         self._tmux = tmux
         self._titles = titles
@@ -189,6 +212,8 @@ class SessionSnapshotBuilder:
         self._messages = messages
         self._mutation_lock = mutation_lock
         self._workspaces = workspaces
+        self._registry = registry
+        self._agent_references = agent_references
         self._clock = clock
         self._lock = asyncio.Lock()
         self._state_history: dict[str, tuple[str, str, int]] = {}
@@ -204,6 +229,16 @@ class SessionSnapshotBuilder:
         items = await self._tmux.list_sessions()
         states = await self._agent_states.detect_sessions(self._tmux, items)
         observed_at = int(self._clock())
+        references = (
+            await self._agent_references.detect_sessions(items)
+            if self._agent_references is not None
+            else {}
+        )
+        recoverable_sessions = (
+            self._registry.reconcile(items, references, observed_at=observed_at)
+            if self._registry is not None
+            else []
+        )
         next_state_history: dict[str, tuple[str, str, int]] = {}
         payload: list[dict[str, Any]] = []
         try:
@@ -228,6 +263,7 @@ class SessionSnapshotBuilder:
             next_state_history[item.name] = (item.id, state.name, changed_at)
 
             record = item.to_dict()
+            reference = references.get(item.name)
             record.update(
                 {
                     "agentState": state.name,
@@ -248,13 +284,20 @@ class SessionSnapshotBuilder:
                         if self._messages is not None
                         else 0
                     ),
+                    "agentType": reference.agent_type if reference else None,
+                    "agentSessionId": reference.session_id if reference else None,
                 }
             )
             payload.append(record)
 
         # Dropping absent names makes a later reappearance a fresh observation.
         self._state_history = next_state_history
-        return {"sessions": payload}
+        result = {"sessions": payload}
+        if self._registry is not None:
+            result["recoverableSessions"] = [
+                record.to_dict() for record in recoverable_sessions
+            ]
+        return result
 
 
 SESSION_SNAPSHOTS_KEY = web.AppKey("session_snapshots", SessionSnapshotBuilder)
@@ -763,6 +806,8 @@ def create_app(
     auth_cookie_secure: bool | None = None,
     file_browser_root: str | None = None,
     host_metrics: HostMetricsSampler | None = None,
+    session_registry: SessionRegistry | None = None,
+    agent_references: AgentReferenceDetector | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -808,6 +853,7 @@ def create_app(
         else auth_cookie_secure
     )
     app[LOGIN_SEMAPHORE_KEY] = asyncio.Semaphore(1)
+    app[FILE_ARCHIVE_SEMAPHORE_KEY] = asyncio.Semaphore(1)
     app[TMUX_KEY] = tmux or TmuxClient()
     app[SNAPSHOTS_KEY] = snapshots or SnapshotStore()
     app[TITLES_KEY] = titles or SessionTitleStore()
@@ -820,6 +866,8 @@ def create_app(
     app[ATTACHMENTS_KEY] = attachments or uploads or AttachmentStore()
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[HOST_METRICS_KEY] = host_metrics or HostMetricsSampler()
+    app[SESSION_REGISTRY_KEY] = session_registry or SessionRegistry()
+    app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
         app[TMUX_KEY],
@@ -828,6 +876,8 @@ def create_app(
         messages=app[MESSAGES_KEY],
         mutation_lock=app[SESSION_RENAME_LOCK_KEY],
         workspaces=app[WORKSPACES_KEY],
+        registry=app[SESSION_REGISTRY_KEY],
+        agent_references=app[AGENT_REFERENCES_KEY],
     )
     app[SESSION_STREAM_BROKER_KEY] = SessionStreamBroker(
         app[SESSION_SNAPSHOTS_KEY],
@@ -843,7 +893,11 @@ def create_app(
     async def close_session_stream_broker(application: web.Application) -> None:
         await application[SESSION_STREAM_BROKER_KEY].close()
 
+    async def close_session_registry(application: web.Application) -> None:
+        application[SESSION_REGISTRY_KEY].close()
+
     app.on_cleanup.append(close_session_stream_broker)
+    app.on_cleanup.append(close_session_registry)
     app.on_response_prepare.append(add_browser_security_headers)
 
     def auth_html_response(document: str, *, status: int = 200) -> web.Response:
@@ -1151,7 +1205,47 @@ def create_app(
             payload = await app[SESSION_SNAPSHOTS_KEY].build()
         except TmuxError as error:
             return json_error(str(error), 503)
+        except SessionRegistryUnavailable as error:
+            return json_error(str(error), 503)
         return web.json_response(payload)
+
+    def record_created_session(
+        created_session: Any,
+        requested_directory: str | None,
+        *,
+        registry_id: str | None = None,
+    ) -> list[str]:
+        directory = (
+            created_session.directory
+            or requested_directory
+            or str(Path.home())
+        )
+        try:
+            app[SESSION_REGISTRY_KEY].record_created(
+                created_session,
+                directory,
+                registry_id=registry_id,
+            )
+        except (SessionRegistryUnavailable, RecoveryRecordNotFoundError) as error:
+            LOGGER.exception(
+                "Session %s was created but its recovery metadata could not be saved",
+                created_session.name,
+                exc_info=error,
+            )
+            return ["session was created but recovery metadata could not be saved"]
+        return []
+
+    def created_session_response(
+        created_session: Any,
+        warnings: list[str],
+    ) -> web.Response:
+        payload: dict[str, Any] = {
+            "session": created_session.name,
+            "sessionId": created_session.id,
+        }
+        if warnings:
+            payload["warnings"] = warnings
+        return web.json_response(payload, status=201)
 
     async def create_session(request: web.Request) -> web.Response:
         try:
@@ -1201,9 +1295,9 @@ def create_app(
             message = str(error)
             status = 409 if "duplicate session" in message.lower() else 503
             return json_error(message, status)
-        return web.json_response(
-            {"session": created_session.name, "sessionId": created_session.id},
-            status=201,
+        return created_session_response(
+            created_session,
+            record_created_session(created_session, requested_directory),
         )
 
     async def copy_session(request: web.Request) -> web.Response:
@@ -1254,10 +1348,94 @@ def create_app(
             return json_error(str(error), 409)
         except TmuxError as error:
             return json_error(str(error), 503)
-        return web.json_response(
-            {"session": created_session.name, "sessionId": created_session.id},
-            status=201,
+        return created_session_response(
+            created_session,
+            record_created_session(created_session, created_session.directory),
         )
+
+    async def recreate_session(request: web.Request) -> web.Response:
+        registry_id = request.match_info["recovery_id"]
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        unknown_fields = sorted(set(payload) - {"theme"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+        requested_theme = payload.get("theme")
+        if "theme" in payload:
+            if not isinstance(requested_theme, str):
+                return json_error("theme must be a string", 400)
+            if requested_theme not in {"dark", "light"}:
+                return json_error("theme must be dark or light", 400)
+
+        try:
+            record = app[SESSION_REGISTRY_KEY].get_recoverable(registry_id)
+        except RecoveryRecordNotFoundError:
+            return json_error("recoverable session not found", 404)
+        except SessionRegistryUnavailable as error:
+            return json_error(str(error), 503)
+        try:
+            directory = validate_tmux_start_directory(record.directory)
+        except ValueError as error:
+            return json_error(
+                f"saved working directory is unavailable: {error}",
+                409,
+            )
+
+        async with app[SESSION_RENAME_LOCK_KEY]:
+            try:
+                live_sessions = await app[TMUX_KEY].list_sessions()
+            except TmuxError as error:
+                return json_error(str(error), 503)
+            if any(session.name == record.name for session in live_sessions):
+                return json_error(
+                    f"tmux session already exists: {record.name}",
+                    409,
+                )
+            try:
+                created_session = await app[TMUX_KEY].create_session(
+                    record.name,
+                    theme=requested_theme,
+                    start_directory=directory,
+                )
+            except ValueError as error:
+                return json_error(str(error), 400)
+            except TmuxError as error:
+                message = str(error)
+                status = 409 if "duplicate session" in message.lower() else 503
+                return json_error(message, status)
+
+            warnings = record_created_session(
+                created_session,
+                directory,
+                registry_id=record.id,
+            )
+        return created_session_response(created_session, warnings)
+
+    async def forget_recoverable_session(request: web.Request) -> web.Response:
+        registry_id = request.match_info["recovery_id"]
+        try:
+            record = app[SESSION_REGISTRY_KEY].get_recoverable(registry_id)
+        except RecoveryRecordNotFoundError:
+            return json_error("recoverable session not found", 404)
+        except SessionRegistryUnavailable as error:
+            return json_error(str(error), 503)
+        try:
+            live_sessions = await app[TMUX_KEY].list_sessions()
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        if any(session.name == record.name for session in live_sessions):
+            return json_error("a live tmux session cannot be forgotten", 409)
+        try:
+            forgotten = app[SESSION_REGISTRY_KEY].forget(registry_id)
+        except SessionRegistryUnavailable as error:
+            return json_error(str(error), 503)
+        if not forgotten:
+            return json_error("recoverable session not found", 404)
+        return web.Response(status=204)
 
     async def upload_session_attachment(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -1441,10 +1619,15 @@ def create_app(
             return json_error(str(error), 415)
         except (
             FileBrowserImageTooLargeError,
+            FileBrowserPdfTooLargeError,
             FileBrowserContentTooLargeError,
+            FileBrowserArchiveLimitError,
         ) as error:
             return json_error(str(error), 413)
-        except FileBrowserUnsupportedImageError as error:
+        except (
+            FileBrowserUnsupportedImageError,
+            FileBrowserUnsupportedPdfError,
+        ) as error:
             return json_error(str(error), 415)
         except FileBrowserPathOutsideRootError as error:
             return json_error(str(error), 403)
@@ -1512,6 +1695,36 @@ def create_app(
 
     async def list_session_files(request: web.Request) -> web.Response:
         return await session_file_request(request, within_boundary(list_directory))
+
+    async def search_session_files(request: web.Request) -> web.Response:
+        context = await session_file_context(
+            request,
+            allowed_fields=frozenset(
+                {"sessionId", "paneId", "q", "hidden", "root"}
+            ),
+            required_fields=("sessionId", "paneId", "q"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, _relative_path, pane_id = context
+        hidden = request.query.get("hidden", "0")
+        if hidden not in {"0", "1"}:
+            return json_error("hidden must be 0 or 1", 400)
+        query = request.query["q"]
+        payload = await execute_session_file_operation(
+            root_path,
+            "",
+            pane_id,
+            lambda operation_root, _operation_path: search_files(
+                operation_root,
+                query,
+                include_hidden=hidden == "1",
+                boundary=app[FILE_BROWSER_ROOT_KEY],
+            ),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        return web.json_response(payload)
 
     async def resolve_session_file_target(request: web.Request) -> web.Response:
         context = await session_file_context(
@@ -1606,6 +1819,41 @@ def create_app(
             },
         )
 
+    async def preview_session_file_pdf(request: web.Request) -> web.StreamResponse:
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            within_boundary(resolve_file_pdf_preview),
+        )
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, FileBrowserPdfPreview):
+            raise TypeError("PDF preview operation returned an invalid result")
+
+        return web.FileResponse(
+            result.path,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": _file_content_disposition(
+                    result.name,
+                    "inline",
+                    fallback="document",
+                ),
+                "Content-Type": "application/pdf",
+                "Content-Security-Policy": "frame-ancestors 'self'",
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "X-Frame-Options": "SAMEORIGIN",
+            },
+        )
+
     async def upload_session_file(request: web.Request) -> web.Response:
         allowed_fields = frozenset(
             {"sessionId", "paneId", "path", "root", "filename"}
@@ -1685,6 +1933,104 @@ def create_app(
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
         return payload
+
+    async def archive_session_file_entries(
+        request: web.Request,
+    ) -> web.StreamResponse:
+        payload = await session_file_mutation_body(
+            request,
+            frozenset({"names"}),
+            ("names",),
+        )
+        if isinstance(payload, web.Response):
+            return payload
+        names = payload["names"]
+        if not isinstance(names, list) or any(
+            not isinstance(name, str) for name in names
+        ):
+            return json_error("names must be an array of strings", 400)
+
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+
+        async def build_archive() -> object | web.Response:
+            # Compression is deliberately serialized: one bounded archive is
+            # cheap, while several concurrent 256 MiB requests are not.
+            async with app[FILE_ARCHIVE_SEMAPHORE_KEY]:
+                return await execute_session_file_operation(
+                    root_path,
+                    relative_path,
+                    pane_id,
+                    lambda operation_root, operation_path: create_download_archive(
+                        operation_root,
+                        operation_path,
+                        names,
+                        boundary=app[FILE_BROWSER_ROOT_KEY],
+                    ),
+                )
+
+        archive_task = asyncio.create_task(build_archive())
+        try:
+            result = await asyncio.shield(archive_task)
+        except asyncio.CancelledError:
+            # asyncio cannot stop a worker thread. If the browser leaves while
+            # compression is running, let it finish under the semaphore and
+            # remove the otherwise-unclaimed temporary archive.
+            def discard_completed_archive(
+                task: asyncio.Task[object | web.Response],
+            ) -> None:
+                if task.cancelled() or task.exception() is not None:
+                    return
+                abandoned = task.result()
+                if isinstance(abandoned, FileBrowserArchive):
+                    with contextlib.suppress(OSError):
+                        abandoned.path.unlink(missing_ok=True)
+
+            archive_task.add_done_callback(discard_completed_archive)
+            raise
+
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, FileBrowserArchive):
+            raise TypeError("file archive operation returned an invalid result")
+
+        response = web.StreamResponse(
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": _file_content_disposition(
+                    result.name,
+                    "attachment",
+                    fallback="selection.zip",
+                ),
+                "Content-Length": str(result.size),
+                "Content-Type": "application/zip",
+                "X-Muxdeck-Archive-Name": quote(result.name, safe=""),
+                "X-Muxdeck-Archive-Files": str(result.file_count),
+                "X-Muxdeck-Archive-Directories": str(result.directory_count),
+                "X-Muxdeck-Archive-Skipped": str(result.skipped_count),
+                "X-Muxdeck-Archive-Uncompressed-Bytes": str(
+                    result.uncompressed_size
+                ),
+            }
+        )
+        try:
+            await response.prepare(request)
+            with result.path.open("rb") as archive_file:
+                while chunk := archive_file.read(FILE_ARCHIVE_STREAM_CHUNK_BYTES):
+                    await response.write(chunk)
+            await response.write_eof()
+        except ConnectionError:
+            # A closed download is not a server error, but its temp file still
+            # needs the same cleanup as a completed transfer.
+            pass
+        finally:
+            result.path.unlink(missing_ok=True)
+        return response
 
     async def run_session_file_mutation(
         request: web.Request,
@@ -1939,6 +2285,17 @@ def create_app(
                     )
                 # Retrying a committed termination should preserve the successful
                 # postcondition without risking a same-name replacement.
+                try:
+                    app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
+                        session_name,
+                        session_id,
+                        session_created,
+                        server_started,
+                        server_pid,
+                        False,
+                    )
+                except SessionRegistryUnavailable as error:
+                    return json_error(str(error), 503)
                 return web.Response(status=204)
             if (
                 target.id != session_id
@@ -1951,6 +2308,20 @@ def create_app(
                 )
 
             try:
+                recovery_state_changed = app[
+                    SESSION_REGISTRY_KEY
+                ].set_recovery_for_identity(
+                    session_name,
+                    session_id,
+                    session_created,
+                    server_started,
+                    server_pid,
+                    False,
+                )
+            except SessionRegistryUnavailable as error:
+                return json_error(str(error), 503)
+
+            try:
                 await app[TMUX_KEY].terminate_session(
                     session_id,
                     session_created,
@@ -1958,10 +2329,40 @@ def create_app(
                     server_pid,
                 )
             except ValueError as error:
+                if recovery_state_changed:
+                    with contextlib.suppress(SessionRegistryUnavailable):
+                        app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
+                            session_name,
+                            session_id,
+                            session_created,
+                            server_started,
+                            server_pid,
+                            True,
+                        )
                 return json_error(str(error), 400)
             except TmuxSessionIdentityChangedError as error:
+                if recovery_state_changed:
+                    with contextlib.suppress(SessionRegistryUnavailable):
+                        app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
+                            session_name,
+                            session_id,
+                            session_created,
+                            server_started,
+                            server_pid,
+                            True,
+                        )
                 return json_error(str(error), 409)
             except TmuxError as error:
+                if recovery_state_changed:
+                    with contextlib.suppress(SessionRegistryUnavailable):
+                        app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
+                            session_name,
+                            session_id,
+                            session_created,
+                            server_started,
+                            server_pid,
+                            True,
+                        )
                 return json_error(str(error), 503)
 
         return web.Response(status=204)
@@ -2092,6 +2493,22 @@ def create_app(
                 warnings.append(
                     "unable to migrate workspace, session-link, and note state"
                 )
+            try:
+                app[SESSION_REGISTRY_KEY].rename_identity(
+                    source_session.id,
+                    source_session.created,
+                    source_session.server_started,
+                    source_session.server_pid,
+                    renamed_session,
+                )
+            except SessionRegistryUnavailable:
+                LOGGER.exception(
+                    "Unable to migrate recovery metadata after renaming tmux session "
+                    "%s to %s",
+                    current_name,
+                    renamed_session,
+                )
+                warnings.append("unable to migrate session recovery metadata")
 
             response: dict[str, Any] = {
                 "previousSession": current_name,
@@ -2996,7 +3413,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"groups"}
+        allowed = required | {"groups", "separators", "separatorsBefore"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -3007,6 +3424,8 @@ def create_app(
                 tabs=payload["tabs"],
                 active_session=payload["activeSession"],
                 groups=payload.get("groups", []),
+                separators=payload.get("separators", []),
+                separators_before=payload.get("separatorsBefore", []),
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
@@ -3028,14 +3447,14 @@ def create_app(
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
 
-        allowed = {"name", "tabs", "groups", "activeSession", "sessionRevision"}
+        allowed = {"name", "tabs", "groups", "separators", "separatorsBefore", "activeSession", "sessionRevision"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
-        if not set(payload) & {"name", "tabs", "groups", "activeSession"}:
-            return json_error("name, tabs, groups, or activeSession is required", 400)
+        if not set(payload) & {"name", "tabs", "groups", "separators", "separatorsBefore", "activeSession"}:
+            return json_error("name, tabs, groups, separators, or activeSession is required", 400)
         if (
-            set(payload) & {"tabs", "groups", "activeSession"}
+            set(payload) & {"tabs", "groups", "separators", "separatorsBefore", "activeSession"}
             and "sessionRevision" not in payload
         ):
             return json_error("sessionRevision is required", 400)
@@ -3050,6 +3469,10 @@ def create_app(
                 update_name="name" in payload,
                 update_tabs="tabs" in payload,
                 update_groups="groups" in payload,
+                separators=payload.get("separators"),
+                update_separators="separators" in payload,
+                separators_before=payload.get("separatorsBefore"),
+                update_separators_before="separatorsBefore" in payload,
                 update_active_session="activeSession" in payload,
                 session_revision=payload.get("sessionRevision"),
             )
@@ -3350,6 +3773,14 @@ def create_app(
     app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
+    app.router.add_post(
+        f"{prefix}/api/recoverable-sessions/{{recovery_id:[^/]+}}/recreate",
+        recreate_session,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/recoverable-sessions/{{recovery_id:[^/]+}}",
+        forget_recoverable_session,
+    )
     app.router.add_post(f"{prefix}/api/sessions/{session_segment}/copy", copy_session)
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/attachments",
@@ -3368,6 +3799,10 @@ def create_app(
         resolve_session_file_target,
     )
     app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/search",
+        search_session_files,
+    )
+    app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/preview",
         preview_session_file,
     )
@@ -3376,8 +3811,16 @@ def create_app(
         preview_session_file_image,
     )
     app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/pdf",
+        preview_session_file_pdf,
+    )
+    app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/download",
         download_session_file,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/archive",
+        archive_session_file_entries,
     )
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/files/upload",

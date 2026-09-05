@@ -50,6 +50,9 @@ export interface Session {
   agentState: AgentState;
   agentStateReason: string;
   agentStateChangedAt: number;
+  /** Passive recovery metadata only; never an instruction to resume an agent. */
+  agentType?: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
+  agentSessionId?: string | null;
   customTitle: string | null;
   tags: SessionTag[];
   starred: boolean;

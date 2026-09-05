@@ -42,6 +42,7 @@ const CORE_SHORTCUT_DEFINITIONS = [
   { id: "view-tab-actions", label: "Tab action buttons", group: "View", direct: "KeyA", launcher: "KeyA" },
   { id: "view-session-tabs", label: "Session tabs", group: "View", direct: "KeyS", launcher: "KeyS" },
   { id: "view-terminal-focus", label: "Terminal Focus", group: "View", direct: "KeyF", launcher: "KeyF" },
+  { id: "view-floating-input", label: "Floating staged input", group: "View", direct: "KeyY", launcher: "KeyY" },
   { id: "view-theme", label: "Theme", group: "View", direct: null, launcher: "KeyT", directEditable: false },
   { id: "workspace-find-tab", label: "Find tab", group: "Tabs", direct: "Semicolon", launcher: "Semicolon" },
   { id: "workspace-previous-tab", label: "Previous tab", group: "Tabs", direct: "Comma", launcher: "Comma" },

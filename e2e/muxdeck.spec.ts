@@ -26,6 +26,7 @@ const messagesFile = process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE;
 const snippetsFile = process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE;
 const workspacesFile = process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE;
 const shortcutsFile = process.env.MUXDECK_PLAYWRIGHT_SHORTCUTS_FILE;
+const sessionRegistryFile = process.env.MUXDECK_PLAYWRIGHT_SESSION_REGISTRY_FILE;
 const authFile = process.env.MUXDECK_PLAYWRIGHT_AUTH_FILE;
 const uploadsDirectory = process.env.MUXDECK_PLAYWRIGHT_UPLOADS_DIR;
 const originalQueuedCommand = "printf 'MEMO_QUEUE_ORIGINAL\\n'";
@@ -147,6 +148,7 @@ if (
   || !snippetsFile
   || !workspacesFile
   || !shortcutsFile
+  || !sessionRegistryFile
   || !authFile
   || !uploadsDirectory
 ) {
@@ -186,6 +188,7 @@ test.afterAll(() => {
   rmSync(snippetsFile, { force: true });
   rmSync(workspacesFile, { force: true });
   rmSync(shortcutsFile, { force: true });
+  // The Playwright web server owns this open database across worker restarts.
   rmSync(authFile, { force: true });
   rmSync(uploadsDirectory, { recursive: true, force: true });
 });
@@ -1259,6 +1262,130 @@ test("terminal HTTP links require Ctrl-click and do not send a mouse frame", asy
   }
 });
 
+test("terminal file paths require Ctrl-click and open in the file manager", async ({ page }) => {
+  test.setTimeout(45_000);
+  const relativePath = "artifacts/terminal-linked-file.txt";
+  const relativeImagePath = "artifacts/terminal-linked-image.png";
+  const panePath = execFileSync(
+    "tmux",
+    [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"],
+    { encoding: "utf8" },
+  ).trim();
+  const absolutePath = `${panePath}/${relativePath}`;
+  const absoluteImagePath = `${panePath}/${relativeImagePath}`;
+  const fileContent = "opened from a terminal file link\n";
+  writeFileSync(absolutePath, fileContent, "utf8");
+  copyFileSync("docs/images/muxdeck-dashboard.png", absoluteImagePath);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live", {
+    timeout: 10_000,
+  });
+  await page.evaluate(() => {
+    const terminalFrames: number[][] = [];
+    const nativeSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (this.url.includes("/ws/terminal")) {
+        if (data instanceof ArrayBuffer) {
+          terminalFrames.push([...new Uint8Array(data)]);
+        } else if (ArrayBuffer.isView(data)) {
+          terminalFrames.push([
+            ...new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+          ]);
+        }
+      }
+      return nativeSend.call(this, data);
+    };
+    Object.defineProperty(window, "__muxdeckFileLinkTerminalFrames", {
+      value: terminalFrames,
+    });
+  });
+
+  try {
+    execFileSync("tmux", [
+      ...tmux,
+      "send-keys",
+      "-t",
+      paneId,
+      "-l",
+      `printf '\\033[2J\\033[H\\033[?1000h%s\\n%s\\n' '${relativePath}' '${relativeImagePath}'`,
+    ]);
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
+    await expect.poll(() => workspaceTmuxContentSnapshot(sessionName)).toContain(relativePath);
+    await expect.poll(() => workspaceTmuxContentSnapshot(sessionName))
+      .toContain(relativeImagePath);
+
+    const terminalScreen = page.locator(".terminal-host .xterm-screen");
+    const screenBox = await terminalScreen.boundingBox();
+    expect(screenBox).not.toBeNull();
+    const cellWidth = screenBox!.width / workspacePaneWidth(sessionName);
+    const cellHeight = screenBox!.height / workspacePaneHeight(sessionName);
+    const linkX = screenBox!.x + (cellWidth * 5);
+    const linkY = screenBox!.y + (cellHeight / 2);
+    await page.mouse.move(linkX, linkY);
+    await expect(page.locator(".terminal-host .xterm")).toHaveAttribute(
+      "title",
+      `Ctrl+click to preview ${relativePath}`,
+    );
+
+    await page.mouse.click(linkX, linkY);
+    await expect(page.getByRole("dialog", { name: "Files" })).toBeHidden();
+
+    // With terminal mouse reporting enabled, that intentional plain click
+    // reaches readline. Cancel it so the shell input buffer stays disposable;
+    // both fixture paths remain painted in the first two rows.
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "C-c"]);
+    await page.mouse.move(screenBox!.x + screenBox!.width - 8, linkY);
+    await page.mouse.move(linkX, linkY);
+
+    await page.keyboard.down("Control");
+    const framesBeforeClick = await page.evaluate(() => (
+      window as Window & { __muxdeckFileLinkTerminalFrames: number[][] }
+    ).__muxdeckFileLinkTerminalFrames.length);
+    await page.mouse.click(linkX, linkY);
+    await page.keyboard.up("Control");
+
+    const browser = page.getByRole("dialog", { name: "Files" });
+    await expect(browser).toBeVisible();
+    await expect(browser.getByText(fileContent.trim())).toBeVisible();
+    await expect(browser.getByLabel("File or directory path"))
+      .toHaveValue(panePath + "/artifacts");
+    const framesAfterClick = await page.evaluate(() => (
+      window as Window & { __muxdeckFileLinkTerminalFrames: number[][] }
+    ).__muxdeckFileLinkTerminalFrames);
+    expect(framesAfterClick.slice(framesBeforeClick)).toEqual([]);
+
+    await browser.getByRole("button", { name: "Close file browser" }).click();
+    const imageLinkY = linkY + cellHeight;
+    await page.mouse.move(screenBox!.x + screenBox!.width - 8, imageLinkY);
+    await page.mouse.move(linkX, imageLinkY);
+    await expect(page.locator(".terminal-host .xterm")).toHaveAttribute(
+      "title",
+      `Ctrl+click to preview ${relativeImagePath}`,
+    );
+    await page.keyboard.down("Control");
+    await page.mouse.click(linkX, imageLinkY);
+    await page.keyboard.up("Control");
+    await expect(page.getByRole("img", {
+      name: "Preview of terminal-linked-image.png",
+    })).toBeVisible();
+  } finally {
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "C-c"]);
+    execFileSync("tmux", [
+      ...tmux,
+      "send-keys",
+      "-t",
+      paneId,
+      "-l",
+      "printf '\\033[?1000l'",
+    ]);
+    execFileSync("tmux", [...tmux, "send-keys", "-t", paneId, "Enter"]);
+    rmSync(absolutePath, { force: true });
+    rmSync(absoluteImagePath, { force: true });
+  }
+});
+
 test("desktop file attachments stage or paste host-readable paths", async ({
   page,
 }) => {
@@ -1336,6 +1463,36 @@ test("desktop file attachments stage or paste host-readable paths", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(attach).toBeHidden();
   await expect(page.locator(".terminal-attachment-feedback")).toBeHidden();
+});
+
+test("file history shows all paths and an ordered CWD subset", async ({ page }) => {
+  const cwd = execFileSync("tmux", [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"], { encoding: "utf8" }).trim();
+  const id = execFileSync("tmux", [...tmux, "display-message", "-p", "-t", paneId, "#{session_id}"], { encoding: "utf8" }).trim();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${sessionName}`);
+  await page.evaluate(({ cwd, id, name }) => {
+    const paths = [`${cwd}-sibling/docs`, `${cwd}/src`, "/another-project", `${cwd}/docs`];
+    localStorage.setItem("muxdeck.session-files-recents.v1", JSON.stringify({
+      version: 1, sessions: { [id]: {
+        sessionName: name, updatedAt: Date.now(),
+        entries: paths.map((path, i) => ({ kind: "directory", absolutePath: path,
+          name: path.split("/").at(-1), visitedAt: Date.now() - i * 1000 })),
+      } },
+    }));
+  }, { cwd, id, name: sessionName });
+  await page.getByRole("button", { name: `Browse files in ${cwd}` }).click();
+  const panel = page.getByRole("dialog", { name: "Files" });
+  await panel.getByRole("button", { name: "Open session file history" }).click();
+  const all = panel.getByRole("region", { name: "All recent paths" });
+  const scoped = panel.getByRole("region", { name: "Under current CWD" });
+  await expect(all.getByRole("button", { name: /^Open recent/ })).toHaveCount(5);
+  await expect(scoped.getByRole("button", { name: /^Open recent/ })).toHaveCount(3);
+  expect(await scoped.locator(".session-file-recent-open").evaluateAll((buttons) => buttons.map((button) => button.getAttribute("title"))))
+    .toEqual([cwd, `${cwd}/src`, `${cwd}/docs`]);
+  await page.screenshot({ path: "artifacts/file-recents-cwd.png" });
+  await scoped.getByRole("button", { name: `Forget recent path ${cwd}/src` }).click();
+  await expect(all.getByRole("button", { name: /^Open recent/ })).toHaveCount(4);
+  await expect(scoped.getByRole("button", { name: /^Open recent/ })).toHaveCount(2);
 });
 
 test("desktop CWD browser previews text and images and stages pane-scoped files", async ({ page }) => {
@@ -2004,10 +2161,15 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   const focusRedraw = focusControls.getByRole("button", {
     name: "Redraw terminal display",
   });
+  const focusInput = focusControls.getByRole("button", {
+    name: "Show floating staged input",
+  });
   const focusShortcuts = focusControls.locator(".desktop-terminal-focus-shortcuts");
-  await expect(focusControls.getByRole("button")).toHaveCount(3);
+  await expect(focusControls.getByRole("button")).toHaveCount(4);
   await expect(focusRedraw).toBeVisible();
   await expect(focusRedraw).toBeInViewport();
+  await expect(focusInput).toBeVisible();
+  await expect(focusInput).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Y");
   await expect(focusShortcuts).toHaveAccessibleName("Show all buttons");
   await expect(focusShortcuts).toHaveAttribute("aria-expanded", "false");
   await expect(focusShortcuts).toHaveAttribute(
@@ -2027,7 +2189,7 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
   expect(terminalSocketCount).toBe(socketCountBeforeFocus);
   expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
-  await expect(page.locator("button:visible")).toHaveCount(3);
+  await expect(page.locator("button:visible")).toHaveCount(4);
   await expect(page.locator(".console-bar-toolbar")).toBeHidden();
   await expect(page.locator(".console-header")).toBeHidden();
   await expect(page.locator(".console-session-navigation")).toBeHidden();
@@ -2944,7 +3106,7 @@ test("desktop shortcut editor validates, persists, and updates visible key hints
     await expect(settings.getByRole("button", { name: "Save keymap" })).toBeDisabled();
 
     await paletteDirect.click();
-    await page.keyboard.press("k");
+    await page.keyboard.press("g");
     await expect(settings.getByText("Resolve duplicate keys before saving.")).toBeHidden();
 
     const launcherDirect = settings.getByRole("button", {
@@ -2967,19 +3129,19 @@ test("desktop shortcut editor validates, persists, and updates visible key hints
     await settings.getByRole("button", { name: "Close shortcut settings" }).click();
 
     const commandTrigger = page.getByRole("button", { name: "Open command palette" });
-    await expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    await expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+G");
     await expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
     await expect(page.getByRole("button", { name: "Open command palette" }))
-      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+G");
     await expect(page.getByRole("button", { name: "Open shortcut window" }))
       .toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
 
     await page.keyboard.press("Control+Shift+H");
     await expect(page.getByRole("dialog", { name: "Run a command" })).toHaveCount(0);
-    await page.keyboard.press("Control+Shift+K");
+    await page.keyboard.press("Control+Shift+G");
     await expect(page.getByRole("dialog", { name: "Run a command" })).toBeVisible();
     await page.keyboard.press("Escape");
 
@@ -3466,6 +3628,74 @@ test("workspace tabs split, copy, and move into isolated browser windows", async
     } catch {
       // Cleanup stays scoped to the session created on this test's disposable socket.
     }
+  }
+});
+
+test("sidebar selection arrows move tabs together without losing selection", async ({ page }) => {
+  const helpers = [`${sessionName}-move-a`, `${sessionName}-move-b`];
+  for (const name of helpers) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${sessionName}&tab=${helpers[0]}&tab=${helpers[1]}`);
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    for (const name of helpers) {
+      await page.locator(`[data-workspace-session-name="${name}"] [role="tab"]`).click({ modifiers: ["Control"] });
+    }
+    await page.getByRole("button", { name: "Move selected tabs up" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
+      .toEqual([...helpers, sessionName]);
+    await expect(page.getByRole("group", { name: "2 tabs selected for moving" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Move selected tabs up" })).toBeDisabled();
+    await page.screenshot({ path: "artifacts/workspace-multiselect-arrows.png" });
+    await page.getByRole("button", { name: "Move selected tabs down" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
+      .toEqual([sessionName, ...helpers]);
+  } finally {
+    for (const name of helpers) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
+
+test("sidebar separators save with a temporary workspace and can be removed after reload", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${sessionName}`);
+  await page.getByRole("button", { name: "Vertical session tabs" }).click();
+  await page.getByRole("button", { name: "Append separator after current session" }).click();
+  await page.getByRole("button", { name: "Insert separator before current session" }).click();
+  const line = page.locator("[data-separator-after] [role=separator]");
+  const beforeLine = page.locator("[data-separator-before] [role=separator]");
+  await expect(beforeLine).toBeVisible();
+  await expect(line).toBeVisible();
+  await expect(line).toHaveCSS("height", "2px");
+  await page.getByRole("button", { name: "Save workspace", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Save this workspace" });
+  await dialog.getByRole("textbox", { name: "Workspace name" }).fill("Separator check");
+  await dialog.getByRole("button", { name: "Save workspace" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("workspace")).toBeTruthy();
+  const workspaceId = new URL(page.url()).searchParams.get("workspace")!;
+  try {
+    await page.reload();
+    await expect(line).toBeVisible();
+    await expect(page.getByRole("button", { name: "Append separator after current session" })).toBeDisabled();
+    await expect(beforeLine).toBeVisible();
+    await expect(page.getByRole("button", { name: "Insert separator before current session" })).toBeDisabled();
+    await page.screenshot({ path: "artifacts/workspace-sidebar-separator.png" });
+    const response = await page.request.get(`/mux/api/workspaces/${workspaceId}`);
+    const saved = (await response.json()).workspace;
+    expect(saved.separators).toEqual([sessionName]);
+    expect(saved.separatorsBefore).toEqual([sessionName]);
+    expect(saved.groups).toEqual([]);
+    await page.getByRole("button", { name: /Remove separator after/ }).click();
+    await expect(line).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Append separator after current session" })).toBeEnabled();
+    await expect(line).toHaveCount(0);
+    await expect(beforeLine).toBeVisible();
+    await page.getByRole("button", { name: /Remove separator before/ }).click();
+    await expect(beforeLine).toHaveCount(0);
+  } finally {
+    await page.request.delete(`/mux/api/workspaces/${workspaceId}`);
   }
 });
 
@@ -6230,6 +6460,14 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await page.getByRole("button", { name: "Ctrl+Q - enqueue in Copilot CLI" }).click();
   await expect.poll(captureJoinedPane).toContain(String.raw`CTRL_Q_KEY=$'\021'`);
 
+  await stagedInput.fill("IFS= read -rsn1 key; printf 'CTRL_T_KEY=%q\n' \"$key\"");
+  await page.getByRole("button", { name: "Send + Enter" }).click();
+  await expect.poll(captureJoinedPane).toContain("CTRL_T_KEY=%q");
+  await page.getByRole("button", {
+    name: "Ctrl+T - view full transcript in Codex CLI",
+  }).click();
+  await expect.poll(captureJoinedPane).toContain(String.raw`CTRL_T_KEY=$'\024'`);
+
   const terminalClearProbe = `/tmp/muxdeck-terminal-clear-${process.pid}`;
   rmSync(terminalClearProbe, { force: true });
   try {
@@ -6504,6 +6742,9 @@ test("native tmux rename preserves alias, workspace order, draft, and metadata",
       terminalShortcuts.getByRole("button", { name: "Enter", exact: true }),
       terminalShortcuts.getByRole("button", { name: "Ctrl+K - delete to end of input" }),
       terminalShortcuts.getByRole("button", { name: "Ctrl+Q - enqueue in Copilot CLI" }),
+      terminalShortcuts.getByRole("button", {
+        name: "Ctrl+T - view full transcript in Codex CLI",
+      }),
     ];
     const primaryShortcutBoxes = [];
     for (const button of primaryShortcuts) {

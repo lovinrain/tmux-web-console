@@ -7,12 +7,19 @@ import os
 import shlex
 import shutil
 import stat
+import tempfile
+import time
+import unicodedata
+import zipfile
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 MAX_DIRECTORY_ENTRIES = 1_000
 MAX_PREVIEW_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_PREVIEW_BYTES = 25 * 1024 * 1024
+MAX_PDF_PREVIEW_BYTES = 50 * 1024 * 1024
+PDF_HEADER_SCAN_BYTES = 1_024
 MAX_FILE_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_FILE_NAME_BYTES = 255
 MAX_RELATIVE_PATH_LENGTH = 4_096
@@ -23,11 +30,44 @@ MAX_TEXT_WRITE_BYTES = 1 * 1024 * 1024
 MAX_TEXT_WRITE_BODY_BYTES = 6 * MAX_TEXT_WRITE_BYTES + 4096
 MAX_COPY_BYTES = 256 * 1024 * 1024
 MAX_RECURSIVE_DELETE_ENTRIES = 20_000
+MAX_FILE_SEARCH_QUERY_LENGTH = 200
+MAX_FILE_SEARCH_RESULTS = 80
+MAX_FILE_SEARCH_ENTRIES = 50_000
+MAX_FILE_SEARCH_DEPTH = 32
+MAX_FILE_SEARCH_SECONDS = 1.5
+MAX_FILE_ARCHIVE_SELECTION = 1_000
+MAX_FILE_ARCHIVE_ENTRIES = 10_000
+MAX_FILE_ARCHIVE_BYTES = 256 * 1024 * 1024
+FILE_ARCHIVE_COPY_CHUNK_BYTES = 256 * 1024
 
 NEW_DIRECTORY_MODE = 0o700
 NEW_FILE_MODE = 0o600
 
 ENTRY_KINDS = ("directory", "file")
+
+# These trees remain searchable, but only after ordinary project directories.
+# A dependency cache should not consume the whole bounded scan before source
+# and documentation folders have been considered.
+DEFERRED_SEARCH_DIRECTORIES = frozenset(
+    {
+        "__pycache__",
+        ".cache",
+        ".git",
+        ".hg",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".svn",
+        ".tox",
+        ".venv",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+        "target",
+        "vendor",
+    }
+)
 
 # The browser starts at the live pane working directory but may be pointed
 # anywhere inside this boundary. It exists so an operator can narrow the reach
@@ -56,8 +96,20 @@ class FileBrowserImageTooLargeError(ValueError):
     pass
 
 
+class FileBrowserUnsupportedPdfError(ValueError):
+    pass
+
+
+class FileBrowserPdfTooLargeError(ValueError):
+    pass
+
+
 class FileBrowserContentTooLargeError(ValueError):
     """A file body exceeds the limit for the requested operation."""
+
+
+class FileBrowserArchiveLimitError(ValueError):
+    """A requested bulk archive exceeds a bounded resource limit."""
 
 
 class FileBrowserDestinationExistsError(FileExistsError):
@@ -83,10 +135,27 @@ class FileBrowserDownload:
 
 
 @dataclass(frozen=True)
+class FileBrowserArchive:
+    path: Path
+    name: str
+    size: int
+    file_count: int
+    directory_count: int
+    skipped_count: int
+    uncompressed_size: int
+
+
+@dataclass(frozen=True)
 class FileBrowserImagePreview:
     path: Path
     name: str
     media_type: str
+
+
+@dataclass(frozen=True)
+class FileBrowserPdfPreview:
+    path: Path
+    name: str
 
 
 def resolve_browse_boundary(configured: str | None = None) -> Path:
@@ -442,6 +511,21 @@ def _raster_image_media_type(target: Path) -> str | None:
     return None
 
 
+def _is_pdf(target: Path) -> bool:
+    with target.open("rb") as handle:
+        header = handle.read(PDF_HEADER_SCAN_BYTES)
+    marker = header.find(b"%PDF-")
+    if marker < 0:
+        return False
+    version = header[marker + 5 : marker + 8]
+    return (
+        len(version) == 3
+        and version[:1].isdigit()
+        and version[1:2] == b"."
+        and version[2:].isdigit()
+    )
+
+
 def _entry_name(value: str, label: str = "filename") -> str:
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")
@@ -627,6 +711,237 @@ def list_directory(
     }
 
 
+def _normalize_search_text(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value)
+    separated: list[str] = []
+    for index, character in enumerate(decomposed):
+        previous = decomposed[index - 1] if index > 0 else ""
+        following = decomposed[index + 1] if index + 1 < len(decomposed) else ""
+        if (
+            character.isupper()
+            and previous.isalnum()
+            and (
+                previous.islower()
+                or previous.isdigit()
+                or (previous.isupper() and following.islower())
+            )
+        ):
+            separated.append(" ")
+        separated.append(character.casefold())
+    comparable = "".join(
+        character if character.isalnum() else " "
+        for character in separated
+        if not unicodedata.combining(character)
+    )
+    return " ".join(comparable.split())
+
+
+def _fuzzy_token_score(token: str, candidate: str) -> int | None:
+    if not token or not candidate:
+        return None
+    if candidate == token:
+        return 5_000
+    if candidate.startswith(token):
+        return 4_000 - (len(candidate) - len(token))
+
+    substring_index = candidate.find(token)
+    if substring_index >= 0:
+        boundary_bonus = (
+            300
+            if substring_index == 0 or candidate[substring_index - 1] == " "
+            else 0
+        )
+        return (
+            3_000
+            + boundary_bonus
+            - substring_index * 3
+            - (len(candidate) - len(token))
+        )
+
+    token_index = 0
+    previous_match = -2
+    score = 1_000
+    for candidate_index, character in enumerate(candidate):
+        if character != token[token_index]:
+            continue
+        score += 45 if candidate_index == previous_match + 1 else 12
+        if candidate_index == 0 or candidate[candidate_index - 1] == " ":
+            score += 35
+        score -= max(0, candidate_index - previous_match - 1) * 2
+        previous_match = candidate_index
+        token_index += 1
+        if token_index == len(token):
+            return score - max(0, len(candidate) - len(token))
+    return None
+
+
+def _file_search_score(tokens: tuple[str, ...], name: str, path: str) -> int | None:
+    fields = (_normalize_search_text(name), _normalize_search_text(path))
+    score = 0
+    for token in tokens:
+        best: int | None = None
+        for field_index, field in enumerate(fields):
+            field_score = _fuzzy_token_score(token, field)
+            if field_score is None:
+                continue
+            weighted = field_score + (2_200 if field_index == 0 else 0)
+            best = weighted if best is None else max(best, weighted)
+        if best is None:
+            return None
+        score += best
+    return score
+
+
+def search_files(
+    root_path: str,
+    query: str,
+    *,
+    include_hidden: bool = False,
+    boundary: Path | None,
+) -> dict[str, object]:
+    """Fuzzy-locate files and folders under a bounded browser root.
+
+    The walk is breadth-first, does not follow symlinks, and defers common
+    dependency/build trees until ordinary project folders have been searched.
+    Fixed depth, entry, result, and wall-clock limits keep a locator request
+    from turning into an unbounded host scan.
+    """
+    if not isinstance(query, str):
+        raise TypeError("query must be a string")
+    trimmed_query = query.strip()
+    if not trimmed_query:
+        raise ValueError("query is required")
+    if len(trimmed_query) > MAX_FILE_SEARCH_QUERY_LENGTH:
+        raise ValueError(
+            f"query must be {MAX_FILE_SEARCH_QUERY_LENGTH} characters or fewer"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in query):
+        raise ValueError("query cannot contain control characters")
+    if not isinstance(include_hidden, bool):
+        raise TypeError("include_hidden must be a boolean")
+
+    tokens = tuple(_normalize_search_text(trimmed_query).split())
+    if not tokens:
+        raise ValueError("query must contain letters or numbers")
+
+    display_root, resolved_root = _resolve_root(root_path, boundary)
+    ordinary: deque[tuple[Path, tuple[str, ...], int]] = deque(
+        [(resolved_root, (), 0)]
+    )
+    deferred: deque[tuple[Path, tuple[str, ...], int]] = deque()
+    candidates: list[tuple[int, dict[str, object]]] = []
+    scanned_entries = 0
+    incomplete = False
+    stopped = False
+    deadline = time.monotonic() + MAX_FILE_SEARCH_SECONDS
+
+    while (ordinary or deferred) and not stopped:
+        directory, directory_parts, depth = (
+            ordinary.popleft() if ordinary else deferred.popleft()
+        )
+        try:
+            current_directory = directory.resolve(strict=True)
+            if not _is_within(resolved_root, current_directory):
+                incomplete = True
+                continue
+            names: list[str] = []
+            with os.scandir(current_directory) as scanner:
+                for child in scanner:
+                    if scanned_entries + len(names) >= MAX_FILE_SEARCH_ENTRIES:
+                        incomplete = True
+                        stopped = True
+                        break
+                    if time.monotonic() >= deadline:
+                        incomplete = True
+                        stopped = True
+                        break
+                    names.append(child.name)
+        except (OSError, RuntimeError):
+            incomplete = True
+            continue
+
+        names.sort(key=lambda value: (value.casefold(), value))
+        for name in names:
+            if time.monotonic() >= deadline:
+                incomplete = True
+                stopped = True
+                break
+            scanned_entries += 1
+            if not include_hidden and name.startswith("."):
+                continue
+            parts = (*directory_parts, name)
+            relative_path = _relative_text(parts)
+            if (
+                len(relative_path) > MAX_RELATIVE_PATH_LENGTH
+                or len(parts) > MAX_RELATIVE_PATH_PARTS
+            ):
+                incomplete = True
+                continue
+
+            child_path = current_directory / name
+            try:
+                # Symlink targets are intentionally absent from recursive
+                # results. They remain visible in ordinary directory listings.
+                if child_path.is_symlink():
+                    continue
+                resolved_child = child_path.resolve(strict=True)
+                if not _is_within(resolved_root, resolved_child):
+                    incomplete = True
+                    continue
+                child_stat = resolved_child.stat()
+            except (OSError, RuntimeError):
+                incomplete = True
+                continue
+
+            kind = _stat_kind(child_stat.st_mode)
+            if kind not in ENTRY_KINDS:
+                continue
+            match_score = _file_search_score(tokens, name, relative_path)
+            if match_score is not None:
+                candidates.append(
+                    (
+                        match_score,
+                        _stat_entry_payload(
+                            display_root,
+                            parts,
+                            child_stat,
+                        ),
+                    )
+                )
+
+            if kind != "directory":
+                continue
+            if depth >= MAX_FILE_SEARCH_DEPTH:
+                incomplete = True
+                continue
+            destination = (
+                deferred
+                if name.casefold() in DEFERRED_SEARCH_DIRECTORIES
+                else ordinary
+            )
+            destination.append((resolved_child, parts, depth + 1))
+
+    candidates.sort(
+        key=lambda item: (
+            -item[0],
+            item[1]["kind"] != "file",
+            len(str(item[1]["path"])),
+            str(item[1]["path"]).casefold(),
+            str(item[1]["path"]),
+        )
+    )
+    result_limited = len(candidates) > MAX_FILE_SEARCH_RESULTS
+    return {
+        "root": str(display_root),
+        "query": trimmed_query,
+        "results": [entry for _, entry in candidates[:MAX_FILE_SEARCH_RESULTS]],
+        "scannedEntries": scanned_entries,
+        "scanLimit": MAX_FILE_SEARCH_ENTRIES,
+        "resultLimit": MAX_FILE_SEARCH_RESULTS,
+        "truncated": incomplete or result_limited,
+    }
+
+
 def preview_file(
     root_path: str,
     relative_path: str,
@@ -656,6 +971,21 @@ def preview_file(
             "modified": target_stat.st_mtime,
             "truncated": target_stat.st_size > MAX_IMAGE_PREVIEW_BYTES,
             "previewBytes": min(target_stat.st_size, MAX_IMAGE_PREVIEW_BYTES),
+            "content": None,
+            "editable": False,
+        }
+
+    if _is_pdf(target):
+        return {
+            "root": str(display_root),
+            **_path_payload(display_root, parts),
+            "name": target.name,
+            "kind": "pdf",
+            "mediaType": "application/pdf",
+            "size": target_stat.st_size,
+            "modified": target_stat.st_mtime,
+            "truncated": target_stat.st_size > MAX_PDF_PREVIEW_BYTES,
+            "previewBytes": min(target_stat.st_size, MAX_PDF_PREVIEW_BYTES),
             "content": None,
             "editable": False,
         }
@@ -693,6 +1023,267 @@ def preview_file(
         "content": text,
         "editable": kind == "text" and not truncated and not is_symlink,
     }
+
+
+@dataclass
+class _ArchiveProgress:
+    inspected_count: int = 0
+    file_count: int = 0
+    directory_count: int = 0
+    skipped_count: int = 0
+    uncompressed_size: int = 0
+
+
+def _archive_component(name: str) -> str:
+    """Keep ordinary names readable while escaping ZIP-hostile characters."""
+    result: list[str] = []
+    for character in name:
+        codepoint = ord(character)
+        if character == "%":
+            result.append("%25")
+        elif character == "\\":
+            result.append("%5C")
+        elif codepoint < 32 or codepoint == 127 or 0xD800 <= codepoint <= 0xDFFF:
+            result.append(f"%{codepoint:04X}")
+        else:
+            result.append(character)
+    return "".join(result) or "unnamed"
+
+
+def _archive_source_name(value: str) -> str:
+    """Validate one existing directory entry without narrowing Unix names."""
+    if not isinstance(value, str):
+        raise TypeError("selected name must be a string")
+    if not value:
+        raise ValueError("selected name is required")
+    if value in {".", ".."} or "/" in value:
+        raise ValueError("selected name must name one item in this folder")
+    if "\x00" in value:
+        raise ValueError("selected name cannot contain a null byte")
+    if len(value.encode("utf-8")) > MAX_FILE_NAME_BYTES:
+        raise ValueError(
+            f"selected name must be {MAX_FILE_NAME_BYTES} UTF-8 bytes or fewer"
+        )
+    return value
+
+
+def _archive_timestamp(modified: float) -> tuple[int, int, int, int, int, int]:
+    try:
+        timestamp = time.localtime(modified)
+    except (OSError, OverflowError, ValueError):
+        return (1980, 1, 1, 0, 0, 0)
+    if timestamp.tm_year < 1980:
+        return (1980, 1, 1, 0, 0, 0)
+    if timestamp.tm_year > 2107:
+        return (2107, 12, 31, 23, 59, 58)
+    return (
+        timestamp.tm_year,
+        timestamp.tm_mon,
+        timestamp.tm_mday,
+        timestamp.tm_hour,
+        timestamp.tm_min,
+        timestamp.tm_sec,
+    )
+
+
+def _archive_info(
+    archive_path: str,
+    entry_stat: os.stat_result,
+    *,
+    directory: bool,
+) -> zipfile.ZipInfo:
+    name = f"{archive_path.rstrip('/')}/" if directory else archive_path
+    info = zipfile.ZipInfo(name, _archive_timestamp(entry_stat.st_mtime))
+    info.create_system = 3
+    info.compress_type = zipfile.ZIP_DEFLATED
+    file_type = stat.S_IFDIR if directory else stat.S_IFREG
+    info.external_attr = (file_type | _preserved_mode(entry_stat)) << 16
+    if directory:
+        info.external_attr |= 0x10
+    return info
+
+
+def _add_archive_entry(
+    archive: zipfile.ZipFile,
+    parent_descriptor: int,
+    source_name: str,
+    archive_parts: tuple[str, ...],
+    progress: _ArchiveProgress,
+) -> None:
+    progress.inspected_count += 1
+    if progress.inspected_count > MAX_FILE_ARCHIVE_ENTRIES:
+        raise FileBrowserArchiveLimitError(
+            f"selection expands past the {MAX_FILE_ARCHIVE_ENTRIES:,}-entry archive limit"
+        )
+
+    entry_stat = os.stat(
+        source_name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    if stat.S_ISLNK(entry_stat.st_mode):
+        progress.skipped_count += 1
+        return
+
+    archive_path = "/".join(archive_parts)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    if stat.S_ISDIR(entry_stat.st_mode):
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | close_on_exec | no_follow
+        try:
+            directory_descriptor = os.open(
+                source_name,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                progress.skipped_count += 1
+                return
+            raise
+        try:
+            opened_stat = os.fstat(directory_descriptor)
+            if not stat.S_ISDIR(opened_stat.st_mode):
+                progress.skipped_count += 1
+                return
+            archive.writestr(
+                _archive_info(archive_path, opened_stat, directory=True),
+                b"",
+            )
+            progress.directory_count += 1
+            with os.scandir(directory_descriptor) as scanner:
+                for child in scanner:
+                    _add_archive_entry(
+                        archive,
+                        directory_descriptor,
+                        child.name,
+                        (*archive_parts, _archive_component(child.name)),
+                        progress,
+                    )
+        finally:
+            os.close(directory_descriptor)
+        return
+
+    if not stat.S_ISREG(entry_stat.st_mode):
+        progress.skipped_count += 1
+        return
+
+    flags = os.O_RDONLY | close_on_exec | no_follow
+    try:
+        file_descriptor = os.open(source_name, flags, dir_fd=parent_descriptor)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            progress.skipped_count += 1
+            return
+        raise
+    try:
+        opened_stat = os.fstat(file_descriptor)
+        if not stat.S_ISREG(opened_stat.st_mode):
+            progress.skipped_count += 1
+            return
+        if progress.uncompressed_size + opened_stat.st_size > MAX_FILE_ARCHIVE_BYTES:
+            raise FileBrowserArchiveLimitError(
+                "selection exceeds the 256 MiB uncompressed archive limit"
+            )
+        with os.fdopen(file_descriptor, "rb") as source:
+            file_descriptor = -1
+            with archive.open(
+                _archive_info(archive_path, opened_stat, directory=False),
+                mode="w",
+                force_zip64=True,
+            ) as destination:
+                while chunk := source.read(FILE_ARCHIVE_COPY_CHUNK_BYTES):
+                    progress.uncompressed_size += len(chunk)
+                    if progress.uncompressed_size > MAX_FILE_ARCHIVE_BYTES:
+                        raise FileBrowserArchiveLimitError(
+                            "selection exceeds the 256 MiB uncompressed archive limit"
+                        )
+                    destination.write(chunk)
+        progress.file_count += 1
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+
+
+def create_download_archive(
+    root_path: str,
+    directory_path: str,
+    names: list[str],
+    *,
+    boundary: Path | None,
+) -> FileBrowserArchive:
+    """Create a bounded temporary ZIP from entries in one displayed folder."""
+    if not isinstance(names, list):
+        raise TypeError("names must be an array")
+    if not names:
+        raise ValueError("select at least one file or folder")
+    if len(names) > MAX_FILE_ARCHIVE_SELECTION:
+        raise FileBrowserArchiveLimitError(
+            f"select no more than {MAX_FILE_ARCHIVE_SELECTION:,} items at once"
+        )
+    validated_names = [_archive_source_name(name) for name in names]
+    if len(set(validated_names)) != len(validated_names):
+        raise ValueError("selected names must be unique")
+
+    _display_root, _resolved_root, directory, _parts = _resolve_target(
+        root_path,
+        directory_path,
+        boundary,
+    )
+    if not stat.S_ISDIR(directory.stat().st_mode):
+        raise NotADirectoryError("path is not a directory")
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    directory_descriptor = os.open(directory, flags)
+    archive_descriptor = -1
+    archive_path: Path | None = None
+    progress = _ArchiveProgress()
+    try:
+        archive_descriptor, archive_name = tempfile.mkstemp(
+            prefix="muxdeck-files-",
+            suffix=".zip",
+        )
+        archive_path = Path(archive_name)
+        with os.fdopen(archive_descriptor, "w+b") as archive_file:
+            archive_descriptor = -1
+            with zipfile.ZipFile(
+                archive_file,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                allowZip64=True,
+            ) as archive:
+                for name in validated_names:
+                    _add_archive_entry(
+                        archive,
+                        directory_descriptor,
+                        name,
+                        (_archive_component(name),),
+                        progress,
+                    )
+        if progress.file_count == 0 and progress.directory_count == 0:
+            raise FileBrowserUnsupportedFileError(
+                "selected items contain only links or special files"
+            )
+        result_stat = archive_path.stat()
+        folder_name = _archive_component(directory.name or "root")
+        return FileBrowserArchive(
+            path=archive_path,
+            name=f"{folder_name}-selection.zip",
+            size=result_stat.st_size,
+            file_count=progress.file_count,
+            directory_count=progress.directory_count,
+            skipped_count=progress.skipped_count,
+            uncompressed_size=progress.uncompressed_size,
+        )
+    except BaseException:
+        if archive_path is not None:
+            archive_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if archive_descriptor >= 0:
+            os.close(archive_descriptor)
+        os.close(directory_descriptor)
 
 
 def resolve_file_download(
@@ -745,6 +1336,31 @@ def resolve_file_image_preview(
         name=parts[-1],
         media_type=media_type,
     )
+
+
+def resolve_file_pdf_preview(
+    root_path: str,
+    relative_path: str,
+    *,
+    boundary: Path | None,
+) -> FileBrowserPdfPreview:
+    _display_root, _resolved_root, target, parts = _resolve_target(
+        root_path,
+        relative_path,
+        boundary,
+    )
+    target_stat = target.stat()
+    if stat.S_ISDIR(target_stat.st_mode):
+        raise IsADirectoryError("path is a directory")
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise FileBrowserUnsupportedFileError("path is not a regular file")
+    if not _is_pdf(target):
+        raise FileBrowserUnsupportedPdfError("path is not a signature-verified PDF")
+    if target_stat.st_size > MAX_PDF_PREVIEW_BYTES:
+        raise FileBrowserPdfTooLargeError(
+            "PDF exceeds the 50 MiB inline preview limit"
+        )
+    return FileBrowserPdfPreview(path=target, name=parts[-1])
 
 
 def upload_file(

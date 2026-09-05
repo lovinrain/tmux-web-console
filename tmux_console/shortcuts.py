@@ -13,9 +13,11 @@ from typing import Any
 
 LOGGER = logging.getLogger("muxdeck.shortcuts")
 MAX_SHORTCUT_REVISION = (1 << 53) - 1
-SHORTCUT_DOCUMENT_VERSION = 2
+SHORTCUT_DOCUMENT_VERSION = 3
+PREVIOUS_SHORTCUT_DOCUMENT_VERSION = 2
 LEGACY_SHORTCUT_DOCUMENT_VERSION = 1
 QUICK_SESSION_ACTION = "workspace-quick-new-session"
+FLOATING_INPUT_ACTION = "view-floating-input"
 SHORTCUT_STORE_UNAVAILABLE_MESSAGE = (
     "shortcut storage is unavailable; inspect and repair the configured shortcuts "
     "file, then restart Muxdeck"
@@ -60,6 +62,7 @@ DEFAULT_SHORTCUT_BINDINGS: dict[str, dict[str, str | None]] = {
     "view-tab-actions": _binding("KeyA", "KeyA"),
     "view-session-tabs": _binding("KeyS", "KeyS"),
     "view-terminal-focus": _binding("KeyF", "KeyF"),
+    FLOATING_INPUT_ACTION: _binding("KeyY", "KeyY"),
     "view-theme": _binding(None, "KeyT"),
     "workspace-previous-tab": _binding("Comma", "Comma"),
     "workspace-next-tab": _binding("Period", "Period"),
@@ -180,32 +183,49 @@ def _validate_stored_bindings(
 ) -> dict[str, ShortcutBinding]:
     if version == SHORTCUT_DOCUMENT_VERSION:
         return validate_bindings(value)
-    if version != LEGACY_SHORTCUT_DOCUMENT_VERSION:
+    if version not in {
+        LEGACY_SHORTCUT_DOCUMENT_VERSION,
+        PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
+    }:
         raise ValueError("unsupported document version")
     if not isinstance(value, dict):
         return validate_bindings(value)
 
-    legacy_actions = set(DEFAULT_SHORTCUT_BINDINGS) - {QUICK_SESSION_ACTION}
+    current_actions = set(DEFAULT_SHORTCUT_BINDINGS)
+    version_two_actions = current_actions - {FLOATING_INPUT_ACTION}
+    version_one_actions = version_two_actions - {QUICK_SESSION_ACTION}
     if set(value) == set(DEFAULT_SHORTCUT_BINDINGS):
         return validate_bindings(value)
-    if set(value) != legacy_actions:
+    if version == PREVIOUS_SHORTCUT_DOCUMENT_VERSION:
+        if set(value) != version_two_actions:
+            return validate_bindings(value)
+    elif frozenset(value) not in {
+        frozenset(version_one_actions),
+        frozenset(version_two_actions),
+    }:
         return validate_bindings(value)
 
     upgraded = copy.deepcopy(value)
-    used_direct = {
-        binding.get("direct")
-        for binding in value.values()
-        if isinstance(binding, dict)
-    }
-    used_launcher = {
-        binding.get("launcher")
-        for binding in value.values()
-        if isinstance(binding, dict)
-    }
-    upgraded[QUICK_SESSION_ACTION] = _binding(
-        "KeyK" if "KeyK" not in used_direct else None,
-        "KeyK" if "KeyK" not in used_launcher else None,
-    )
+
+    def add_available_binding(action: str, code: str) -> None:
+        used_direct = {
+            binding.get("direct")
+            for binding in upgraded.values()
+            if isinstance(binding, dict)
+        }
+        used_launcher = {
+            binding.get("launcher")
+            for binding in upgraded.values()
+            if isinstance(binding, dict)
+        }
+        upgraded[action] = _binding(
+            code if code not in used_direct else None,
+            code if code not in used_launcher else None,
+        )
+
+    if QUICK_SESSION_ACTION not in upgraded:
+        add_available_binding(QUICK_SESSION_ACTION, "KeyK")
+    add_available_binding(FLOATING_INPUT_ACTION, "KeyY")
     return validate_bindings(upgraded)
 
 

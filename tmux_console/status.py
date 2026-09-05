@@ -11,6 +11,7 @@ from .tmux import Pane, Session, TmuxClient, TmuxError
 AgentStateName = Literal[
     "working", "waiting_human", "waiting_command", "unknown", "other"
 ]
+AgentType = Literal["claude", "codex", "copilot", "cursor", "grok"]
 COMMAND_WAIT_PATTERN = re.compile(
     r"\bwaiting for (?:background terminals?|agents?)\b", re.IGNORECASE
 )
@@ -194,6 +195,23 @@ def _is_copilot_pane(command: str, title: str) -> bool:
         normalized_title == COPILOT_TITLE
         or normalized_title.endswith(f" - {COPILOT_TITLE}")
     )
+
+
+def classify_agent_type(pane: Pane | None) -> AgentType | None:
+    if pane is None or pane.dead:
+        return None
+    command = pane.command.casefold()
+    if command == "claude":
+        return "claude"
+    if command == "codex":
+        return "codex"
+    if command == "grok":
+        return "grok"
+    if command in CURSOR_COMMANDS:
+        return "cursor"
+    if _is_copilot_pane(command, pane.title):
+        return "copilot"
+    return None
 
 
 def _classify_copilot_state(

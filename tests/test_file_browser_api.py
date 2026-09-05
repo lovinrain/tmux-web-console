@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import stat
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ from tmux_console.app import create_app
 from tmux_console.tmux import Pane, Session, TmuxClient, TmuxError
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"preview payload"
+PDF_BYTES = b"%PDF-1.7\n% muxdeck test\n%%EOF\n"
 
 
 def make_pane(path: Path, pane_id: str = "%3") -> Pane:
@@ -101,6 +104,65 @@ def test_directory_listing_and_file_previews_are_scoped_and_shell_safe(tmp_path)
     assert binary["content"] is None
 
 
+def test_fuzzy_file_search_ranks_paths_and_bounds_recursive_traversal(
+    tmp_path,
+    monkeypatch,
+):
+    components = tmp_path / "src" / "components"
+    components.mkdir(parents=True)
+    (components / "SessionFilesPanel.tsx").write_text("panel\n", encoding="utf-8")
+    (components / "SessionFilesPanel.test.tsx").write_text("tests\n", encoding="utf-8")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "file-search.md").write_text("locator\n", encoding="utf-8")
+    hidden = tmp_path / ".plans"
+    hidden.mkdir()
+    (hidden / "secret-roadmap.md").write_text("hidden\n", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-search"
+    outside.mkdir()
+    (outside / "secret-roadmap.md").write_text("outside\n", encoding="utf-8")
+    (tmp_path / "outside-link").symlink_to(outside, target_is_directory=True)
+
+    ranked = file_browser.search_files(str(tmp_path), "sfp", boundary=None)
+    assert ranked["query"] == "sfp"
+    assert ranked["results"][0]["path"] == "src/components/SessionFilesPanel.tsx"
+    assert ranked["results"][0]["kind"] == "file"
+    assert ranked["scannedEntries"] >= 7
+    assert ranked["truncated"] is False
+
+    by_tokens = file_browser.search_files(str(tmp_path), "file search", boundary=None)
+    assert [entry["path"] for entry in by_tokens["results"]] == [
+        "docs/file-search.md"
+    ]
+    assert file_browser.search_files(str(tmp_path), "secret road", boundary=None)[
+        "results"
+    ] == []
+    hidden_results = file_browser.search_files(
+        str(tmp_path),
+        "secret road",
+        include_hidden=True,
+        boundary=None,
+    )
+    assert [entry["path"] for entry in hidden_results["results"]] == [
+        ".plans/secret-roadmap.md"
+    ]
+
+    monkeypatch.setattr(file_browser, "MAX_FILE_SEARCH_ENTRIES", 2)
+    limited = file_browser.search_files(str(tmp_path), "panel", boundary=None)
+    assert limited["scannedEntries"] == 2
+    assert limited["scanLimit"] == 2
+    assert limited["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["", "   ", "***", "bad\nquery", "x" * 201],
+)
+def test_fuzzy_file_search_rejects_invalid_queries(tmp_path, query):
+    with pytest.raises(ValueError):
+        file_browser.search_files(str(tmp_path), query, boundary=None)
+
+
 def test_preview_is_capped_without_splitting_invalid_utf8(tmp_path, monkeypatch):
     monkeypatch.setattr(file_browser, "MAX_PREVIEW_BYTES", 5)
     (tmp_path / "large.txt").write_bytes("four\u00e9more".encode())
@@ -180,6 +242,51 @@ def test_image_preview_rejects_unsupported_and_oversized_content(
         file_browser.resolve_file_image_preview(str(tmp_path), "oversized.png", boundary=None)
 
 
+def test_pdf_preview_is_signature_checked_and_capped(tmp_path, monkeypatch):
+    pdf = tmp_path / "guide.pdf"
+    pdf.write_bytes(PDF_BYTES)
+    disguised = tmp_path / "disguised.pdf"
+    disguised.write_text("not a PDF", encoding="utf-8")
+
+    preview = file_browser.preview_file(str(tmp_path), "guide.pdf", boundary=None)
+    resolved = file_browser.resolve_file_pdf_preview(
+        str(tmp_path),
+        "guide.pdf",
+        boundary=None,
+    )
+    assert preview["kind"] == "pdf"
+    assert preview["mediaType"] == "application/pdf"
+    assert preview["content"] is None
+    assert preview["truncated"] is False
+    assert resolved.path == pdf
+    assert resolved.name == "guide.pdf"
+
+    with pytest.raises(
+        file_browser.FileBrowserUnsupportedPdfError,
+        match="signature-verified PDF",
+    ):
+        file_browser.resolve_file_pdf_preview(
+            str(tmp_path),
+            "disguised.pdf",
+            boundary=None,
+        )
+
+    monkeypatch.setattr(file_browser, "MAX_PDF_PREVIEW_BYTES", 8)
+    limited = file_browser.preview_file(str(tmp_path), "guide.pdf", boundary=None)
+    assert limited["kind"] == "pdf"
+    assert limited["truncated"] is True
+    assert limited["previewBytes"] == 8
+    with pytest.raises(
+        file_browser.FileBrowserPdfTooLargeError,
+        match="inline preview limit",
+    ):
+        file_browser.resolve_file_pdf_preview(
+            str(tmp_path),
+            "guide.pdf",
+            boundary=None,
+        )
+
+
 def test_upload_writes_a_private_file_and_resolves_it_for_download(tmp_path):
     nested = tmp_path / "incoming"
     nested.mkdir()
@@ -214,6 +321,112 @@ def test_upload_writes_a_private_file_and_resolves_it_for_download(tmp_path):
     )
     assert download.path == destination
     assert download.name == "build notes.txt"
+
+
+def test_bulk_archive_keeps_selected_roots_and_recurses_without_links(tmp_path):
+    current = tmp_path / "src"
+    bundle = current / "bundle"
+    empty = bundle / "empty"
+    empty.mkdir(parents=True)
+    (current / "top.txt").write_text("top\n", encoding="utf-8")
+    (current / "odd\\name.txt").write_text("odd\n", encoding="utf-8")
+    (bundle / "nested.txt").write_text("nested\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("private\n", encoding="utf-8")
+    (current / "outside-link").symlink_to(outside)
+
+    result = file_browser.create_download_archive(
+        str(tmp_path),
+        "src",
+        ["top.txt", "odd\\name.txt", "bundle", "outside-link"],
+        boundary=None,
+    )
+    try:
+        assert result.name == "src-selection.zip"
+        assert result.file_count == 3
+        assert result.directory_count == 2
+        assert result.skipped_count == 1
+        assert result.uncompressed_size == 15
+        assert stat.S_IMODE(result.path.stat().st_mode) == 0o600
+        with zipfile.ZipFile(result.path) as archive:
+            assert set(archive.namelist()) == {
+                "top.txt",
+                "odd%5Cname.txt",
+                "bundle/",
+                "bundle/nested.txt",
+                "bundle/empty/",
+            }
+            assert archive.read("top.txt") == b"top\n"
+            assert archive.read("bundle/nested.txt") == b"nested\n"
+            assert all(not name.startswith("src/") for name in archive.namelist())
+    finally:
+        result.path.unlink(missing_ok=True)
+
+
+def test_bulk_archive_enforces_selection_entry_and_byte_limits(
+    tmp_path,
+    monkeypatch,
+):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "one.txt").write_bytes(b"12")
+    (tree / "two.txt").write_bytes(b"34")
+    (tmp_path / "other.txt").write_bytes(b"x")
+
+    monkeypatch.setattr(file_browser, "MAX_FILE_ARCHIVE_SELECTION", 1)
+    with pytest.raises(file_browser.FileBrowserArchiveLimitError, match="at once"):
+        file_browser.create_download_archive(
+            str(tmp_path),
+            "",
+            ["tree", "other.txt"],
+            boundary=None,
+        )
+
+    monkeypatch.setattr(file_browser, "MAX_FILE_ARCHIVE_SELECTION", 1_000)
+    monkeypatch.setattr(file_browser, "MAX_FILE_ARCHIVE_ENTRIES", 2)
+    with pytest.raises(file_browser.FileBrowserArchiveLimitError, match="entry"):
+        file_browser.create_download_archive(
+            str(tmp_path),
+            "",
+            ["tree"],
+            boundary=None,
+        )
+
+    monkeypatch.setattr(file_browser, "MAX_FILE_ARCHIVE_ENTRIES", 10_000)
+    monkeypatch.setattr(file_browser, "MAX_FILE_ARCHIVE_BYTES", 3)
+    created_paths: list[Path] = []
+    original_mkstemp = file_browser.tempfile.mkstemp
+
+    def tracked_mkstemp(*args, **kwargs):
+        descriptor, name = original_mkstemp(*args, **kwargs)
+        created_paths.append(Path(name))
+        return descriptor, name
+
+    monkeypatch.setattr(file_browser.tempfile, "mkstemp", tracked_mkstemp)
+    with pytest.raises(file_browser.FileBrowserArchiveLimitError, match="256 MiB"):
+        file_browser.create_download_archive(
+            str(tmp_path),
+            "",
+            ["tree"],
+            boundary=None,
+        )
+    assert created_paths
+    assert all(not path.exists() for path in created_paths)
+
+
+@pytest.mark.parametrize(
+    "names",
+    [[], ["tree", "tree"], ["../tree"], ["nested/tree"], ["bad\x00name"]],
+)
+def test_bulk_archive_rejects_invalid_selections(tmp_path, names):
+    (tmp_path / "tree").mkdir()
+    with pytest.raises((TypeError, ValueError)):
+        file_browser.create_download_archive(
+            str(tmp_path),
+            "",
+            names,
+            boundary=None,
+        )
 
 
 def test_upload_refuses_overwrites_unsafe_names_and_escaped_directories(
@@ -309,6 +522,19 @@ async def test_file_browser_api_uses_live_session_and_pane_identity(tmp_path):
         preview = await preview_response.json()
         assert preview["content"] == "print('hello')\n"
         assert preview["absolutePath"] == str(nested / "main.py")
+
+        search_response = await client.get(
+            "/api/sessions/files-agent/files/search",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "q": "mn py",
+            },
+        )
+        assert search_response.status == 200
+        search = await search_response.json()
+        assert search["query"] == "mn py"
+        assert [entry["path"] for entry in search["results"]] == ["src/main.py"]
     finally:
         await client.close()
 
@@ -320,6 +546,8 @@ async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
     nested.mkdir()
     image_name = "preview image.png"
     (nested / image_name).write_bytes(PNG_BYTES)
+    pdf_name = "reference guide.pdf"
+    (nested / pdf_name).write_bytes(PDF_BYTES)
     client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
     try:
         filename = 'r\u00e9sum\u00e9 "draft".txt'
@@ -386,6 +614,127 @@ async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
         assert image.headers["Content-Disposition"].startswith("inline;")
         assert image.headers["Cross-Origin-Resource-Policy"] == "same-origin"
         assert image.headers["X-Content-Type-Options"] == "nosniff"
+
+        pdf = await client.get(
+            "/api/sessions/files-agent/files/pdf",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": f"incoming/{pdf_name}",
+            },
+        )
+        assert pdf.status == 200
+        assert await pdf.read() == PDF_BYTES
+        assert pdf.headers["Content-Type"] == "application/pdf"
+        assert pdf.headers["Cache-Control"] == "private, no-store"
+        assert pdf.headers["Content-Disposition"].startswith("inline;")
+        assert pdf.headers["Content-Security-Policy"] == "frame-ancestors 'self'"
+        assert pdf.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert pdf.headers["X-Frame-Options"] == "SAMEORIGIN"
+        assert pdf.headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        await client.close()
+
+
+async def test_file_browser_api_streams_and_removes_a_bulk_archive(
+    tmp_path,
+    monkeypatch,
+):
+    current = tmp_path / "reports"
+    nested = current / "daily"
+    nested.mkdir(parents=True)
+    (current / "summary.txt").write_text("summary\n", encoding="utf-8")
+    (nested / "monday.txt").write_text("monday\n", encoding="utf-8")
+    created_paths: list[Path] = []
+    real_create_archive = file_browser.create_download_archive
+
+    def tracked_create_archive(*args, **kwargs):
+        archive = real_create_archive(*args, **kwargs)
+        created_paths.append(archive.path)
+        return archive
+
+    monkeypatch.setattr(
+        "tmux_console.app.create_download_archive",
+        tracked_create_archive,
+    )
+    client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
+    try:
+        response = await client.post(
+            "/api/sessions/files-agent/files/archive",
+            params={"sessionId": "$7", "paneId": "%3", "path": "reports"},
+            json={"names": ["summary.txt", "daily"]},
+        )
+        assert response.status == 200
+        body = await response.read()
+        assert response.headers["Content-Type"] == "application/zip"
+        assert response.headers["Cache-Control"] == "private, no-store"
+        assert response.headers["Content-Length"] == str(len(body))
+        assert response.headers["X-Muxdeck-Archive-Name"] == (
+            "reports-selection.zip"
+        )
+        assert response.headers["X-Muxdeck-Archive-Files"] == "2"
+        assert response.headers["X-Muxdeck-Archive-Directories"] == "1"
+        assert response.headers["X-Muxdeck-Archive-Skipped"] == "0"
+        assert response.headers["Content-Disposition"].startswith("attachment;")
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            assert set(archive.namelist()) == {
+                "summary.txt",
+                "daily/",
+                "daily/monday.txt",
+            }
+            assert archive.read("daily/monday.txt") == b"monday\n"
+        assert created_paths
+        assert all(not path.exists() for path in created_paths)
+    finally:
+        await client.close()
+
+
+async def test_file_browser_archive_api_validates_body_identity_and_limits(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "large.bin").write_bytes(b"1234")
+    client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
+    identity = {"sessionId": "$7", "paneId": "%3", "path": ""}
+    try:
+        cases = [
+            ({}, 400, "names is required"),
+            ({"names": "large.bin"}, 400, "array of strings"),
+            ({"names": ["large.bin", 3]}, 400, "array of strings"),
+            ({"names": ["large.bin"], "extra": True}, 400, "unknown field"),
+        ]
+        for body, expected_status, expected_error in cases:
+            response = await client.post(
+                "/api/sessions/files-agent/files/archive",
+                params=identity,
+                json=body,
+            )
+            assert response.status == expected_status
+            assert expected_error in (await response.json())["error"]
+
+        missing_path = await client.post(
+            "/api/sessions/files-agent/files/archive",
+            params={"sessionId": "$7", "paneId": "%3"},
+            json={"names": ["large.bin"]},
+        )
+        assert missing_path.status == 400
+        assert await missing_path.json() == {"error": "path is required"}
+
+        stale = await client.post(
+            "/api/sessions/files-agent/files/archive",
+            params={**identity, "sessionId": "$8"},
+            json={"names": ["large.bin"]},
+        )
+        assert stale.status == 409
+
+        monkeypatch.setattr(file_browser, "MAX_FILE_ARCHIVE_BYTES", 3)
+        oversized = await client.post(
+            "/api/sessions/files-agent/files/archive",
+            params=identity,
+            json={"names": ["large.bin"]},
+        )
+        assert oversized.status == 413
+        assert "archive limit" in (await oversized.json())["error"]
     finally:
         await client.close()
 
@@ -445,6 +794,25 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path, monk
         assert missing_preview_path.status == 400
         assert await missing_preview_path.json() == {"error": "path is required"}
 
+        missing_search_query = await client.get(
+            "/api/sessions/files-agent/files/search",
+            params={"sessionId": "$7", "paneId": "%3"},
+        )
+        assert missing_search_query.status == 400
+        assert await missing_search_query.json() == {"error": "q is required"}
+
+        invalid_search_hidden = await client.get(
+            "/api/sessions/files-agent/files/search",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "q": "secret",
+                "hidden": "yes",
+            },
+        )
+        assert invalid_search_hidden.status == 400
+        assert await invalid_search_hidden.json() == {"error": "hidden must be 0 or 1"}
+
         missing_download_path = await client.get(
             "/api/sessions/files-agent/files/download",
             params={"sessionId": "$7", "paneId": "%3"},
@@ -458,6 +826,13 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path, monk
         )
         assert missing_image_path.status == 400
         assert await missing_image_path.json() == {"error": "path is required"}
+
+        missing_pdf_path = await client.get(
+            "/api/sessions/files-agent/files/pdf",
+            params={"sessionId": "$7", "paneId": "%3"},
+        )
+        assert missing_pdf_path.status == 400
+        assert await missing_pdf_path.json() == {"error": "path is required"}
 
         escaped_download = await client.get(
             "/api/sessions/files-agent/files/download",
@@ -489,6 +864,17 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path, monk
             },
         )
         assert unsupported_image.status == 415
+
+        (tmp_path / "not-pdf.pdf").write_bytes(b"plain text")
+        unsupported_pdf = await client.get(
+            "/api/sessions/files-agent/files/pdf",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": "not-pdf.pdf",
+            },
+        )
+        assert unsupported_pdf.status == 415
 
         (tmp_path / "large.png").write_bytes(PNG_BYTES)
         monkeypatch.setattr(file_browser, "MAX_IMAGE_PREVIEW_BYTES", 8)
@@ -1480,6 +1866,9 @@ def test_operations_refuse_a_root_outside_the_boundary(tmp_path):
         lambda: file_browser.resolve_file_download(
             str(outside), "secret.txt", boundary=boundary
         ),
+        lambda: file_browser.create_download_archive(
+            str(outside), "", ["secret.txt"], boundary=boundary
+        ),
         lambda: file_browser.create_entry(
             str(outside), "", "planted", "file", boundary=boundary
         ),
@@ -1525,6 +1914,9 @@ def test_a_root_swapped_for_an_escaping_symlink_is_caught_at_use(tmp_path):
     for operation in [
         lambda: file_browser.list_directory(str(data), boundary=boundary),
         lambda: file_browser.preview_file(str(data), "secret.txt", boundary=boundary),
+        lambda: file_browser.create_download_archive(
+            str(data), "", ["secret.txt"], boundary=boundary
+        ),
         lambda: file_browser.delete_entry(str(data), "secret.txt", boundary=boundary),
     ]:
         with pytest.raises(file_browser.FileBrowserPathOutsideRootError):

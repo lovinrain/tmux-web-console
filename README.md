@@ -67,7 +67,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - A desktop file manager that opens at the pane CWD and browses anywhere inside
   a configurable boundary, with an address bar that opens absolute file or
   directory paths, safe text and raster-image previews, uploads/downloads,
-  shell-safe path staging, in-place text editing, and confirmed
+  recursive ZIP downloads for checked files and folders, shell-safe path
+  staging, in-place text editing, and confirmed
   create/rename/move/duplicate/delete including multi-select bulk actions
 - A demand-driven desktop Host Pulse card with aggregate and per-core CPU,
   memory PSI, swap activity, on-view history, and a movable, resizable,
@@ -141,6 +142,11 @@ For frontend development, run `npm run dev`. Vite serves
 - A staged-input acknowledgement confirms only that bytes reached the PTY, not
   that a command or agent turn completed. Uncertain deliveries are never
   retried automatically.
+- Desktop staged input also has a movable floating editor for terminal Focus and
+  scrollback work. It mirrors the active session's saved draft in both
+  directions, can be pinned across session switches, and remembers its open,
+  pin, and position state per saved workspace. Use `Float input` or
+  `Ctrl+Shift+Y`; `Open full input` returns to the complete composer controls.
 - Desktop staged input accepts any non-empty file from its picker, clipboard, or
   drag-and-drop target (12 MiB per file, six at once). Composer attachments
   stage shell-safe paths for review; dropping files over the live terminal
@@ -153,16 +159,42 @@ For frontend development, run `npm run dev`. Vite serves
   scoped to the displayed directory and cannot follow a symlink outside it. Text
   previews are UTF-8, capped at 1 MiB, and wrap long lines without changing the
   file's content.
+  `Find` opens a keyboard-friendly fuzzy locator for files and folders anywhere
+  below the browser's current root. Searches run only when submitted, skip
+  dotfiles unless they are enabled, and bound traversal on very large trees.
+  `Recent` keeps the last 32 successfully opened files and folders in two compact
+  lists, scoped to the current tmux session. The list survives panel closes and
+  reloads in that browser, supports one-click reopening and individual or bulk
+  removal, and is not copied into backend state.
   Signature-verified PNG, JPEG, GIF, WebP, AVIF, BMP, and ICO files render in a
   fitted viewer up to 25 MiB and can be opened full size; active formats such as
-  SVG are never embedded. Other binary files show metadata. Selected regular
-  files can be downloaded without a preview-size limit. `Upload` and
+  SVG are never embedded. Signature-verified PDFs up to 50 MiB open in the
+  browser's built-in PDF viewer with new-tab and download fallbacks. Other
+  binary files show metadata. Selected regular files can be downloaded without
+  a preview-size limit. Check several files and folders, then use `Download ZIP`
+  to fetch the whole selection recursively in one browser download; symlinks and
+  special files are skipped, and bounded size/entry limits protect the host.
+  `Upload` and
   drag-and-drop write up to six files at once into the folder shown (12 MiB
   each, mode `0600`) and refuse to overwrite an existing name. `Copy path`
   copies the absolute server path, while `Stage path` inserts its shell-quoted
   form into the composer without sending.
+- On desktop, terminal output ending in `.md`, `.pdf`, `.png`, or `.txt` is also linkified.
+  `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
+  in the floating file browser; a relative path is resolved from the live pane
+  CWD, while absolute and `~/` paths keep their server meaning. Plain clicks
+  remain terminal input, HTTP(S) links keep opening as web links, and no
+  filesystem request is made until the modified click.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
+- Muxdeck records live tmux reconstruction metadata in a private SQLite registry.
+  If a session is missing after a host or tmux restart, the landing page offers
+  an explicit `Recreate shell` action using its saved native name and last CWD,
+  plus `Forget` to remove only that recovery record. Recreate never launches or
+  resumes a coding agent. A passively detected agent type and conversation ID
+  may be shown solely as a reference, and a missing directory or live name
+  conflict blocks recovery instead of changing another session. Sessions ended
+  through Muxdeck are intentionally excluded from recovery.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck
   cannot reconstruct output tmux did not save.
 
@@ -184,6 +216,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+A` | Show or hide tab action buttons |
 | `Ctrl+Shift+S` | Show or hide the session tab strip |
 | `Ctrl+Shift+F` | Enter or exit terminal Focus |
+| `Ctrl+Shift+Y` | Show or hide the movable staged-input window |
 | `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's remembered controls |
 | `Ctrl+Shift+L` | Leave scrollback and return to live output |
 | `Ctrl+Shift+C` | Toggle browser terminal Copy mode |
@@ -271,6 +304,7 @@ the source tree.
 | `MUXDECK_AUTH_COOKIE_SECURE` | `true` | Require HTTPS for the `server`-mode remembered-browser cookie; disable only for intentional direct loopback HTTP development |
 | `TMUX_BIN` | `tmux` | tmux executable |
 | `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name |
+| `MUXDECK_SESSION_REGISTRY_FILE` | `~/.local/state/muxdeck/sessions.sqlite3` | Private SQLite recovery metadata for observed tmux sessions |
 
 The [complete reference](docs/REFERENCE.md#configuration) documents persistence
 paths and every runtime setting.

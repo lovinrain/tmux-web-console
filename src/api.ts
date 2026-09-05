@@ -20,6 +20,21 @@ export class ApiRequestError extends Error {
   }
 }
 
+export interface RecoverableSession {
+  id: string;
+  name: string;
+  directory: string;
+  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
+  agentSessionId: string | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  directoryAvailable: boolean;
+}
+
+type SessionListWithRecovery = Session[] & {
+  recoverableSessions?: RecoverableSession[];
+};
+
 function isUnknownFieldError(error: unknown, field: string): error is ApiRequestError {
   return error instanceof ApiRequestError
     && error.status === 400
@@ -39,8 +54,19 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listSessions(signal?: AbortSignal): Promise<Session[]> {
-  const result = await jsonRequest<{ sessions: Session[] }>("/api/sessions", { signal });
+  const result = await jsonRequest<{
+    sessions: Session[];
+    recoverableSessions?: RecoverableSession[];
+  }>("/api/sessions", { signal });
+  Object.defineProperty(result.sessions, "recoverableSessions", {
+    configurable: true,
+    value: result.recoverableSessions ?? [],
+  });
   return result.sessions;
+}
+
+export function recoverableSessionsFromList(sessions: Session[]): RecoverableSession[] {
+  return (sessions as SessionListWithRecovery).recoverableSessions ?? [];
 }
 
 export type HostMetricRange = "15m" | "1h" | "24h";
@@ -146,6 +172,23 @@ export async function copySession(
   }, `/api/sessions/${encodeURIComponent(sourceSession)}/copy`);
 }
 
+export async function recreateSession(
+  recoveryId: string,
+  theme?: Theme,
+): Promise<CreatedSession> {
+  return requestSessionCreation(
+    theme === undefined ? {} : { theme },
+    `/api/recoverable-sessions/${encodeURIComponent(recoveryId)}/recreate`,
+  );
+}
+
+export async function forgetRecoverableSession(recoveryId: string): Promise<void> {
+  await jsonRequest<unknown>(
+    `/api/recoverable-sessions/${encodeURIComponent(recoveryId)}`,
+    { method: "DELETE" },
+  );
+}
+
 export interface UploadedSessionAttachment {
   name: string;
   path: string;
@@ -189,13 +232,23 @@ export interface ResolvedSessionFilePath {
   entry: SessionFileEntry | null;
 }
 
+export interface SessionFileSearchResults {
+  root: string;
+  query: string;
+  results: SessionFileEntry[];
+  scannedEntries: number;
+  scanLimit: number;
+  resultLimit: number;
+  truncated: boolean;
+}
+
 export interface SessionFilePreview {
   root: string;
   name: string;
   path: string;
   absolutePath: string;
   terminalText: string;
-  kind: "text" | "image" | "binary";
+  kind: "text" | "image" | "pdf" | "binary";
   mediaType: string;
   size: number;
   modified: number;
@@ -276,6 +329,25 @@ export async function resolveSessionFilePath(
   );
 }
 
+export async function searchSessionFiles(
+  target: SessionFileTarget,
+  query: string,
+  includeHidden = false,
+  signal?: AbortSignal,
+): Promise<SessionFileSearchResults> {
+  const params = new URLSearchParams({
+    sessionId: target.sessionId,
+    paneId: target.paneId,
+    q: query,
+  });
+  if (target.root) params.set("root", target.root);
+  if (includeHidden) params.set("hidden", "1");
+  return jsonRequest<SessionFileSearchResults>(
+    `/api/sessions/${encodeURIComponent(target.session)}/files/search?${params}`,
+    { signal },
+  );
+}
+
 export async function previewSessionFile(
   target: SessionFileTarget,
   path: string,
@@ -294,11 +366,83 @@ export function sessionFileImageUrl(
   return `${BASE_PATH}${sessionFileUrl(target, "image", path)}`;
 }
 
+export function sessionFilePdfUrl(
+  target: SessionFileTarget,
+  path: string,
+): string {
+  return `${BASE_PATH}${sessionFileUrl(target, "pdf", path)}`;
+}
+
 export function sessionFileDownloadUrl(
   target: SessionFileTarget,
   path: string,
 ): string {
   return `${BASE_PATH}${sessionFileUrl(target, "download", path)}`;
+}
+
+export interface SessionFileArchiveDownload {
+  blob: Blob;
+  name: string;
+  fileCount: number;
+  directoryCount: number;
+  skippedCount: number;
+  uncompressedBytes: number;
+}
+
+function nonNegativeHeaderInteger(response: Response, name: string): number {
+  const value = Number.parseInt(response.headers.get(name) ?? "", 10);
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+export async function downloadSessionFileEntries(
+  target: SessionFileTarget,
+  directoryPath: string,
+  names: string[],
+  signal?: AbortSignal,
+): Promise<SessionFileArchiveDownload> {
+  const response = await fetch(
+    `${BASE_PATH}${sessionFileUrl(target, "archive", directoryPath)}`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/zip",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ names }),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiRequestError(
+      payload.error || `Request failed (${response.status})`,
+      response.status,
+    );
+  }
+
+  const encodedName = response.headers.get("X-Muxdeck-Archive-Name");
+  let name = "muxdeck-selection.zip";
+  if (encodedName) {
+    try {
+      name = decodeURIComponent(encodedName);
+    } catch {
+      // Keep a safe local filename if an intermediary damages the header.
+    }
+  }
+  return {
+    blob: await response.blob(),
+    name,
+    fileCount: nonNegativeHeaderInteger(response, "X-Muxdeck-Archive-Files"),
+    directoryCount: nonNegativeHeaderInteger(
+      response,
+      "X-Muxdeck-Archive-Directories",
+    ),
+    skippedCount: nonNegativeHeaderInteger(response, "X-Muxdeck-Archive-Skipped"),
+    uncompressedBytes: nonNegativeHeaderInteger(
+      response,
+      "X-Muxdeck-Archive-Uncompressed-Bytes",
+    ),
+  };
 }
 
 export async function uploadSessionFile(
@@ -488,7 +632,7 @@ export async function renameSession(
 export type SessionStreamStatus = "connecting" | "open" | "error";
 
 export interface SessionStreamOptions {
-  onSessions: (sessions: Session[]) => void;
+  onSessions: (sessions: Session[], recoverableSessions?: RecoverableSession[]) => void;
   onStatus?: (status: SessionStreamStatus) => void;
   onError?: (error: Error) => void;
 }
@@ -510,11 +654,27 @@ export function subscribeToSessions({
     if (closed) return;
 
     try {
-      const payload = JSON.parse(event.data) as { sessions?: unknown };
+      const payload = JSON.parse(event.data) as {
+        sessions?: unknown;
+        recoverableSessions?: unknown;
+      };
       if (!Array.isArray(payload.sessions)) {
         throw new Error("Session stream event did not contain a sessions array");
       }
-      onSessions(payload.sessions as Session[]);
+      if (
+        payload.recoverableSessions !== undefined
+        && !Array.isArray(payload.recoverableSessions)
+      ) {
+        throw new Error("Session stream event contained an invalid recovery list");
+      }
+      if (payload.recoverableSessions === undefined) {
+        onSessions(payload.sessions as Session[]);
+      } else {
+        onSessions(
+          payload.sessions as Session[],
+          payload.recoverableSessions as RecoverableSession[],
+        );
+      }
     } catch (error) {
       const streamError = error instanceof Error ? error : new Error(String(error));
       onStatus?.("error");
@@ -650,6 +810,8 @@ export interface SavedWorkspace {
   name: string;
   tabs: string[];
   groups?: WorkspaceTabGroup[];
+  separators?: string[];
+  separatorsBefore?: string[];
   quickLinks?: WorkspaceQuickLink[];
   activeSession: string | null;
   sessionRevision: number;
@@ -681,12 +843,14 @@ export interface CreateWorkspaceInput {
   name: string;
   tabs: string[];
   groups: WorkspaceTabGroup[];
+  separators?: string[];
+  separatorsBefore?: string[];
   activeSession: string | null;
 }
 
 export type WorkspaceUpdate = Partial<Pick<
   SavedWorkspace,
-  "name" | "tabs" | "activeSession" | "sessionRevision"
+  "name" | "tabs" | "separators" | "separatorsBefore" | "activeSession" | "sessionRevision"
 >>;
 
 function workspacePath(workspaceId: string): string {

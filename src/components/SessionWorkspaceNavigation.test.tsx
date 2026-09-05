@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
 import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
+import { moveWorkspaceSessions } from "../workspaceState";
 import { SHORTCUT_ACTION_EVENT, type ShortcutActionId } from "../shortcutSettings";
 import type { Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
@@ -544,6 +545,19 @@ describe("SessionWorkspaceNavigation", () => {
       shiftKey: true,
     });
     shortcuts = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(shortcuts).getByRole("button", {
+      name: /Show or hide floating staged input/,
+    })).toHaveTextContent("Y");
+    fireEvent.keyDown(window, { code: "KeyY", key: "y" });
+    expect(shortcutActions).toContain("view-floating-input");
+
+    fireEvent.keyDown(window, {
+      code: "KeyZ",
+      key: "Z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    shortcuts = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
     expect(within(shortcuts).getByRole("button", { name: /Fuzzy command search/ }))
       .toHaveTextContent("H");
     fireEvent.keyDown(window, { code: "KeyH", key: "h" });
@@ -861,6 +875,39 @@ describe("SessionWorkspaceNavigation", () => {
       .not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Alpha control tab window actions" }))
       .toBeInTheDocument();
+  });
+
+  it("adds and removes independent separators inside groups without adding tabs", () => {
+    function SeparatorWorkspace() {
+      const [separators, setSeparators] = useState<string[]>([]);
+      const [separatorsBefore, setSeparatorsBefore] = useState<string[]>([]);
+      return <SessionWorkspaceNavigation {...navigationProps({
+        orientation: "vertical",
+        separators,
+        separatorsBefore,
+        groups: [{ id: "pair", name: "Pair", color: "blue", collapsed: false, tabs: ["alpha", "beta"] }],
+        onChangeSeparator: (name, add, side) => side === "before"
+          ? setSeparatorsBefore(add ? [...separatorsBefore, name] : [])
+          : setSeparators(add ? [...separators, name] : []),
+      })} />;
+    }
+    render(<SeparatorWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "Insert separator before current session" }));
+    const before = screen.getByRole("separator", { name: "Separator before Alpha control" });
+    const tab = document.querySelector('[data-workspace-session-name="alpha"]')!;
+    expect(before.parentElement?.nextElementSibling).toBe(tab);
+    fireEvent.click(screen.getByRole("button", { name: "Append separator after current session" }));
+    const separator = screen.getByRole("separator", { name: "Separator after Alpha control" });
+    expect(separator.closest(".workspace-tab-group")).toHaveAttribute("data-workspace-tab-group-id", "pair");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(separator.parentElement?.previousElementSibling).toBe(tab);
+    expect(screen.getByRole("button", { name: "Append separator after current session" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove separator after Alpha control" }));
+    expect(screen.queryByRole("separator", { name: "Separator after Alpha control" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Append separator after current session" })).toBeEnabled();
+    expect(before).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove separator before Alpha control" }));
+    expect(screen.queryByRole("separator", { name: "Separator before Alpha control" })).toBeNull();
   });
 
   it("uses vertical tab semantics, arrow traversal, and reorder controls", () => {
@@ -1558,6 +1605,47 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onSelect).toHaveBeenCalledWith("zulu");
     expect(screen.queryByRole("group", { name: /tabs selected for moving/ }))
       .not.toBeInTheDocument();
+  });
+
+  it.each(["horizontal", "vertical"] as const)("moves selections with arrows in %s tabs and keeps selection", (orientation) => {
+    const onMoveTab = vi.fn();
+    function Harness() {
+      const [tabs, setTabs] = useState(["alpha", "beta", "archive", "zulu"]);
+      return <SessionWorkspaceNavigation {...navigationProps({
+        activeSession: "beta", openSessions: tabs, orientation, onMoveTab,
+        onMoveTabs: (names, target) => setTabs(moveWorkspaceSessions({
+          openSessions: tabs, recentSessions: [], groups: [],
+        }, names, target).openSessions),
+      })} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("tab", { name: "Archived deploy, Background work" }), { shiftKey: true });
+    const previous = orientation === "vertical" ? "up" : "left";
+    const next = orientation === "vertical" ? "down" : "right";
+    const order = () => Array.from(document.querySelectorAll(".workspace-tab[data-workspace-session-name]"))
+      .map((item) => item.getAttribute("data-workspace-session-name"));
+    fireEvent.click(screen.getByRole("button", { name: `Move beta tab ${previous}` }));
+    expect(order()).toEqual(["beta", "archive", "alpha", "zulu"]);
+    expect(onMoveTab).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: `Move selected tabs ${previous}` })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: `Move selected tabs ${next}` }));
+    fireEvent.click(screen.getByRole("button", { name: `Move selected tabs ${next}` }));
+    expect(order()).toEqual(["alpha", "zulu", "beta", "archive"]);
+    expect(screen.getByRole("button", { name: `Move selected tabs ${next}` })).toBeDisabled();
+    expect(screen.getByRole("group", { name: "2 tabs selected for moving" })).toBeVisible();
+  });
+
+  it("offers move controls with Actions hidden and preserves non-contiguous selection order", () => {
+    const onMoveTabs = vi.fn();
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      openSessions: ["alpha", "beta", "archive", "zulu"], tabActionsVisible: false,
+      onMoveTab: vi.fn(), onMoveTabs, orientation: "vertical",
+    })} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Zulu shell, Other" }), { metaKey: true });
+    fireEvent.click(screen.getByRole("tab", { name: "beta, Working" }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Move selected tabs up" }));
+    expect(onMoveTabs).toHaveBeenCalledWith(["beta", "zulu"], 0);
+    expect(screen.getByRole("button", { name: "Move selected tabs down" })).toBeDisabled();
   });
 
   it("moves a Ctrl/Cmd-selected set together in stable tab order", () => {

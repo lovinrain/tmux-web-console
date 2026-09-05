@@ -9,6 +9,7 @@ import {
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import type { WorkspaceTabGroup } from "../workspaceState";
+import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
 import { approximateWorkspaceActivity, SavedWorkspaceList } from "./SavedWorkspaceList";
 
 vi.mock("../api", () => ({
@@ -239,7 +240,7 @@ describe("SavedWorkspaceList", () => {
 
   it("keeps fresh creation available when there are too many tabs to copy", async () => {
     const currentTabs = Array.from(
-      { length: 33 },
+      { length: MAX_WORKSPACE_TABS + 1 },
       (_, index) => `session-${String(index + 1).padStart(2, "0")}`,
     );
     vi.mocked(listWorkspaces).mockResolvedValue([]);
@@ -254,7 +255,7 @@ describe("SavedWorkspaceList", () => {
     renderWithTheme(
       <SavedWorkspaceList
         currentTabs={currentTabs}
-        activeSession="session-33"
+        activeSession={`session-${MAX_WORKSPACE_TABS + 1}`}
         onOpen={vi.fn()}
       />,
     );
@@ -263,7 +264,7 @@ describe("SavedWorkspaceList", () => {
 
     expect(screen.getByRole("radio", { name: /Copy current tabs/ })).toBeDisabled();
     expect(screen.getByText(
-      "33 tabs are open; saved workspaces support up to 32.",
+      `${MAX_WORKSPACE_TABS + 1} tabs are open; saved workspaces support up to ${MAX_WORKSPACE_TABS}.`,
     )).toBeVisible();
     fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
       target: { value: "Fresh despite tabs" },

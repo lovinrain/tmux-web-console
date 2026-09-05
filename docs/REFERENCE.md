@@ -130,7 +130,9 @@ but resets on reload; phone layouts keep Scrollback full-width.
 `^A`, `^E`, and `^K` send `Ctrl+A`, `Ctrl+E`, and `Ctrl+K` respectively, letting
 compatible shells and agents move to the beginning or end of their active input,
 or delete from the cursor to the end. `^Q` sends a literal `Ctrl+Q` byte, which
-Copilot CLI uses to enqueue its current prompt. The `Other Keys` control reveals
+Copilot CLI uses to enqueue its current prompt. `^T` sends a literal `Ctrl+T`
+byte, which Codex CLI uses to open earlier messages and the full transcript. The
+`Other Keys` control reveals
 `Up`, `Down`, `Left`, and `Right` in a secondary row so those less-frequent
 controls do not crowd the main shortcut strip.
 
@@ -148,22 +150,32 @@ ephemeral and resets on session changes, workspace overview, mobile layout,
 desktop Focus, or reload.
 
 On desktop, `Focus` in the top `VIEW` toolbar expands the live terminal to the
-full browser viewport and leaves floating `Redraw`, `Show all buttons`, and
-`Exit` controls. `Show all buttons` overlays the existing bottom shortcut strip
+full browser viewport and leaves floating `Redraw`, `Float input`, `Show all
+buttons`, and `Exit` controls. `Show all buttons` overlays the existing bottom
+shortcut strip
 as a wrapped floating panel, including `More Keys`; it does not shrink the
 terminal or create duplicate actions. Drag the panel's `Move panel` handle to
 place it anywhere within the viewport. With that handle focused, the arrow keys
 move it by 16 pixels, Shift+Arrow moves it by 64 pixels, and Enter or Home resets
 it to the centered bottom position. Hiding and reopening the panel preserves its
-position until Focus ends. Actions that reveal staged input leave Focus so the
-composer is visible. Focus does not invoke the browser Fullscreen API, remount
+position until Focus ends. `Float input`, also available beside the normal
+`Input` toolbar control, opens a separate non-modal editor without leaving
+Focus. The editor mirrors the active session's staged draft immediately in both
+directions and saves through the same per-session browser storage as the full
+composer. Drag its title strip to move it; arrow keys move it when the strip is
+focused. Pinning keeps it open and follows the newly active session's own draft,
+while an unpinned window closes on a session switch. Open, pin, and position
+state persist locally per saved workspace. Closing clears the pin, and `Open
+full input` leaves Focus and reveals the complete composer. Focus does not
+invoke the browser Fullscreen API, remount
 xterm, reconnect the WebSocket, change the URL, or discard the staged draft.
 Entering and leaving refits the existing PTY attachment so tmux receives the new
 dimensions. The choice is session-local and resets when the active session
 changes, the workspace overview opens, the layout switches to mobile, the
 console is left, or the page reloads. Escape remains raw terminal input rather
-than an exit shortcut; `Ctrl+Shift+F` enters or exits Focus even while xterm or
-staged input owns keyboard focus.
+than an exit shortcut; `Ctrl+Shift+F` enters or exits Focus and
+`Ctrl+Shift+Y` toggles floating input even while xterm or staged input owns
+keyboard focus.
 
 The sticky `Details` shortcut in the terminal's bottom bar opens the same title
 and tag editor used by the dashboard. The optional display title changes only
@@ -255,9 +267,71 @@ confined to the directory currently being browsed, so symlinks that resolve
 outside it remain inaccessible. Text preview remains capped at 1 MiB. Signature-verified PNG,
 JPEG, GIF, WebP, AVIF, BMP, and ICO images render in a fitted viewer up to 25 MiB
 and link to the same protected inline stream for full-size viewing. SVG, HTML,
-and other active or unsupported formats are never embedded. Downloads stream
+and other active or unsupported formats are never embedded. A signature-verified
+PDF up to 50 MiB uses the browser's built-in PDF viewer inside the preview pane;
+`Open PDF` gives it a full browser tab, while Download remains available for
+browsers that disable inline PDF viewing and for larger documents. The server
+does no PDF rendering or parsing beyond the signature and size gate, so this
+adds no PDF library, conversion process, or idle cost. Downloads stream
 the selected regular file with an attachment filename and have no preview-size
 limit.
+
+Checked entries expose `Download ZIP` in the bulk bar. The server puts each
+selected file or folder at the archive root, recursively includes ordinary
+files and empty folders, and skips symlinks and special files rather than
+following them. The browser receives one archive, so it does not need permission
+for a burst of separate downloads. Preparing the archive is non-mutating and
+does not clear the checked rows; the status line reports file, folder, and
+skipped counts when the download starts.
+
+Archive generation accepts at most 1,000 explicitly selected entries, inspects
+at most 10,000 entries after folder expansion, and stops above 256 MiB of
+uncompressed file content. Builds are serialized, use a private temporary ZIP,
+repeat the live session/pane identity and configured-boundary checks, and never
+follow a symlink during traversal. The temporary archive is removed after it is
+streamed, after a build error, or after an interrupted browser request.
+
+`Find` replaces the directory/preview split with a fuzzy locator rooted at the
+directory named in the file-browser header. A query may use fragments or
+initials across both a basename and its relative path; multiple space-separated
+tokens must all match. Submit explicitly with Enter or `Locate`, use Up/Down to
+move through ranked results, and press Enter again to open the highlighted file
+or folder. Opening a nested file moves the ordinary browser to its parent and
+starts the same protected preview. The existing `Show dotfiles` setting also
+controls whether hidden trees participate.
+
+Locator walks are on demand, never follow symlinks, and are bounded to 80 best
+results, 50,000 inspected entries, 32 directory levels, and roughly 1.5 seconds.
+Common dependency, cache, and build trees remain searchable but run after
+ordinary project folders so they do not consume the scan first. The result
+footer reports partial searches; refine the query when the cap is reached.
+
+`Recent` replaces the split view with `All recent paths` and `Under current CWD`.
+Both include successfully previewed files and opened folders. The CWD list is a
+filtered subset of the same session history, retaining its most-recent-first order;
+it includes the CWD itself and its descendants, excluding sibling path prefixes.
+The CWD appears above the filtered list. Forgetting a path removes it from both
+sections, since they share one history. Selecting an item resolves its
+absolute path again through the normal identity-checked file API, so a moved,
+deleted, or newly forbidden item produces the ordinary path error instead of
+using stale file data. Each path is deduplicated and refreshed to the front;
+individual entries can be forgotten or the current session's list can be
+cleared. Up to 32 paths are retained per tmux session, with old session buckets
+pruned from browser storage. This history is browser-local, survives closing or
+reloading the panel, and is neither uploaded to the backend nor shared with a
+different browser profile.
+
+On desktop, xterm also detects terminal-output candidates ending in `.md`,
+`.pdf`, `.png`, or `.txt`. It understands absolute paths, `~/` paths, CWD-relative paths, quoted
+paths with spaces, and shell-escaped spaces; common trailing punctuation and
+`:line` suffixes are excluded from the target. A plain click remains available
+to the terminal application. `Ctrl`+click on Windows/Linux or `Cmd`+click on
+macOS resolves the candidate against the live pane CWD where necessary, opens
+the floating browser, and selects and previews the resolved file. HTTP(S) URLs
+have higher link priority and continue to open as browser links. Detection is
+client-side and does not probe the filesystem on hover; the authenticated,
+identity-checked file resolver runs only after activation and still enforces
+`MUXDECK_FILE_BROWSER_ROOT`.
 
 `Copy path` puts the absolute server path on the clipboard. A console reached
 over plain HTTP is not a secure context and has no clipboard, so instead of
@@ -271,13 +345,19 @@ folder. Each file is capped at 12 MiB and created directly in that displayed
 folder with mode `0600`. Empty files are allowed. An existing file, directory,
 or symlink with the same name causes a visible per-file conflict instead of an
 overwrite; successful files refresh the listing and select the last upload.
+Each successful upload result also provides `FULL` and `REL` copy buttons without
+needing to find its row in the listing. Both update the PATH bar and attempt a
+clipboard copy; `REL` uses the active pane's CWD, falling back to the full path
+for files outside that directory.
 These are project/CWD files, not temporary attachments: they are outside
 `MUXDECK_UPLOADS_DIR`, have no application storage-total cap or cleanup policy,
 and remain until the user or another host process removes them. Uploading changes
 the host filesystem but never inserts terminal input or presses Enter.
 
-The browser also edits the tree in place. The toolbar creates an empty folder
-(mode `0700`) or an empty file (mode `0600`) in the folder currently shown. Each
+The browser also edits the tree in place. Use `New folder` in the toolbar to
+create an empty folder (mode `0700`), or `New text file` to create an empty file
+(mode `0600`) in the folder currently shown. Enter a name such as `notes.txt`
+and click `Create`; no initial content is required. Each
 row reveals rename, duplicate, move, and delete actions on hover or keyboard
 focus; `F2` renames the focused row, `Delete` asks to remove it, and `Backspace`
 goes up one folder. Renaming and moving are the same server operation and refuse
@@ -294,13 +374,14 @@ named entry itself, so removing a symlink never touches what it points at.
 
 Row checkboxes select several entries at once, and the tools row toggles only
 the rows currently on screen, so a checked entry hidden by the filter keeps its
-state. The bulk bar then moves or deletes the whole selection, running one entry
-at a time and reporting each result in the same per-item list the upload queue
-uses, so a partial failure stays visible instead of being collapsed into a single
-error. A bulk move whose destination folder is itself selected moves everything
-else and says how many it skipped. Renaming an entry carries its checkbox along.
-Entries can also be sorted by name, size, or modification time in either
-direction, with folders kept first.
+state. The bulk bar downloads that selection as one ZIP, or moves or deletes the
+whole selection. Move and delete run one entry at a time and report each result
+in the same per-item list the upload queue uses, so a partial failure stays
+visible instead of being collapsed into a single error. A bulk move whose
+destination folder is itself selected moves everything else and says how many
+it skipped. Renaming an entry carries its checkbox along. Entries can also be
+sorted by name, size, or modification time in either direction, with folders
+kept first.
 
 A text preview under 1 MiB that is not a symlink can be edited in place. `Edit`
 swaps the preview for a textarea, `Save` (or `Ctrl`/`Cmd`+`S`) writes the file
@@ -632,12 +713,27 @@ tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
 
+In Side tabs, select a session and use the two separator buttons on the same row:
+`Insert separator` puts an amber line immediately before it (including the first tab), while
+`Append separator` puts one immediately after it. In narrow rails, the buttons
+use up/down icons and descriptive tooltips.
+Use a line's small remove button to delete it. Separators
+are independent of named groups and can appear inside expanded groups; collapsing
+a group hides separators belonging to its hidden tabs. A line follows its anchor
+tab when reordered, and saved-workspace lines follow native renames made through
+Muxdeck. Closing or moving the anchor out of the workspace removes its line.
+Saved workspaces persist separators on the backend. Temporary-workspace separators
+last for the current page and are included when explicitly saving that workspace.
+
 Desktop top and side tabs can also move as a selection. Shift-click selects the
 contiguous range from the active or most recently clicked tab; Ctrl-click on
 Windows/Linux or Cmd-click on macOS toggles individual tabs without changing the
 active session. Selected tabs receive check marks and a compact `N selected`
 tray; drag any selected tab to move the complete set while preserving its
-relative order. Named groups are atomic, so selecting one member selects and
+relative order. The tray also offers up/down (or left/right) buttons; the arrows
+on a selected tab move the complete selection too. The selection remains active
+after moving, and the tray controls remain available when per-tab Actions are hidden.
+Named groups are atomic, so selecting one member selects and
 moves the whole group, including when the group is collapsed. A normal tab click,
 the tray's close button, or Escape clears the browser-local selection. Selection
 itself is intentionally temporary, while a completed move updates the URL and
@@ -798,14 +894,15 @@ session rename dialog, `L` returns to live output, `C` toggles browser Copy mode
 and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
 creates a numbered session in the active pane's directory, `B` opens New session,
 `K` immediately creates a temporary assigned-name session from workspace memory,
-`F` enters or exits terminal Focus, and `S` shows or hides the session strip. The
+`F` enters or exits terminal Focus, `Y` toggles the floating staged-input
+window, and `S` shows or hides the session strip. The
 desktop command palette uses `Ctrl+Shift+H`. The console-only
 chords are captured before xterm can turn them into terminal input, keep unrelated
 modifier combinations untouched, and pause while a modal dialog or mobile
 workspace layout is active.
 
 `Shortcuts` in the desktop workspace strip, or `Ctrl+Shift+Z` by default, opens a modal
-shortcut layer containing the known tab, view, paging, Copy, Live, Rename, and
+shortcut layer containing the known tab, view, floating-input, paging, Copy, Live, Rename, and
 End actions. After releasing the opening chord, a single displayed key runs the
 action: notably `E` opens End confirmation, `R` opens Rename, and `H` switches to
 fuzzy command search. `T` toggles the theme. Escape or clicking outside closes
@@ -849,6 +946,40 @@ Entries for sessions that disappear outside Muxdeck remain dormant; a future
 tmux session that reuses such a name inherits its saved alias and organization
 status.
 
+`MUXDECK_SESSION_REGISTRY_FILE` is a private SQLite database that records each
+observed tmux session under a stable Muxdeck UUID. Its reconstruction fields are
+the native name, last active-pane working directory, last-seen tmux identity,
+and first/last observation times. The registry can also retain the latest
+recognized coding-agent type and a passively discovered conversation/session ID.
+Those agent fields are identification references only: Muxdeck does not build,
+display, or execute an agent resume command from them.
+
+When a registered, recovery-enabled identity is absent from the live tmux
+inventory, the landing page lists it under `Missing after restart`. Recovery is
+always manual. `Recreate shell` asks tmux for a new detached shell with exactly
+the saved name and CWD, then opens that new session; it does not start the prior
+agent or replay any terminal input. An existing live name or unavailable CWD is
+reported as a conflict and nothing is renamed, replaced, or killed. `Forget`
+deletes only the selected registry record. Ending a live session through
+Muxdeck disables recovery for that exact identity, while a later independently
+created same-name identity becomes eligible after it is observed.
+
+Saved workspaces remain in the existing atomic JSON workspace store; they
+already survive Muxdeck and host restarts and retain unavailable native session
+names. Recreating a missing shell under that exact name therefore makes the
+existing workspace tab usable again without rewriting the workspace document.
+The session registry does not duplicate workspace content.
+
+Agent-reference discovery is conservative and bounded. It examines only the
+active pane's capped descendant process tree and already-open paths matching a
+known Claude, Codex, Copilot, Cursor, or Grok state-file shape. Results are
+cached; Muxdeck never recursively searches the session CWD, changes an agent's
+configuration, or installs hooks. Some agent versions expose no safely
+attributable ID, in which case only the agent type (or neither field) is stored.
+Treat the database as sensitive because names, paths, and agent IDs can reveal
+project information. Schema version 1 fails closed on an unsupported future
+schema rather than replacing it.
+
 The current metadata schema is version 4. Existing version 1 through 3 files
 load without a separate migration command and initially have no tags; the next
 title, tag, star, or ignored-status write atomically rewrites the file as version
@@ -866,10 +997,12 @@ browsers, uses revision-checked whole-document writes, and defaults to the
 built-in bindings until the first save. An unreadable, malformed, conflicting,
 or unsupported document makes shortcut persistence unavailable rather than
 overwriting the file; the browser continues with built-in defaults and exposes a
-retry state in the editor. Shortcut documents are version 2. Version 1 loads by
-adding the quick-temporary-session action with `K` in each unoccupied layer; its
-first keymap save atomically rewrites the document as version 2. Keep a version-1
-backup when rollback to an older release is possible.
+retry state in the editor. Shortcut documents are version 3. Version 2 loads by
+adding the floating-input action with `Y` in each unoccupied layer. Version 1
+first adds the quick-temporary-session action with `K`, then adds floating input
+with `Y`; conflicts leave only that layer unbound instead of replacing a custom
+key. The first keymap save atomically rewrites either older document as version
+3. Keep a pre-upgrade backup when rollback to an older release is possible.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.
 `server` uses the Muxdeck form login and remembered-device cookies. `basic` uses
@@ -940,21 +1073,23 @@ server workspace document, but the browser restores them when that workspace is
 resumed. Pinned Common and Workspace windows remain open across session-tab
 switches, while a Session window remains tied to its native tmux session.
 
-The workspace schema is version 7. Version 1 files load at session revision zero;
+The workspace schema is version 9. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
 version 1 through 6 files load with no global session pins or inherited-pin
-provenance. A legacy document upgrades atomically on its next workspace,
+provenance. Versions 1 through 7 load with no sidebar separators; version 8 retains
+its after-session separators and loads with no before-session separators. A legacy document
+upgrades atomically on its next workspace,
 quick-link, note, or global-pin write. A workspace name is limited to 80
 characters and a workspace can contain
-at most 32 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
+at most 256 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
 quick links. The global common shelf and each native-session shelf also permit 16
 links. Group names are limited to 40 characters, quick-link labels to 48
 characters, quick-link URLs to 2,048 characters, and every scoped note to 8,000
 characters. Writes use an atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 6
-reject the version 7 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 8
+reject the version 9 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
@@ -991,6 +1126,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_SNIPPETS_FILE` | `~/.local/state/muxdeck/snippets.json` | Persistent global folder/snippet tree |
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, scoped quick links and notes, and activity times |
 | `MUXDECK_SHORTCUTS_FILE` | `~/.local/state/muxdeck/shortcuts.json` | Persistent global desktop shortcut keymap |
+| `MUXDECK_SESSION_REGISTRY_FILE` | `~/.local/state/muxdeck/sessions.sqlite3` | Persistent session reconstruction metadata and reference-only detected agent IDs |
 | `MUXDECK_UPLOADS_DIR` | `~/.local/state/muxdeck/uploads` | Private host files uploaded from desktop staged input |
 | `MUXDECK_FILE_BROWSER_ROOT` | `/` | Absolute directory the file browser may never be pointed above; a relative, missing, or non-directory value fails startup |
 | `LOG_LEVEL` | `INFO` | Python log level |

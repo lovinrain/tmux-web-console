@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -67,6 +68,11 @@ export interface SessionWorkspaceNavigationProps {
   openSessions: string[];
   recentSessions: string[];
   groups?: WorkspaceTabGroup[];
+  separators?: string[];
+  separatorsBefore?: string[];
+  separatorsBusy?: boolean;
+  separatorsError?: string;
+  onChangeSeparator?: (sessionName: string, add: boolean, side?: "before" | "after") => void;
   sessions: Session[];
   recentsOpen: boolean;
   orientation?: WorkspaceTabOrientation;
@@ -168,6 +174,7 @@ export const DESKTOP_CONSOLE_SHORTCUTS = {
   pageDown: "Ctrl+Shift+D",
   sessionTabs: "Ctrl+Shift+S",
   focus: "Ctrl+Shift+F",
+  floatingInput: "Ctrl+Shift+Y",
   theme: "Ctrl+Shift+Z, then T",
   copyNew: "Ctrl+Shift+M",
 } as const;
@@ -569,6 +576,16 @@ function buildWorkspaceCommands({
       disabled: !activeSessionLoaded,
       disabledReason: "Open a live session first.",
     }, "view-terminal-focus"),
+    shortcutCommand({
+      id: "view-floating-input",
+      label: "Show or hide floating staged input",
+      description: "Edit the active session's staged draft in a movable, pinnable window.",
+      category: "View",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.floatingInput,
+      keywords: ["prompt", "composer", "draft", "focus mode", "pin"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "view-floating-input"),
     {
       id: "view-theme",
       label: "Toggle light or dark theme",
@@ -1814,6 +1831,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     openSessions,
     recentSessions,
     groups = [],
+    separators = [],
+    separatorsBefore = [],
+    separatorsBusy = false,
+    separatorsError = "",
+    onChangeSeparator,
     sessions,
     recentsOpen,
     orientation: preferredOrientation = "horizontal",
@@ -1971,6 +1993,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     () => new Set(selectedWorkspaceTabs),
     [selectedWorkspaceTabs],
   );
+  const orderedSelection = openSessions.filter((name) => selectedWorkspaceTabSet.has(name));
+  const unselectedTabs = openSessions.filter((name) => !selectedWorkspaceTabSet.has(name));
+  const previousSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection[0]) - 1];
+  const nextSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection.at(-1)!) + 1];
+  const selectionMoveTargets = {
+    previous: previousSelectionNeighbor ? unselectedTabs.indexOf(previousSelectionNeighbor) : -1,
+    next: nextSelectionNeighbor ? unselectedTabs.indexOf(nextSelectionNeighbor) + 1 : -1,
+  };
 
   const clearWorkspaceTabSelection = useCallback((announce = true) => {
     if (selectedWorkspaceTabs.length === 0) return;
@@ -2708,7 +2738,23 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onCloseNewSession?.();
   };
 
+  const moveSelectedTabs = (direction: "previous" | "next") => {
+    const targetIndex = selectionMoveTargets[direction];
+    if (!onMoveTabs || orderedSelection.length === 0 || targetIndex < 0) return;
+    onMoveTabs(orderedSelection, targetIndex);
+    setReorderAnnouncement(
+      `${orderedSelection.length} selected tabs moved ${direction === "previous" ? "backward" : "forward"} together. Their relative order was preserved.`,
+    );
+  };
+
   const moveQuickTab = (sessionName: string, title: string, targetIndex: number) => {
+    if (selectedWorkspaceTabSet.has(sessionName) && orderedSelection.length > 1 && onMoveTabs) {
+      const direction = targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next";
+      if (selectionMoveTargets[direction] < 0) return;
+      reorderFocusIntent.current = { sessionName, direction };
+      moveSelectedTabs(direction);
+      return;
+    }
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
     const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex);
     reorderFocusIntent.current = {
@@ -2775,6 +2821,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   };
 
   const moveGroup = (group: WorkspaceTabGroup, direction: -1 | 1) => {
+    if (onMoveTabs && group.tabs.every((name) => selectedWorkspaceTabSet.has(name))) {
+      moveSelectedTabs(direction < 0 ? "previous" : "next");
+      return;
+    }
     if (!onMoveTabGroup) return;
     groupReorderFocusIntent.current = {
       groupId: group.id,
@@ -2843,6 +2893,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     terminateTarget,
   ]);
 
+  const renderSeparator = (sessionName: string, title: string, side: "before" | "after") => (
+    orientation === "vertical" && (side === "before" ? separatorsBefore : separators).includes(sessionName)
+      ? <div className="workspace-tab-separator" data-separator-after={side === "after" ? sessionName : undefined}
+          data-separator-before={side === "before" ? sessionName : undefined}>
+          <span role="separator" aria-label={`Separator ${side} ${title}`} />
+          {onChangeSeparator && (
+            <button
+              type="button"
+              disabled={separatorsBusy}
+              onClick={() => onChangeSeparator(sessionName, false, side)}
+              aria-label={`Remove separator ${side} ${title}`}
+              title="Remove separator"
+            ><CloseIcon /></button>
+          )}
+        </div>
+      : null
+  );
+
   const renderWorkspaceTab = (
     sessionName: string,
     group?: WorkspaceTabGroup,
@@ -2854,8 +2922,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
     const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
     const groupTabIndex = group?.tabs.indexOf(sessionName) ?? -1;
-    const canMovePrevious = group ? groupTabIndex > 0 : index > 0;
-    const canMoveNext = group
+    const canMovePrevious = selectedDrag && onMoveTabs
+      ? selectionMoveTargets.previous >= 0 : group ? groupTabIndex > 0 : index > 0;
+    const canMoveNext = selectedDrag && onMoveTabs ? selectionMoveTargets.next >= 0 : group
       ? groupTabIndex >= 0 && groupTabIndex < group.tabs.length - 1
       : index < openSessions.length - 1;
     const canDragTab = desktopTabDragEnabled && (
@@ -2874,6 +2943,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       : undefined;
     const tabShortcut = directShortcutLabel(tabShortcutBinding);
     return (
+      <Fragment key={sessionName}>
+      {renderSeparator(sessionName, title, "before")}
       <div
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
@@ -2941,7 +3012,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               onClick={() => moveQuickTab(sessionName, title, index - 1)}
               disabled={!canMovePrevious}
               aria-label={`Move ${title} tab ${orientation === "vertical" ? "up" : "left"}`}
-              title={`Move tab ${orientation === "vertical" ? "up" : "left"}`}
+              title={`Move ${selectedDrag ? "selected tabs" : "tab"} ${orientation === "vertical" ? "up" : "left"}`}
+              aria-description={selectedDrag ? "Moves all selected tabs together" : undefined}
             >
               {orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}
             </button>
@@ -2951,7 +3023,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               onClick={() => moveQuickTab(sessionName, title, index + 1)}
               disabled={!canMoveNext}
               aria-label={`Move ${title} tab ${orientation === "vertical" ? "down" : "right"}`}
-              title={`Move tab ${orientation === "vertical" ? "down" : "right"}`}
+              title={`Move ${selectedDrag ? "selected tabs" : "tab"} ${orientation === "vertical" ? "down" : "right"}`}
+              aria-description={selectedDrag ? "Moves all selected tabs together" : undefined}
             >
               {orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}
             </button>
@@ -3011,6 +3084,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           </button>
         )}
       </div>
+      {renderSeparator(sessionName, title, "after")}
+      </Fragment>
     );
   };
 
@@ -3165,6 +3240,39 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <small>Stable</small>
             </button>
           )}
+          {orientation === "vertical" && onChangeSeparator && (
+            <>
+              <div className="workspace-separator-controls" role="group" aria-label="Separator placement">
+              <button
+                type="button"
+                className="workspace-add-separator"
+                disabled={!activeSession || separatorsBusy || separatorsBefore.includes(activeSession)
+                  || workspacePersistenceState === "loading"}
+                onClick={() => activeSession && onChangeSeparator(activeSession, true, "before")}
+                aria-label="Insert separator before current session"
+                title="Insert a colored separator before the current session"
+              >
+                <ArrowUpIcon /><span>Insert separator</span>
+              </button>
+              <button
+                type="button"
+                className="workspace-add-separator"
+                disabled={!activeSession || separatorsBusy || separators.includes(activeSession)
+                  || workspacePersistenceState === "loading"}
+                onClick={() => activeSession && onChangeSeparator(activeSession, true, "after")}
+                aria-label="Append separator after current session"
+                title="Append a colored separator after the current session"
+              >
+                <ArrowDownIcon /><span>Append separator</span>
+              </button>
+              </div>
+              {separatorsError && (
+                <div className="workspace-separator-error" role="alert">
+                  <span>Separators: {separatorsError}</span>
+                </div>
+              )}
+            </>
+          )}
           <div className="workspace-tab-viewport">
             <div
               className="workspace-tab-list"
@@ -3249,7 +3357,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                             type="button"
                             className="workspace-tab-group-move workspace-tab-group-move-previous"
                             onClick={() => moveGroup(group, -1)}
-                            disabled={groupStart === 0}
+                            disabled={selectedForMove && onMoveTabs
+                              ? selectionMoveTargets.previous < 0 : groupStart === 0}
                             aria-label={`Move ${group.name} group ${orientation === "vertical" ? "up" : "left"}`}
                             title={`Move group ${orientation === "vertical" ? "up" : "left"}`}
                           >
@@ -3259,7 +3368,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                             type="button"
                             className="workspace-tab-group-move workspace-tab-group-move-next"
                             onClick={() => moveGroup(group, 1)}
-                            disabled={groupEnd === openSessions.length - 1}
+                            disabled={selectedForMove && onMoveTabs
+                              ? selectionMoveTargets.next < 0 : groupEnd === openSessions.length - 1}
                             aria-label={`Move ${group.name} group ${orientation === "vertical" ? "down" : "right"}`}
                             title={`Move group ${orientation === "vertical" ? "down" : "right"}`}
                           >
@@ -3355,6 +3465,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 <span>selected</span>
               </span>
               <small>Drag together</small>
+              {onMoveTabs && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => moveSelectedTabs("previous")}
+                    disabled={selectionMoveTargets.previous < 0}
+                    aria-label={`Move selected tabs ${orientation === "vertical" ? "up" : "left"}`}
+                    title={`Move selected tabs ${orientation === "vertical" ? "up" : "left"}`}
+                  >{orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}</button>
+                  <button
+                    type="button"
+                    onClick={() => moveSelectedTabs("next")}
+                    disabled={selectionMoveTargets.next < 0}
+                    aria-label={`Move selected tabs ${orientation === "vertical" ? "down" : "right"}`}
+                    title={`Move selected tabs ${orientation === "vertical" ? "down" : "right"}`}
+                  >{orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}</button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => clearWorkspaceTabSelection()}

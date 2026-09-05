@@ -8,6 +8,8 @@ import {
   createWorkspace,
   deleteQueuedMessage,
   deleteWorkspace,
+  forgetRecoverableSession,
+  downloadSessionFileEntries,
   getCommonNote,
   getCommonWorkspaceQuickLinks,
   getHostMetrics,
@@ -19,10 +21,13 @@ import {
   getSnippetTree,
   getShortcutSettings,
   listSessionFiles,
+  listSessions,
   listQueuedMessages,
   previewSessionFile,
   resolveSessionFilePath,
   renameSession,
+  recreateSession,
+  recoverableSessionsFromList,
   replaceCommonNote,
   replaceCommonWorkspaceQuickLinks,
   replaceSessionNote,
@@ -31,8 +36,10 @@ import {
   replaceWorkspaceQuickLinks,
   saveSnippetTree,
   saveShortcutSettings,
+  searchSessionFiles,
   sessionFileDownloadUrl,
   sessionFileImageUrl,
+  sessionFilePdfUrl,
   subscribeToSessions,
   terminateSession,
   transferSessionToWorkspace,
@@ -150,6 +157,29 @@ describe("host metrics API", () => {
 });
 
 describe("session creation API", () => {
+  it("preserves recovery records alongside the compatible session array", async () => {
+    const live = [session()];
+    const recoverable = [{
+      id: "registry-id",
+      name: "missing-work",
+      directory: "/work",
+      agentType: "codex" as const,
+      agentSessionId: "reference-id",
+      firstSeenAt: 1,
+      lastSeenAt: 2,
+      directoryAvailable: true,
+    }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      sessions: live,
+      recoverableSessions: recoverable,
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    const listed = await listSessions();
+
+    expect(listed).toEqual(live);
+    expect(recoverableSessionsFromList(listed)).toEqual(recoverable);
+  });
+
   it("creates a default session with an explicit empty JSON object", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       session: "muxdeck-abc123def456",
@@ -171,6 +201,32 @@ describe("session creation API", () => {
           "Content-Type": "application/json",
         }),
       }),
+    );
+  });
+
+  it("recreates and forgets only the selected recovery record", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        session: "recovered",
+        sessionId: "$12",
+      }), { status: 201, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(recreateSession("id/one")).resolves.toEqual({
+      name: "recovered",
+      id: "$12",
+    });
+    await expect(forgetRecoverableSession("id/one")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${BASE_PATH}/api/recoverable-sessions/id%2Fone/recreate`,
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${BASE_PATH}/api/recoverable-sessions/id%2Fone`,
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 
@@ -463,6 +519,9 @@ describe("session file browser API", () => {
     expect(sessionFileImageUrl(target, "src/main file.ts")).toBe(
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/image?sessionId=%247&paneId=%253&path=src%2Fmain+file.ts`,
     );
+    expect(sessionFilePdfUrl(target, "docs/guide.pdf")).toBe(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/pdf?sessionId=%247&paneId=%253&path=docs%2Fguide.pdf`,
+    );
     // An explicit root travels with every request once the browser leaves the
     // pane's own directory.
     expect(sessionFileDownloadUrl(
@@ -508,6 +567,77 @@ describe("session file browser API", () => {
     );
   });
 
+  it("downloads selected file-browser entries as one named ZIP", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      "zip payload",
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "X-Muxdeck-Archive-Name": "reports%20selection.zip",
+          "X-Muxdeck-Archive-Files": "3",
+          "X-Muxdeck-Archive-Directories": "2",
+          "X-Muxdeck-Archive-Skipped": "1",
+          "X-Muxdeck-Archive-Uncompressed-Bytes": "1234",
+        },
+      },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const target = {
+      session: "work/name #1",
+      sessionId: "$7",
+      paneId: "%3",
+      root: "/srv/data",
+    };
+
+    const archive = await downloadSessionFileEntries(
+      target,
+      "reports/daily",
+      ["one.txt", "assets"],
+      controller.signal,
+    );
+
+    expect(archive).toMatchObject({
+      name: "reports selection.zip",
+      fileCount: 3,
+      directoryCount: 2,
+      skippedCount: 1,
+      uncompressedBytes: 1234,
+    });
+    expect(await archive.blob.text()).toBe("zip payload");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/archive?sessionId=%247&paneId=%253&path=reports%2Fdaily&root=%2Fsrv%2Fdata`,
+      expect.objectContaining({
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({ names: ["one.txt", "assets"] }),
+        headers: {
+          Accept: "application/zip",
+          "Content-Type": "application/json",
+        },
+      }),
+    );
+  });
+
+  it("preserves a bulk archive limit error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "selection exceeds the 256 MiB uncompressed archive limit",
+    }), { status: 413, headers: { "Content-Type": "application/json" } })));
+
+    const error = await downloadSessionFileEntries(
+      { session: "work", sessionId: "$7", paneId: "%3" },
+      "",
+      ["large"],
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      message: "selection exceeds the 256 MiB uncompressed archive limit",
+      status: 413,
+    });
+  });
+
   it("resolves an absolute file path without carrying the currently browsed root", async () => {
     const resolved = {
       kind: "file",
@@ -547,6 +677,41 @@ describe("session file browser API", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/resolve?sessionId=%247&paneId=%253&path=%2Fsrv%2Fdata%2Fnotes+with+space.md`,
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("encodes a bounded fuzzy file search with the active browser root", async () => {
+    const results = {
+      root: "/srv/data",
+      query: "sfp",
+      results: [],
+      scannedEntries: 42,
+      scanLimit: 50_000,
+      resultLimit: 80,
+      truncated: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(results), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(searchSessionFiles(
+      {
+        session: "work/name #1",
+        sessionId: "$7",
+        paneId: "%3",
+        root: "/srv/data",
+      },
+      "sfp",
+      true,
+      controller.signal,
+    )).resolves.toEqual(results);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/search?sessionId=%247&paneId=%253&q=sfp&root=%2Fsrv%2Fdata&hidden=1`,
       expect.objectContaining({ signal: controller.signal }),
     );
   });

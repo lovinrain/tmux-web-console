@@ -20,6 +20,7 @@ Environment=MUXDECK_MESSAGES_FILE=@@STATE_DIR@@/session-messages.json
 Environment=MUXDECK_SNIPPETS_FILE=@@STATE_DIR@@/snippets.json
 Environment=MUXDECK_WORKSPACES_FILE=@@STATE_DIR@@/workspaces.json
 Environment=MUXDECK_SHORTCUTS_FILE=@@STATE_DIR@@/shortcuts.json
+Environment=MUXDECK_SESSION_REGISTRY_FILE=@@STATE_DIR@@/sessions.sqlite3
 Environment=MUXDECK_AUTH_MODE=@@AUTH_MODE@@
 Environment=MUXDECK_AUTH_FILE=@@STATE_DIR@@/auth.json
 Environment=MUXDECK_UPLOADS_DIR=@@STATE_DIR@@/uploads

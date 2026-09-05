@@ -62,6 +62,8 @@ describe("shortcut helpers", () => {
     expect(canonicalShortcutCode("Escape")).toBeNull();
     expect(directShortcutLabel(DEFAULT_SHORTCUT_BINDINGS["command-palette"]))
       .toBe("Ctrl+Shift+H");
+    expect(directShortcutLabel(DEFAULT_SHORTCUT_BINDINGS["view-floating-input"]))
+      .toBe("Ctrl+Shift+Y");
 
     const duplicate = cloneShortcutBindings(DEFAULT_SHORTCUT_BINDINGS);
     duplicate["session-end"].launcher = "KeyR";
@@ -99,13 +101,13 @@ describe("ShortcutSettingsProvider", () => {
       name: "Fuzzy command search direct key",
     });
     fireEvent.click(paletteDirect);
-    fireEvent.keyDown(paletteDirect, { code: "KeyY", key: "y" });
+    fireEvent.keyDown(paletteDirect, { code: "KeyG", key: "g" });
 
     const launcherDirect = within(settings).getByRole("button", {
       name: "Shortcut window direct key",
     });
     fireEvent.click(launcherDirect);
-    fireEvent.keyDown(launcherDirect, { code: "KeyX", key: "x" });
+    fireEvent.keyDown(launcherDirect, { code: "KeyO", key: "o" });
 
     const endLauncher = within(settings).getByRole("button", {
       name: "End session launcher key",
@@ -117,8 +119,8 @@ describe("ShortcutSettingsProvider", () => {
     await waitFor(() => expect(saveShortcutSettingsMock).toHaveBeenCalledOnce());
     const [savedBindings, revision] = saveShortcutSettingsMock.mock.calls[0];
     expect(revision).toBe(0);
-    expect(savedBindings["command-palette"].direct).toBe("KeyY");
-    expect(savedBindings["shortcut-launcher"].direct).toBe("KeyX");
+    expect(savedBindings["command-palette"].direct).toBe("KeyG");
+    expect(savedBindings["shortcut-launcher"].direct).toBe("KeyO");
     expect(savedBindings["session-end"].launcher).toBe("KeyW");
     await waitFor(() => expect(within(settings).getByText("Saved for every browser."))
       .toBeVisible());
@@ -128,8 +130,8 @@ describe("ShortcutSettingsProvider", () => {
 
     const commandTrigger = screen.getByRole("button", { name: "Open command palette" });
     const shortcutTrigger = screen.getByRole("button", { name: "Open shortcut window" });
-    expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Y");
-    expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
+    expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+G");
+    expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+O");
 
     fireEvent.keyDown(window, {
       code: "KeyH",
@@ -139,8 +141,8 @@ describe("ShortcutSettingsProvider", () => {
     });
     expect(screen.queryByRole("dialog", { name: "Run a command" })).not.toBeInTheDocument();
     fireEvent.keyDown(window, {
-      code: "KeyY",
-      key: "Y",
+      code: "KeyG",
+      key: "G",
       ctrlKey: true,
       shiftKey: true,
     });
@@ -148,8 +150,8 @@ describe("ShortcutSettingsProvider", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     fireEvent.keyDown(window, {
-      code: "KeyX",
-      key: "X",
+      code: "KeyO",
+      key: "O",
       ctrlKey: true,
       shiftKey: true,
     });

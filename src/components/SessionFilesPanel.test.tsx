@@ -1,17 +1,20 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   copySessionFileEntry,
   createSessionFileEntry,
   deleteSessionFileEntry,
+  downloadSessionFileEntries,
   listSessionFiles,
   moveSessionFileEntry,
   previewSessionFile,
   resolveSessionFilePath,
   saveSessionFileContent,
+  searchSessionFiles,
   sessionFileDownloadUrl,
   sessionFileImageUrl,
+  sessionFilePdfUrl,
   uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
@@ -19,6 +22,7 @@ import {
 } from "../api";
 import {
   SESSION_FILES_LAYOUT_STORAGE_KEY,
+  SESSION_FILES_RECENTS_STORAGE_KEY,
   SessionFilesPanel,
 } from "./SessionFilesPanel";
 
@@ -35,13 +39,16 @@ vi.mock("../api", () => ({
   copySessionFileEntry: vi.fn(),
   createSessionFileEntry: vi.fn(),
   deleteSessionFileEntry: vi.fn(),
+  downloadSessionFileEntries: vi.fn(),
   listSessionFiles: vi.fn(),
   moveSessionFileEntry: vi.fn(),
   previewSessionFile: vi.fn(),
   resolveSessionFilePath: vi.fn(),
   saveSessionFileContent: vi.fn(),
+  searchSessionFiles: vi.fn(),
   sessionFileDownloadUrl: vi.fn(),
   sessionFileImageUrl: vi.fn(),
+  sessionFilePdfUrl: vi.fn(),
   uploadSessionFile: vi.fn(),
 }));
 
@@ -129,20 +136,26 @@ function listingAt(
 function renderPanel(overrides: {
   onClose?: () => void;
   onInsertPath?: (terminalText: string) => boolean;
+  openPathRequest?: { id: number; path: string };
+  sessionName?: string;
+  sessionId?: string;
+  paneId?: string;
+  panePath?: string;
 } = {}) {
   const onClose = overrides.onClose ?? vi.fn();
   const onInsertPath = overrides.onInsertPath ?? vi.fn(() => true);
-  render(
+  const result = render(
     <SessionFilesPanel
-      sessionName="agent"
-      sessionId="$7"
-      paneId="%3"
-      panePath="/work/project"
+      sessionName={overrides.sessionName ?? "agent"}
+      sessionId={overrides.sessionId ?? "$7"}
+      paneId={overrides.paneId ?? "%3"}
+      panePath={overrides.panePath ?? "/work/project"}
+      openPathRequest={overrides.openPathRequest}
       onClose={onClose}
       onInsertPath={onInsertPath}
     />,
   );
-  return { onClose, onInsertPath };
+  return { ...result, onClose, onInsertPath };
 }
 
 function dispatchPointer(
@@ -172,6 +185,7 @@ beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(sessionFileDownloadUrl).mockReturnValue("/files/download");
   vi.mocked(sessionFileImageUrl).mockReturnValue("/files/image");
+  vi.mocked(sessionFilePdfUrl).mockReturnValue("/files/pdf");
   vi.mocked(resolveSessionFilePath).mockImplementation(async (_target, path) => ({
     kind: "directory",
     root: path,
@@ -184,9 +198,410 @@ beforeEach(() => {
     configurable: true,
     value: { writeText: vi.fn(async () => undefined) },
   });
+  Object.defineProperties(URL, {
+    createObjectURL: {
+      configurable: true,
+      value: vi.fn(() => "blob:muxdeck-archive"),
+    },
+    revokeObjectURL: {
+      configurable: true,
+      value: vi.fn(),
+    },
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("SessionFilesPanel", () => {
+  it("renders complete Markdown only on request and returns to raw source", async () => {
+    const markdown = [
+      "# Release notes",
+      "",
+      "- First item",
+      "- Second item",
+      "",
+      "| Name | State |",
+      "| --- | --- |",
+      "| Preview | Ready |",
+      "",
+      "[Documentation](https://example.com/docs)",
+      "",
+      "![tracking pixel](https://tracker.invalid/pixel.png)",
+      "",
+      "<script>window.__markdownUnsafe = true</script>",
+    ].join("\n");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("README.md", "README.md", "file"),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "README.md",
+      "README.md",
+      markdown,
+      { mediaType: "text/markdown" },
+    ));
+
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "File README.md" }));
+
+    const previewButton = await within(panel).findByRole("button", {
+      name: "Preview README.md as rendered Markdown",
+    });
+    expect(previewButton).toHaveAttribute("aria-pressed", "false");
+    const raw = within(panel).getByText((_, element) => (
+      element?.tagName === "PRE" && element.textContent === markdown
+    ));
+    expect(raw).toBeInTheDocument();
+    expect(within(panel).queryByRole("document", {
+      name: "Rendered Markdown preview",
+    })).not.toBeInTheDocument();
+
+    fireEvent.click(previewButton);
+    const rendered = await within(panel).findByRole("document", {
+      name: "Rendered Markdown preview",
+    });
+    expect(within(rendered).getByRole("heading", {
+      level: 1,
+      name: "Release notes",
+    })).toBeInTheDocument();
+    expect(within(rendered).getByRole("list")).toHaveTextContent("First item");
+    expect(within(rendered).getByRole("table")).toHaveTextContent("PreviewReady");
+    expect(within(rendered).getByRole("link", { name: "Documentation" }))
+      .toHaveAttribute("href", "https://example.com/docs");
+    expect(within(rendered).getByRole("link", { name: "Documentation" }))
+      .toHaveAttribute("target", "_blank");
+    expect(within(rendered).getByRole("note"))
+      .toHaveTextContent("Image not loaded: tracking pixel");
+    expect(rendered.querySelector("img")).toBeNull();
+    expect(rendered.querySelector("script")).toBeNull();
+    expect(rendered).not.toHaveTextContent("window.__markdownUnsafe");
+
+    const rawButton = within(panel).getByRole("button", {
+      name: "Show raw Markdown for README.md",
+    });
+    expect(rawButton).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(rawButton);
+    expect(await within(panel).findByText((_, element) => (
+      element?.tagName === "PRE" && element.textContent === markdown
+    ))).toBeInTheDocument();
+    expect(within(panel).queryByRole("document", {
+      name: "Rendered Markdown preview",
+    })).not.toBeInTheDocument();
+  });
+
+  it("resets rendered Markdown when selecting another file", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("README.md", "README.md", "file"),
+      entry("NEXT.MD", "NEXT.MD", "file"),
+    ]));
+    vi.mocked(previewSessionFile).mockImplementation(async (_target, path) => (
+      path === "README.md"
+        ? textPreview("README.md", path, "# First document")
+        : textPreview("NEXT.MD", path, "# Second document")
+    ));
+
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "File README.md" }));
+    fireEvent.click(await within(panel).findByRole("button", {
+      name: "Preview README.md as rendered Markdown",
+    }));
+    expect(await within(panel).findByRole("heading", { name: "First document" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File NEXT.MD" }));
+    expect(await within(panel).findByText("# Second document")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", {
+      name: "Preview NEXT.MD as rendered Markdown",
+    })).toHaveAttribute("aria-pressed", "false");
+    expect(within(panel).queryByRole("heading", { name: "Second document" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("does not offer rendered preview for non-Markdown or truncated files", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("notes.txt", "notes.txt", "file"),
+      entry("huge.markdown", "huge.markdown", "file"),
+    ]));
+    vi.mocked(previewSessionFile).mockImplementation(async (_target, path) => (
+      path === "notes.txt"
+        ? textPreview("notes.txt", path, "# Plain text")
+        : textPreview("huge.markdown", path, "# Partial Markdown", { truncated: true })
+    ));
+
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "File notes.txt" }));
+    expect(await within(panel).findByText("# Plain text")).toBeInTheDocument();
+    expect(within(panel).queryByText("Preview Markdown")).not.toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File huge.markdown" }));
+    expect(await within(panel).findByText("# Partial Markdown")).toBeInTheDocument();
+    expect(within(panel).queryByText("Preview Markdown")).not.toBeInTheDocument();
+  });
+
+  it("opens a requested terminal path directly in the preview", async () => {
+    const directEntry = entry("result.txt", "result.txt", "file", {
+      absolutePath: "/work/project/output/result.txt",
+      terminalText: "/work/project/output/result.txt",
+    });
+    vi.mocked(resolveSessionFilePath).mockResolvedValue({
+      kind: "file",
+      root: "/work/project/output",
+      path: "result.txt",
+      absolutePath: "/work/project/output/result.txt",
+      entry: directEntry,
+    });
+    let resolveInitialListing!: (value: SessionDirectoryListing) => void;
+    const initialListing = new Promise<SessionDirectoryListing>((resolve) => {
+      resolveInitialListing = resolve;
+    });
+    vi.mocked(listSessionFiles).mockImplementation(async (target) => (
+      target.root === "/work/project/output"
+        ? listingAt("/work/project/output", [directEntry], "/work/project")
+        : initialListing
+    ));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "result.txt",
+      "result.txt",
+      "opened from terminal output",
+      {
+        root: "/work/project/output",
+        absolutePath: "/work/project/output/result.txt",
+        terminalText: "/work/project/output/result.txt",
+      },
+    ));
+
+    renderPanel({
+      openPathRequest: { id: 7, path: "/work/project/output/result.txt" },
+    });
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    expect(await within(panel).findByText("opened from terminal output")).toBeInTheDocument();
+    expect(resolveSessionFilePath).toHaveBeenCalledTimes(1);
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "/work/project/output/result.txt",
+      expect.any(AbortSignal),
+    );
+    expect(within(panel).getByLabelText("File or directory path"))
+      .toHaveValue("/work/project/output");
+
+    // A slow response for the directory that was open at mount must not move
+    // the browser away from the parent selected by the direct-path resolver.
+    await act(async () => {
+      resolveInitialListing(listing("", []));
+    });
+    expect(within(panel).getByLabelText("File or directory path"))
+      .toHaveValue("/work/project/output");
+    expect(within(panel).getByText("opened from terminal output"))
+      .toBeInTheDocument();
+  });
+
+  it("fuzzy-locates a nested file and opens it in its parent folder", async () => {
+    const located = entry("session-guide.md", "docs/session-guide.md", "file", {
+      size: 25,
+    });
+    vi.mocked(listSessionFiles).mockImplementation(async (_target, path) => (
+      path === "docs"
+        ? listing("docs", [located])
+        : listing("", [entry("docs", "docs", "directory")])
+    ));
+    vi.mocked(searchSessionFiles).mockResolvedValue({
+      root: "/work/project",
+      query: "sgm",
+      results: [located],
+      scannedEntries: 124,
+      scanLimit: 50_000,
+      resultLimit: 80,
+      truncated: false,
+    });
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "session-guide.md",
+      "docs/session-guide.md",
+      "# Session guide\n",
+    ));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Open fuzzy file locator",
+    }));
+    const query = within(panel).getByRole("combobox", { name: "Fuzzy file search" });
+    await waitFor(() => expect(query).toHaveFocus());
+    fireEvent.change(query, { target: { value: "sgm" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Locate" }));
+
+    expect(await within(panel).findByRole("option", { name: /session-guide\.md/ }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(searchSessionFiles).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "sgm",
+      false,
+      expect.any(AbortSignal),
+    );
+    expect(within(panel).getByText(/1 match from 124 scanned entries/))
+      .toBeInTheDocument();
+
+    fireEvent.keyDown(query, { key: "Enter" });
+    await waitFor(() => expect(listSessionFiles).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "docs",
+      expect.any(AbortSignal),
+    ));
+    expect(await within(panel).findByText("# Session guide")).toBeInTheDocument();
+    expect(within(panel).queryByRole("combobox", { name: "Fuzzy file search" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("filters the shared recent order by CWD boundaries without recording duplicates", async () => {
+    const paths = ["/work/project-old/docs", "/work/project/src", "/elsewhere", "/work/project/docs/readme.md"];
+    const now = Date.now();
+    window.localStorage.setItem(SESSION_FILES_RECENTS_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      sessions: { "$7": { sessionName: "agent", updatedAt: now, entries: paths.map((path, index) => ({
+        kind: path.endsWith(".md") ? "file" : "directory",
+        absolutePath: path, name: path.split("/").at(-1), visitedAt: now - index * 1000,
+      })) } },
+    }));
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    await waitFor(() => expect(listSessionFiles).toHaveBeenCalled());
+    fireEvent.click(within(panel).getByRole("button", { name: "Open session file history" }));
+    const all = within(panel).getByRole("region", { name: "All recent paths" });
+    const cwd = within(panel).getByRole("region", { name: "Under current CWD" });
+    const labels = (region: HTMLElement) => within(region).getAllByRole("button", { name: /^Open recent/ })
+      .map((button) => button.getAttribute("title"));
+    expect(labels(all)).toEqual(["/work/project", ...paths]);
+    expect(labels(cwd)).toEqual(["/work/project", "/work/project/src", "/work/project/docs/readme.md"]);
+    expect(within(cwd).queryByText("/work/project-old/docs")).toBeNull();
+    fireEvent.click(within(cwd).getByRole("button", { name: "Forget recent path /work/project/src" }));
+    expect(labels(all)).not.toContain("/work/project/src");
+    expect(labels(cwd)).not.toContain("/work/project/src");
+    const stored = JSON.parse(window.localStorage.getItem(SESSION_FILES_RECENTS_STORAGE_KEY)!);
+    expect(stored.sessions["$7"].entries).toHaveLength(4);
+  });
+
+  it("remembers recent files and folders separately for the current tmux session", async () => {
+    const sourceFolder = entry("src", "src", "directory");
+    const notesFile = entry("notes.md", "src/notes.md", "file", { size: 24 });
+    vi.mocked(listSessionFiles).mockImplementation(async (_target, path) => (
+      path === "src"
+        ? listing("src", [notesFile])
+        : listing("", [sourceFolder])
+    ));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "notes.md",
+      "src/notes.md",
+      "# Session notes\n",
+    ));
+
+    const first = renderPanel();
+    let panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Folder src" }));
+    fireEvent.click(await within(panel).findByRole("button", { name: "File notes.md" }));
+    expect(await within(panel).findByText("# Session notes")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Open session file history",
+    }));
+    const history = within(panel).getByRole("region", {
+      name: "All recent paths",
+    });
+    expect(within(history).getByRole("button", {
+      name: "Open recent file /work/project/src/notes.md",
+    })).toBeInTheDocument();
+    expect(within(history).getByRole("button", {
+      name: "Open recent folder /work/project/src",
+    })).toBeInTheDocument();
+    expect(within(history).getByText("./src/notes.md")).toBeInTheDocument();
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_RECENTS_STORAGE_KEY) || "null",
+    );
+    expect(stored.version).toBe(1);
+    expect(stored.sessions["$7"].entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "file",
+        absolutePath: "/work/project/src/notes.md",
+      }),
+      expect.objectContaining({
+        kind: "directory",
+        absolutePath: "/work/project/src",
+      }),
+    ]));
+
+    first.unmount();
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    const otherSession = renderPanel({ sessionName: "other-agent", sessionId: "$8" });
+    panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Open session file history",
+    }));
+    expect(within(panel).queryByText("notes.md")).not.toBeInTheDocument();
+    otherSession.unmount();
+
+    const reopenedEntry = entry("notes.md", "notes.md", "file", {
+      absolutePath: "/work/project/src/notes.md",
+      terminalText: "/work/project/src/notes.md",
+    });
+    vi.mocked(resolveSessionFilePath).mockResolvedValue({
+      kind: "file",
+      root: "/work/project/src",
+      path: "notes.md",
+      absolutePath: "/work/project/src/notes.md",
+      entry: reopenedEntry,
+    });
+    vi.mocked(listSessionFiles).mockImplementation(async (target) => (
+      target.root === "/work/project/src"
+        ? listingAt("/work/project/src", [reopenedEntry], "/work/project")
+        : listing("", [])
+    ));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "notes.md",
+      "notes.md",
+      "# Reopened\n",
+      {
+        root: "/work/project/src",
+        absolutePath: "/work/project/src/notes.md",
+        terminalText: "/work/project/src/notes.md",
+      },
+    ));
+
+    renderPanel();
+    panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Open session file history",
+    }));
+    fireEvent.click(within(within(panel).getByRole("region", { name: "Under current CWD" })).getByRole("button", {
+      name: "Open recent file /work/project/src/notes.md",
+    }));
+    await waitFor(() => expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "/work/project/src/notes.md",
+      expect.any(AbortSignal),
+    ));
+    expect(await within(panel).findByText("# Reopened")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Open session file history",
+    }));
+    fireEvent.click(within(within(panel).getByRole("region", { name: "Under current CWD" })).getByRole("button", {
+      name: "Forget recent path /work/project/src/notes.md",
+    }));
+    expect(within(panel).queryByRole("button", {
+      name: "Open recent file /work/project/src/notes.md",
+    })).not.toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole("button", { name: "Clear" }));
+    expect(within(panel).getByText("No recent paths yet")).toBeInTheDocument();
+    expect(JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_RECENTS_STORAGE_KEY) || "null",
+    ).sessions["$7"]).toBeUndefined();
+  });
+
   it("browses folders, previews text, and stages a shell-safe path", async () => {
     const root = listing("", [
       entry("src", "src", "directory"),
@@ -288,6 +703,42 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "File archive.bin" }));
     expect(await within(panel).findByText("Binary file")).toBeInTheDocument();
     expect(within(panel).getByText(/Preview is disabled/)).toBeInTheDocument();
+  });
+
+  it("embeds a verified PDF with open and download fallbacks", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("architecture.pdf", "architecture.pdf", "file", { size: 8_192 }),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/project",
+      name: "architecture.pdf",
+      path: "architecture.pdf",
+      absolutePath: "/work/project/architecture.pdf",
+      terminalText: "/work/project/architecture.pdf",
+      kind: "pdf",
+      mediaType: "application/pdf",
+      size: 8_192,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 8_192,
+      content: null,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File architecture.pdf" }));
+    const frame = await within(panel).findByTitle("Preview of architecture.pdf");
+    expect(frame).toHaveAttribute("src", "/files/pdf");
+    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(sessionFilePdfUrl).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "architecture.pdf",
+    );
+    expect(within(panel).getByRole("link", {
+      name: "Open architecture.pdf in browser PDF viewer",
+    })).toHaveAttribute("href", "/files/pdf");
+    expect(within(panel).getByRole("link", { name: "Download selected file" }))
+      .toHaveAttribute("href", "/files/download");
   });
 
   it("renders raster images with a full-size link and a decode failure state", async () => {
@@ -553,6 +1004,20 @@ describe("SessionFilesPanel", () => {
     const uploadedRow = await within(panel).findByRole("button", { name: "File notes.txt" });
     expect(uploadedRow).toHaveAttribute("aria-pressed", "true");
     expect(await within(panel).findByText("new note")).toBeInTheDocument();
+    const address = within(panel).getByLabelText("File or directory path");
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Copy full path for uploaded notes.txt",
+    }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith(
+      "/work/project/notes.txt",
+    ));
+    expect(address).toHaveValue("/work/project/notes.txt");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Copy relative path for uploaded notes.txt",
+    }));
+    await within(panel).findByText("Relative path is ready in the PATH bar");
+    expect(address).toHaveValue("notes.txt");
   });
 
   it("accepts file drops and keeps a per-file conflict visible", async () => {
@@ -759,6 +1224,79 @@ describe("SessionFilesPanel", () => {
 
     expect(within(panel).queryByText(/Permanently delete/)).not.toBeInTheDocument();
     expect(deleteSessionFileEntry).not.toHaveBeenCalled();
+  });
+
+  it("downloads checked files and folders together without clearing selection", async () => {
+    const first = entry("summary.txt", "summary.txt", "file");
+    const second = entry("assets", "assets", "directory");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [first, second]));
+    let finishArchive!: (
+      value: Awaited<ReturnType<typeof downloadSessionFileEntries>>,
+    ) => void;
+    vi.mocked(downloadSessionFileEntries).mockReturnValue(new Promise((resolve) => {
+      finishArchive = resolve;
+    }));
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("checkbox", { name: "Select summary.txt" }));
+    fireEvent.click(within(panel).getByRole("checkbox", { name: "Select assets" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Download ZIP" }));
+
+    expect(within(panel).getByRole("button", { name: "Preparing ZIP..." }))
+      .toBeDisabled();
+    expect(downloadSessionFileEntries).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "",
+      ["summary.txt", "assets"],
+      expect.any(AbortSignal),
+    );
+
+    const blob = new Blob(["zip"], { type: "application/zip" });
+    await act(async () => {
+      finishArchive({
+        blob,
+        name: "project-selection.zip",
+        fileCount: 3,
+        directoryCount: 2,
+        skippedCount: 1,
+        uncompressedBytes: 42,
+      });
+    });
+
+    expect(await within(panel).findByText(
+      "Download started: 3 files and 2 folders in project-selection.zip. 1 link or special item skipped.",
+    )).toBeInTheDocument();
+    expect(within(panel).getByText("2 selected")).toBeInTheDocument();
+    expect(URL.createObjectURL).toHaveBeenCalledWith(blob);
+    expect(clickSpy).toHaveBeenCalledOnce();
+    const anchor = clickSpy.mock.instances[0] as HTMLAnchorElement;
+    expect(anchor.download).toBe("project-selection.zip");
+    expect(anchor.href).toBe("blob:muxdeck-archive");
+    await waitFor(() => expect(URL.revokeObjectURL)
+      .toHaveBeenCalledWith("blob:muxdeck-archive"));
+  });
+
+  it("keeps checked entries available when ZIP preparation fails", async () => {
+    const selected = entry("large", "large", "directory");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [selected]));
+    vi.mocked(downloadSessionFileEntries).mockRejectedValue(
+      apiError("selection exceeds the 256 MiB uncompressed archive limit", 413),
+    );
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("checkbox", { name: "Select large" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Download ZIP" }));
+
+    expect(await within(panel).findByText(
+      "selection exceeds the 256 MiB uncompressed archive limit",
+    )).toBeInTheDocument();
+    expect(within(panel).getByText("1 selected")).toBeInTheDocument();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
   it("bulk deletes checked entries and reports partial failures", async () => {

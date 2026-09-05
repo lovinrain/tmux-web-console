@@ -11,6 +11,7 @@ from aiohttp import ClientResponse
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console import app as app_module
+from tmux_console.agent_reference import AgentReference
 from tmux_console.app import (
     SESSION_RENAME_LOCK_KEY,
     SESSION_SNAPSHOTS_KEY,
@@ -20,9 +21,14 @@ from tmux_console.app import (
 )
 from tmux_console.messages import SessionMessageStore
 from tmux_console.metadata import SessionTitleStore
+from tmux_console.session_registry import (
+    RecoveryRecordNotFoundError,
+    SessionRegistry,
+)
 from tmux_console.status import AgentState, AgentStateDetector
 from tmux_console.tmux import (
     CreatedSession,
+    Pane,
     Session,
     TmuxClient,
     TmuxError,
@@ -71,6 +77,30 @@ def make_session(name: str = "agent-one") -> Session:
 def make_recreated_session(name: str = "agent-one") -> Session:
     session = make_session(name)
     session.id = "$2"
+    return session
+
+
+def add_active_pane(session: Session, directory: str, command: str = "codex") -> Session:
+    session.panes = [
+        Pane(
+            id="%1",
+            index=0,
+            window_index=0,
+            window_name="main",
+            window_active=True,
+            active=True,
+            command=command,
+            path=directory,
+            title=command,
+            width=100,
+            height=30,
+            history_size=0,
+            history_limit=2000,
+            alternate_on=False,
+            dead=False,
+            activity=SESSION_CREATED,
+        )
+    ]
     return session
 
 
@@ -589,6 +619,173 @@ async def test_copy_session_api_maps_tmux_failures(error: Exception, status: int
 
 
 @pytest.mark.asyncio
+async def test_sessions_api_lists_missing_recovery_metadata_as_reference_only(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    saved = add_active_pane(make_session("saved-work"), str(tmp_path))
+    registry.reconcile(
+        [saved],
+        {"saved-work": AgentReference("codex", "agent-reference-id")},
+        observed_at=100,
+    )
+    tmux = FakeTmux([[]])
+    client = TestClient(TestServer(create_app(
+        tmux=tmux,
+        session_registry=registry,
+        base_path="",
+    )))
+
+    try:
+        await client.start_server()
+        response = await client.get("/api/sessions")
+
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["sessions"] == []
+        assert payload["recoverableSessions"] == [{
+            "id": "saved-id",
+            "name": "saved-work",
+            "directory": str(tmp_path),
+            "agentType": "codex",
+            "agentSessionId": "agent-reference-id",
+            "firstSeenAt": 100,
+            "lastSeenAt": 100,
+            "directoryAvailable": True,
+        }]
+        assert tmux.list_calls == 1
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_recreate_session_api_starts_only_a_fresh_shell_at_saved_cwd(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    saved = add_active_pane(make_session("saved-work"), str(tmp_path))
+    registry.reconcile(
+        [saved],
+        {"saved-work": AgentReference("codex", "agent-reference-id")},
+        observed_at=100,
+    )
+    tmux = CreatingFakeTmux(CreatedSession("saved-work", "$new"))
+    client = TestClient(TestServer(create_app(
+        tmux=tmux,
+        session_registry=registry,
+        base_path="",
+    )))
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/recoverable-sessions/saved-id/recreate",
+            json={},
+        )
+
+        assert response.status == 201
+        assert await response.json() == {
+            "session": "saved-work",
+            "sessionId": "$new",
+        }
+        assert tmux.create_calls == ["saved-work"]
+        assert tmux.create_directory_calls == [str(tmp_path)]
+        assert tmux.create_theme_calls == [None]
+        # Captured agent data remains reference metadata; no resume command is
+        # accepted by or sent through this endpoint.
+        recovered = registry.get_recoverable("saved-id")
+        assert recovered.agent_type == "codex"
+        assert recovered.agent_session_id == "agent-reference-id"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_recreate_session_api_refuses_name_and_directory_conflicts(tmp_path):
+    missing_directory = tmp_path / "gone"
+    missing_registry = SessionRegistry(
+        tmp_path / "missing.sqlite3",
+        id_factory=lambda: "missing-id",
+    )
+    missing_registry.record_created(
+        CreatedSession("missing-work", "$old"),
+        str(missing_directory),
+    )
+    missing_tmux = CreatingFakeTmux(CreatedSession("missing-work", "$new"))
+    missing_client = TestClient(TestServer(create_app(
+        tmux=missing_tmux,
+        session_registry=missing_registry,
+        base_path="",
+    )))
+
+    try:
+        await missing_client.start_server()
+        unavailable = await missing_client.post(
+            "/api/recoverable-sessions/missing-id/recreate",
+            json={},
+        )
+        assert unavailable.status == 409
+        assert (await unavailable.json())["error"].startswith(
+            "saved working directory is unavailable:"
+        )
+        assert missing_tmux.create_calls == []
+    finally:
+        await missing_client.close()
+
+    conflict_registry = SessionRegistry(
+        tmp_path / "conflict.sqlite3",
+        id_factory=lambda: "conflict-id",
+    )
+    conflict_registry.record_created(
+        CreatedSession("existing", "$old"),
+        str(tmp_path),
+    )
+    conflict_tmux = CreatingFakeTmux(CreatedSession("existing", "$new"))
+    conflict_tmux._snapshots = iter([[make_session("existing")]])
+    conflict_client = TestClient(TestServer(create_app(
+        tmux=conflict_tmux,
+        session_registry=conflict_registry,
+        base_path="",
+    )))
+
+    try:
+        await conflict_client.start_server()
+        conflict = await conflict_client.post(
+            "/api/recoverable-sessions/conflict-id/recreate",
+            json={},
+        )
+        assert conflict.status == 409
+        assert await conflict.json() == {
+            "error": "tmux session already exists: existing"
+        }
+        assert conflict_tmux.create_calls == []
+    finally:
+        await conflict_client.close()
+
+
+@pytest.mark.asyncio
+async def test_forget_recoverable_session_removes_only_the_registry_record(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    tmux = FakeTmux([[]])
+    client = TestClient(TestServer(create_app(
+        tmux=tmux,
+        session_registry=registry,
+        base_path="",
+    )))
+
+    try:
+        await client.start_server()
+        response = await client.delete("/api/recoverable-sessions/saved-id")
+
+        assert response.status == 204
+        with pytest.raises(RecoveryRecordNotFoundError):
+            registry.get_recoverable("saved-id")
+        assert tmux.list_calls == 1
+
+        repeated = await client.delete("/api/recoverable-sessions/saved-id")
+        assert repeated.status == 404
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_terminate_session_api_uses_the_exact_stable_id():
     session_name = "agent one"
     tmux = TerminatingFakeTmux([make_session(session_name)])
@@ -606,6 +803,56 @@ async def test_terminate_session_api_uses_the_exact_stable_id():
         assert tmux.terminate_calls == [
             ("$1", SESSION_CREATED, SERVER_STARTED, SERVER_PID)
         ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_terminate_session_api_marks_the_exact_identity_nonrecoverable(tmp_path):
+    live = add_active_pane(make_session("intentional-end"), str(tmp_path))
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3")
+    registry.reconcile([live], observed_at=100)
+    tmux = TerminatingFakeTmux([live])
+    client = TestClient(TestServer(create_app(
+        tmux=tmux,
+        session_registry=registry,
+        base_path="",
+    )))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/intentional-end",
+            json=termination_payload(),
+        )
+
+        assert response.status == 204
+        assert registry.reconcile([], observed_at=110) == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_termination_keeps_the_session_recoverable(tmp_path):
+    live = add_active_pane(make_session("failed-end"), str(tmp_path))
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3")
+    registry.reconcile([live], observed_at=100)
+    tmux = TerminatingFakeTmux([live], TmuxError("tmux unavailable"))
+    client = TestClient(TestServer(create_app(
+        tmux=tmux,
+        session_registry=registry,
+        base_path="",
+    )))
+
+    try:
+        await client.start_server()
+        response = await client.delete(
+            "/api/sessions/failed-end",
+            json=termination_payload(),
+        )
+
+        assert response.status == 503
+        assert registry.reconcile([], observed_at=110)[0].name == "failed-end"
     finally:
         await client.close()
 
@@ -2513,7 +2760,10 @@ async def test_session_workspace_pin_api_validates_live_session_and_capacity(tmp
             json={"session": session.name, "pinned": True},
         )
         assert full.status == 409
-        assert "already has 32 sessions" in (await full.json())["error"]
+        assert (
+            f"already has {MAX_WORKSPACE_TABS} sessions"
+            in (await full.json())["error"]
+        )
         assert workspaces.list_pinned_sessions() == ()
     finally:
         await client.close()

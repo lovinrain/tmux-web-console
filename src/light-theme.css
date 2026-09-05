@@ -493,6 +493,36 @@ html[data-theme="light"] .starred-section {
   border-color: rgba(165, 90, 5, 0.28);
 }
 
+html[data-theme="light"] .recovery-section {
+  background:
+    linear-gradient(115deg, rgba(8, 122, 112, 0.09), transparent 48%),
+    rgba(255, 253, 248, 0.82);
+  border-color: rgba(8, 122, 112, 0.3);
+}
+
+html[data-theme="light"] .recovery-section-copy,
+html[data-theme="light"] .recovery-card .recovery-agent-reference {
+  color: #5f6c63;
+}
+
+html[data-theme="light"] .recovery-card {
+  background: rgba(244, 240, 231, 0.7);
+  border-color: #b9c5bd;
+}
+
+html[data-theme="light"] .recovery-card > p {
+  color: #4f5d53;
+}
+
+html[data-theme="light"] .recovery-card > p.unavailable,
+html[data-theme="light"] .recovery-card .recovery-directory-warning {
+  color: var(--amber);
+}
+
+html[data-theme="light"] .recovery-agent-reference code {
+  color: #3d4f45;
+}
+
 html[data-theme="light"] .ignored-section {
   background:
     linear-gradient(110deg, rgba(83, 93, 81, 0.06), transparent 42%),
@@ -933,6 +963,71 @@ html[data-theme="light"] .scoped-sticky-note.window-pinned {
   box-shadow:
     0 5px 14px rgba(65, 55, 38, 0.2),
     0 0 0 1px color-mix(in srgb, var(--note-accent) 20%, transparent);
+}
+
+html[data-theme="light"] .floating-staged-input-panel {
+  --floating-input-surface: #fbf8f0;
+  color: #30372c;
+  border-color: color-mix(in srgb, var(--floating-input-accent) 48%, #aaa294);
+  box-shadow:
+    0 24px 68px rgba(65, 55, 38, 0.28),
+    0 3px 0 color-mix(in srgb, var(--floating-input-accent) 22%, transparent);
+}
+
+html[data-theme="light"] .floating-staged-input-header {
+  background: color-mix(in srgb, var(--floating-input-surface) 90%, #ddd7ca);
+  border-color: color-mix(in srgb, var(--floating-input-accent) 25%, #c4bcaf);
+}
+
+html[data-theme="light"] .floating-staged-input-header span {
+  color: #746f62;
+}
+
+html[data-theme="light"] .floating-staged-input-header h2 {
+  color: #2d3329;
+}
+
+html[data-theme="light"] .floating-staged-input-header button {
+  color: color-mix(in srgb, var(--floating-input-accent) 72%, #3f443a);
+  background: color-mix(in srgb, var(--floating-input-accent) 7%, #fffdf8);
+  border-color: color-mix(in srgb, var(--floating-input-accent) 34%, #b8b0a3);
+}
+
+html[data-theme="light"] .floating-staged-input-body textarea {
+  color: #272d24;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent),
+    #fffdf8;
+  border-color: #bdb6aa;
+  scrollbar-color: #aaa294 transparent;
+}
+
+html[data-theme="light"] .floating-staged-input-body textarea::placeholder {
+  color: #918b80;
+}
+
+html[data-theme="light"] .floating-staged-input-meta {
+  color: #777267;
+}
+
+html[data-theme="light"] .floating-staged-input-meta span:last-child {
+  color: #5f5b52;
+}
+
+html[data-theme="light"] .floating-staged-input-actions button {
+  color: #555e50;
+  background: #f2eee6;
+  border-color: #c4bdb1;
+}
+
+html[data-theme="light"] .floating-staged-input-actions .floating-staged-input-clear {
+  color: #9c552e;
+}
+
+html[data-theme="light"] .floating-staged-input-actions .floating-staged-input-open-full {
+  color: #fff;
+  background: #557c1d;
+  border-color: #557c1d;
 }
 
 html[data-theme="light"] .workspace-timer-card {
@@ -3206,6 +3301,7 @@ html[data-theme="light"] .jump-live {
 }
 
 html[data-theme="light"] .desktop-terminal-focus-redraw,
+html[data-theme="light"] .desktop-terminal-focus-input,
 html[data-theme="light"] .desktop-terminal-focus-shortcuts,
 html[data-theme="light"] .desktop-terminal-focus-exit {
   color: #354132;
@@ -3216,6 +3312,8 @@ html[data-theme="light"] .desktop-terminal-focus-exit {
 
 html[data-theme="light"] .desktop-terminal-focus-redraw:hover,
 html[data-theme="light"] .desktop-terminal-focus-redraw:focus-visible,
+html[data-theme="light"] .desktop-terminal-focus-input:hover,
+html[data-theme="light"] .desktop-terminal-focus-input:focus-visible,
 html[data-theme="light"] .desktop-terminal-focus-shortcuts:hover,
 html[data-theme="light"] .desktop-terminal-focus-shortcuts:focus-visible,
 html[data-theme="light"] .desktop-terminal-focus-exit:hover,
@@ -3225,6 +3323,9 @@ html[data-theme="light"] .desktop-terminal-focus-exit:focus-visible {
   border-color: #557c1d;
 }
 
+html[data-theme="light"] .desktop-terminal-focus-input[aria-expanded="true"],
+html[data-theme="light"] .desktop-terminal-focus-input[aria-expanded="true"]:hover,
+html[data-theme="light"] .desktop-terminal-focus-input[aria-expanded="true"]:focus-visible,
 html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"],
 html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:hover,
 html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:focus-visible {

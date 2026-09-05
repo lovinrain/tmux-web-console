@@ -2,10 +2,12 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteWorkspace,
+  forgetRecoverableSession,
   getSnippetTree,
   listQueuedMessages,
   listSessions,
   listWorkspaces,
+  recreateSession,
   subscribeToSessions,
   updateSessionDetails,
   updateSessionIgnored,
@@ -21,12 +23,14 @@ import { activePane, classifyPane, SessionDashboard } from "./SessionDashboard";
 
 vi.mock("../api", () => ({
   BASE_PATH: "/mux",
+  forgetRecoverableSession: vi.fn(),
   listSessions: vi.fn(),
   listQueuedMessages: vi.fn(),
   createQueuedMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
   deleteQueuedMessage: vi.fn(),
   listWorkspaces: vi.fn(),
+  recreateSession: vi.fn(),
   createWorkspace: vi.fn(),
   updateWorkspace: vi.fn(),
   deleteWorkspace: vi.fn(),
@@ -110,6 +114,8 @@ beforeEach(() => {
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 1, tree: [] });
   vi.mocked(listWorkspaces).mockResolvedValue([]);
   vi.mocked(deleteWorkspace).mockResolvedValue();
+  vi.mocked(forgetRecoverableSession).mockResolvedValue();
+  vi.mocked(recreateSession).mockResolvedValue({ name: "recreated", id: "$recreated" });
 });
 
 afterEach(() => {
@@ -1181,6 +1187,73 @@ describe("session classification", () => {
     expect(screen.getByText(/1 sessions \/ live/i)).toBeVisible();
   });
 
+  it("recreates missing sessions as an explicit fresh shell and opens it", async () => {
+    let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
+    const onOpen = vi.fn();
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(recreateSession).mockResolvedValue({ name: "restored-work", id: "$9" });
+    vi.mocked(subscribeToSessions).mockImplementation((options) => {
+      streamOptions = options;
+      return vi.fn();
+    });
+    renderWithTheme(<SessionDashboard onOpen={onOpen} />);
+
+    await waitFor(() => expect(streamOptions).toBeDefined());
+    act(() => streamOptions?.onSessions([], [{
+      id: "registry-id",
+      name: "restored-work",
+      directory: "/work/project",
+      agentType: "codex",
+      agentSessionId: "12345678-1234-1234-1234-1234567890ab",
+      firstSeenAt: 10,
+      lastSeenAt: 20,
+      directoryAvailable: true,
+    }]));
+
+    expect(screen.getByRole("heading", { name: /Missing after restart/i })).toBeVisible();
+    expect(screen.getByText(/never resumes an agent automatically/i)).toBeVisible();
+    expect(screen.getByText("12345678-1234-1234-1234-1234567890ab")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Recreate shell" }));
+
+    await waitFor(() => expect(recreateSession).toHaveBeenCalledWith("registry-id"));
+    expect(onOpen).toHaveBeenCalledWith("restored-work");
+    expect(screen.queryByText("12345678-1234-1234-1234-1234567890ab"))
+      .not.toBeInTheDocument();
+  });
+
+  it("can forget only a recovery record and disables unavailable directories", async () => {
+    let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(subscribeToSessions).mockImplementation((options) => {
+      streamOptions = options;
+      return vi.fn();
+    });
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await waitFor(() => expect(streamOptions).toBeDefined());
+    act(() => streamOptions?.onSessions([], [{
+      id: "missing-directory",
+      name: "old-shell",
+      directory: "/gone/project",
+      agentType: null,
+      agentSessionId: null,
+      firstSeenAt: 10,
+      lastSeenAt: 20,
+      directoryAvailable: false,
+    }]));
+
+    expect(screen.getByRole("button", { name: "Recreate shell" })).toBeDisabled();
+    expect(screen.getByText(/Restore it before recreating/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Forget recovery record for old-shell",
+    }));
+
+    await waitFor(() => expect(forgetRecoverableSession)
+      .toHaveBeenCalledWith("missing-directory"));
+    expect(screen.queryByRole("heading", { name: /Missing after restart/i }))
+      .not.toBeInTheDocument();
+  });
+
   it("does not let an older poll overwrite a newer streamed snapshot", async () => {
     let resolvePoll!: (sessions: Session[]) => void;
     let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
@@ -1489,7 +1562,7 @@ describe("session classification", () => {
   it("rolls back a failed global workspace pin", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionWorkspacePin).mockRejectedValue(
-      new Error("A workspace already has 32 sessions"),
+      new Error("A workspace has reached its session capacity"),
     );
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
@@ -1498,7 +1571,7 @@ describe("session classification", () => {
     }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "A workspace already has 32 sessions",
+      "A workspace has reached its session capacity",
     );
     expect(screen.getByRole("button", {
       name: "Pin test to every workspace",

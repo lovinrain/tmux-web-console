@@ -19,7 +19,7 @@ from .messages import validate_session_name
 LOGGER = logging.getLogger("muxdeck.workspaces")
 MAX_WORKSPACE_ID_LENGTH = 128
 MAX_WORKSPACE_NAME_LENGTH = 80
-MAX_WORKSPACE_TABS = 32
+MAX_WORKSPACE_TABS = 256
 MAX_WORKSPACE_GROUPS = 16
 MAX_WORKSPACE_GROUP_ID_LENGTH = 64
 MAX_WORKSPACE_GROUP_NAME_LENGTH = 40
@@ -42,8 +42,9 @@ WORKSPACE_GROUP_COLORS = (
 WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
+_SEPARATORS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 7
+WORKSPACE_SCHEMA_VERSION = 9
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -585,6 +586,13 @@ def _rename_workspace_groups(
     return _reconcile_workspace_groups(tuple(renamed_groups), renamed_tabs)
 
 
+def validate_workspace_separators(value: object, tabs: tuple[str, ...]) -> tuple[str, ...]:
+    separators = validate_workspace_tabs(value)
+    if any(tab not in tabs for tab in separators):
+        raise ValueError("separators must refer to workspace tabs")
+    return tuple(tab for tab in tabs if tab in separators)
+
+
 @dataclass(frozen=True)
 class SavedWorkspace:
     id: str
@@ -597,6 +605,8 @@ class SavedWorkspace:
     created_at: int
     updated_at: int
     last_active_at: int
+    separators: tuple[str, ...] = ()
+    separators_before: tuple[str, ...] = ()
 
     def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
         payload = {
@@ -605,6 +615,8 @@ class SavedWorkspace:
             "tabs": list(self.tabs),
             "groups": [group.to_dict() for group in self.groups],
             "quickLinks": [link.to_dict() for link in self.quick_links],
+            "separators": list(self.separators),
+            "separatorsBefore": list(self.separators_before),
             "activeSession": self.active_session,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -757,6 +769,8 @@ class WorkspaceStore:
                         current,
                         tabs=tabs,
                         groups=_reconcile_workspace_groups(current.groups, tabs),
+                        separators=tuple(tab for tab in current.separators if tab in tabs),
+                        separators_before=tuple(tab for tab in current.separators_before if tab in tabs),
                         inherited_pins=tuple(
                             item
                             for item in current.inherited_pins
@@ -857,6 +871,8 @@ class WorkspaceStore:
                     source,
                     tabs=source_tabs,
                     groups=_reconcile_workspace_groups(source.groups, source_tabs),
+                    separators=tuple(tab for tab in source.separators if tab in source_tabs),
+                    separators_before=tuple(tab for tab in source.separators_before if tab in source_tabs),
                     inherited_pins=tuple(
                         tab for tab in source.inherited_pins if tab != session_name
                     ),
@@ -1022,9 +1038,18 @@ class WorkspaceStore:
         active_session: object,
         groups: object = _GROUPS_OMITTED,
         quick_links: object = _QUICK_LINKS_OMITTED,
+        separators: object = _SEPARATORS_OMITTED,
+        separators_before: object = _SEPARATORS_OMITTED,
     ) -> dict[str, Any]:
         normalized_name = normalize_workspace_name(name)
         validated_tabs = validate_workspace_tabs(tabs)
+        validated_separators = validate_workspace_separators(
+            [] if separators is _SEPARATORS_OMITTED else separators, validated_tabs
+        )
+        validated_separators_before = validate_workspace_separators(
+            [] if separators_before is _SEPARATORS_OMITTED else separators_before,
+            validated_tabs,
+        )
         validated_groups = validate_workspace_groups(
             [] if groups is _GROUPS_OMITTED else groups,
             validated_tabs,
@@ -1046,6 +1071,8 @@ class WorkspaceStore:
                 tabs=merged_tabs,
                 groups=validated_groups,
                 quick_links=validated_quick_links,
+                separators=validated_separators,
+                separators_before=validated_separators_before,
                 inherited_pins=inherited_pins,
                 active_session=validated_active_session,
                 created_at=timestamp,
@@ -1068,6 +1095,10 @@ class WorkspaceStore:
         update_tabs: bool = False,
         update_groups: bool = False,
         update_active_session: bool = False,
+        separators: object = None,
+        update_separators: bool = False,
+        separators_before: object = None,
+        update_separators_before: bool = False,
         session_revision: object = None,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
@@ -1075,7 +1106,7 @@ class WorkspaceStore:
         validated_tabs = validate_workspace_tabs(tabs) if update_tabs else None
         validated_session_revision = (
             _validate_session_revision(session_revision)
-            if update_tabs or update_groups or update_active_session
+            if update_tabs or update_groups or update_active_session or update_separators or update_separators_before
             else None
         )
 
@@ -1117,6 +1148,16 @@ class WorkspaceStore:
                 name=normalized_name if normalized_name is not None else current.name,
                 tabs=next_tabs,
                 groups=next_groups,
+                separators=(
+                    validate_workspace_separators(separators, next_tabs)
+                    if update_separators
+                    else tuple(tab for tab in current.separators if tab in next_tabs)
+                ),
+                separators_before=(
+                    validate_workspace_separators(separators_before, next_tabs)
+                    if update_separators_before
+                    else tuple(tab for tab in current.separators_before if tab in next_tabs)
+                ),
                 inherited_pins=next_inherited_pins,
                 active_session=next_active_session,
                 updated_at=timestamp,
@@ -1168,6 +1209,8 @@ class WorkspaceStore:
                 tabs=merged_tabs,
                 groups=validated_groups,
                 inherited_pins=inherited_pins,
+                separators=tuple(tab for tab in current.separators if tab in merged_tabs),
+                separators_before=tuple(tab for tab in current.separators_before if tab in merged_tabs),
                 active_session=validated_active_session,
                 updated_at=timestamp,
                 last_active_at=timestamp,
@@ -1236,6 +1279,16 @@ class WorkspaceStore:
                     current,
                     tabs=renamed_tabs,
                     groups=groups,
+                    separators=tuple(dict.fromkeys(
+                        new_name if tab == current_name else tab
+                        for tab in current.separators
+                        if tab == current_name or tab != new_name
+                    )),
+                    separators_before=tuple(dict.fromkeys(
+                        new_name if tab == current_name else tab
+                        for tab in current.separators_before
+                        if tab == current_name or tab != new_name
+                    )),
                     inherited_pins=tuple(
                         item for item in inherited_pins if item in renamed_tabs
                     ),
@@ -1460,6 +1513,10 @@ class WorkspaceStore:
             expected.add("quickLinks")
         if version >= 7:
             expected.add("inheritedPins")
+        if version >= 8:
+            expected.add("separators")
+        if version >= 9:
+            expected.add("separatorsBefore")
         missing = sorted(expected - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -1517,6 +1574,14 @@ class WorkspaceStore:
             created_at=created_at,
             updated_at=updated_at,
             last_active_at=last_active_at,
+            separators=(
+                validate_workspace_separators(record["separators"], tabs)
+                if version >= 8 else ()
+            ),
+            separators_before=(
+                validate_workspace_separators(record["separatorsBefore"], tabs)
+                if version >= 9 else ()
+            ),
         )
 
     def _record_load_error(self, error: BaseException) -> None:

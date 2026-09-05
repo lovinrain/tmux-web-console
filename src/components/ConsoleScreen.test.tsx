@@ -11,6 +11,7 @@ import {
   listSessions,
   renameSession,
   previewSessionFile,
+  resolveSessionFilePath,
   updateSessionDetails,
   updateSessionWorkspacePin,
   updateQueuedMessage,
@@ -37,6 +38,7 @@ const liveTerminalHandle = vi.hoisted(() => ({
 }));
 const liveTerminalState = vi.hoisted(() => ({
   onStateChange: null as null | ((state: "live") => void),
+  onOpenFilePath: null as null | ((path: string) => void),
 }));
 
 vi.mock("../api", () => ({
@@ -50,6 +52,11 @@ vi.mock("../api", () => ({
   getSnippetTree: vi.fn(),
   listSessionFiles: vi.fn(),
   previewSessionFile: vi.fn(),
+  resolveSessionFilePath: vi.fn(),
+  searchSessionFiles: vi.fn(),
+  sessionFileDownloadUrl: vi.fn(() => "/mux/files/download"),
+  sessionFileImageUrl: vi.fn(() => "/mux/files/image"),
+  sessionFilePdfUrl: vi.fn(() => "/mux/files/pdf"),
   renameSession: vi.fn(),
   updateSessionDetails: vi.fn(),
   updateSessionWorkspacePin: vi.fn(),
@@ -70,16 +77,19 @@ vi.mock("./LiveTerminal", async () => {
         layoutRefreshToken,
         theme,
         onStateChange,
+        onOpenFilePath,
       }: {
         browserCopyMode?: boolean;
         layoutSuspended?: boolean;
         layoutRefreshToken?: string;
         theme: Theme;
         onStateChange: (state: "live") => void;
+        onOpenFilePath?: (path: string) => void;
       },
       ref,
     ) {
       liveTerminalState.onStateChange = onStateChange;
+      liveTerminalState.onOpenFilePath = onOpenFilePath ?? null;
       useImperativeHandle(ref, () => liveTerminalHandle, []);
       return (
         <div
@@ -152,6 +162,7 @@ function deferred<T>(): {
 beforeEach(() => {
   vi.resetAllMocks();
   liveTerminalState.onStateChange = null;
+  liveTerminalState.onOpenFilePath = null;
   window.localStorage.clear();
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
   vi.mocked(listSessionFiles).mockResolvedValue({
@@ -165,6 +176,13 @@ beforeEach(() => {
     rootParent: null,
   });
   vi.mocked(listWorkspaces).mockResolvedValue([]);
+  vi.mocked(resolveSessionFilePath).mockImplementation(async (_target, path) => ({
+    kind: "directory",
+    root: path,
+    path: "",
+    absolutePath: path,
+    entry: null,
+  }));
   document.title = "Muxdeck";
 });
 
@@ -220,6 +238,58 @@ describe("ConsoleScreen session identity", () => {
     }));
 
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("/work");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+  });
+
+  it("opens a modifier-clicked terminal path in the desktop file preview", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const fileEntry = {
+      name: "result.txt",
+      path: "result.txt",
+      absolutePath: "/work/artifacts/result.txt",
+      terminalText: "/work/artifacts/result.txt",
+      kind: "file" as const,
+      size: 12,
+      modified: 1_700_000_000,
+      hidden: false,
+      symlink: false,
+      accessible: true,
+    };
+    vi.mocked(resolveSessionFilePath).mockResolvedValue({
+      kind: "file",
+      root: "/work/artifacts",
+      path: "result.txt",
+      absolutePath: "/work/artifacts/result.txt",
+      entry: fileEntry,
+    });
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/artifacts",
+      name: "result.txt",
+      path: "result.txt",
+      absolutePath: "/work/artifacts/result.txt",
+      terminalText: "/work/artifacts/result.txt",
+      kind: "text",
+      mediaType: "text/plain",
+      size: 12,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 12,
+      content: "terminal link",
+    });
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "Browse files in /work" });
+    expect(liveTerminalState.onOpenFilePath).not.toBeNull();
+    act(() => liveTerminalState.onOpenFilePath?.("artifacts/result.txt"));
+
+    const files = await screen.findByRole("dialog", { name: "Files" });
+    expect(await within(files).findByText("terminal link")).toBeInTheDocument();
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      { session: "test", sessionId: "$1", paneId: "%1" },
+      "/work/artifacts/result.txt",
+      expect.any(AbortSignal),
+    );
     expect(liveTerminalHandle.send).not.toHaveBeenCalled();
     expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
   });
@@ -866,8 +936,13 @@ describe("ConsoleScreen session identity", () => {
     const focusShortcuts = within(focusControls).getByRole("button", {
       name: "Show all buttons",
     });
-    expect(within(focusControls).getAllByRole("button")).toHaveLength(3);
+    const focusInput = within(focusControls).getByRole("button", {
+      name: "Show floating staged input",
+    });
+    expect(within(focusControls).getAllByRole("button")).toHaveLength(4);
     expect(focusRedraw).toHaveTextContent("Redraw");
+    expect(focusInput).toHaveTextContent("Float input");
+    expect(focusInput).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Y");
     expect(focusShortcuts).toHaveTextContent("Show all buttons");
     expect(focusShortcuts).toHaveAttribute(
       "aria-controls",
@@ -879,6 +954,29 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.click(focusRedraw);
     expect(liveTerminalHandle.redraw).toHaveBeenCalledOnce();
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(fireEvent.keyDown(window, {
+      code: "KeyY",
+      key: "Y",
+      ctrlKey: true,
+      shiftKey: true,
+    })).toBe(false);
+    const floatingDraft = await screen.findByRole("textbox", {
+      name: "Floating staged input",
+    });
+    await waitFor(() => expect(floatingDraft).toHaveFocus());
+    expect(floatingDraft).toHaveValue("keep this desktop draft");
+    fireEvent.change(floatingDraft, { target: { value: "edited over terminal scrollback" } });
+    expect(draft).toHaveValue("edited over terminal scrollback");
+    fireEvent.input(draft, { target: { value: "mirrored back from full input" } });
+    expect(floatingDraft).toHaveValue("mirrored back from full input");
+    expect(focusInput).toHaveAccessibleName("Hide floating staged input");
+    fireEvent.click(focusInput);
+    expect(screen.queryByRole("dialog", { name: "Floating staged input" }))
+      .not.toBeInTheDocument();
+    fireEvent.click(focusInput);
+    expect(screen.getByRole("textbox", { name: "Floating staged input" }))
+      .toHaveValue("mirrored back from full input");
+    fireEvent.click(focusInput);
     expect(fireEvent.mouseDown(focusShortcuts)).toBe(false);
     fireEvent.click(focusShortcuts);
     expect(focusShortcuts).toHaveAttribute("aria-expanded", "true");
@@ -910,7 +1008,7 @@ describe("ConsoleScreen session identity", () => {
       name: "Desktop terminal focus controls",
     })).not.toBeInTheDocument();
     expect(screen.getByTestId("live-terminal")).toBe(terminal);
-    expect(draft).toHaveValue("keep this desktop draft");
+    expect(draft).toHaveValue("mirrored back from full input");
     expect(terminal).toHaveAttribute(
       "data-layout-refresh-token",
       "terminal:standard:desktop-standard:desktop-tabs-horizontal:desktop-tab-rail-288",
@@ -998,6 +1096,69 @@ describe("ConsoleScreen session identity", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Hide all buttons" }));
     expect(shortcutStrip).toHaveAttribute("hidden");
+  });
+
+  it("keeps a pinned floating input synced to the active session draft", async () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:test", "draft for alpha");
+    window.localStorage.setItem(
+      "muxdeck-terminal-draft:next-session",
+      "draft for beta",
+    );
+    vi.mocked(listSessions).mockResolvedValue([
+      session(),
+      session(null, "next-session"),
+    ]);
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+        onBack={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Show floating staged input" }));
+    let dialog = screen.getByRole("dialog", { name: "Floating staged input" });
+    expect(within(dialog).getByRole("textbox", { name: "Floating staged input" }))
+      .toHaveValue("draft for alpha");
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "Pin floating staged input",
+    }));
+
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="next-session"
+          workspaceId="workspace-one"
+          workspaceName="Launch room"
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+    await screen.findByRole("heading", { name: "next-session" });
+    dialog = screen.getByRole("dialog", { name: "Floating staged input" });
+    await waitFor(() => expect(within(dialog).getByRole("textbox", {
+      name: "Floating staged input",
+    })).toHaveValue("draft for beta"));
+    expect(dialog).toHaveTextContent("Launch room / next-session");
+
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "Unpin floating staged input",
+    }));
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen
+          sessionName="test"
+          workspaceId="workspace-one"
+          workspaceName="Launch room"
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", {
+      name: "Floating staged input",
+    })).not.toBeInTheDocument());
   });
 
   it("moves the floating shortcut panel by pointer and keyboard within the viewport", async () => {
@@ -1385,7 +1546,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabs).toHaveAttribute("title", "Show session tabs (Ctrl+Shift+S)");
     expect(workspaceLinks).toBeVisible();
     expect(within(screen.getByRole("group", { name: "Console bars" }))
-      .getAllByRole("button")).toHaveLength(5);
+      .getAllByRole("button")).toHaveLength(6);
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();

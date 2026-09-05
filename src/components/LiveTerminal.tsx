@@ -23,6 +23,7 @@ import {
   prepareTerminalSubmission,
   type TerminalSubmissionTerminator,
 } from "../terminalInput";
+import { TerminalFileLinkProvider } from "../terminalFileLinks";
 import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import type { ConnectionState } from "../types";
 
@@ -44,6 +45,7 @@ interface LiveTerminalProps {
   layoutRefreshToken?: string;
   theme: TerminalThemeMode;
   onUploadAttachment?: SessionAttachmentUploader;
+  onOpenFilePath?: (path: string) => void;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
 }
@@ -114,6 +116,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     layoutRefreshToken = "default",
     theme,
     onUploadAttachment,
+    onOpenFilePath,
     onStateChange,
     onPaneChange,
   }, ref) {
@@ -121,6 +124,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const terminalRef = useRef<Terminal | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const browserCopyModeRef = useRef(browserCopyMode);
+    const openFilePathRef = useRef(onOpenFilePath);
     const copySelectionActiveRef = useRef(false);
     const copyWheelRemainderRef = useRef(0);
     const layoutSuspendedRef = useRef(layoutSuspended);
@@ -375,6 +379,10 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     }, [browserCopyMode]);
 
     useLayoutEffect(() => {
+      openFilePathRef.current = onOpenFilePath;
+    }, [onOpenFilePath]);
+
+    useLayoutEffect(() => {
       const wasSuspended = layoutSuspendedRef.current;
       layoutSuspendedRef.current = layoutSuspended;
       if (wasSuspended && !layoutSuspended) scheduleFitAndResizeRef.current?.();
@@ -445,8 +453,13 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       let attempts = 0;
       let lastResize: { socket: WebSocket; cols: number; rows: number } | null = null;
       let terminalElement: HTMLElement | undefined;
-      let hoveredTerminalLink: string | null = null;
-      let pressedTerminalLink: string | null = null;
+      type HoveredTerminalLink = {
+        kind: "file" | "web";
+        text: string;
+        activate: (event: MouseEvent) => void;
+      };
+      let hoveredTerminalLink: HoveredTerminalLink | null = null;
+      let pressedTerminalLink: HoveredTerminalLink | null = null;
       const pendingSubmissions = new Map<string, {
         resolve: (accepted: boolean) => void;
         timer: number;
@@ -462,14 +475,44 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         openTerminalWebLink(uri);
       };
       const hoverTerminalLink = (_event: MouseEvent, uri: string) => {
-        hoveredTerminalLink = uri;
+        hoveredTerminalLink = {
+          kind: "web",
+          text: uri,
+          activate: (event) => activateTerminalLink(event, uri),
+        };
         terminalElement?.setAttribute(
           "title",
           `${linkModifierLabel}+click to open ${uri}`,
         );
       };
       const leaveTerminalLink = (_event: MouseEvent, uri: string) => {
-        if (hoveredTerminalLink !== uri) return;
+        if (hoveredTerminalLink?.kind !== "web" || hoveredTerminalLink.text !== uri) return;
+        hoveredTerminalLink = null;
+        pressedTerminalLink = null;
+        terminalElement?.removeAttribute("title");
+      };
+      const activateTerminalFileLink = (event: MouseEvent, path: string) => {
+        if (
+          browserCopyModeRef.current
+          || event.button !== 0
+          || !hasTerminalLinkModifier(event, macBrowser)
+        ) return;
+        openFilePathRef.current?.(path);
+      };
+      const hoverTerminalFileLink = (_event: MouseEvent, path: string) => {
+        if (!openFilePathRef.current) return;
+        hoveredTerminalLink = {
+          kind: "file",
+          text: path,
+          activate: (event) => activateTerminalFileLink(event, path),
+        };
+        terminalElement?.setAttribute(
+          "title",
+          `${linkModifierLabel}+click to preview ${path}`,
+        );
+      };
+      const leaveTerminalFileLink = (_event: MouseEvent, path: string) => {
+        if (hoveredTerminalLink?.kind !== "file" || hoveredTerminalLink.text !== path) return;
         hoveredTerminalLink = null;
         pressedTerminalLink = null;
         terminalElement?.removeAttribute("title");
@@ -501,6 +544,12 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       terminal.loadAddon(new WebLinksAddon(activateTerminalLink, {
         hover: hoverTerminalLink,
         leave: leaveTerminalLink,
+      }));
+      const fileLinks = terminal.registerLinkProvider(new TerminalFileLinkProvider(terminal, {
+        activate: activateTerminalFileLink,
+        hover: hoverTerminalFileLink,
+        leave: leaveTerminalFileLink,
+        enabled: () => Boolean(openFilePathRef.current),
       }));
       const terminalDocument = terminalElement?.ownerDocument;
       const replayedMouseEvents = new WeakSet<MouseEvent>();
@@ -538,14 +587,14 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           return;
         }
         if (pressedTerminalLink === null) return;
-        const uri = pressedTerminalLink;
+        const link = pressedTerminalLink;
         pressedTerminalLink = null;
         event.preventDefault();
         event.stopImmediatePropagation();
         if (
-          hoveredTerminalLink === uri
+          hoveredTerminalLink === link
           && hasTerminalLinkModifier(event, macBrowser)
-        ) openTerminalWebLink(uri);
+        ) link.activate(event);
       };
 
       const handleCopyMouseDown = (event: MouseEvent) => {
@@ -807,6 +856,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         window.visualViewport?.removeEventListener("scroll", scheduleFitAndResize);
         input.dispose();
         scroll.dispose();
+        fileLinks.dispose();
         socketRef.current?.close(1000, "view closed");
         socketRef.current = null;
         terminal.dispose();

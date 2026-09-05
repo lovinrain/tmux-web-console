@@ -40,6 +40,7 @@ PANE_FORMAT_FIELDS = (
     "history_limit",
     "alternate_on",
     "pane_dead",
+    "pane_pid",
 )
 PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT_FIELDS)
 CREATED_SESSION_FORMAT = "#{session_name}\t#{session_id}"
@@ -88,6 +89,7 @@ class TmuxSessionIdentityChangedError(TmuxError):
 class CreatedSession:
     name: str
     id: str
+    directory: str | None = field(default=None, compare=False)
 
 
 def validate_tmux_session_name(value: str) -> str:
@@ -178,9 +180,14 @@ class Pane:
     alternate_on: bool
     dead: bool
     activity: int
+    process_pid: int = 0
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # The pane process is only used for bounded local agent-reference
+        # discovery; it is not part of the browser-facing terminal inventory.
+        record = asdict(self)
+        record.pop("process_pid", None)
+        return record
 
 
 @dataclass
@@ -274,6 +281,7 @@ def parse_sessions(output: str) -> list[Session]:
             alternate_on=row["alternate_on"] == "1",
             dead=row["pane_dead"] == "1",
             activity=_as_int(row["window_activity"]),
+            process_pid=_as_int(row["pane_pid"]),
         )
         session.panes.append(pane)
         session.activity = max(session.activity, pane.activity)
@@ -483,7 +491,7 @@ class TmuxClient:
             raise TmuxError("tmux returned an unexpected created session name")
         if not session_id.startswith("$") or not session_id[1:].isdigit():
             raise TmuxError("tmux did not return the created session id")
-        return CreatedSession(name=requested_name, id=session_id)
+        return CreatedSession(name=requested_name, id=session_id, directory=directory)
 
     async def _supports_new_session_environment(self) -> bool:
         if self._new_session_environment_supported is not None:

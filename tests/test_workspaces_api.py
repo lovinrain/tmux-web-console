@@ -22,6 +22,41 @@ def sequence(values):
     return lambda: next(iterator)
 
 
+@pytest.mark.asyncio
+async def test_separator_api_validates_and_preserves_other_workspace_fields(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.post("/api/workspaces", json={
+            "name": "Lines", "tabs": ["a", "b"], "activeSession": "a",
+            "separators": ["a"],
+        })
+        assert response.status == 201
+        original = (await response.json())["workspace"]
+        route = f"/api/workspaces/{original['id']}"
+        for invalid in (None, "a", ["missing"], ["a", "a"]):
+            response = await client.patch(route, json={
+                "separators": invalid, "sessionRevision": 0,
+            })
+            assert response.status == 400
+        response = await client.patch(route, json={"separators": []})
+        assert response.status == 400
+        response = await client.patch(route, json={
+            "separators": ["b"], "sessionRevision": 0,
+        })
+        assert response.status == 200
+        updated = (await response.json())["workspace"]
+        assert updated["separators"] == ["b"]
+        assert updated["tabs"] == original["tabs"]
+        assert updated["groups"] == original["groups"]
+        response = await client.patch(route, json={
+            "separatorsBefore": ["a"], "sessionRevision": 0,
+        })
+        assert response.status == 200
+        updated = (await response.json())["workspace"]
+        assert updated["separatorsBefore"] == ["a"]
+        assert updated["separators"] == ["b"]
+
+
 def workspace_group(
     group_id,
     tabs,
@@ -72,6 +107,8 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
             "tabs": ["agent-a", "agent-b"],
             "groups": [workspace_group("agents", ["agent-a", "agent-b"])],
             "quickLinks": [],
+            "separators": [],
+            "separatorsBefore": [],
             "activeSession": "agent-a",
             "createdAt": 10_000,
             "updatedAt": 10_000,
@@ -517,7 +554,7 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
         assert created.status == 201
 
         update_cases = [
-            ({}, "name, tabs, groups, or activeSession is required"),
+            ({}, "name, tabs, groups, separators, or activeSession is required"),
             ({"extra": True}, "unknown field: extra"),
             ({"name": None}, "name must be a string"),
             (

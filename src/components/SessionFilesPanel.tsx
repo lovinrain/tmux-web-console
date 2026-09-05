@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -16,17 +18,21 @@ import {
   copySessionFileEntry,
   createSessionFileEntry,
   deleteSessionFileEntry,
+  downloadSessionFileEntries,
   listSessionFiles,
   moveSessionFileEntry,
   previewSessionFile,
   resolveSessionFilePath,
   saveSessionFileContent,
+  searchSessionFiles,
   sessionFileDownloadUrl,
   sessionFileImageUrl,
+  sessionFilePdfUrl,
   uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
   type SessionFilePreview,
+  type SessionFileSearchResults,
   type SessionFileTarget,
 } from "../api";
 import {
@@ -44,6 +50,7 @@ import {
   EditIcon,
   ExternalLinkIcon,
   FolderIcon,
+  HistoryIcon,
   ImageIcon,
   MoveIcon,
   PlusIcon,
@@ -55,6 +62,8 @@ import {
   WindowCopyIcon,
 } from "../icons";
 import "./SessionFilesPanel.css";
+
+const MarkdownPreview = lazy(() => import("./MarkdownPreview"));
 
 const PANEL_MARGIN = 12;
 const PANEL_DEFAULT_WIDTH = 760;
@@ -71,8 +80,13 @@ const PANEL_MAX_SPLIT = 0.82;
 const PANEL_SPLIT_STEP = 0.02;
 const PANEL_SPLIT_LARGE_STEP = 0.08;
 const INTERNAL_DRAG_TYPE = "application/x-muxdeck-file-path";
+const SESSION_FILE_RECENT_LIMIT = 32;
+const SESSION_FILE_RECENT_BUCKET_LIMIT = 48;
+const SESSION_FILE_RECENT_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1_000;
+const MARKDOWN_FILE_PATTERN = /\.(?:md|markdown)$/i;
 
 export const SESSION_FILES_LAYOUT_STORAGE_KEY = "muxdeck.session-files-layout.v1";
+export const SESSION_FILES_RECENTS_STORAGE_KEY = "muxdeck.session-files-recents.v1";
 
 interface PanelPosition {
   x: number;
@@ -119,6 +133,26 @@ interface PathTarget {
   terminalText: string;
 }
 
+type SessionFileRecentKind = "file" | "directory";
+
+interface SessionFileRecentEntry {
+  kind: SessionFileRecentKind;
+  absolutePath: string;
+  name: string;
+  visitedAt: number;
+}
+
+interface SessionFileRecentBucket {
+  sessionName: string;
+  updatedAt: number;
+  entries: SessionFileRecentEntry[];
+}
+
+interface SessionFileRecentStore {
+  version: 1;
+  sessions: Record<string, SessionFileRecentBucket>;
+}
+
 type TaskStatus = "queued" | "running" | "done" | "error";
 type ImagePreviewStatus = "loading" | "ready" | "error";
 type SortKey = "name" | "size" | "modified";
@@ -136,6 +170,7 @@ interface TaskItem {
   name: string;
   status: TaskStatus;
   message: string;
+  uploadedEntry?: SessionFileEntry;
 }
 
 interface TaskHeadings {
@@ -156,11 +191,17 @@ interface ConfirmState {
   message: string;
 }
 
+export interface SessionFileOpenRequest {
+  id: number;
+  path: string;
+}
+
 interface SessionFilesPanelProps {
   sessionName: string;
   sessionId: string;
   paneId: string;
   panePath: string;
+  openPathRequest?: SessionFileOpenRequest | null;
   onClose: () => void;
   onInsertPath: (terminalText: string) => boolean;
 }
@@ -229,6 +270,89 @@ function writePanelLayout(layout: PanelLayout): void {
     );
   } catch {
     // Resizing remains available when browser storage is disabled.
+  }
+}
+
+function emptyRecentStore(): SessionFileRecentStore {
+  return { version: 1, sessions: {} };
+}
+
+function validRecentEntry(value: unknown): value is SessionFileRecentEntry {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<SessionFileRecentEntry>;
+  return (candidate.kind === "file" || candidate.kind === "directory")
+    && typeof candidate.absolutePath === "string"
+    && candidate.absolutePath.startsWith("/")
+    && candidate.absolutePath.length <= 4_096
+    && typeof candidate.name === "string"
+    && candidate.name.length > 0
+    && candidate.name.length <= 512
+    && typeof candidate.visitedAt === "number"
+    && Number.isFinite(candidate.visitedAt)
+    && candidate.visitedAt > 0;
+}
+
+function readRecentStore(): SessionFileRecentStore {
+  try {
+    const raw = window.localStorage.getItem(SESSION_FILES_RECENTS_STORAGE_KEY);
+    if (!raw) return emptyRecentStore();
+    const parsed = JSON.parse(raw) as Partial<SessionFileRecentStore>;
+    if (parsed.version !== 1 || !parsed.sessions || typeof parsed.sessions !== "object") {
+      return emptyRecentStore();
+    }
+    const sessions: Record<string, SessionFileRecentBucket> = {};
+    for (const [sessionId, rawBucket] of Object.entries(parsed.sessions)) {
+      if (!rawBucket || typeof rawBucket !== "object") continue;
+      const bucket = rawBucket as Partial<SessionFileRecentBucket>;
+      if (
+        typeof bucket.sessionName !== "string"
+        || typeof bucket.updatedAt !== "number"
+        || !Number.isFinite(bucket.updatedAt)
+        || !Array.isArray(bucket.entries)
+      ) continue;
+      sessions[sessionId] = {
+        sessionName: bucket.sessionName,
+        updatedAt: bucket.updatedAt,
+        entries: bucket.entries.filter(validRecentEntry).slice(0, SESSION_FILE_RECENT_LIMIT),
+      };
+    }
+    return { version: 1, sessions };
+  } catch {
+    return emptyRecentStore();
+  }
+}
+
+function readSessionFileRecents(sessionId: string): SessionFileRecentEntry[] {
+  return readRecentStore().sessions[sessionId]?.entries ?? [];
+}
+
+function writeSessionFileRecents(
+  sessionId: string,
+  sessionName: string,
+  entries: SessionFileRecentEntry[],
+): void {
+  try {
+    const now = Date.now();
+    const store = readRecentStore();
+    if (entries.length > 0) {
+      store.sessions[sessionId] = {
+        sessionName,
+        updatedAt: now,
+        entries: entries.slice(0, SESSION_FILE_RECENT_LIMIT),
+      };
+    } else {
+      delete store.sessions[sessionId];
+    }
+    const retained = Object.entries(store.sessions)
+      .filter(([, bucket]) => now - bucket.updatedAt <= SESSION_FILE_RECENT_MAX_AGE_MS)
+      .sort((left, right) => right[1].updatedAt - left[1].updatedAt)
+      .slice(0, SESSION_FILE_RECENT_BUCKET_LIMIT);
+    window.localStorage.setItem(
+      SESSION_FILES_RECENTS_STORAGE_KEY,
+      JSON.stringify({ version: 1, sessions: Object.fromEntries(retained) }),
+    );
+  } catch {
+    // Recents still work for this open panel when browser storage is blocked.
   }
 }
 
@@ -306,12 +430,30 @@ function formatModified(value: number | null): string {
   }).format(new Date(value * 1_000));
 }
 
-function fileBadge(entry: SessionFileEntry): string {
-  if (entry.kind === "other") return entry.symlink ? "LINK" : "OTHER";
-  const extension = entry.name.includes(".")
-    ? entry.name.split(".").pop()?.slice(0, 4).toUpperCase()
+function fileNameBadge(name: string): string {
+  const extension = name.includes(".")
+    ? name.split(".").pop()?.slice(0, 4).toUpperCase()
     : "FILE";
   return extension || "FILE";
+}
+
+function fileBadge(entry: SessionFileEntry): string {
+  if (entry.kind === "other") return entry.symlink ? "LINK" : "OTHER";
+  return fileNameBadge(entry.name);
+}
+
+function formatRecentAge(visitedAt: number): string {
+  const elapsed = Math.max(0, Date.now() - visitedAt);
+  if (elapsed < 60_000) return "just now";
+  if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < 24 * 60 * 60_000) return `${Math.floor(elapsed / (60 * 60_000))}h ago`;
+  if (elapsed < 7 * 24 * 60 * 60_000) {
+    return `${Math.floor(elapsed / (24 * 60 * 60_000))}d ago`;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(visitedAt));
 }
 
 function compareNames(left: string, right: string): number {
@@ -368,6 +510,7 @@ export function SessionFilesPanel({
   sessionId,
   paneId,
   panePath,
+  openPathRequest = null,
   onClose,
   onInsertPath,
 }: SessionFilesPanelProps) {
@@ -379,11 +522,18 @@ export function SessionFilesPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const promptInputRef = useRef<HTMLInputElement>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
+  const locatorInputRef = useRef<HTMLInputElement>(null);
   const manualCopyRef = useRef<HTMLInputElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const layerTriggerRef = useRef<HTMLElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const archiveAbortRef = useRef<AbortController | null>(null);
   const addressAbortRef = useRef<AbortController | null>(null);
+  const listingAbortRef = useRef<AbortController | null>(null);
+  const locatorAbortRef = useRef<AbortController | null>(null);
+  const locatorResultRefs = useRef(new Map<string, HTMLButtonElement>());
+  const handledOpenPathRequestRef = useRef<number | null>(null);
+  const recentEntriesRef = useRef<SessionFileRecentEntry[]>([]);
   const fileDragDepthRef = useRef(0);
   const pendingSelectionPathRef = useRef<string | null>(null);
   const directSelectionEntryRef = useRef<SessionFileEntry | null>(null);
@@ -410,9 +560,20 @@ export function SessionFilesPanel({
   const [preview, setPreview] = useState<SessionFilePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [markdownRendered, setMarkdownRendered] = useState(false);
   const [imagePreviewStatus, setImagePreviewStatus] = useState<ImagePreviewStatus>("loading");
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
+  const [locatorOpen, setLocatorOpen] = useState(false);
+  const [locatorQuery, setLocatorQuery] = useState("");
+  const [locatorResults, setLocatorResults] = useState<SessionFileSearchResults | null>(null);
+  const [locatorLoading, setLocatorLoading] = useState(false);
+  const [locatorError, setLocatorError] = useState<string | null>(null);
+  const [locatorHighlightedPath, setLocatorHighlightedPath] = useState<string | null>(null);
+  const [recentsOpen, setRecentsOpen] = useState(false);
+  const [recentEntries, setRecentEntries] = useState<SessionFileRecentEntry[]>(
+    () => readSessionFileRecents(sessionId),
+  );
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [actionStatus, setActionStatus] = useState<string | null>(null);
@@ -422,6 +583,7 @@ export function SessionFilesPanel({
     done: "UPLOAD RESULTS",
   });
   const [uploading, setUploading] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [working, setWorking] = useState(false);
   const [fileDropActive, setFileDropActive] = useState(false);
   const [dropFolderPath, setDropFolderPath] = useState<string | null>(null);
@@ -450,7 +612,7 @@ export function SessionFilesPanel({
     ...(browseRoot === panePath ? {} : { root: browseRoot }),
   }), [browseRoot, paneId, panePath, sessionId, sessionName]);
 
-  const busy = uploading || working || addressResolving;
+  const busy = uploading || archiving || working || addressResolving;
   const editorDirty = editing && editorValue !== editorOrigin;
 
   const keepVisible = useCallback(() => {
@@ -489,12 +651,62 @@ export function SessionFilesPanel({
     restoreLayerFocus();
   }, [restoreLayerFocus]);
 
+  const closeLocator = useCallback(() => {
+    locatorAbortRef.current?.abort();
+    locatorAbortRef.current = null;
+    setLocatorOpen(false);
+    setLocatorLoading(false);
+    setLocatorError(null);
+    setLocatorResults(null);
+    setLocatorHighlightedPath(null);
+  }, []);
+
+  const closeRecents = useCallback(() => {
+    setRecentsOpen(false);
+  }, []);
+
+  const rememberRecentPath = useCallback((entry: SessionFileRecentEntry) => {
+    const persisted = readSessionFileRecents(sessionId);
+    const combined = [entry, ...persisted, ...recentEntriesRef.current];
+    const seen = new Set<string>();
+    const next = combined.filter((candidate) => {
+      if (seen.has(candidate.absolutePath)) return false;
+      seen.add(candidate.absolutePath);
+      return true;
+    }).slice(0, SESSION_FILE_RECENT_LIMIT);
+    recentEntriesRef.current = next;
+    setRecentEntries(next);
+    writeSessionFileRecents(sessionId, sessionName, next);
+  }, [sessionId, sessionName]);
+
+  const forgetRecentPath = useCallback((absolutePath: string) => {
+    const next = recentEntriesRef.current.filter(
+      (entry) => entry.absolutePath !== absolutePath,
+    );
+    recentEntriesRef.current = next;
+    setRecentEntries(next);
+    writeSessionFileRecents(sessionId, sessionName, next);
+  }, [sessionId, sessionName]);
+
+  const clearRecentPaths = useCallback(() => {
+    recentEntriesRef.current = [];
+    setRecentEntries([]);
+    writeSessionFileRecents(sessionId, sessionName, []);
+    setActionStatus("Recent paths cleared for this session");
+  }, [sessionId, sessionName]);
+
   useEffect(() => {
     identityRef.current = identity;
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
+    archiveAbortRef.current?.abort();
+    archiveAbortRef.current = null;
     addressAbortRef.current?.abort();
     addressAbortRef.current = null;
+    listingAbortRef.current?.abort();
+    listingAbortRef.current = null;
+    locatorAbortRef.current?.abort();
+    locatorAbortRef.current = null;
     fileDragDepthRef.current = 0;
     pendingSelectionPathRef.current = null;
     directSelectionEntryRef.current = null;
@@ -507,12 +719,24 @@ export function SessionFilesPanel({
     setListing(null);
     setSelected(null);
     setPreview(null);
+    setMarkdownRendered(false);
     setListingError(null);
     setPreviewError(null);
     setFilter("");
+    setLocatorOpen(false);
+    setLocatorQuery("");
+    setLocatorResults(null);
+    setLocatorLoading(false);
+    setLocatorError(null);
+    setLocatorHighlightedPath(null);
+    setRecentsOpen(false);
+    const storedRecents = readSessionFileRecents(sessionId);
+    recentEntriesRef.current = storedRecents;
+    setRecentEntries(storedRecents);
     setActionStatus(null);
     setTaskItems([]);
     setUploading(false);
+    setArchiving(false);
     setWorking(false);
     setFileDropActive(false);
     setPrompt(null);
@@ -522,15 +746,32 @@ export function SessionFilesPanel({
     setEditorError(null);
     setDropFolderPath(null);
     setManualCopyPath(null);
-  }, [identity, panePath]);
+    handledOpenPathRequestRef.current = null;
+  }, [identity, panePath, sessionId]);
+
+  useEffect(() => {
+    const syncRecents = (event: StorageEvent) => {
+      if (event.key !== SESSION_FILES_RECENTS_STORAGE_KEY) return;
+      const storedRecents = readSessionFileRecents(sessionId);
+      recentEntriesRef.current = storedRecents;
+      setRecentEntries(storedRecents);
+    };
+    window.addEventListener("storage", syncRecents);
+    return () => window.removeEventListener("storage", syncRecents);
+  }, [sessionId]);
 
   useEffect(() => () => {
     uploadAbortRef.current?.abort();
+    archiveAbortRef.current?.abort();
     addressAbortRef.current?.abort();
+    listingAbortRef.current?.abort();
+    locatorAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
+    listingAbortRef.current?.abort();
+    listingAbortRef.current = controller;
     setListingLoading(true);
     setListingError(null);
     void listSessionFiles(
@@ -540,6 +781,12 @@ export function SessionFilesPanel({
     ).then((nextListing) => {
       if (controller.signal.aborted) return;
       setListing(nextListing);
+      rememberRecentPath({
+        kind: "directory",
+        absolutePath: nextListing.absolutePath,
+        name: nextListing.absolutePath.split("/").filter(Boolean).pop() ?? "/",
+        visitedAt: Date.now(),
+      });
       setDirectoryPath(nextListing.path);
       // The server resolves "~" and symlinks, so the browser adopts the path it
       // actually landed on rather than the one that was typed.
@@ -574,9 +821,13 @@ export function SessionFilesPanel({
       setListingError(errorMessage(error, "Unable to list this directory"));
     }).finally(() => {
       if (!controller.signal.aborted) setListingLoading(false);
+      if (listingAbortRef.current === controller) listingAbortRef.current = null;
     });
-    return () => controller.abort();
-  }, [directoryPath, fileTarget, refreshToken]);
+    return () => {
+      controller.abort();
+      if (listingAbortRef.current === controller) listingAbortRef.current = null;
+    };
+  }, [directoryPath, fileTarget, refreshToken, rememberRecentPath]);
 
   // Keyed on the path and the refresh token rather than the entry object, so a
   // reloaded listing that hands back an identical object still refetches.
@@ -599,7 +850,16 @@ export function SessionFilesPanel({
       fileTarget,
       previewPath,
       controller.signal,
-    ).then(setPreview).catch((error: unknown) => {
+    ).then((nextPreview) => {
+      if (controller.signal.aborted) return;
+      setPreview(nextPreview);
+      rememberRecentPath({
+        kind: "file",
+        absolutePath: nextPreview.absolutePath,
+        name: nextPreview.name,
+        visitedAt: Date.now(),
+      });
+    }).catch((error: unknown) => {
       if (!controller.signal.aborted) {
         setPreviewError(errorMessage(error, "Unable to preview this file"));
       }
@@ -607,7 +867,7 @@ export function SessionFilesPanel({
       if (!controller.signal.aborted) setPreviewLoading(false);
     });
     return () => controller.abort();
-  }, [fileTarget, previewPath, refreshToken]);
+  }, [fileTarget, previewPath, refreshToken, rememberRecentPath]);
 
   useEffect(() => {
     selectedPathRef.current = selected?.path ?? null;
@@ -620,6 +880,7 @@ export function SessionFilesPanel({
   useEffect(() => {
     setEditing(false);
     setEditorError(null);
+    setMarkdownRendered(false);
   }, [previewPath]);
 
   useEffect(() => {
@@ -636,6 +897,31 @@ export function SessionFilesPanel({
   useEffect(() => {
     if (prompt) promptInputRef.current?.focus();
   }, [prompt?.mode, prompt?.entries]);
+
+  useEffect(() => {
+    if (!locatorOpen) return;
+    requestAnimationFrame(() => {
+      locatorInputRef.current?.focus();
+      locatorInputRef.current?.select();
+    });
+  }, [locatorOpen]);
+
+  useEffect(() => {
+    if (!locatorOpen) return;
+    locatorAbortRef.current?.abort();
+    locatorAbortRef.current = null;
+    setLocatorLoading(false);
+    setLocatorResults(null);
+    setLocatorError(null);
+    setLocatorHighlightedPath(null);
+  }, [locatorOpen, showHidden]);
+
+  useEffect(() => {
+    if (!locatorHighlightedPath) return;
+    locatorResultRefs.current.get(locatorHighlightedPath)?.scrollIntoView?.({
+      block: "nearest",
+    });
+  }, [locatorHighlightedPath]);
 
   // Focus lands on Cancel, never on the destructive button, and moves again
   // when a non-empty folder escalates the confirmation to a recursive delete.
@@ -688,6 +974,18 @@ export function SessionFilesPanel({
         addressInputRef.current.blur();
         return;
       }
+      if (locatorOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLocator();
+        return;
+      }
+      if (recentsOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeRecents();
+        return;
+      }
       if (prompt) {
         event.preventDefault();
         event.stopPropagation();
@@ -715,7 +1013,20 @@ export function SessionFilesPanel({
     };
     window.addEventListener("keydown", unwindOnEscape, true);
     return () => window.removeEventListener("keydown", unwindOnEscape, true);
-  }, [busy, closeConfirm, closePrompt, confirm, editing, editorDirty, onClose, prompt]);
+  }, [
+    busy,
+    closeConfirm,
+    closeLocator,
+    closePrompt,
+    closeRecents,
+    confirm,
+    editing,
+    editorDirty,
+    locatorOpen,
+    onClose,
+    prompt,
+    recentsOpen,
+  ]);
 
   const visibleEntries = useMemo(() => {
     const normalizedFilter = filter.trim().toLocaleLowerCase();
@@ -760,9 +1071,15 @@ export function SessionFilesPanel({
   const imagePreviewUrl = preview?.kind === "image" && !preview.truncated
     ? sessionFileImageUrl(fileTarget, preview.path)
     : null;
+  const pdfPreviewUrl = preview?.kind === "pdf" && !preview.truncated
+    ? sessionFilePdfUrl(fileTarget, preview.path)
+    : null;
   const canEditPreview = preview?.kind === "text"
     && !preview.truncated
     && (preview.editable ?? !selected?.symlink);
+  const canRenderMarkdown = preview?.kind === "text"
+    && !preview.truncated
+    && MARKDOWN_FILE_PATTERN.test(preview.name);
 
   const guardEditor = useCallback((): boolean => {
     if (!editorDirty) return true;
@@ -779,6 +1096,8 @@ export function SessionFilesPanel({
   const navigateTo = useCallback((path: string) => {
     if (!guardBusy("Wait for the current operation to finish before changing folders")) return;
     if (!guardEditor()) return;
+    closeLocator();
+    closeRecents();
     setDirectoryPath(path);
     directSelectionEntryRef.current = null;
     setFilter("");
@@ -791,7 +1110,7 @@ export function SessionFilesPanel({
     // Navigating elsewhere abandons a half-typed path rather than leaving the
     // field showing somewhere the browser is not.
     setAddressEdited(false);
-  }, [guardBusy, guardEditor]);
+  }, [closeLocator, closeRecents, guardBusy, guardEditor]);
 
   const refresh = useCallback(() => {
     if (!guardEditor()) return;
@@ -803,6 +1122,8 @@ export function SessionFilesPanel({
   const navigateToRoot = useCallback((absolute: string) => {
     if (!guardBusy("Wait for the current operation to finish before changing folders")) return;
     if (!guardEditor()) return;
+    closeLocator();
+    closeRecents();
     setBrowseRoot(absolute);
     setDirectoryPath("");
     directSelectionEntryRef.current = null;
@@ -815,15 +1136,113 @@ export function SessionFilesPanel({
     setCheckedPaths([]);
     setManualCopyPath(null);
     setAddressEdited(false);
-  }, [guardBusy, guardEditor]);
+  }, [closeLocator, closeRecents, guardBusy, guardEditor]);
+
+  const toggleLocator = useCallback(() => {
+    if (locatorOpen) {
+      closeLocator();
+      return;
+    }
+    if (!guardBusy("Wait for the current operation to finish before locating files")) return;
+    if (!guardEditor()) return;
+    closeRecents();
+    setLocatorOpen(true);
+    setLocatorError(null);
+    setLocatorResults(null);
+    setLocatorHighlightedPath(null);
+  }, [closeLocator, closeRecents, guardBusy, guardEditor, locatorOpen]);
+
+  const toggleRecents = useCallback(() => {
+    if (recentsOpen) {
+      closeRecents();
+      return;
+    }
+    if (!guardBusy("Wait for the current operation to finish before opening recent paths")) return;
+    if (!guardEditor()) return;
+    closeLocator();
+    setActionStatus(null);
+    setRecentsOpen(true);
+  }, [closeLocator, closeRecents, guardBusy, guardEditor, recentsOpen]);
+
+  const runLocatorSearch = useCallback(() => {
+    const query = locatorQuery.trim();
+    if (!query) {
+      setLocatorError("Enter a filename or fuzzy abbreviation");
+      setLocatorResults(null);
+      setLocatorHighlightedPath(null);
+      return;
+    }
+    const controller = new AbortController();
+    locatorAbortRef.current?.abort();
+    locatorAbortRef.current = controller;
+    setLocatorLoading(true);
+    setLocatorError(null);
+    setLocatorResults(null);
+    setLocatorHighlightedPath(null);
+    void searchSessionFiles(
+      fileTarget,
+      query,
+      showHidden,
+      controller.signal,
+    ).then((results) => {
+      if (controller.signal.aborted) return;
+      setLocatorResults(results);
+      setLocatorHighlightedPath(results.results[0]?.path ?? null);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setLocatorError(errorMessage(error, "Unable to search files"));
+      }
+    }).finally(() => {
+      if (locatorAbortRef.current === controller) locatorAbortRef.current = null;
+      if (!controller.signal.aborted) setLocatorLoading(false);
+    });
+  }, [fileTarget, locatorQuery, showHidden]);
+
+  const openLocatedEntry = useCallback((entry: SessionFileEntry) => {
+    if (!guardBusy("Wait for the current operation to finish before opening a result")) return;
+    if (!guardEditor()) return;
+    if (entry.kind === "directory") {
+      navigateTo(entry.path);
+      setActionStatus(`Opened ${entry.name}`);
+      return;
+    }
+    listingAbortRef.current?.abort();
+    closeLocator();
+    directSelectionEntryRef.current = entry;
+    pendingSelectionPathRef.current = entry.path;
+    setDirectoryPath(parentPath(entry.path));
+    setSelected(entry);
+    setFilter("");
+    setTaskItems([]);
+    setPrompt(null);
+    setConfirm(null);
+    setCheckedPaths([]);
+    setManualCopyPath(null);
+    if (entry.hidden) setShowHidden(true);
+    setAddressEdited(false);
+    setActionStatus(`Located ${entry.name}`);
+  }, [closeLocator, guardBusy, guardEditor, navigateTo]);
+
+  const moveLocatorHighlight = useCallback((direction: -1 | 1) => {
+    const results = locatorResults?.results ?? [];
+    if (results.length === 0) return;
+    const currentIndex = results.findIndex(
+      (entry) => entry.path === locatorHighlightedPath,
+    );
+    const nextIndex = currentIndex < 0
+      ? direction > 0 ? 0 : results.length - 1
+      : (currentIndex + direction + results.length) % results.length;
+    setLocatorHighlightedPath(results[nextIndex].path);
+  }, [locatorHighlightedPath, locatorResults?.results]);
 
   const updateTask = useCallback((
     id: string,
     status: TaskStatus,
     message: string,
+    uploadedEntry?: SessionFileEntry,
   ) => {
     setTaskItems((current) => current.map((item) => (
-      item.id === id ? { ...item, status, message } : item
+      item.id === id ? { ...item, status, message, uploadedEntry } : item
     )));
   }, []);
 
@@ -889,7 +1308,7 @@ export function SessionFilesPanel({
             controller.signal,
           );
           uploadedEntries.push(uploaded);
-          updateTask(item.id, "done", `${formatBytes(uploaded.size)} uploaded`);
+          updateTask(item.id, "done", `${formatBytes(uploaded.size)} uploaded`, uploaded);
         } catch (error) {
           if (controller.signal.aborted) break;
           failureCount += 1;
@@ -933,6 +1352,72 @@ export function SessionFilesPanel({
     listingLoading,
     updateTask,
   ]);
+
+  const downloadCheckedEntries = useCallback(async (
+    entries: SessionFileEntry[],
+  ) => {
+    if (entries.length === 0) return;
+    if (!guardBusy("Wait for the current operation to finish")) return;
+
+    const archiveIdentity = identityRef.current;
+    const controller = new AbortController();
+    archiveAbortRef.current?.abort();
+    archiveAbortRef.current = controller;
+    setArchiving(true);
+    setActionStatus("Preparing ZIP...");
+
+    try {
+      const archive = await downloadSessionFileEntries(
+        fileTarget,
+        directoryPath,
+        entries.map((entry) => entry.name),
+        controller.signal,
+      );
+      if (controller.signal.aborted || identityRef.current !== archiveIdentity) return;
+      if (typeof URL.createObjectURL !== "function") {
+        throw new Error("This browser cannot prepare local downloads");
+      }
+
+      const objectUrl = URL.createObjectURL(archive.blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = archive.name;
+      link.style.display = "none";
+      document.body.append(link);
+      try {
+        link.click();
+      } finally {
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+      }
+
+      const packed: string[] = [];
+      if (archive.fileCount > 0) {
+        packed.push(
+          `${archive.fileCount} file${archive.fileCount === 1 ? "" : "s"}`,
+        );
+      }
+      if (archive.directoryCount > 0) {
+        packed.push(
+          `${archive.directoryCount} folder${archive.directoryCount === 1 ? "" : "s"}`,
+        );
+      }
+      const skipped = archive.skippedCount > 0
+        ? ` ${archive.skippedCount} link or special item${archive.skippedCount === 1 ? "" : "s"} skipped.`
+        : "";
+      setActionStatus(
+        `Download started: ${packed.join(" and ")} in ${archive.name}.${skipped}`,
+      );
+    } catch (error) {
+      if (controller.signal.aborted || identityRef.current !== archiveIdentity) return;
+      setActionStatus(errorMessage(error, "Could not prepare the ZIP download"));
+    } finally {
+      if (archiveAbortRef.current === controller) {
+        archiveAbortRef.current = null;
+        if (identityRef.current === archiveIdentity) setArchiving(false);
+      }
+    }
+  }, [directoryPath, fileTarget, guardBusy]);
 
   const runBatch = useCallback(async (
     entries: SessionFileEntry[],
@@ -1781,16 +2266,15 @@ export function SessionFilesPanel({
     else if (rootParent) navigateToRoot(rootParent);
   };
 
-  const submitAddress = (event: ReactFormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmed = addressShown.trim();
-    if (!trimmed) return;
+  const openAbsolutePath = useCallback((requestedPath: string): boolean => {
+    const trimmed = requestedPath.trim();
+    if (!trimmed) return false;
     if (!trimmed.startsWith("/") && !trimmed.startsWith("~")) {
       setActionStatus("Enter an absolute path, starting with / or ~");
-      return;
+      return false;
     }
-    if (!guardBusy("Wait for the current operation to finish before opening a path")) return;
-    if (!guardEditor()) return;
+    if (!guardBusy("Wait for the current operation to finish before opening a path")) return false;
+    if (!guardEditor()) return false;
 
     const controller = new AbortController();
     addressAbortRef.current?.abort();
@@ -1804,6 +2288,7 @@ export function SessionFilesPanel({
       controller.signal,
     ).then((resolved) => {
       if (controller.signal.aborted || identityRef.current !== resolvingIdentity) return;
+      closeRecents();
       if (resolved.kind === "directory") {
         navigateToRoot(resolved.root);
         return;
@@ -1811,6 +2296,10 @@ export function SessionFilesPanel({
       if (!resolved.entry) {
         throw new Error("The server did not return the file to open");
       }
+      // A listing for the previously open directory may finish in the same
+      // tick as this resolver. Abort it before changing roots so its canonical
+      // root cannot overwrite the file's parent and misroute the preview.
+      listingAbortRef.current?.abort();
       directSelectionEntryRef.current = resolved.entry;
       pendingSelectionPathRef.current = resolved.path;
       setBrowseRoot(resolved.root);
@@ -1834,6 +2323,65 @@ export function SessionFilesPanel({
       addressAbortRef.current = null;
       setAddressResolving(false);
     });
+    return true;
+  }, [
+    closeRecents,
+    guardBusy,
+    guardEditor,
+    navigateToRoot,
+    paneId,
+    sessionId,
+    sessionName,
+  ]);
+
+  useEffect(() => {
+    if (
+      !openPathRequest
+      || handledOpenPathRequestRef.current === openPathRequest.id
+    ) return;
+    setAddressValue(openPathRequest.path);
+    setAddressEdited(true);
+    if (openAbsolutePath(openPathRequest.path)) {
+      handledOpenPathRequestRef.current = openPathRequest.id;
+    }
+  }, [openAbsolutePath, openPathRequest]);
+
+  const submitAddress = (event: ReactFormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    openAbsolutePath(addressShown);
+  };
+
+  const openRecentPath = (entry: SessionFileRecentEntry) => {
+    setAddressValue(entry.absolutePath);
+    setAddressEdited(true);
+    openAbsolutePath(entry.absolutePath);
+  };
+
+  const submitLocator = (event: ReactFormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    runLocatorSearch();
+  };
+
+  const handleLocatorKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveLocatorHighlight(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (
+      event.key === "Enter"
+      && locatorResults
+      && locatorQuery.trim() === locatorResults.query
+      && locatorHighlightedPath
+    ) {
+      const highlighted = locatorResults.results.find(
+        (entry) => entry.path === locatorHighlightedPath,
+      );
+      if (highlighted) {
+        event.preventDefault();
+        openLocatedEntry(highlighted);
+      }
+    }
   };
 
   const promptIsMove = prompt?.mode === "move" || prompt?.mode === "bulk-move";
@@ -1854,6 +2402,13 @@ export function SessionFilesPanel({
   } as CSSProperties;
   const rootName = listing?.root || panePath;
   const listReady = Boolean(listing) && !listingLoading && !listingError;
+  const recentUnderCwd = recentEntries.filter(
+    (entry) => pathRelativeToPaneCwd(entry.absolutePath, panePath).relative,
+  );
+  const currentRecentPath = selected?.absolutePath ?? listing?.absolutePath ?? null;
+  const locatorHighlightedIndex = locatorResults?.results.findIndex(
+    (entry) => entry.path === locatorHighlightedPath,
+  ) ?? -1;
 
   return createPortal(
     <section
@@ -1864,7 +2419,7 @@ export function SessionFilesPanel({
       role="dialog"
       aria-modal="false"
       aria-labelledby="session-files-title"
-      aria-busy={listingLoading || busy}
+      aria-busy={listingLoading || busy || locatorLoading}
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
@@ -1960,17 +2515,19 @@ export function SessionFilesPanel({
         >
           <FolderIcon />
           <PlusIcon />
+          <span>New folder</span>
         </button>
         <button
           type="button"
           className="session-files-new"
           aria-label="Create an empty file here"
-          title="New file"
+          title="Create an empty text file in the current directory"
           disabled={!listReady || busy}
           onClick={() => openPrompt("create-file")}
         >
           <EditIcon />
           <PlusIcon />
+          <span>New text file</span>
         </button>
         <button
           type="button"
@@ -1982,6 +2539,35 @@ export function SessionFilesPanel({
         >
           <ArrowUpIcon />
           <span>Upload</span>
+        </button>
+        <button
+          type="button"
+          className="session-files-locate-button"
+          aria-label="Open fuzzy file locator"
+          aria-expanded={locatorOpen}
+          aria-controls="session-files-locator"
+          title={`Fuzzy-locate files and folders under ${browseRoot}`}
+          disabled={busy}
+          onClick={toggleLocator}
+        >
+          <SearchIcon />
+          <span>Find</span>
+        </button>
+        <button
+          type="button"
+          className="session-files-recents-button"
+          aria-label="Open session file history"
+          aria-expanded={recentsOpen}
+          aria-controls="session-files-recents"
+          title={`Recent files and folders for ${sessionName}`}
+          disabled={busy}
+          onClick={toggleRecents}
+        >
+          <HistoryIcon />
+          <span>Recent</span>
+          {recentEntries.length > 0 && (
+            <small aria-hidden="true">{recentEntries.length}</small>
+          )}
         </button>
         <button
           type="button"
@@ -2095,7 +2681,7 @@ export function SessionFilesPanel({
               disabled={busy}
               placeholder={promptIsMove
                 ? "Folder relative to the pane cwd; empty for the root"
-                : "name"}
+                : prompt.mode === "create-file" ? "notes.txt" : "name"}
               onChange={(event) => setPrompt({
                 ...prompt,
                 value: event.target.value,
@@ -2151,6 +2737,15 @@ export function SessionFilesPanel({
           <strong>{checkedEntries.length} selected</strong>
           <button
             type="button"
+            className="download"
+            disabled={busy}
+            onClick={() => void downloadCheckedEntries(checkedEntries)}
+          >
+            <ArrowDownIcon />
+            <span>{archiving ? "Preparing ZIP..." : "Download ZIP"}</span>
+          </button>
+          <button
+            type="button"
             disabled={busy}
             onClick={() => openPrompt("bulk-move", checkedEntries)}
           >
@@ -2185,6 +2780,24 @@ export function SessionFilesPanel({
               <div key={item.id} className={`session-file-upload-item ${item.status}`}>
                 <strong title={item.name}>{item.name}</strong>
                 <span>{item.message}</span>
+                {item.status === "done" && item.uploadedEntry && (
+                  <div className="session-file-upload-path-actions">
+                    <button
+                      type="button"
+                      aria-label={`Copy full path for uploaded ${item.name}`}
+                      title={`Copy full path: ${item.uploadedEntry.absolutePath}`}
+                      onClick={() => void copyEntryPath(item.uploadedEntry!, "full")}
+                    >FULL</button>
+                    <button
+                      type="button"
+                      aria-label={`Copy relative path for uploaded ${item.name}`}
+                      title={pathRelativeToPaneCwd(item.uploadedEntry.absolutePath, panePath).relative
+                        ? `Copy relative to pane cwd: ${pathRelativeToPaneCwd(item.uploadedEntry.absolutePath, panePath).text}`
+                        : `Outside pane cwd - copy full path: ${item.uploadedEntry.absolutePath}`}
+                      onClick={() => void copyEntryPath(item.uploadedEntry!, "relative")}
+                    >REL</button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -2199,7 +2812,293 @@ export function SessionFilesPanel({
         </div>
       )}
 
-      <div ref={contentRef} className="session-files-content">
+      {locatorOpen && (
+        <section
+          id="session-files-locator"
+          className="session-files-locator"
+          aria-label="Fuzzy file locator"
+        >
+          <div className="session-files-locator-heading">
+            <div>
+              <span>FUZZY LOCATOR</span>
+              <strong>Find anywhere under this root</strong>
+            </div>
+            <code title={browseRoot}>{browseRoot}</code>
+            <button
+              type="button"
+              aria-label="Close fuzzy file locator"
+              title="Close locator (Esc)"
+              onClick={closeLocator}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+          <form className="session-files-locator-form" onSubmit={submitLocator}>
+            <label>
+              <SearchIcon />
+              <input
+                ref={locatorInputRef}
+                type="search"
+                role="combobox"
+                aria-label="Fuzzy file search"
+                aria-autocomplete="list"
+                aria-controls="session-files-locator-results"
+                aria-expanded={Boolean(locatorResults?.results.length)}
+                aria-activedescendant={locatorHighlightedIndex >= 0
+                  ? `session-file-locator-result-${locatorHighlightedIndex}`
+                  : undefined}
+                autoComplete="off"
+                spellCheck={false}
+                value={locatorQuery}
+                placeholder="Try sfp, read deploy, or package json..."
+                onKeyDown={handleLocatorKeyDown}
+                onChange={(event) => {
+                  locatorAbortRef.current?.abort();
+                  locatorAbortRef.current = null;
+                  setLocatorQuery(event.target.value);
+                  setLocatorLoading(false);
+                  setLocatorResults(null);
+                  setLocatorError(null);
+                  setLocatorHighlightedPath(null);
+                }}
+              />
+            </label>
+            <button type="submit" className="primary" disabled={locatorLoading}>
+              <SearchIcon />
+              <span>{locatorLoading ? "Searching" : "Locate"}</span>
+            </button>
+          </form>
+          <p className="session-files-locator-hint">
+            Type an abbreviation, then press Enter. Arrow keys choose a result;
+            Enter opens it. {showHidden
+              ? "Dotfiles are included."
+              : "Dotfiles are skipped unless Show dotfiles is enabled."}
+          </p>
+
+          <div
+            id="session-files-locator-results"
+            className="session-files-locator-results"
+            role="listbox"
+            aria-label="Located files and folders"
+          >
+            {locatorLoading && (
+              <div className="session-files-locator-state" role="status">
+                <span className="session-files-spinner" />
+                <strong>Searching the file tree</strong>
+                <span>Large dependency and build folders are searched last.</span>
+              </div>
+            )}
+            {!locatorLoading && locatorError && (
+              <div className="session-files-locator-state error" role="alert">
+                <strong>Search unavailable</strong>
+                <span>{locatorError}</span>
+              </div>
+            )}
+            {!locatorLoading && !locatorError && !locatorResults && (
+              <div className="session-files-locator-state">
+                <SearchIcon />
+                <strong>Locate by fragments or initials</strong>
+                <span>
+                  Results include regular files and folders. Directory symlinks
+                  are never followed.
+                </span>
+              </div>
+            )}
+            {!locatorLoading && !locatorError && locatorResults
+              && locatorResults.results.length === 0 && (
+                <div className="session-files-locator-state">
+                  <strong>No fuzzy matches</strong>
+                  <span>Try fewer characters or enable dotfiles and search again.</span>
+                </div>
+              )}
+            {!locatorLoading && !locatorError && locatorResults?.results.map(
+              (entry, index) => (
+                <button
+                  key={entry.path}
+                  id={`session-file-locator-result-${index}`}
+                  ref={(node) => {
+                    if (node) locatorResultRefs.current.set(entry.path, node);
+                    else locatorResultRefs.current.delete(entry.path);
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={entry.path === locatorHighlightedPath}
+                  className={entry.path === locatorHighlightedPath ? "highlighted" : undefined}
+                  title={entry.absolutePath}
+                  onMouseEnter={() => setLocatorHighlightedPath(entry.path)}
+                  onFocus={() => setLocatorHighlightedPath(entry.path)}
+                  onClick={() => openLocatedEntry(entry)}
+                >
+                  <span className={`session-file-locator-kind ${entry.kind}`} aria-hidden="true">
+                    {entry.kind === "directory" ? <FolderIcon /> : fileBadge(entry)}
+                  </span>
+                  <span className="session-file-locator-name">
+                    <strong>{entry.name}</strong>
+                    <code>{parentPath(entry.path) || "."}</code>
+                  </span>
+                  <small>{entry.kind === "directory" ? "FOLDER" : formatBytes(entry.size)}</small>
+                  <ChevronRightIcon />
+                </button>
+              ),
+            )}
+          </div>
+
+          {locatorResults && !locatorLoading && !locatorError && (
+            <footer>
+              <span>
+                {locatorResults.results.length.toLocaleString()} match{
+                  locatorResults.results.length === 1 ? "" : "es"
+                } from {locatorResults.scannedEntries.toLocaleString()} scanned entries
+              </span>
+              {locatorResults.truncated && (
+                <strong>
+                  Best matches shown; refine the query for a narrower scan.
+                </strong>
+              )}
+            </footer>
+          )}
+        </section>
+      )}
+
+      {recentsOpen && (
+        <section
+          id="session-files-recents"
+          className="session-files-recents"
+          aria-label="Recent session files and folders"
+        >
+          <div className="session-files-recents-heading">
+            <div>
+              <span>SESSION HISTORY</span>
+              <strong>Pick up where you left off</strong>
+            </div>
+            <code title={sessionName}>{sessionName}</code>
+            <span className="session-files-recents-heading-actions">
+              <button
+                type="button"
+                disabled={recentEntries.length === 0 || busy}
+                onClick={clearRecentPaths}
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                aria-label="Close session file history"
+                title="Close recent paths (Esc)"
+                onClick={closeRecents}
+              >
+                <CloseIcon />
+              </button>
+            </span>
+          </div>
+
+          {actionStatus && (
+            <p className="session-files-recents-status" role="status">
+              {actionStatus}
+            </p>
+          )}
+
+          {recentEntries.length === 0 ? (
+            <div className="session-files-recents-empty">
+              <HistoryIcon />
+              <strong>No recent paths yet</strong>
+              <span>
+                Open a folder or preview a file. It will appear here for this
+                tmux session.
+              </span>
+            </div>
+          ) : (
+            <div className="session-files-recents-groups">
+              {[
+                { label: "All recent paths", entries: recentEntries, cwd: false },
+                { label: "Under current CWD", entries: recentUnderCwd, cwd: true },
+              ].map((group) => (
+                <section key={group.label} className="session-files-recents-group" aria-label={group.label}>
+                  <header>
+                    <span>{group.label}</span>
+                    <small>{group.entries.length}</small>
+                  </header>
+                  {group.cwd && <code className="session-files-recents-cwd" title={panePath}>{panePath}</code>}
+                  {group.entries.length === 0 ? (
+                    <p>{group.cwd ? "No recent paths under this CWD yet." : "Nothing opened yet."}</p>
+                  ) : (
+                    <ol>
+                      {group.entries.map((entry) => {
+                        const relative = pathRelativeToPaneCwd(
+                          entry.absolutePath,
+                          panePath,
+                        );
+                        const entryLabel = entry.kind === "directory" ? "folder" : "file";
+                        return (
+                          <li
+                            key={`${entry.kind}:${entry.absolutePath}`}
+                            className={currentRecentPath === entry.absolutePath
+                              ? "current"
+                              : undefined}
+                          >
+                            <button
+                              type="button"
+                              className="session-file-recent-open"
+                              aria-label={`Open recent ${entryLabel} ${entry.absolutePath}`}
+                              aria-current={currentRecentPath === entry.absolutePath
+                                ? "page"
+                                : undefined}
+                              title={entry.absolutePath}
+                              disabled={busy}
+                              onClick={() => openRecentPath(entry)}
+                            >
+                              <span
+                                className={`session-file-recent-kind ${entry.kind}`}
+                                aria-hidden="true"
+                              >
+                                {entry.kind === "directory"
+                                  ? <FolderIcon />
+                                  : fileNameBadge(entry.name)}
+                              </span>
+                              <span className="session-file-recent-name">
+                                <strong>{entry.name}</strong>
+                                <code>
+                                  {relative.relative
+                                    ? relative.text === "." ? "pane cwd" : `./${relative.text}`
+                                    : entry.absolutePath}
+                                </code>
+                              </span>
+                              <time
+                                dateTime={new Date(entry.visitedAt).toISOString()}
+                                title={new Date(entry.visitedAt).toLocaleString()}
+                              >
+                                {formatRecentAge(entry.visitedAt)}
+                              </time>
+                              <ChevronRightIcon />
+                            </button>
+                            <button
+                              type="button"
+                              className="session-file-recent-forget"
+                              aria-label={`Forget recent path ${entry.absolutePath}`}
+                              title="Remove from this session's recents"
+                              disabled={busy}
+                              onClick={() => forgetRecentPath(entry.absolutePath)}
+                            >
+                              <CloseIcon />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  )}
+                </section>
+              ))}
+            </div>
+          )}
+
+          <footer>
+            <span>Saved in this browser, separately for each tmux session.</span>
+            <strong>{recentEntries.length} / {SESSION_FILE_RECENT_LIMIT} paths</strong>
+          </footer>
+        </section>
+      )}
+
+      {!locatorOpen && !recentsOpen && (
+        <div ref={contentRef} className="session-files-content">
         <div className="session-files-list" aria-label="Directory contents">
           {listingLoading && (
             <div className="session-files-state" role="status">Reading directory...</div>
@@ -2514,6 +3413,22 @@ export function SessionFilesPanel({
                 <span>{formatBytes(preview.size)}</span>
                 <span>{preview.mediaType}</span>
                 <span>{formatModified(preview.modified)}</span>
+                {canRenderMarkdown && !editing && (
+                  <button
+                    type="button"
+                    className="session-file-preview-mode"
+                    aria-label={markdownRendered
+                      ? `Show raw Markdown for ${preview.name}`
+                      : `Preview ${preview.name} as rendered Markdown`}
+                    aria-pressed={markdownRendered}
+                    title={markdownRendered
+                      ? "Return to the raw Markdown source"
+                      : "Render this Markdown file"}
+                    onClick={() => setMarkdownRendered((current) => !current)}
+                  >
+                    {markdownRendered ? "Raw" : "Preview Markdown"}
+                  </button>
+                )}
                 {canEditPreview && !editing && (
                   <button
                     type="button"
@@ -2526,6 +3441,7 @@ export function SessionFilesPanel({
                       setEditorOrigin(preview.content ?? "");
                       setEditorBaseline(preview.modified);
                       setEditorError(null);
+                      setMarkdownRendered(false);
                       setEditing(true);
                     }}
                   >
@@ -2574,6 +3490,17 @@ export function SessionFilesPanel({
                       {editorError && <p role="alert">{editorError}</p>}
                     </div>
                   </div>
+                ) : markdownRendered && canRenderMarkdown ? (
+                  <Suspense
+                    fallback={(
+                      <div className="session-file-markdown-loading" role="status">
+                        <span className="session-files-spinner" />
+                        <strong>Rendering Markdown</strong>
+                      </div>
+                    )}
+                  >
+                    <MarkdownPreview content={preview.content ?? ""} />
+                  </Suspense>
                 ) : (
                   <pre tabIndex={0}>{preview.content || ""}</pre>
                 )
@@ -2629,6 +3556,39 @@ export function SessionFilesPanel({
                     )}
                   </div>
                 ) : null
+              ) : preview.kind === "pdf" ? (
+                preview.truncated ? (
+                  <div className="session-file-preview-empty pdf-limit">
+                    <strong>PDF is too large to preview</strong>
+                    <span>
+                      Inline viewing is limited to {formatBytes(preview.previewBytes)}.
+                      Download the original file instead.
+                    </span>
+                  </div>
+                ) : pdfPreviewUrl ? (
+                  <div className="session-file-pdf-preview">
+                    <iframe
+                      src={pdfPreviewUrl}
+                      title={`Preview of ${preview.name}`}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                    />
+                    <a
+                      href={pdfPreviewUrl}
+                      target="_blank"
+                      rel="noopener"
+                      aria-label={`Open ${preview.name} in browser PDF viewer`}
+                      title="Open the PDF in a new tab"
+                    >
+                      <ExternalLinkIcon />
+                      <span>Open PDF</span>
+                    </a>
+                    <p>
+                      Uses the browser's built-in PDF viewer. Download remains
+                      available when inline PDF viewing is disabled.
+                    </p>
+                  </div>
+                ) : null
               ) : (
                 <div className="session-file-preview-empty binary">
                   <strong>Binary file</strong>
@@ -2643,7 +3603,8 @@ export function SessionFilesPanel({
             </>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       {fileDropActive && (
         <div className="session-files-drop-overlay" role="status">

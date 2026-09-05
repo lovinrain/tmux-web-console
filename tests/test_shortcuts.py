@@ -8,6 +8,8 @@ import pytest
 
 from tmux_console.shortcuts import (
     DEFAULT_SHORTCUT_BINDINGS,
+    FLOATING_INPUT_ACTION,
+    PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
     QUICK_SESSION_ACTION,
     SHORTCUT_DOCUMENT_VERSION,
     SHORTCUT_STORE_UNAVAILABLE_MESSAGE,
@@ -29,7 +31,7 @@ def test_shortcut_store_uses_defaults_then_persists_a_revision(tmp_path):
 
     assert store.get_snapshot() == {"revision": 0, "bindings": bindings()}
     updated = bindings()
-    updated["command-palette"]["direct"] = "KeyY"
+    updated["command-palette"]["direct"] = "KeyG"
     updated["terminal-copy-mode"]["direct"] = "KeyH"
     saved = store.replace_bindings(updated, expected_revision=0)
 
@@ -43,11 +45,12 @@ def test_shortcut_store_uses_defaults_then_persists_a_revision(tmp_path):
     assert list(tmp_path.glob(".shortcuts.json.*.tmp")) == []
 
 
-def test_shortcut_store_upgrades_version_one_with_quick_session_binding(tmp_path):
+def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     path = tmp_path / "shortcuts.json"
     legacy = bindings()
     legacy.pop(QUICK_SESSION_ACTION)
-    legacy["command-palette"]["direct"] = "KeyY"
+    legacy.pop(FLOATING_INPUT_ACTION)
+    legacy["command-palette"]["direct"] = "KeyG"
     path.write_text(
         json.dumps({"version": 1, "revision": 7, "bindings": legacy}),
         encoding="utf-8",
@@ -57,10 +60,14 @@ def test_shortcut_store_upgrades_version_one_with_quick_session_binding(tmp_path
     snapshot = store.get_snapshot()
 
     assert snapshot["revision"] == 7
-    assert snapshot["bindings"]["command-palette"]["direct"] == "KeyY"
+    assert snapshot["bindings"]["command-palette"]["direct"] == "KeyG"
     assert snapshot["bindings"][QUICK_SESSION_ACTION] == {
         "direct": "KeyK",
         "launcher": "KeyK",
+    }
+    assert snapshot["bindings"][FLOATING_INPUT_ACTION] == {
+        "direct": "KeyY",
+        "launcher": "KeyY",
     }
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
 
@@ -71,14 +78,17 @@ def test_shortcut_store_upgrades_version_one_with_quick_session_binding(tmp_path
     )
 
 
-def test_shortcut_store_does_not_override_a_legacy_key_k_binding(tmp_path):
+def test_shortcut_store_does_not_override_legacy_default_key_conflicts(tmp_path):
     path = tmp_path / "shortcuts.json"
     legacy = bindings()
     legacy.pop(QUICK_SESSION_ACTION)
+    legacy.pop(FLOATING_INPUT_ACTION)
     legacy["command-palette"]["direct"] = "KeyK"
     legacy["terminal-copy-mode"]["direct"] = "KeyH"
     legacy["command-palette"]["launcher"] = "KeyK"
     legacy["terminal-copy-mode"]["launcher"] = "KeyH"
+    legacy["view-session-tabs"]["direct"] = "KeyY"
+    legacy["view-session-tabs"]["launcher"] = "KeyY"
     path.write_text(
         json.dumps({"version": 1, "revision": 2, "bindings": legacy}),
         encoding="utf-8",
@@ -90,6 +100,39 @@ def test_shortcut_store_does_not_override_a_legacy_key_k_binding(tmp_path):
         "direct": None,
         "launcher": None,
     }
+    assert snapshot["bindings"][FLOATING_INPUT_ACTION] == {
+        "direct": None,
+        "launcher": None,
+    }
+
+
+def test_shortcut_store_upgrades_version_two_without_overriding_key_y(tmp_path):
+    path = tmp_path / "shortcuts.json"
+    previous = bindings()
+    previous.pop(FLOATING_INPUT_ACTION)
+    previous["command-palette"]["direct"] = "KeyY"
+    path.write_text(
+        json.dumps({
+            "version": PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
+            "revision": 4,
+            "bindings": previous,
+        }),
+        encoding="utf-8",
+    )
+
+    store = ShortcutStore(path)
+    snapshot = store.get_snapshot()
+
+    assert snapshot["revision"] == 4
+    assert snapshot["bindings"]["command-palette"]["direct"] == "KeyY"
+    assert snapshot["bindings"][FLOATING_INPUT_ACTION] == {
+        "direct": None,
+        "launcher": "KeyY",
+    }
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
+
+    store.replace_bindings(snapshot["bindings"], expected_revision=4)
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 3
 
 
 def test_shortcut_store_rejects_stale_and_conflicting_bindings(tmp_path):

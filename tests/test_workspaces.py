@@ -37,6 +37,58 @@ def sequence(values):
     return lambda: next(iterator)
 
 
+def test_separators_persist_follow_renames_and_prune_closed_tabs(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path)
+    workspace = store.create_workspace(
+        name="Separators", tabs=["a", "b", "c"], active_session="a",
+        groups=[workspace_group("pair", ["a", "b"])], separators=["a"],
+        separators_before=["a", "b"],
+    )
+    workspace_id = workspace["id"]
+    assert WorkspaceStore(path).get_workspace(workspace_id)["separators"] == ["a"]
+    changed = store.update_workspace(
+        workspace_id, separators=["b", "a"], update_separators=True, session_revision=0,
+    )
+    assert changed["separators"] == ["a", "b"]
+    assert changed["groups"] == workspace["groups"]
+    assert changed["separatorsBefore"] == ["a", "b"]
+    store.rename_session("a", "renamed")
+    assert store.get_workspace(workspace_id)["separators"] == ["renamed", "b"]
+    assert store.get_workspace(workspace_id)["separatorsBefore"] == ["renamed", "b"]
+    with pytest.raises(WorkspaceSessionRevisionConflict):
+        store.update_workspace(
+            workspace_id, separators=["a"], update_separators=True, session_revision=0,
+        )
+    closed = store.record_activity(
+        workspace_id, tabs=["c", "renamed"], active_session="c", session_revision=1,
+    )
+    assert closed["separators"] == ["renamed"]
+    assert closed["separatorsBefore"] == ["renamed"]
+    assert WorkspaceStore(path).get_workspace(workspace_id)["separators"] == ["renamed"]
+
+
+@pytest.mark.parametrize("version", [7, 8])
+def test_older_workspace_loads_without_before_separators(tmp_path, version):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path)
+    workspace = store.create_workspace(name="Old", tabs=["a"], active_session="a")
+    payload = json.loads(path.read_text())
+    payload["version"] = version
+    for record in payload["workspaces"]:
+        if version < 8:
+            record.pop("separators")
+        record.pop("separatorsBefore")
+    path.write_text(json.dumps(payload))
+    restored = WorkspaceStore(path)
+    assert restored.get_workspace(workspace["id"])["separators"] == []
+    assert restored.get_workspace(workspace["id"])["separatorsBefore"] == []
+    restored.update_workspace(
+        workspace["id"], separators=["a"], update_separators=True, session_revision=0,
+    )
+    assert json.loads(path.read_text())["version"] == WORKSPACE_SCHEMA_VERSION
+
+
 def workspace_group(
     group_id,
     tabs,
@@ -78,6 +130,8 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
         "tabs": ["agent-a", "agent-b"],
         "groups": [],
         "quickLinks": [],
+        "separators": [],
+        "separatorsBefore": [],
         "activeSession": "agent-b",
         "createdAt": 10_000,
         "updatedAt": 10_000,
@@ -510,7 +564,10 @@ def test_global_workspace_pin_rejects_full_workspace_atomically(tmp_path):
         active_session=full_tabs[0],
     )
 
-    with pytest.raises(WorkspacePinCapacityError, match="already has 32 sessions"):
+    with pytest.raises(
+        WorkspacePinCapacityError,
+        match=rf"already has {MAX_WORKSPACE_TABS} sessions",
+    ):
         store.set_session_workspace_pinned("new-agent", True)
 
     assert store.list_pinned_sessions() == ()
@@ -600,7 +657,10 @@ def test_workspace_session_transfer_rejects_stale_full_and_pinned_moves(tmp_path
         active_session=full_tabs[0],
     )
 
-    with pytest.raises(WorkspaceTransferConflictError, match="already has 32 sessions"):
+    with pytest.raises(
+        WorkspaceTransferConflictError,
+        match=rf"already has {MAX_WORKSPACE_TABS} sessions",
+    ):
         store.transfer_session(
             "agent",
             source_workspace_id="source",
@@ -1344,6 +1404,8 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
                         "groups": [],
                         "quickLinks": [],
                         "inheritedPins": [],
+                        "separators": [],
+                        "separatorsBefore": [],
                         "activeSession": "old",
                         "createdAt": 1_000,
                         "updatedAt": 1_000,

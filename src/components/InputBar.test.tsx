@@ -103,13 +103,21 @@ describe("InputBar", () => {
     const copilotEnqueueButton = screen.getByRole("button", {
       name: "Ctrl+Q - enqueue in Copilot CLI",
     });
+    const codexTranscriptButton = screen.getByRole("button", {
+      name: "Ctrl+T - view full transcript in Codex CLI",
+    });
     expect(startButton).toHaveTextContent(/^\^A$/);
     expect(endButton).toHaveTextContent(/^\^E$/);
     expect(deleteToEndButton).toHaveTextContent(/^\^K$/);
     expect(copilotEnqueueButton).toHaveTextContent(/^\^Q$/);
+    expect(codexTranscriptButton).toHaveTextContent(/^\^T$/);
     expect(copilotEnqueueButton).toHaveAttribute(
       "title",
       "Enqueue the current prompt in Copilot CLI (Ctrl+Q)",
+    );
+    expect(codexTranscriptButton).toHaveAttribute(
+      "title",
+      "View earlier messages and the full transcript in Codex CLI (Ctrl+T)",
     );
     expect(screen.getByRole("button", { name: "Raw terminal keyboard" })).toHaveAttribute(
       "title",
@@ -134,6 +142,7 @@ describe("InputBar", () => {
     fireEvent.click(endButton);
     fireEvent.click(deleteToEndButton);
     fireEvent.click(copilotEnqueueButton);
+    fireEvent.click(codexTranscriptButton);
     fireEvent.click(screen.getByRole("button", { name: "Clear terminal input" }));
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
     fireEvent.click(screen.getByRole("button", { name: "PgDn" }));
@@ -153,6 +162,7 @@ describe("InputBar", () => {
       ["\x05"],
       ["\x0b"],
       ["\x11"],
+      ["\x14"],
       ["\x01\x0b"],
       ["\x1b[5~"],
       ["\x1b[6~"],
@@ -683,6 +693,30 @@ describe("InputBar", () => {
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("queued instruction");
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBe("queued instruction");
     expect(screen.getByText(/Draft loaded locally/)).toBeVisible();
+  });
+
+  it("mirrors every draft change and accepts replacement text without prompting", async () => {
+    window.localStorage.setItem("muxdeck-terminal-draft:test-session", "restored draft");
+    const ref = createRef<InputBarHandle>();
+    const onDraftChange = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<InputBar {...props} ref={ref} onDraftChange={onDraftChange} />);
+
+    await waitFor(() => expect(onDraftChange).toHaveBeenCalledWith("restored draft"));
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(textarea, { target: { value: "typed in the full composer" } });
+    expect(onDraftChange).toHaveBeenLastCalledWith("typed in the full composer");
+
+    let replaced = false;
+    act(() => {
+      replaced = ref.current?.replaceDraft("typed in the floating composer") ?? false;
+    });
+    expect(replaced).toBe(true);
+    expect(textarea).toHaveValue("typed in the floating composer");
+    expect(onDraftChange).toHaveBeenLastCalledWith("typed in the floating composer");
+    expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session"))
+      .toBe("typed in the floating composer");
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("removes the exact staged memo source after acknowledged delivery", async () => {

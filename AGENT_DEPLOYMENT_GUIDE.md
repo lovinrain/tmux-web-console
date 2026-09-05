@@ -89,6 +89,8 @@ must rebuild it on the target. An archive of this folder does not include:
 - titles, predefined session tags, starred/ignored session names, memoranda, the
   snippet library, saved workspaces, shortcut keymap, authentication state, and
   uploaded attachments stored outside the source folder;
+- the SQLite session-recovery registry, including saved CWDs and reference-only
+  coding-agent IDs;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -124,7 +126,7 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | tmux | 3.x | 3.2+ enables Grok startup appearance hints; `xterm-256color` terminfo must exist. |
 | Base path | `/mux` | No trailing slash at runtime; build value is `/mux/`. |
 | Loopback port | `7683` | Must not conflict with an unrelated service. |
-| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains six JSON files and private uploaded attachments. |
+| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains six JSON files, one SQLite recovery registry, and private uploaded attachments. |
 | Authentication mode | `server` | Use `basic` only when browser-managed credentials are intended; use `none` only behind another explicit trust boundary. |
 | Application login | required for `server` or `basic` | Provision interactively; never put a plaintext password in source, a unit, an environment file, or command-line arguments. |
 | tmux socket | default or `-L NAME` | `MUXDECK_TMUX_SOCKET` is a name, never a filesystem path. |
@@ -132,7 +134,7 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | Public host | optional | Must be protected by a VPN, trusted network, tunnel, or proxy access control. |
 | Browser origins | empty for loopback-only | Exact external `http://` or `https://` origins, comma-separated; required for a reverse proxy. |
 | Proxy | Caddy, existing proxy, or none | Proxy must preserve the base path and support WebSocket + streaming SSE. |
-| State migration | yes/no | Runtime JSON files and uploaded attachments are separate from the source archive. |
+| State migration | yes/no | Runtime JSON files, the SQLite recovery registry, and uploaded attachments are separate from the source archive. |
 
 A useful working set is:
 
@@ -268,7 +270,9 @@ caddy validate --config /etc/caddy/Caddyfile
 ```
 
 Back up the existing unit, the relevant Caddy configuration, all six state JSON
-files, the upload directory when present, and the old release path. Use
+files, the `sessions.sqlite3` recovery registry when present, the upload
+directory when present, and the old release path. Stop only Muxdeck or use
+SQLite's backup API before copying the database so the backup is consistent. Use
 timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
@@ -352,7 +356,8 @@ MUXDECK_PLAYWRIGHT_BROWSER=/absolute/path/to/chrome npm run test:e2e
 
 The Playwright configuration uses the project `.venv` when present and creates
 a unique disposable tmux socket plus title, memorandum, snippet, workspace,
-shortcut, authentication, and attachment-upload state paths per run. Do not run browser
+shortcut, session-registry, authentication, and attachment-upload state paths
+per run. Do not run browser
 validation against valuable target sessions, and do not remove those state-path
 overrides.
 
@@ -367,6 +372,7 @@ The default source paths are under the old service user's state directory:
 ~/.local/state/muxdeck/workspaces.json
 ~/.local/state/muxdeck/shortcuts.json
 ~/.local/state/muxdeck/auth.json
+~/.local/state/muxdeck/sessions.sqlite3
 ~/.local/state/muxdeck/uploads/
 ```
 
@@ -387,22 +393,29 @@ sixth file contains the salted login password hash and hashes of remembered
 browser tokens. It is security-sensitive even though it contains neither the
 plaintext password nor bearer tokens. Keep it mode `0600`, never include it in a
 source archive, and do not print its contents in deployment evidence.
+The SQLite database contains stable Muxdeck session IDs, native tmux names,
+working directories, last-seen tmux identities, and optional passively detected
+coding-agent types and IDs. The latter are reference metadata only; migration
+does not resume an agent. Treat the whole database as sensitive and keep it mode
+`0600`.
 An existing unit may override any path; inspect its environment rather than
 assuming defaults.
 
-The workspace file uses schema version 7. Version 1 loads at workspace session
+The workspace file uses schema version 9. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
 through 3 load with no common or workspace-specific quick links. Versions 1
 through 4 load with no session-specific quick links, versions 1 through 5 load
 with empty scoped notes, and versions 1 through 6 load with no global session
-pins or inherited-pin provenance. A legacy file upgrades atomically on the next
+pins or inherited-pin provenance. Versions 1 through 7 load with no sidebar
+separators. Version 8 preserves after-session separators and loads with no
+before-session separators. A legacy file upgrades atomically on the next
 workspace, quick-link, note, or global-pin write. Each record permits an 80-character name,
-at most 32 unique ordered tabs, at most 16 disjoint contiguous tab groups whose
+at most 256 unique ordered tabs, at most 16 disjoint contiguous tab groups whose
 names are at most 40 characters, and at most 16 quick links; the global common
 shelf and each native-session shelf also permit 16 links. Quick-link labels are
 limited to 48 characters and URLs to 2,048 characters. Each scoped note is
 limited to 8,000 characters. Keep a pre-upgrade copy for rollback because a
-release that only understands versions 1 through 6 rejects the version 7
+release that only understands versions 1 through 8 rejects the version 9
 document. As with snippets, an unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
@@ -419,18 +432,22 @@ An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
 
-The shortcut file uses schema version 2. Version 1 loads by adding the quick
-temporary-session binding with `KeyK` wherever that key is not already assigned.
-The next keymap save atomically writes version 2. Keep a pre-upgrade copy for
-rollback because a release that only understands version 1 rejects the version-2
-document. An unreadable, malformed, conflicting, or unsupported shortcut file
+The shortcut file uses schema version 3. Version 2 loads by adding the floating
+staged-input binding with `KeyY` wherever that key is not already assigned.
+Version 1 first adds the quick temporary-session binding with `KeyK`, then the
+floating-input binding with `KeyY`; occupied keys leave that layer unbound.
+The next keymap save atomically writes version 3. Keep a pre-upgrade copy for
+rollback because a release that only understands version 1 or 2 rejects the
+version-3 document. An unreadable, malformed, conflicting, or unsupported shortcut file
 makes that store unavailable instead of overwriting it.
 
 Migration procedure:
 
 1. Stop only Muxdeck on the source if a consistent final copy is needed. This
    disconnects web clients but does not stop tmux sessions.
-2. Copy the six JSON files that exist separately from the source archive. An
+2. Copy the six JSON files and `sessions.sqlite3` that exist separately from the
+   source archive. Stop only Muxdeck or use SQLite's backup API while copying
+   the database; never restart or stop tmux for this operation. An
    older release may not have created `workspaces.json`, `shortcuts.json`, or
    `auth.json` yet. Treat `auth.json` as credential state and never print or
    archive its contents with ordinary source/deployment evidence.
@@ -442,7 +459,8 @@ Migration procedure:
    the upload directory and its per-session subdirectories at `0700`, and
    attachment files at `0600`.
 5. Point the rendered unit at their absolute target paths, including
-   `MUXDECK_SHORTCUTS_FILE`, `MUXDECK_AUTH_FILE`, and `MUXDECK_UPLOADS_DIR`.
+   `MUXDECK_SHORTCUTS_FILE`, `MUXDECK_SESSION_REGISTRY_FILE`,
+   `MUXDECK_AUTH_FILE`, and `MUXDECK_UPLOADS_DIR`.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
 Title, tag, star, ignored, memorandum, saved-workspace tab, session-link, and
@@ -482,7 +500,7 @@ name-keyed files. If Muxdeck reports a post-rename storage warning, the tmux
 rename itself has already succeeded; keep all affected state files and resolve
 the warned migration before deleting old-name records.
 
-Not migrated: tmux sessions, browser local storage, page-local workspace
+Not migrated: live tmux processes or agent processes, browser local storage, page-local workspace
 Recents, history snapshots, and state-change observation times. Uploaded
 attachments are migrated only when the upload directory is explicitly copied
 in step 2.
@@ -760,6 +778,10 @@ merely to test that the application itself has no login.
     session switches, and restores its browser-local state per saved workspace.
     A disposable short countdown should visibly alarm and mark the browser-tab
     title; audio depends on the browser allowing Web Audio after the Start click.
+    In terminal Focus, `Float input` and its configured shortcut should open the
+    movable staged-input editor without leaving Focus. Confirm edits mirror the
+    full composer in both directions, an unpinned window closes on session
+    switch, and a pinned window stays open with the newly active session's draft.
 14. On desktop, Host Pulse should take one initial CPU/memory sample, then remain
     idle until its movable/resizable panel is open and unpaused. Confirm Overview
     switches to Details, every logical core appears, and RAM headroom, PSI
@@ -783,9 +805,25 @@ merely to test that the application itself has no login.
     is rejected without changing the original bytes, and downloading returns the
     same bytes. Add a small PNG or JPEG and confirm it renders in the fitted
     preview and opens through the protected full-size link; an SVG must remain a
-    non-embedded text or binary preview. Enter one disposable file's absolute path
+    non-embedded text or binary preview. Add a small disposable PDF and confirm
+    its signature-checked inline viewer, new-tab link, and download fallback; a
+    renamed non-PDF must not render through the PDF route. Enter one disposable file's absolute path
     in the address row and confirm its parent opens with that file previewed
-    immediately. Delete only those disposable fixtures
+    immediately. Open `Find`, fuzzy-locate a nested disposable file, and confirm
+    selecting it opens the same parent and preview; a deliberately broad search
+    must report when its bounded traversal is partial. Open `Recent` and confirm
+    the file and its parent appear in All recent paths and Under current CWD
+    when inside the pane CWD, preserving the same relative order; paths outside
+    the CWD appear only in All recent paths. Confirm entries survive
+    closing and reopening the panel, reopen with one click, and do not appear for
+    another tmux session. Check the uploaded file plus a disposable nested folder,
+    use `Download ZIP`, and confirm one archive contains both selected roots and
+    the nested contents; the checked rows should remain selected afterward.
+    Print disposable relative
+    `.md`, `.pdf`, `.txt`, and `.png` paths in the live
+    terminal; confirm a plain click remains terminal input while `Ctrl`+click
+    (or `Cmd`+click on macOS) opens each in this browser without sending a
+    terminal mouse frame. Delete only those disposable fixtures
     afterward; none of these file operations should send terminal input or
     change tmux identities.
 17. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
@@ -812,7 +850,7 @@ The deployment agent should report:
 - the selected authentication mode and its expected unauthenticated result;
   for `server`, whether same-profile tabs shared the login; for `basic`, whether
   the browser challenge succeeded; never report a password or bearer cookie;
-- source/unit/Caddy, state-file, and uploaded-attachment backups retained for rollback;
+- source/unit/Caddy, JSON/SQLite state, and uploaded-attachment backups retained for rollback;
 - build/test commands and results;
 - local and external health results;
 - pre/post tmux identity comparison;
@@ -833,10 +871,14 @@ For a failed replacement:
 2. Validate the restored Caddy configuration, then reload Caddy.
 3. Stop only `muxdeck.service`, then restore the prior systemd unit or point it
    back to the prior release.
-4. Restore all six state JSON files only while Muxdeck is stopped; preserve
-   owner and modes. Preserve `workspaces.json` even when the rollback release
+4. Restore all six state JSON files and `sessions.sqlite3` only while Muxdeck is
+   stopped; preserve owner and modes. Preserve `workspaces.json` even when the rollback release
    does not understand it, so a later compatible release can recover the saved
    workspace list.
+   When rolling back to version 8 or earlier, retain the version-9 file separately
+   and restore the pre-upgrade workspace file; older releases cannot read
+   before-session separators. A separator anchors before or after a session and
+   follows Muxdeck renames; removing that tab also removes the separator.
    When rolling back to a release that only understands workspace-file versions
    1 through 6, retain a separate copy of the version-7 file and restore the
    pre-upgrade `workspaces.json`; global pins and inherited-membership provenance
@@ -848,9 +890,10 @@ For a failed replacement:
    `session-titles.json`; tags are unavailable to that older release and would be
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
-   When rolling back to a release that only understands shortcut-file version 1,
-   retain the version-2 file separately and restore the pre-upgrade
-   `shortcuts.json`; the quick temporary-session binding is unavailable there.
+   When rolling back to a release that only understands shortcut-file version 2,
+   retain the version-3 file separately and restore the pre-upgrade
+   `shortcuts.json`; the floating-input binding is unavailable there. A
+   version-1 release also lacks the quick temporary-session binding.
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back
    application code.
@@ -873,8 +916,8 @@ tree:
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
 4. retain the external state directory unchanged and keep timestamped
-   pre-upgrade copies of all six state files plus the upload directory when it
-   exists;
+   pre-upgrade copies of all six JSON state files, `sessions.sqlite3`, plus the
+   upload directory when it exists;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;
@@ -900,6 +943,7 @@ web consoles, but it should not stop the underlying tmux sessions or agents.
 | Titles/tags/starred/ignored organization, memoranda, snippets, saved workspaces, shortcuts, authentication devices, or attachments do not persist | State path or ownership/mode is wrong | Inspect all configured paths in the unit, directory ownership, mode `0700`, files mode `0600`, and journal without printing credential state. |
 | File attachment returns `400`, `413`, `507`, or `503` | Empty file, 12 MiB file limit, 512 MiB directory cap, or unwritable upload path | Try a small non-empty file in a disposable session, inspect `MUXDECK_UPLOADS_DIR` and the journal, then archive/remove old uploads or repair ownership without changing tmux. |
 | Pane-CWD upload returns `403`, `409`, or `413` | Destination is not writable/root-confined, the name already exists, or the file exceeds 12 MiB | Refresh the live pane identity and folder, choose a new filename, and inspect only that disposable destination's ownership/permissions; Muxdeck deliberately never overwrites. |
+| Pane-CWD bulk ZIP returns `413` or `415` | The selection exceeds 1,000 selected entries, 10,000 expanded entries, or 256 MiB uncompressed; or it contains only links/special files | Narrow the checked selection or archive a very large tree from the terminal; do not raise the bounds merely to hide the error, and do not make symlink traversal permissive. |
 | Pane-CWD image preview returns `413` or `415` | The raster image exceeds 25 MiB, has an unsupported or active format, or its signature does not match a supported image | Use Download for large files; convert trusted content to PNG, JPEG, GIF, WebP, AVIF, BMP, or ICO rather than weakening the inline allowlist. |
 | Snippet API returns `503` | The configured snippet file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. |
 | Workspace API returns `503` | The configured workspace file exists but is unreadable, invalid, or unsupported | Preserve a copy, inspect the journal, repair or move only that file, then restart Muxdeck; the service deliberately refuses to overwrite it. Do not delete tmux sessions. |

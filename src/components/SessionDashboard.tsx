@@ -9,7 +9,9 @@ import {
 } from "react";
 import {
   BASE_PATH,
+  forgetRecoverableSession,
   listSessions,
+  recreateSession,
   subscribeToSessions,
   updateSessionDetails,
   updateSessionIgnored,
@@ -17,6 +19,7 @@ import {
   updateSessionWorkspacePin,
   updateSessionTags,
   updateSessionTitle,
+  type RecoverableSession,
   type SavedWorkspace,
 } from "../api";
 import {
@@ -25,6 +28,7 @@ import {
   EyeOffIcon,
   ExternalLinkIcon,
   GridIcon,
+  HistoryIcon,
   ListIcon,
   MemoIcon,
   PinIcon,
@@ -252,6 +256,16 @@ function isolatedWorkspaceHref(href: string): string {
 function sessionConsoleHref(sessionName: string): string {
   const search = isolatedWorkspaceSearch(window.location.search);
   return `${BASE_PATH}/session/${encodeURIComponent(sessionName)}${search}`;
+}
+
+function recoveryItemsFromSessions(sessions: Session[]): RecoverableSession[] {
+  return (sessions as Session[] & { recoverableSessions?: RecoverableSession[] })
+    .recoverableSessions ?? [];
+}
+
+function recoveryAgentLabel(agentType: RecoverableSession["agentType"]): string {
+  if (!agentType) return "Shell";
+  return agentType[0].toUpperCase() + agentType.slice(1);
 }
 
 function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
@@ -509,6 +523,7 @@ export function SessionDashboard({
   onSessionTerminated,
 }: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [recoverableSessions, setRecoverableSessions] = useState<RecoverableSession[]>([]);
   const [route, setRoute] = useState<SessionDashboardRouteState>(initialDashboardRoute);
   const [loading, setLoading] = useState(true);
   const [updateMode, setUpdateMode] = useState<UpdateMode>("connecting");
@@ -527,6 +542,7 @@ export function SessionDashboard({
   const [workspacePinBusyNames, setWorkspacePinBusyNames] = useState<Set<string>>(
     () => new Set(),
   );
+  const [recoveryBusyIds, setRecoveryBusyIds] = useState<Set<string>>(() => new Set());
   const tagFilterModeDescriptionId = useId();
   const terminatedSessionsRef = useRef<Session[]>([]);
   const editTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -606,6 +622,7 @@ export function SessionDashboard({
           || requestId !== pollRequestId
           || streamVersionAtStart !== streamVersion
         ) return;
+        setRecoverableSessions(recoveryItemsFromSessions(next));
         setSessions(withoutTerminatedSessions(next));
         setError(null);
       } catch (requestError) {
@@ -637,11 +654,12 @@ export function SessionDashboard({
     let unsubscribe = () => {};
     try {
       unsubscribe = subscribeToSessions({
-        onSessions: (next) => {
+        onSessions: (next, recoverable = []) => {
           if (stopped) return;
           streamVersion += 1;
           stopPolling();
           setSessions(withoutTerminatedSessions(next));
+          setRecoverableSessions(recoverable);
           setError(null);
           setLoading(false);
           setUpdateMode("live");
@@ -951,6 +969,49 @@ export function SessionDashboard({
     }
   }, [onWorkspacePinChange]);
 
+  const recreateMissingSession = useCallback(async (recovery: RecoverableSession) => {
+    setActionError(null);
+    setRecoveryBusyIds((current) => new Set(current).add(recovery.id));
+    try {
+      const created = await recreateSession(recovery.id);
+      setRecoverableSessions((current) => current.filter((item) => item.id !== recovery.id));
+      onOpen(created.name);
+    } catch (recoveryError) {
+      setActionError(
+        recoveryError instanceof Error
+          ? recoveryError.message
+          : "Unable to recreate the tmux session",
+      );
+    } finally {
+      setRecoveryBusyIds((current) => {
+        const next = new Set(current);
+        next.delete(recovery.id);
+        return next;
+      });
+    }
+  }, [onOpen]);
+
+  const forgetMissingSession = useCallback(async (recovery: RecoverableSession) => {
+    setActionError(null);
+    setRecoveryBusyIds((current) => new Set(current).add(recovery.id));
+    try {
+      await forgetRecoverableSession(recovery.id);
+      setRecoverableSessions((current) => current.filter((item) => item.id !== recovery.id));
+    } catch (forgetError) {
+      setActionError(
+        forgetError instanceof Error
+          ? forgetError.message
+          : "Unable to forget the recovery record",
+      );
+    } finally {
+      setRecoveryBusyIds((current) => {
+        const next = new Set(current);
+        next.delete(recovery.id);
+        return next;
+      });
+    }
+  }, []);
+
   return (
     <main className="dashboard-shell">
       <div className="ambient-grid" />
@@ -1147,6 +1208,70 @@ export function SessionDashboard({
 
       {error && <div className="dashboard-error" role="alert">{error}</div>}
       {actionError && <div className="dashboard-error action-error" role="alert">{actionError}</div>}
+
+      {recoverableSessions.length > 0 && (
+        <section className="session-section recovery-section" aria-labelledby="recovery-heading">
+          <header className="session-section-header">
+            <div>
+              <p className="eyebrow">RECOVERY</p>
+              <h2 id="recovery-heading"><HistoryIcon /> Missing after restart</h2>
+            </div>
+            <span>{recoverableSessions.length}</span>
+          </header>
+          <p className="recovery-section-copy">
+            Recreate starts a fresh detached shell at the saved directory. Agent IDs are
+            identification references only; Muxdeck never resumes an agent automatically.
+          </p>
+          <div className="recovery-list">
+            {recoverableSessions.map((recovery) => {
+              const busy = recoveryBusyIds.has(recovery.id);
+              return (
+                <article className="recovery-card" key={recovery.id}>
+                  <div className="recovery-card-heading">
+                    <span className={`agent-badge ${recovery.agentType ?? "shell"}`}>
+                      {recoveryAgentLabel(recovery.agentType)}
+                    </span>
+                    <strong>{recovery.name}</strong>
+                    <small>seen {relativeTime(recovery.lastSeenAt)}</small>
+                  </div>
+                  <p className={recovery.directoryAvailable ? "" : "unavailable"}>
+                    {recovery.directory}
+                  </p>
+                  {recovery.agentSessionId && (
+                    <p className="recovery-agent-reference" title={recovery.agentSessionId}>
+                      Reference ID / <code>{recovery.agentSessionId}</code>
+                    </p>
+                  )}
+                  {!recovery.directoryAvailable && (
+                    <p className="recovery-directory-warning">
+                      The saved directory is unavailable. Restore it before recreating.
+                    </p>
+                  )}
+                  <div className="recovery-card-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={busy || !recovery.directoryAvailable}
+                      onClick={() => void recreateMissingSession(recovery)}
+                    >
+                      <TerminalIcon /> {busy ? "Working..." : "Recreate shell"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy}
+                      onClick={() => void forgetMissingSession(recovery)}
+                      aria-label={`Forget recovery record for ${recovery.name}`}
+                    >
+                      <TrashIcon /> Forget
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {loading && sessions.length === 0 ? (
         <section className="session-grid" aria-busy="true">

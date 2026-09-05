@@ -64,6 +64,7 @@ def pane_row(**overrides: str) -> str:
         "history_limit": "2000",
         "alternate_on": "1",
         "pane_dead": "0",
+        "pane_pid": "4321",
     }
     values.update(overrides)
     return OUTPUT_FIELD_SEPARATOR.join(values[field] for field in PANE_FORMAT_FIELDS)

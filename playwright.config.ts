@@ -10,6 +10,7 @@ const messagesFile = `/tmp/muxdeck-playwright-${runId}-messages.json`;
 const snippetsFile = `/tmp/muxdeck-playwright-${runId}-snippets.json`;
 const workspacesFile = `/tmp/muxdeck-playwright-${runId}-workspaces.json`;
 const shortcutsFile = `/tmp/muxdeck-playwright-${runId}-shortcuts.json`;
+const sessionRegistryFile = `/tmp/muxdeck-playwright-${runId}-sessions.sqlite3`;
 const authFile = `/tmp/muxdeck-playwright-${runId}-auth.json`;
 const uploadsDirectory = `/tmp/muxdeck-playwright-${runId}-uploads`;
 const socketName = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET || `muxdeck-playwright-${runId}`;
@@ -45,6 +46,7 @@ process.env.MUXDECK_PLAYWRIGHT_MESSAGES_FILE = messagesFile;
 process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE = snippetsFile;
 process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE = workspacesFile;
 process.env.MUXDECK_PLAYWRIGHT_SHORTCUTS_FILE = shortcutsFile;
+process.env.MUXDECK_PLAYWRIGHT_SESSION_REGISTRY_FILE = sessionRegistryFile;
 process.env.MUXDECK_PLAYWRIGHT_AUTH_FILE = authFile;
 process.env.MUXDECK_PLAYWRIGHT_UPLOADS_DIR = uploadsDirectory;
 process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET = socketName;
@@ -62,7 +64,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} MUXDECK_WORKSPACES_FILE=${workspacesFile} MUXDECK_SHORTCUTS_FILE=${shortcutsFile} MUXDECK_AUTH_MODE=server MUXDECK_AUTH_FILE=${authFile} MUXDECK_AUTH_COOKIE_SECURE=false MUXDECK_UPLOADS_DIR=${uploadsDirectory} ${pythonBin} -m tmux_console.app`,
+    command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} MUXDECK_WORKSPACES_FILE=${workspacesFile} MUXDECK_SHORTCUTS_FILE=${shortcutsFile} MUXDECK_SESSION_REGISTRY_FILE=${sessionRegistryFile} MUXDECK_AUTH_MODE=server MUXDECK_AUTH_FILE=${authFile} MUXDECK_AUTH_COOKIE_SECURE=false MUXDECK_UPLOADS_DIR=${uploadsDirectory} ${pythonBin} -m tmux_console.app`,
     url: "http://127.0.0.1:7684/mux/login",
     reuseExistingServer: false,
     timeout: 10_000,

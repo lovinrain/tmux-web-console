@@ -25,7 +25,7 @@ async def test_shortcuts_api_loads_saves_persists_and_rejects_stale_writes(tmp_p
         base_path="",
     )))
     updated = bindings()
-    updated["command-palette"]["direct"] = "KeyY"
+    updated["command-palette"]["direct"] = "KeyG"
     updated["terminal-copy-mode"]["direct"] = "KeyH"
 
     try:
