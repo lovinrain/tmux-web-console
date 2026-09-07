@@ -13,7 +13,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { SavedWorkspace } from "../api";
+import type { SavedWorkspace, WorkspacePaneLayout } from "../api";
+import { adjacentSeparatorCrossing, type SeparatorCrossing } from "../workspaceSeparatorMovement";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
   ArrowDownIcon,
@@ -60,6 +61,7 @@ import {
   type WorkspaceCommand,
 } from "./WorkspaceCommandPalette";
 import { WorkspaceQuickSwitcher } from "./WorkspaceQuickSwitcher";
+import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 
@@ -73,6 +75,7 @@ export interface SessionWorkspaceNavigationProps {
   separatorsBusy?: boolean;
   separatorsError?: string;
   onChangeSeparator?: (sessionName: string, add: boolean, side?: "before" | "after") => void;
+  onCrossSeparator?: (crossing: SeparatorCrossing) => void;
   sessions: Session[];
   recentsOpen: boolean;
   orientation?: WorkspaceTabOrientation;
@@ -85,6 +88,8 @@ export interface SessionWorkspaceNavigationProps {
   onCloseTab: (sessionName: string) => void;
   onMoveTab?: (sessionName: string, targetIndex: number) => void;
   onMoveTabs?: (sessionNames: string[], targetIndex: number) => void;
+  onTabSelectionChange?: (sessionNames: string[]) => void;
+  onBulkSessionAction?: (action: "close" | "end", sessionNames: string[]) => void;
   onSortTabsByWorkingState?: () => void;
   onToggleTabActions?: () => void;
   onOpenTabInNewWindow?: (
@@ -107,6 +112,11 @@ export interface SessionWorkspaceNavigationProps {
   quickNewSessionError?: string | null;
   onDismissQuickNewSessionError?: () => void;
   onOpenTabSearch?: () => void;
+  paneLayouts?: WorkspacePaneLayout[];
+  activePaneLayoutId?: string | null;
+  paneLayoutsBusy?: boolean;
+  onSelectPaneLayout?: (layoutId: string) => void;
+  onCreatePaneLayout?: () => void | Promise<void>;
   workspacePersistenceState?: WorkspacePersistenceState;
   activeWorkspaceId?: string | null;
   workspaceName?: string | null;
@@ -586,6 +596,15 @@ function buildWorkspaceCommands({
       disabled: !activeSessionLoaded,
       disabledReason: "Open a live session first.",
     }, "view-floating-input"),
+    shortcutCommand({
+      id: "view-floating-terminal",
+      label: "Show or hide utility terminal",
+      description: "Open an independent shell in a movable, resizable workspace window.",
+      category: "View",
+      keywords: ["shell", "floating", "terminal", "pin"],
+      disabled: !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+    }, "view-floating-terminal"),
     {
       id: "view-theme",
       label: "Toggle light or dark theme",
@@ -1121,6 +1140,11 @@ function tabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
   if (event.key === previousKey) nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
   if (event.key === nextKey) nextIndex = (currentIndex + 1) % tabs.length;
   tabs[nextIndex]?.focus();
+}
+
+function assignedPaneSessionCount(node: WorkspacePaneLayout["root"]): number {
+  if (node.kind === "pane") return Number(Boolean(node.session));
+  return assignedPaneSessionCount(node.first) + assignedPaneSessionCount(node.second);
 }
 
 interface WorkspaceSessionRowProps {
@@ -1866,6 +1890,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     quickNewSessionError = null,
     onDismissQuickNewSessionError,
     onOpenTabSearch,
+    paneLayouts = [],
+    activePaneLayoutId = null,
+    paneLayoutsBusy = false,
+    onSelectPaneLayout,
+    onCreatePaneLayout,
     workspacePersistenceState = "unsaved",
     activeWorkspaceId = null,
     workspaceName,
@@ -1877,6 +1906,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const { orientation, compactViewport } = useWorkspaceTabOrientation(
     preferredOrientation,
   );
+  const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
   const { bindings: shortcutBindings } = useShortcutSettings();
   const desktopTabRailMaxWidth = useDesktopTabRailMaxWidth();
   const [internalDesktopTabRailWidth, setInternalDesktopTabRailWidth] = useState(() => (
@@ -1993,13 +2023,32 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     () => new Set(selectedWorkspaceTabs),
     [selectedWorkspaceTabs],
   );
-  const orderedSelection = openSessions.filter((name) => selectedWorkspaceTabSet.has(name));
+  const orderedSelection = useMemo(
+    () => openSessions.filter((name) => selectedWorkspaceTabSet.has(name)),
+    [openSessions, selectedWorkspaceTabSet],
+  );
+  const onTabSelectionChange = props.onTabSelectionChange;
+  useEffect(() => {
+    onTabSelectionChange?.(orderedSelection);
+  }, [onTabSelectionChange, orderedSelection]);
+  useEffect(() => () => onTabSelectionChange?.([]), [onTabSelectionChange]);
+  useEffect(() => { setSelectedWorkspaceTabs([]); }, [activeWorkspaceId]);
   const unselectedTabs = openSessions.filter((name) => !selectedWorkspaceTabSet.has(name));
   const previousSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection[0]) - 1];
   const nextSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection.at(-1)!) + 1];
   const selectionMoveTargets = {
     previous: previousSelectionNeighbor ? unselectedTabs.indexOf(previousSelectionNeighbor) : -1,
     next: nextSelectionNeighbor ? unselectedTabs.indexOf(nextSelectionNeighbor) + 1 : -1,
+  };
+  const separatorCrossing = (names: string[], direction: "previous" | "next") => (
+    orientation === "vertical" && !compactViewport && props.onCrossSeparator
+      ? adjacentSeparatorCrossing(openSessions, names, separatorsBefore, separators, direction) : null
+  );
+  const crossAdjacentSeparator = (names: string[], direction: "previous" | "next") => {
+    const crossing = separatorCrossing(names, direction);
+    if (!crossing) return false;
+    if (!separatorsBusy) props.onCrossSeparator?.(crossing);
+    return true;
   };
 
   const clearWorkspaceTabSelection = useCallback((announce = true) => {
@@ -2739,6 +2788,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   };
 
   const moveSelectedTabs = (direction: "previous" | "next") => {
+    if (crossAdjacentSeparator(orderedSelection, direction)) return;
     const targetIndex = selectionMoveTargets[direction];
     if (!onMoveTabs || orderedSelection.length === 0 || targetIndex < 0) return;
     onMoveTabs(orderedSelection, targetIndex);
@@ -2750,11 +2800,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const moveQuickTab = (sessionName: string, title: string, targetIndex: number) => {
     if (selectedWorkspaceTabSet.has(sessionName) && orderedSelection.length > 1 && onMoveTabs) {
       const direction = targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next";
-      if (selectionMoveTargets[direction] < 0) return;
       reorderFocusIntent.current = { sessionName, direction };
       moveSelectedTabs(direction);
       return;
     }
+    if (crossAdjacentSeparator([sessionName], targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next")) return;
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
     const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex);
     reorderFocusIntent.current = {
@@ -2896,7 +2946,28 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const renderSeparator = (sessionName: string, title: string, side: "before" | "after") => (
     orientation === "vertical" && (side === "before" ? separatorsBefore : separators).includes(sessionName)
       ? <div className="workspace-tab-separator" data-separator-after={side === "after" ? sessionName : undefined}
-          data-separator-before={side === "before" ? sessionName : undefined}>
+          data-separator-before={side === "before" ? sessionName : undefined}
+          onDragOver={(event) => {
+            const crossing = ["previous", "next"].map((direction) => separatorCrossing(workspaceTabDragSessionsRef.current, direction as "previous" | "next"))
+              .find((value) => value?.from.name === sessionName && value.from.side === side);
+            if (!crossing || separatorsBusy) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = "move";
+            event.currentTarget.dataset.crossing = "true";
+          }}
+          onDragLeave={(event) => { delete event.currentTarget.dataset.crossing; }}
+          onDrop={(event) => {
+            const crossing = ["previous", "next"].map((direction) => separatorCrossing(workspaceTabDragSessionsRef.current, direction as "previous" | "next"))
+              .find((value) => value?.from.name === sessionName && value.from.side === side);
+            delete event.currentTarget.dataset.crossing;
+            if (!crossing || separatorsBusy) return;
+            event.preventDefault();
+            event.stopPropagation();
+            props.onCrossSeparator?.(crossing);
+            finishWorkspaceTabDrag();
+          }}
+          title="Drop adjacent tabs here to move them across this separator">
           <span role="separator" aria-label={`Separator ${side} ${title}`} />
           {onChangeSeparator && (
             <button
@@ -2922,11 +2993,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
     const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
     const groupTabIndex = group?.tabs.indexOf(sessionName) ?? -1;
-    const canMovePrevious = selectedDrag && onMoveTabs
-      ? selectionMoveTargets.previous >= 0 : group ? groupTabIndex > 0 : index > 0;
-    const canMoveNext = selectedDrag && onMoveTabs ? selectionMoveTargets.next >= 0 : group
+    const crossingNames = selectedDrag ? orderedSelection : [sessionName];
+    const canMovePrevious = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "previous")) || (selectedDrag && onMoveTabs
+      ? selectionMoveTargets.previous >= 0 : group ? groupTabIndex > 0 : index > 0));
+    const canMoveNext = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "next")) || (selectedDrag && onMoveTabs ? selectionMoveTargets.next >= 0 : group
       ? groupTabIndex >= 0 && groupTabIndex < group.tabs.length - 1
-      : index < openSessions.length - 1;
+      : index < openSessions.length - 1));
     const canDragTab = desktopTabDragEnabled && (
       selectedDrag && onMoveTabs
         ? true
@@ -3000,7 +3072,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           />
           <span className="workspace-tab-title">{title}</span>
         </button>
-        {tabActionsVisible && onMoveTab && openSessions.length > 1 && (
+        {tabActionsVisible && onMoveTab && (openSessions.length > 1 || canMovePrevious || canMoveNext) && (
           <span
             className="workspace-tab-reorder"
             role="group"
@@ -3271,7 +3343,23 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   <span>Separators: {separatorsError}</span>
                 </div>
               )}
-            </>
+              </>
+          )}
+          {orientation === "vertical" && (paneLayouts.length > 0 || onCreatePaneLayout) && (
+            <div className="workspace-pane-layout-heading">
+              <span><GridIcon /> Pane views</span>
+              {onCreatePaneLayout && (
+                <button
+                  type="button"
+                  disabled={paneLayoutsBusy || paneLayouts.length >= 16}
+                  onClick={() => void onCreatePaneLayout()}
+                  aria-label="Create multi-pane view"
+                  title="Create a named, saved multi-pane view"
+                >
+                  <PlusIcon />
+                </button>
+              )}
+            </div>
           )}
           <div className="workspace-tab-viewport">
             <div
@@ -3418,6 +3506,47 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   <span>New group</span>
                 </button>
               )}
+              {paneLayouts.map((paneLayout) => {
+                const active = paneLayout.id === activePaneLayoutId;
+                const assignedCount = assignedPaneSessionCount(paneLayout.root);
+                return (
+                  <div
+                    key={paneLayout.id}
+                    className={active
+                      ? "workspace-tab workspace-pane-layout-tab active"
+                      : "workspace-tab workspace-pane-layout-tab"}
+                    data-workspace-pane-layout-id={paneLayout.id}
+                  >
+                    <button
+                      ref={active ? activeTabRef : undefined}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      aria-controls={active ? "muxdeck-workspace-pane-board" : undefined}
+                      tabIndex={active ? 0 : -1}
+                      title={`${paneLayout.name} - ${assignedCount} assigned ${assignedCount === 1 ? "session" : "sessions"}`}
+                      onClick={() => onSelectPaneLayout?.(paneLayout.id)}
+                      onKeyDown={tabKeyDown}
+                    >
+                      <span className="workspace-pane-layout-icon"><GridIcon /></span>
+                      <span className="workspace-tab-title">{paneLayout.name}</span>
+                      <small>{assignedCount}</small>
+                    </button>
+                  </div>
+                );
+              })}
+              {orientation === "horizontal" && onCreatePaneLayout && (
+                <button
+                  type="button"
+                  className="workspace-pane-layout-create-inline"
+                  disabled={paneLayoutsBusy || paneLayouts.length >= 16}
+                  onClick={() => void onCreatePaneLayout()}
+                  aria-label="Create multi-pane view"
+                  title="Create a named, saved multi-pane view"
+                >
+                  <GridIcon /><PlusIcon /><span>Pane view</span>
+                </button>
+              )}
               {newSessionActive && (
                 <div className="workspace-tab workspace-new-session-tab active">
                   <button
@@ -3470,19 +3599,31 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   <button
                     type="button"
                     onClick={() => moveSelectedTabs("previous")}
-                    disabled={selectionMoveTargets.previous < 0}
+                    disabled={separatorsBusy || (selectionMoveTargets.previous < 0 && !separatorCrossing(orderedSelection, "previous"))}
                     aria-label={`Move selected tabs ${orientation === "vertical" ? "up" : "left"}`}
                     title={`Move selected tabs ${orientation === "vertical" ? "up" : "left"}`}
                   >{orientation === "vertical" ? <ArrowUpIcon /> : <ArrowLeftIcon />}</button>
                   <button
                     type="button"
                     onClick={() => moveSelectedTabs("next")}
-                    disabled={selectionMoveTargets.next < 0}
+                    disabled={separatorsBusy || (selectionMoveTargets.next < 0 && !separatorCrossing(orderedSelection, "next"))}
                     aria-label={`Move selected tabs ${orientation === "vertical" ? "down" : "right"}`}
                     title={`Move selected tabs ${orientation === "vertical" ? "down" : "right"}`}
                   >{orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}</button>
                 </>
               )}
+              {props.onBulkSessionAction && <>
+                <button type="button" className="workspace-selection-bulk-action" aria-label={`Close ${orderedSelection.length} selected tabs`}
+                  title="Close selected tabs; keep their sessions running"
+                  onClick={() => props.onBulkSessionAction?.("close", orderedSelection)}>
+                  <CloseIcon /><span>Close tabs</span>
+                </button>
+                {onSessionTerminated && <button type="button" className="workspace-selection-bulk-action" aria-label={`End ${orderedSelection.length} selected sessions`}
+                  title="End selected tmux sessions everywhere; confirmation required"
+                  onClick={() => props.onBulkSessionAction?.("end", orderedSelection)}>
+                  <TrashIcon /><span>End sessions</span>
+                </button>}
+              </>}
               <button
                 type="button"
                 onClick={() => clearWorkspaceTabSelection()}
@@ -3597,6 +3738,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <span>Recents</span>
             {closedRecentCount > 0 && <strong>{closedRecentCount}</strong>}
           </button>
+          <button type="button" className="workspace-recents-button"
+            onClick={() => setSessionHistoryOpen(true)} aria-haspopup="dialog"
+            title={activeWorkspaceId ? "Persistent session history for this workspace" : "Recycle Bin: save this workspace to track its own session history"}>
+            <HistoryIcon /><span>{activeWorkspaceId ? "Recent Sessions" : "Recycle Bin"}</span>
+          </button>
           {orientation === "vertical" && (
             <div
               className="workspace-tab-rail-resize-handle"
@@ -3624,6 +3770,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         message={windowActionError}
         onDismiss={() => setWindowActionError("")}
       />
+      {sessionHistoryOpen && <SessionHistoryDialog workspaceId={activeWorkspaceId} workspaceName={workspaceName}
+        onClose={() => setSessionHistoryOpen(false)} onOpenSession={onSelect} />}
 
       {quickNewSessionError && onDismissQuickNewSessionError && (
         <WorkspaceWindowActionError

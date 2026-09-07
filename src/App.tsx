@@ -13,11 +13,14 @@ import {
   createWorkspace,
   getWorkspace,
   listSessions,
+  recordClosedSessionTab,
+  releaseUtilityTerminal,
   terminateSession,
   transferSessionToWorkspace,
   updateWorkspace,
   updateWorkspaceActivity,
   type SavedWorkspace,
+  type WorkspacePaneLayout,
   type WorkspaceSessionTransferOperation,
 } from "./api";
 import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
@@ -31,10 +34,13 @@ import {
 import { SessionDashboard } from "./components/SessionDashboard";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
+import { BulkSessionActionsDialog, type BulkSessionAction, type BulkSessionTarget } from "./components/BulkSessionActionsDialog";
+import { FLOATING_TERMINAL_STORAGE_PREFIX, newTemporaryTerminalKey } from "./floatingTerminalState";
 import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
 import { WorkspaceTimer } from "./components/WorkspaceTimer";
 import { HostPulse } from "./components/HostPulse";
 import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
+import { WorkspacePaneBoard } from "./components/WorkspacePaneBoard";
 import {
   SessionWorkspaceNavigation,
   WorkspaceTabSearchDialog,
@@ -86,6 +92,13 @@ import {
   type SessionWorkspaceState,
   type WorkspaceTabGroup,
 } from "./workspaceState";
+import {
+  createWorkspacePaneLayout,
+  reconcileWorkspacePaneLayouts,
+  renameWorkspacePaneSession,
+  replaceWorkspacePaneLayout,
+  workspacePaneSessions,
+} from "./workspacePaneLayouts";
 
 interface MuxLocation {
   path: string;
@@ -99,6 +112,10 @@ interface SessionRoute {
 
 interface NewSessionRoute {
   recentsOpen: boolean;
+}
+
+interface PaneLayoutRoute {
+  layoutId: string;
 }
 
 interface PendingRecentsNavigation {
@@ -245,6 +262,13 @@ function sameWorkspaceGroups(
   });
 }
 
+function sameWorkspacePaneLayouts(
+  left: readonly WorkspacePaneLayout[],
+  right: readonly WorkspacePaneLayout[],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function workspaceActivityUrl(workspaceId: string): string {
   return `${BASE_PATH}/api/workspaces/${encodeURIComponent(workspaceId)}/activity`;
 }
@@ -350,6 +374,15 @@ function parseNewSessionRoute(path: string): NewSessionRoute | null {
 
 function newSessionPath(recentsOpen = false): string {
   return recentsOpen ? `${NEW_SESSION_PATH}/recents` : NEW_SESSION_PATH;
+}
+
+function parsePaneLayoutRoute(path: string): PaneLayoutRoute | null {
+  const match = path.match(/^\/panes\/([^/]+)\/?$/);
+  return match ? { layoutId: decodeSessionName(match[1]) } : null;
+}
+
+function paneLayoutPath(layoutId: string): string {
+  return `/panes/${encodeURIComponent(layoutId)}`;
 }
 
 function withoutRecentsEntry(state: unknown): Record<string, unknown> {
@@ -682,6 +715,10 @@ function AppRoutes() {
     useState(storedDesktopTabRailWidth);
   const [desktopTabActionsVisible, setDesktopTabActionsVisibleState] =
     useState(storedDesktopTabActionsVisible);
+  const [selectedWorkspaceTabs, setSelectedWorkspaceTabs] = useState<string[]>([]);
+  const [bulkSessionAction, setBulkSessionAction] = useState<{
+    action: BulkSessionAction; targets: BulkSessionTarget[]; workspaceKey: string;
+  } | null>(null);
   const [mobileConsoleMode, setMobileConsoleMode] = useState<MobileConsoleMode>(
     "terminal",
   );
@@ -699,7 +736,42 @@ function AppRoutes() {
       workspaceGroupsFromSearch(initialLocation.search, tabs),
     );
   });
+  const [workspacePaneLayouts, setWorkspacePaneLayouts] = useState<WorkspacePaneLayout[]>([]);
+  const workspacePaneLayoutsRef = useRef<WorkspacePaneLayout[]>([]);
+  const [workspacePaneLayoutsBusy, setWorkspacePaneLayoutsBusy] = useState(false);
   const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
+  const [newlySavedWorkspaceId, setNewlySavedWorkspaceId] = useState<string | null>(null);
+  const [temporaryTerminalKey, setTemporaryTerminalKey] = useState(newTemporaryTerminalKey);
+  const temporaryTerminalUsed = useRef(false);
+  const temporaryTerminalKeyRef = useRef(temporaryTerminalKey);
+  temporaryTerminalKeyRef.current = temporaryTerminalKey;
+  const onTemporaryTerminalUsed = useCallback(() => {
+    if (!savedWorkspaceIdFromSearch(currentLocation().search)) temporaryTerminalUsed.current = true;
+  }, []);
+  const releaseTemporaryTerminal = useCallback((destination?: string) => {
+    if (!temporaryTerminalUsed.current) return;
+    temporaryTerminalUsed.current = false;
+    try { sessionStorage.removeItem(`${FLOATING_TERMINAL_STORAGE_PREFIX}${temporaryTerminalKeyRef.current}`); } catch { /* Storage can be unavailable. */ }
+    void releaseUtilityTerminal(temporaryTerminalKeyRef.current, destination)
+      .catch((error: unknown) => console.error(error));
+  }, []);
+  useEffect(() => {
+    const workspaceId = savedWorkspaceIdFromSearch(location.search);
+    const inWorkspace = Boolean(
+      parseSessionRoute(location.path)
+      || parseNewSessionRoute(location.path)
+      || parsePaneLayoutRoute(location.path),
+    );
+    if (temporaryTerminalUsed.current && (workspaceId || !inWorkspace)) {
+      releaseTemporaryTerminal(workspaceId && workspaceId === newlySavedWorkspaceId ? `workspace:${workspaceId}` : undefined);
+      setTemporaryTerminalKey(newTemporaryTerminalKey());
+    }
+  }, [location.path, location.search, newlySavedWorkspaceId, releaseTemporaryTerminal]);
+  useEffect(() => {
+    const release = () => releaseTemporaryTerminal();
+    window.addEventListener("pagehide", release);
+    return () => { window.removeEventListener("pagehide", release); release(); };
+  }, [releaseTemporaryTerminal]);
   const [activeWorkspaceIdentity, setActiveWorkspaceIdentity] =
     useState<ActiveWorkspaceIdentity | null>(null);
   const workspaceSeparators = useWorkspaceSeparators(
@@ -713,6 +785,7 @@ function AppRoutes() {
   const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
     useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
+  const [historySaveError, setHistorySaveError] = useState<string | null>(null);
   const [quickSessionBusy, setQuickSessionBusy] = useState(false);
   const [quickSessionError, setQuickSessionError] = useState<string | null>(null);
   const [tabSearchOpen, setTabSearchOpen] = useState(false);
@@ -783,6 +856,17 @@ function AppRoutes() {
 
   locationRef.current = location;
   workspaceRef.current = workspace;
+  workspacePaneLayoutsRef.current = workspacePaneLayouts;
+
+  useEffect(() => {
+    const reconciled = reconcileWorkspacePaneLayouts(
+      workspacePaneLayoutsRef.current,
+      workspace.openSessions,
+    );
+    if (sameWorkspacePaneLayouts(reconciled, workspacePaneLayoutsRef.current)) return;
+    workspacePaneLayoutsRef.current = reconciled;
+    setWorkspacePaneLayouts(reconciled);
+  }, [workspace.openSessions]);
 
   const recordWorkspaceGroupsSupport = useCallback((supported: boolean | null) => {
     workspaceGroupsSupportedRef.current = supported;
@@ -967,6 +1051,12 @@ function AppRoutes() {
       );
       workspaceRef.current = restoredWorkspace;
       setWorkspace(restoredWorkspace);
+      const restoredPaneLayouts = reconcileWorkspacePaneLayouts(
+        savedWorkspace.paneLayouts ?? [],
+        savedWorkspace.tabs,
+      );
+      workspacePaneLayoutsRef.current = restoredPaneLayouts;
+      setWorkspacePaneLayouts(restoredPaneLayouts);
       knownSessionsRef.current = currentSessions;
       setKnownSessions(currentSessions);
       failedWorkspaceActivity.current = null;
@@ -982,11 +1072,17 @@ function AppRoutes() {
 
       const current = currentLocation();
       const route = parseSessionRoute(current.path);
+      const paneRoute = parsePaneLayoutRoute(current.path);
       let path = current.path;
       if (route || (resume && isDashboardPath(current.path))) {
         path = targetSession
           ? sessionPath(targetSession, Boolean(route?.recentsOpen))
           : "/";
+      } else if (
+        paneRoute
+        && !restoredPaneLayouts.some((layout) => layout.id === paneRoute.layoutId)
+      ) {
+        path = targetSession ? sessionPath(targetSession) : "/";
       }
       const search = searchWithSavedWorkspaceId(
         searchWithWorkspaceState(
@@ -1059,14 +1155,28 @@ function AppRoutes() {
       tabs: [...group.tabs],
     }));
     const route = parseSessionRoute(startingLocation.path);
+    const paneRoute = parsePaneLayoutRoute(startingLocation.path);
+    const paneLayout = paneRoute
+      ? workspacePaneLayoutsRef.current.find((layout) => layout.id === paneRoute.layoutId)
+      : undefined;
+    const paneSession = paneLayout
+      ? workspacePaneSessions(
+          reconcileWorkspacePaneLayouts([paneLayout], tabs)[0],
+        )[0] ?? null
+      : null;
     const activeSession = route && tabs.includes(route.sessionName)
       ? route.sessionName
-      : null;
+      : paneSession && tabs.includes(paneSession)
+        ? paneSession
+        : null;
     const startingNavigationGeneration = navigationGeneration.current;
     const created = await createWorkspace({
       name, tabs, groups, activeSession,
       ...(workspaceSeparators.anchors.length ? { separators: workspaceSeparators.anchors } : {}),
       ...(workspaceSeparators.beforeAnchors.length ? { separatorsBefore: workspaceSeparators.beforeAnchors } : {}),
+      ...(workspacePaneLayoutsRef.current.length
+        ? { paneLayouts: workspacePaneLayoutsRef.current }
+        : {}),
     });
     if (!appMounted.current) return;
 
@@ -1110,6 +1220,12 @@ function AppRoutes() {
     );
     workspaceRef.current = boundWorkspace;
     setWorkspace(boundWorkspace);
+    const createdPaneLayouts = reconcileWorkspacePaneLayouts(
+      created.paneLayouts ?? workspacePaneLayoutsRef.current,
+      created.tabs,
+    );
+    workspacePaneLayoutsRef.current = createdPaneLayouts;
+    setWorkspacePaneLayouts(createdPaneLayouts);
     workspaceSessionRevision.current = {
       workspaceId: created.id,
       value: created.sessionRevision,
@@ -1127,6 +1243,7 @@ function AppRoutes() {
       sessionRevision: created.sessionRevision,
     };
     setWorkspaceIdentity(created);
+    setNewlySavedWorkspaceId(created.id);
     setHydratedWorkspaceBinding(created.id);
     setWorkspaceSyncProblem(null);
 
@@ -1339,6 +1456,7 @@ function AppRoutes() {
 
   const activeRoute = parseSessionRoute(location.path);
   const newSessionRoute = parseNewSessionRoute(location.path);
+  const paneLayoutRoute = parsePaneLayoutRoute(location.path);
   const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
   const workspaceName = (
     locationWorkspaceId && activeWorkspaceIdentity?.id === locationWorkspaceId
@@ -2019,6 +2137,93 @@ function AppRoutes() {
     finishSessionSwitch(sessionName, nextWorkspace);
   }, [finishSessionSwitch, workspace]);
 
+  const persistWorkspacePaneLayouts = useCallback(async (
+    paneLayouts: WorkspacePaneLayout[],
+  ) => {
+    const current = currentLocation();
+    const workspaceId = savedWorkspaceIdFromSearch(current.search);
+    if (!workspaceId) {
+      workspacePaneLayoutsRef.current = paneLayouts;
+      setWorkspacePaneLayouts(paneLayouts);
+      return;
+    }
+    const revision = workspaceSessionRevision.current;
+    if (
+      hydratedWorkspaceIdRef.current !== workspaceId
+      || revision?.workspaceId !== workspaceId
+    ) {
+      throw new Error("Wait for this saved workspace to finish opening.");
+    }
+    if (workspacePaneLayoutsBusy) {
+      throw new Error("An earlier pane layout change is still saving.");
+    }
+    setWorkspacePaneLayoutsBusy(true);
+    try {
+      const updated = await updateWorkspace(workspaceId, {
+        paneLayouts,
+        sessionRevision: revision.value,
+      });
+      if (
+        !appMounted.current
+        || savedWorkspaceIdFromSearch(currentLocation().search) !== workspaceId
+      ) return;
+      const savedLayouts = reconcileWorkspacePaneLayouts(
+        updated.paneLayouts ?? paneLayouts,
+        workspaceRef.current.openSessions,
+      );
+      workspacePaneLayoutsRef.current = savedLayouts;
+      setWorkspacePaneLayouts(savedLayouts);
+      workspaceSessionRevision.current = {
+        workspaceId,
+        value: updated.sessionRevision,
+      };
+      setWorkspaceIdentity(updated);
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) {
+        void hydrateSavedWorkspace(workspaceId);
+      }
+      throw error;
+    } finally {
+      if (appMounted.current) setWorkspacePaneLayoutsBusy(false);
+    }
+  }, [hydrateSavedWorkspace, setWorkspaceIdentity, workspacePaneLayoutsBusy]);
+
+  const selectWorkspacePaneLayout = useCallback((layoutId: string) => {
+    if (!workspacePaneLayoutsRef.current.some((layout) => layout.id === layoutId)) return;
+    const current = currentLocation();
+    replaceLocation(window.history.state, paneLayoutPath(layoutId), current.search);
+    syncLocation();
+  }, [replaceLocation, syncLocation]);
+
+  const createWorkspacePaneView = useCallback(async () => {
+    if (workspacePaneLayoutsRef.current.length >= 16 || workspacePaneLayoutsBusy) return;
+    const current = currentLocation();
+    const route = parseSessionRoute(current.path);
+    const initialSession = route?.sessionName
+      ?? workspaceRef.current.recentSessions.find((sessionName) => (
+        workspaceRef.current.openSessions.includes(sessionName)
+      ))
+      ?? workspaceRef.current.openSessions[0]
+      ?? null;
+    const created = createWorkspacePaneLayout(
+      workspacePaneLayoutsRef.current,
+      initialSession,
+    );
+    const nextLayouts = [...workspacePaneLayoutsRef.current, created];
+    await persistWorkspacePaneLayouts(nextLayouts);
+    selectWorkspacePaneLayout(created.id);
+  }, [persistWorkspacePaneLayouts, selectWorkspacePaneLayout, workspacePaneLayoutsBusy]);
+
+  const updateWorkspacePaneView = useCallback(async (
+    nextLayout: WorkspacePaneLayout,
+  ) => {
+    const nextLayouts = replaceWorkspacePaneLayout(
+      workspacePaneLayoutsRef.current,
+      nextLayout,
+    );
+    await persistWorkspacePaneLayouts(nextLayouts);
+  }, [persistWorkspacePaneLayouts]);
+
   const commitWorkspaceStructure = useCallback((nextWorkspace: SessionWorkspaceState) => {
     if (nextWorkspace === workspaceRef.current) return;
     workspaceRef.current = nextWorkspace;
@@ -2092,7 +2297,9 @@ function AppRoutes() {
   const openTabSearch = useCallback(() => {
     const current = currentLocation();
     if (
-      (!parseSessionRoute(current.path) && !parseNewSessionRoute(current.path))
+      (!parseSessionRoute(current.path)
+        && !parseNewSessionRoute(current.path)
+        && !parsePaneLayoutRoute(current.path))
       || workspaceRef.current.openSessions.length === 0
       || isCompactWorkspaceViewport()
       || document.querySelector('[aria-modal="true"]')
@@ -2127,7 +2334,11 @@ function AppRoutes() {
       ) return;
 
       const current = currentLocation();
-      if (!parseSessionRoute(current.path) && !parseNewSessionRoute(current.path)) return;
+      if (
+        !parseSessionRoute(current.path)
+        && !parseNewSessionRoute(current.path)
+        && !parsePaneLayoutRoute(current.path)
+      ) return;
 
       const searchRequested = matchesDirectShortcut(
         event,
@@ -2278,6 +2489,40 @@ function AppRoutes() {
     navigateToDashboard(workspaceRef.current);
   }, [navigateToDashboard]);
 
+  const deleteWorkspacePaneView = useCallback(async (layoutId: string) => {
+    const removed = workspacePaneLayoutsRef.current.find(
+      (layout) => layout.id === layoutId,
+    );
+    const nextLayouts = workspacePaneLayoutsRef.current.filter(
+      (layout) => layout.id !== layoutId,
+    );
+    await persistWorkspacePaneLayouts(nextLayouts);
+    const target = removed
+      ? workspacePaneSessions(removed).find((sessionName) => (
+        workspaceRef.current.openSessions.includes(sessionName)
+      ))
+      : undefined;
+    if (target) switchSession(target);
+    else returnToDashboard();
+  }, [persistWorkspacePaneLayouts, returnToDashboard, switchSession]);
+
+  const exitWorkspacePaneView = useCallback(() => {
+    const route = parsePaneLayoutRoute(currentLocation().path);
+    const layout = route
+      ? workspacePaneLayoutsRef.current.find((item) => item.id === route.layoutId)
+      : undefined;
+    const target = layout
+      ? workspacePaneSessions(layout).find((sessionName) => (
+        workspaceRef.current.openSessions.includes(sessionName)
+      ))
+      : undefined;
+    const fallback = workspaceRef.current.recentSessions.find((sessionName) => (
+      workspaceRef.current.openSessions.includes(sessionName)
+    ));
+    if (target || fallback) switchSession(target ?? fallback!);
+    else returnToDashboard();
+  }, [returnToDashboard, switchSession]);
+
   const closeNewSessionView = useCallback(() => {
     const returnSession = newSessionReturnSession(window.history.state);
     if (returnSession) {
@@ -2338,8 +2583,13 @@ function AppRoutes() {
   const openSessionInNewWindow = useCallback((
     sessionName: string,
     mode: OpenTabInNewWindowMode,
+    selectedSessions?: string[],
   ): OpenTabInNewWindowResult => {
     if (!workspaceRef.current.openSessions.includes(sessionName)) return "failed";
+    const selected = new Set(selectedSessions || [sessionName]);
+    const tabs = workspaceRef.current.openSessions.filter((name) => selected.has(name));
+    if (tabs.length === 0) return "failed";
+    const focusedSession = tabs.includes(sessionName) ? sessionName : tabs[0];
     const current = currentLocation();
     const savedWorkspaceId = savedWorkspaceIdFromSearch(current.search);
     if (mode === "move" && savedWorkspaceId) {
@@ -2364,9 +2614,9 @@ function AppRoutes() {
         return "workspace-sync-pending";
       }
     }
-    const search = isolatedWorkspaceSearch(current.search, [sessionName]);
+    const search = isolatedWorkspaceSearch(current.search, tabs);
     const destination = new URL(
-      targetUrl(sessionPath(sessionName), search),
+      targetUrl(sessionPath(focusedSession), search),
       window.location.href,
     ).toString();
 
@@ -2390,10 +2640,17 @@ function AppRoutes() {
   const splitSessionIntoNewWorkspace = useCallback((
     sessionName: string,
   ): OpenTabInNewWindowResult => (
-    openSessionInNewWindow(sessionName, "copy")
-  ), [openSessionInNewWindow]);
+    openSessionInNewWindow(sessionName, "copy", selectedWorkspaceTabs.length > 1 ? selectedWorkspaceTabs : undefined)
+  ), [openSessionInNewWindow, selectedWorkspaceTabs]);
 
   const closeSessionTab = useCallback((sessionName: string) => {
+    const live = knownSessionsRef.current.find((item) => item.name === sessionName);
+    if (live) {
+      void Promise.resolve(recordClosedSessionTab(live.name, live.id)).catch((error: unknown) => {
+        if (error instanceof ApiRequestError && error.status === 404) return;
+        setHistorySaveError(`Tab closed, but its history could not be recorded: ${workspaceErrorMessage(error, "history is unavailable")}`);
+      });
+    }
     const route = parseSessionRoute(currentLocation().path);
     const currentWorkspace = workspaceRef.current;
     const nextSession = sessionAfterClose(currentWorkspace.openSessions, sessionName);
@@ -2487,6 +2744,30 @@ function AppRoutes() {
     }
   }, [closeSessionTab]);
 
+  const requestBulkSessionAction = useCallback((action: BulkSessionAction, names: string[]) => {
+    const selected = new Set(names);
+    const active = parseSessionRoute(currentLocation().path)?.sessionName;
+    const ordered = workspaceRef.current.openSessions.filter((name) => selected.has(name));
+    // Close the active tab last to avoid navigating through tabs about to be removed.
+    const targets = [...ordered.filter((name) => name !== active), ...ordered.filter((name) => name === active)]
+      .map((name) => ({ name, session: knownSessionsRef.current.find((session) => session.name === name) }));
+    const workspaceKey = savedWorkspaceIdFromSearch(currentLocation().search) || temporaryTerminalKeyRef.current;
+    if (targets.length) setBulkSessionAction({ action, targets, workspaceKey });
+  }, []);
+
+  const applyBulkSessionAction = async (target: BulkSessionTarget) => {
+    if (bulkSessionAction?.action === "close") {
+      const currentKey = savedWorkspaceIdFromSearch(currentLocation().search) || temporaryTerminalKeyRef.current;
+      if (currentKey !== bulkSessionAction.workspaceKey) throw new Error("Workspace changed; reselect tabs in the intended workspace.");
+      closeSessionTab(target.name);
+    } else if (target.session) {
+      const session = target.session;
+      await terminateOpenSession(session.name, session.id, session.created, session.serverStarted, session.serverPid);
+    } else {
+      throw new Error("Session unavailable; refresh before trying to end it.");
+    }
+  };
+
   const clearRecents = useCallback(() => {
     setWorkspace(clearClosedWorkspaceHistory);
   }, []);
@@ -2508,6 +2789,26 @@ function AppRoutes() {
     setKnownSessions(currentSessions);
     syncLocation();
   }, [syncLocation]);
+
+  useEffect(() => {
+    if (!parsePaneLayoutRoute(location.path)) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const sessions = await listSessions();
+        if (!cancelled) replaceKnownSessions(sessions);
+      } catch {
+        // Each embedded console displays its own connection state; keep the
+        // most recent inventory while a transient list request is unavailable.
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [location.path, replaceKnownSessions]);
 
   const updateKnownSession = useCallback((updatedSession: Session) => {
     if (terminatedSessionsRef.current.some(
@@ -2714,6 +3015,15 @@ function AppRoutes() {
       : workspaceRef.current;
     workspaceRef.current = nextWorkspace;
     setWorkspace(nextWorkspace);
+    if (previousNameStillBelongsToSession) {
+      const renamedPaneLayouts = renameWorkspacePaneSession(
+        workspacePaneLayoutsRef.current,
+        previousName,
+        nextName,
+      );
+      workspacePaneLayoutsRef.current = renamedPaneLayouts;
+      setWorkspacePaneLayouts(renamedPaneLayouts);
+    }
     const nextKnownSessions = knownSessionsRef.current.map((session) => (
       session.id === sessionId && session.name === previousName
         ? { ...session, name: nextName }
@@ -2871,6 +3181,16 @@ function AppRoutes() {
   };
 
   const tabSearchActiveSession = activeRoute?.sessionName
+    ?? (paneLayoutRoute
+      ? workspacePaneLayouts
+          .find((layout) => layout.id === paneLayoutRoute.layoutId)
+          ? workspacePaneSessions(
+              workspacePaneLayouts.find(
+                (layout) => layout.id === paneLayoutRoute.layoutId,
+              )!,
+            )[0] ?? null
+          : null
+      : null)
     ?? (newSessionRoute
       ? null
       : workspace.recentSessions.find((sessionName) => (
@@ -2892,6 +3212,13 @@ function AppRoutes() {
 
   const withWorkspaceSyncNotice = (content: ReactNode) => (
     <>
+      {bulkSessionAction && <BulkSessionActionsDialog
+        action={bulkSessionAction.action} targets={bulkSessionAction.targets}
+        onApply={applyBulkSessionAction} onClose={() => setBulkSessionAction(null)}
+      />}
+      {historySaveError && <aside className="workspace-sync-notice" role="alert">
+        <p>{historySaveError}</p><button type="button" onClick={() => setHistorySaveError(null)}>Dismiss</button>
+      </aside>}
       {workspaceSyncProblem && !workspaceSyncNoticeDismissed && (
         <aside
           className={activeRoute
@@ -2947,7 +3274,7 @@ function AppRoutes() {
           </div>
         </aside>
       )}
-      {tabSearchOpen && (activeRoute || newSessionRoute) && (
+      {tabSearchOpen && (activeRoute || newSessionRoute || paneLayoutRoute) && (
         <WorkspaceTabSearchDialog
           activeSession={tabSearchActiveSession}
           openSessions={workspace.openSessions}
@@ -2970,6 +3297,173 @@ function AppRoutes() {
     ),
   );
 
+  if (paneLayoutRoute) {
+    const paneLayout = workspacePaneLayouts.find(
+      (layout) => layout.id === paneLayoutRoute.layoutId,
+    );
+    if (!paneLayout) {
+      return withWorkspaceSyncNotice(
+        <main className="workspace-pane-loading">
+          <p>{workspacePersistenceState === "loading"
+            ? "Opening saved pane view..."
+            : "This pane view is no longer available."}</p>
+          <button type="button" onClick={exitWorkspacePaneView}>Return to session</button>
+        </main>,
+      );
+    }
+    const paneSessionNames = workspacePaneSessions(paneLayout);
+    const widgetSessionName = paneSessionNames[0]
+      ?? workspace.recentSessions.find((sessionName) => (
+        workspace.openSessions.includes(sessionName)
+      ));
+    const paneHeaderWidgets = widgetSessionName ? (
+      <div className="workspace-header-widgets">
+        <ScopedStickyNotes
+          sessionName={widgetSessionName}
+          workspaceId={hydratedWorkspaceId === locationWorkspaceId
+            ? locationWorkspaceId
+            : null}
+          workspaceName={workspaceName}
+        />
+        <WorkspaceTimer
+          sessionName={widgetSessionName}
+          workspaceId={hydratedWorkspaceId === locationWorkspaceId
+            ? locationWorkspaceId
+            : null}
+          workspaceName={workspaceName}
+        />
+        <HostPulse
+          sessionName={widgetSessionName}
+          workspaceId={hydratedWorkspaceId === locationWorkspaceId
+            ? locationWorkspaceId
+            : null}
+          workspaceName={workspaceName}
+        />
+      </div>
+    ) : undefined;
+    const paneLinks = widgetSessionName ? (
+      <WorkspaceQuickLinks
+        sessionName={widgetSessionName}
+        workspaceId={hydratedWorkspaceId === locationWorkspaceId
+          ? locationWorkspaceId
+          : null}
+        workspaceName={workspaceName}
+      />
+    ) : undefined;
+    const paneNavigation = (
+      <SessionWorkspaceNavigation
+        activeSession={null}
+        separators={workspaceSeparators.anchors}
+        separatorsBefore={workspaceSeparators.beforeAnchors}
+        separatorsBusy={workspaceSeparators.busy}
+        separatorsError={workspaceSeparators.error}
+        onChangeSeparator={workspaceSeparators.change}
+        onCrossSeparator={workspaceSeparators.cross}
+        openSessions={workspace.openSessions}
+        recentSessions={workspace.recentSessions}
+        groups={workspace.groups}
+        sessions={knownSessions}
+        recentsOpen={false}
+        tabsVisible={consoleBars.sessionTabs}
+        tabActionsVisible={desktopTabActionsVisible}
+        orientation={desktopTabOrientation}
+        desktopTabRailWidth={desktopTabRailWidth}
+        onDesktopTabRailWidthChange={setDesktopTabRailWidth}
+        onSelect={switchSession}
+        onMoveTab={moveSessionTab}
+        onMoveTabs={moveSessionTabs}
+        onTabSelectionChange={setSelectedWorkspaceTabs}
+        onBulkSessionAction={requestBulkSessionAction}
+        onSortTabsByWorkingState={sortSessionTabsByWorkingState}
+        onToggleTabActions={() => setDesktopTabActionsVisible(
+          !desktopTabActionsVisible,
+        )}
+        onSaveTabGroup={saveTabGroup}
+        onDeleteTabGroup={deleteTabGroup}
+        onToggleTabGroup={toggleTabGroup}
+        onMoveTabGroup={moveTabGroup}
+        onOpenTabInNewWindow={openSessionInNewWindow}
+        onCloseTab={closeSessionTab}
+        onOpenRecents={openRecents}
+        onCloseRecents={closeRecents}
+        onClearRecents={clearRecents}
+        onOpenDashboard={returnToDashboard}
+        dashboardWindowHref={dashboardWindowHref}
+        onNewSession={openNewSession}
+        onQuickNewSession={createQuickSession}
+        quickNewSessionBusy={quickSessionBusy}
+        quickNewSessionError={quickSessionError}
+        onDismissQuickNewSessionError={() => setQuickSessionError(null)}
+        onOpenTabSearch={openTabSearch}
+        paneLayouts={workspacePaneLayouts}
+        activePaneLayoutId={paneLayout.id}
+        paneLayoutsBusy={workspacePaneLayoutsBusy}
+        onSelectPaneLayout={selectWorkspacePaneLayout}
+        onCreatePaneLayout={createWorkspacePaneView}
+        workspacePersistenceState={workspacePersistenceState}
+        activeWorkspaceId={locationWorkspaceId}
+        workspaceName={workspaceName}
+        onSwitchWorkspace={openSavedWorkspace}
+        onSaveWorkspace={saveCurrentWorkspace}
+        onRenameWorkspace={renameCurrentWorkspace}
+        onSessionTerminated={terminateOpenSession}
+      />
+    );
+
+    return withWorkspaceSyncNotice(
+      <WorkspacePaneBoard
+        layout={paneLayout}
+        openSessions={workspace.openSessions}
+        sessions={knownSessions}
+        workspaceName={workspaceName}
+        workspaceLinks={paneLinks}
+        headerWidgets={paneHeaderWidgets}
+        sessionNavigation={paneNavigation}
+        desktopTabOrientation={desktopTabOrientation}
+        desktopTabRailWidth={desktopTabRailWidth}
+        workspacePersistenceState={workspacePersistenceState}
+        onChange={updateWorkspacePaneView}
+        onDelete={deleteWorkspacePaneView}
+        onExit={exitWorkspacePaneView}
+        renderSession={(sessionName, paneId, active, onActivate) => (
+          <ConsoleScreen
+            key={`${paneLayout.id}:${paneId}:${sessionName}`}
+            sessionName={sessionName}
+            embedded
+            instanceId={`${paneLayout.id}-${paneId}`}
+            keyboardShortcutsEnabled={active}
+            onActivate={onActivate}
+            sessionSnapshot={knownSessions.find(
+              (session) => session.name === sessionName,
+            ) ?? null}
+            workspaceId={hydratedWorkspaceId === locationWorkspaceId
+              ? locationWorkspaceId
+              : null}
+            workspaceName={workspaceName}
+            onBack={exitWorkspacePaneView}
+            onSessionUpdate={updateKnownSession}
+            onWorkspacePinChange={sessionWorkspacePinChanged}
+            onSessionWorkspaceTransfer={transferOpenSessionToWorkspace}
+            workspaceTransferDisabled={workspacePersistenceState === "loading"
+              || workspacePersistenceState === "error"}
+            onSessionRenamed={renameOpenSession}
+            onSessionTerminated={terminateOpenSession}
+            onSessionCopied={completeCopiedSession}
+            onSplitWorkspace={splitSessionIntoNewWorkspace}
+            splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
+            copySessionDisabled={workspacePersistenceState === "loading"}
+            renameWarning={knownSessions.find((item) => item.name === sessionName)
+              ? renameWarnings.get(
+                  knownSessions.find((item) => item.name === sessionName)!.id,
+                ) ?? null
+              : null}
+            onDismissRenameWarning={dismissRenameWarning}
+          />
+        )}
+      />,
+    );
+  }
+
   if (activeRoute) {
     const { sessionName, recentsOpen } = activeRoute;
     const liveSession = knownSessions.find((session) => session.name === sessionName);
@@ -2981,6 +3475,8 @@ function AppRoutes() {
     return withWorkspaceSyncNotice(
       <ConsoleScreen
         sessionName={sessionName}
+        temporaryTerminalKey={temporaryTerminalKey}
+        onTemporaryTerminalUsed={onTemporaryTerminalUsed}
         workspaceId={hydratedWorkspaceId === locationWorkspaceId
           ? locationWorkspaceId
           : null}
@@ -3046,6 +3542,7 @@ function AppRoutes() {
         onSessionTerminated={terminateOpenSession}
         onSessionCopied={completeCopiedSession}
         onSplitWorkspace={splitSessionIntoNewWorkspace}
+        splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
         copySessionDisabled={workspacePersistenceState === "loading"}
         renameWarning={renameWarning}
         onDismissRenameWarning={dismissRenameWarning}
@@ -3057,6 +3554,7 @@ function AppRoutes() {
             separatorsBusy={workspaceSeparators.busy}
             separatorsError={workspaceSeparators.error}
             onChangeSeparator={workspaceSeparators.change}
+            onCrossSeparator={workspaceSeparators.cross}
             openSessions={workspace.openSessions}
             recentSessions={workspace.recentSessions}
             groups={workspace.groups}
@@ -3070,6 +3568,8 @@ function AppRoutes() {
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
             onMoveTabs={moveSessionTabs}
+            onTabSelectionChange={setSelectedWorkspaceTabs}
+            onBulkSessionAction={requestBulkSessionAction}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onToggleTabActions={() => setDesktopTabActionsVisible(
               !desktopTabActionsVisible,
@@ -3091,6 +3591,11 @@ function AppRoutes() {
             quickNewSessionError={quickSessionError}
             onDismissQuickNewSessionError={() => setQuickSessionError(null)}
             onOpenTabSearch={openTabSearch}
+            paneLayouts={workspacePaneLayouts}
+            activePaneLayoutId={null}
+            paneLayoutsBusy={workspacePaneLayoutsBusy}
+            onSelectPaneLayout={selectWorkspacePaneLayout}
+            onCreatePaneLayout={createWorkspacePaneView}
             workspacePersistenceState={workspacePersistenceState}
             activeWorkspaceId={locationWorkspaceId}
             workspaceName={workspaceName}
@@ -3120,6 +3625,7 @@ function AppRoutes() {
             separatorsBusy={workspaceSeparators.busy}
             separatorsError={workspaceSeparators.error}
             onChangeSeparator={workspaceSeparators.change}
+            onCrossSeparator={workspaceSeparators.cross}
             openSessions={workspace.openSessions}
             recentSessions={workspace.recentSessions}
             groups={workspace.groups}
@@ -3133,6 +3639,8 @@ function AppRoutes() {
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
             onMoveTabs={moveSessionTabs}
+            onTabSelectionChange={setSelectedWorkspaceTabs}
+            onBulkSessionAction={requestBulkSessionAction}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onToggleTabActions={() => setDesktopTabActionsVisible(
               !desktopTabActionsVisible,
@@ -3155,6 +3663,11 @@ function AppRoutes() {
             quickNewSessionError={quickSessionError}
             onDismissQuickNewSessionError={() => setQuickSessionError(null)}
             onOpenTabSearch={openTabSearch}
+            paneLayouts={workspacePaneLayouts}
+            activePaneLayoutId={null}
+            paneLayoutsBusy={workspacePaneLayoutsBusy}
+            onSelectPaneLayout={selectWorkspacePaneLayout}
+            onCreatePaneLayout={createWorkspacePaneView}
             workspacePersistenceState={workspacePersistenceState}
             activeWorkspaceId={locationWorkspaceId}
             workspaceName={workspaceName}

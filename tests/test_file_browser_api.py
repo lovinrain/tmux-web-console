@@ -16,6 +16,7 @@ from tmux_console.tmux import Pane, Session, TmuxClient, TmuxError
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"preview payload"
 PDF_BYTES = b"%PDF-1.7\n% muxdeck test\n%%EOF\n"
+HTML_BYTES = b"<!doctype html><html><body><h1>Muxdeck</h1></body></html>\n"
 
 
 def make_pane(path: Path, pane_id: str = "%3") -> Pane:
@@ -283,6 +284,42 @@ def test_pdf_preview_is_signature_checked_and_capped(tmp_path, monkeypatch):
         file_browser.resolve_file_pdf_preview(
             str(tmp_path),
             "guide.pdf",
+            boundary=None,
+        )
+
+
+def test_html_preview_is_extension_checked_and_size_limited(tmp_path, monkeypatch):
+    document = tmp_path / "report.HTML"
+    document.write_bytes(HTML_BYTES)
+    disguised = tmp_path / "report.txt"
+    disguised.write_bytes(HTML_BYTES)
+
+    resolved = file_browser.resolve_file_html_preview(
+        str(tmp_path),
+        "report.HTML",
+        boundary=None,
+    )
+    assert resolved.path == document
+    assert resolved.name == "report.HTML"
+
+    with pytest.raises(
+        file_browser.FileBrowserUnsupportedHtmlError,
+        match="HTML document",
+    ):
+        file_browser.resolve_file_html_preview(
+            str(tmp_path),
+            "report.txt",
+            boundary=None,
+        )
+
+    monkeypatch.setattr(file_browser, "MAX_HTML_PREVIEW_BYTES", len(HTML_BYTES) - 1)
+    with pytest.raises(
+        file_browser.FileBrowserHtmlTooLargeError,
+        match="10 MiB preview limit",
+    ):
+        file_browser.resolve_file_html_preview(
+            str(tmp_path),
+            "report.HTML",
             boundary=None,
         )
 
@@ -632,6 +669,38 @@ async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
         assert pdf.headers["Cross-Origin-Resource-Policy"] == "same-origin"
         assert pdf.headers["X-Frame-Options"] == "SAMEORIGIN"
         assert pdf.headers["X-Content-Type-Options"] == "nosniff"
+
+        html_name = "report page.HTML"
+        (nested / html_name).write_bytes(HTML_BYTES)
+        html = await client.get(
+            "/api/sessions/files-agent/files/html",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": f"incoming/{html_name}",
+            },
+        )
+        assert html.status == 200
+        assert await html.read() == HTML_BYTES
+        assert html.headers["Content-Type"] == "text/html; charset=utf-8"
+        assert html.headers["Cache-Control"] == "private, no-store"
+        assert html.headers["Content-Disposition"].startswith("inline;")
+        assert "sandbox" in html.headers["Content-Security-Policy"]
+        assert "script-src 'none'" in html.headers["Content-Security-Policy"]
+        assert "connect-src 'none'" in html.headers["Content-Security-Policy"]
+        assert html.headers["X-Frame-Options"] == "DENY"
+        assert html.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert html.headers["X-Content-Type-Options"] == "nosniff"
+
+        unsupported_html = await client.get(
+            "/api/sessions/files-agent/files/html",
+            params={
+                "sessionId": "$7",
+                "paneId": "%3",
+                "path": f"incoming/{image_name}",
+            },
+        )
+        assert unsupported_html.status == 415
     finally:
         await client.close()
 
@@ -833,6 +902,13 @@ async def test_file_browser_api_validates_queries_and_containment(tmp_path, monk
         )
         assert missing_pdf_path.status == 400
         assert await missing_pdf_path.json() == {"error": "path is required"}
+
+        missing_html_path = await client.get(
+            "/api/sessions/files-agent/files/html",
+            params={"sessionId": "$7", "paneId": "%3"},
+        )
+        assert missing_html_path.status == 400
+        assert await missing_html_path.json() == {"error": "path is required"}
 
         escaped_download = await client.get(
             "/api/sessions/files-agent/files/download",

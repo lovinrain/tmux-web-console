@@ -38,6 +38,7 @@ import {
   saveShortcutSettings,
   searchSessionFiles,
   sessionFileDownloadUrl,
+  sessionFileHtmlUrl,
   sessionFileImageUrl,
   sessionFilePdfUrl,
   subscribeToSessions,
@@ -521,6 +522,9 @@ describe("session file browser API", () => {
     );
     expect(sessionFilePdfUrl(target, "docs/guide.pdf")).toBe(
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/pdf?sessionId=%247&paneId=%253&path=docs%2Fguide.pdf`,
+    );
+    expect(sessionFileHtmlUrl({ ...target, root: "/srv/data" }, "report.html")).toBe(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/files/html?sessionId=%247&paneId=%253&path=report.html&root=%2Fsrv%2Fdata`,
     );
     // An explicit root travels with every request once the browser leaves the
     // pane's own directory.

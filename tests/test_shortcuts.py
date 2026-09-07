@@ -9,6 +9,7 @@ import pytest
 from tmux_console.shortcuts import (
     DEFAULT_SHORTCUT_BINDINGS,
     FLOATING_INPUT_ACTION,
+    FLOATING_TERMINAL_ACTION,
     PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
     QUICK_SESSION_ACTION,
     SHORTCUT_DOCUMENT_VERSION,
@@ -50,6 +51,7 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     legacy = bindings()
     legacy.pop(QUICK_SESSION_ACTION)
     legacy.pop(FLOATING_INPUT_ACTION)
+    legacy.pop(FLOATING_TERMINAL_ACTION)
     legacy["command-palette"]["direct"] = "KeyG"
     path.write_text(
         json.dumps({"version": 1, "revision": 7, "bindings": legacy}),
@@ -83,6 +85,7 @@ def test_shortcut_store_does_not_override_legacy_default_key_conflicts(tmp_path)
     legacy = bindings()
     legacy.pop(QUICK_SESSION_ACTION)
     legacy.pop(FLOATING_INPUT_ACTION)
+    legacy.pop(FLOATING_TERMINAL_ACTION)
     legacy["command-palette"]["direct"] = "KeyK"
     legacy["terminal-copy-mode"]["direct"] = "KeyH"
     legacy["command-palette"]["launcher"] = "KeyK"
@@ -110,6 +113,7 @@ def test_shortcut_store_upgrades_version_two_without_overriding_key_y(tmp_path):
     path = tmp_path / "shortcuts.json"
     previous = bindings()
     previous.pop(FLOATING_INPUT_ACTION)
+    previous.pop(FLOATING_TERMINAL_ACTION)
     previous["command-palette"]["direct"] = "KeyY"
     path.write_text(
         json.dumps({
@@ -132,7 +136,19 @@ def test_shortcut_store_upgrades_version_two_without_overriding_key_y(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
 
     store.replace_bindings(snapshot["bindings"], expected_revision=4)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == SHORTCUT_DOCUMENT_VERSION
+
+
+def test_version_three_adds_terminal_without_overwriting_custom_bindings(tmp_path):
+    path = tmp_path / "shortcuts.json"
+    previous = bindings()
+    previous.pop(FLOATING_TERMINAL_ACTION)
+    previous["command-palette"]["direct"] = "KeyJ"
+    path.write_text(json.dumps({"version": 3, "revision": 9, "bindings": previous}))
+    snapshot = ShortcutStore(path).get_snapshot()
+    assert snapshot["revision"] == 9
+    assert snapshot["bindings"][FLOATING_TERMINAL_ACTION] == {"direct": None, "launcher": "KeyJ"}
+    assert snapshot["bindings"][FLOATING_INPUT_ACTION] == previous[FLOATING_INPUT_ACTION]
 
 
 def test_shortcut_store_rejects_stale_and_conflicting_bindings(tmp_path):

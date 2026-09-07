@@ -43,6 +43,7 @@ const liveTerminalState = vi.hoisted(() => ({
 
 vi.mock("../api", () => ({
   BASE_PATH: "/mux",
+  releaseUtilityTerminal: vi.fn().mockResolvedValue(undefined),
   copySession: vi.fn(),
   listSessions: vi.fn(),
   listQueuedMessages: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("../api", () => ({
   resolveSessionFilePath: vi.fn(),
   searchSessionFiles: vi.fn(),
   sessionFileDownloadUrl: vi.fn(() => "/mux/files/download"),
+  sessionFileHtmlUrl: vi.fn(() => "/mux/files/html"),
   sessionFileImageUrl: vi.fn(() => "/mux/files/image"),
   sessionFilePdfUrl: vi.fn(() => "/mux/files/pdf"),
   renameSession: vi.fn(),
@@ -187,6 +189,34 @@ beforeEach(() => {
 });
 
 describe("ConsoleScreen session identity", () => {
+  it("uses scoped controls and a supplied snapshot in an embedded pane", async () => {
+    const { container } = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        embedded
+        instanceId="layout-left"
+        sessionSnapshot={session()}
+        keyboardShortcutsEnabled={false}
+        onBack={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(container.querySelector("main")).toBeNull();
+    expect(container.querySelector(".embedded-console")).toHaveAttribute(
+      "class",
+      expect.stringContaining("embedded-console"),
+    );
+    expect(screen.getByRole("button", { name: "Browser terminal copy mode" }))
+      .toHaveAttribute("aria-controls", "muxdeck-pane-layout-left-console");
+    expect(screen.queryByRole("group", {
+      name: "Sessions and workspaces navigation",
+    })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Staged input" }))
+      .toHaveAttribute("id", "muxdeck-pane-layout-left-staged-textarea");
+  });
+
   it("splits landing-page navigation between this window and a new window", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     const onBack = vi.fn();
@@ -229,7 +259,7 @@ describe("ConsoleScreen session identity", () => {
     const files = await screen.findByRole("dialog", { name: "Files" });
     expect(cwd).toHaveAttribute("aria-expanded", "true");
     expect(listSessionFiles).toHaveBeenCalledWith(
-      { session: "test", sessionId: "$1", paneId: "%1" },
+      { session: "test", sessionId: "$1", paneId: "%1", root: "/work" },
       "",
       expect.any(AbortSignal),
     );
@@ -240,6 +270,26 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("/work");
     expect(liveTerminalHandle.send).not.toHaveBeenCalled();
     expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+  });
+
+  it("foregrounds the retained file browser in normal and focus views", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Browse files in /work" }));
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.change(within(panel).getByLabelText("Filter files"), { target: { value: "keep this" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Background" }));
+    expect(screen.queryByRole("dialog", { name: "Files" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Foreground Files" }));
+    expect(screen.getByRole("dialog", { name: "Files" })).toBe(panel);
+    expect(within(panel).getByLabelText("Filter files")).toHaveValue("keep this");
+    expect(resolveSessionFilePath).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Background" }));
+    fireEvent.keyDown(window, { key: "F", code: "KeyF", ctrlKey: true, shiftKey: true });
+    const focus = screen.getByRole("group", { name: "Desktop terminal focus controls" });
+    fireEvent.click(within(focus).getByRole("button", { name: "Foreground Files" }));
+    expect(screen.getByRole("dialog", { name: "Files" })).toBe(panel);
+    expect(within(panel).getByLabelText("Filter files")).toHaveValue("keep this");
   });
 
   it("opens a modifier-clicked terminal path in the desktop file preview", async () => {
@@ -939,7 +989,7 @@ describe("ConsoleScreen session identity", () => {
     const focusInput = within(focusControls).getByRole("button", {
       name: "Show floating staged input",
     });
-    expect(within(focusControls).getAllByRole("button")).toHaveLength(4);
+    expect(within(focusControls).getAllByRole("button")).toHaveLength(6);
     expect(focusRedraw).toHaveTextContent("Redraw");
     expect(focusInput).toHaveTextContent("Float input");
     expect(focusInput).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Y");
@@ -1546,7 +1596,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabs).toHaveAttribute("title", "Show session tabs (Ctrl+Shift+S)");
     expect(workspaceLinks).toBeVisible();
     expect(within(screen.getByRole("group", { name: "Console bars" }))
-      .getAllByRole("button")).toHaveLength(6);
+      .getAllByRole("button")).toHaveLength(8);
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
@@ -1858,6 +1908,15 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.click(split);
     expect(onSplitWorkspace).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the selection count on the desktop split workspace control", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
+      onSplitWorkspace={vi.fn()} splitWorkspaceSelectionCount={3} />);
+    const split = await screen.findByRole("button", { name: "Split 3 selected sessions into a new temporary workspace" });
+    expect(split).toHaveTextContent("Split workspace (3)");
+    expect(split).toHaveAttribute("title", expect.stringContaining("keep their tab order"));
   });
 
   it("creates a focused session copy from the desktop header and exact shortcut", async () => {

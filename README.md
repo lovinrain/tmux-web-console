@@ -59,7 +59,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   tablet, and phone layouts
 - Persistent named workspaces with colored, collapsible tab groups, ordered top
   or side tabs with desktop multi-select dragging, common/workspace/session
-  quick-link shelves, scoped sticky notes, and cross-device resume
+  quick-link shelves, scoped sticky notes, saved recursive multi-pane views,
+  and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
@@ -112,6 +113,12 @@ For frontend development, run `npm run dev`. Vite serves
   session alone in a new no-opener window. The destination starts as an unsaved
   temporary workspace: `Save workspace` gives it a persistent server identity,
   and saved workspaces can be renamed directly from the same tab strip.
+- Desktop workspaces can add a named `Pane view` beside their session tabs.
+  Every leaf embeds a complete session console, can select any open workspace
+  session, and can split left/right or top/bottom again for arbitrary nested
+  layouts. Dividers resize by drag or keyboard. Named workspaces persist pane
+  assignments, names, split directions, and ratios on the server; a temporary
+  workspace carries them into its explicit `Save workspace` operation.
 - New Session can start in an absolute server directory. Its browser-local
   Workspace Memory ranks paths learned from tmux sessions and successful
   launches by recency and frequency; paths can also be pinned, hidden, restored,
@@ -168,7 +175,9 @@ For frontend development, run `npm run dev`. Vite serves
   removal, and is not copied into backend state.
   Signature-verified PNG, JPEG, GIF, WebP, AVIF, BMP, and ICO files render in a
   fitted viewer up to 25 MiB and can be opened full size; active formats such as
-  SVG are never embedded. Signature-verified PDFs up to 50 MiB open in the
+  SVG are never embedded. HTML/HTM files offer `Open webpage`, which opens a
+  10 MiB-bounded, opaque-origin sandboxed tab with scripts, forms, and network
+  connections disabled. Signature-verified PDFs up to 50 MiB open in the
   browser's built-in PDF viewer with new-tab and download fallbacks. Other
   binary files show metadata. Selected regular files can be downloaded without
   a preview-size limit. Check several files and folders, then use `Download ZIP`
@@ -179,12 +188,14 @@ For frontend development, run `npm run dev`. Vite serves
   each, mode `0600`) and refuse to overwrite an existing name. `Copy path`
   copies the absolute server path, while `Stage path` inserts its shell-quoted
   form into the composer without sending.
-- On desktop, terminal output ending in `.md`, `.pdf`, `.png`, or `.txt` is also linkified.
+- On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.html`, or `.htm` is also linkified.
   `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
   in the floating file browser; a relative path is resolved from the live pane
   CWD, while absolute and `~/` paths keep their server meaning. Plain clicks
-  remain terminal input, HTTP(S) links keep opening as web links, and no
-  filesystem request is made until the modified click.
+  remain terminal input for ordinary files. A plain click on an absolute HTML
+  path opens the sandboxed hosted document in a new tab; HTTP(S) links keep
+  opening as web links, and no filesystem request is made until the link is
+  activated.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Muxdeck records live tmux reconstruction metadata in a private SQLite registry.
@@ -195,6 +206,11 @@ For frontend development, run `npm run dev`. Vite serves
   may be shown solely as a reference, and a missing directory or live name
   conflict blocks recovery instead of changing another session. Sessions ended
   through Muxdeck are intentionally excluded from recovery.
+- SQLite also retains a searchable session history and Recycle Bin: native and
+  previous names, display titles, CWD, saved-workspace membership, timestamps,
+  and captured agent references. Open `Recycle Bin` on the landing page or
+  `Recent Sessions` in a saved workspace. Reopen attaches to the original live
+  session; confirmed recreation starts a fresh shell without resuming an agent.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck
   cannot reconstruct output tmux did not save.
 
@@ -217,6 +233,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+S` | Show or hide the session tab strip |
 | `Ctrl+Shift+F` | Enter or exit terminal Focus |
 | `Ctrl+Shift+Y` | Show or hide the movable staged-input window |
+| `Ctrl+Shift+J` | Show or hide the independent floating workspace terminal |
 | `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's remembered controls |
 | `Ctrl+Shift+L` | Leave scrollback and return to live output |
 | `Ctrl+Shift+C` | Toggle browser terminal Copy mode |

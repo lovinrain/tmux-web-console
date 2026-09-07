@@ -328,7 +328,7 @@ describe("SavedWorkspaceList", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Delete workspace Launch room" }));
     const confirmation = screen.getByRole("alertdialog");
-    expect(confirmation).toHaveTextContent("Tmux sessions keep running");
+    expect(confirmation).toHaveTextContent("Session tabs keep running. Its owned workspace terminal will end.");
     await waitFor(() => expect(confirmation).toHaveFocus());
     fireEvent.click(within(confirmation).getByRole("button", { name: "Keep" }));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();

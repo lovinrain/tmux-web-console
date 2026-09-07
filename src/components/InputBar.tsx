@@ -44,6 +44,8 @@ const DRAFT_KEY_PREFIX = "muxdeck-terminal-draft:";
 interface InputBarProps {
   sessionName: string;
   sessionId?: string;
+  idScope?: string;
+  terminalControlId?: string;
   enabled: boolean;
   composerVisible?: boolean;
   shortcutsVisible?: boolean;
@@ -374,6 +376,8 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({
   sessionName,
   sessionId,
+  idScope,
+  terminalControlId = "muxdeck-active-console",
   enabled,
   composerVisible = true,
   shortcutsVisible = true,
@@ -412,6 +416,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   });
   const initialDraft = initialDraftState.draft;
   const otherKeyPanelId = useId();
+  const stagedInputId = idScope ? `${idScope}-staged-input` : "muxdeck-staged-input";
+  const stagedTextareaId = idScope ? `${idScope}-staged-textarea` : "terminal-staged-input";
+  const shortcutsId = idScope ? `${idScope}-terminal-shortcuts` : "muxdeck-terminal-shortcuts";
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const otherKeyPanelRef = useRef<HTMLDivElement>(null);
@@ -960,7 +967,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     >
       {shortcutPanelHeader}
       <div
-        id="muxdeck-staged-input"
+        id={stagedInputId}
         className={attachmentDragActive ? "staged-composer attachment-drag-active" : "staged-composer"}
         data-attachment-uploading={attachmentUploadPending ? "true" : "false"}
         hidden={!composerVisible}
@@ -970,7 +977,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         onDrop={handleAttachmentDrop}
       >
         <div className="composer-heading">
-          <label htmlFor="terminal-staged-input">Staged input</label>
+          <label htmlFor={stagedTextareaId}>Staged input</label>
           <div className="composer-heading-tools">
             <button
               type="button"
@@ -1046,7 +1053,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               aria-label={mobileDistractionFree
                 ? "Exit distraction-free input"
                 : "Enter distraction-free input"}
-              aria-controls="muxdeck-staged-input"
+              aria-controls={stagedInputId}
               aria-pressed={mobileDistractionFree}
               disabled={!onToggleMobileDistractionFree}
               onMouseDown={(event) => event.preventDefault()}
@@ -1067,7 +1074,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         )}
         <div className="composer-body">
           <textarea
-            id="terminal-staged-input"
+            id={stagedTextareaId}
             ref={textareaRef}
             defaultValue={initialDraft}
             maxLength={MAX_DRAFT_LENGTH}
@@ -1234,7 +1241,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       </div>
 
       <div
-        id="muxdeck-terminal-shortcuts"
+        id={shortcutsId}
         className="input-bar"
         role="group"
         aria-label="Terminal input shortcuts"
@@ -1278,7 +1285,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onClick={onReturnToLive}
           disabled={!enabled}
           aria-label="Focus live terminal input"
-          aria-controls="muxdeck-active-console"
+          aria-controls={terminalControlId}
           aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
           title={`Exit scrollback and focus raw terminal input${directShortcutLabel(shortcutBindings["terminal-return-live"])
             ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
@@ -1293,7 +1300,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onClick={onRedraw}
           disabled={!onRedraw}
           aria-label="Redraw terminal display"
-          aria-controls="muxdeck-active-console"
+          aria-controls={terminalControlId}
           title="Repaint the local terminal display without reconnecting or changing the tmux session"
           onMouseDown={(event) => event.preventDefault()}
         >

@@ -2,13 +2,14 @@ import type { IBufferCell, IBufferLine, ILink, Terminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
   findTerminalFilePaths,
+  isHtmlFilePath,
   resolveTerminalFileLinkPath,
   TerminalFileLinkProvider,
 } from "./terminalFileLinks";
 
 describe("terminal file path detection", () => {
   it("finds absolute, relative, home, and bare previewable file paths", () => {
-    const text = "open /tmp/chart.PNG, ./notes.txt:12 ~/shots/final.png report.TXT README.md design.PDF";
+    const text = "open /tmp/chart.PNG, ./notes.txt:12 ~/shots/final.png report.TXT README.md design.PDF /tmp/report.html page.htm";
     expect(findTerminalFilePaths(text).map((match) => match.text)).toEqual([
       "/tmp/chart.PNG",
       "./notes.txt",
@@ -16,6 +17,8 @@ describe("terminal file path detection", () => {
       "report.TXT",
       "README.md",
       "design.PDF",
+      "/tmp/report.html",
+      "page.htm",
     ]);
   });
 
@@ -37,6 +40,8 @@ describe("terminal file path detection", () => {
       "notes.json",
       "archive.txt.bak",
       ".png",
+      "https://example.test/index.html",
+      ".html",
     ].join(" ");
     expect(findTerminalFilePaths(text)).toEqual([]);
   });
@@ -62,6 +67,8 @@ describe("terminal file path resolution", () => {
       .toBe("/work/project/docs/guide.md");
     expect(resolveTerminalFileLinkPath("artifacts/report.pdf", "/work/project"))
       .toBe("/work/project/artifacts/report.pdf");
+    expect(resolveTerminalFileLinkPath("/tmp/report.html", "/work/project"))
+      .toBe("/tmp/report.html");
   });
 
   it("preserves absolute and current-user home paths", () => {
@@ -76,6 +83,14 @@ describe("terminal file path resolution", () => {
     expect(resolveTerminalFileLinkPath("notes.json", "/work")).toBeNull();
     expect(resolveTerminalFileLinkPath("~other/notes.txt", "/work")).toBeNull();
     expect(resolveTerminalFileLinkPath("notes.txt", "relative/work")).toBeNull();
+  });
+
+  it("identifies only valid HTML file paths for hosted previews", () => {
+    expect(isHtmlFilePath("/tmp/report.html")).toBe(true);
+    expect(isHtmlFilePath("docs/index.HTM")).toBe(true);
+    expect(isHtmlFilePath("https://example.test/index.html")).toBe(false);
+    expect(isHtmlFilePath(".html")).toBe(false);
+    expect(isHtmlFilePath("report.txt")).toBe(false);
   });
 });
 

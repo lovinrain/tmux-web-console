@@ -39,6 +39,7 @@ vi.mock("./api", async (importOriginal) => {
     getWorkspace: vi.fn(),
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
+    recordClosedSessionTab: vi.fn(async () => undefined),
     listWorkspaces: vi.fn(),
     terminateSession: vi.fn(),
     transferSessionToWorkspace: vi.fn(),
@@ -238,18 +239,18 @@ vi.mock("./components/ConsoleScreen", () => ({
     onBack,
     sessionNavigation,
     workspaceOverlayOpen,
-    mobileMode,
-    onMobileModeChange,
+    mobileMode = "terminal",
+    onMobileModeChange = () => undefined,
     onOpenWorkspaceOverview,
     onCloseWorkspaceOverview,
-    barVisibility,
-    onBarVisibilityChange,
-    desktopTabOrientation,
-    onDesktopTabOrientationChange,
-    tabActionsVisible,
-    onTabActionsVisibilityChange,
-    desktopTabRailWidth,
-    onDesktopTabRailWidthChange,
+    barVisibility = { sessionTabs: true, stagedInput: true, shortcuts: true },
+    onBarVisibilityChange = () => undefined,
+    desktopTabOrientation = "horizontal",
+    onDesktopTabOrientationChange = () => undefined,
+    tabActionsVisible = true,
+    onTabActionsVisibilityChange = () => undefined,
+    desktopTabRailWidth = 288,
+    onDesktopTabRailWidthChange = () => undefined,
     onSessionsChange,
     onWorkspacePinChange,
     onSessionWorkspaceTransfer,
@@ -266,25 +267,25 @@ vi.mock("./components/ConsoleScreen", () => ({
     onBack: () => void;
     sessionNavigation?: ReactNode;
     workspaceOverlayOpen?: boolean;
-    mobileMode: "terminal" | "input";
-    onMobileModeChange: (mode: "terminal" | "input") => void;
+    mobileMode?: "terminal" | "input";
+    onMobileModeChange?: (mode: "terminal" | "input") => void;
     onOpenWorkspaceOverview?: () => void;
     onCloseWorkspaceOverview?: () => void;
-    barVisibility: {
+    barVisibility?: {
       sessionTabs: boolean;
       stagedInput: boolean;
       shortcuts: boolean;
     };
-    onBarVisibilityChange: (
+    onBarVisibilityChange?: (
       bar: "sessionTabs" | "stagedInput" | "shortcuts",
       visible: boolean,
     ) => void;
-    desktopTabOrientation: "horizontal" | "vertical";
-    onDesktopTabOrientationChange: (orientation: "horizontal" | "vertical") => void;
-    tabActionsVisible: boolean;
-    onTabActionsVisibilityChange: (visible: boolean) => void;
-    desktopTabRailWidth: number;
-    onDesktopTabRailWidthChange: (width: number) => void;
+    desktopTabOrientation?: "horizontal" | "vertical";
+    onDesktopTabOrientationChange?: (orientation: "horizontal" | "vertical") => void;
+    tabActionsVisible?: boolean;
+    onTabActionsVisibilityChange?: (visible: boolean) => void;
+    desktopTabRailWidth?: number;
+    onDesktopTabRailWidthChange?: (width: number) => void;
     onSessionsChange?: (sessions: Session[]) => void;
     onWorkspacePinChange?: (
       sessionName: string,
@@ -652,6 +653,58 @@ describe("App routing", () => {
     } else {
       Reflect.deleteProperty(window.navigator, "sendBeacon");
     }
+  });
+
+  it("hydrates, edits, and exits a named recursive workspace pane view", async () => {
+    const paneLayout = {
+      id: "review-wall",
+      name: "Review wall",
+      root: { id: "primary", kind: "pane" as const, session: "alpha" },
+    };
+    const loaded = savedWorkspace({ paneLayouts: [paneLayout] });
+    getWorkspaceMock.mockResolvedValue(loaded);
+    listSessionsMock.mockResolvedValue([
+      session("alpha", "$alpha"),
+      session("beta", "$beta"),
+    ]);
+    updateWorkspaceMock.mockImplementation(async (_workspaceId, update) => (
+      savedWorkspace({
+        ...loaded,
+        paneLayouts: update.paneLayouts ?? loaded.paneLayouts,
+        updatedAt: 2_000,
+      })
+    ));
+    replaceUrl(
+      `${BASE_PATH}/panes/review-wall?workspace=workspace-one&tab=alpha&tab=beta`,
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Review wall" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: /Review wall/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+      "data-session",
+      "alpha",
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Split this pane left and right",
+    }));
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledWith(
+      "workspace-one",
+      expect.objectContaining({
+        paneLayouts: [expect.objectContaining({ id: "review-wall" })],
+        sessionRevision: 0,
+      }),
+    ));
+
+    fireEvent.click(screen.getByRole("tab", { name: /beta/i }));
+    await waitFor(() => expect(window.location.pathname).toBe(
+      `${BASE_PATH}/session/beta`,
+    ));
   });
 
   it("preserves dashboard query state when opening a session and using application Back", async () => {
@@ -2253,6 +2306,61 @@ describe("App routing", () => {
     expect(terminateSessionMock).not.toHaveBeenCalled();
 
     open.mockRestore();
+  });
+
+  it.each(["alpha", "beta"])("splits selected tabs in source order with %s active", (active) => {
+    replaceUrl(sessionUrl(active, "?flag&tab=alpha&tab=beta&tab=gamma&tab=delta"));
+    const sourceUrl = window.location.href;
+    const replace = vi.fn();
+    const child = { opener: window, location: { replace }, close: vi.fn() } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(child);
+    render(<App />);
+    fireEvent.click(screen.getByRole("tab", { name: /^delta,/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Split workspace" }));
+    const destination = new URL(String(replace.mock.calls[0]?.[0]));
+    expect(destination.searchParams.getAll("tab")).toEqual(["beta", "delta"]);
+    expect(destination.pathname).toBe(`${BASE_PATH}/session/beta`);
+    expect(destination.searchParams.has("workspace")).toBe(false);
+    expect(child.opener).toBeNull();
+    expect(window.location.href).toBe(sourceUrl);
+    expect(renderedTabs()).toEqual(["alpha", "beta", "gamma", "delta"]);
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it("bulk closes selected tabs only after confirmation without ending sessions", async () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta&tab=gamma"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("alpha", "$1"), session("beta", "$2"), session("gamma", "$3")]));
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }), { shiftKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 selected tabs" }));
+    expect(renderedTabs()).toEqual(["alpha", "beta", "gamma"]);
+    const dialog = screen.getByRole("alertdialog", { name: "Close 2 selected tabs?" });
+    expect(dialog).toHaveTextContent("keep running");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close 2 tabs" }));
+    await waitFor(() => expect(renderedTabs()).toEqual(["gamma"]));
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma`);
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("bulk ending keeps its confirmation across closing the last tab and uses captured identities", async () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("alpha", "$1"), session("beta", "$2")]));
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }), { shiftKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "End 2 selected sessions" }));
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    // Live inventory changes after confirmation must not change the requested identity.
+    act(() => reportKnownSessions?.([session("alpha", "$1"), session("beta", "$changed")]));
+    terminateSessionMock.mockRejectedValueOnce(new Error("Session identity changed"));
+    fireEvent.click(screen.getByRole("button", { name: "End 2 sessions" }));
+    await screen.findByText(/1 succeeded; 1 failed/);
+    expect(terminateSessionMock).toHaveBeenNthCalledWith(1, "beta", "$2", 1, 10, 100);
+    expect(terminateSessionMock).toHaveBeenNthCalledWith(2, "alpha", "$1", 1, 10, 100);
+    expect(renderedTabs()).toEqual(["beta"]);
+    expect(screen.getByRole("alertdialog")).toBeVisible();
   });
 
   it("moves a tab only after its isolated browser workspace opens", () => {

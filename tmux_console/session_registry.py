@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -8,11 +9,12 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .agent_reference import AgentReference
 from .tmux import CreatedSession, Session
 
-SESSION_REGISTRY_SCHEMA_VERSION = 1
+SESSION_REGISTRY_SCHEMA_VERSION = 2
 LAST_SEEN_WRITE_INTERVAL_SECONDS = 60
 SESSION_REGISTRY_UNAVAILABLE_MESSAGE = (
     "session recovery registry is unavailable; repair the configured SQLite "
@@ -139,10 +141,11 @@ class SessionRegistry:
     def _initialize(self) -> None:
         connection = self._require_connection()
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {0, SESSION_REGISTRY_SCHEMA_VERSION}:
+        if version not in {0, 1, SESSION_REGISTRY_SCHEMA_VERSION}:
             raise sqlite3.DatabaseError(
                 f"unsupported session registry schema version: {version}"
             )
+        connection.execute("BEGIN")
         with connection:
             connection.execute(
                 """
@@ -172,6 +175,41 @@ class SessionRegistry:
             )
             if actual_columns != REGISTRY_COLUMN_NAMES:
                 raise sqlite3.DatabaseError("session registry schema is malformed")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS session_history (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, names TEXT NOT NULL,
+                    directory TEXT NOT NULL, tmux_id TEXT NOT NULL,
+                    created INTEGER NOT NULL, server_started INTEGER NOT NULL,
+                    server_pid INTEGER NOT NULL, agent_type TEXT, agent_id TEXT,
+                    first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL,
+                    state TEXT NOT NULL, ended_at INTEGER, tab_closed_at INTEGER, title TEXT,
+                    UNIQUE(tmux_id, created, server_started, server_pid)
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS history_workspaces (
+                    history_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    workspace_name TEXT NOT NULL, first_seen INTEGER NOT NULL,
+                    last_seen INTEGER NOT NULL, present INTEGER NOT NULL,
+                    closed_at INTEGER,
+                    PRIMARY KEY(history_id, workspace_id)
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS history_workspace_idx ON history_workspaces(workspace_id, last_seen)")
+            connection.execute("CREATE INDEX IF NOT EXISTS history_name_idx ON session_history(name, last_seen)")
+            if version < 2:
+                for row in connection.execute(f"SELECT {REGISTRY_COLUMNS} FROM sessions").fetchall():
+                    connection.execute("""
+                        INSERT OR IGNORE INTO session_history VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL
+                        )
+                    """, (
+                        str(uuid.uuid4()), row["tmux_name"], json.dumps([row["tmux_name"]]),
+                        row["working_directory"], row["tmux_session_id"], row["session_created"],
+                        row["server_started"], row["server_pid"], row["agent_type"],
+                        row["agent_session_id"], row["first_seen_at"], row["last_seen_at"],
+                        "missing" if row["recoverable"] else "ended",
+                    ))
             connection.execute(f"PRAGMA user_version={SESSION_REGISTRY_SCHEMA_VERSION}")
 
     def _require_connection(self) -> sqlite3.Connection:
@@ -202,8 +240,10 @@ class SessionRegistry:
             try:
                 connection = self._require_connection()
                 live_registry_ids: set[str] = set()
+                live_history_ids: set[str] = set()
                 with connection:
                     for session in sessions:
+                        live_history_ids.add(self._observe_history(connection, session, references.get(session.name), timestamp))
                         registry_id = self._reconcile_session(
                             connection,
                             session,
@@ -211,6 +251,9 @@ class SessionRegistry:
                             timestamp,
                         )
                         live_registry_ids.add(registry_id)
+                    for history in connection.execute("SELECT id FROM session_history WHERE state = 'live'").fetchall():
+                        if history["id"] not in live_history_ids:
+                            connection.execute("UPDATE session_history SET state = 'missing', ended_at = ? WHERE id = ?", (timestamp, history["id"]))
                     rows = connection.execute(
                         f"SELECT {REGISTRY_COLUMNS} FROM sessions "
                         "WHERE recoverable = 1 ORDER BY last_seen_at DESC, tmux_name"
@@ -344,6 +387,10 @@ class SessionRegistry:
             try:
                 connection = self._require_connection()
                 with connection:
+                    self._observe_history(connection, Session(
+                        name=created.name, id=created.id, windows=1, attached=0,
+                        created=0,
+                    ), None, timestamp, directory=directory)
                     row = None
                     if registry_id is not None:
                         row = connection.execute(
@@ -481,6 +528,163 @@ class SessionRegistry:
             except (OSError, sqlite3.Error) as error:
                 raise self._database_error(error) from error
 
+    def _observe_history(
+        self, connection: sqlite3.Connection, session: Session,
+        reference: AgentReference | None, timestamp: int,
+        *, directory: str | None = None,
+    ) -> str:
+        identity = _identity(session)
+        row = connection.execute(
+            "SELECT * FROM session_history WHERE tmux_id = ? AND created = ? AND server_started = ? AND server_pid = ?",
+            identity,
+        ).fetchone()
+        if row is None and session.created:
+            # Creation is recorded before tmux's full server identity is available.
+            row = connection.execute(
+                "SELECT * FROM session_history WHERE name = ? AND tmux_id = ? AND created = 0 AND state = 'live'",
+                (session.name, session.id),
+            ).fetchone()
+        directory = directory or (session.active_pane.path if session.active_pane else None) or (row["directory"] if row else str(Path.home()))
+        agent_type = reference.agent_type if reference and reference.agent_type else (row["agent_type"] if row else None)
+        agent_id = row["agent_id"] if row and row["agent_type"] == agent_type else None
+        if reference and reference.session_id:
+            agent_id = reference.session_id
+        if row is None:
+            history_id = str(uuid.uuid4())
+            connection.execute("""
+                INSERT INTO session_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', NULL, NULL, NULL)
+            """, (history_id, session.name, json.dumps([session.name]), directory, *identity,
+                  agent_type, agent_id, timestamp, timestamp))
+            return history_id
+        names = json.loads(row["names"])
+        if session.name not in names:
+            names.append(session.name)
+        changed = (
+            row["name"] != session.name or row["directory"] != directory
+            or row["created"] != session.created or row["server_started"] != session.server_started
+            or row["server_pid"] != session.server_pid or row["state"] != "live"
+            or row["agent_type"] != agent_type or row["agent_id"] != agent_id
+            or timestamp - row["last_seen"] >= LAST_SEEN_WRITE_INTERVAL_SECONDS
+        )
+        if changed:
+            connection.execute("""
+                UPDATE session_history SET name = ?, names = ?, directory = ?,
+                    created = ?, server_started = ?, server_pid = ?, agent_type = ?,
+                    agent_id = ?, last_seen = ?, state = 'live', ended_at = NULL WHERE id = ?
+            """, (session.name, json.dumps(names), directory, session.created, session.server_started,
+                  session.server_pid, agent_type, agent_id, timestamp, row["id"]))
+        return str(row["id"])
+
+    def observe_history(self, session: Session, reference: AgentReference | None = None) -> str:
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    return self._observe_history(connection, session, reference, int(self._clock()))
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
+    def sync_history_workspaces(self, workspaces: list[dict[str, Any]]) -> None:
+        """Keep past membership even after a tab, workspace, or native session is gone."""
+        timestamp = int(self._clock())
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    by_name: dict[str, str] = {}
+                    for row in connection.execute("SELECT id, name FROM session_history ORDER BY last_seen, rowid"):
+                        by_name[row["name"]] = row["id"]
+                    wanted: set[tuple[str, str]] = set()
+                    for workspace in workspaces:
+                        for name in workspace["tabs"]:
+                            history_id = by_name.get(name)
+                            if history_id is None:
+                                continue
+                            wanted.add((history_id, workspace["id"]))
+                            connection.execute("""
+                                INSERT INTO history_workspaces VALUES (?, ?, ?, ?, ?, 1, NULL)
+                                ON CONFLICT(history_id, workspace_id) DO UPDATE SET
+                                    workspace_name = excluded.workspace_name,
+                                    last_seen = excluded.last_seen, present = 1
+                                WHERE history_workspaces.present = 0
+                                   OR history_workspaces.workspace_name != excluded.workspace_name
+                                   OR excluded.last_seen - history_workspaces.last_seen >= 60
+                            """, (history_id, workspace["id"], workspace["name"], timestamp, timestamp))
+                    for row in connection.execute("SELECT history_id, workspace_id FROM history_workspaces WHERE present = 1").fetchall():
+                        if (row["history_id"], row["workspace_id"]) not in wanted:
+                            connection.execute("UPDATE history_workspaces SET present = 0, closed_at = ? WHERE history_id = ? AND workspace_id = ?", (timestamp, row["history_id"], row["workspace_id"]))
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
+    def mark_history(self, history_id: str, *, ended: bool = False) -> None:
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    if ended:
+                        connection.execute("UPDATE session_history SET state = 'ended', ended_at = ? WHERE id = ?", (int(self._clock()), history_id))
+                    else:
+                        connection.execute("UPDATE session_history SET tab_closed_at = ? WHERE id = ?", (int(self._clock()), history_id))
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
+    def record_history_titles(self, titles: Mapping[str, str | None]) -> None:
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    for name, title in titles.items():
+                        connection.execute("UPDATE session_history SET title = ? WHERE name = ? AND state = 'live' AND title IS NOT ?", (title, name, title))
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
+    def get_history(self, history_id: str) -> dict[str, Any]:
+        with self._lock:
+            try:
+                row = self._require_connection().execute("SELECT * FROM session_history WHERE id = ?", (history_id,)).fetchone()
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+            if row is None:
+                raise RecoveryRecordNotFoundError(history_id)
+            return dict(row)
+
+    def list_history(
+        self, *, workspace_id: str | None = None, query: str = "",
+        recycled: bool = False, offset: int = 0,
+    ) -> dict[str, Any]:
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                clauses = ["1 = 1"]
+                params: list[Any] = []
+                if workspace_id:
+                    clauses.append("EXISTS (SELECT 1 FROM history_workspaces w WHERE w.history_id = h.id AND w.workspace_id = ?)")
+                    params.append(workspace_id)
+                if query:
+                    clauses.append("(instr(lower(h.names || ' ' || coalesce(h.title, '') || ' ' || h.directory || ' ' || coalesce(h.agent_type, '') || ' ' || coalesce(h.agent_id, '')), lower(?)) > 0)")
+                    params.append(query)
+                if recycled:
+                    clauses.append("(h.state != 'live' OR h.tab_closed_at IS NOT NULL OR EXISTS (SELECT 1 FROM history_workspaces w WHERE w.history_id = h.id AND w.closed_at IS NOT NULL))")
+                rows = connection.execute(
+                    "SELECT h.* FROM session_history h WHERE " + " AND ".join(clauses)
+                    + " ORDER BY max(h.last_seen, coalesce(h.ended_at, 0), coalesce(h.tab_closed_at, 0), coalesce((SELECT max(coalesce(w.closed_at, w.last_seen)) FROM history_workspaces w WHERE w.history_id = h.id), 0)) DESC, h.id LIMIT 51 OFFSET ?",
+                    [*params, offset],
+                ).fetchall()
+                entries = []
+                for row in rows[:50]:
+                    memberships = connection.execute("SELECT * FROM history_workspaces WHERE history_id = ? ORDER BY last_seen DESC", (row["id"],)).fetchall()
+                    entries.append({
+                        "id": row["id"], "name": row["name"], "names": json.loads(row["names"]), "title": row["title"],
+                        "directory": row["directory"], "directoryAvailable": Path(row["directory"]).is_dir(),
+                        "agentType": row["agent_type"], "agentSessionId": row["agent_id"],
+                        "firstSeenAt": row["first_seen"], "lastSeenAt": row["last_seen"],
+                        "state": row["state"], "endedAt": row["ended_at"], "tabClosedAt": row["tab_closed_at"],
+                        "workspaces": [{"id": w["workspace_id"], "name": w["workspace_name"], "present": bool(w["present"]), "lastSeenAt": w["last_seen"], "closedAt": w["closed_at"]} for w in memberships],
+                    })
+                return {"entries": entries, "nextOffset": offset + 50 if len(rows) > 50 else None}
+            except (OSError, sqlite3.Error) as error:
+                raise self._database_error(error) from error
+
     def rename_identity(
         self,
         tmux_session_id: str,
@@ -493,6 +697,12 @@ class SessionRegistry:
             try:
                 connection = self._require_connection()
                 with connection:
+                    history = connection.execute("SELECT id, names FROM session_history WHERE tmux_id = ? AND created = ? AND server_started = ? AND server_pid = ?", (tmux_session_id, session_created, server_started, server_pid)).fetchone()
+                    if history is not None:
+                        names = json.loads(history["names"])
+                        if new_name not in names:
+                            names.append(new_name)
+                        connection.execute("UPDATE session_history SET name = ?, names = ?, last_seen = ? WHERE id = ?", (new_name, json.dumps(names), int(self._clock()), history["id"]))
                     row = connection.execute(
                         """
                         SELECT registry_id FROM sessions

@@ -1465,6 +1465,57 @@ test("desktop file attachments stage or paste host-readable paths", async ({
   await expect(page.locator(".terminal-attachment-feedback")).toBeHidden();
 });
 
+test("file browser background foreground preserves editor and scroll without reloading", async ({ page }) => {
+  const cwd = execFileSync("tmux", [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"], { encoding: "utf8" }).trim();
+  const fixtureName = `muxdeck-background-files-${process.pid}`;
+  const directory = `${cwd}/${fixtureName}`;
+  mkdirSync(directory);
+  for (let index = 0; index < 45; index += 1) writeFileSync(`${directory}/note-${String(index).padStart(2, "0")}.txt`, "original\n".repeat(100));
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${sessionName}`);
+    await page.getByRole("button", { name: `Browse files in ${cwd}` }).click();
+    const panel = page.getByRole("dialog", { name: "Files" });
+    await panel.getByRole("button", { name: `Folder ${fixtureName}` }).click();
+    await panel.getByRole("button", { name: "File note-30.txt", exact: true }).click();
+    await panel.getByRole("button", { name: "Edit note-30.txt" }).click();
+    const editor = panel.getByLabel("Contents of note-30.txt");
+    await editor.fill("unsaved change\n".repeat(100));
+    await panel.getByLabel("Filter files").fill("note-");
+    await panel.getByLabel("Select note-30.txt", { exact: true }).check();
+    await editor.evaluate((node) => { node.scrollTop = 200; });
+    await panel.locator(".session-files-list").evaluate((node) => { node.scrollTop = 700; });
+    const before = await panel.evaluate((node) => ({
+      list: node.querySelector(".session-files-list")!.scrollTop,
+      editor: node.querySelector("textarea")!.scrollTop,
+      width: node.getBoundingClientRect().width,
+    }));
+    let reads = 0;
+    page.on("request", (request) => { if (request.url().includes("/files") && request.method() === "GET") reads += 1; });
+    await panel.getByRole("button", { name: "Background", exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Foreground Files", exact: true }).click();
+    await expect(editor).toHaveValue("unsaved change\n".repeat(100));
+    await expect(panel.getByLabel("File or directory path")).toHaveValue(directory);
+    await expect(panel.getByLabel("Select note-30.txt", { exact: true })).toBeChecked();
+    expect(await panel.evaluate((node) => ({
+      list: node.querySelector(".session-files-list")!.scrollTop,
+      editor: node.querySelector("textarea")!.scrollTop,
+      width: node.getBoundingClientRect().width,
+    }))).toEqual(before);
+    expect(reads).toBe(0);
+    expect(readFileSync(`${directory}/note-30.txt`, "utf8")).toBe("original\n".repeat(100));
+    await panel.getByRole("button", { name: "Background", exact: true }).click();
+    await page.keyboard.press("Control+Shift+F");
+    await page.getByRole("group", { name: "Desktop terminal focus controls" }).getByRole("button", { name: "Foreground Files", exact: true }).click();
+    await expect(editor).toHaveValue("unsaved change\n".repeat(100));
+    await page.screenshot({ path: "artifacts/file-browser-foreground.png" });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("file history shows all paths and an ordered CWD subset", async ({ page }) => {
   const cwd = execFileSync("tmux", [...tmux, "display-message", "-p", "-t", paneId, "#{pane_current_path}"], { encoding: "utf8" }).trim();
   const id = execFileSync("tmux", [...tmux, "display-message", "-p", "-t", paneId, "#{session_id}"], { encoding: "utf8" }).trim();
@@ -3292,6 +3343,111 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
   }
 });
 
+test("bulk selection closes tabs safely and ends sessions only after confirmation", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const names = [`${sessionName}-bulk-a`, `${sessionName}-bulk-b`];
+  for (const name of names) execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  const tabs = [sessionName, ...names];
+  const response = await request.post("/mux/api/workspaces", {
+    data: { name: "Bulk action test", tabs, groups: [], activeSession: sessionName },
+  });
+  expect(response.ok()).toBe(true);
+  const workspaceId = (await response.json()).workspace.id;
+  const identities = tabs.map(workspaceTmuxIdentity);
+  const selectHelpers = async () => {
+    for (const name of names) await page.getByRole("tab", { name: new RegExp(`^${name},`) }).click({ modifiers: ["Control"] });
+  };
+  try {
+    await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}${tabs.map((name) => `&tab=${name}`).join("")}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    await selectHelpers();
+    await page.getByRole("button", { name: "Close 2 selected tabs" }).click();
+    let dialog = page.getByRole("alertdialog", { name: "Close 2 selected tabs?" });
+    await expect(dialog).toContainText("keep running");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByRole("tab")).toHaveCount(3);
+    await page.getByRole("button", { name: "Close 2 selected tabs" }).click();
+    await dialog.getByRole("button", { name: "Close 2 tabs" }).click();
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      return (await response.json()).workspace.tabs;
+    }).toEqual([sessionName]);
+    const history = await request.get(`/mux/api/session-history?workspace=${workspaceId}&recycled=1`);
+    const entries = (await history.json()).entries;
+    for (const name of names) expect(entries.some((entry: { name: string }) => entry.name === name)).toBe(true);
+
+    await page.goto(`/mux/session/${sessionName}${tabs.map((name, index) => `${index ? "&" : "?"}tab=${name}`).join("")}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await selectHelpers();
+    await page.getByRole("button", { name: "End 2 selected sessions" }).click();
+    dialog = page.getByRole("alertdialog", { name: "End 2 selected sessions?" });
+    for (const name of names) await expect(dialog).toContainText(name);
+    await expect(dialog).toContainText("across all workspaces");
+    await page.screenshot({ path: "artifacts/bulk-session-confirmation.png" });
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+    await dialog.getByRole("button", { name: "End 2 sessions" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("tab")).toHaveCount(1);
+    const remaining = execFileSync("tmux", [...tmux, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8" });
+    for (const name of names) expect(remaining).not.toContain(name);
+    expect(workspaceTmuxIdentity(sessionName)).toBe(identities[0]);
+    const endedHistory = await request.get(`/mux/api/session-history?workspace=${workspaceId}&recycled=1`);
+    const endedEntries = (await endedHistory.json()).entries;
+    for (const name of names) expect(endedEntries.some((entry: { name: string; state: string }) => entry.name === name && entry.state === "ended")).toBe(true);
+  } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+    for (const name of names) {
+      try { execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], { stdio: "ignore" }); } catch { /* Already ended by the test. */ }
+    }
+  }
+});
+
+test("split workspace opens the multi-selected tabs in their source order", async ({ page, request, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const first = `${sessionName}-split-first`;
+  const second = `${sessionName}-split-second`;
+  for (const name of [first, second]) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const tabs = [sessionName, first, second];
+  const created = await request.post("/mux/api/workspaces", {
+    data: { name: "Multi split source", tabs, groups: [], activeSession: sessionName },
+  });
+  expect(created.ok()).toBe(true);
+  const workspaceId = (await created.json()).workspace.id;
+  let child: Page | undefined;
+  try {
+    await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}${tabs.map((name) => `&tab=${name}`).join("")}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    await page.getByRole("tab", { name: new RegExp(`^${second},`) }).click({ modifiers: ["Control"] });
+    await page.getByRole("tab", { name: new RegExp(`^${first},`) }).click({ modifiers: ["Control"] });
+    const button = page.getByRole("button", { name: "Split 2 selected sessions into a new temporary workspace" });
+    await expect(button).toHaveText("Split workspace (2)");
+    const identities = tabs.map(workspaceTmuxIdentity);
+    const popup = context.waitForEvent("page");
+    await button.click();
+    child = await popup;
+    await expectRoute(child, `/mux/session/${first}`, [first, second]);
+    expect(new URL(child.url()).searchParams.has("workspace")).toBe(false);
+    expect(await child.evaluate(() => window.opener === null)).toBe(true);
+    await expectRoute(page, `/mux/session/${sessionName}`, tabs, { workspace: workspaceId });
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+    const source = await request.get(`/mux/api/workspaces/${workspaceId}`);
+    expect((await source.json()).workspace.tabs).toEqual(tabs);
+    await page.screenshot({ path: "artifacts/multi-selection-split-workspace.png" });
+  } finally {
+    await child?.close();
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+    for (const name of [first, second]) {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+    }
+  }
+});
+
 test("workspace tabs split, copy, and move into isolated browser windows", async ({
   browser,
   page,
@@ -3653,6 +3809,253 @@ test("sidebar selection arrows move tabs together without losing selection", asy
     await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
       .toEqual([sessionName, ...helpers]);
   } finally {
+    for (const name of helpers) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
+
+test("recycle bin and workspace recent sessions retain closed and ended sessions", async ({ page, request }) => {
+  test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const archivedName = `history-named-${process.pid}`;
+  const unrelatedName = `history-unrelated-${process.pid}`;
+  for (const name of [archivedName, unrelatedName]) {
+    const response = await request.post("/mux/api/sessions", { data: { name, directory: "/tmp" } });
+    expect(response.ok()).toBe(true);
+  }
+  const createWorkspace = async (name: string, tabs: string[]) => {
+    const response = await request.post("/mux/api/workspaces", { data: { name, tabs, activeSession: tabs[0], groups: [] } });
+    expect(response.ok()).toBe(true);
+    return (await response.json()).workspace.id as string;
+  };
+  const workspaceId = await createWorkspace("History project", [sessionName, archivedName]);
+  const unrelatedWorkspaceId = await createWorkspace("Unrelated project", [unrelatedName]);
+  try {
+    await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}&tab=${sessionName}&tab=${archivedName}`);
+    await page.getByRole("button", { name: `Close ${archivedName} quick tab`, exact: true }).click();
+    await page.getByRole("button", { name: "Recent Sessions", exact: true }).click();
+    let history = page.getByRole("dialog", { name: "Recent Sessions" });
+    let entry = history.getByRole("article", { name: `History for ${archivedName}`, exact: true });
+    await expect(entry).toContainText("Still running");
+    await expect(history).not.toContainText(unrelatedName);
+    await entry.getByRole("button", { name: "Reopen session" }).click();
+    await expect(page).toHaveURL(new RegExp(`/session/${archivedName}`));
+    expect(new URL(page.url()).searchParams.getAll("tab").filter((name) => name === archivedName)).toHaveLength(1);
+    await page.getByRole("button", { name: `Close ${archivedName} quick tab`, exact: true }).click();
+    const inventory = (await (await request.get("/mux/api/sessions")).json()).sessions;
+    const source = inventory.find((item: { name: string }) => item.name === archivedName);
+    const response = await request.delete(`/mux/api/sessions/${archivedName}`, { data: {
+      sessionId: source.id, sessionCreated: source.created, serverStarted: source.serverStarted, serverPid: source.serverPid,
+    } });
+    expect(response.status()).toBe(204);
+    await page.reload();
+    await page.getByRole("button", { name: "Recent Sessions", exact: true }).click();
+    history = page.getByRole("dialog", { name: "Recent Sessions" });
+    entry = history.getByRole("article", { name: `History for ${archivedName}`, exact: true });
+    await expect(entry).toContainText("Ended");
+    await expect(entry).toContainText("History project");
+    await expect(entry).toContainText("/tmp");
+    await page.screenshot({ path: "artifacts/workspace-session-history.png" });
+    await entry.getByRole("button", { name: "Recreate shell" }).click();
+    const confirm = history.getByRole("alertdialog", { name: "Recreate shell confirmation" });
+    await expect(confirm).toContainText("No coding agent will be resumed");
+    await confirm.getByRole("button", { name: "Create fresh shell" }).click();
+    await expect(page).toHaveURL(new RegExp(`/session/${archivedName}`));
+    const after = (await (await request.get("/mux/api/sessions")).json()).sessions;
+    expect(after.find((item: { name: string }) => item.name === archivedName).id).not.toBe(source.id);
+    expect(new URL(page.url()).searchParams.getAll("tab").filter((name) => name === archivedName)).toHaveLength(1);
+    await page.goto("/mux/");
+    await page.getByRole("button", { name: "Recycle Bin", exact: true }).click();
+    const bin = page.getByRole("dialog", { name: "Recycle Bin" });
+    await bin.getByLabel("Search session history").fill(archivedName);
+    await bin.getByRole("button", { name: "Search", exact: true }).click();
+    await expect(bin.getByRole("article", { name: `History for ${archivedName}`, exact: true }).first()).toContainText("Ended");
+  } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+    await request.delete(`/mux/api/workspaces/${unrelatedWorkspaceId}`);
+  }
+});
+
+test("floating utility terminal is independent, resizable, pinned and reused", async ({ page, request, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const created = await request.post("/mux/api/workspaces", {
+    data: { name: "Utility terminal check", tabs: [sessionName], groups: [], activeSession: sessionName },
+  });
+  expect(created.ok()).toBe(true);
+  const workspaceId = (await created.json()).workspace.id;
+  const route = `/mux/session/${sessionName}?workspace=${workspaceId}&tab=${sessionName}`;
+  const originalIdentity = workspaceTmuxIdentity(sessionName);
+  const sourceText = execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" }).trim();
+  try {
+    await page.goto(route);
+    await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "Utility terminal" });
+    await expect(panel.getByRole("status")).toHaveText("live");
+    await panel.locator(".xterm-helper-textarea").pressSequentially("printf 'UTILITY_TERMINAL_OK\\n'");
+    await panel.locator(".xterm-helper-textarea").press("Enter");
+    await expect(panel.locator(".xterm-screen")).toContainText("UTILITY_TERMINAL_OK");
+    const name = (await panel.locator("footer > span").textContent())!;
+    expect(name).toMatch(/^muxdeck-terminal-/);
+    expect(workspaceTmuxIdentity(sessionName)).toBe(originalIdentity);
+    expect(execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", paneId], { encoding: "utf8" }).trim()).toBe(sourceText);
+    await panel.getByRole("button", { name: "Pin utility terminal" }).click();
+    const initial = (await panel.boundingBox())!;
+    await page.mouse.move(initial.x + 2, initial.y + initial.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(initial.x + 122, initial.y + initial.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(Math.round(initial.width - 120));
+    const strip = panel.getByLabel("Move utility terminal");
+    await strip.focus();
+    await strip.press("ArrowDown");
+    const moved = (await panel.boundingBox())!;
+    await page.reload();
+    await expect(panel.getByRole("status")).toHaveText("live");
+    await expect(panel).toHaveAttribute("data-pinned", "true");
+    expect((await panel.boundingBox())!.width).toBeCloseTo(moved.width);
+    expect((await panel.boundingBox())!.y).toBeCloseTo(moved.y);
+    await page.keyboard.press("Control+Shift+J");
+    await expect(panel).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+F");
+    await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+    await expect(panel.getByRole("status")).toHaveText("live");
+    await expect(panel.locator("footer > span")).toHaveText(name);
+    const second = await context.newPage();
+    await second.setViewportSize({ width: 1440, height: 900 });
+    await second.goto(route);
+    const secondPanel = second.getByRole("dialog", { name: "Utility terminal" });
+    await expect(secondPanel.getByRole("status")).toHaveText("live");
+    await expect(secondPanel.locator("footer > span")).toHaveText(name);
+    await second.close();
+    await page.screenshot({ path: "artifacts/floating-utility-terminal.png" });
+    await panel.getByRole("button", { name: "End shell" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Terminate session", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "Start shell" })).toBeVisible();
+    expect(workspaceTmuxIdentity(sessionName)).toBe(originalIdentity);
+  } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+  }
+});
+
+test("session terminals are isolated, restored per tab, and cleaned up with their parent", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const parent = `scoped-parent-${Date.now()}`;
+  execFileSync("tmux", [...tmux, "new-session", "-d", "-s", parent]);
+  const response = await request.post("/mux/api/workspaces", {
+    data: { name: "Scoped shells", tabs: [parent, sessionName], groups: [], activeSession: parent },
+  });
+  expect(response.ok()).toBe(true);
+  const workspaceId = (await response.json()).workspace.id;
+  const route = (name: string) => `/mux/session/${name}?workspace=${workspaceId}&tab=${parent}&tab=${sessionName}`;
+  try {
+    await page.goto(route(parent));
+    await page.getByRole("button", { name: "Show session terminal", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "Session terminal", exact: true });
+    await expect(panel.getByRole("status")).toHaveText("live");
+    const shell = (await panel.locator("footer > span").textContent())!;
+    await expect(panel.getByRole("button", { name: "Pin utility terminal" })).toHaveCount(0);
+    await panel.getByRole("button", { name: "Hide utility terminal" }).click();
+    await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+    const workspacePanel = page.getByRole("dialog", { name: "Utility terminal", exact: true });
+    await expect(workspacePanel.getByRole("status")).toHaveText("live");
+    const workspaceShell = (await workspacePanel.locator("footer > span").textContent())!;
+    expect(workspaceShell).not.toBe(shell);
+    await workspacePanel.getByRole("button", { name: "Pin utility terminal" }).click();
+    await workspacePanel.getByLabel("Move utility terminal").focus();
+    for (let index = 0; index < 22; index++) await page.keyboard.press("ArrowDown");
+    await page.getByRole("button", { name: "Show session terminal", exact: true }).click();
+    await expect(panel.locator("footer > span")).toHaveText(shell);
+    await page.getByRole("tab", { name: new RegExp(`^${sessionName},`) }).focus();
+    await page.keyboard.press("Enter");
+    await expect(workspacePanel.getByRole("status")).toHaveText("live");
+    await expect(workspacePanel.locator("footer > span")).toHaveText(workspaceShell);
+    await expect(panel).toHaveCount(0);
+    await page.getByRole("tab", { name: new RegExp(`^${parent},`) }).focus();
+    await page.keyboard.press("Enter");
+    await expect(panel.getByRole("status")).toHaveText("live");
+    await expect(panel.locator("footer > span")).toHaveText(shell);
+    await page.screenshot({ path: "artifacts/scoped-utility-terminals.png" });
+    execFileSync("tmux", [...tmux, "kill-session", "-t", `=${parent}`]);
+    await expect.poll(() => execFileSync("tmux", [...tmux, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8" }), { timeout: 10000 }).not.toContain(shell);
+    expect(workspaceTmuxIdentity(workspaceShell)).toContain(workspaceShell);
+  } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+  }
+});
+
+test("temporary workspace terminals transfer on save and release when leaving", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const route = `/mux/session/${sessionName}?tab=${sessionName}`;
+  await page.goto(route);
+  await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Utility terminal", exact: true });
+  await expect(panel.getByRole("status")).toHaveText("live");
+  const original = (await panel.locator("footer > span").textContent())!;
+  await panel.getByRole("button", { name: "Hide utility terminal" }).click();
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("button", { name: "Close New session tab" }).click();
+  await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+  await expect(panel.getByRole("status")).toHaveText("live");
+  await expect(panel.locator("footer > span")).toHaveText(original);
+  await panel.getByRole("button", { name: "Hide utility terminal" }).click();
+  await page.getByRole("button", { name: "Save workspace", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Save this workspace" });
+  await dialog.getByRole("textbox", { name: "Workspace name" }).fill("Transferred utility shell");
+  const transfer = page.waitForResponse((response) => response.url().endsWith("/api/utility-terminal/release"));
+  await dialog.getByRole("button", { name: "Save workspace" }).click();
+  expect((await transfer).ok()).toBe(true);
+  await expect.poll(() => new URL(page.url()).searchParams.get("workspace")).toBeTruthy();
+  const workspaceId = new URL(page.url()).searchParams.get("workspace")!;
+  try {
+    await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+    await expect(panel.getByRole("status")).toHaveText("live");
+    await expect(panel.locator("footer > span")).toHaveText(original);
+    await page.goto(route);
+    await page.getByRole("button", { name: "Show utility terminal", exact: true }).click();
+    await expect(panel.getByRole("status")).toHaveText("live");
+    const temporary = (await panel.locator("footer > span").textContent())!;
+    expect(temporary).not.toBe(original);
+    await page.goto("/mux/");
+    await expect.poll(() => execFileSync("tmux", [...tmux, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8" })).not.toContain(temporary);
+    expect(workspaceTmuxIdentity(original)).toContain(original);
+  } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+  }
+});
+
+test("sidebar tabs cross separators independently and persist after reload", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const helpers = [`${sessionName}-cross-b`, `${sessionName}-cross-c`];
+  for (const name of helpers) execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  const tabs = [sessionName, ...helpers];
+  const response = await request.post("/mux/api/workspaces", {
+    data: { name: "Separator crossing", tabs, groups: [], activeSession: sessionName, separators: [sessionName] },
+  });
+  expect(response.ok()).toBe(true);
+  const id = (await response.json()).workspace.id;
+  const snapshot = () => request.get(`/mux/api/workspaces/${id}`).then((r) => r.json()).then((body) => body.workspace);
+  try {
+    await page.goto(`/mux/session/${sessionName}?workspace=${id}${tabs.map((name) => `&tab=${name}`).join("")}`);
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    await page.getByRole("button", { name: `Move ${helpers[0]} tab up` }).click();
+    await expect.poll(async () => (await snapshot()).separators).toEqual([helpers[0]]);
+    expect((await snapshot()).tabs).toEqual(tabs);
+    await page.reload();
+    const divider = page.locator(`[data-separator-after="${helpers[0]}"]`);
+    await expect(divider).toBeVisible();
+    const tab = page.getByRole("tab", { name: new RegExp(`^${helpers[0]},`) });
+    await tab.dragTo(divider);
+    await expect.poll(async () => (await snapshot()).separatorsBefore).toEqual([helpers[0]]);
+    expect((await snapshot()).tabs).toEqual(tabs);
+    for (const name of helpers) await page.getByRole("tab", { name: new RegExp(`^${name},`) }).click({ modifiers: ["Control"] });
+    await page.getByRole("button", { name: "Move selected tabs up" }).click();
+    await expect.poll(async () => (await snapshot()).separators).toEqual([helpers[1]]);
+    expect((await snapshot()).separatorsBefore).toEqual([]);
+    expect((await snapshot()).tabs).toEqual(tabs);
+    await page.reload();
+    await expect(page.locator(`[data-separator-after="${helpers[1]}"]`)).toBeVisible();
+    await page.screenshot({ path: "artifacts/separator-crossing.png" });
+  } finally {
+    await request.delete(`/mux/api/workspaces/${id}`);
     for (const name of helpers) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
   }
 });
@@ -4627,7 +5030,7 @@ test("saved workspace survives reload and device handoff without touching tmux p
       exact: true,
     }).click();
     const deleteDialog = renamedSecondDeviceCard.getByRole("alertdialog");
-    await expect(deleteDialog).toContainText("Tmux sessions keep running.");
+    await expect(deleteDialog).toContainText("Session tabs keep running. Its owned workspace terminal will end.");
     const beforeDeleteTmuxSnapshots = orderedTabs.map(workspaceTmuxSnapshot);
     await deleteDialog.getByRole("button", { name: "Delete workspace", exact: true }).click();
 

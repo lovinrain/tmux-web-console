@@ -74,6 +74,65 @@ def workspace_group(
     }
 
 
+def pane_layout(name="Pair"):
+    return {
+        "id": "pair-view",
+        "name": name,
+        "root": {
+            "id": "root-split",
+            "kind": "split",
+            "direction": "horizontal",
+            "ratio": 0.5,
+            "first": {"id": "left", "kind": "pane", "session": "a"},
+            "second": {"id": "right", "kind": "pane", "session": "b"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_workspace_pane_layout_api_create_update_and_validation(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Project",
+                "tabs": ["a", "b"],
+                "activeSession": "a",
+                "paneLayouts": [pane_layout()],
+            },
+        )
+        assert response.status == 201
+        assert (await response.json())["workspace"]["paneLayouts"] == [pane_layout()]
+
+        renamed_layout = pane_layout("Review wall")
+        response = await client.patch(
+            "/api/workspaces/workspace-id",
+            json={"paneLayouts": [renamed_layout], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["workspace"]["paneLayouts"] == [renamed_layout]
+
+        response = await client.patch(
+            "/api/workspaces/workspace-id",
+            json={"paneLayouts": [pane_layout()]},
+        )
+        assert response.status == 400
+        assert await response.json() == {"error": "sessionRevision is required"}
+
+        invalid = pane_layout()
+        invalid["root"]["second"]["session"] = "outside"
+        response = await client.patch(
+            "/api/workspaces/workspace-id",
+            json={"paneLayouts": [invalid], "sessionRevision": 0},
+        )
+        assert response.status == 400
+        assert "must be one of the workspace tabs" in (await response.json())["error"]
+
+
 @pytest.mark.asyncio
 async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
     path = tmp_path / "workspaces.json"
@@ -109,6 +168,7 @@ async def test_workspaces_api_crud_activity_and_persistence(tmp_path):
             "quickLinks": [],
             "separators": [],
             "separatorsBefore": [],
+            "paneLayouts": [],
             "activeSession": "agent-a",
             "createdAt": 10_000,
             "updatedAt": 10_000,
@@ -554,7 +614,7 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
         assert created.status == 201
 
         update_cases = [
-            ({}, "name, tabs, groups, separators, or activeSession is required"),
+            ({}, "name, tabs, groups, separators, paneLayouts, or activeSession is required"),
             ({"extra": True}, "unknown field: extra"),
             ({"name": None}, "name must be a string"),
             (

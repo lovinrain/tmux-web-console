@@ -164,6 +164,40 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it("shows saved pane views beside sessions and can create or open one", () => {
+    const onCreatePaneLayout = vi.fn();
+    const onSelectPaneLayout = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          paneLayouts: [{
+            id: "review-wall",
+            name: "Review wall",
+            root: {
+              id: "split",
+              kind: "split",
+              direction: "horizontal",
+              ratio: 0.5,
+              first: { id: "left", kind: "pane", session: "alpha" },
+              second: { id: "right", kind: "pane", session: "beta" },
+            },
+          }],
+          activePaneLayoutId: "review-wall",
+          onCreatePaneLayout,
+          onSelectPaneLayout,
+        })}
+      />,
+    );
+
+    const paneTab = screen.getByRole("tab", { name: /Review wall/ });
+    expect(paneTab).toHaveAttribute("aria-selected", "true");
+    expect(paneTab).toHaveAttribute("aria-controls", "muxdeck-workspace-pane-board");
+    fireEvent.click(paneTab);
+    expect(onSelectPaneLayout).toHaveBeenCalledWith("review-wall");
+    fireEvent.click(screen.getByRole("button", { name: "Create multi-pane view" }));
+    expect(onCreatePaneLayout).toHaveBeenCalledOnce();
+  });
+
   it("finds tabs by group name and exposes their group name and color", () => {
     render(
       <WorkspaceTabSearchDialog
@@ -1577,6 +1611,7 @@ describe("SessionWorkspaceNavigation", () => {
       openSessions: ["alpha", "beta", "archive", "zulu"],
       onMoveTab: vi.fn(),
       onMoveTabs: vi.fn(),
+      onTabSelectionChange: vi.fn(),
     });
     render(<SessionWorkspaceNavigation {...props} />);
 
@@ -1586,6 +1621,7 @@ describe("SessionWorkspaceNavigation", () => {
     const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" });
 
     fireEvent.click(archive, { shiftKey: true });
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["alpha", "beta", "archive"]);
     expect(alpha.closest(".workspace-tab")).toHaveAttribute("data-tab-move-selected", "true");
     expect(beta.closest(".workspace-tab")).toHaveAttribute("data-tab-move-selected", "true");
     expect(archive.closest(".workspace-tab")).toHaveAttribute("data-tab-move-selected", "true");
@@ -1595,6 +1631,7 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onSelect).not.toHaveBeenCalled();
 
     fireEvent.keyDown(archive, { key: "Escape" });
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith([]);
     expect(screen.queryByRole("group", { name: /tabs selected for moving/ }))
       .not.toBeInTheDocument();
     expect(alpha.closest(".workspace-tab")).not.toHaveAttribute("data-tab-move-selected");
@@ -1605,6 +1642,47 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onSelect).toHaveBeenCalledWith("zulu");
     expect(screen.queryByRole("group", { name: /tabs selected for moving/ }))
       .not.toBeInTheDocument();
+  });
+
+  it("moves an adjacent tab across a separator with arrows or drag without changing tab order", () => {
+    const onCrossSeparator = vi.fn();
+    const props = navigationProps({ orientation: "vertical", separators: ["alpha"], onCrossSeparator, onMoveTab: vi.fn(), onMoveTabs: vi.fn() });
+    render(<SessionWorkspaceNavigation {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Move beta tab up" }));
+    expect(onCrossSeparator).toHaveBeenLastCalledWith({ from: { name: "alpha", side: "after" }, to: { name: "beta", side: "after" } });
+    expect(props.onMoveTab).not.toHaveBeenCalled();
+    const beta = screen.getByRole("tab", { name: "beta, Working" });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(beta, { dataTransfer });
+    const separator = screen.getByRole("separator", { name: "Separator after Alpha control" }).parentElement!;
+    fireEvent.dragOver(separator, { dataTransfer });
+    expect(separator).toHaveAttribute("data-crossing", "true");
+    fireEvent.drop(separator, { dataTransfer });
+    expect(onCrossSeparator).toHaveBeenCalledTimes(2);
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
+  });
+
+  it("crosses a leading separator with the complete selected block", () => {
+    const props = navigationProps({ orientation: "vertical", separatorsBefore: ["alpha"], onCrossSeparator: vi.fn(), onMoveTab: vi.fn(), onMoveTabs: vi.fn() });
+    render(<SessionWorkspaceNavigation {...props} />);
+    fireEvent.click(screen.getByRole("tab", { name: "beta, Working" }), { shiftKey: true });
+    const up = screen.getByRole("button", { name: "Move selected tabs up" });
+    expect(up).toBeEnabled();
+    fireEvent.click(up);
+    expect(props.onCrossSeparator).toHaveBeenCalledWith({ from: { name: "alpha", side: "before" }, to: { name: "beta", side: "after" } });
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
+  });
+
+  it("clears the reported selection when switching workspaces or unmounting", () => {
+    const onTabSelectionChange = vi.fn();
+    const props = navigationProps({ onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onTabSelectionChange, activeWorkspaceId: "one" });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    fireEvent.click(screen.getByRole("tab", { name: "beta, Working" }), { shiftKey: true });
+    expect(onTabSelectionChange).toHaveBeenLastCalledWith(["alpha", "beta"]);
+    view.rerender(<SessionWorkspaceNavigation {...props} activeWorkspaceId="two" />);
+    expect(onTabSelectionChange).toHaveBeenLastCalledWith([]);
+    view.unmount();
+    expect(onTabSelectionChange).toHaveBeenLastCalledWith([]);
   });
 
   it.each(["horizontal", "vertical"] as const)("moves selections with arrows in %s tabs and keeps selection", (orientation) => {

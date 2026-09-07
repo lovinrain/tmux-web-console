@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import { CloseIcon, TrashIcon } from "../icons";
 
@@ -8,6 +8,11 @@ interface SessionTerminateDialogProps {
   onClose: () => void;
   onTerminate: () => Promise<void>;
   onFallbackFocus?: () => void;
+  heading?: string;
+  description?: ReactNode;
+  confirmLabel?: string;
+  pendingLabel?: string;
+  destructive?: boolean;
 }
 
 export function SessionTerminateDialog({
@@ -16,6 +21,11 @@ export function SessionTerminateDialog({
   onClose,
   onTerminate,
   onFallbackFocus,
+  heading = "Terminate tmux session?",
+  description,
+  confirmLabel = "Terminate session",
+  pendingLabel = "Terminating...",
+  destructive = true,
 }: SessionTerminateDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -25,6 +35,7 @@ export function SessionTerminateDialog({
   const fallbackFocusRef = useRef(onFallbackFocus);
   fallbackFocusRef.current = onFallbackFocus;
   const [terminating, setTerminating] = useState(false);
+  const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -92,7 +103,8 @@ export function SessionTerminateDialog({
   }, [onClose, terminating]);
 
   const terminate = async () => {
-    if (terminating) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setTerminating(true);
     setError(null);
     try {
@@ -105,6 +117,7 @@ export function SessionTerminateDialog({
           : "Unable to terminate the tmux session",
       );
       setTerminating(false);
+      inFlight.current = false;
     }
   };
 
@@ -134,8 +147,8 @@ export function SessionTerminateDialog({
       >
         <header>
           <div>
-            <p className="eyebrow">DESTRUCTIVE SESSION ACTION</p>
-            <h2 id={headingId}>Terminate tmux session?</h2>
+            <p className="eyebrow">{destructive ? "DESTRUCTIVE SESSION ACTION" : "WORKSPACE TAB ACTION"}</p>
+            <h2 id={headingId}>{heading}</h2>
           </div>
           <button
             type="button"
@@ -148,7 +161,7 @@ export function SessionTerminateDialog({
           </button>
         </header>
         <div id={descriptionId} className="title-form-body session-terminate-body">
-          <p className="session-terminate-target">
+          {description ?? <><p className="session-terminate-target">
             <TrashIcon />
             <span>
               End <strong>{displayTitle}</strong>
@@ -162,7 +175,7 @@ export function SessionTerminateDialog({
           <p>
             Muxdeck removes its quick tab if it is open. Memoranda and display metadata
             remain saved, and references in other saved workspaces are not silently rewritten.
-          </p>
+          </p></>}
           {error && <p className="title-error" role="alert">{error}</p>}
         </div>
         <div className="title-actions">
@@ -177,11 +190,11 @@ export function SessionTerminateDialog({
           </button>
           <button
             type="button"
-            className="danger-button"
+            className={destructive ? "danger-button" : "primary-button"}
             onClick={() => void terminate()}
             disabled={terminating}
           >
-            {terminating ? "Terminating..." : "Terminate session"}
+            {terminating ? pendingLabel : confirmLabel}
           </button>
         </div>
       </div>

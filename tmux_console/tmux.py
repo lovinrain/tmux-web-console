@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
+import pwd
 import re
 import secrets
 import shlex
@@ -380,6 +382,111 @@ class TmuxClient:
                 start_directory=directory,
             )
 
+    async def utility_session(
+        self, workspace_key: str, source_name: str, source_id: str, *, create: bool
+    ) -> Session | None:
+        if not re.fullmatch(r"(?:workspace:[A-Za-z0-9_-]{1,80}|temporary:[a-f0-9-]{36}|session:\$[0-9]+:[0-9]+:[0-9]+:[0-9]+)", workspace_key):
+            raise ValueError("invalid utility terminal workspace key")
+        marker = hashlib.sha256(workspace_key.encode()).hexdigest()
+        async with self._session_creation_lock:
+            sessions = await self.list_sessions()
+            source = next((session for session in sessions if session.name == source_name), None)
+            if workspace_key.startswith("session:"):
+                if source is None:
+                    raise TmuxSessionNotFoundError("source session is no longer available")
+                identity = f"session:{source.id}:{source.created}:{source.server_started}:{source.server_pid}"
+                if source.id != source_id or identity != workspace_key:
+                    raise TmuxSessionIdentityChangedError("source session identity changed")
+            if sessions:
+                output = await self.run([
+                    "list-sessions", "-F", "#{session_id}\t#{@muxdeck-utility-workspace}",
+                ])
+                ids = {
+                    row.split("\t", 1)[0]
+                    for row in output.splitlines()
+                    if row.endswith(f"\t{marker}")
+                }
+                existing = next((session for session in sessions if session.id in ids), None)
+                if existing is not None:
+                    return existing
+            if not create:
+                return None
+            source = next((session for session in sessions if session.name == source_name), None)
+            if source is None:
+                raise TmuxSessionNotFoundError("source session is no longer available")
+            if source.id != source_id:
+                raise TmuxSessionIdentityChangedError("source session identity changed")
+            if source.active_pane is None:
+                raise TmuxError("source session has no active pane")
+            directory = validate_tmux_start_directory(source.active_pane.path)
+            # Explicitly launch a shell, even when tmux's default-command starts an agent.
+            shell = (await self.run(["show-options", "-gv", "default-shell"])).strip()
+            if not shell or not os.path.isabs(shell):
+                raise TmuxError("tmux default-shell is not an absolute executable path")
+            name = f"muxdeck-terminal-{secrets.token_hex(6)}"
+            await self.run([
+                "new-session", "-d", "-s", name, "-c", _escape_tmux_format(directory),
+                shlex.quote(shell),
+                ";", "set-option", "-t", name,
+                "@muxdeck-utility-workspace", marker,
+                ";", "set-option", "-t", name,
+                "@muxdeck-utility-owner", workspace_key,
+            ])
+            return await self.get_session(name)
+
+    async def release_utility_workspace(self, key: str, *, destination: str | None = None) -> None:
+        if not re.fullmatch(r"temporary:[a-f0-9-]{36}", key):
+            raise ValueError("only temporary workspace terminals can be released or transferred")
+        if destination is not None and not re.fullmatch(r"workspace:[A-Za-z0-9_-]{1,80}", destination):
+            raise ValueError("destination must be a saved workspace")
+        async with self._session_creation_lock:
+            owned = await self._owned_utility_sessions()
+            if destination is not None and any(owner == destination for _, owner in owned) and any(owner == key for _, owner in owned):
+                raise TmuxError("destination already has a utility shell; temporary shell was kept")
+            for session, owner in owned:
+                if owner != key:
+                    continue
+                if destination is not None:
+                    await self.run([
+                        "set-option", "-t", session.id, "@muxdeck-utility-owner", destination,
+                        ";", "set-option", "-t", session.id, "@muxdeck-utility-workspace",
+                        hashlib.sha256(destination.encode()).hexdigest(),
+                    ])
+                else:
+                    await self.terminate_session(
+                        session_id=session.id, session_created=session.created,
+                        server_started=session.server_started, server_pid=session.server_pid,
+                    )
+
+    async def _owned_utility_sessions(self) -> list[tuple[Session, str]]:
+        sessions = await self.list_sessions()
+        if not sessions:
+            return []
+        output = await self.run(["list-sessions", "-F", "#{session_id}\t#{@muxdeck-utility-owner}"])
+        owners = dict(row.split("\t", 1) for row in output.splitlines() if "\t" in row)
+        return [(session, owners[session.id]) for session in sessions if owners.get(session.id)]
+
+    async def cleanup_utility_sessions(self, workspace_ids: set[str]) -> None:
+        # Only explicitly owned utility shells are eligible; never infer ownership by name.
+        async with self._session_creation_lock:
+            owned = await self._owned_utility_sessions()
+            if not owned:
+                return
+            sessions = await self.list_sessions()
+            identities = {
+                f"session:{s.id}:{s.created}:{s.server_started}:{s.server_pid}"
+                for s in sessions
+            }
+            for session, owner in owned:
+                orphan = (owner.startswith("session:") and owner not in identities) or (
+                    owner.startswith("workspace:") and owner.removeprefix("workspace:") not in workspace_ids
+                )
+                if orphan:
+                    await self.terminate_session(
+                        session_id=session.id, session_created=session.created,
+                        server_started=session.server_started, server_pid=session.server_pid,
+                    )
+
     async def copy_session(
         self,
         source_name: str,
@@ -433,12 +540,18 @@ class TmuxClient:
                     existing_names.add(candidate)
                     increment += 1
 
+    async def create_shell_session(self, name: str, directory: str) -> CreatedSession:
+        directory = validate_tmux_start_directory(directory)
+        async with self._session_creation_lock:
+            return await self._create_session(name, start_directory=directory, shell_only=True)
+
     async def _create_session(
         self,
         requested_name: str | None = None,
         theme: str | None = None,
         *,
         start_directory: str | None = None,
+        shell_only: bool = False,
     ) -> CreatedSession:
         requested_name = (
             f"muxdeck-{secrets.token_hex(6)}"
@@ -480,6 +593,16 @@ class TmuxClient:
             )
         directory = start_directory if start_directory is not None else str(Path.home())
         args.extend(["-c", _escape_tmux_format(directory)])
+        if shell_only:
+            try:
+                shell = (await self.run(["show-options", "-gv", "default-shell"])).strip()
+            except TmuxError as error:
+                if not any(marker in str(error).lower() for marker in ("no server running", "error connecting", "failed to connect")):
+                    raise
+                shell = pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
+            if not shell or not os.path.isabs(shell):
+                raise TmuxError("tmux default-shell is not an absolute executable path")
+            args.append(shlex.quote(shell))
         output = await self.run(args)
         # Tabs and line separators are invalid in names, so this preserves spaces.
         rows = output.splitlines()

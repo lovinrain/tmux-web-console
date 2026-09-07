@@ -68,7 +68,7 @@ def test_separators_persist_follow_renames_and_prune_closed_tabs(tmp_path):
     assert WorkspaceStore(path).get_workspace(workspace_id)["separators"] == ["renamed"]
 
 
-@pytest.mark.parametrize("version", [7, 8])
+@pytest.mark.parametrize("version", [7, 8, 9])
 def test_older_workspace_loads_without_before_separators(tmp_path, version):
     path = tmp_path / "workspaces.json"
     store = WorkspaceStore(path)
@@ -78,7 +78,9 @@ def test_older_workspace_loads_without_before_separators(tmp_path, version):
     for record in payload["workspaces"]:
         if version < 8:
             record.pop("separators")
-        record.pop("separatorsBefore")
+        if version < 9:
+            record.pop("separatorsBefore")
+        record.pop("paneLayouts")
     path.write_text(json.dumps(payload))
     restored = WorkspaceStore(path)
     assert restored.get_workspace(workspace["id"])["separators"] == []
@@ -104,6 +106,92 @@ def workspace_group(
         "collapsed": collapsed,
         "tabs": tabs,
     }
+
+
+def three_pane_layout():
+    return {
+        "id": "triage",
+        "name": "Triage board",
+        "root": {
+            "id": "split-root",
+            "kind": "split",
+            "direction": "horizontal",
+            "ratio": 0.6,
+            "first": {"id": "main", "kind": "pane", "session": "agent-a"},
+            "second": {
+                "id": "split-right",
+                "kind": "split",
+                "direction": "vertical",
+                "ratio": 0.5,
+                "first": {"id": "review", "kind": "pane", "session": "agent-b"},
+                "second": {"id": "spare", "kind": "pane", "session": None},
+            },
+        },
+    }
+
+
+def test_workspace_pane_layouts_persist_rename_and_clear_closed_sessions(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+    created = store.create_workspace(
+        name="Project",
+        tabs=["agent-a", "agent-b", "agent-c"],
+        active_session="agent-a",
+        pane_layouts=[three_pane_layout()],
+    )
+
+    assert created["paneLayouts"] == [three_pane_layout()]
+    assert WorkspaceStore(path).get_workspace("workspace-id")["paneLayouts"] == [
+        three_pane_layout()
+    ]
+
+    assert store.rename_session("agent-b", "reviewer") == 1
+    renamed = store.get_workspace("workspace-id")
+    right = renamed["paneLayouts"][0]["root"]["second"]
+    assert right["first"]["session"] == "reviewer"
+
+    pruned = store.record_activity(
+        "workspace-id",
+        tabs=["agent-a", "agent-c"],
+        active_session="agent-a",
+        session_revision=renamed["sessionRevision"],
+    )
+    assert pruned["paneLayouts"][0]["root"]["second"]["first"]["session"] is None
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda layout: layout.update(name=" "), "name cannot be blank"),
+        (
+            lambda layout: layout["root"].update(ratio=0.99),
+            "ratio must be between",
+        ),
+        (
+            lambda layout: layout["root"]["second"]["first"].update(
+                session="agent-a"
+            ),
+            "assigns session more than once",
+        ),
+        (
+            lambda layout: layout["root"]["second"]["first"].update(
+                session="outside"
+            ),
+            "must be one of the workspace tabs",
+        ),
+    ],
+)
+def test_workspace_pane_layout_validation_is_strict(tmp_path, mutate, message):
+    layout = three_pane_layout()
+    mutate(layout)
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    with pytest.raises((TypeError, ValueError), match=message):
+        store.create_workspace(
+            name="Project",
+            tabs=["agent-a", "agent-b"],
+            active_session="agent-a",
+            pane_layouts=[layout],
+        )
 
 
 def test_workspace_crud_activity_order_and_persistence(tmp_path):
@@ -132,6 +220,7 @@ def test_workspace_crud_activity_order_and_persistence(tmp_path):
         "quickLinks": [],
         "separators": [],
         "separatorsBefore": [],
+        "paneLayouts": [],
         "activeSession": "agent-b",
         "createdAt": 10_000,
         "updatedAt": 10_000,
@@ -1406,6 +1495,7 @@ def test_session_rename_revision_exhaustion_is_persisted_as_a_write_fence(tmp_pa
                         "inheritedPins": [],
                         "separators": [],
                         "separatorsBefore": [],
+                        "paneLayouts": [],
                         "activeSession": "old",
                         "createdAt": 1_000,
                         "updatedAt": 1_000,

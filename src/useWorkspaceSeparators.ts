@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getWorkspace, updateWorkspace } from "./api";
+import type { SeparatorCrossing } from "./workspaceSeparatorMovement";
 
 interface SeparatorSnapshot {
   id: string;
@@ -18,6 +19,7 @@ export function useWorkspaceSeparators(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
+  const movementInFlight = useRef(false);
   const currentId = useRef(workspaceId);
   currentId.current = workspaceId;
   const tabsKey = JSON.stringify(tabs);
@@ -87,5 +89,45 @@ export function useWorkspaceSeparators(
     }
   };
 
-  return { anchors, beforeAnchors, busy, error, change };
+  const cross = async ({ from, to }: SeparatorCrossing) => {
+    if (busy || movementInFlight.current) return;
+    const transform = (before: string[], after: string[]) => {
+      const values = { before: [...before], after: [...after] };
+      if (!values[from.side].includes(from.name) || values[to.side].includes(to.name)) {
+        throw new Error("Separators changed; refresh and try again.");
+      }
+      values[from.side] = values[from.side].filter((name) => name !== from.name);
+      values[to.side].push(to.name);
+      return values;
+    };
+    const id = workspaceId;
+    const request = ++generation.current;
+    movementInFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      if (!id) {
+        const values = transform(beforeAnchors, anchors);
+        setTemporaryBefore(values.before);
+        setTemporary(values.after);
+      } else {
+        const latest = await getWorkspace(id);
+        if (generation.current !== request || currentId.current !== id) return;
+        if (JSON.stringify(latest.tabs) !== tabsKey) throw new Error("Wait for workspace tab order to finish syncing, then try again.");
+        const values = transform(latest.separatorsBefore ?? [], latest.separators ?? []);
+        const updated = await updateWorkspace(id, {
+          separatorsBefore: values.before, separators: values.after,
+          sessionRevision: latest.sessionRevision,
+        });
+        if (generation.current === request && currentId.current === id) setSaved(updated);
+      }
+    } catch (reason) {
+      if (generation.current === request) setError(reason instanceof Error ? reason.message : "Unable to move across separator.");
+    } finally {
+      movementInFlight.current = false;
+      if (generation.current === request) setBusy(false);
+    }
+  };
+
+  return { anchors, beforeAnchors, busy, error, change, cross };
 }

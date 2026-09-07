@@ -46,6 +46,32 @@
   white-space: nowrap;
 }
 
+.session-files-panel[hidden] { display: none; }
+
+.console-files-foreground {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--ink-raised);
+  color: var(--cyan);
+  font: 10px "JetBrains Mono Variable", monospace;
+  cursor: pointer;
+}
+.console-files-foreground svg { width: 13px; height: 13px; }
+.console-files-foreground:hover { border-color: var(--cyan); }
+.session-files-header .session-files-background {
+  display: inline-flex;
+  width: auto;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px 6px;
+  font-size: 10px;
+}
+
 .session-files-panel {
   --files-accent: var(--cyan);
   position: fixed;
@@ -122,6 +148,10 @@
 
 .session-files-header > div > span {
   display: block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #6e8c84;
   font-size: 7px;
   font-weight: 760;
@@ -1575,6 +1605,11 @@ html.session-files-panel-splitting .session-files-splitter > span {
 .session-file-download {
   color: #d6ba80 !important;
   border-color: rgba(255, 182, 72, 0.34) !important;
+}
+
+.session-file-webpage {
+  color: #9ed6ff !important;
+  border-color: rgba(93, 178, 235, 0.38) !important;
 }
 
 .session-file-action-status {

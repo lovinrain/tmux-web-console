@@ -26,6 +26,7 @@ import {
   saveSessionFileContent,
   searchSessionFiles,
   sessionFileDownloadUrl,
+  sessionFileHtmlUrl,
   sessionFileImageUrl,
   sessionFilePdfUrl,
   uploadSessionFile,
@@ -84,6 +85,7 @@ const SESSION_FILE_RECENT_LIMIT = 32;
 const SESSION_FILE_RECENT_BUCKET_LIMIT = 48;
 const SESSION_FILE_RECENT_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1_000;
 const MARKDOWN_FILE_PATTERN = /\.(?:md|markdown)$/i;
+const HTML_FILE_PATTERN = /\.html?$/i;
 
 export const SESSION_FILES_LAYOUT_STORAGE_KEY = "muxdeck.session-files-layout.v1";
 export const SESSION_FILES_RECENTS_STORAGE_KEY = "muxdeck.session-files-recents.v1";
@@ -201,7 +203,10 @@ interface SessionFilesPanelProps {
   sessionId: string;
   paneId: string;
   panePath: string;
+  panelId?: string;
   openPathRequest?: SessionFileOpenRequest | null;
+  backgrounded?: boolean;
+  onBackground?: () => void;
   onClose: () => void;
   onInsertPath: (terminalText: string) => boolean;
 }
@@ -492,6 +497,10 @@ function pathRelativeToPaneCwd(
   return { text: absolutePath.slice(cwdPrefix.length), relative: true };
 }
 
+function isHtmlFileName(name: string): boolean {
+  return HTML_FILE_PATTERN.test(name);
+}
+
 async function copyPath(text: string): Promise<boolean> {
   // The async clipboard needs a secure context, which a console reached over
   // plain HTTP on a LAN or tunnel does not have. Report that rather than
@@ -510,11 +519,17 @@ export function SessionFilesPanel({
   sessionId,
   paneId,
   panePath,
+  panelId = "muxdeck-session-files",
   openPathRequest = null,
+  backgrounded = false,
+  onBackground,
   onClose,
   onInsertPath,
 }: SessionFilesPanelProps) {
+  const titleId = `${panelId}-title`;
   const panelRef = useRef<HTMLElement>(null);
+  const backgroundedRef = useRef(backgrounded);
+  backgroundedRef.current = backgrounded;
   const contentRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<PanelDrag | null>(null);
   const resizeRef = useRef<PanelResizeDrag | null>(null);
@@ -602,15 +617,15 @@ export function SessionFilesPanel({
   const [editorError, setEditorError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const identity = `${sessionName}\u0000${sessionId}\u0000${paneId}\u0000${panePath}`;
+  const retainedView = Boolean(onBackground);
 
-  // Sending no root at all keeps the default view working against a backend
-  // that predates this field.
+  // Retained views must pin their root even if the live pane changes CWD while hidden.
   const fileTarget = useMemo<SessionFileTarget>(() => ({
     session: sessionName,
     sessionId,
     paneId,
-    ...(browseRoot === panePath ? {} : { root: browseRoot }),
-  }), [browseRoot, paneId, panePath, sessionId, sessionName]);
+    ...(retainedView || browseRoot !== panePath ? { root: browseRoot } : {}),
+  }), [browseRoot, paneId, panePath, retainedView, sessionId, sessionName]);
 
   const busy = uploading || archiving || working || addressResolving;
   const editorDirty = editing && editorValue !== editorOrigin;
@@ -637,7 +652,7 @@ export function SessionFilesPanel({
     // The listing may still be re-rendering, so the row is looked up again on
     // the next frame and skipped if the refresh replaced it.
     requestAnimationFrame(() => {
-      if (document.contains(trigger)) trigger.focus();
+      if (!backgroundedRef.current && document.contains(trigger)) trigger.focus();
     });
   }, []);
 
@@ -895,16 +910,17 @@ export function SessionFilesPanel({
   }, [editing, editorBaseline, editorOrigin, editorValue, preview]);
 
   useEffect(() => {
-    if (prompt) promptInputRef.current?.focus();
-  }, [prompt?.mode, prompt?.entries]);
+    if (!backgrounded && prompt) promptInputRef.current?.focus();
+  }, [backgrounded, prompt?.mode, prompt?.entries]);
 
   useEffect(() => {
-    if (!locatorOpen) return;
+    if (backgrounded || !locatorOpen) return;
     requestAnimationFrame(() => {
+      if (backgroundedRef.current) return;
       locatorInputRef.current?.focus();
       locatorInputRef.current?.select();
     });
-  }, [locatorOpen]);
+  }, [backgrounded, locatorOpen]);
 
   useEffect(() => {
     if (!locatorOpen) return;
@@ -917,26 +933,27 @@ export function SessionFilesPanel({
   }, [locatorOpen, showHidden]);
 
   useEffect(() => {
-    if (!locatorHighlightedPath) return;
+    if (backgrounded || !locatorHighlightedPath) return;
     locatorResultRefs.current.get(locatorHighlightedPath)?.scrollIntoView?.({
       block: "nearest",
     });
-  }, [locatorHighlightedPath]);
+  }, [backgrounded, locatorHighlightedPath]);
 
   // Focus lands on Cancel, never on the destructive button, and moves again
   // when a non-empty folder escalates the confirmation to a recursive delete.
   useEffect(() => {
-    if (confirm) confirmCancelRef.current?.focus();
-  }, [confirm?.entries, confirm?.recursive]);
+    if (!backgrounded && confirm) confirmCancelRef.current?.focus();
+  }, [backgrounded, confirm?.entries, confirm?.recursive]);
 
   useEffect(() => {
-    if (!manualCopyPath) return;
+    if (backgrounded || !manualCopyPath) return;
     const field = manualCopyRef.current;
     field?.focus();
     field?.select();
-  }, [manualCopyPath]);
+  }, [backgrounded, manualCopyPath]);
 
   useEffect(() => {
+    if (backgrounded) return;
     const panel = panelRef.current;
     const observer = panel && typeof ResizeObserver !== "undefined"
       ? new ResizeObserver(keepVisible)
@@ -954,9 +971,10 @@ export function SessionFilesPanel({
         "session-files-panel-splitting",
       );
     };
-  }, [keepVisible]);
+  }, [backgrounded, keepVisible]);
 
   useEffect(() => {
+    if (backgrounded) return;
     // Captured so the topmost layer wins, and unwound one layer at a time:
     // Escape over an open prompt, confirmation, or editor must not discard the
     // work by closing the whole panel.
@@ -1014,6 +1032,7 @@ export function SessionFilesPanel({
     window.addEventListener("keydown", unwindOnEscape, true);
     return () => window.removeEventListener("keydown", unwindOnEscape, true);
   }, [
+    backgrounded,
     busy,
     closeConfirm,
     closeLocator,
@@ -1073,6 +1092,11 @@ export function SessionFilesPanel({
     : null;
   const pdfPreviewUrl = preview?.kind === "pdf" && !preview.truncated
     ? sessionFilePdfUrl(fileTarget, preview.path)
+    : null;
+  const htmlPreviewUrl = selected?.kind === "file"
+    && selected.accessible
+    && isHtmlFileName(selected.name)
+    ? sessionFileHtmlUrl(fileTarget, selected.path)
     : null;
   const canEditPreview = preview?.kind === "text"
     && !preview.truncated
@@ -2412,13 +2436,15 @@ export function SessionFilesPanel({
 
   return createPortal(
     <section
-      id="muxdeck-session-files"
+      id={panelId}
       ref={panelRef}
       className="session-files-panel"
+      hidden={backgrounded}
+      inert={backgrounded}
       style={panelStyle}
       role="dialog"
       aria-modal="false"
-      aria-labelledby="session-files-title"
+      aria-labelledby={titleId}
       aria-busy={listingLoading || busy || locatorLoading}
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
@@ -2438,10 +2464,15 @@ export function SessionFilesPanel({
       >
         <span className="session-files-heading-icon"><FolderIcon /></span>
         <div>
-          <span>LIVE FILES / PANE CWD</span>
-          <h2 id="session-files-title">Files</h2>
+          <span title={sessionName}>LIVE FILES / {sessionName}</span>
+          <h2 id={titleId}>Files</h2>
         </div>
         <code title={rootName}>{rootName}</code>
+        {onBackground && (
+          <button type="button" className="session-files-background"
+            title="Hide and retain this view, selection, scroll position, and unsaved edits"
+            onClick={onBackground}><ArrowDownIcon /><span>Background</span></button>
+        )}
         <button type="button" aria-label="Close file browser" onClick={onClose}>
           <CloseIcon />
         </button>
@@ -3336,6 +3367,20 @@ export function SessionFilesPanel({
               >
                 <ArrowDownIcon />
                 <span>Download</span>
+              </a>
+            )}
+            {htmlPreviewUrl && selected && (
+              <a
+                className="session-file-webpage"
+                href={htmlPreviewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open ${selected.name} as webpage`}
+                title="Open this HTML document in a sandboxed browser tab"
+                onClick={() => setActionStatus(`Opened ${selected.name} as a webpage`)}
+              >
+                <ExternalLinkIcon />
+                <span>Open webpage</span>
               </a>
             )}
             <button

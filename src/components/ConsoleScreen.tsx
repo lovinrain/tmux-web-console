@@ -15,6 +15,7 @@ import {
   deleteQueuedMessage,
   listSessions,
   renameSession,
+  sessionFileHtmlUrl,
   uploadSessionAttachment,
   updateSessionDetails,
   updateSessionWorkspacePin,
@@ -51,7 +52,7 @@ import {
   type AgentScrollMode,
 } from "../agentScrollPreferences";
 import { paneCommandKind } from "../sessionDashboardModel";
-import { resolveTerminalFileLinkPath } from "../terminalFileLinks";
+import { isHtmlFilePath, resolveTerminalFileLinkPath } from "../terminalFileLinks";
 import {
   SHORTCUT_ACTION_EVENT,
   directShortcutAria,
@@ -65,6 +66,8 @@ import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { AccountLink } from "./AccountLink";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
+import { FloatingTerminal, type FloatingTerminalHandle } from "./FloatingTerminal";
+import { newTemporaryTerminalKey } from "../floatingTerminalState";
 import {
   FloatingStagedInput,
   type FloatingStagedInputHandle,
@@ -99,7 +102,14 @@ import { ThemeToggle } from "./ThemeToggle";
 
 interface ConsoleScreenProps {
   sessionName: string;
+  embedded?: boolean;
+  instanceId?: string;
+  keyboardShortcutsEnabled?: boolean;
+  onActivate?: () => void;
+  sessionSnapshot?: Session | null;
   workspaceId?: string | null;
+  temporaryTerminalKey?: string;
+  onTemporaryTerminalUsed?: () => void;
   workspaceName?: string | null;
   onBack: () => void;
   dashboardWindowHref?: string;
@@ -154,6 +164,7 @@ interface ConsoleScreenProps {
     sessionId: string,
   ) => void;
   onSplitWorkspace?: (sessionName: string) => OpenTabInNewWindowResult;
+  splitWorkspaceSelectionCount?: number;
   copySessionDisabled?: boolean;
   renameWarning?: SessionRenameWarning | null;
   onDismissRenameWarning?: (sessionId: string) => void;
@@ -222,6 +233,7 @@ type DesktopSessionShortcut = "end" | "rename";
 type DesktopConsoleShortcutAction =
   | "view-terminal-focus"
   | "view-floating-input"
+  | "view-floating-terminal"
   | "view-session-tabs"
   | "session-end"
   | "session-rename"
@@ -256,10 +268,17 @@ interface ConsoleBarToolbarProps {
   floatingInputOpen?: boolean;
   floatingInputPinned?: boolean;
   onToggleFloatingInput?: () => void;
+  floatingTerminalOpen?: boolean;
+  onToggleFloatingTerminal?: () => void;
+  sessionTerminalOpen?: boolean;
+  onToggleSessionTerminal?: () => void;
   desktopTabOrientation?: WorkspaceTabOrientation;
   onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
   tabActionsVisible?: boolean;
   onTabActionsVisibilityChange?: (visible: boolean) => void;
+  stagedInputControlId?: string;
+  shortcutsControlId?: string;
+  terminalControlId?: string;
 }
 
 const CONSOLE_BARS: Array<{
@@ -299,10 +318,17 @@ function ConsoleBarToolbar({
   floatingInputOpen = false,
   floatingInputPinned = false,
   onToggleFloatingInput,
+  floatingTerminalOpen = false,
+  onToggleFloatingTerminal,
+  sessionTerminalOpen = false,
+  onToggleSessionTerminal,
   desktopTabOrientation = "horizontal",
   onDesktopTabOrientationChange,
   tabActionsVisible = true,
   onTabActionsVisibilityChange,
+  stagedInputControlId = "muxdeck-staged-input",
+  shortcutsControlId = "muxdeck-terminal-shortcuts",
+  terminalControlId = "muxdeck-active-console",
 }: ConsoleBarToolbarProps) {
   const { bindings: shortcutBindings } = useShortcutSettings();
   const sessionTabsShortcut = directShortcutLabel(shortcutBindings["view-session-tabs"]);
@@ -328,6 +354,11 @@ function ConsoleBarToolbar({
         {CONSOLE_BARS.map(({ bar, label, shortLabel, controls }) => {
           const visible = visibility[bar];
           const available = availability?.[bar] ?? true;
+          const controlId = bar === "stagedInput"
+            ? stagedInputControlId
+            : bar === "shortcuts"
+              ? shortcutsControlId
+              : controls;
           const shortcut = bar === "sessionTabs" && available
             ? directShortcutAria(shortcutBindings["view-session-tabs"])
             : undefined;
@@ -338,7 +369,7 @@ function ConsoleBarToolbar({
               className="console-bar-toggle"
               aria-label={label}
               aria-pressed={available && visible}
-              aria-controls={available ? controls : undefined}
+              aria-controls={available ? controlId : undefined}
               aria-keyshortcuts={shortcut}
               disabled={!available}
               title={available
@@ -371,6 +402,19 @@ function ConsoleBarToolbar({
           <span>Float input</span>
         </button>
       )}
+      {onToggleFloatingTerminal && (
+        <button type="button" className="console-bar-toggle floating-terminal-toggle"
+          aria-label={floatingTerminalOpen ? "Hide utility terminal" : "Show utility terminal"}
+          aria-expanded={floatingTerminalOpen} aria-controls="muxdeck-floating-terminal"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["view-floating-terminal"])}
+          title={`Independent workspace shell${directShortcutLabel(shortcutBindings["view-floating-terminal"]) ? ` (${directShortcutLabel(shortcutBindings["view-floating-terminal"])})` : ""}`}
+          onClick={onToggleFloatingTerminal}><TerminalIcon /><span>Workspace Terminal</span></button>
+      )}
+      {onToggleSessionTerminal && <button type="button" className="console-bar-toggle floating-terminal-toggle"
+        aria-label={sessionTerminalOpen ? "Hide session terminal" : "Show session terminal"}
+        aria-expanded={sessionTerminalOpen} aria-controls="muxdeck-session-terminal"
+        title="Independent shell belonging to this session; ends with its parent session"
+        onClick={onToggleSessionTerminal}><TerminalIcon /><span>Session Terminal</span></button>}
       {onDesktopTabOrientationChange && (availability?.sessionTabs ?? true) && (
         <button
           type="button"
@@ -410,7 +454,7 @@ function ConsoleBarToolbar({
           type="button"
           className="console-bar-toggle desktop-terminal-copy-toggle"
           aria-label="Browser terminal copy mode"
-          aria-controls="muxdeck-active-console"
+          aria-controls={terminalControlId}
           aria-pressed={desktopCopyMode}
           aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-copy-mode"])}
           title={desktopCopyMode
@@ -428,7 +472,7 @@ function ConsoleBarToolbar({
           className="console-bar-toggle desktop-terminal-focus-key"
           onClick={onEnterDesktopFocus}
           aria-label="Enter desktop terminal focus"
-          aria-controls="muxdeck-active-console"
+          aria-controls={terminalControlId}
           aria-pressed="false"
           aria-keyshortcuts={directShortcutAria(shortcutBindings["view-terminal-focus"])}
           title={`Fill the browser viewport with this live terminal${focusShortcut ? ` (${focusShortcut})` : ""}`}
@@ -443,7 +487,14 @@ function ConsoleBarToolbar({
 
 export function ConsoleScreen({
   sessionName,
+  embedded = false,
+  instanceId,
+  keyboardShortcutsEnabled = true,
+  onActivate,
+  sessionSnapshot,
   workspaceId = null,
+  temporaryTerminalKey: providedTemporaryTerminalKey,
+  onTemporaryTerminalUsed,
   workspaceName = null,
   onBack,
   dashboardWindowHref,
@@ -473,6 +524,7 @@ export function ConsoleScreen({
   onSessionTerminated,
   onSessionCopied,
   onSplitWorkspace,
+  splitWorkspaceSelectionCount = 0,
   copySessionDisabled = false,
   renameWarning,
   onDismissRenameWarning,
@@ -485,6 +537,29 @@ export function ConsoleScreen({
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
   const floatingInputRef = useRef<FloatingStagedInputHandle>(null);
+  const floatingTerminalRef = useRef<FloatingTerminalHandle>(null);
+  const sessionTerminalRef = useRef<FloatingTerminalHandle>(null);
+  const [sessionTerminalOpen, setSessionTerminalOpen] = useState(false);
+  const toggleSessionTerminal = useCallback(() => sessionTerminalRef.current?.toggle(), []);
+  const [fallbackTemporaryTerminalKey] = useState(newTemporaryTerminalKey);
+  const temporaryTerminalKey = providedTemporaryTerminalKey || fallbackTemporaryTerminalKey;
+  const idScope = embedded
+    ? `muxdeck-pane-${instanceId || sessionName.replace(/[^A-Za-z0-9_-]/g, "-")}`
+    : undefined;
+  const activeConsoleId = idScope ? `${idScope}-console` : "muxdeck-active-console";
+  const stagedInputControlId = idScope
+    ? `${idScope}-staged-input`
+    : "muxdeck-staged-input";
+  const shortcutsControlId = idScope
+    ? `${idScope}-terminal-shortcuts`
+    : "muxdeck-terminal-shortcuts";
+  const filesControlId = idScope ? `${idScope}-files` : "muxdeck-session-files";
+  const [floatingTerminalOpen, setFloatingTerminalOpen] = useState(false);
+  const toggleFloatingTerminal = useCallback(() => floatingTerminalRef.current?.toggle(), []);
+  const onWorkspaceTerminalOpen = useCallback((open: boolean) => {
+    if (open && !workspaceId) onTemporaryTerminalUsed?.();
+    setFloatingTerminalOpen(open);
+  }, [workspaceId, onTemporaryTerminalUsed]);
   const [loadedSession, setLoadedSession] = useState<Session | null>(null);
   const [paneId, setPaneId] = useState<string | null>(null);
   const [connectionSnapshot, setConnectionSnapshot] = useState<{
@@ -493,6 +568,9 @@ export function ConsoleScreen({
   }>({ sessionName, state: "connecting" });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [fileBrowserTarget, setFileBrowserTarget] = useState<{
+    sessionName: string; sessionId: string; paneId: string; panePath: string;
+  } | null>(null);
   const [fileOpenRequest, setFileOpenRequest] = useState<SessionFileOpenRequest | null>(null);
   const [titleEditorOpen, setTitleEditorOpen] = useState(false);
   const [renameEditorOpen, setRenameEditorOpen] = useState(false);
@@ -601,15 +679,42 @@ export function ConsoleScreen({
   const floatingDraft = floatingDraftSnapshot.sessionName === sessionName
     ? floatingDraftSnapshot.value
     : "";
+  const RootElement = embedded ? "section" : "main";
 
   const openTerminalFilePath = useCallback((candidate: string) => {
-    if (mobileLayout || workspaceOverlayOpen || !pane?.path) return;
+    if (mobileLayout || workspaceOverlayOpen || !pane?.path || !session) return;
     const path = resolveTerminalFileLinkPath(candidate, pane.path);
     if (!path) return;
+    setFileBrowserTarget({ sessionName: session.name, sessionId: session.id, paneId: pane.id, panePath: pane.path });
     fileOpenRequestIdRef.current += 1;
     setFileOpenRequest({ id: fileOpenRequestIdRef.current, path });
     setFilesOpen(true);
-  }, [mobileLayout, pane?.path, workspaceOverlayOpen]);
+  }, [mobileLayout, pane, session, workspaceOverlayOpen]);
+
+  const openTerminalHtmlPath = useCallback((candidate: string) => {
+    if (
+      mobileLayout
+      || workspaceOverlayOpen
+      || !pane?.path
+      || !session
+      || !candidate.startsWith("/")
+    ) return;
+    const path = resolveTerminalFileLinkPath(candidate, pane.path);
+    if (!path || !path.startsWith("/") || !isHtmlFilePath(path)) return;
+    const separator = path.lastIndexOf("/");
+    const root = separator > 0 ? path.slice(0, separator) : "/";
+    const relativePath = path.slice(separator + 1);
+    const url = sessionFileHtmlUrl(
+      {
+        session: session.name,
+        sessionId: session.id,
+        paneId: pane.id,
+        root,
+      },
+      relativePath,
+    );
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, [mobileLayout, pane, session, workspaceOverlayOpen]);
 
   const copyNewSession = useCallback(async () => {
     if (
@@ -971,6 +1076,7 @@ export function ConsoleScreen({
   ]);
 
   useEffect(() => {
+    if (embedded) return;
     const shell = consoleShellRef.current;
     const viewport = window.visualViewport;
     if (!shell || !viewport) return;
@@ -986,7 +1092,7 @@ export function ConsoleScreen({
       viewport.removeEventListener("resize", syncViewport);
       viewport.removeEventListener("scroll", syncViewport);
     };
-  }, [currentLookupError, sessionName]);
+  }, [currentLookupError, embedded, sessionName]);
 
   useEffect(() => {
     const syncAgentScrollPreferences = (event: StorageEvent) => {
@@ -1001,6 +1107,19 @@ export function ConsoleScreen({
 
   useEffect(() => {
     let cancelled = false;
+    if (sessionSnapshot !== undefined) {
+      const match = sessionSnapshot?.name === sessionName ? sessionSnapshot : null;
+      if (!match) {
+        setLoadedSession(null);
+        setPaneId(null);
+        setLookupError({ sessionName, message: "This tmux session no longer exists." });
+      } else {
+        setLoadedSession(match);
+        setPaneId(match.activePaneId);
+        setLookupError(null);
+      }
+      return;
+    }
     const load = async () => {
       try {
         const sessions = await listSessions();
@@ -1041,7 +1160,7 @@ export function ConsoleScreen({
     void load();
     const timer = window.setInterval(load, 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [onSessionsChange, sessionName]);
+  }, [onSessionsChange, sessionName, sessionSnapshot]);
 
   useEffect(() => {
     setPaneId(null);
@@ -1113,6 +1232,7 @@ export function ConsoleScreen({
   }, [resetDesktopFocusShortcutsPosition]);
 
   useEffect(() => {
+    if (embedded) return;
     const sessionTitle = session?.name === sessionName
       ? session.customTitle || sessionName
       : sessionName;
@@ -1120,7 +1240,7 @@ export function ConsoleScreen({
     document.title = savedWorkspaceName
       ? `${savedWorkspaceName} - ${sessionTitle}`
       : `${sessionTitle} - Muxdeck`;
-  }, [session, sessionName, workspaceName]);
+  }, [embedded, session, sessionName, workspaceName]);
 
   const grokThemeName = theme === "light" ? "grokday" : "groknight";
   const grokThemeCommand = `/theme ${grokThemeName}`;
@@ -1230,6 +1350,7 @@ export function ConsoleScreen({
     setRenameEditorOpen(true);
   }, [onSessionRenamed, session]);
   useEffect(() => {
+    if (!keyboardShortcutsEnabled) return;
     const blockedDesktopShortcut = () => (
       workspaceOverlayOpen
       || Boolean(document.querySelector('[aria-modal="true"]'))
@@ -1241,6 +1362,7 @@ export function ConsoleScreen({
       const candidates: DesktopConsoleShortcutAction[] = [
         "view-terminal-focus",
         "view-floating-input",
+        "view-floating-terminal",
         "view-session-tabs",
         "session-end",
         "session-rename",
@@ -1265,6 +1387,10 @@ export function ConsoleScreen({
       }
       if (action === "view-floating-input") {
         if (!repeated) toggleFloatingInput();
+        return;
+      }
+      if (action === "view-floating-terminal") {
+        if (!repeated) toggleFloatingTerminal();
         return;
       }
       if (action === "session-end") {
@@ -1310,6 +1436,13 @@ export function ConsoleScreen({
       if (action === "session-copy-new" && !onSessionCopied) return;
       if (blockedDesktopShortcut()) return;
 
+      // Session/terminal actions in this handler belong to the main coding-agent view.
+      if (document.activeElement?.closest("#muxdeck-floating-terminal") && !action.startsWith("view-")) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       runDesktopAction(action, event.repeat, true);
@@ -1328,6 +1461,7 @@ export function ConsoleScreen({
         || event.altKey
         || event.metaKey
         || blockedDesktopShortcut()
+        || Boolean(document.activeElement?.closest("#muxdeck-floating-terminal"))
         || (sessionShortcut === "rename" && (!session || !onSessionRenamed))
       ) return;
 
@@ -1342,6 +1476,7 @@ export function ConsoleScreen({
       const supportedActions: DesktopConsoleShortcutAction[] = [
         "view-terminal-focus",
         "view-floating-input",
+        "view-floating-terminal",
         "view-session-tabs",
         "session-end",
         "session-rename",
@@ -1379,8 +1514,10 @@ export function ConsoleScreen({
     setBarVisible,
     shortcutBindings,
     toggleFloatingInput,
+    toggleFloatingTerminal,
     visibleBars.sessionTabs,
     workspaceOverlayOpen,
+    keyboardShortcutsEnabled,
   ]);
   const saveSessionDetails = useCallback(async (title: string, tags: SessionTag[]) => {
     if (!session) return;
@@ -1470,10 +1607,11 @@ export function ConsoleScreen({
 
   if (currentLookupError && !session) {
     return (
-      <main className={sessionNavigation
-        ? "workspace-missing-session has-session-navigation"
-        : "workspace-missing-session"}
+      <RootElement className={sessionNavigation
+        ? `workspace-missing-session has-session-navigation${embedded ? " embedded-console" : ""}`
+        : `workspace-missing-session${embedded ? " embedded-console" : ""}`}
         style={consoleShellStyle}
+        onPointerDownCapture={onActivate}
         data-desktop-tabs={desktopTabOrientation}
         data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
         data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
@@ -1495,12 +1633,15 @@ export function ConsoleScreen({
           onTabActionsVisibilityChange={sessionNavigation
             ? onTabActionsVisibilityChange
             : undefined}
+          stagedInputControlId={stagedInputControlId}
+          shortcutsControlId={shortcutsControlId}
+          terminalControlId={activeConsoleId}
         />
         {sessionNavigation && (
           <div className="console-session-navigation">{sessionNavigation}</div>
         )}
         <section
-          id="muxdeck-active-console"
+          id={activeConsoleId}
           className="missing-session-content"
           role={sessionNavigation ? "tabpanel" : undefined}
           aria-label={`${sessionName} session unavailable`}
@@ -1510,9 +1651,11 @@ export function ConsoleScreen({
           <p className="eyebrow">SESSION UNAVAILABLE</p>
           <h1>{sessionName}</h1>
           <p>{currentLookupError}</p>
-          <button type="button" className="primary-button" onClick={onBack}>Back to sessions</button>
+          {!embedded && (
+            <button type="button" className="primary-button" onClick={onBack}>Back to sessions</button>
+          )}
         </section>
-      </main>
+      </RootElement>
     );
   }
 
@@ -1523,10 +1666,11 @@ export function ConsoleScreen({
     : undefined;
 
   return (
-    <main
+    <RootElement
       ref={consoleShellRef}
-      className={sessionNavigation ? "console-shell has-session-navigation" : "console-shell"}
+      className={`${sessionNavigation ? "console-shell has-session-navigation" : "console-shell"}${embedded ? " embedded-console" : ""}`}
       style={consoleShellStyle}
+      onPointerDownCapture={onActivate}
       data-composer-visible={visibleBars.stagedInput || visibleMobileMode === "input"}
       data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
       data-mobile-focus={activeMobileFocus}
@@ -1558,9 +1702,16 @@ export function ConsoleScreen({
         onEnterDesktopFocus={enterDesktopTerminalFocus}
         floatingInputOpen={floatingInputPanelState.open}
         floatingInputPinned={floatingInputPanelState.pinned}
-        onToggleFloatingInput={toggleFloatingInput}
+        onToggleFloatingInput={embedded ? undefined : toggleFloatingInput}
+        floatingTerminalOpen={floatingTerminalOpen}
+        onToggleFloatingTerminal={embedded ? undefined : toggleFloatingTerminal}
+        sessionTerminalOpen={sessionTerminalOpen}
+        onToggleSessionTerminal={embedded ? undefined : toggleSessionTerminal}
+        stagedInputControlId={stagedInputControlId}
+        shortcutsControlId={shortcutsControlId}
+        terminalControlId={activeConsoleId}
       />
-      <nav className="mobile-console-focus" aria-label="Mobile console focus">
+      {!embedded && <nav className="mobile-console-focus" aria-label="Mobile console focus">
         <button
           id={MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID}
           type="button"
@@ -1577,7 +1728,7 @@ export function ConsoleScreen({
           type="button"
           className="mobile-console-focus-button terminal"
           aria-pressed={activeMobileFocus === "terminal"}
-          aria-controls="muxdeck-active-console"
+          aria-controls={activeConsoleId}
           onClick={() => selectMobileFocus("terminal")}
         >
           <TerminalIcon />
@@ -1594,7 +1745,7 @@ export function ConsoleScreen({
             ? `Input, ${queuedMemorandumCount} queued memo ${queuedMemorandumCount === 1 ? "item" : "items"}`
             : "Input"}
           aria-pressed={activeMobileFocus === "input"}
-          aria-controls="muxdeck-staged-input"
+          aria-controls={stagedInputControlId}
           title={session?.agentState === "waiting_human"
             ? "This session needs input"
             : "Focus the staged input"}
@@ -1611,9 +1762,9 @@ export function ConsoleScreen({
             <span className="mobile-console-focus-attention" aria-hidden="true" />
           )}
         </button>
-      </nav>
+      </nav>}
       <header className="console-header">
-        <div
+        {!embedded && <div
           className="console-dashboard-navigation"
           role="group"
           aria-label="Sessions and workspaces navigation"
@@ -1637,7 +1788,7 @@ export function ConsoleScreen({
           >
             <ExternalLinkIcon />
           </a>
-        </div>
+        </div>}
         <div className="console-identity">
           <div className="console-title-line">
             <h1>{session?.customTitle || sessionName}</h1>
@@ -1649,7 +1800,7 @@ export function ConsoleScreen({
             aria-label={pane?.path && !mobileLayout
               ? `Browse files in ${pane.path}`
               : `Pane working directory: ${pane?.path || "unavailable"}`}
-            aria-controls="muxdeck-session-files"
+            aria-controls={filesControlId}
             aria-expanded={filesOpen}
             disabled={!session || !pane?.path || mobileLayout}
             title={pane?.path
@@ -1657,13 +1808,31 @@ export function ConsoleScreen({
                 ? "File browsing is available in the desktop layout"
                 : "Browse this pane's working directory"
               : undefined}
-            onClick={() => setFilesOpen((open) => !open)}
+            onClick={() => {
+              if (filesOpen) setFilesOpen(false);
+              else if (session && pane?.path) {
+                setFileBrowserTarget({ sessionName: session.name, sessionId: session.id, paneId: pane.id, panePath: pane.path });
+                if (fileBrowserTarget) {
+                  fileOpenRequestIdRef.current += 1;
+                  setFileOpenRequest({ id: fileOpenRequestIdRef.current, path: pane.path });
+                }
+                setFilesOpen(true);
+              }
+            }}
           >
             <FolderIcon />
             <span>{session?.customTitle
               ? `${sessionName} / ${pane?.path || "loading"}`
               : pane?.path || "Loading tmux session..."}</span>
           </button>
+          {fileBrowserTarget && !filesOpen && !mobileLayout && (
+            <button type="button" className="console-files-foreground"
+              aria-controls={filesControlId}
+              title={`Restore the previous file browser view for ${fileBrowserTarget.sessionName}, including unsaved edits`}
+              onClick={() => setFilesOpen(true)}>
+              <WindowCopyIcon /><span>Foreground Files</span>
+            </button>
+          )}
         </div>
         {headerNotes}
         <div className="console-actions">
@@ -1700,12 +1869,16 @@ export function ConsoleScreen({
               type="button"
               className="split-workspace-button"
               disabled={!session}
-              aria-label={`Split ${sessionName} into a new temporary workspace`}
-              title="Open this session alone in a new temporary workspace window"
+              aria-label={splitWorkspaceSelectionCount > 1
+                ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
+                : `Split ${sessionName} into a new temporary workspace`}
+              title={splitWorkspaceSelectionCount > 1
+                ? `Open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
+                : "Open this session alone in a new temporary workspace window"}
               onClick={splitIntoNewWorkspace}
             >
               <ExternalLinkIcon />
-              <span>Split workspace</span>
+              <span>Split workspace{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
             </button>
           )}
           <button
@@ -1751,7 +1924,7 @@ export function ConsoleScreen({
               type="button"
               className="grok-theme-stage"
               aria-label={`Stage ${grokThemeName} theme command for Grok`}
-              aria-controls="muxdeck-staged-input"
+              aria-controls={stagedInputControlId}
               aria-describedby="muxdeck-grok-theme-help"
               title={`Stage "${grokThemeCommand}" to match full-screen Grok to Muxdeck. Review it, then use Send + Enter; Grok saves this choice globally.`}
               onClick={stageGrokTheme}
@@ -1822,6 +1995,7 @@ export function ConsoleScreen({
         <LiveTerminal
           ref={terminalRef}
           session={sessionName}
+          elementId={activeConsoleId}
           ignoreSize={ignoreSize}
           layoutSuspended={mobileInputDistractionFree}
           browserCopyMode={desktopCopyMode}
@@ -1835,6 +2009,7 @@ export function ConsoleScreen({
           theme={theme}
           onUploadAttachment={uploadAttachment}
           onOpenFilePath={mobileLayout ? undefined : openTerminalFilePath}
+          onOpenHtmlPath={mobileLayout ? undefined : openTerminalHtmlPath}
           onStateChange={stateChange}
           onPaneChange={paneChange}
         />
@@ -1845,7 +2020,7 @@ export function ConsoleScreen({
               ? "terminal-view-control preferred-scroll-control"
               : "terminal-view-control"}
             aria-label="Raw terminal Page Up"
-            aria-controls="muxdeck-active-console"
+            aria-controls={activeConsoleId}
             aria-keyshortcuts={preferredScrollMode === "application"
               ? directShortcutAria(shortcutBindings["terminal-page-up"])
               : undefined}
@@ -1868,7 +2043,7 @@ export function ConsoleScreen({
               ? "terminal-view-control preferred-scroll-control"
               : "terminal-view-control"}
             aria-label="Raw terminal Page Down"
-            aria-controls="muxdeck-active-console"
+            aria-controls={activeConsoleId}
             aria-keyshortcuts={preferredScrollMode === "application"
               ? directShortcutAria(shortcutBindings["terminal-page-down"])
               : undefined}
@@ -1891,7 +2066,7 @@ export function ConsoleScreen({
               ? "terminal-view-control tmux-history preferred-scroll-control"
               : "terminal-view-control tmux-history"}
             aria-label="Tmux Page Up"
-            aria-controls="muxdeck-active-console"
+            aria-controls={activeConsoleId}
             aria-keyshortcuts={preferredScrollMode === "tmux"
               ? directShortcutAria(shortcutBindings["terminal-page-up"])
               : undefined}
@@ -1914,7 +2089,7 @@ export function ConsoleScreen({
               ? "terminal-view-control tmux-history preferred-scroll-control"
               : "terminal-view-control tmux-history"}
             aria-label="Tmux Page Down"
-            aria-controls="muxdeck-active-console"
+            aria-controls={activeConsoleId}
             aria-keyshortcuts={preferredScrollMode === "tmux"
               ? directShortcutAria(shortcutBindings["terminal-page-down"])
               : undefined}
@@ -1935,7 +2110,7 @@ export function ConsoleScreen({
             type="button"
             className="terminal-view-control live-toggle"
             aria-label="Return to live terminal"
-            aria-controls="muxdeck-active-console"
+            aria-controls={activeConsoleId}
             aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
             title={`Leave tmux copy mode and return to live output${directShortcutLabel(shortcutBindings["terminal-return-live"])
               ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
@@ -1969,7 +2144,7 @@ export function ConsoleScreen({
             aria-label={mobileTerminalDistractionFree
               ? "Exit distraction-free terminal"
               : "Enter distraction-free terminal"}
-            aria-controls="muxdeck-active-console"
+            aria-controls={activeConsoleId}
             aria-pressed={mobileTerminalDistractionFree}
             onMouseDown={(event) => event.preventDefault()}
             onClick={toggleMobileTerminalDistractionFree}
@@ -1988,7 +2163,7 @@ export function ConsoleScreen({
               type="button"
               className="desktop-terminal-focus-redraw"
               aria-label="Redraw terminal display"
-              aria-controls="muxdeck-active-console"
+              aria-controls={activeConsoleId}
               title="Repaint the local terminal display without reconnecting or changing the tmux session"
               onMouseDown={(event) => event.preventDefault()}
               onClick={redrawTerminal}
@@ -2016,13 +2191,30 @@ export function ConsoleScreen({
               <KeyboardIcon />
               <span>{floatingInputPanelState.open ? "Hide input" : "Float input"}</span>
             </button>
+            <button type="button" className="desktop-terminal-focus-input"
+              aria-label={floatingTerminalOpen ? "Hide utility terminal" : "Show utility terminal"}
+              aria-expanded={floatingTerminalOpen} aria-controls="muxdeck-floating-terminal"
+              aria-keyshortcuts={directShortcutAria(shortcutBindings["view-floating-terminal"])}
+              title={directShortcutLabel(shortcutBindings["view-floating-terminal"]) || "Independent workspace shell"}
+              onClick={toggleFloatingTerminal}><TerminalIcon /><span>Workspace Terminal</span></button>
+            <button type="button" className="desktop-terminal-focus-input"
+              aria-label={sessionTerminalOpen ? "Hide session terminal" : "Show session terminal"}
+              aria-expanded={sessionTerminalOpen} aria-controls="muxdeck-session-terminal"
+              title="Independent shell belonging to this session; ends with its parent session"
+              onClick={toggleSessionTerminal}><TerminalIcon /><span>Session Terminal</span></button>
+            {fileBrowserTarget && !filesOpen && (
+              <button type="button" className="desktop-terminal-focus-input"
+                aria-controls={filesControlId}
+                title={`Restore file browser for ${fileBrowserTarget.sessionName}`}
+                onClick={() => setFilesOpen(true)}><FolderIcon /><span>Foreground Files</span></button>
+            )}
             <button
               type="button"
               className="desktop-terminal-focus-shortcuts"
               aria-label={desktopFocusShortcutsOpen
                 ? "Hide all buttons"
                 : "Show all buttons"}
-              aria-controls="muxdeck-terminal-shortcuts"
+              aria-controls={shortcutsControlId}
               aria-expanded={desktopFocusShortcutsOpen}
               title={desktopFocusShortcutsOpen
                 ? "Hide the floating terminal shortcut panel"
@@ -2042,7 +2234,7 @@ export function ConsoleScreen({
               type="button"
               className="desktop-terminal-focus-exit"
               aria-label="Exit desktop terminal focus"
-              aria-controls="muxdeck-active-console"
+              aria-controls={activeConsoleId}
               aria-pressed="true"
               aria-keyshortcuts={directShortcutAria(shortcutBindings["view-terminal-focus"])}
               title={`Return to the full console${directShortcutLabel(shortcutBindings["view-terminal-focus"])
@@ -2062,6 +2254,8 @@ export function ConsoleScreen({
         ref={inputBarRef}
         sessionName={sessionName}
         sessionId={session?.id}
+        idScope={idScope}
+        terminalControlId={activeConsoleId}
         enabled={connection === "live"}
         composerVisible={visibleBars.stagedInput || visibleMobileMode === "input"}
         shortcutsVisible={
@@ -2118,7 +2312,28 @@ export function ConsoleScreen({
         messageCount={memorandumCount}
         queuedMessageCount={queuedMemorandumCount}
       />
-      <FloatingStagedInput
+      {!embedded && <FloatingTerminal
+        key={workspaceId || temporaryTerminalKey}
+        ref={floatingTerminalRef}
+        workspaceKey={workspaceId ? `workspace:${workspaceId}` : temporaryTerminalKey}
+        workspaceName={workspaceName}
+        sessionName={sessionName}
+        sessionId={session?.id}
+        enabled={!mobileLayout && !workspaceOverlayOpen}
+        theme={theme}
+        onOpenChange={onWorkspaceTerminalOpen}
+      />}
+      {!embedded && <FloatingTerminal
+        key={`session:${session?.id}:${session?.created}:${session?.serverStarted}:${session?.serverPid}`}
+        ref={sessionTerminalRef}
+        workspaceKey={`session:${session?.id}:${session?.created}:${session?.serverStarted}:${session?.serverPid}`}
+        sessionName={sessionName}
+        sessionId={session?.id}
+        enabled={!mobileLayout && !workspaceOverlayOpen && Boolean(session)}
+        theme={theme}
+        onOpenChange={setSessionTerminalOpen}
+      />}
+      {!embedded && <FloatingStagedInput
         ref={floatingInputRef}
         sessionName={sessionName}
         workspaceId={workspaceId}
@@ -2127,13 +2342,16 @@ export function ConsoleScreen({
         onChange={replaceFloatingDraft}
         onOpenFullInput={revealAndFocusComposer}
         onPanelStateChange={setFloatingInputPanelState}
-      />
-      {!workspaceOverlayOpen && filesOpen && session && pane?.path && (
+      />}
+      {fileBrowserTarget && (
         <SessionFilesPanel
-          sessionName={session.name}
-          sessionId={session.id}
-          paneId={pane.id}
-          panePath={pane.path}
+          {...fileBrowserTarget}
+          panelId={filesControlId}
+          backgrounded={!filesOpen || workspaceOverlayOpen || mobileLayout}
+          onBackground={() => {
+            setFilesOpen(false);
+            terminalRef.current?.focus();
+          }}
           openPathRequest={fileOpenRequest}
           onClose={() => setFilesOpen(false)}
           onInsertPath={insertFilePath}
@@ -2224,6 +2442,6 @@ export function ConsoleScreen({
           }}
         />
       )}
-    </main>
+    </RootElement>
   );
 }

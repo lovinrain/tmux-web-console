@@ -19,6 +19,9 @@ MAX_DIRECTORY_ENTRIES = 1_000
 MAX_PREVIEW_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_PREVIEW_BYTES = 25 * 1024 * 1024
 MAX_PDF_PREVIEW_BYTES = 50 * 1024 * 1024
+# HTML is rendered in an isolated browser document. Keep the response bounded
+# so opening a generated report cannot turn into an unbounded file transfer.
+MAX_HTML_PREVIEW_BYTES = 10 * 1024 * 1024
 PDF_HEADER_SCAN_BYTES = 1_024
 MAX_FILE_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_FILE_NAME_BYTES = 255
@@ -104,6 +107,14 @@ class FileBrowserPdfTooLargeError(ValueError):
     pass
 
 
+class FileBrowserUnsupportedHtmlError(ValueError):
+    pass
+
+
+class FileBrowserHtmlTooLargeError(ValueError):
+    pass
+
+
 class FileBrowserContentTooLargeError(ValueError):
     """A file body exceeds the limit for the requested operation."""
 
@@ -154,6 +165,12 @@ class FileBrowserImagePreview:
 
 @dataclass(frozen=True)
 class FileBrowserPdfPreview:
+    path: Path
+    name: str
+
+
+@dataclass(frozen=True)
+class FileBrowserHtmlPreview:
     path: Path
     name: str
 
@@ -1361,6 +1378,42 @@ def resolve_file_pdf_preview(
             "PDF exceeds the 50 MiB inline preview limit"
         )
     return FileBrowserPdfPreview(path=target, name=parts[-1])
+
+
+def resolve_file_html_preview(
+    root_path: str,
+    relative_path: str,
+    *,
+    boundary: Path | None,
+) -> FileBrowserHtmlPreview:
+    """Resolve an HTML document that may be opened in an isolated tab.
+
+    The extension check is deliberate: this endpoint returns a browser-
+    interpreted ``text/html`` response and must never be usable as a generic
+    content-type override for arbitrary files.
+    """
+    _display_root, _resolved_root, target, parts = _resolve_target(
+        root_path,
+        relative_path,
+        boundary,
+    )
+    target_stat = target.stat()
+    if stat.S_ISDIR(target_stat.st_mode):
+        raise IsADirectoryError("path is a directory")
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise FileBrowserUnsupportedFileError("path is not a regular file")
+    # Check the name supplied inside the browsed root, not the resolved target
+    # suffix: a safely-contained symlink may point at a file with another name,
+    # but the response is still only eligible when the requested entry is HTML.
+    if Path(parts[-1]).suffix.casefold() not in {".html", ".htm"}:
+        raise FileBrowserUnsupportedHtmlError(
+            "path is not an HTML document"
+        )
+    if target_stat.st_size > MAX_HTML_PREVIEW_BYTES:
+        raise FileBrowserHtmlTooLargeError(
+            "HTML document exceeds the 10 MiB preview limit"
+        )
+    return FileBrowserHtmlPreview(path=target, name=parts[-1])
 
 
 def upload_file(

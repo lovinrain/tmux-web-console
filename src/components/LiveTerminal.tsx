@@ -23,7 +23,7 @@ import {
   prepareTerminalSubmission,
   type TerminalSubmissionTerminator,
 } from "../terminalInput";
-import { TerminalFileLinkProvider } from "../terminalFileLinks";
+import { isHtmlFilePath, TerminalFileLinkProvider } from "../terminalFileLinks";
 import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import type { ConnectionState } from "../types";
 
@@ -39,6 +39,8 @@ export interface LiveTerminalHandle {
 
 interface LiveTerminalProps {
   session: string;
+  identity?: string;
+  elementId?: string;
   ignoreSize: boolean;
   browserCopyMode?: boolean;
   layoutSuspended?: boolean;
@@ -46,6 +48,8 @@ interface LiveTerminalProps {
   theme: TerminalThemeMode;
   onUploadAttachment?: SessionAttachmentUploader;
   onOpenFilePath?: (path: string) => void;
+  /** Open an absolute HTML path directly in a new browser tab. */
+  onOpenHtmlPath?: (path: string) => void;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
 }
@@ -110,6 +114,8 @@ function nextSubmissionId(): string {
 export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
   function LiveTerminal({
     session,
+    identity,
+    elementId = "muxdeck-active-console",
     ignoreSize,
     browserCopyMode = false,
     layoutSuspended = false,
@@ -117,6 +123,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     theme,
     onUploadAttachment,
     onOpenFilePath,
+    onOpenHtmlPath,
     onStateChange,
     onPaneChange,
   }, ref) {
@@ -125,6 +132,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const socketRef = useRef<WebSocket | null>(null);
     const browserCopyModeRef = useRef(browserCopyMode);
     const openFilePathRef = useRef(onOpenFilePath);
+    const openHtmlPathRef = useRef(onOpenHtmlPath);
     const copySelectionActiveRef = useRef(false);
     const copyWheelRemainderRef = useRef(0);
     const layoutSuspendedRef = useRef(layoutSuspended);
@@ -383,6 +391,10 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     }, [onOpenFilePath]);
 
     useLayoutEffect(() => {
+      openHtmlPathRef.current = onOpenHtmlPath;
+    }, [onOpenHtmlPath]);
+
+    useLayoutEffect(() => {
       const wasSuspended = layoutSuspendedRef.current;
       layoutSuspendedRef.current = layoutSuspended;
       if (wasSuspended && !layoutSuspended) scheduleFitAndResizeRef.current?.();
@@ -492,15 +504,26 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         terminalElement?.removeAttribute("title");
       };
       const activateTerminalFileLink = (event: MouseEvent, path: string) => {
-        if (
-          browserCopyModeRef.current
-          || event.button !== 0
-          || !hasTerminalLinkModifier(event, macBrowser)
-        ) return;
+        if (browserCopyModeRef.current || event.button !== 0) return;
+        // An absolute HTML path is safe to open directly because the server
+        // endpoint re-validates the pane identity and serves it sandboxed. A
+        // plain click is intentionally reserved for this case; every other
+        // file keeps the conservative Ctrl/Cmd-click preview interaction.
+        if (path.startsWith("/") && isHtmlFilePath(path)) {
+          if (!hasTerminalLinkModifier(event, macBrowser)) {
+            openHtmlPathRef.current?.(path);
+            return;
+          }
+          if (openHtmlPathRef.current) {
+            openHtmlPathRef.current(path);
+            return;
+          }
+        }
+        if (!hasTerminalLinkModifier(event, macBrowser)) return;
         openFilePathRef.current?.(path);
       };
       const hoverTerminalFileLink = (_event: MouseEvent, path: string) => {
-        if (!openFilePathRef.current) return;
+        if (!openFilePathRef.current && !openHtmlPathRef.current) return;
         hoveredTerminalLink = {
           kind: "file",
           text: path,
@@ -508,7 +531,9 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         };
         terminalElement?.setAttribute(
           "title",
-          `${linkModifierLabel}+click to preview ${path}`,
+          path.startsWith("/") && isHtmlFilePath(path)
+            ? `Click to open ${path} as a webpage`
+            : `${linkModifierLabel}+click to preview ${path}`,
         );
       };
       const leaveTerminalFileLink = (_event: MouseEvent, path: string) => {
@@ -549,7 +574,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         activate: activateTerminalFileLink,
         hover: hoverTerminalFileLink,
         leave: leaveTerminalFileLink,
-        enabled: () => Boolean(openFilePathRef.current),
+        enabled: () => Boolean(openFilePathRef.current || openHtmlPathRef.current),
       }));
       const terminalDocument = terminalElement?.ownerDocument;
       const replayedMouseEvents = new WeakSet<MouseEvent>();
@@ -576,10 +601,14 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
 
       const handleModifiedLinkMouseEvent = (event: MouseEvent) => {
         if (browserCopyModeRef.current || event.button !== 0) return;
+        const directHtmlLink = hoveredTerminalLink?.kind === "file"
+          && hoveredTerminalLink.text.startsWith("/")
+          && isHtmlFilePath(hoveredTerminalLink.text)
+          && Boolean(openHtmlPathRef.current);
         if (event.type === "mousedown") {
           if (
             hoveredTerminalLink === null
-            || !hasTerminalLinkModifier(event, macBrowser)
+            || (!directHtmlLink && !hasTerminalLinkModifier(event, macBrowser))
           ) return;
           pressedTerminalLink = hoveredTerminalLink;
           event.preventDefault();
@@ -593,7 +622,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         event.stopImmediatePropagation();
         if (
           hoveredTerminalLink === link
-          && hasTerminalLinkModifier(event, macBrowser)
+          && (directHtmlLink || hasTerminalLinkModifier(event, macBrowser))
         ) link.activate(event);
       };
 
@@ -748,7 +777,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         if (cancelled || ended) return;
         onStateChange(attempts > 0 ? "reconnecting" : "connecting");
         const socket = new WebSocket(
-          terminalWebSocketUrl(session, terminal.cols, terminal.rows, ignoreSize),
+          terminalWebSocketUrl(session, terminal.cols, terminal.rows, ignoreSize, identity),
         );
         socket.binaryType = "arraybuffer";
         socketRef.current = socket;
@@ -862,7 +891,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         terminal.dispose();
         terminalRef.current = null;
       };
-    }, [ignoreSize, onPaneChange, onStateChange, session]);
+    }, [identity, ignoreSize, onPaneChange, onStateChange, session]);
 
     useEffect(() => {
       if (terminalRef.current) {
@@ -872,7 +901,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
 
     return (
       <div
-        id="muxdeck-active-console"
+        id={elementId}
         className="terminal-stage"
         data-copy-mode={browserCopyMode ? "true" : "false"}
         data-attachment-drag-active={attachmentDragActive ? "true" : "false"}

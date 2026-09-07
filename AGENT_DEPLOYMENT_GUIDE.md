@@ -87,8 +87,9 @@ must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
 - titles, predefined session tags, starred/ignored session names, memoranda, the
-  snippet library, saved workspaces, shortcut keymap, authentication state, and
-  uploaded attachments stored outside the source folder;
+  snippet library, saved workspaces and their named pane layouts, shortcut
+  keymap, authentication state, and uploaded attachments stored outside the
+  source folder;
 - the SQLite session-recovery registry, including saved CWDs and reference-only
   coding-agent IDs;
 - browser-local staged drafts and dashboard preferences;
@@ -276,7 +277,9 @@ SQLite's backup API before copying the database so the backup is consistent. Use
 timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
-upgraded by the new release.
+upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
+the first workspace-state write can upgrade it to schema 10, and a release that
+only understands versions 1 through 9 cannot read the upgraded document.
 
 ## 5. Build a clean release
 
@@ -381,9 +384,10 @@ names. The
 second contains memoranda and may include sensitive commands or prose. The third
 contains the global folder/snippet tree and may also contain sensitive commands
 or prose. The fourth contains saved workspace names, ordered tmux session names,
-tab-group names/colors/membership, common, workspace-specific, and
-session-specific quick links, Common/Workspace/Session notes, global session
-pins and their per-workspace inherited-membership provenance, and activity times.
+tab-group names/colors/membership, named pane layouts and their session
+assignments/split ratios, common, workspace-specific, and session-specific quick
+links, Common/Workspace/Session notes, global session pins and their
+per-workspace inherited-membership provenance, and activity times.
 Notes may contain sensitive commands or prose. The upload directory contains
 arbitrary files attached from the desktop console; it is capped at 512 MiB by
 the application but has no automatic deletion policy. Attachments may be
@@ -401,21 +405,35 @@ does not resume an agent. Treat the whole database as sensitive and keep it mode
 An existing unit may override any path; inspect its environment rather than
 assuming defaults.
 
-The workspace file uses schema version 9. Version 1 loads at workspace session
+The SQLite registry uses `PRAGMA user_version = 2`. Version 1 upgrades in a
+transaction by adding `session_history` and `history_workspaces` and importing
+the existing recovery records; the original `sessions` table remains intact.
+History includes native/previous names, display titles, last CWD, lifecycle
+timestamps, workspace membership, and captured reference-only agent IDs.
+It contains no terminal transcripts. Keep the database private and retain a
+consistent pre-upgrade SQLite backup. Previous releases reject version 2;
+rollback requires stopping only Muxdeck, preserving the upgraded database, and
+restoring the pre-upgrade database alongside the previous application code.
+Never downgrade `user_version` in place or discard the upgraded history.
+
+The workspace file uses schema version 10. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
 through 3 load with no common or workspace-specific quick links. Versions 1
 through 4 load with no session-specific quick links, versions 1 through 5 load
 with empty scoped notes, and versions 1 through 6 load with no global session
 pins or inherited-pin provenance. Versions 1 through 7 load with no sidebar
 separators. Version 8 preserves after-session separators and loads with no
-before-session separators. A legacy file upgrades atomically on the next
-workspace, quick-link, note, or global-pin write. Each record permits an 80-character name,
-at most 256 unique ordered tabs, at most 16 disjoint contiguous tab groups whose
-names are at most 40 characters, and at most 16 quick links; the global common
-shelf and each native-session shelf also permit 16 links. Quick-link labels are
-limited to 48 characters and URLs to 2,048 characters. Each scoped note is
+before-session separators. Version 9 loads with no named pane layouts. A legacy
+file upgrades atomically on the next workspace, quick-link, note, or global-pin
+write. Each record permits an 80-character name, at most 256 unique ordered
+tabs, at most 16 disjoint contiguous tab groups whose names are at most 40
+characters, and at most 16 quick links; the global common shelf and each
+native-session shelf also permit 16 links. A workspace can keep at most 16 named
+pane layouts, each with at most 12 leaves and six split levels. Pane-layout names
+are limited to 64 characters and divider ratios to 15%-85%. Quick-link labels
+are limited to 48 characters and URLs to 2,048 characters. Each scoped note is
 limited to 8,000 characters. Keep a pre-upgrade copy for rollback because a
-release that only understands versions 1 through 8 rejects the version 9
+release that only understands versions 1 through 9 rejects the version 10
 document. As with snippets, an unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
@@ -432,14 +450,17 @@ An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
 
-The shortcut file uses schema version 3. Version 2 loads by adding the floating
+The shortcut file uses schema version 4. Version 3 loads by adding the floating
+utility-terminal binding with `KeyJ` wherever that key is not already assigned.
+Version 2 loads by adding the floating
 staged-input binding with `KeyY` wherever that key is not already assigned.
 Version 1 first adds the quick temporary-session binding with `KeyK`, then the
 floating-input binding with `KeyY`; occupied keys leave that layer unbound.
-The next keymap save atomically writes version 3. Keep a pre-upgrade copy for
-rollback because a release that only understands version 1 or 2 rejects the
-version-3 document. An unreadable, malformed, conflicting, or unsupported shortcut file
-makes that store unavailable instead of overwriting it.
+All older versions then add the terminal binding where available. The next
+keymap save atomically writes version 4. Keep a pre-upgrade copy for rollback:
+releases that only understand versions 1 through 3 reject version 4. An
+unreadable, malformed, conflicting, or unsupported shortcut file makes that
+store unavailable instead of overwriting it.
 
 Migration procedure:
 
@@ -463,10 +484,11 @@ Migration procedure:
    `MUXDECK_AUTH_FILE`, and `MUXDECK_UPLOADS_DIR`.
 6. Start Muxdeck and inspect logs for read/JSON/permission warnings.
 
-Title, tag, star, ignored, memorandum, saved-workspace tab, session-link, and
-session-note entries are keyed by tmux session name, so old entries may remain
-dormant until a session with the same name exists. A new session that reuses that
-name inherits the stored metadata, workspace position, link shelf, or note. The
+Title, tag, star, ignored, memorandum, saved-workspace tab and pane assignment,
+session-link, and session-note entries are keyed by tmux session name, so old
+entries may remain dormant until a session with the same name exists. A new
+session that reuses that name inherits the stored metadata, workspace position,
+pane assignment, link shelf, or note. The
 snippet tree, saved-workspace collection, shortcut keymap, login account, and
 remembered-device list are global to the Muxdeck instance rather than per
 browser. Do not run two Muxdeck processes
@@ -476,8 +498,8 @@ coordinated between processes.
 Saved workspaces are server-global and shared by every browser that can reach
 this Muxdeck instance. Their stable `workspace=` URL identifier is independent
 of the editable workspace name. Opening or changing one records its ordered tabs,
-groups and collapse state, workspace-specific quick links, active session, and
-last-active time. A separate common quick-link list is pinned across all
+groups and collapse state, named pane layouts and assignments, workspace-specific
+quick links, active session, and last-active time. A separate common quick-link list is pinned across all
 workspaces. Session-specific quick-link lists are keyed by native tmux name and
 follow the active session across temporary and saved workspaces. Common,
 workspace, and session notes use the same scopes and last-write-wins replacement;
@@ -742,7 +764,7 @@ merely to test that the application itself has no login.
    should be in the collapsed background section and absent from regular state
    counts; a reverse-filtered tag must hide matches from every session section.
 8. Opening a saved workspace restores its ordered tabs, tab groups, collapse
-   state, workspace-specific quick links, and active session. Common quick links
+   state, workspace-specific quick links, named pane layouts, and active session. Common quick links
    appear in both temporary and saved workspaces. Session-specific quick links
    follow the active native session across both kinds of workspace. On desktop,
    Common, Workspace, and Session notes appear immediately left of the console
@@ -753,10 +775,16 @@ merely to test that the application itself has no login.
    card's `New window` link must restore the same workspace in a no-opener tab,
    while the console header's split landing-page control must leave the console
    intact when it opens Sessions and Workspaces in a new window. The desktop
-   `Split workspace` action must open only the active session in a no-opener
+   `Split workspace` action must open the multi-selected tabs in source order,
+   or only the active session without a multi-selection, in a no-opener
    temporary workspace without changing the source. Save that destination from
    its tab strip, then rename it there; confirm its stable ID, membership, and
    tmux identities remain unchanged through the rename.
+   Create a disposable named Pane view, split it right and then split one leaf
+   down, assign three existing workspace sessions, resize both dividers, and
+   rename the view. Reload the saved workspace and confirm the tree, assignments,
+   ratios, and name return. Removing a workspace tab should clear only its pane
+   assignment; deleting the Pane view must not stop or resize any tmux session.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
 10. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
@@ -845,7 +873,7 @@ The deployment agent should report:
 - Python, Node, npm, and tmux versions;
 - base path, port, trusted browser origins, and proxy/access-control choice;
 - whether state was migrated and its target directory (not memorandum, snippet,
-  workspace-name, workspace-tab, quick-link, note, password-hash, or
+  workspace-name, workspace-tab, pane-layout, quick-link, note, password-hash, or
   remembered-device content);
 - the selected authentication mode and its expected unauthenticated result;
   for `server`, whether same-profile tabs shared the login; for `basic`, whether
@@ -875,6 +903,10 @@ For a failed replacement:
    stopped; preserve owner and modes. Preserve `workspaces.json` even when the rollback release
    does not understand it, so a later compatible release can recover the saved
    workspace list.
+   When rolling back to a release that only understands workspace-file versions
+   1 through 9, retain the version-10 file separately and restore the pre-upgrade
+   workspace file; older releases cannot read named pane layouts or their session
+   assignments and split ratios.
    When rolling back to version 8 or earlier, retain the version-9 file separately
    and restore the pre-upgrade workspace file; older releases cannot read
    before-session separators. A separator anchors before or after a session and
@@ -890,9 +922,10 @@ For a failed replacement:
    `session-titles.json`; tags are unavailable to that older release and would be
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
-   When rolling back to a release that only understands shortcut-file version 2,
-   retain the version-3 file separately and restore the pre-upgrade
-   `shortcuts.json`; the floating-input binding is unavailable there. A
+   When rolling back to a release that only understands shortcut-file version 3
+   or earlier, preserve the version-4 document and restore the pre-upgrade
+   `shortcuts.json`; the utility-terminal action is unavailable there.
+   Version-2 releases additionally lack the floating-input binding. A
    version-1 release also lacks the quick temporary-session binding.
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back

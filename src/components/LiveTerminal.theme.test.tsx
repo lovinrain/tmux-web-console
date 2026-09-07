@@ -539,6 +539,71 @@ describe("LiveTerminal web links", () => {
     expect(terminalElement).not.toHaveAttribute("title");
   });
 
+  it("opens absolute HTML paths on a plain click while keeping relative files conservative", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const onOpenFilePath = vi.fn();
+    const onOpenHtmlPath = vi.fn();
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        onOpenFilePath={onOpenFilePath}
+        onOpenHtmlPath={onOpenHtmlPath}
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    setTerminalBufferLine(terminal, "open /work/report.html docs/index.htm");
+    let links: MockProvidedLink[] | undefined;
+    fileLinkMocks.instances[0].provideLinks(1, (provided) => { links = provided; });
+    expect(links?.map((link) => link.text)).toEqual([
+      "/work/report.html",
+      "docs/index.htm",
+    ]);
+
+    const absolute = links?.[0];
+    absolute?.hover?.(new MouseEvent("mousemove"), absolute.text);
+    expect(terminal.element).toHaveAttribute(
+      "title",
+      "Click to open /work/report.html as a webpage",
+    );
+    absolute?.activate(new MouseEvent("mouseup", { button: 0 }), absolute.text);
+    expect(onOpenHtmlPath).toHaveBeenCalledWith("/work/report.html");
+    expect(onOpenFilePath).not.toHaveBeenCalled();
+
+    const socket = socketMocks.instances[0];
+    socket.emit("open");
+    socket.send.mockClear();
+    absolute?.hover?.(new MouseEvent("mousemove"), absolute.text);
+    terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        buttons: 1,
+      }),
+    );
+    terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.dispatchEvent(
+      new MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      }),
+    );
+    expect(onOpenHtmlPath).toHaveBeenCalledWith("/work/report.html");
+    expect(socket.send).not.toHaveBeenCalled();
+
+    const relative = links?.[1];
+    relative?.activate(new MouseEvent("mouseup", { button: 0 }), relative.text);
+    expect(onOpenFilePath).not.toHaveBeenCalled();
+    relative?.activate(
+      new MouseEvent("mouseup", { button: 0, ctrlKey: true }),
+      relative.text,
+    );
+    expect(onOpenFilePath).toHaveBeenCalledWith("docs/index.htm");
+  });
+
   it("does not send modified link clicks into the terminal application", async () => {
     vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
     const open = vi.spyOn(window, "open").mockReturnValue(null);

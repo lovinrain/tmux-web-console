@@ -1,0 +1,28 @@
+.bulk-session-targets {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  max-height: min(36vh, 320px);
+  overflow: auto;
+}
+.bulk-session-targets li {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.bulk-session-targets code, .bulk-session-targets span { font-size: 12px; }
+
+.workspace-tab-selection-status { flex-wrap: wrap; }
+.workspace-tab-selection-status > .workspace-selection-bulk-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 28px;
+  gap: 4px;
+  padding: 4px 7px;
+  font: inherit;
+  font-size: 10px;
+}
+.workspace-navigation-vertical[data-compact="true"] .workspace-selection-bulk-action span { display: none; }

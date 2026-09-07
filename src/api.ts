@@ -31,6 +31,42 @@ export interface RecoverableSession {
   directoryAvailable: boolean;
 }
 
+export interface SessionHistoryEntry {
+  id: string;
+  title: string | null;
+  name: string;
+  names: string[];
+  directory: string;
+  directoryAvailable: boolean;
+  agentType: string | null;
+  agentSessionId: string | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  state: "live" | "ended" | "missing";
+  endedAt: number | null;
+  tabClosedAt: number | null;
+  workspaces: Array<{ id: string; name: string; present: boolean; lastSeenAt: number; closedAt: number | null }>;
+}
+
+export function listSessionHistory(workspaceId: string | null, query: string, recycled: boolean, offset = 0, signal?: AbortSignal): Promise<{ entries: SessionHistoryEntry[]; nextOffset: number | null }> {
+  const search = new URLSearchParams({ q: query, recycled: recycled ? "1" : "0", offset: String(offset) });
+  if (workspaceId) search.set("workspace", workspaceId);
+  return jsonRequest(`/api/session-history?${search}`, { signal });
+}
+
+export function recordClosedSessionTab(session: string, sessionId: string): Promise<void> {
+  return jsonRequest("/api/session-history/close-tab", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session, sessionId }),
+  });
+}
+
+export function restoreSessionHistory(id: string, create: boolean): Promise<{ session: string; sessionId: string; created: boolean; warnings?: string[] }> {
+  return jsonRequest(`/api/session-history/${encodeURIComponent(id)}/restore`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ create }),
+  });
+}
+
 type SessionListWithRecovery = Session[] & {
   recoverableSessions?: RecoverableSession[];
 };
@@ -371,6 +407,13 @@ export function sessionFilePdfUrl(
   path: string,
 ): string {
   return `${BASE_PATH}${sessionFileUrl(target, "pdf", path)}`;
+}
+
+export function sessionFileHtmlUrl(
+  target: SessionFileTarget,
+  path: string,
+): string {
+  return `${BASE_PATH}${sessionFileUrl(target, "html", path)}`;
 }
 
 export function sessionFileDownloadUrl(
@@ -813,11 +856,35 @@ export interface SavedWorkspace {
   separators?: string[];
   separatorsBefore?: string[];
   quickLinks?: WorkspaceQuickLink[];
+  paneLayouts?: WorkspacePaneLayout[];
   activeSession: string | null;
   sessionRevision: number;
   createdAt: number;
   updatedAt: number;
   lastActiveAt: number;
+}
+
+export interface WorkspaceSessionPane {
+  id: string;
+  kind: "pane";
+  session: string | null;
+}
+
+export interface WorkspacePaneSplit {
+  id: string;
+  kind: "split";
+  direction: "horizontal" | "vertical";
+  ratio: number;
+  first: WorkspacePaneNode;
+  second: WorkspacePaneNode;
+}
+
+export type WorkspacePaneNode = WorkspaceSessionPane | WorkspacePaneSplit;
+
+export interface WorkspacePaneLayout {
+  id: string;
+  name: string;
+  root: WorkspacePaneNode;
 }
 
 export type WorkspaceSessionTransferOperation = "copy" | "move";
@@ -845,12 +912,13 @@ export interface CreateWorkspaceInput {
   groups: WorkspaceTabGroup[];
   separators?: string[];
   separatorsBefore?: string[];
+  paneLayouts?: WorkspacePaneLayout[];
   activeSession: string | null;
 }
 
 export type WorkspaceUpdate = Partial<Pick<
   SavedWorkspace,
-  "name" | "tabs" | "separators" | "separatorsBefore" | "activeSession" | "sessionRevision"
+  "name" | "tabs" | "groups" | "separators" | "separatorsBefore" | "paneLayouts" | "activeSession" | "sessionRevision"
 >>;
 
 function workspacePath(workspaceId: string): string {
@@ -1247,11 +1315,39 @@ export function loadHistoryPage(
   );
 }
 
+export type UtilityTerminalSession = Pick<Session,
+  "name" | "id" | "created" | "serverStarted" | "serverPid" | "panes" | "activePaneId"
+>;
+
+export async function releaseUtilityTerminal(workspaceKey: string, destination?: string): Promise<void> {
+  const response = await fetch(`${BASE_PATH}/api/utility-terminal/release`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceKey, destination }), keepalive: true,
+  });
+  if (!response.ok) throw new Error("Unable to release or transfer temporary workspace terminal");
+}
+
+export async function openUtilityTerminal(
+  workspaceKey: string,
+  sourceSession: string,
+  sourceSessionId: string,
+  create: boolean,
+  signal?: AbortSignal,
+): Promise<{ terminal: UtilityTerminalSession | null }> {
+  return jsonRequest("/api/utility-terminal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceKey, sourceSession, sourceSessionId, create }),
+    signal,
+  });
+}
+
 export function terminalWebSocketUrl(
   session: string,
   cols: number,
   rows: number,
   ignoreSize: boolean,
+  identity?: string,
 ): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const query = new URLSearchParams({
@@ -1260,5 +1356,6 @@ export function terminalWebSocketUrl(
     rows: String(rows),
     ignoreSize: ignoreSize ? "1" : "0",
   });
+  if (identity) query.set("identity", identity);
   return `${protocol}//${window.location.host}${BASE_PATH}/ws/terminal?${query}`;
 }

@@ -13,6 +13,7 @@ import {
   saveSessionFileContent,
   searchSessionFiles,
   sessionFileDownloadUrl,
+  sessionFileHtmlUrl,
   sessionFileImageUrl,
   sessionFilePdfUrl,
   uploadSessionFile,
@@ -47,6 +48,7 @@ vi.mock("../api", () => ({
   saveSessionFileContent: vi.fn(),
   searchSessionFiles: vi.fn(),
   sessionFileDownloadUrl: vi.fn(),
+  sessionFileHtmlUrl: vi.fn(),
   sessionFileImageUrl: vi.fn(),
   sessionFilePdfUrl: vi.fn(),
   uploadSessionFile: vi.fn(),
@@ -184,6 +186,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
   vi.mocked(sessionFileDownloadUrl).mockReturnValue("/files/download");
+  vi.mocked(sessionFileHtmlUrl).mockReturnValue("/files/html");
   vi.mocked(sessionFileImageUrl).mockReturnValue("/files/image");
   vi.mocked(sessionFilePdfUrl).mockReturnValue("/files/pdf");
   vi.mocked(resolveSessionFilePath).mockImplementation(async (_target, path) => ({
@@ -215,6 +218,54 @@ afterEach(() => {
 });
 
 describe("SessionFilesPanel", () => {
+  it("backgrounds without remounting or losing an unsaved editor, selection, filter or layout", async () => {
+    const target = entry("notes.md", "notes.md", "file", { size: 5 });
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [target]));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview("notes.md", "notes.md", "first"));
+    const props = { sessionName: "agent", sessionId: "$7", paneId: "%3", panePath: "/work/project", onClose: vi.fn(), onBackground: vi.fn(), onInsertPath: vi.fn(() => true) };
+    const view = render(<SessionFilesPanel {...props} />);
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", { name: "File notes.md" }));
+    fireEvent.click(await within(panel).findByRole("button", { name: "Edit notes.md" }));
+    const editor = within(panel).getByLabelText("Contents of notes.md");
+    fireEvent.change(editor, { target: { value: "unsaved draft" } });
+    fireEvent.change(within(panel).getByLabelText("Filter files"), { target: { value: "notes" } });
+    fireEvent.click(within(panel).getByLabelText("Select notes.md"));
+    const calls = vi.mocked(listSessionFiles).mock.calls.length;
+    const previewCalls = vi.mocked(previewSessionFile).mock.calls.length;
+    const layout = panel.getAttribute("style");
+    fireEvent.click(within(panel).getByRole("button", { name: "Background" }));
+    expect(props.onBackground).toHaveBeenCalledOnce();
+    view.rerender(<SessionFilesPanel {...props} backgrounded />);
+    expect(panel).not.toBeVisible();
+    expect(panel).toHaveAttribute("inert");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(props.onClose).not.toHaveBeenCalled();
+    view.rerender(<SessionFilesPanel {...props} />);
+    expect(screen.getByRole("dialog", { name: "Files" })).toBe(panel);
+    expect(within(panel).getByLabelText("Contents of notes.md")).toBe(editor);
+    expect(editor).toHaveValue("unsaved draft");
+    expect(within(panel).getByLabelText("Filter files")).toHaveValue("notes");
+    expect(within(panel).getByLabelText("Select notes.md")).toBeChecked();
+    expect(panel.getAttribute("style")).toBe(layout);
+    expect(listSessionFiles).toHaveBeenCalledTimes(calls);
+    expect(previewSessionFile).toHaveBeenCalledTimes(previewCalls);
+    expect(listSessionFiles).toHaveBeenCalledWith({ session: "agent", sessionId: "$7", paneId: "%3", root: "/work/project" }, "", expect.any(AbortSignal));
+  });
+
+  it("leaves a backgrounded locator untouched by terminal Escape", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    const props = { sessionName: "agent", sessionId: "$7", paneId: "%3", panePath: "/work/project", onClose: vi.fn(), onBackground: vi.fn(), onInsertPath: vi.fn(() => true) };
+    const view = render(<SessionFilesPanel {...props} />);
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Open fuzzy file locator" }));
+    fireEvent.change(within(panel).getByLabelText("Fuzzy file search"), { target: { value: "readme" } });
+    view.rerender(<SessionFilesPanel {...props} backgrounded />);
+    expect(fireEvent.keyDown(window, { key: "Escape" })).toBe(true);
+    view.rerender(<SessionFilesPanel {...props} />);
+    expect(within(panel).getByLabelText("Fuzzy file search")).toHaveValue("readme");
+  });
+
   it("renders complete Markdown only on request and returns to raw source", async () => {
     const markdown = [
       "# Release notes",
@@ -703,6 +754,32 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "File archive.bin" }));
     expect(await within(panel).findByText("Binary file")).toBeInTheDocument();
     expect(within(panel).getByText(/Preview is disabled/)).toBeInTheDocument();
+  });
+
+  it("offers a sandboxed webpage tab for HTML files", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("report.html", "report.html", "file", { size: 128 }),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "report.html",
+      "report.html",
+      "<h1>Report</h1>",
+      { mediaType: "text/html" },
+    ));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File report.html" }));
+    const webpage = await within(panel).findByRole("link", {
+      name: "Open report.html as webpage",
+    });
+    expect(webpage).toHaveAttribute("href", "/files/html");
+    expect(webpage).toHaveAttribute("target", "_blank");
+    expect(webpage).toHaveAttribute("rel", "noopener noreferrer");
+    expect(sessionFileHtmlUrl).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "report.html",
+    );
   });
 
   it("embeds a verified PDF with open and download fallbacks", async () => {

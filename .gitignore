@@ -27,6 +27,8 @@ snippets.json
 workspaces.json
 shortcuts.json
 auth.json
+sessions.sqlite3
+sessions.sqlite3-*
 .session-titles.json.*.tmp
 .session-messages.json.*.tmp
 .snippets.json.*.tmp

@@ -9,7 +9,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, quote, urlsplit
@@ -45,6 +45,8 @@ from .file_browser import (
     FileBrowserDestinationExistsError,
     FileBrowserDirectoryNotEmptyError,
     FileBrowserDownload,
+    FileBrowserHtmlPreview,
+    FileBrowserHtmlTooLargeError,
     FileBrowserImagePreview,
     FileBrowserImageTooLargeError,
     FileBrowserPartialDeleteError,
@@ -52,6 +54,7 @@ from .file_browser import (
     FileBrowserPdfPreview,
     FileBrowserPdfTooLargeError,
     FileBrowserUnsupportedFileError,
+    FileBrowserUnsupportedHtmlError,
     FileBrowserUnsupportedImageError,
     FileBrowserUnsupportedPdfError,
     copy_entry,
@@ -65,6 +68,7 @@ from .file_browser import (
     resolve_browse_root,
     resolve_browse_target,
     resolve_file_download,
+    resolve_file_html_preview,
     resolve_file_image_preview,
     resolve_file_pdf_preview,
     search_files,
@@ -239,6 +243,13 @@ class SessionSnapshotBuilder:
             if self._registry is not None
             else []
         )
+        if self._registry is not None and self._workspaces is not None:
+            try:
+                self._registry.sync_history_workspaces(self._workspaces.list_workspaces())
+            except WorkspaceStoreUnavailable:
+                pass
+        if self._registry is not None:
+            self._registry.record_history_titles({item.name: self._titles.get_title(item.name) for item in items})
         next_state_history: dict[str, tuple[str, str, int]] = {}
         payload: list[dict[str, Any]] = []
         try:
@@ -879,6 +890,26 @@ def create_app(
         registry=app[SESSION_REGISTRY_KEY],
         agent_references=app[AGENT_REFERENCES_KEY],
     )
+    @web.middleware
+    async def history_workspace_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
+        workspace_write = request.method not in SAFE_HTTP_METHODS and any(
+            part in request.path for part in ("/api/workspaces", "/api/session-workspace", "/api/session-name")
+        )
+        if not workspace_write:
+            return await handler(request)
+        try:
+            app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
+        except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
+            return json_error(str(error), 503)
+        response = await handler(request)
+        if response.status < 400:
+            try:
+                app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
+            except (SessionRegistryUnavailable, WorkspaceStoreUnavailable):
+                LOGGER.exception("Workspace changed but history membership could not be updated")
+        return response
+
+    app.middlewares.append(history_workspace_middleware)
     app[SESSION_STREAM_BROKER_KEY] = SessionStreamBroker(
         app[SESSION_SNAPSHOTS_KEY],
         sample_seconds=SESSION_STREAM_SAMPLE_SECONDS,
@@ -899,6 +930,24 @@ def create_app(
     app.on_cleanup.append(close_session_stream_broker)
     app.on_cleanup.append(close_session_registry)
     app.on_response_prepare.append(add_browser_security_headers)
+
+    async def utility_lifecycle(application: web.Application) -> AsyncIterator[None]:
+        async def monitor() -> None:
+            while True:
+                await asyncio.sleep(5)
+                try:
+                    async with application[SESSION_RENAME_LOCK_KEY]:
+                        workspace_ids = {item["id"] for item in application[WORKSPACES_KEY].list_workspaces()}
+                        await application[TMUX_KEY].cleanup_utility_sessions(workspace_ids)
+                except (TmuxError, WorkspaceStoreUnavailable):
+                    LOGGER.exception("Unable to check utility shell owners; keeping shells running")
+        task = asyncio.create_task(monitor())
+        yield
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    app.cleanup_ctx.append(utility_lifecycle)
 
     def auth_html_response(document: str, *, status: int = 200) -> web.Response:
         response = web.Response(text=document, content_type="text/html", status=status)
@@ -1300,6 +1349,59 @@ def create_app(
             record_created_session(created_session, requested_directory),
         )
 
+    async def utility_terminal(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise TypeError("request body must be an object")
+            if set(payload) != {"workspaceKey", "sourceSession", "sourceSessionId", "create"}:
+                raise ValueError("workspaceKey, sourceSession, sourceSessionId and create are required")
+            key = payload["workspaceKey"]
+            if not isinstance(key, str):
+                raise TypeError("workspaceKey must be a string")
+            source = validate_tmux_session_name(payload["sourceSession"])
+            source_id = validate_tmux_session_id(payload["sourceSessionId"])
+            if not isinstance(payload["create"], bool):
+                raise TypeError("create must be a boolean")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                if key.startswith("workspace:"):
+                    app[WORKSPACES_KEY].get_workspace(key.removeprefix("workspace:"))
+                result = await app[TMUX_KEY].utility_session(
+                    key, source, source_id, create=payload["create"],
+                )
+            return web.json_response({"terminal": result.to_dict() if result else None})
+        except (ValueError, TypeError, RecursionError) as error:
+            return json_error(str(error), 400)
+        except (WorkspaceNotFoundError, TmuxSessionNotFoundError) as error:
+            return json_error(str(error), 404)
+        except TmuxSessionIdentityChangedError as error:
+            return json_error(str(error), 409)
+        except (TmuxError, WorkspaceStoreUnavailable) as error:
+            return json_error(str(error), 503)
+
+    async def release_utility_terminal(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) - {"workspaceKey", "destination"}:
+                raise ValueError("expected workspaceKey and optional destination")
+            key = payload.get("workspaceKey")
+            destination = payload.get("destination")
+            if not isinstance(key, str) or (destination is not None and not isinstance(destination, str)):
+                raise ValueError("invalid workspace key")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                if destination is not None:
+                    if not destination.startswith("workspace:"):
+                        raise ValueError("destination must be a saved workspace")
+                    app[WORKSPACES_KEY].get_workspace(destination.removeprefix("workspace:"))
+                await app[TMUX_KEY].release_utility_workspace(key, destination=destination)
+            return web.Response(status=204)
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 400)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TmuxError, WorkspaceStoreUnavailable) as error:
+            return json_error(str(error), 503)
+
     async def copy_session(request: web.Request) -> web.Response:
         source_name = request.match_info["session"]
         try:
@@ -1414,6 +1516,81 @@ def create_app(
                 registry_id=record.id,
             )
         return created_session_response(created_session, warnings)
+
+    async def list_session_history(request: web.Request) -> web.Response:
+        try:
+            if set(request.query) - {"workspace", "q", "recycled", "offset"}:
+                raise ValueError("unknown history query field")
+            offset = int(request.query.get("offset", "0"))
+            if not 0 <= offset <= 1_000_000:
+                raise ValueError("invalid history offset")
+            query = request.query.get("q", "").strip()
+            if len(query) > 256:
+                raise ValueError("search cannot exceed 256 characters")
+            # Reconcile only from a successful full inventory, never from an error/partial result.
+            await app[SESSION_SNAPSHOTS_KEY].build()
+            result = app[SESSION_REGISTRY_KEY].list_history(
+                workspace_id=request.query.get("workspace"), query=query,
+                recycled=request.query.get("recycled", "0") == "1", offset=offset,
+            )
+            return web.json_response(result)
+        except ValueError as error:
+            return json_error(str(error), 400)
+        except (TmuxError, SessionRegistryUnavailable) as error:
+            return json_error(str(error), 503)
+
+    async def close_history_tab(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"session", "sessionId"}:
+                raise ValueError("session and sessionId are required")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                target = await app[TMUX_KEY].get_session(validate_tmux_session_name(payload["session"]))
+                if target.id != payload["sessionId"]:
+                    return json_error("session identity changed", 409)
+                references = await app[AGENT_REFERENCES_KEY].detect_sessions([target])
+                history_id = app[SESSION_REGISTRY_KEY].observe_history(target, references.get(target.name))
+                app[SESSION_REGISTRY_KEY].record_history_titles({target.name: app[TITLES_KEY].get_title(target.name)})
+                app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
+                app[SESSION_REGISTRY_KEY].mark_history(history_id)
+            return web.Response(status=204)
+        except (ValueError, TypeError, RecursionError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TmuxError, SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
+            return json_error(str(error), 503)
+
+    async def restore_history_session(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict) or set(payload) != {"create"} or not isinstance(payload["create"], bool):
+                raise ValueError("create must be an explicit boolean")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                record = app[SESSION_REGISTRY_KEY].get_history(request.match_info["history_id"])
+                live = await app[TMUX_KEY].list_sessions()
+                references = await app[AGENT_REFERENCES_KEY].detect_sessions(live)
+                app[SESSION_REGISTRY_KEY].reconcile(live, references)
+                app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
+                original = next((s for s in live if (s.id, s.created, s.server_started, s.server_pid) == (
+                    record["tmux_id"], record["created"], record["server_started"], record["server_pid"],
+                )), None)
+                if original:
+                    return web.json_response({"session": original.name, "sessionId": original.id, "created": False})
+                if not payload["create"]:
+                    return json_error("session no longer exists; explicitly recreate its shell", 409)
+                if any(s.name == record["name"] for s in live):
+                    return json_error("a different live session already uses this name; it will not be replaced", 409)
+                directory = validate_tmux_start_directory(record["directory"])
+                created = await app[TMUX_KEY].create_shell_session(record["name"], directory)
+                warnings = record_created_session(created, directory)
+                return web.json_response({"session": created.name, "sessionId": created.id, "created": True, "warnings": warnings}, status=201)
+        except RecoveryRecordNotFoundError:
+            return json_error("session history record not found", 404)
+        except (ValueError, TypeError, RecursionError) as error:
+            return json_error(str(error), 400)
+        except (TmuxError, SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
+            return json_error(str(error), 503)
 
     async def forget_recoverable_session(request: web.Request) -> web.Response:
         registry_id = request.match_info["recovery_id"]
@@ -1619,12 +1796,14 @@ def create_app(
             return json_error(str(error), 415)
         except (
             FileBrowserImageTooLargeError,
+            FileBrowserHtmlTooLargeError,
             FileBrowserPdfTooLargeError,
             FileBrowserContentTooLargeError,
             FileBrowserArchiveLimitError,
         ) as error:
             return json_error(str(error), 413)
         except (
+            FileBrowserUnsupportedHtmlError,
             FileBrowserUnsupportedImageError,
             FileBrowserUnsupportedPdfError,
         ) as error:
@@ -1851,6 +2030,52 @@ def create_app(
                 "Content-Security-Policy": "frame-ancestors 'self'",
                 "Cross-Origin-Resource-Policy": "same-origin",
                 "X-Frame-Options": "SAMEORIGIN",
+            },
+        )
+
+    async def preview_session_file_html(request: web.Request) -> web.StreamResponse:
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            within_boundary(resolve_file_html_preview),
+        )
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, FileBrowserHtmlPreview):
+            raise TypeError("HTML preview operation returned an invalid result")
+
+        # The sandbox gives the document an opaque origin (no access to the
+        # authenticated Muxdeck origin). Network-capable directives are kept
+        # deliberately narrow so an untrusted report cannot call the console's
+        # APIs or submit a form while it is open in a new tab.
+        return web.FileResponse(
+            result.path,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": _file_content_disposition(
+                    result.name,
+                    "inline",
+                    fallback="document",
+                ),
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Security-Policy": (
+                    "sandbox; default-src 'self'; base-uri 'none'; "
+                    "connect-src 'none'; form-action 'none'; "
+                    "frame-ancestors 'none'; object-src 'none'; "
+                    "script-src 'none'; style-src 'self' 'unsafe-inline'; "
+                    "img-src 'self' data: blob:; font-src 'self' data:; "
+                    "media-src 'self' data:"
+                ),
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "X-Frame-Options": "DENY",
             },
         )
 
@@ -2308,6 +2533,10 @@ def create_app(
                 )
 
             try:
+                references = await app[AGENT_REFERENCES_KEY].detect_sessions([target])
+                history_id = app[SESSION_REGISTRY_KEY].observe_history(target, references.get(target.name))
+                app[SESSION_REGISTRY_KEY].record_history_titles({target.name: app[TITLES_KEY].get_title(target.name)})
+                app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
                 recovery_state_changed = app[
                     SESSION_REGISTRY_KEY
                 ].set_recovery_for_identity(
@@ -2318,7 +2547,7 @@ def create_app(
                     server_pid,
                     False,
                 )
-            except SessionRegistryUnavailable as error:
+            except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
                 return json_error(str(error), 503)
 
             try:
@@ -2365,6 +2594,7 @@ def create_app(
                         )
                 return json_error(str(error), 503)
 
+            app[SESSION_REGISTRY_KEY].mark_history(history_id, ended=True)
         return web.Response(status=204)
 
     async def rename_session(request: web.Request) -> web.Response:
@@ -3413,7 +3643,12 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"groups", "separators", "separatorsBefore"}
+        allowed = required | {
+            "groups",
+            "separators",
+            "separatorsBefore",
+            "paneLayouts",
+        }
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -3426,6 +3661,7 @@ def create_app(
                 groups=payload.get("groups", []),
                 separators=payload.get("separators", []),
                 separators_before=payload.get("separatorsBefore", []),
+                pane_layouts=payload.get("paneLayouts", []),
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
@@ -3447,14 +3683,43 @@ def create_app(
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
 
-        allowed = {"name", "tabs", "groups", "separators", "separatorsBefore", "activeSession", "sessionRevision"}
+        allowed = {
+            "name",
+            "tabs",
+            "groups",
+            "separators",
+            "separatorsBefore",
+            "paneLayouts",
+            "activeSession",
+            "sessionRevision",
+        }
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
-        if not set(payload) & {"name", "tabs", "groups", "separators", "separatorsBefore", "activeSession"}:
-            return json_error("name, tabs, groups, separators, or activeSession is required", 400)
+        workspace_fields = {
+            "name",
+            "tabs",
+            "groups",
+            "separators",
+            "separatorsBefore",
+            "paneLayouts",
+            "activeSession",
+        }
+        if not set(payload) & workspace_fields:
+            return json_error(
+                "name, tabs, groups, separators, paneLayouts, or activeSession is required",
+                400,
+            )
         if (
-            set(payload) & {"tabs", "groups", "separators", "separatorsBefore", "activeSession"}
+            set(payload)
+            & {
+                "tabs",
+                "groups",
+                "separators",
+                "separatorsBefore",
+                "paneLayouts",
+                "activeSession",
+            }
             and "sessionRevision" not in payload
         ):
             return json_error("sessionRevision is required", 400)
@@ -3473,6 +3738,8 @@ def create_app(
                 update_separators="separators" in payload,
                 separators_before=payload.get("separatorsBefore"),
                 update_separators_before="separatorsBefore" in payload,
+                pane_layouts=payload.get("paneLayouts"),
+                update_pane_layouts="paneLayouts" in payload,
                 update_active_session="activeSession" in payload,
                 session_revision=payload.get("sessionRevision"),
             )
@@ -3575,6 +3842,12 @@ def create_app(
             session = await app[TMUX_KEY].get_session(session_name)
         except TmuxError as error:
             return json_error(str(error), 404)
+
+        expected_identity = request.query.get("identity")
+        if expected_identity is not None and expected_identity != (
+            f"{session.id}:{session.created}:{session.server_started}:{session.server_pid}"
+        ):
+            return json_error("terminal session identity changed; reopen the terminal panel", 409)
 
         cols, rows = clamp_size(
             parse_int(request.query.get("cols"), 100),
@@ -3773,6 +4046,11 @@ def create_app(
     app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
+    app.router.add_post(f"{prefix}/api/utility-terminal", utility_terminal)
+    app.router.add_post(f"{prefix}/api/utility-terminal/release", release_utility_terminal)
+    app.router.add_get(f"{prefix}/api/session-history", list_session_history)
+    app.router.add_post(f"{prefix}/api/session-history/close-tab", close_history_tab)
+    app.router.add_post(f"{prefix}/api/session-history/{{history_id}}/restore", restore_history_session)
     app.router.add_post(
         f"{prefix}/api/recoverable-sessions/{{recovery_id:[^/]+}}/recreate",
         recreate_session,
@@ -3813,6 +4091,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/pdf",
         preview_session_file_pdf,
+    )
+    app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/html",
+        preview_session_file_html,
     )
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/download",

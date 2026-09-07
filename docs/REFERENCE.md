@@ -65,12 +65,27 @@ claim an available tmux session name. `Ctrl+Shift+M` invokes the same action.
 The button and shortcut are unavailable in compact mobile layouts.
 
 `Split workspace` is the non-mutating browser-workspace counterpart beside that
-control. It opens the current native session alone in a separate no-opener
-window, removes the saved-workspace ID and tab groups from the destination URL,
+control. With multiple tabs selected using Shift-click or Ctrl/Cmd-click, it
+opens that selection in its existing tab order; the button shows the selected
+count. Otherwise it opens the current native session alone. The active session
+stays focused if selected; otherwise the first selected tab receives focus.
+It opens a separate no-opener window and removes the saved-workspace ID and tab groups from the destination URL,
 and leaves the source tab exactly where it was. The new window is temporary
 until its own `Save workspace` action is used; splitting never creates, copies,
 renames, resizes, or sends input to a tmux session. A blocked pop-up leaves the
 source unchanged and produces a dismissible error.
+
+The desktop tab-selection bar also provides `Close tabs` and `End sessions`.
+Both show a confirmation listing the captured selection, native names, and
+display titles. `Close tabs` removes tabs only from the current workspace and
+records their history without stopping tmux. `End sessions` terminates the
+selected sessions everywhere, including their panes, programs, and owned
+session terminals, using full captured tmux identities. Recycle Bin retains
+metadata, not recoverable running programs or terminal transcripts.
+Items are processed independently, with the active tab last. Partial failures
+remain visible alongside successful results; retry only attempts failed items
+and never substitutes a replacement session that reused a name. This is not an
+atomic operation: a failure does not roll back earlier successful actions.
 
 When Muxdeck creates a session with tmux 3.2 or newer, it gives the new shell
 `GROK_THEME=auto` and the browser's current `GROK_APPEARANCE=dark|light` value.
@@ -177,6 +192,116 @@ than an exit shortcut; `Ctrl+Shift+F` enters or exits Focus and
 `Ctrl+Shift+Y` toggles floating input even while xterm or staged input owns
 keyboard focus.
 
+### Recycle Bin and workspace Recent Sessions
+
+`Recycle Bin` on the landing page opens the SQLite-backed history of closed
+tabs and ended/missing sessions. Saved workspaces expose `Recent Sessions` in
+their tab-strip/side-rail controls, filtered by that workspace's stable ID.
+This is distinct from the existing browser-local `Recents` live-session
+switcher. Temporary workspaces offer the global Recycle Bin; save a workspace
+to retain its own membership history across browsers and reloads.
+
+Each observed tmux process identity has a separate history record, even when
+its native name is reused later. The record retains native and previous names,
+display title, last CWD, first/last observation times, known end/disappearance
+or tab-close time, saved-workspace names and membership, and the last captured
+agent type and conversation ID. Agent IDs are reference-only, may be absent,
+and do not imply a supported resume command. Terminal output/transcripts,
+environment variables, and running process state are not archived.
+
+Both views default to closed/ended history and also offer `All history`.
+Search explicitly with Enter or Search by name, old name, title, directory,
+agent type, or agent ID. Results are newest activity first, 50 at a time with
+`Load older sessions`; records have no automatic expiry. `Reopen session`
+checks the original full tmux identity before adding/focusing its tab through
+the existing deduplicating workspace navigation. `Recreate shell` requires a
+second confirmation and an existing saved directory, refuses a same-name live
+conflict, and explicitly launches a shell instead of tmux's default command.
+Recreation keeps the original historical record. Neither action resumes a
+coding agent, restores terminal output, or re-adds tabs to every former
+workspace. Closed/reopened records remain available as history.
+
+Metadata is collected during normal successful session inventories and session
+actions. Saved-workspace changes capture membership before and after the
+write, so removing a tab, moving it, or deleting a workspace retains its former
+association. Closing a quick tab does not terminate its tmux session; the
+history labels it `Still running`. End Session retains history and labels it
+`Ended`. A previously observed session absent from a successful inventory is
+`Missing`; inventory failures never count as a disappearance. Last-seen writes
+are throttled to once per minute when no meaningful metadata changes occur.
+History searches run on demand without a new polling timer.
+
+Existing SQLite recovery records are imported at upgrade, including those
+previously marked non-recoverable. Their old end times and former workspace
+memberships were not recorded, so those cannot be retroactively reconstructed.
+Sessions deleted or overwritten before this history feature and sessions
+created/ended externally between observations cannot be recovered from nothing.
+The existing `Forget` recovery action does not erase the new history archive.
+
+### Backgrounding the file browser (desktop)
+
+The file browser also supports `Background` in its title strip and
+`Foreground Files` beside the console CWD (and in Focus controls). Background
+hides the existing panel without destroying its view: folder/file selection,
+list and editor scroll, unsaved editor text, filters, sort, checked entries,
+Find/Recent mode, and window layout remain intact. Foreground restores that
+same panel without refetching its directory or preview. Started file operations
+may finish while hidden; Background is not a cancellation or a save-to-disk.
+The close icon also retains the view. A retained browser remains bound to its
+original session/pane and browsing root when another session tab is selected;
+its header identifies that source. Explicit CWD/file-path clicks still navigate
+to the requested location. Use Refresh to re-read externally changed files.
+This full view state is kept only while the console page remains mounted,
+not across a browser reload or a trip back to the landing page. Unsaved file
+edits are never implicitly written to disk by Background.
+
+### Floating utility terminal (desktop)
+
+`Workspace Terminal` in the VIEW toolbar or Focus controls opens an independent shell in
+a compact non-modal panel. The default shortcut is `Ctrl+Shift+J` (or `J` in the
+shortcut window); both bindings are configurable in Shortcuts and saved on the
+backend. Existing custom assignments take precedence over the new defaults.
+
+The shell starts in the active coding-agent pane's CWD, using tmux's configured
+default shell, not its default command. It does not type into or interrupt the
+coding agent. Each saved workspace has one utility shell, found through a
+tmux session option even after Muxdeck restarts or that shell is renamed.
+Opening the same workspace in another browser tab reuses this shell. The shell
+also appears in the landing-page session inventory as `muxdeck-terminal-*`.
+
+Drag the title strip to move the panel or any edge/corner to resize, including
+the left edge. With the title strip focused, arrows move and Shift+arrows resize.
+Pin keeps the same shell visible across session switches; an unpinned panel
+hides. Open/pin/position/size are browser-local per saved workspace. Temporary
+workspaces retain their panel association only for the current mounted view.
+
+Close or the toggle shortcut hides the panel and disconnects only its attach
+client; the shell keeps running. `End shell` requires confirmation and checks
+the session's full tmux identity. Reloading a saved open panel only reconnects
+to an existing shell; if it ended, `Start shell` explicitly creates another.
+`Session Terminal` opens a separate shell belonging to the active session. Its
+association uses the full tmux identity, so renaming the parent preserves it and
+reusing a terminated parent's name does not inherit it. Its open state and layout
+are browser-local per session; returning to that session restores its panel.
+It has no cross-session pin. Both terminal windows may be open together.
+
+New utility shells carry explicit ownership metadata. Every five seconds the
+backend checks for ended parents or deleted saved workspaces and ends only their
+owned utility shells. Closing a session tab does not end its session shell.
+Existing utility shells from before ownership tracking remain untouched.
+Leaving or closing a temporary workspace view sends a best-effort cleanup
+request for its workspace shell; hiding the panel does not. Saving the temporary
+workspace transfers that shell to the saved workspace. A browser crash or lost
+network can prevent temporary cleanup; such a shell can still be ended from the
+landing page. Host reboot still ends live shell processes; this feature does not
+silently recreate them.
+
+The panel uses the existing authenticated WebSocket terminal, with no additional
+service or idle polling. Resizing the independent shell cannot resize the coding
+agent's session, though two browser views of the same utility shell share tmux
+window sizing. Main-session end/rename and terminal-control chords are suppressed
+while keyboard focus is in this panel; use its explicit `End shell` control.
+
 The sticky `Details` shortcut in the terminal's bottom bar opens the same title
 and tag editor used by the dashboard. The optional display title changes only
 the label shown by Muxdeck; the native tmux session name and attach target do not
@@ -266,8 +391,12 @@ every edit repeat the live tmux session and pane identity check, and each one is
 confined to the directory currently being browsed, so symlinks that resolve
 outside it remain inaccessible. Text preview remains capped at 1 MiB. Signature-verified PNG,
 JPEG, GIF, WebP, AVIF, BMP, and ICO images render in a fitted viewer up to 25 MiB
-and link to the same protected inline stream for full-size viewing. SVG, HTML,
-and other active or unsupported formats are never embedded. A signature-verified
+and link to the same protected inline stream for full-size viewing. SVG and
+other active or unsupported formats are never embedded. HTML/HTM files expose
+an `Open webpage` action and a hosted new-tab view. That response is bounded
+to 10 MiB and carries an opaque-origin CSP sandbox with scripts, forms, and
+network connections disabled, so untrusted markup cannot access the authenticated
+Muxdeck page or APIs. A signature-verified
 PDF up to 50 MiB uses the browser's built-in PDF viewer inside the preview pane;
 `Open PDF` gives it a full browser tab, while Download remains available for
 browsers that disable inline PDF viewing and for larger documents. The server
@@ -597,7 +726,8 @@ current workspace is marked explicitly, and a temporary workspace can jump to
 the first or last saved workspace without visiting the landing page first.
 
 Each saved workspace keeps its name, ordered open tabs, tab groups,
-workspace-scoped quick links, active session, global-pin provenance, and
+workspace-scoped quick links, named multi-pane layouts, active session,
+global-pin provenance, and
 server-generated creation, update, and last-active times in
 `MUXDECK_WORKSPACES_FILE`. Opening or changing a
 saved workspace refreshes its rough last-active time. Workspace names, tab
@@ -619,6 +749,36 @@ links, and browser Back/Forward preserve the same structure. When a saved
 workspace is loaded, its server record is authoritative. A URL with `tab=` values
 but no `workspace=` remains an unsaved browser workspace; its `Resume workspace`
 action returns to the most recently active open tab without changing their order.
+
+### Named multi-pane views (desktop)
+
+`Pane view` in the horizontal workspace strip, or the `Pane views` section in
+Side tabs, creates a named workspace view without creating or splitting any
+native tmux session. A pane view is a recursive tree: any leaf can `Split right`
+or `Split down`, so the same model supports two, three, or more panes instead of
+stopping at a fixed side-by-side mode. Each leaf chooses one existing session
+from the current workspace; choosing a session already visible in another leaf
+moves that assignment rather than opening a duplicate connection in the layout.
+
+Every assigned leaf contains the regular session identity, CWD/file browser,
+connection state, Fit/Scrollback/Copy New/theme and workspace actions, live
+xterm terminal, staged input, and terminal key strip. Click inside a leaf to
+make it the target for configurable desktop session shortcuts. Pane toolbar
+controls add a nested horizontal or vertical split, clear/remove the leaf, and
+collapse the removed space into its sibling. Drag the divider to resize it;
+arrow keys adjust the focused divider, Shift uses a larger step, Home/End reach
+the safe bounds, and Enter returns to 50/50.
+
+The pane-view tab itself has a name and session-count badge. Its header can
+rename or explicitly delete the view, and the ordinary session tabs remain the
+canonical workspace inventory and a fast way to leave the layout. Common,
+workspace, and session links plus workspace widgets remain available above the
+board. Saved workspaces persist the recursive tree, assignments, names, split
+directions, and bounded ratios in `MUXDECK_WORKSPACES_FILE`; closing a workspace
+tab clears that session's pane assignment without destroying the layout, and a
+Muxdeck session rename follows all assignments. Temporary-workspace pane views
+live for the current page and are included when `Save workspace` gives the
+workspace a server identity. Multi-pane rendering is intentionally desktop-only.
 
 The landing-page `New session` action opens `/sessions/new` as a synthetic
 workspace tab and waits for explicit confirmation before changing tmux. On
@@ -722,6 +882,13 @@ are independent of named groups and can appear inside expanded groups; collapsin
 a group hides separators belonging to its hidden tabs. A line follows its anchor
 tab when reordered, and saved-workspace lines follow native renames made through
 Muxdeck. Closing or moving the anchor out of the workspace removes its line.
+In desktop Side tabs, an up/down arrow crosses an immediately adjacent separator
+before moving past another tab. This changes the separator anchor without
+changing session order. A contiguous multi-selection crosses as one block.
+Dragging the adjacent tab or selected block onto the separator crosses it too;
+the separator highlights while it can accept that drop. Noncontiguous selections
+retain their existing tab-reorder behavior. Separator crossing is saved as one
+update and waits for any pending tab-order save rather than overwriting it.
 Saved workspaces persist separators on the backend. Temporary-workspace separators
 last for the current page and are included when explicitly saving that workspace.
 
@@ -1073,23 +1240,26 @@ server workspace document, but the browser restores them when that workspace is
 resumed. Pinned Common and Workspace windows remain open across session-tab
 switches, while a Session window remains tied to its native tmux session.
 
-The workspace schema is version 9. Version 1 files load at session revision zero;
+The workspace schema is version 10. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
 version 1 through 6 files load with no global session pins or inherited-pin
 provenance. Versions 1 through 7 load with no sidebar separators; version 8 retains
-its after-session separators and loads with no before-session separators. A legacy document
+its after-session separators and loads with no before-session separators, and
+versions 1 through 9 load with no named pane views. A legacy document
 upgrades atomically on its next workspace,
 quick-link, note, or global-pin write. A workspace name is limited to 80
 characters and a workspace can contain
 at most 256 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
-quick links. The global common shelf and each native-session shelf also permit 16
+quick links. It can keep 16 named pane layouts, each with at most 12 leaves and
+six levels of nested splits. Pane names are limited to 64 characters and split
+ratios stay between 15% and 85%. The global common shelf and each native-session shelf also permit 16
 links. Group names are limited to 40 characters, quick-link labels to 48
 characters, quick-link URLs to 2,048 characters, and every scoped note to 8,000
 characters. Writes use an atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 8
-reject the version 9 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 9
+reject the version 10 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 

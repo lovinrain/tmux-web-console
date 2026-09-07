@@ -13,11 +13,12 @@ from typing import Any
 
 LOGGER = logging.getLogger("muxdeck.shortcuts")
 MAX_SHORTCUT_REVISION = (1 << 53) - 1
-SHORTCUT_DOCUMENT_VERSION = 3
+SHORTCUT_DOCUMENT_VERSION = 4
 PREVIOUS_SHORTCUT_DOCUMENT_VERSION = 2
 LEGACY_SHORTCUT_DOCUMENT_VERSION = 1
 QUICK_SESSION_ACTION = "workspace-quick-new-session"
 FLOATING_INPUT_ACTION = "view-floating-input"
+FLOATING_TERMINAL_ACTION = "view-floating-terminal"
 SHORTCUT_STORE_UNAVAILABLE_MESSAGE = (
     "shortcut storage is unavailable; inspect and repair the configured shortcuts "
     "file, then restart Muxdeck"
@@ -63,6 +64,7 @@ DEFAULT_SHORTCUT_BINDINGS: dict[str, dict[str, str | None]] = {
     "view-session-tabs": _binding("KeyS", "KeyS"),
     "view-terminal-focus": _binding("KeyF", "KeyF"),
     FLOATING_INPUT_ACTION: _binding("KeyY", "KeyY"),
+    FLOATING_TERMINAL_ACTION: _binding("KeyJ", "KeyJ"),
     "view-theme": _binding(None, "KeyT"),
     "workspace-previous-tab": _binding("Comma", "Comma"),
     "workspace-next-tab": _binding("Period", "Period"),
@@ -186,23 +188,24 @@ def _validate_stored_bindings(
     if version not in {
         LEGACY_SHORTCUT_DOCUMENT_VERSION,
         PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
+        3,
     }:
         raise ValueError("unsupported document version")
     if not isinstance(value, dict):
         return validate_bindings(value)
 
     current_actions = set(DEFAULT_SHORTCUT_BINDINGS)
-    version_two_actions = current_actions - {FLOATING_INPUT_ACTION}
+    version_three_actions = current_actions - {FLOATING_TERMINAL_ACTION}
+    version_two_actions = version_three_actions - {FLOATING_INPUT_ACTION}
     version_one_actions = version_two_actions - {QUICK_SESSION_ACTION}
     if set(value) == set(DEFAULT_SHORTCUT_BINDINGS):
         return validate_bindings(value)
-    if version == PREVIOUS_SHORTCUT_DOCUMENT_VERSION:
-        if set(value) != version_two_actions:
-            return validate_bindings(value)
-    elif frozenset(value) not in {
-        frozenset(version_one_actions),
-        frozenset(version_two_actions),
-    }:
+    allowed_actions = [version_three_actions]
+    if version <= 2:
+        allowed_actions.append(version_two_actions)
+    if version == 1:
+        allowed_actions.append(version_one_actions)
+    if set(value) not in allowed_actions:
         return validate_bindings(value)
 
     upgraded = copy.deepcopy(value)
@@ -225,7 +228,9 @@ def _validate_stored_bindings(
 
     if QUICK_SESSION_ACTION not in upgraded:
         add_available_binding(QUICK_SESSION_ACTION, "KeyK")
-    add_available_binding(FLOATING_INPUT_ACTION, "KeyY")
+    if FLOATING_INPUT_ACTION not in upgraded:
+        add_available_binding(FLOATING_INPUT_ACTION, "KeyY")
+    add_available_binding(FLOATING_TERMINAL_ACTION, "KeyJ")
     return validate_bindings(upgraded)
 
 

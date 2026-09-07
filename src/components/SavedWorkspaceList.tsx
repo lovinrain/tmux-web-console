@@ -510,7 +510,7 @@ export function SavedWorkspaceList({
                       tabIndex={-1}
                     >
                       <p id={`workspace-delete-${workspace.id}`}>
-                        Delete <strong>{workspace.name}</strong>? Tmux sessions keep running.
+                        Delete <strong>{workspace.name}</strong>? Session tabs keep running. Its owned workspace terminal will end.
                       </p>
                       <div>
                         <button

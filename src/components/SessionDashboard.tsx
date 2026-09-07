@@ -81,6 +81,7 @@ import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { ThemeToggle } from "./ThemeToggle";
+import { SessionHistoryDialog } from "./SessionHistoryDialog";
 
 interface SessionDashboardProps {
   onOpen: (session: string) => void;
@@ -524,6 +525,7 @@ export function SessionDashboard({
 }: SessionDashboardProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [recoverableSessions, setRecoverableSessions] = useState<RecoverableSession[]>([]);
+  const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
   const [route, setRoute] = useState<SessionDashboardRouteState>(initialDashboardRoute);
   const [loading, setLoading] = useState(true);
   const [updateMode, setUpdateMode] = useState<UpdateMode>("connecting");
@@ -1034,6 +1036,9 @@ export function SessionDashboard({
             onSnippets={() => onOpenSnippets?.()}
           />
           <ThemeToggle />
+          <button type="button" className="secondary-button" onClick={() => setSessionHistoryOpen(true)} aria-haspopup="dialog">
+            <HistoryIcon /> Recycle Bin
+          </button>
         </div>
       </header>
 
@@ -1207,6 +1212,7 @@ export function SessionDashboard({
       </section>
 
       {error && <div className="dashboard-error" role="alert">{error}</div>}
+      {sessionHistoryOpen && <SessionHistoryDialog onClose={() => setSessionHistoryOpen(false)} onOpenSession={onOpen} />}
       {actionError && <div className="dashboard-error action-error" role="alert">{actionError}</div>}
 
       {recoverableSessions.length > 0 && (

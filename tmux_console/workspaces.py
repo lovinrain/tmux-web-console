@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import tempfile
 import threading
@@ -28,6 +29,13 @@ MAX_WORKSPACE_QUICK_LINK_ID_LENGTH = 64
 MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH = 48
 MAX_WORKSPACE_QUICK_LINK_URL_LENGTH = 2048
 MAX_SCOPED_NOTE_LENGTH = 8_000
+MAX_WORKSPACE_PANE_LAYOUTS = 16
+MAX_WORKSPACE_PANE_LAYOUT_ID_LENGTH = 64
+MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH = 64
+MAX_WORKSPACE_PANES_PER_LAYOUT = 12
+MAX_WORKSPACE_PANE_DEPTH = 6
+MIN_WORKSPACE_PANE_RATIO = 0.15
+MAX_WORKSPACE_PANE_RATIO = 0.85
 WORKSPACE_GROUP_COLORS = (
     "gray",
     "blue",
@@ -43,8 +51,9 @@ WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
 _SEPARATORS_OMITTED = object()
+_PANE_LAYOUTS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 9
+WORKSPACE_SCHEMA_VERSION = 10
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -593,6 +602,301 @@ def validate_workspace_separators(value: object, tabs: tuple[str, ...]) -> tuple
     return tuple(tab for tab in tabs if tab in separators)
 
 
+def _normalize_workspace_pane_layout_name(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    name = value.strip()
+    if not name:
+        raise ValueError(f"{field} cannot be blank")
+    if len(name) > MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH} characters or fewer"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in name):
+        raise ValueError(f"{field} cannot contain control characters")
+    _validate_unicode(name, field)
+    return name
+
+
+@dataclass(frozen=True)
+class WorkspacePaneNode:
+    id: str
+    kind: str
+    session: str | None = None
+    direction: str | None = None
+    ratio: float | None = None
+    first: WorkspacePaneNode | None = None
+    second: WorkspacePaneNode | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.kind == "pane":
+            return {"id": self.id, "kind": "pane", "session": self.session}
+        if self.first is None or self.second is None:
+            raise ValueError("split pane node is missing a child")
+        return {
+            "id": self.id,
+            "kind": "split",
+            "direction": self.direction,
+            "ratio": self.ratio,
+            "first": self.first.to_dict(),
+            "second": self.second.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class WorkspacePaneLayout:
+    id: str
+    name: str
+    root: WorkspacePaneNode
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "name": self.name, "root": self.root.to_dict()}
+
+
+def _validate_workspace_pane_node(
+    raw_node: object,
+    *,
+    node_path: str,
+    layout_path: str,
+    depth: int,
+    workspace_tabs: set[str],
+    seen_node_ids: set[str],
+    assigned_sessions: set[str],
+    pane_count: list[int],
+) -> WorkspacePaneNode:
+    if depth > MAX_WORKSPACE_PANE_DEPTH:
+        raise ValueError(
+            f"{node_path} exceeds maximum split depth {MAX_WORKSPACE_PANE_DEPTH}"
+        )
+    if not isinstance(raw_node, dict):
+        raise TypeError(f"{node_path} must be an object")
+    kind = raw_node.get("kind")
+    if kind not in {"pane", "split"}:
+        raise ValueError(f"{node_path}.kind must be pane or split")
+    expected_node_fields = (
+        {"id", "kind", "session"}
+        if kind == "pane"
+        else {"id", "kind", "direction", "ratio", "first", "second"}
+    )
+    missing_node_fields = sorted(expected_node_fields - set(raw_node))
+    if missing_node_fields:
+        raise ValueError(f"{node_path} is missing field: {missing_node_fields[0]}")
+    unknown_node_fields = sorted(
+        str(item) for item in set(raw_node) - expected_node_fields
+    )
+    if unknown_node_fields:
+        raise ValueError(f"{node_path} has unknown field: {unknown_node_fields[0]}")
+    node_id = _validate_workspace_group_id(raw_node["id"], f"{node_path}.id")
+    if len(node_id) > MAX_WORKSPACE_PANE_LAYOUT_ID_LENGTH:
+        raise ValueError(
+            f"{node_path}.id must be "
+            f"{MAX_WORKSPACE_PANE_LAYOUT_ID_LENGTH} characters or fewer"
+        )
+    if node_id in seen_node_ids:
+        raise ValueError(f"{layout_path} contains duplicate pane node id: {node_id}")
+    seen_node_ids.add(node_id)
+
+    if kind == "pane":
+        pane_count[0] += 1
+        if pane_count[0] > MAX_WORKSPACE_PANES_PER_LAYOUT:
+            raise ValueError(
+                f"{layout_path} cannot contain more than "
+                f"{MAX_WORKSPACE_PANES_PER_LAYOUT} panes"
+            )
+        session_value = raw_node["session"]
+        if session_value is None:
+            return WorkspacePaneNode(id=node_id, kind="pane")
+        if not isinstance(session_value, str):
+            raise TypeError(f"{node_path}.session must be a string or null")
+        try:
+            session_name = validate_session_name(session_value)
+            _validate_unicode(session_name, f"{node_path}.session")
+        except ValueError as error:
+            raise ValueError(f"{node_path}.session: {error}") from error
+        if session_name not in workspace_tabs:
+            raise ValueError(f"{node_path}.session must be one of the workspace tabs")
+        if session_name in assigned_sessions:
+            raise ValueError(
+                f"{layout_path} assigns session more than once: {session_name}"
+            )
+        assigned_sessions.add(session_name)
+        return WorkspacePaneNode(id=node_id, kind="pane", session=session_name)
+
+    direction = raw_node["direction"]
+    if direction not in {"horizontal", "vertical"}:
+        raise ValueError(f"{node_path}.direction must be horizontal or vertical")
+    ratio = raw_node["ratio"]
+    if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+        raise TypeError(f"{node_path}.ratio must be a number")
+    numeric_ratio = float(ratio)
+    if (
+        not math.isfinite(numeric_ratio)
+        or numeric_ratio < MIN_WORKSPACE_PANE_RATIO
+        or numeric_ratio > MAX_WORKSPACE_PANE_RATIO
+    ):
+        raise ValueError(
+            f"{node_path}.ratio must be between "
+            f"{MIN_WORKSPACE_PANE_RATIO} and {MAX_WORKSPACE_PANE_RATIO}"
+        )
+    return WorkspacePaneNode(
+        id=node_id,
+        kind="split",
+        direction=direction,
+        ratio=round(numeric_ratio, 4),
+        first=_validate_workspace_pane_node(
+            raw_node["first"],
+            node_path=f"{node_path}.first",
+            layout_path=layout_path,
+            depth=depth + 1,
+            workspace_tabs=workspace_tabs,
+            seen_node_ids=seen_node_ids,
+            assigned_sessions=assigned_sessions,
+            pane_count=pane_count,
+        ),
+        second=_validate_workspace_pane_node(
+            raw_node["second"],
+            node_path=f"{node_path}.second",
+            layout_path=layout_path,
+            depth=depth + 1,
+            workspace_tabs=workspace_tabs,
+            seen_node_ids=seen_node_ids,
+            assigned_sessions=assigned_sessions,
+            pane_count=pane_count,
+        ),
+    )
+
+
+def validate_workspace_pane_layouts(
+    value: object,
+    workspace_tabs: tuple[str, ...],
+    field: str = "paneLayouts",
+) -> tuple[WorkspacePaneLayout, ...]:
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be an array")
+    if len(value) > MAX_WORKSPACE_PANE_LAYOUTS:
+        raise ValueError(
+            f"{field} cannot contain more than {MAX_WORKSPACE_PANE_LAYOUTS} layouts"
+        )
+
+    workspace_tab_set = set(workspace_tabs)
+    seen_layout_ids: set[str] = set()
+    layouts: list[WorkspacePaneLayout] = []
+    for layout_index, candidate in enumerate(value):
+        path = f"{field}[{layout_index}]"
+        if not isinstance(candidate, dict):
+            raise TypeError(f"{path} must be an object")
+        expected = {"id", "name", "root"}
+        missing = sorted(expected - set(candidate))
+        if missing:
+            raise ValueError(f"{path} is missing field: {missing[0]}")
+        unknown = sorted(str(item) for item in set(candidate) - expected)
+        if unknown:
+            raise ValueError(f"{path} has unknown field: {unknown[0]}")
+
+        layout_id = _validate_workspace_group_id(candidate["id"], f"{path}.id")
+        if len(layout_id) > MAX_WORKSPACE_PANE_LAYOUT_ID_LENGTH:
+            raise ValueError(
+                f"{path}.id must be {MAX_WORKSPACE_PANE_LAYOUT_ID_LENGTH} characters or fewer"
+            )
+        if layout_id in seen_layout_ids:
+            raise ValueError(f"{field} contains duplicate id: {layout_id}")
+        seen_layout_ids.add(layout_id)
+
+        seen_node_ids: set[str] = set()
+        assigned_sessions: set[str] = set()
+        pane_count = [0]
+
+        layouts.append(
+            WorkspacePaneLayout(
+                id=layout_id,
+                name=_normalize_workspace_pane_layout_name(
+                    candidate["name"], f"{path}.name"
+                ),
+                root=_validate_workspace_pane_node(
+                    candidate["root"],
+                    node_path=f"{path}.root",
+                    layout_path=path,
+                    depth=1,
+                    workspace_tabs=workspace_tab_set,
+                    seen_node_ids=seen_node_ids,
+                    assigned_sessions=assigned_sessions,
+                    pane_count=pane_count,
+                ),
+            )
+        )
+    return tuple(layouts)
+
+
+def _map_workspace_pane_sessions(
+    node: WorkspacePaneNode,
+    mapper: Callable[[str], str | None],
+) -> WorkspacePaneNode:
+    if node.kind == "pane":
+        return replace(
+            node,
+            session=mapper(node.session) if node.session is not None else None,
+        )
+    if node.first is None or node.second is None:
+        return node
+    return replace(
+        node,
+        first=_map_workspace_pane_sessions(node.first, mapper),
+        second=_map_workspace_pane_sessions(node.second, mapper),
+    )
+
+
+def _reconcile_workspace_pane_layouts(
+    layouts: tuple[WorkspacePaneLayout, ...],
+    workspace_tabs: tuple[str, ...],
+) -> tuple[WorkspacePaneLayout, ...]:
+    tab_set = set(workspace_tabs)
+    return tuple(
+        replace(
+            layout,
+            root=_map_workspace_pane_sessions(
+                layout.root,
+                lambda session_name: session_name if session_name in tab_set else None,
+            ),
+        )
+        for layout in layouts
+    )
+
+
+def _rename_workspace_pane_layouts(
+    layouts: tuple[WorkspacePaneLayout, ...],
+    current_name: str,
+    new_name: str,
+) -> tuple[WorkspacePaneLayout, ...]:
+    def renamed_layout(layout: WorkspacePaneLayout) -> WorkspacePaneLayout:
+        source_present = False
+
+        def find_source(node: WorkspacePaneNode) -> None:
+            nonlocal source_present
+            if node.kind == "pane":
+                source_present = source_present or node.session == current_name
+                return
+            if node.first is not None:
+                find_source(node.first)
+            if node.second is not None:
+                find_source(node.second)
+
+        find_source(layout.root)
+
+        def rename_session(session_name: str) -> str | None:
+            if session_name == current_name:
+                return new_name
+            if source_present and session_name == new_name:
+                return None
+            return session_name
+
+        return replace(
+            layout,
+            root=_map_workspace_pane_sessions(layout.root, rename_session),
+        )
+
+    return tuple(renamed_layout(layout) for layout in layouts)
+
+
 @dataclass(frozen=True)
 class SavedWorkspace:
     id: str
@@ -607,6 +911,7 @@ class SavedWorkspace:
     last_active_at: int
     separators: tuple[str, ...] = ()
     separators_before: tuple[str, ...] = ()
+    pane_layouts: tuple[WorkspacePaneLayout, ...] = ()
 
     def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
         payload = {
@@ -617,6 +922,7 @@ class SavedWorkspace:
             "quickLinks": [link.to_dict() for link in self.quick_links],
             "separators": list(self.separators),
             "separatorsBefore": list(self.separators_before),
+            "paneLayouts": [layout.to_dict() for layout in self.pane_layouts],
             "activeSession": self.active_session,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
@@ -769,6 +1075,9 @@ class WorkspaceStore:
                         current,
                         tabs=tabs,
                         groups=_reconcile_workspace_groups(current.groups, tabs),
+                        pane_layouts=_reconcile_workspace_pane_layouts(
+                            current.pane_layouts, tabs
+                        ),
                         separators=tuple(tab for tab in current.separators if tab in tabs),
                         separators_before=tuple(tab for tab in current.separators_before if tab in tabs),
                         inherited_pins=tuple(
@@ -871,6 +1180,9 @@ class WorkspaceStore:
                     source,
                     tabs=source_tabs,
                     groups=_reconcile_workspace_groups(source.groups, source_tabs),
+                    pane_layouts=_reconcile_workspace_pane_layouts(
+                        source.pane_layouts, source_tabs
+                    ),
                     separators=tuple(tab for tab in source.separators if tab in source_tabs),
                     separators_before=tuple(tab for tab in source.separators_before if tab in source_tabs),
                     inherited_pins=tuple(
@@ -1040,6 +1352,7 @@ class WorkspaceStore:
         quick_links: object = _QUICK_LINKS_OMITTED,
         separators: object = _SEPARATORS_OMITTED,
         separators_before: object = _SEPARATORS_OMITTED,
+        pane_layouts: object = _PANE_LAYOUTS_OMITTED,
     ) -> dict[str, Any]:
         normalized_name = normalize_workspace_name(name)
         validated_tabs = validate_workspace_tabs(tabs)
@@ -1057,6 +1370,10 @@ class WorkspaceStore:
         validated_quick_links = validate_workspace_quick_links(
             [] if quick_links is _QUICK_LINKS_OMITTED else quick_links,
         )
+        validated_pane_layouts = validate_workspace_pane_layouts(
+            [] if pane_layouts is _PANE_LAYOUTS_OMITTED else pane_layouts,
+            validated_tabs,
+        )
         with self._lock:
             self._ensure_writable()
             merged_tabs, inherited_pins = self._merge_pinned_sessions(validated_tabs)
@@ -1073,6 +1390,7 @@ class WorkspaceStore:
                 quick_links=validated_quick_links,
                 separators=validated_separators,
                 separators_before=validated_separators_before,
+                pane_layouts=validated_pane_layouts,
                 inherited_pins=inherited_pins,
                 active_session=validated_active_session,
                 created_at=timestamp,
@@ -1099,6 +1417,8 @@ class WorkspaceStore:
         update_separators: bool = False,
         separators_before: object = None,
         update_separators_before: bool = False,
+        pane_layouts: object = None,
+        update_pane_layouts: bool = False,
         session_revision: object = None,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
@@ -1106,7 +1426,7 @@ class WorkspaceStore:
         validated_tabs = validate_workspace_tabs(tabs) if update_tabs else None
         validated_session_revision = (
             _validate_session_revision(session_revision)
-            if update_tabs or update_groups or update_active_session or update_separators or update_separators_before
+            if update_tabs or update_groups or update_active_session or update_separators or update_separators_before or update_pane_layouts
             else None
         )
 
@@ -1135,6 +1455,15 @@ class WorkspaceStore:
                 if update_tabs
                 else current.groups
             )
+            next_pane_layouts = (
+                validate_workspace_pane_layouts(pane_layouts, next_tabs)
+                if update_pane_layouts
+                else _reconcile_workspace_pane_layouts(
+                    current.pane_layouts, next_tabs
+                )
+                if update_tabs
+                else current.pane_layouts
+            )
             next_active_session = (
                 validate_active_session(active_session, next_tabs)
                 if update_active_session
@@ -1148,6 +1477,7 @@ class WorkspaceStore:
                 name=normalized_name if normalized_name is not None else current.name,
                 tabs=next_tabs,
                 groups=next_groups,
+                pane_layouts=next_pane_layouts,
                 separators=(
                     validate_workspace_separators(separators, next_tabs)
                     if update_separators
@@ -1208,6 +1538,9 @@ class WorkspaceStore:
                 current,
                 tabs=merged_tabs,
                 groups=validated_groups,
+                pane_layouts=_reconcile_workspace_pane_layouts(
+                    current.pane_layouts, merged_tabs
+                ),
                 inherited_pins=inherited_pins,
                 separators=tuple(tab for tab in current.separators if tab in merged_tabs),
                 separators_before=tuple(tab for tab in current.separators_before if tab in merged_tabs),
@@ -1279,6 +1612,9 @@ class WorkspaceStore:
                     current,
                     tabs=renamed_tabs,
                     groups=groups,
+                    pane_layouts=_rename_workspace_pane_layouts(
+                        current.pane_layouts, current_name, new_name
+                    ),
                     separators=tuple(dict.fromkeys(
                         new_name if tab == current_name else tab
                         for tab in current.separators
@@ -1517,6 +1853,8 @@ class WorkspaceStore:
             expected.add("separators")
         if version >= 9:
             expected.add("separatorsBefore")
+        if version >= 10:
+            expected.add("paneLayouts")
         missing = sorted(expected - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -1581,6 +1919,10 @@ class WorkspaceStore:
             separators_before=(
                 validate_workspace_separators(record["separatorsBefore"], tabs)
                 if version >= 9 else ()
+            ),
+            pane_layouts=(
+                validate_workspace_pane_layouts(record["paneLayouts"], tabs)
+                if version >= 10 else ()
             ),
         )
 
