@@ -2159,14 +2159,14 @@ describe("App routing", () => {
 
   it("applies backend-configured workspace chords and updates button hints", async () => {
     const bindings = cloneShortcutBindings(DEFAULT_SHORTCUT_BINDINGS);
-    bindings["workspace-new-session"].direct = "KeyG";
+    bindings["workspace-new-session"].direct = "KeyV";
     getShortcutSettingsMock.mockResolvedValueOnce({ revision: 7, bindings });
     replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
     render(<App />);
 
     const newSessionButton = screen.getByRole("button", { name: "New session" });
     await waitFor(() => expect(newSessionButton)
-      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+G"));
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+V"));
 
     const oldShortcut = new KeyboardEvent("keydown", {
       code: "KeyB",
@@ -2182,8 +2182,8 @@ describe("App routing", () => {
       .not.toBeInTheDocument();
 
     const configuredShortcut = new KeyboardEvent("keydown", {
-      code: "KeyG",
-      key: "G",
+      code: "KeyV",
+      key: "V",
       ctrlKey: true,
       shiftKey: true,
       bubbles: true,

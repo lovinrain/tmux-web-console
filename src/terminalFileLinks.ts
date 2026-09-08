@@ -5,7 +5,7 @@ import type {
   Terminal,
 } from "@xterm/xterm";
 
-const FILE_EXTENSION = /\.(?:md|pdf|png|txt|html?)/gi;
+const FILE_EXTENSION = /\.(?:md|pdf|png|txt|json|html?)/gi;
 const MAX_LINK_TEXT_LENGTH = 4_096;
 const MAX_WRAPPED_TEXT_LENGTH = 2_048;
 const UNQUOTED_BOUNDARIES = new Set([
@@ -91,10 +91,10 @@ function validPathCandidate(path: string): boolean {
     || path.length > MAX_LINK_TEXT_LENGTH
     || /[\u0000-\u001f\u007f]/.test(path)
     || /^[a-z][a-z0-9+.-]*:\/\//i.test(path)
-    || !/\.(?:md|pdf|png|txt|html?)$/i.test(path)
+    || !/\.(?:md|pdf|png|txt|json|html?)$/i.test(path)
   ) return false;
   const name = path.split("/").pop() || "";
-  const extension = name.match(/\.(?:md|pdf|png|txt|html?)$/i)?.[0] || "";
+  const extension = name.match(/\.(?:md|pdf|png|txt|json|html?)$/i)?.[0] || "";
   return name.length > extension.length;
 }
 

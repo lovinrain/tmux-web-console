@@ -9,13 +9,14 @@ import {
 
 describe("terminal file path detection", () => {
   it("finds absolute, relative, home, and bare previewable file paths", () => {
-    const text = "open /tmp/chart.PNG, ./notes.txt:12 ~/shots/final.png report.TXT README.md design.PDF /tmp/report.html page.htm";
+    const text = "open /tmp/chart.PNG, ./notes.txt:12 ~/shots/final.png report.TXT README.md config.JSON design.PDF /tmp/report.html page.htm";
     expect(findTerminalFilePaths(text).map((match) => match.text)).toEqual([
       "/tmp/chart.PNG",
       "./notes.txt",
       "~/shots/final.png",
       "report.TXT",
       "README.md",
+      "config.JSON",
       "design.PDF",
       "/tmp/report.html",
       "page.htm",
@@ -37,7 +38,6 @@ describe("terminal file path detection", () => {
       "https://example.test/image.png",
       "file:///tmp/document.txt",
       "photo.jpg",
-      "notes.json",
       "archive.txt.bak",
       ".png",
       "https://example.test/index.html",
@@ -65,6 +65,8 @@ describe("terminal file path resolution", () => {
       .toBe("/image.png");
     expect(resolveTerminalFileLinkPath("docs/guide.md", "/work/project"))
       .toBe("/work/project/docs/guide.md");
+    expect(resolveTerminalFileLinkPath("config.json", "/work/project"))
+      .toBe("/work/project/config.json");
     expect(resolveTerminalFileLinkPath("artifacts/report.pdf", "/work/project"))
       .toBe("/work/project/artifacts/report.pdf");
     expect(resolveTerminalFileLinkPath("/tmp/report.html", "/work/project"))
@@ -80,7 +82,6 @@ describe("terminal file path resolution", () => {
 
   it("rejects invalid candidates and unsupported home-user expansion", () => {
     expect(resolveTerminalFileLinkPath("https://example.test/a.png", "/work")).toBeNull();
-    expect(resolveTerminalFileLinkPath("notes.json", "/work")).toBeNull();
     expect(resolveTerminalFileLinkPath("~other/notes.txt", "/work")).toBeNull();
     expect(resolveTerminalFileLinkPath("notes.txt", "relative/work")).toBeNull();
   });

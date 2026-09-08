@@ -450,15 +450,14 @@ An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
 
-The shortcut file uses schema version 4. Version 3 loads by adding the floating
-utility-terminal binding with `KeyJ` wherever that key is not already assigned.
-Version 2 loads by adding the floating
-staged-input binding with `KeyY` wherever that key is not already assigned.
-Version 1 first adds the quick temporary-session binding with `KeyK`, then the
-floating-input binding with `KeyY`; occupied keys leave that layer unbound.
-All older versions then add the terminal binding where available. The next
-keymap save atomically writes version 4. Keep a pre-upgrade copy for rollback:
-releases that only understand versions 1 through 3 reject version 4. An
+The shortcut file uses schema version 5. Version 4 loads by adding the pane
+navigation binding with `KeyG` wherever that key is not already assigned.
+Version 3 loads by adding the floating utility-terminal binding with `KeyJ`;
+version 2 adds the floating staged-input binding with `KeyY`, and version 1 first
+adds the quick temporary-session binding with `KeyK`. Each legacy upgrade adds
+the later bindings in that order; occupied keys leave only that layer unbound.
+The next keymap save atomically writes version 5. Keep a pre-upgrade copy for
+rollback: releases that only understand versions 1 through 4 reject version 5. An
 unreadable, malformed, conflicting, or unsupported shortcut file makes that
 store unavailable instead of overwriting it.
 
@@ -785,6 +784,11 @@ merely to test that the application itself has no login.
    rename the view. Reload the saved workspace and confirm the tree, assignments,
    ratios, and name return. Removing a workspace tab should clear only its pane
    assignment; deleting the Pane view must not stop or resize any tmux session.
+   Use the displayed pane-navigation leader followed by arrows to traverse the
+   three panes, including successive arrows within its repeat window. Confirm
+   the highlight and keyboard input focus move together, an outside edge does
+   not wrap, `Escape` cancels, and the shortcut-window `G` action arms the same
+   mode. Do not type validation input into a valuable session.
 9. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
 10. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
@@ -848,7 +852,7 @@ merely to test that the application itself has no login.
     use `Download ZIP`, and confirm one archive contains both selected roots and
     the nested contents; the checked rows should remain selected afterward.
     Print disposable relative
-    `.md`, `.pdf`, `.txt`, and `.png` paths in the live
+    `.md`, `.pdf`, `.txt`, `.png`, and `.json` paths in the live
     terminal; confirm a plain click remains terminal input while `Ctrl`+click
     (or `Cmd`+click on macOS) opens each in this browser without sending a
     terminal mouse frame. Delete only those disposable fixtures
@@ -922,10 +926,11 @@ For a failed replacement:
    `session-titles.json`; tags are unavailable to that older release and would be
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
-   When rolling back to a release that only understands shortcut-file version 3
-   or earlier, preserve the version-4 document and restore the pre-upgrade
-   `shortcuts.json`; the utility-terminal action is unavailable there.
-   Version-2 releases additionally lack the floating-input binding. A
+   When rolling back to a release that only understands shortcut-file version 4
+   or earlier, preserve the version-5 document and restore the pre-upgrade
+   `shortcuts.json`; the pane-navigation action is unavailable there. Version-3
+   releases additionally lack the utility-terminal action, and version-2
+   releases additionally lack the floating-input binding. A
    version-1 release also lacks the quick temporary-session binding.
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back

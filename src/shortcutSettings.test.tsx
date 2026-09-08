@@ -101,7 +101,7 @@ describe("ShortcutSettingsProvider", () => {
       name: "Fuzzy command search direct key",
     });
     fireEvent.click(paletteDirect);
-    fireEvent.keyDown(paletteDirect, { code: "KeyG", key: "g" });
+    fireEvent.keyDown(paletteDirect, { code: "KeyV", key: "v" });
 
     const launcherDirect = within(settings).getByRole("button", {
       name: "Shortcut window direct key",
@@ -119,7 +119,7 @@ describe("ShortcutSettingsProvider", () => {
     await waitFor(() => expect(saveShortcutSettingsMock).toHaveBeenCalledOnce());
     const [savedBindings, revision] = saveShortcutSettingsMock.mock.calls[0];
     expect(revision).toBe(0);
-    expect(savedBindings["command-palette"].direct).toBe("KeyG");
+    expect(savedBindings["command-palette"].direct).toBe("KeyV");
     expect(savedBindings["shortcut-launcher"].direct).toBe("KeyO");
     expect(savedBindings["session-end"].launcher).toBe("KeyW");
     await waitFor(() => expect(within(settings).getByText("Saved for every browser."))
@@ -130,7 +130,7 @@ describe("ShortcutSettingsProvider", () => {
 
     const commandTrigger = screen.getByRole("button", { name: "Open command palette" });
     const shortcutTrigger = screen.getByRole("button", { name: "Open shortcut window" });
-    expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+G");
+    expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+V");
     expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+O");
 
     fireEvent.keyDown(window, {
@@ -141,8 +141,8 @@ describe("ShortcutSettingsProvider", () => {
     });
     expect(screen.queryByRole("dialog", { name: "Run a command" })).not.toBeInTheDocument();
     fireEvent.keyDown(window, {
-      code: "KeyG",
-      key: "G",
+      code: "KeyV",
+      key: "V",
       ctrlKey: true,
       shiftKey: true,
     });

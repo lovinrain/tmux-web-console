@@ -3425,7 +3425,7 @@ function AppRoutes() {
         onChange={updateWorkspacePaneView}
         onDelete={deleteWorkspacePaneView}
         onExit={exitWorkspacePaneView}
-        renderSession={(sessionName, paneId, active, onActivate) => (
+        renderSession={(sessionName, paneId, active, onActivate, focusRequestToken) => (
           <ConsoleScreen
             key={`${paneLayout.id}:${paneId}:${sessionName}`}
             sessionName={sessionName}
@@ -3433,6 +3433,7 @@ function AppRoutes() {
             instanceId={`${paneLayout.id}-${paneId}`}
             keyboardShortcutsEnabled={active}
             onActivate={onActivate}
+            terminalFocusRequest={focusRequestToken}
             sessionSnapshot={knownSessions.find(
               (session) => session.name === sessionName,
             ) ?? null}

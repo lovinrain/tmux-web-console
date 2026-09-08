@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
 import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
 import { moveWorkspaceSessions } from "../workspaceState";
-import { SHORTCUT_ACTION_EVENT, type ShortcutActionId } from "../shortcutSettings";
+import {
+  PANE_NAVIGATION_ACTION,
+  SHORTCUT_ACTION_EVENT,
+  type ShortcutActionId,
+} from "../shortcutSettings";
 import type { Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import {
@@ -167,6 +171,11 @@ describe("SessionWorkspaceNavigation", () => {
   it("shows saved pane views beside sessions and can create or open one", () => {
     const onCreatePaneLayout = vi.fn();
     const onSelectPaneLayout = vi.fn();
+    const shortcutActions: ShortcutActionId[] = [];
+    const captureShortcut = (event: Event) => {
+      shortcutActions.push((event as CustomEvent<ShortcutActionId>).detail);
+    };
+    window.addEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
     render(
       <SessionWorkspaceNavigation
         {...navigationProps({
@@ -196,6 +205,14 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onSelectPaneLayout).toHaveBeenCalledWith("review-wall");
     fireEvent.click(screen.getByRole("button", { name: "Create multi-pane view" }));
     expect(onCreatePaneLayout).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open shortcut window" }));
+    const shortcutDialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(shortcutDialog).getByRole("button", { name: /Navigate between panes/ }))
+      .toHaveTextContent("G");
+    fireEvent.keyDown(window, { code: "KeyG", key: "g" });
+    expect(shortcutActions).toContain(PANE_NAVIGATION_ACTION);
+    window.removeEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
   });
 
   it("finds tabs by group name and exposes their group name and color", () => {

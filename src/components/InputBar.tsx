@@ -1287,7 +1287,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           aria-label="Focus live terminal input"
           aria-controls={terminalControlId}
           aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
-          title={`Exit scrollback and focus raw terminal input${directShortcutLabel(shortcutBindings["terminal-return-live"])
+          title={`${preferredScrollMode === "application"
+            ? `Return ${preferredScrollLabel || "the foreground application"} to live output`
+            : "Exit scrollback and focus raw terminal input"}${directShortcutLabel(shortcutBindings["terminal-return-live"])
             ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
             : ""}`}
           onMouseDown={(event) => event.preventDefault()}

@@ -118,7 +118,10 @@ For frontend development, run `npm run dev`. Vite serves
   session, and can split left/right or top/bottom again for arbitrary nested
   layouts. Dividers resize by drag or keyboard. Named workspaces persist pane
   assignments, names, split directions, and ratios on the server; a temporary
-  workspace carries them into its explicit `Save workspace` operation.
+  workspace carries them into its explicit `Save workspace` operation. Use the
+  configurable `Ctrl+Shift+G`, then Arrow leader to move real terminal focus
+  geometrically between visible panes; `Ctrl+Shift+Z`, then `G` provides the
+  shortcut-window route.
 - New Session can start in an absolute server directory. Its browser-local
   Workspace Memory ranks paths learned from tmux sessions and successful
   launches by recency and frequency; paths can also be pinned, hidden, restored,
@@ -188,7 +191,8 @@ For frontend development, run `npm run dev`. Vite serves
   each, mode `0600`) and refuse to overwrite an existing name. `Copy path`
   copies the absolute server path, while `Stage path` inserts its shell-quoted
   form into the composer without sending.
-- On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.html`, or `.htm` is also linkified.
+- On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.json`,
+  `.html`, or `.htm` is also linkified.
   `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
   in the floating file browser; a relative path is resolved from the live pane
   CWD, while absolute and `~/` paths keep their server meaning. Plain clicks
@@ -232,6 +236,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+A` | Show or hide tab action buttons |
 | `Ctrl+Shift+S` | Show or hide the session tab strip |
 | `Ctrl+Shift+F` | Enter or exit terminal Focus |
+| `Ctrl+Shift+G`, then Arrow | Move terminal focus between panes in a multi-pane view |
 | `Ctrl+Shift+Y` | Show or hide the movable staged-input window |
 | `Ctrl+Shift+J` | Show or hide the independent floating workspace terminal |
 | `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's remembered controls |
@@ -244,7 +249,8 @@ active on the landing page or compact mobile layout.
 
 The shortcut window provides a browser-safe second route to known actions. In
 particular, the defaults `Z` then `E`, `R`, or `H` open End confirmation, Rename,
-or fuzzy command search. Open `Shortcuts`, then `Customize`, to change every
+or fuzzy command search; `Z`, then `G`, then Arrow enters pane navigation. Open
+`Shortcuts`, then `Customize`, to change every
 direct `Ctrl+Shift` chord and every one-key shortcut-window action. The keymap is
 stored by the backend and shared by every browser using this Muxdeck instance;
 all visible hints update after saving. Browsers and operating systems may still

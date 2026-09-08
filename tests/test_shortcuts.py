@@ -10,6 +10,7 @@ from tmux_console.shortcuts import (
     DEFAULT_SHORTCUT_BINDINGS,
     FLOATING_INPUT_ACTION,
     FLOATING_TERMINAL_ACTION,
+    PANE_NAVIGATION_ACTION,
     PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
     QUICK_SESSION_ACTION,
     SHORTCUT_DOCUMENT_VERSION,
@@ -32,7 +33,7 @@ def test_shortcut_store_uses_defaults_then_persists_a_revision(tmp_path):
 
     assert store.get_snapshot() == {"revision": 0, "bindings": bindings()}
     updated = bindings()
-    updated["command-palette"]["direct"] = "KeyG"
+    updated["command-palette"]["direct"] = "KeyV"
     updated["terminal-copy-mode"]["direct"] = "KeyH"
     saved = store.replace_bindings(updated, expected_revision=0)
 
@@ -52,6 +53,7 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     legacy.pop(QUICK_SESSION_ACTION)
     legacy.pop(FLOATING_INPUT_ACTION)
     legacy.pop(FLOATING_TERMINAL_ACTION)
+    legacy.pop(PANE_NAVIGATION_ACTION)
     legacy["command-palette"]["direct"] = "KeyG"
     path.write_text(
         json.dumps({"version": 1, "revision": 7, "bindings": legacy}),
@@ -71,6 +73,10 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
         "direct": "KeyY",
         "launcher": "KeyY",
     }
+    assert snapshot["bindings"][PANE_NAVIGATION_ACTION] == {
+        "direct": None,
+        "launcher": "KeyG",
+    }
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
 
     saved = store.replace_bindings(snapshot["bindings"], expected_revision=7)
@@ -86,6 +92,7 @@ def test_shortcut_store_does_not_override_legacy_default_key_conflicts(tmp_path)
     legacy.pop(QUICK_SESSION_ACTION)
     legacy.pop(FLOATING_INPUT_ACTION)
     legacy.pop(FLOATING_TERMINAL_ACTION)
+    legacy.pop(PANE_NAVIGATION_ACTION)
     legacy["command-palette"]["direct"] = "KeyK"
     legacy["terminal-copy-mode"]["direct"] = "KeyH"
     legacy["command-palette"]["launcher"] = "KeyK"
@@ -114,6 +121,7 @@ def test_shortcut_store_upgrades_version_two_without_overriding_key_y(tmp_path):
     previous = bindings()
     previous.pop(FLOATING_INPUT_ACTION)
     previous.pop(FLOATING_TERMINAL_ACTION)
+    previous.pop(PANE_NAVIGATION_ACTION)
     previous["command-palette"]["direct"] = "KeyY"
     path.write_text(
         json.dumps({
@@ -143,12 +151,29 @@ def test_version_three_adds_terminal_without_overwriting_custom_bindings(tmp_pat
     path = tmp_path / "shortcuts.json"
     previous = bindings()
     previous.pop(FLOATING_TERMINAL_ACTION)
+    previous.pop(PANE_NAVIGATION_ACTION)
     previous["command-palette"]["direct"] = "KeyJ"
     path.write_text(json.dumps({"version": 3, "revision": 9, "bindings": previous}))
     snapshot = ShortcutStore(path).get_snapshot()
     assert snapshot["revision"] == 9
     assert snapshot["bindings"][FLOATING_TERMINAL_ACTION] == {"direct": None, "launcher": "KeyJ"}
     assert snapshot["bindings"][FLOATING_INPUT_ACTION] == previous[FLOATING_INPUT_ACTION]
+
+
+def test_version_four_adds_pane_navigation_without_overwriting_key_g(tmp_path):
+    path = tmp_path / "shortcuts.json"
+    previous = bindings()
+    previous.pop(PANE_NAVIGATION_ACTION)
+    previous["command-palette"]["direct"] = "KeyG"
+    path.write_text(json.dumps({"version": 4, "revision": 11, "bindings": previous}))
+
+    snapshot = ShortcutStore(path).get_snapshot()
+
+    assert snapshot["revision"] == 11
+    assert snapshot["bindings"][PANE_NAVIGATION_ACTION] == {
+        "direct": None,
+        "launcher": "KeyG",
+    }
 
 
 def test_shortcut_store_rejects_stale_and_conflicting_bindings(tmp_path):

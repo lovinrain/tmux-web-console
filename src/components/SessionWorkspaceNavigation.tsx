@@ -39,6 +39,7 @@ import {
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
 import { requestThemeToggle } from "../theme";
 import {
+  PANE_NAVIGATION_ACTION,
   directShortcutAria,
   directShortcutLabel,
   dispatchShortcutAction,
@@ -386,6 +387,7 @@ interface WorkspaceCommandContext {
   sessionsByName: Map<string, Session>;
   tabsVisible: boolean;
   tabActionsVisible: boolean;
+  paneLayoutActive: boolean;
   workspacePersistenceState: WorkspacePersistenceState;
   newSessionDisabled: boolean;
   quickNewSessionDisabled: boolean;
@@ -420,6 +422,7 @@ function buildWorkspaceCommands({
   sessionsByName,
   tabsVisible,
   tabActionsVisible,
+  paneLayoutActive,
   workspacePersistenceState,
   newSessionDisabled,
   quickNewSessionDisabled,
@@ -586,6 +589,15 @@ function buildWorkspaceCommands({
       disabled: !activeSessionLoaded,
       disabledReason: "Open a live session first.",
     }, "view-terminal-focus"),
+    shortcutCommand({
+      id: PANE_NAVIGATION_ACTION,
+      label: "Navigate between panes",
+      description: "Arm the pane grid, then use arrow keys to move terminal focus.",
+      category: "View",
+      keywords: ["pane", "grid", "focus", "arrow", "tmux"],
+      disabled: !paneLayoutActive,
+      disabledReason: "Open a multi-pane view first.",
+    }, PANE_NAVIGATION_ACTION),
     shortcutCommand({
       id: "view-floating-input",
       label: "Show or hide floating staged input",
@@ -3168,6 +3180,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     sessionsByName,
     tabsVisible,
     tabActionsVisible,
+    paneLayoutActive: Boolean(activePaneLayoutId),
     workspacePersistenceState,
     newSessionDisabled,
     quickNewSessionDisabled,

@@ -3157,7 +3157,7 @@ test("desktop shortcut editor validates, persists, and updates visible key hints
     await expect(settings.getByRole("button", { name: "Save keymap" })).toBeDisabled();
 
     await paletteDirect.click();
-    await page.keyboard.press("g");
+    await page.keyboard.press("v");
     await expect(settings.getByText("Resolve duplicate keys before saving.")).toBeHidden();
 
     const launcherDirect = settings.getByRole("button", {
@@ -3180,19 +3180,19 @@ test("desktop shortcut editor validates, persists, and updates visible key hints
     await settings.getByRole("button", { name: "Close shortcut settings" }).click();
 
     const commandTrigger = page.getByRole("button", { name: "Open command palette" });
-    await expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+G");
+    await expect(commandTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+V");
     await expect(shortcutTrigger).toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
 
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
     await expect(page.getByRole("button", { name: "Open command palette" }))
-      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+G");
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+V");
     await expect(page.getByRole("button", { name: "Open shortcut window" }))
       .toHaveAttribute("aria-keyshortcuts", "Control+Shift+X");
 
     await page.keyboard.press("Control+Shift+H");
     await expect(page.getByRole("dialog", { name: "Run a command" })).toHaveCount(0);
-    await page.keyboard.press("Control+Shift+G");
+    await page.keyboard.press("Control+Shift+V");
     await expect(page.getByRole("dialog", { name: "Run a command" })).toBeVisible();
     await page.keyboard.press("Escape");
 
@@ -5059,6 +5059,104 @@ test("saved workspace survives reload and device handoff without touching tmux p
       });
     } catch {
       // Cleanup stays scoped to the helper session on this test's disposable socket.
+    }
+  }
+});
+
+test("desktop pane view keeps embedded input controls flush and visible", async ({
+  page,
+  request,
+}) => {
+  const leftSession = `${sessionName}-pane-left`;
+  const rightSession = `${sessionName}-pane-right`;
+  const layoutId = `pane-input-fit-${process.pid}`;
+  let workspaceId: string | null = null;
+
+  for (const name of [leftSession, rightSession]) {
+    execFileSync("tmux", [
+      ...tmux,
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "bash",
+      "--noprofile",
+      "--norc",
+    ]);
+  }
+
+  try {
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name: `Pane input fit ${process.pid}`,
+        tabs: [leftSession, rightSession],
+        groups: [],
+        activeSession: leftSession,
+        paneLayouts: [{
+          id: layoutId,
+          name: "Input fit",
+          root: {
+            id: "root-split",
+            kind: "split",
+            direction: "horizontal",
+            ratio: 0.5,
+            first: { id: "left", kind: "pane", session: leftSession },
+            second: { id: "right", kind: "pane", session: rightSession },
+          },
+        }],
+      },
+    });
+    expect(response.ok()).toBe(true);
+    workspaceId = (await response.json()).workspace.id as string;
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(
+      `/mux/panes/${encodeURIComponent(layoutId)}`
+        + `?workspace=${encodeURIComponent(workspaceId)}`
+        + `&tab=${encodeURIComponent(leftSession)}`
+        + `&tab=${encodeURIComponent(rightSession)}`,
+    );
+    const consoles = page.locator(".embedded-console");
+    await expect(consoles).toHaveCount(2);
+    await expect(page.locator(".embedded-console .connection-badge")).toHaveCount(2);
+
+    const metrics = await consoles.evaluateAll((elements) => elements.map((root) => {
+      const dock = root.querySelector<HTMLElement>(":scope > .input-dock");
+      const composer = dock?.querySelector<HTMLElement>(".staged-composer");
+      const inputBar = dock?.querySelector<HTMLElement>(".input-bar");
+      if (!dock || !composer || !inputBar) throw new Error("Embedded input controls are missing");
+      const rootBounds = root.getBoundingClientRect();
+      const dockBounds = dock.getBoundingClientRect();
+      const composerBounds = composer.getBoundingClientRect();
+      const inputBarBounds = inputBar.getBoundingClientRect();
+      return {
+        blankBelowDock: Math.abs(rootBounds.bottom - dockBounds.bottom),
+        dockOverflow: dock.scrollHeight - dock.clientHeight,
+        composerInsideDock: composerBounds.top >= dockBounds.top - 1
+          && composerBounds.bottom <= dockBounds.bottom + 1,
+        inputBarInsideDock: inputBarBounds.top >= dockBounds.top - 1
+          && inputBarBounds.bottom <= dockBounds.bottom + 1,
+      };
+    }));
+
+    for (const metric of metrics) {
+      expect(metric.blankBelowDock).toBeLessThanOrEqual(1);
+      expect(metric.dockOverflow).toBeLessThanOrEqual(1);
+      expect(metric.composerInsideDock).toBe(true);
+      expect(metric.inputBarInsideDock).toBe(true);
+    }
+  } finally {
+    if (workspaceId) {
+      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    }
+    for (const name of [leftSession, rightSession]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to this test's sessions on the disposable socket.
+      }
     }
   }
 });

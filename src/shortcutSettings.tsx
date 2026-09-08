@@ -27,6 +27,8 @@ export interface ShortcutDefinition {
   launcherEditable?: boolean;
 }
 
+export const PANE_NAVIGATION_ACTION = "view-pane-navigation" as const;
+
 const CORE_SHORTCUT_DEFINITIONS = [
   { id: "command-palette", label: "Fuzzy command search", group: "Open", direct: "KeyH", launcher: "KeyH" },
   { id: "shortcut-launcher", label: "Shortcut window", group: "Open", direct: "KeyZ", launcher: null, launcherEditable: false },
@@ -44,6 +46,7 @@ const CORE_SHORTCUT_DEFINITIONS = [
   { id: "view-terminal-focus", label: "Terminal Focus", group: "View", direct: "KeyF", launcher: "KeyF" },
   { id: "view-floating-input", label: "Floating staged input", group: "View", direct: "KeyY", launcher: "KeyY" },
   { id: "view-floating-terminal", label: "Workspace terminal", group: "View", direct: "KeyJ", launcher: "KeyJ" },
+  { id: PANE_NAVIGATION_ACTION, label: "Pane navigation", group: "View", direct: "KeyG", launcher: "KeyG" },
   { id: "view-theme", label: "Theme", group: "View", direct: null, launcher: "KeyT", directEditable: false },
   { id: "workspace-find-tab", label: "Find tab", group: "Tabs", direct: "Semicolon", launcher: "Semicolon" },
   { id: "workspace-previous-tab", label: "Previous tab", group: "Tabs", direct: "Comma", launcher: "Comma" },

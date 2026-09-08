@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   copySession,
   createQueuedMessage,
@@ -188,7 +188,29 @@ beforeEach(() => {
   document.title = "Muxdeck";
 });
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("ConsoleScreen session identity", () => {
+  it("focuses an embedded xterm when its pane receives a focus request", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        embedded
+        terminalFocusRequest={1}
+        sessionSnapshot={session()}
+        onBack={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "test" });
+    expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
+  });
+
   it("uses scoped controls and a supplied snapshot in an embedded pane", async () => {
     const { container } = renderWithTheme(
       <ConsoleScreen
@@ -726,6 +748,31 @@ describe("ConsoleScreen session identity", () => {
       expect(within(mobileControls).getByRole("button", { name }))
         .not.toHaveClass("preferred-scroll-control");
     }
+  });
+
+  it("returns Claude's application scroll view to live with Ctrl+End", async () => {
+    const claudeSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code", alternate_on: true }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([claudeSession]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const terminalControls = screen.getByRole("navigation", {
+      name: "Terminal view controls",
+    });
+    const returnToLive = within(terminalControls).getByRole("button", {
+      name: "Return to live terminal",
+    });
+
+    fireEvent.click(returnToLive);
+
+    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[8^");
+    expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalledWith("exit");
+    expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
+    expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
   });
 
   it("learns agent paging controls and captures the exact desktop terminal shortcuts", async () => {

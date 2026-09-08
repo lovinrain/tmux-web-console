@@ -12,6 +12,16 @@ export const MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH = 64;
 export const MIN_WORKSPACE_PANE_RATIO = 0.15;
 export const MAX_WORKSPACE_PANE_RATIO = 0.85;
 
+export type WorkspacePaneDirection = "left" | "right" | "up" | "down";
+
+export interface WorkspacePaneBounds {
+  id: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
 let fallbackId = 0;
 
 export function newWorkspacePaneId(prefix: "layout" | "pane" | "split"): string {
@@ -31,6 +41,61 @@ export function workspacePaneSessions(layout: WorkspacePaneLayout): string[] {
   return workspacePaneLeaves(layout.root).flatMap((pane) => (
     pane.session ? [pane.session] : []
   ));
+}
+
+export function adjacentWorkspacePaneId(
+  panes: readonly WorkspacePaneBounds[],
+  activePaneId: string,
+  direction: WorkspacePaneDirection,
+): string | null {
+  const active = panes.find((pane) => pane.id === activePaneId);
+  if (!active) return null;
+
+  const horizontal = direction === "left" || direction === "right";
+  const candidates = panes.flatMap((pane, index) => {
+    if (pane.id === activePaneId) return [];
+    const perpendicularOverlap = horizontal
+      ? Math.min(active.bottom, pane.bottom) - Math.max(active.top, pane.top)
+      : Math.min(active.right, pane.right) - Math.max(active.left, pane.left);
+    if (perpendicularOverlap <= 0) return [];
+
+    let primaryGap: number;
+    if (direction === "left") {
+      if (pane.right > active.left + 1) return [];
+      primaryGap = active.left - pane.right;
+    } else if (direction === "right") {
+      if (pane.left < active.right - 1) return [];
+      primaryGap = pane.left - active.right;
+    } else if (direction === "up") {
+      if (pane.bottom > active.top + 1) return [];
+      primaryGap = active.top - pane.bottom;
+    } else {
+      if (pane.top < active.bottom - 1) return [];
+      primaryGap = pane.top - active.bottom;
+    }
+
+    const activeSecondaryCenter = horizontal
+      ? (active.top + active.bottom) / 2
+      : (active.left + active.right) / 2;
+    const paneSecondaryCenter = horizontal
+      ? (pane.top + pane.bottom) / 2
+      : (pane.left + pane.right) / 2;
+    return [{
+      id: pane.id,
+      index,
+      primaryGap,
+      secondaryDistance: Math.abs(paneSecondaryCenter - activeSecondaryCenter),
+      perpendicularOverlap,
+    }];
+  });
+
+  candidates.sort((left, right) => (
+    left.primaryGap - right.primaryGap
+    || left.secondaryDistance - right.secondaryDistance
+    || right.perpendicularOverlap - left.perpendicularOverlap
+    || left.index - right.index
+  ));
+  return candidates[0]?.id ?? null;
 }
 
 function workspacePaneNodeDepth(

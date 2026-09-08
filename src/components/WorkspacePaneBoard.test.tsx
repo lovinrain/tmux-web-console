@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspacePaneLayout } from "../api";
 import type { Session } from "../types";
 import { WorkspacePaneBoard } from "./WorkspacePaneBoard";
@@ -13,6 +13,33 @@ const layout: WorkspacePaneLayout = {
     session: "alpha",
   },
 };
+
+const pairLayout: WorkspacePaneLayout = {
+  id: "pair",
+  name: "Pair view",
+  root: {
+    id: "split",
+    kind: "split",
+    direction: "horizontal",
+    ratio: 0.5,
+    first: { id: "left", kind: "pane", session: "alpha" },
+    second: { id: "right", kind: "pane", session: "beta" },
+  },
+};
+
+function paneRect(left: number, right: number): DOMRect {
+  return {
+    x: left,
+    y: 0,
+    left,
+    right,
+    top: 0,
+    bottom: 500,
+    width: right - left,
+    height: 500,
+    toJSON: () => ({}),
+  };
+}
 
 function session(name: string): Session {
   return {
@@ -37,7 +64,67 @@ function session(name: string): Session {
   };
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("WorkspacePaneBoard", () => {
+  it("arms pane navigation and moves active terminal focus geometrically", () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function mockPaneBounds(this: HTMLElement) {
+        if (this.dataset.paneId === "left") return paneRect(0, 400);
+        if (this.dataset.paneId === "right") return paneRect(408, 800);
+        return paneRect(0, 0);
+      });
+    render(
+      <WorkspacePaneBoard
+        layout={pairLayout}
+        openSessions={["alpha", "beta"]}
+        sessions={[session("alpha"), session("beta")]}
+        sessionNavigation={<nav />}
+        desktopTabOrientation="horizontal"
+        desktopTabRailWidth={288}
+        workspacePersistenceState="saved"
+        onChange={vi.fn(async () => undefined)}
+        onDelete={vi.fn(async () => undefined)}
+        onExit={vi.fn()}
+        renderSession={(name, paneId, active, _onActivate, focusRequestToken) => (
+          <div
+            data-testid={`terminal-${paneId}`}
+            data-active={active}
+            data-focus-request={focusRequestToken}
+          >
+            {name}
+          </div>
+        )}
+      />,
+    );
+
+    fireEvent.keyDown(window, {
+      code: "KeyG",
+      key: "G",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Pane navigation");
+    expect(screen.getByRole("button", { name: /Navigating/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(screen.getByTestId("terminal-right")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("terminal-right")).toHaveAttribute(
+      "data-focus-request",
+      expect.stringMatching(/^\d+$/),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Focused beta");
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByTestId("terminal-left")).toHaveAttribute("data-active", "true");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    bounds.mockRestore();
+  });
+
   it("renders sessions as full pane content and can extend the split tree", async () => {
     const onChange = vi.fn(async (_layout: WorkspacePaneLayout) => undefined);
     render(

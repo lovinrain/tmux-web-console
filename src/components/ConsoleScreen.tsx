@@ -106,6 +106,7 @@ interface ConsoleScreenProps {
   instanceId?: string;
   keyboardShortcutsEnabled?: boolean;
   onActivate?: () => void;
+  terminalFocusRequest?: number;
   sessionSnapshot?: Session | null;
   workspaceId?: string | null;
   temporaryTerminalKey?: string;
@@ -203,6 +204,10 @@ const STATE_LABEL: Record<ConnectionState, string> = {
 
 const RAW_PAGE_UP_SEQUENCE = "\x1b[5~";
 const RAW_PAGE_DOWN_SEQUENCE = "\x1b[6~";
+// Claude Code handles application scrolling in its alternate screen. Its
+// terminal parser maps xterm's Ctrl+End sequence to the scroll-to-bottom
+// action, whereas tmux's copy-mode cancel cannot reach that state.
+const RAW_APPLICATION_BOTTOM_SEQUENCE = "\x1b[8^";
 const MOBILE_CONSOLE_LAYOUT_QUERY = [
   "(max-width: 640px)",
   "(max-width: 1024px) and (pointer: coarse)",
@@ -491,6 +496,7 @@ export function ConsoleScreen({
   instanceId,
   keyboardShortcutsEnabled = true,
   onActivate,
+  terminalFocusRequest,
   sessionSnapshot,
   workspaceId = null,
   temporaryTerminalKey: providedTemporaryTerminalKey,
@@ -566,6 +572,12 @@ export function ConsoleScreen({
     sessionName: string;
     state: ConnectionState;
   }>({ sessionName, state: "connecting" });
+
+  useEffect(() => {
+    if (terminalFocusRequest === undefined) return;
+    const frame = window.requestAnimationFrame(() => terminalRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [terminalFocusRequest]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [fileBrowserTarget, setFileBrowserTarget] = useState<{
@@ -1253,10 +1265,14 @@ export function ConsoleScreen({
   }, [sessionName]);
   const paneChange = useCallback((nextPaneId: string | null) => setPaneId(nextPaneId), []);
   const returnToLiveTerminal = useCallback(() => {
-    terminalRef.current?.navigateHistory("exit");
+    if (preferredScrollMode === "application") {
+      terminalRef.current?.send(RAW_APPLICATION_BOTTOM_SEQUENCE);
+    } else {
+      terminalRef.current?.navigateHistory("exit");
+    }
     terminalRef.current?.jumpToLive();
     terminalRef.current?.focus();
-  }, []);
+  }, [preferredScrollMode]);
   const rememberScrollMode = useCallback((mode: AgentScrollMode) => {
     setAgentScrollPreferences((current) => (
       rememberAgentScrollMode(current, scrollAgentKind, mode)
@@ -2112,7 +2128,9 @@ export function ConsoleScreen({
             aria-label="Return to live terminal"
             aria-controls={activeConsoleId}
             aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
-            title={`Leave tmux copy mode and return to live output${directShortcutLabel(shortcutBindings["terminal-return-live"])
+            title={`${preferredScrollMode === "application"
+              ? `Return ${classification.label} to live output`
+              : "Leave tmux copy mode and return to live output"}${directShortcutLabel(shortcutBindings["terminal-return-live"])
               ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
               : ""}`}
             disabled={connection !== "live"}

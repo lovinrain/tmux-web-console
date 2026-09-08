@@ -539,6 +539,33 @@ describe("LiveTerminal web links", () => {
     expect(terminalElement).not.toHaveAttribute("title");
   });
 
+  it("previews JSON paths with the same conservative Ctrl-click interaction", () => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    const onOpenFilePath = vi.fn();
+    render(
+      <LiveTerminal
+        session="agent"
+        ignoreSize={false}
+        theme="dark"
+        onOpenFilePath={onOpenFilePath}
+        {...callbacks}
+      />,
+    );
+    const terminal = terminalMocks.instances[0];
+    setTerminalBufferLine(terminal, "result: /work/config.JSON");
+    let links: MockProvidedLink[] | undefined;
+    fileLinkMocks.instances[0].provideLinks(1, (provided) => { links = provided; });
+
+    expect(links?.map((link) => link.text)).toEqual(["/work/config.JSON"]);
+    links?.[0].activate(new MouseEvent("mouseup", { button: 0 }), links[0].text);
+    expect(onOpenFilePath).not.toHaveBeenCalled();
+    links?.[0].activate(
+      new MouseEvent("mouseup", { button: 0, ctrlKey: true }),
+      links[0].text,
+    );
+    expect(onOpenFilePath).toHaveBeenCalledWith("/work/config.JSON");
+  });
+
   it("opens absolute HTML paths on a plain click while keeping relative files conservative", () => {
     vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
     const onOpenFilePath = vi.fn();

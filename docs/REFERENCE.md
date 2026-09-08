@@ -451,8 +451,9 @@ reloading the panel, and is neither uploaded to the backend nor shared with a
 different browser profile.
 
 On desktop, xterm also detects terminal-output candidates ending in `.md`,
-`.pdf`, `.png`, or `.txt`. It understands absolute paths, `~/` paths, CWD-relative paths, quoted
-paths with spaces, and shell-escaped spaces; common trailing punctuation and
+`.pdf`, `.png`, `.txt`, or `.json`. It understands absolute paths, `~/` paths,
+CWD-relative paths, quoted paths with spaces, and shell-escaped spaces; common
+trailing punctuation and
 `:line` suffixes are excluded from the target. A plain click remains available
 to the terminal application. `Ctrl`+click on Windows/Linux or `Cmd`+click on
 macOS resolves the candidate against the live pane CWD where necessary, opens
@@ -768,6 +769,18 @@ controls add a nested horizontal or vertical split, clear/remove the leaf, and
 collapse the removed space into its sibling. Drag the divider to resize it;
 arrow keys adjust the focused divider, Shift uses a larger step, Home/End reach
 the safe bounds, and Enter returns to 50/50.
+
+`Navigate` arms tmux-style spatial focus movement. Its default leader is
+`Ctrl+Shift+G`; release the chord, then use an arrow key. The mode remains armed
+for 1.5 seconds after each move so successive arrows can cross a larger layout,
+and `Escape` cancels it. Movement does not wrap at an outside edge. Muxdeck
+chooses the nearest visible pane in that direction with an overlapping edge,
+marks it as active, and focuses its xterm input so subsequent typing reaches the
+new session. Empty leaves receive focus on their session selector instead. A
+small HUD identifies the armed state and result. The shortcut window provides
+the fallback sequence `Ctrl+Shift+Z`, then `G`, then Arrow. The leader's direct
+and window keys are configurable under `Pane navigation`; clicking a pane still
+selects it normally.
 
 The pane-view tab itself has a name and session-count badge. Its header can
 rename or explicitly delete the view, and the ordinary session tabs remain the
@@ -1164,12 +1177,14 @@ browsers, uses revision-checked whole-document writes, and defaults to the
 built-in bindings until the first save. An unreadable, malformed, conflicting,
 or unsupported document makes shortcut persistence unavailable rather than
 overwriting the file; the browser continues with built-in defaults and exposes a
-retry state in the editor. Shortcut documents are version 3. Version 2 loads by
-adding the floating-input action with `Y` in each unoccupied layer. Version 1
-first adds the quick-temporary-session action with `K`, then adds floating input
-with `Y`; conflicts leave only that layer unbound instead of replacing a custom
-key. The first keymap save atomically rewrites either older document as version
-3. Keep a pre-upgrade backup when rollback to an older release is possible.
+retry state in the editor. Shortcut documents are version 5. Version 4 loads by
+adding pane navigation with `G` in each unoccupied layer. Version 3 additionally
+adds the floating utility terminal with `J`; version 2 adds floating input with
+`Y`, and version 1 first adds the quick temporary session with `K`. Upgrades add
+each later action in order, and a conflict leaves only that layer unbound instead
+of replacing a custom key. The first keymap save atomically rewrites a version 1
+through 4 document as version 5. Keep a pre-upgrade backup when rollback to an
+older release is possible.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.
 `server` uses the Muxdeck form login and remembered-device cookies. `basic` uses

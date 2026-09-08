@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -22,10 +23,21 @@ import {
   PlusIcon,
   SaveIcon,
   TrashIcon,
+  WindowMoveIcon,
 } from "../icons";
 import { sessionDisplayTitle } from "../sessionDashboardModel";
+import {
+  PANE_NAVIGATION_ACTION,
+  SHORTCUT_ACTION_EVENT,
+  directShortcutAria,
+  directShortcutLabel,
+  matchesDirectShortcut,
+  useShortcutSettings,
+  type ShortcutActionId,
+} from "../shortcutSettings";
 import type { Session } from "../types";
 import {
+  adjacentWorkspacePaneId,
   assignWorkspacePaneSession,
   canSplitWorkspacePane,
   MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH,
@@ -34,10 +46,12 @@ import {
   splitWorkspacePane,
   workspacePaneLeaves,
   workspacePaneSessions,
+  type WorkspacePaneDirection,
 } from "../workspacePaneLayouts";
-import type {
-  WorkspacePersistenceState,
-  WorkspaceTabOrientation,
+import {
+  isCompactWorkspaceViewport,
+  type WorkspacePersistenceState,
+  type WorkspaceTabOrientation,
 } from "./SessionWorkspaceNavigation";
 
 interface WorkspacePaneBoardProps {
@@ -59,6 +73,7 @@ interface WorkspacePaneBoardProps {
     paneId: string,
     active: boolean,
     onActivate: () => void,
+    focusRequestToken?: number,
   ) => ReactNode;
 }
 
@@ -70,6 +85,8 @@ interface ResizeDrag {
   target: HTMLDivElement;
   changed: boolean;
 }
+
+const PANE_NAVIGATION_REPEAT_MS = 1_500;
 
 function sameLayout(left: WorkspacePaneLayout, right: WorkspacePaneLayout): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -91,26 +108,43 @@ export function WorkspacePaneBoard({
   onExit,
   renderSession,
 }: WorkspacePaneBoardProps) {
+  const { bindings: shortcutBindings } = useShortcutSettings();
   const [draft, setDraft] = useState(layout);
   const draftRef = useRef(draft);
+  const screenRef = useRef<HTMLElement>(null);
   const [activePaneId, setActivePaneId] = useState(
     () => workspacePaneLeaves(layout.root)[0]?.id ?? "",
   );
+  const activePaneIdRef = useRef(activePaneId);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(layout.name);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [paneNavigationArmed, setPaneNavigationArmed] = useState(false);
+  const paneNavigationArmedRef = useRef(false);
+  const [paneNavigationStatus, setPaneNavigationStatus] = useState("");
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState<{
+    paneId: string;
+    token: number;
+  } | null>(null);
+  const terminalFocusRequestCounter = useRef(0);
+  const paneNavigationTimerRef = useRef<number | null>(null);
   const resizeDragRef = useRef<ResizeDrag | null>(null);
   draftRef.current = draft;
+  activePaneIdRef.current = activePaneId;
 
   useEffect(() => {
     setDraft(layout);
     setNameDraft(layout.name);
     const leaves = workspacePaneLeaves(layout.root);
-    setActivePaneId((current) => (
-      leaves.some((pane) => pane.id === current) ? current : leaves[0]?.id ?? ""
-    ));
+    setActivePaneId((current) => {
+      const next = leaves.some((pane) => pane.id === current)
+        ? current
+        : leaves[0]?.id ?? "";
+      activePaneIdRef.current = next;
+      return next;
+    });
   }, [layout]);
 
   useEffect(() => {
@@ -130,6 +164,160 @@ export function WorkspacePaneBoard({
   );
   const paneCount = workspacePaneLeaves(draft.root).length;
 
+  const clearPaneNavigationTimer = useCallback(() => {
+    if (paneNavigationTimerRef.current === null) return;
+    window.clearTimeout(paneNavigationTimerRef.current);
+    paneNavigationTimerRef.current = null;
+  }, []);
+
+  const keepPaneNavigationArmed = useCallback(() => {
+    clearPaneNavigationTimer();
+    paneNavigationTimerRef.current = window.setTimeout(() => {
+      paneNavigationTimerRef.current = null;
+      paneNavigationArmedRef.current = false;
+      setPaneNavigationArmed(false);
+      setPaneNavigationStatus("");
+    }, PANE_NAVIGATION_REPEAT_MS);
+  }, [clearPaneNavigationTimer]);
+
+  const disarmPaneNavigation = useCallback(() => {
+    clearPaneNavigationTimer();
+    paneNavigationArmedRef.current = false;
+    setPaneNavigationArmed(false);
+    setPaneNavigationStatus("");
+  }, [clearPaneNavigationTimer]);
+
+  const focusPane = useCallback((paneId: string) => {
+    activePaneIdRef.current = paneId;
+    setActivePaneId(paneId);
+    const pane = workspacePaneLeaves(draftRef.current.root).find((item) => item.id === paneId);
+    if (pane?.session) {
+      terminalFocusRequestCounter.current += 1;
+      setTerminalFocusRequest({
+        paneId,
+        token: terminalFocusRequestCounter.current,
+      });
+      return;
+    }
+    setTerminalFocusRequest(null);
+    window.requestAnimationFrame(() => {
+      const paneElement = Array.from(
+        screenRef.current?.querySelectorAll<HTMLElement>("[data-pane-id]") ?? [],
+      ).find((element) => element.dataset.paneId === paneId);
+      paneElement?.querySelector<HTMLSelectElement>("select")?.focus();
+    });
+  }, []);
+
+  const armPaneNavigation = useCallback(() => {
+    if (isCompactWorkspaceViewport() || paneCount < 2) return;
+    paneNavigationArmedRef.current = true;
+    setPaneNavigationArmed(true);
+    setPaneNavigationStatus("Use an arrow key to move between panes.");
+    keepPaneNavigationArmed();
+    focusPane(activePaneIdRef.current);
+  }, [focusPane, keepPaneNavigationArmed, paneCount]);
+
+  const movePaneFocus = useCallback((direction: WorkspacePaneDirection) => {
+    const paneElements = Array.from(
+      screenRef.current?.querySelectorAll<HTMLElement>("[data-pane-id]") ?? [],
+    );
+    const bounds = paneElements.flatMap((element) => {
+      const rect = element.getBoundingClientRect();
+      if (rect.right <= rect.left || rect.bottom <= rect.top) return [];
+      return [{
+        id: element.dataset.paneId ?? "",
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+      }];
+    }).filter((pane) => pane.id);
+    const nextPaneId = adjacentWorkspacePaneId(
+      bounds,
+      activePaneIdRef.current,
+      direction,
+    );
+    if (!nextPaneId) {
+      setPaneNavigationStatus(`No pane ${direction} of the active pane.`);
+      keepPaneNavigationArmed();
+      return;
+    }
+    const pane = workspacePaneLeaves(draftRef.current.root).find(
+      (item) => item.id === nextPaneId,
+    );
+    const session = pane?.session ? sessionsByName.get(pane.session) : undefined;
+    focusPane(nextPaneId);
+    setPaneNavigationStatus(
+      pane?.session
+        ? `Focused ${session ? sessionDisplayTitle(session) : pane.session}.`
+        : "Focused an empty pane.",
+    );
+    keepPaneNavigationArmed();
+  }, [focusPane, keepPaneNavigationArmed, sessionsByName]);
+
+  useEffect(() => clearPaneNavigationTimer, [clearPaneNavigationTimer]);
+
+  useEffect(() => {
+    const handleShortcutAction = (event: Event) => {
+      if ((event as CustomEvent<ShortcutActionId>).detail === PANE_NAVIGATION_ACTION) {
+        armPaneNavigation();
+      }
+    };
+    const handlePaneNavigationKey = (event: KeyboardEvent) => {
+      if (matchesDirectShortcut(event, shortcutBindings[PANE_NAVIGATION_ACTION])) {
+        if (
+          isCompactWorkspaceViewport()
+          || document.querySelector('[aria-modal="true"]')
+        ) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) armPaneNavigation();
+        return;
+      }
+      if (!paneNavigationArmedRef.current) return;
+      if (isCompactWorkspaceViewport()) {
+        disarmPaneNavigation();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        disarmPaneNavigation();
+        return;
+      }
+      const direction: WorkspacePaneDirection | null = event.key === "ArrowLeft"
+        ? "left"
+        : event.key === "ArrowRight"
+          ? "right"
+          : event.key === "ArrowUp"
+            ? "up"
+            : event.key === "ArrowDown"
+              ? "down"
+              : null;
+      if (!direction) {
+        if (!["Control", "Shift", "Alt", "Meta"].includes(event.key)) {
+          disarmPaneNavigation();
+        }
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      movePaneFocus(direction);
+    };
+
+    window.addEventListener("keydown", handlePaneNavigationKey, true);
+    window.addEventListener(SHORTCUT_ACTION_EVENT, handleShortcutAction);
+    return () => {
+      window.removeEventListener("keydown", handlePaneNavigationKey, true);
+      window.removeEventListener(SHORTCUT_ACTION_EVENT, handleShortcutAction);
+    };
+  }, [
+    armPaneNavigation,
+    disarmPaneNavigation,
+    movePaneFocus,
+    shortcutBindings,
+  ]);
+
   const commit = async (next: WorkspacePaneLayout) => {
     if (sameLayout(next, layout) && sameLayout(next, draftRef.current)) return;
     setDraft(next);
@@ -146,6 +334,7 @@ export function WorkspacePaneBoard({
   };
 
   const assignSession = (pane: WorkspaceSessionPane, session: string | null) => {
+    activePaneIdRef.current = pane.id;
     setActivePaneId(pane.id);
     void commit(assignWorkspacePaneSession(draftRef.current, pane.id, session));
   };
@@ -157,14 +346,18 @@ export function WorkspacePaneBoard({
     const next = splitWorkspacePane(draftRef.current, pane.id, direction);
     if (next === draftRef.current) return;
     const leaves = workspacePaneLeaves(next.root);
-    setActivePaneId(leaves.at(-1)?.id ?? pane.id);
+    const nextActivePaneId = leaves.at(-1)?.id ?? pane.id;
+    activePaneIdRef.current = nextActivePaneId;
+    setActivePaneId(nextActivePaneId);
     void commit(next);
   };
 
   const removePane = (pane: WorkspaceSessionPane) => {
     const next = removeWorkspacePane(draftRef.current, pane.id);
     const leaves = workspacePaneLeaves(next.root);
-    setActivePaneId(leaves[0]?.id ?? "");
+    const nextActivePaneId = leaves[0]?.id ?? "";
+    activePaneIdRef.current = nextActivePaneId;
+    setActivePaneId(nextActivePaneId);
     void commit(next);
   };
 
@@ -237,9 +430,17 @@ export function WorkspacePaneBoard({
     return (
       <section
         key={pane.id}
-        className={active ? "workspace-pane-leaf active" : "workspace-pane-leaf"}
+        className={[
+          "workspace-pane-leaf",
+          active ? "active" : "",
+          active && paneNavigationArmed ? "navigation-target" : "",
+        ].filter(Boolean).join(" ")}
         data-pane-id={pane.id}
-        onPointerDownCapture={() => setActivePaneId(pane.id)}
+        onPointerDownCapture={() => {
+          activePaneIdRef.current = pane.id;
+          setActivePaneId(pane.id);
+          if (paneNavigationArmed) disarmPaneNavigation();
+        }}
       >
         <header className="workspace-pane-leaf-toolbar">
           <span className="workspace-pane-leaf-mark" aria-hidden="true" />
@@ -302,6 +503,9 @@ export function WorkspacePaneBoard({
                 pane.id,
                 active,
                 () => setActivePaneId(pane.id),
+                terminalFocusRequest?.paneId === pane.id
+                  ? terminalFocusRequest.token
+                  : undefined,
               )
             : (
               <div className="workspace-pane-empty">
@@ -373,8 +577,11 @@ export function WorkspacePaneBoard({
 
   return (
     <main
+      ref={screenRef}
       id="muxdeck-workspace-pane-board"
-      className="workspace-pane-screen"
+      className={paneNavigationArmed
+        ? "workspace-pane-screen pane-navigation-armed"
+        : "workspace-pane-screen"}
       data-desktop-tabs={desktopTabOrientation}
       style={{ "--desktop-tab-rail-width": `${desktopTabRailWidth}px` } as React.CSSProperties}
     >
@@ -438,6 +645,29 @@ export function WorkspacePaneBoard({
           <small>{workspacePaneSessions(draft).length} assigned</small>
         </div>
         {headerWidgets}
+        <div className="workspace-pane-navigation-control">
+          <button
+            type="button"
+            className={paneNavigationArmed ? "active" : ""}
+            disabled={paneCount < 2}
+            aria-pressed={paneNavigationArmed}
+            aria-keyshortcuts={directShortcutAria(
+              shortcutBindings[PANE_NAVIGATION_ACTION],
+            )}
+            title={paneCount < 2
+              ? "Split this view before navigating between panes"
+              : `Arm pane navigation${directShortcutLabel(
+                shortcutBindings[PANE_NAVIGATION_ACTION],
+              ) ? ` (${directShortcutLabel(shortcutBindings[PANE_NAVIGATION_ACTION])})` : ""}`}
+            onClick={paneNavigationArmed ? disarmPaneNavigation : armPaneNavigation}
+          >
+            <WindowMoveIcon />
+            <span>{paneNavigationArmed ? "Navigating" : "Navigate"}</span>
+            {directShortcutLabel(shortcutBindings[PANE_NAVIGATION_ACTION]) && (
+              <kbd>{directShortcutLabel(shortcutBindings[PANE_NAVIGATION_ACTION])}</kbd>
+            )}
+          </button>
+        </div>
         <div className="workspace-pane-danger">
           <button
             type="button"
@@ -468,7 +698,20 @@ export function WorkspacePaneBoard({
           <button type="button" onClick={() => setError("")}>Dismiss</button>
         </aside>
       )}
-      <div className="workspace-pane-canvas">{renderNode(draft.root)}</div>
+      <div className="workspace-pane-canvas">
+        {paneNavigationArmed && (
+          <div className="workspace-pane-navigation-hud" role="status" aria-live="polite">
+            <WindowMoveIcon />
+            <span>
+              <strong>Pane navigation</strong>
+              <small>{paneNavigationStatus}</small>
+            </span>
+            <kbd>Arrow keys</kbd>
+            <kbd>Esc</kbd>
+          </div>
+        )}
+        {renderNode(draft.root)}
+      </div>
       <div className="workspace-pane-mobile-unavailable-actions" aria-hidden="true">
         <PlusIcon /><ArrowDownIcon />
       </div>

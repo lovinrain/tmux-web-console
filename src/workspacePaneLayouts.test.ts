@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspacePaneLayout } from "./api";
 import {
+  adjacentWorkspacePaneId,
   assignWorkspacePaneSession,
   canSplitWorkspacePane,
   createWorkspacePaneLayout,
@@ -34,6 +35,20 @@ function pair(): WorkspacePaneLayout {
 }
 
 describe("workspace pane layouts", () => {
+  it("finds the nearest geometrically adjacent pane without wrapping", () => {
+    const panes = [
+      { id: "left", left: 0, right: 40, top: 0, bottom: 100 },
+      { id: "top-right", left: 48, right: 100, top: 0, bottom: 46 },
+      { id: "bottom-right", left: 48, right: 100, top: 54, bottom: 100 },
+    ];
+
+    expect(adjacentWorkspacePaneId(panes, "left", "right")).toBe("top-right");
+    expect(adjacentWorkspacePaneId(panes, "top-right", "down")).toBe("bottom-right");
+    expect(adjacentWorkspacePaneId(panes, "bottom-right", "left")).toBe("left");
+    expect(adjacentWorkspacePaneId(panes, "left", "down")).toBeNull();
+    expect(adjacentWorkspacePaneId(panes, "top-right", "right")).toBeNull();
+  });
+
   it("creates uniquely named layouts and recursively splits panes", () => {
     const ids = idFactory();
     const first = createWorkspacePaneLayout([], "alpha", ids);
