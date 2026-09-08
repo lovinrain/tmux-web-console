@@ -182,8 +182,10 @@ For frontend development, run `npm run dev`. Vite serves
   10 MiB-bounded, opaque-origin sandboxed tab with scripts, forms, and network
   connections disabled. Signature-verified PDFs up to 50 MiB open in the
   browser's built-in PDF viewer with new-tab and download fallbacks. Other
-  binary files show metadata. Selected regular files can be downloaded without
-  a preview-size limit. Check several files and folders, then use `Download ZIP`
+  binary files show metadata. Markdown files can switch between raw source and
+  a rendered view whose remembered text size steps from 100% to 175%. Regular
+  files can be downloaded directly from their row or selected-file toolbar
+  without a preview-size limit. Check several files and folders, then use `Download ZIP`
   to fetch the whole selection recursively in one browser download; symlinks and
   special files are skipped, and bounded size/entry limits protect the host.
   `Upload` and

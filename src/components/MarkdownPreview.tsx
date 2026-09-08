@@ -1,16 +1,24 @@
+import type { CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 interface MarkdownPreviewProps {
   content: string;
+  fontScale?: number;
 }
 
-export default function MarkdownPreview({ content }: MarkdownPreviewProps) {
+export default function MarkdownPreview({
+  content,
+  fontScale = 1,
+}: MarkdownPreviewProps) {
   return (
     <div
       className="session-file-markdown-preview"
       role="document"
       aria-label="Rendered Markdown preview"
+      style={{
+        "--session-file-markdown-font-size": `${11 * fontScale}px`,
+      } as CSSProperties}
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}

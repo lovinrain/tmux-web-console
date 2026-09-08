@@ -401,9 +401,13 @@ PDF up to 50 MiB uses the browser's built-in PDF viewer inside the preview pane;
 `Open PDF` gives it a full browser tab, while Download remains available for
 browsers that disable inline PDF viewing and for larger documents. The server
 does no PDF rendering or parsing beyond the signature and size gate, so this
-adds no PDF library, conversion process, or idle cost. Downloads stream
-the selected regular file with an attachment filename and have no preview-size
-limit.
+adds no PDF library, conversion process, or idle cost. Markdown files offer a
+client-side rendered view with 100%, 125%, 150%, and 175% text sizes; 100% keeps
+the original presentation, and the selected size is remembered with the
+browser-local file-panel layout. Downloads stream a regular file with an
+attachment filename and have no preview-size limit. Each accessible file row
+has its own download shortcut, so selecting or previewing the file first is not
+required.
 
 Checked entries expose `Download ZIP` in the bulk bar. The server puts each
 selected file or folder at the archive root, recursively includes ordinary

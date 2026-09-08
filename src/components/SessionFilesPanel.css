@@ -1386,7 +1386,8 @@ html.session-files-panel-splitting .session-files-splitter > span {
   opacity: 1;
 }
 
-.session-file-row-actions > button {
+.session-file-row-actions > button,
+.session-file-row-actions > a {
   display: inline-flex;
   width: 23px;
   height: 23px;
@@ -1398,9 +1399,11 @@ html.session-files-panel-splitting .session-files-splitter > span {
   border: 1px solid #30413b;
   border-radius: 3px;
   cursor: pointer;
+  text-decoration: none;
 }
 
-.session-file-row-actions > button:hover:not(:disabled) {
+.session-file-row-actions > button:hover:not(:disabled),
+.session-file-row-actions > a:hover:not([aria-disabled="true"]) {
   color: #effff9;
   background: #223229;
   border-color: #5a7c72;
@@ -1412,14 +1415,21 @@ html.session-files-panel-splitting .session-files-splitter > span {
   border-color: rgba(255, 107, 99, 0.6);
 }
 
-.session-file-row-actions > button:disabled {
+.session-file-row-actions > button:disabled,
+.session-file-row-actions > a[aria-disabled="true"] {
   cursor: default;
   opacity: 0.4;
 }
 
-.session-file-row-actions > button svg {
+.session-file-row-actions > button svg,
+.session-file-row-actions > a svg {
   width: 12px;
   height: 12px;
+}
+
+.session-file-row-actions > a.session-file-row-download {
+  color: #d6ba80;
+  border-color: rgba(255, 182, 72, 0.34);
 }
 
 .session-file-row-actions > button.session-file-copy-path {
@@ -1709,7 +1719,7 @@ html.session-files-panel-splitting .session-files-splitter > span {
     linear-gradient(135deg, rgba(104, 223, 208, 0.025), transparent 36%),
     #0b110e;
   font-family: "Space Grotesk Variable", sans-serif;
-  font-size: 11px;
+  font-size: var(--session-file-markdown-font-size, 11px);
   line-height: 1.65;
   overflow-wrap: anywhere;
   scrollbar-color: #40544c #0d1411;
@@ -1739,23 +1749,23 @@ html.session-files-panel-splitting .session-files-splitter > span {
 .session-file-markdown-preview h1 {
   padding-bottom: 7px;
   border-bottom: 1px solid #31423a;
-  font-size: 20px;
+  font-size: 1.818em;
 }
 
 .session-file-markdown-preview h2 {
   padding-bottom: 5px;
   border-bottom: 1px solid #28372f;
-  font-size: 16px;
+  font-size: 1.455em;
 }
 
 .session-file-markdown-preview h3 {
-  font-size: 13px;
+  font-size: 1.182em;
 }
 
 .session-file-markdown-preview h4,
 .session-file-markdown-preview h5,
 .session-file-markdown-preview h6 {
-  font-size: 11px;
+  font-size: 1em;
 }
 
 .session-file-markdown-preview p,
@@ -1826,7 +1836,7 @@ html.session-files-panel-splitting .session-files-splitter > span {
   max-width: 100%;
   border-spacing: 0;
   border-collapse: collapse;
-  font-size: 10px;
+  font-size: 0.909em;
 }
 
 .session-file-markdown-preview th,
@@ -1865,7 +1875,7 @@ html.session-files-panel-splitting .session-files-splitter > span {
   border: 1px dashed rgba(185, 165, 118, 0.45);
   border-radius: 3px;
   font-family: "JetBrains Mono Variable", monospace;
-  font-size: 9px;
+  font-size: 0.818em;
 }
 
 .session-file-markdown-loading {
@@ -2752,6 +2762,63 @@ html.session-files-panel-splitting * {
   margin-left: 0;
 }
 
+.session-file-markdown-size {
+  display: inline-flex;
+  height: 22px;
+  flex: 0 0 auto;
+  margin-left: 0;
+}
+
+.session-file-markdown-size > button {
+  display: inline-flex;
+  min-width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  color: #aebdb6;
+  background: #18211d;
+  border: 1px solid #33443e;
+  border-radius: 0;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 7px;
+  font-weight: 780;
+}
+
+.session-file-markdown-size > button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.session-file-markdown-size > button:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.session-file-markdown-size > button + button {
+  margin-left: -1px;
+}
+
+.session-file-markdown-size > button.session-file-markdown-size-value {
+  min-width: 34px;
+  color: var(--files-accent);
+}
+
+.session-file-markdown-size > button:hover:not(:disabled) {
+  z-index: 1;
+  color: #effff9;
+  background: #21312b;
+  border-color: #5a7c72;
+}
+
+.session-file-markdown-size > button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.session-file-markdown-size + .session-file-edit {
+  margin-left: 0;
+}
+
 .session-file-editor {
   display: flex;
   min-height: 0;
@@ -3449,7 +3516,8 @@ html[data-theme="light"] .session-file-image-message strong {
     opacity: 0.72;
   }
 
-  .session-file-row-actions > button {
+  .session-file-row-actions > button,
+  .session-file-row-actions > a {
     width: 20px;
     height: 21px;
   }
@@ -3571,8 +3639,10 @@ html[data-theme="light"] .session-files-prompt > button,
 html[data-theme="light"] .session-files-confirm > button,
 html[data-theme="light"] .session-files-bulk > button,
 html[data-theme="light"] .session-file-row-actions > button,
+html[data-theme="light"] .session-file-row-actions > a,
 html[data-theme="light"] .session-file-preview-meta > .session-file-edit,
 html[data-theme="light"] .session-file-preview-meta > .session-file-preview-mode,
+html[data-theme="light"] .session-file-markdown-size > button,
 html[data-theme="light"] .session-file-editor-actions > button {
   color: #33473f;
   background: #fff;
@@ -3583,9 +3653,11 @@ html[data-theme="light"] .session-files-prompt > button:hover:not(:disabled),
 html[data-theme="light"] .session-files-confirm > button:hover:not(:disabled),
 html[data-theme="light"] .session-files-bulk > button:hover:not(:disabled),
 html[data-theme="light"] .session-file-row-actions > button:hover:not(:disabled),
+html[data-theme="light"] .session-file-row-actions > a:hover:not([aria-disabled="true"]),
 html[data-theme="light"] .session-file-preview-meta > .session-file-edit:hover:not(:disabled),
 html[data-theme="light"] .session-file-preview-meta > .session-file-preview-mode:hover:not(:disabled),
 html[data-theme="light"] .session-file-preview-meta > .session-file-preview-mode[aria-pressed="true"],
+html[data-theme="light"] .session-file-markdown-size > button:hover:not(:disabled),
 html[data-theme="light"] .session-file-editor-actions > button:hover:not(:disabled) {
   color: #0c1a14;
   background: #e4ece7;
@@ -3604,6 +3676,11 @@ html[data-theme="light"] .session-files-bulk > button.download:hover:not(:disabl
   color: #03100c;
   background: #75ddcd;
   border-color: #2fae9c;
+}
+
+html[data-theme="light"] .session-file-row-actions > a.session-file-row-download {
+  color: #8a5b12;
+  border-color: rgba(138, 91, 18, 0.38);
 }
 
 html[data-theme="light"] .session-files-confirm {

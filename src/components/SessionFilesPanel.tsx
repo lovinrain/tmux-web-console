@@ -86,6 +86,8 @@ const SESSION_FILE_RECENT_BUCKET_LIMIT = 48;
 const SESSION_FILE_RECENT_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1_000;
 const MARKDOWN_FILE_PATTERN = /\.(?:md|markdown)$/i;
 const HTML_FILE_PATTERN = /\.html?$/i;
+const MARKDOWN_FONT_SCALES = [1, 1.25, 1.5, 1.75] as const;
+const DEFAULT_MARKDOWN_FONT_SCALE = MARKDOWN_FONT_SCALES[0];
 
 export const SESSION_FILES_LAYOUT_STORAGE_KEY = "muxdeck.session-files-layout.v1";
 export const SESSION_FILES_RECENTS_STORAGE_KEY = "muxdeck.session-files-recents.v1";
@@ -103,6 +105,7 @@ interface PanelSize {
 interface PanelLayout {
   size: PanelSize;
   split: number;
+  markdownFontScale: number;
 }
 
 interface PanelDrag {
@@ -234,6 +237,12 @@ function clampSplit(split: number): number {
   return Math.min(PANEL_MAX_SPLIT, Math.max(PANEL_MIN_SPLIT, split));
 }
 
+function normalizeMarkdownFontScale(scale: number): number {
+  return MARKDOWN_FONT_SCALES.reduce((nearest, candidate) => (
+    Math.abs(candidate - scale) < Math.abs(nearest - scale) ? candidate : nearest
+  ));
+}
+
 function defaultPanelLayout(): PanelLayout {
   return {
     size: clampPanelSize({
@@ -241,6 +250,7 @@ function defaultPanelLayout(): PanelLayout {
       height: PANEL_DEFAULT_HEIGHT,
     }),
     split: PANEL_DEFAULT_SPLIT,
+    markdownFontScale: DEFAULT_MARKDOWN_FONT_SCALE,
   };
 }
 
@@ -253,6 +263,7 @@ function readPanelLayout(): PanelLayout {
     const width = saved.size?.width;
     const height = saved.size?.height;
     const split = saved.split;
+    const markdownFontScale = saved.markdownFontScale;
     return {
       size: typeof width === "number" && Number.isFinite(width)
         && typeof height === "number" && Number.isFinite(height)
@@ -261,6 +272,10 @@ function readPanelLayout(): PanelLayout {
       split: typeof split === "number" && Number.isFinite(split)
         ? clampSplit(split)
         : fallback.split,
+      markdownFontScale: typeof markdownFontScale === "number"
+        && Number.isFinite(markdownFontScale)
+        ? normalizeMarkdownFontScale(markdownFontScale)
+        : fallback.markdownFontScale,
     };
   } catch {
     return fallback;
@@ -1104,6 +1119,23 @@ export function SessionFilesPanel({
   const canRenderMarkdown = preview?.kind === "text"
     && !preview.truncated
     && MARKDOWN_FILE_PATTERN.test(preview.name);
+  const markdownFontScaleIndex = MARKDOWN_FONT_SCALES.findIndex(
+    (scale) => scale === panelLayout.markdownFontScale,
+  );
+  const markdownFontPercent = Math.round(panelLayout.markdownFontScale * 100);
+
+  const adjustMarkdownFontScale = useCallback((step: number) => {
+    setPanelLayout((current) => {
+      const currentIndex = Math.max(0, MARKDOWN_FONT_SCALES.findIndex(
+        (scale) => scale === current.markdownFontScale,
+      ));
+      const nextIndex = Math.min(
+        MARKDOWN_FONT_SCALES.length - 1,
+        Math.max(0, currentIndex + step),
+      );
+      return { ...current, markdownFontScale: MARKDOWN_FONT_SCALES[nextIndex] };
+    });
+  }, []);
 
   const guardEditor = useCallback((): boolean => {
     if (!editorDirty) return true;
@@ -3275,15 +3307,37 @@ export function SessionFilesPanel({
                     <EditIcon />
                   </button>
                   {entry.kind === "file" && (
-                    <button
-                      type="button"
-                      aria-label={`Duplicate ${entry.name}`}
-                      title="Duplicate"
-                      disabled={busy || !entry.accessible}
-                      onClick={() => openPrompt("duplicate", [entry])}
-                    >
-                      <WindowCopyIcon />
-                    </button>
+                    <>
+                      {entry.accessible && (
+                        <a
+                          className="session-file-row-download"
+                          href={sessionFileDownloadUrl(fileTarget, entry.path)}
+                          download={entry.name}
+                          aria-label={`Download ${entry.name}`}
+                          aria-disabled={busy}
+                          tabIndex={busy ? -1 : undefined}
+                          title={`Download ${entry.name}`}
+                          onClick={(event) => {
+                            if (busy) {
+                              event.preventDefault();
+                              return;
+                            }
+                            setActionStatus(`Download started for ${entry.name}`);
+                          }}
+                        >
+                          <ArrowDownIcon />
+                        </a>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Duplicate ${entry.name}`}
+                        title="Duplicate"
+                        disabled={busy || !entry.accessible}
+                        onClick={() => openPrompt("duplicate", [entry])}
+                      >
+                        <WindowCopyIcon />
+                      </button>
+                    </>
                   )}
                   <button
                     type="button"
@@ -3474,6 +3528,45 @@ export function SessionFilesPanel({
                     {markdownRendered ? "Raw" : "Preview Markdown"}
                   </button>
                 )}
+                {canRenderMarkdown && markdownRendered && !editing && (
+                  <div
+                    className="session-file-markdown-size"
+                    role="group"
+                    aria-label="Rendered Markdown text size"
+                  >
+                    <button
+                      type="button"
+                      aria-label="Decrease rendered Markdown text size"
+                      title="Decrease toward the default text size"
+                      disabled={markdownFontScaleIndex <= 0}
+                      onClick={() => adjustMarkdownFontScale(-1)}
+                    >
+                      <span aria-hidden="true">A-</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="session-file-markdown-size-value"
+                      aria-label="Reset rendered Markdown text size to default"
+                      title="Reset rendered Markdown text size to 100%"
+                      disabled={markdownFontScaleIndex <= 0}
+                      onClick={() => setPanelLayout((current) => ({
+                        ...current,
+                        markdownFontScale: DEFAULT_MARKDOWN_FONT_SCALE,
+                      }))}
+                    >
+                      {markdownFontPercent}%
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Increase rendered Markdown text size"
+                      title="Increase rendered Markdown text size"
+                      disabled={markdownFontScaleIndex >= MARKDOWN_FONT_SCALES.length - 1}
+                      onClick={() => adjustMarkdownFontScale(1)}
+                    >
+                      <span aria-hidden="true">A+</span>
+                    </button>
+                  </div>
+                )}
                 {canEditPreview && !editing && (
                   <button
                     type="button"
@@ -3544,7 +3637,10 @@ export function SessionFilesPanel({
                       </div>
                     )}
                   >
-                    <MarkdownPreview content={preview.content ?? ""} />
+                    <MarkdownPreview
+                      content={preview.content ?? ""}
+                      fontScale={panelLayout.markdownFontScale}
+                    />
                   </Suspense>
                 ) : (
                   <pre tabIndex={0}>{preview.content || ""}</pre>

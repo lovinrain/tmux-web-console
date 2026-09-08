@@ -851,6 +851,10 @@ merely to test that the application itself has no login.
     another tmux session. Check the uploaded file plus a disposable nested folder,
     use `Download ZIP`, and confirm one archive contains both selected roots and
     the nested contents; the checked rows should remain selected afterward.
+    Confirm an accessible regular-file row downloads directly without first
+    selecting it. Render a disposable Markdown file, enlarge it from the 100%
+    default, close and reopen the panel, and confirm that browser remembers the
+    chosen text size; the percentage control must also reset it to 100%.
     Print disposable relative
     `.md`, `.pdf`, `.txt`, `.png`, and `.json` paths in the live
     terminal; confirm a plain click remains terminal input while `Ctrl`+click

@@ -313,6 +313,8 @@ describe("SessionFilesPanel", () => {
     const rendered = await within(panel).findByRole("document", {
       name: "Rendered Markdown preview",
     });
+    expect(rendered.style.getPropertyValue("--session-file-markdown-font-size"))
+      .toBe("11px");
     expect(within(rendered).getByRole("heading", {
       level: 1,
       name: "Release notes",
@@ -329,6 +331,36 @@ describe("SessionFilesPanel", () => {
     expect(rendered.querySelector("script")).toBeNull();
     expect(rendered).not.toHaveTextContent("window.__markdownUnsafe");
 
+    const fontSizeControls = within(panel).getByRole("group", {
+      name: "Rendered Markdown text size",
+    });
+    const decreaseFont = within(fontSizeControls).getByRole("button", {
+      name: "Decrease rendered Markdown text size",
+    });
+    const increaseFont = within(fontSizeControls).getByRole("button", {
+      name: "Increase rendered Markdown text size",
+    });
+    const resetFont = within(fontSizeControls).getByRole("button", {
+      name: "Reset rendered Markdown text size to default",
+    });
+    expect(decreaseFont).toBeDisabled();
+    expect(resetFont).toBeDisabled();
+    expect(resetFont).toHaveTextContent("100%");
+
+    fireEvent.click(increaseFont);
+    expect(resetFont).toHaveTextContent("125%");
+    expect(decreaseFont).toBeEnabled();
+    expect(rendered.style.getPropertyValue("--session-file-markdown-font-size"))
+      .toBe("13.75px");
+    await waitFor(() => expect(JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_LAYOUT_STORAGE_KEY) || "null",
+    ).markdownFontScale).toBe(1.25));
+
+    fireEvent.click(resetFont);
+    expect(resetFont).toHaveTextContent("100%");
+    expect(rendered.style.getPropertyValue("--session-file-markdown-font-size"))
+      .toBe("11px");
+
     const rawButton = within(panel).getByRole("button", {
       name: "Show raw Markdown for README.md",
     });
@@ -340,6 +372,28 @@ describe("SessionFilesPanel", () => {
     expect(within(panel).queryByRole("document", {
       name: "Rendered Markdown preview",
     })).not.toBeInTheDocument();
+  });
+
+  it("offers a direct download action on each accessible file row", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("artifacts", "artifacts", "directory"),
+      entry("report.txt", "report.txt", "file"),
+    ]));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    const download = await within(panel).findByRole("link", {
+      name: "Download report.txt",
+    });
+    expect(download).toHaveAttribute("href", "/files/download");
+    expect(download).toHaveAttribute("download", "report.txt");
+    expect(within(panel).queryByRole("link", { name: "Download artifacts" }))
+      .not.toBeInTheDocument();
+    expect(previewSessionFile).not.toHaveBeenCalled();
+    expect(sessionFileDownloadUrl).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "report.txt",
+    );
   });
 
   it("resets rendered Markdown when selecting another file", async () => {
@@ -391,6 +445,35 @@ describe("SessionFilesPanel", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "File huge.markdown" }));
     expect(await within(panel).findByText("# Partial Markdown")).toBeInTheDocument();
     expect(within(panel).queryByText("Preview Markdown")).not.toBeInTheDocument();
+  });
+
+  it("restores the remembered rendered Markdown text size", async () => {
+    window.localStorage.setItem(SESSION_FILES_LAYOUT_STORAGE_KEY, JSON.stringify({
+      size: { width: 760, height: 560 },
+      split: 0.4,
+      markdownFontScale: 1.5,
+    }));
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("README.md", "README.md", "file"),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue(
+      textPreview("README.md", "README.md", "# Large preview"),
+    );
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "File README.md" }));
+    fireEvent.click(await within(panel).findByRole("button", {
+      name: "Preview README.md as rendered Markdown",
+    }));
+
+    const rendered = await within(panel).findByRole("document", {
+      name: "Rendered Markdown preview",
+    });
+    expect(rendered.style.getPropertyValue("--session-file-markdown-font-size"))
+      .toBe("16.5px");
+    expect(within(panel).getByRole("button", {
+      name: "Reset rendered Markdown text size to default",
+    })).toHaveTextContent("150%");
   });
 
   it("opens a requested terminal path directly in the preview", async () => {
