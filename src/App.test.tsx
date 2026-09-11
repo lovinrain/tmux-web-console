@@ -2093,6 +2093,54 @@ describe("App routing", () => {
     expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
   });
 
+  it("toggles the active session in the callback list with Ctrl+Shift+K", async () => {
+    const loaded = savedWorkspace({ callbackSessions: [] });
+    getWorkspaceMock.mockResolvedValue(loaded);
+    listSessionsMock.mockResolvedValue([session("alpha", "$alpha")]);
+    updateWorkspaceMock.mockImplementation(async (_workspaceId, update) => (
+      savedWorkspace({
+        ...loaded,
+        callbackSessions: update.callbackSessions ?? [],
+        sessionRevision: 1,
+        updatedAt: 2_000,
+      })
+    ));
+    replaceUrl(sessionUrl("alpha", "?workspace=workspace-one&tab=alpha"));
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("main", { name: "Console" }))
+      .toHaveAttribute("data-session", "alpha"));
+    const addShortcut = new KeyboardEvent("keydown", {
+      key: "K",
+      code: "KeyK",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => window.dispatchEvent(addShortcut));
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledWith(
+      "workspace-one",
+      expect.objectContaining({ callbackSessions: ["alpha"], sessionRevision: 0 }),
+    ));
+    expect(addShortcut.defaultPrevented).toBe(true);
+
+    const removeShortcut = new KeyboardEvent("keydown", {
+      key: "K",
+      code: "KeyK",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => window.dispatchEvent(removeShortcut));
+    await waitFor(() => expect(updateWorkspaceMock).toHaveBeenLastCalledWith(
+      "workspace-one",
+      expect.objectContaining({ callbackSessions: [], sessionRevision: 1 }),
+    ));
+    expect(removeShortcut.defaultPrevented).toBe(true);
+  });
+
   it("quick-creates an assigned session from pinned workspace memory and focuses it", async () => {
     window.localStorage.setItem(
       NEW_SESSION_WORKSPACE_MEMORY_STORAGE_KEY,
@@ -2124,18 +2172,8 @@ describe("App routing", () => {
     render(<App />);
 
     const quick = screen.getByRole("button", { name: "Quick new temporary session" });
-    expect(quick).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
-    const shortcut = new KeyboardEvent("keydown", {
-      key: "K",
-      code: "KeyK",
-      ctrlKey: true,
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    act(() => window.dispatchEvent(shortcut));
-
-    expect(shortcut.defaultPrevented).toBe(true);
+    expect(quick).not.toHaveAttribute("aria-keyshortcuts");
+    fireEvent.click(quick);
     await waitFor(() => expect(createSessionMock).toHaveBeenCalledWith(
       undefined,
       "dark",

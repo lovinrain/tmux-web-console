@@ -43,6 +43,7 @@ import {
   directShortcutAria,
   directShortcutLabel,
   dispatchShortcutAction,
+  launcherShortcutLabel,
   useShortcutSettings,
   type ShortcutActionId,
 } from "../shortcutSettings";
@@ -109,6 +110,7 @@ export interface SessionWorkspaceNavigationProps {
   dashboardWindowHref?: string;
   onNewSession?: () => void;
   onQuickNewSession?: () => void | Promise<void>;
+  onToggleCallbackSession?: () => void | Promise<void>;
   quickNewSessionBusy?: boolean;
   quickNewSessionError?: string | null;
   onDismissQuickNewSessionError?: () => void;
@@ -393,6 +395,7 @@ interface WorkspaceCommandContext {
   quickNewSessionDisabled: boolean;
   onNewSession?: () => void;
   onQuickNewSession?: () => void | Promise<void>;
+  onToggleCallbackSession?: () => void | Promise<void>;
   onOpenTabSearch?: () => void;
   onOpenRecents: () => void;
   onOpenDashboard: () => void;
@@ -428,6 +431,7 @@ function buildWorkspaceCommands({
   quickNewSessionDisabled,
   onNewSession,
   onQuickNewSession,
+  onToggleCallbackSession,
   onOpenTabSearch,
   onOpenRecents,
   onOpenDashboard,
@@ -472,6 +476,18 @@ function buildWorkspaceCommands({
       disabled: !onQuickNewSession || quickNewSessionDisabled,
       disabledReason: "Wait for the current quick session or workspace load to finish.",
       run: () => void onQuickNewSession?.(),
+    },
+    {
+      id: "workspace-callback",
+      label: "Add or remove current session from callback list",
+      description: "Keep this session in the workspace callback queue for later review.",
+      category: "Workspace",
+      shortcutId: "workspace-callback",
+      shortcut: "Ctrl+Shift+K",
+      keywords: ["callback", "watch", "follow up", "later", "queue"],
+      disabled: !onToggleCallbackSession || !activeSessionLoaded,
+      disabledReason: "Open a live session first.",
+      run: () => void onToggleCallbackSession?.(),
     },
     shortcutCommand({
       id: "session-copy-new",
@@ -1898,6 +1914,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     dashboardWindowHref,
     onNewSession,
     onQuickNewSession,
+    onToggleCallbackSession,
     quickNewSessionBusy = false,
     quickNewSessionError = null,
     onDismissQuickNewSessionError,
@@ -1920,6 +1937,13 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   );
   const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
   const { bindings: shortcutBindings } = useShortcutSettings();
+  const quickSessionShortcutHint = (() => {
+    const launcher = launcherShortcutLabel(
+      shortcutBindings["workspace-quick-new-session"],
+    );
+    const launcherChord = directShortcutLabel(shortcutBindings["shortcut-launcher"]);
+    return launcher && launcherChord ? `${launcherChord}, then ${launcher}` : null;
+  })();
   const desktopTabRailMaxWidth = useDesktopTabRailMaxWidth();
   const [internalDesktopTabRailWidth, setInternalDesktopTabRailWidth] = useState(() => (
     clampDesktopTabRailWidth(desktopTabRailWidth ?? DEFAULT_DESKTOP_TAB_RAIL_WIDTH)
@@ -3186,6 +3210,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     quickNewSessionDisabled,
     onNewSession,
     onQuickNewSession,
+    onToggleCallbackSession,
     onOpenTabSearch,
     onOpenRecents,
     onOpenDashboard,
@@ -3300,11 +3325,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     ? "Creating a quick temporary session"
                     : workspacePersistenceState === "loading"
                       ? "Wait for workspace to finish opening"
-                      : `Quick temporary session from workspace memory${directShortcutLabel(
-                        shortcutBindings["workspace-quick-new-session"],
-                      ) ? ` (${directShortcutLabel(
-                          shortcutBindings["workspace-quick-new-session"],
-                        )})` : ""}`}
+                      : `Quick temporary session from workspace memory${quickSessionShortcutHint
+                        ? ` (${quickSessionShortcutHint})`
+                        : ""}`}
                 >
                   <TerminalIcon />
                 </button>

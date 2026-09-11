@@ -2,11 +2,18 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCommonNote,
+  getCommonNotebook,
   getSessionNote,
+  getSessionNotebook,
   getWorkspaceNote,
+  getWorkspaceNotebook,
   replaceCommonNote,
+  replaceCommonNotebook,
   replaceSessionNote,
+  replaceSessionNotebook,
   replaceWorkspaceNote,
+  replaceWorkspaceNotebook,
+  type ScopedNoteNotebook,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import {
@@ -20,12 +27,33 @@ import {
 
 vi.mock("../api", () => ({
   getCommonNote: vi.fn(),
+  getCommonNotebook: vi.fn(),
   getSessionNote: vi.fn(),
+  getSessionNotebook: vi.fn(),
   getWorkspaceNote: vi.fn(),
+  getWorkspaceNotebook: vi.fn(),
   replaceCommonNote: vi.fn(),
+  replaceCommonNotebook: vi.fn(),
   replaceSessionNote: vi.fn(),
+  replaceSessionNotebook: vi.fn(),
   replaceWorkspaceNote: vi.fn(),
+  replaceWorkspaceNotebook: vi.fn(),
 }));
+
+function notebook(content: string): ScopedNoteNotebook {
+  return { pages: [{ id: "main", name: "Page 1", content }] };
+}
+
+function withFirstPageContent(
+  value: ScopedNoteNotebook,
+  content: string,
+): ScopedNoteNotebook {
+  return {
+    pages: value.pages.map((page, index) => (
+      index === 0 ? { ...page, content } : page
+    )),
+  };
+}
 
 function deferred<T>() {
   let resolve = (_value: T) => {};
@@ -86,6 +114,33 @@ beforeEach(() => {
   vi.mocked(replaceCommonNote).mockImplementation(async (note) => note);
   vi.mocked(replaceWorkspaceNote).mockImplementation(async (_workspaceId, note) => note);
   vi.mocked(replaceSessionNote).mockImplementation(async (_sessionName, note) => note);
+  vi.mocked(getCommonNotebook).mockImplementation(async (signal) => (
+    notebook(await vi.mocked(getCommonNote)(signal))
+  ));
+  vi.mocked(getWorkspaceNotebook).mockImplementation(async (workspaceId, signal) => (
+    notebook(await vi.mocked(getWorkspaceNote)(workspaceId, signal))
+  ));
+  vi.mocked(getSessionNotebook).mockImplementation(async (sessionName, signal) => (
+    notebook(await vi.mocked(getSessionNote)(sessionName, signal))
+  ));
+  vi.mocked(replaceCommonNotebook).mockImplementation(async (value) => (
+    withFirstPageContent(
+      value,
+      await vi.mocked(replaceCommonNote)(value.pages[0].content),
+    )
+  ));
+  vi.mocked(replaceWorkspaceNotebook).mockImplementation(async (workspaceId, value) => (
+    withFirstPageContent(
+      value,
+      await vi.mocked(replaceWorkspaceNote)(workspaceId, value.pages[0].content),
+    )
+  ));
+  vi.mocked(replaceSessionNotebook).mockImplementation(async (sessionName, value) => (
+    withFirstPageContent(
+      value,
+      await vi.mocked(replaceSessionNote)(sessionName, value.pages[0].content),
+    )
+  ));
 });
 
 describe("ScopedStickyNotes", () => {
@@ -112,6 +167,49 @@ describe("ScopedStickyNotes", () => {
     expect(cards[0]).toHaveTextContent("Shared checklist");
     expect(cards[1]).toHaveTextContent("Workspace plan");
     expect(cards[2]).toHaveTextContent("Session handoff");
+  });
+
+  it("adds, names, navigates, and lists notebook pages without a text limit", async () => {
+    await renderLoadedNotes();
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    const textarea = within(editor).getByRole("textbox", { name: "Note" });
+    expect(textarea).not.toHaveAttribute("maxlength");
+    expect(within(editor).getByLabelText("Page 1 of 1")).toHaveTextContent("1 / 1");
+
+    fireEvent.click(within(editor).getByRole("button", { name: "Add note page" }));
+    expect(within(editor).getByLabelText("Page 2 of 2")).toHaveTextContent("2 / 2");
+    const pageName = within(editor).getByRole("textbox", { name: "Page name" });
+    fireEvent.change(pageName, { target: { value: "Runbook" } });
+    fireEvent.blur(pageName);
+    fireEvent.change(textarea, { target: { value: "A".repeat(12_000) } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Show page sidebar" }));
+
+    const pageList = within(editor).getByRole("complementary", {
+      name: "Notebook pages",
+    });
+    expect(within(pageList).getByRole("button", { name: /Runbook/ }))
+      .toHaveAttribute("aria-current", "page");
+    act(() => vi.advanceTimersByTime(650));
+    await flushPromises();
+    expect(replaceCommonNotebook).toHaveBeenLastCalledWith({
+      pages: [
+        { id: "main", name: "Page 1", content: "Shared checklist" },
+        expect.objectContaining({ name: "Runbook", content: "A".repeat(12_000) }),
+      ],
+    });
+
+    fireEvent.click(within(editor).getByRole("button", { name: "Previous note page" }));
+    expect(textarea).toHaveValue("Shared checklist");
+    expect(within(editor).getByLabelText("Page 1 of 2")).toHaveTextContent("1 / 2");
+    expect(JSON.parse(window.localStorage.getItem(
+      workspaceWindowStorageKey("workspace-one", "common:common"),
+    ) || "null")).toMatchObject({
+      selectedPageId: "main",
+      sidebarOpen: true,
+    });
   });
 
   it("keeps common and session notes available in a temporary workspace", async () => {

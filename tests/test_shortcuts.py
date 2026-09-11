@@ -7,6 +7,7 @@ import stat
 import pytest
 
 from tmux_console.shortcuts import (
+    CALLBACK_ACTION,
     DEFAULT_SHORTCUT_BINDINGS,
     FLOATING_INPUT_ACTION,
     FLOATING_TERMINAL_ACTION,
@@ -54,6 +55,7 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     legacy.pop(FLOATING_INPUT_ACTION)
     legacy.pop(FLOATING_TERMINAL_ACTION)
     legacy.pop(PANE_NAVIGATION_ACTION)
+    legacy.pop(CALLBACK_ACTION)
     legacy["command-palette"]["direct"] = "KeyG"
     path.write_text(
         json.dumps({"version": 1, "revision": 7, "bindings": legacy}),
@@ -66,8 +68,12 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     assert snapshot["revision"] == 7
     assert snapshot["bindings"]["command-palette"]["direct"] == "KeyG"
     assert snapshot["bindings"][QUICK_SESSION_ACTION] == {
-        "direct": "KeyK",
+        "direct": None,
         "launcher": "KeyK",
+    }
+    assert snapshot["bindings"][CALLBACK_ACTION] == {
+        "direct": "KeyK",
+        "launcher": None,
     }
     assert snapshot["bindings"][FLOATING_INPUT_ACTION] == {
         "direct": "KeyY",
@@ -86,6 +92,28 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     )
 
 
+def test_shortcut_store_reserves_ctrl_shift_k_for_callback_when_upgrading(tmp_path):
+    path = tmp_path / "shortcuts.json"
+    legacy = bindings()
+    legacy.pop(CALLBACK_ACTION)
+    # This is the pre-callback default: K belonged to quick session creation.
+    legacy[QUICK_SESSION_ACTION] = {"direct": "KeyK", "launcher": "KeyK"}
+    path.write_text(
+        json.dumps({"version": 5, "revision": 3, "bindings": legacy}),
+        encoding="utf-8",
+    )
+
+    snapshot = ShortcutStore(path).get_snapshot()
+    assert snapshot["bindings"][CALLBACK_ACTION] == {
+        "direct": "KeyK",
+        "launcher": None,
+    }
+    assert snapshot["bindings"][QUICK_SESSION_ACTION] == {
+        "direct": None,
+        "launcher": "KeyK",
+    }
+
+
 def test_shortcut_store_does_not_override_legacy_default_key_conflicts(tmp_path):
     path = tmp_path / "shortcuts.json"
     legacy = bindings()
@@ -93,6 +121,7 @@ def test_shortcut_store_does_not_override_legacy_default_key_conflicts(tmp_path)
     legacy.pop(FLOATING_INPUT_ACTION)
     legacy.pop(FLOATING_TERMINAL_ACTION)
     legacy.pop(PANE_NAVIGATION_ACTION)
+    legacy.pop(CALLBACK_ACTION)
     legacy["command-palette"]["direct"] = "KeyK"
     legacy["terminal-copy-mode"]["direct"] = "KeyH"
     legacy["command-palette"]["launcher"] = "KeyK"
@@ -122,6 +151,7 @@ def test_shortcut_store_upgrades_version_two_without_overriding_key_y(tmp_path):
     previous.pop(FLOATING_INPUT_ACTION)
     previous.pop(FLOATING_TERMINAL_ACTION)
     previous.pop(PANE_NAVIGATION_ACTION)
+    previous.pop(CALLBACK_ACTION)
     previous["command-palette"]["direct"] = "KeyY"
     path.write_text(
         json.dumps({
@@ -152,6 +182,7 @@ def test_version_three_adds_terminal_without_overwriting_custom_bindings(tmp_pat
     previous = bindings()
     previous.pop(FLOATING_TERMINAL_ACTION)
     previous.pop(PANE_NAVIGATION_ACTION)
+    previous.pop(CALLBACK_ACTION)
     previous["command-palette"]["direct"] = "KeyJ"
     path.write_text(json.dumps({"version": 3, "revision": 9, "bindings": previous}))
     snapshot = ShortcutStore(path).get_snapshot()
@@ -164,6 +195,7 @@ def test_version_four_adds_pane_navigation_without_overwriting_key_g(tmp_path):
     path = tmp_path / "shortcuts.json"
     previous = bindings()
     previous.pop(PANE_NAVIGATION_ACTION)
+    previous.pop(CALLBACK_ACTION)
     previous["command-palette"]["direct"] = "KeyG"
     path.write_text(json.dumps({"version": 4, "revision": 11, "bindings": previous}))
 

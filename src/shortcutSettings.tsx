@@ -33,7 +33,8 @@ const CORE_SHORTCUT_DEFINITIONS = [
   { id: "command-palette", label: "Fuzzy command search", group: "Open", direct: "KeyH", launcher: "KeyH" },
   { id: "shortcut-launcher", label: "Shortcut window", group: "Open", direct: "KeyZ", launcher: null, launcherEditable: false },
   { id: "workspace-new-session", label: "New session", group: "Session", direct: "KeyB", launcher: "KeyB" },
-  { id: "workspace-quick-new-session", label: "Quick temporary session", group: "Session", direct: "KeyK", launcher: "KeyK" },
+  { id: "workspace-callback", label: "Add or remove callback session", group: "Session", direct: "KeyK", launcher: null },
+  { id: "workspace-quick-new-session", label: "Quick temporary session", group: "Session", direct: null, launcher: "KeyK" },
   { id: "session-copy-new", label: "Copy New", group: "Session", direct: "KeyM", launcher: "KeyM" },
   { id: "session-rename", label: "Rename session", group: "Session", direct: "KeyR", launcher: "KeyR" },
   { id: "session-end", label: "End session", group: "Session", direct: "KeyE", launcher: "KeyE" },
@@ -207,7 +208,11 @@ function normalizePayload(payload: ShortcutSettingsPayload): {
     throw new Error("The shortcut response has invalid bindings.");
   }
   const actualIds = Object.keys(payload.bindings);
-  if (actualIds.length !== expectedIds.size || actualIds.some((id) => !expectedIds.has(id))) {
+  const missingIds = [...expectedIds].filter((id) => !actualIds.includes(id));
+  const legacyMissingCallback = missingIds.length === 1
+    && missingIds[0] === "workspace-callback";
+  if ((!legacyMissingCallback && actualIds.length !== expectedIds.size)
+    || actualIds.some((id) => !expectedIds.has(id))) {
     throw new Error("The shortcut response does not match this Muxdeck version.");
   }
 
@@ -215,6 +220,10 @@ function normalizePayload(payload: ShortcutSettingsPayload): {
   for (const definition of SHORTCUT_DEFINITIONS) {
     const action = definition.id as ShortcutActionId;
     const binding = payload.bindings[action];
+    if (!binding && action === "workspace-callback" && legacyMissingCallback) {
+      bindings[action] = { direct: "KeyK", launcher: null };
+      continue;
+    }
     if (!binding || typeof binding !== "object") {
       throw new Error(`The shortcut response is missing ${definition.label}.`);
     }
@@ -225,6 +234,16 @@ function normalizePayload(payload: ShortcutSettingsPayload): {
       }
       bindings[action][layer] = code;
     }
+  }
+  // Version-five servers used K for quick-session direct chords. Reserve it
+  // for the callback action while keeping quick creation available in the
+  // shortcut window (Z, then K).
+  if (
+    legacyMissingCallback
+    && bindings["workspace-callback"].direct === "KeyK"
+    && bindings["workspace-quick-new-session"].direct === "KeyK"
+  ) {
+    bindings["workspace-quick-new-session"].direct = null;
   }
   const conflicts = shortcutConflictMessages(bindings);
   if (conflicts.length > 0) throw new Error(conflicts[0]);

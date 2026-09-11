@@ -37,7 +37,6 @@ from tmux_console.tmux import (
     TmuxSessionNotFoundError,
 )
 from tmux_console.workspaces import (
-    MAX_SCOPED_NOTE_LENGTH,
     MAX_WORKSPACE_TABS,
     WorkspaceStore,
 )
@@ -45,6 +44,14 @@ from tmux_console.workspaces import (
 SESSION_CREATED = 1_700_000_000
 SERVER_STARTED = 1_699_999_900
 SERVER_PID = 4242
+
+
+def note_payload(note, *, pages=None):
+    notebook = {
+        "pages": pages
+        or [{"id": "main", "name": "Page 1", "content": note}]
+    }
+    return {"note": notebook["pages"][0]["content"], "notebook": notebook}
 
 
 def termination_payload(
@@ -1386,20 +1393,20 @@ async def test_session_note_api_isolates_live_sessions_and_persists(tmp_path):
         await client.start_server()
         response = await client.get(f"/api/sessions/{first_name}/note")
         assert response.status == 200
-        assert await response.json() == {"note": ""}
+        assert await response.json() == note_payload("")
 
         response = await client.put(
             f"/api/sessions/{first_name}/note",
             json={"note": "Handoff\r\nnext step"},
         )
         assert response.status == 200
-        assert await response.json() == {"note": "Handoff\nnext step"}
+        assert await response.json() == note_payload("Handoff\nnext step")
         assert await (
             await client.get(f"/api/sessions/{first_name}/note")
-        ).json() == {"note": "Handoff\nnext step"}
+        ).json() == note_payload("Handoff\nnext step")
         assert await (
             await client.get(f"/api/sessions/{second_name}/note")
-        ).json() == {"note": ""}
+        ).json() == note_payload("")
     finally:
         await client.close()
 
@@ -1426,13 +1433,9 @@ async def test_session_note_api_validates_payload_and_live_session(tmp_path):
 
         invalid_requests = [
             ([], "request body must be an object"),
-            ({}, "note is required"),
+            ({}, "note or notebook is required"),
             ({"note": "", "extra": True}, "unknown field: extra"),
             ({"note": 7}, "note must be a string"),
-            (
-                {"note": "x" * (MAX_SCOPED_NOTE_LENGTH + 1)},
-                "8000 characters or fewer",
-            ),
             ({"note": "unsafe\x00note"}, "cannot contain control characters"),
         ]
         for payload, message in invalid_requests:

@@ -87,7 +87,8 @@ must rebuild it on the target. An archive of this folder does not include:
 
 - the target machine's tmux server, sessions, or agent processes;
 - titles, predefined session tags, starred/ignored session names, memoranda, the
-  snippet library, saved workspaces and their named pane layouts, shortcut
+  snippet library, saved workspaces and their named pane layouts, callback
+  lists, shortcut
   keymap, authentication state, and uploaded attachments stored outside the
   source folder;
 - the SQLite session-recovery registry, including saved CWDs and reference-only
@@ -278,8 +279,8 @@ timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
 upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
-the first workspace-state write can upgrade it to schema 10, and a release that
-only understands versions 1 through 9 cannot read the upgraded document.
+the first workspace-state write can upgrade it to schema 12, and a release that
+only understands versions 1 through 11 cannot read the upgraded document.
 
 ## 5. Build a clean release
 
@@ -416,7 +417,7 @@ rollback requires stopping only Muxdeck, preserving the upgraded database, and
 restoring the pre-upgrade database alongside the previous application code.
 Never downgrade `user_version` in place or discard the upgraded history.
 
-The workspace file uses schema version 10. Version 1 loads at workspace session
+The workspace file uses schema version 12. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
 through 3 load with no common or workspace-specific quick links. Versions 1
 through 4 load with no session-specific quick links, versions 1 through 5 load
@@ -424,17 +425,20 @@ with empty scoped notes, and versions 1 through 6 load with no global session
 pins or inherited-pin provenance. Versions 1 through 7 load with no sidebar
 separators. Version 8 preserves after-session separators and loads with no
 before-session separators. Version 9 loads with no named pane layouts. A legacy
-file upgrades atomically on the next workspace, quick-link, note, or global-pin
-write. Each record permits an 80-character name, at most 256 unique ordered
+file upgrades atomically on the next workspace, quick-link, note, global-pin, or
+callback-list write. Versions 1 through 10 load with an empty callback list.
+Each record permits an 80-character name, at most 256 unique ordered
 tabs, at most 16 disjoint contiguous tab groups whose names are at most 40
 characters, and at most 16 quick links; the global common shelf and each
 native-session shelf also permit 16 links. A workspace can keep at most 16 named
 pane layouts, each with at most 12 leaves and six split levels. Pane-layout names
 are limited to 64 characters and divider ratios to 15%-85%. Quick-link labels
-are limited to 48 characters and URLs to 2,048 characters. Each scoped note is
-limited to 8,000 characters. Keep a pre-upgrade copy for rollback because a
-release that only understands versions 1 through 9 rejects the version 10
-document. As with snippets, an unreadable, malformed, or unsupported existing
+are limited to 48 characters and URLs to 2,048 characters. Each notebook has at
+most 128 pages with 80-character names; page content has no separate character
+validator. Each callback list permits 64 unique session names.
+Keep a pre-upgrade copy for rollback because a release that only understands
+versions 1 through 11 rejects the version 12 document. As with snippets, an
+unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
 
@@ -450,16 +454,19 @@ An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
 
-The shortcut file uses schema version 5. Version 4 loads by adding the pane
-navigation binding with `KeyG` wherever that key is not already assigned.
-Version 3 loads by adding the floating utility-terminal binding with `KeyJ`;
-version 2 adds the floating staged-input binding with `KeyY`, and version 1 first
-adds the quick temporary-session binding with `KeyK`. Each legacy upgrade adds
-the later bindings in that order; occupied keys leave only that layer unbound.
-The next keymap save atomically writes version 5. Keep a pre-upgrade copy for
-rollback: releases that only understand versions 1 through 4 reject version 5. An
-unreadable, malformed, conflicting, or unsupported shortcut file makes that
-store unavailable instead of overwriting it.
+The shortcut file uses schema version 6. Version 5 loads by adding the workspace
+callback binding with `KeyK`; when the older quick temporary-session default also
+owns `KeyK`, its direct binding is moved out of the way while its shortcut-window
+binding remains available. Versions 1 through 4 add the pane navigation binding
+with `KeyG` wherever that key is not already assigned. Version 3 also adds the
+floating utility-terminal binding with `KeyJ`; version 2 adds the floating
+staged-input binding with `KeyY`, and version 1 first adds the quick
+temporary-session binding with `KeyK`. Each legacy upgrade adds the later bindings
+in that order; occupied keys leave only that layer unbound. The next keymap save
+atomically writes version 6. Keep a pre-upgrade copy for rollback: releases that
+only understand versions 1 through 5 reject version 6. An unreadable, malformed,
+conflicting, or unsupported shortcut file makes that store unavailable instead
+of overwriting it.
 
 Migration procedure:
 
@@ -789,23 +796,31 @@ merely to test that the application itself has no login.
    the highlight and keyboard input focus move together, an outside edge does
    not wrap, `Escape` cancels, and the shortcut-window `G` action arms the same
    mode. Do not type validation input into a valuable session.
-9. Deleting a disposable saved workspace removes only that workspace record and
+9. On desktop, open the `Callback` card, add the current and another workspace
+   session, and confirm the list deduplicates entries, shows Working/Ready/
+   Ended status, opens a live session from its row, and removes an item with the
+   reviewed check button. Confirm `Clear ended` and `Clear all`, reload the
+   saved workspace, and verify entries persist. Drag and resize the floating
+   panel, pin it, switch sessions, and confirm it stays visible; unpinned panels
+   close on a session switch. A temporary workspace should keep its list only
+   in that browser until it is saved.
+10. Deleting a disposable saved workspace removes only that workspace record and
    leaves all referenced tmux sessions and pane identities unchanged.
-10. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
+11. On desktop, `Move / Copy` lists other saved workspaces. Copying twice leaves
     one destination tab; moving to a destination that already contains the
     session removes only the source tab. A globally pinned session explains why
     Move is unavailable until it is unpinned.
-11. On desktop, the workspace quick switcher's Previous and Next buttons replace
+12. On desktop, the workspace quick switcher's Previous and Next buttons replace
     the current page's saved workspace without opening the landing page, wrap in
     stable alphabetical order, and its searchable chooser opens the selected
     workspace in the same browser tab.
-12. In desktop Side tabs, `Non-working first` stably moves every non-Working tab
+13. In desktop Side tabs, `Non-working first` stably moves every non-Working tab
     before Working tabs, preserves relative order inside each partition, keeps
     tab groups intact, and writes the resulting order to the URL or saved
     workspace without changing the active session. In both top and side tabs,
     Shift-click a range, Ctrl/Cmd-click individual tabs, and drag the selection;
     confirm its relative order is preserved and any selected group moves whole.
-13. On desktop, the workspace timer opens as a draggable floating window, runs
+14. On desktop, the workspace timer opens as a draggable floating window, runs
     both countdown and stopwatch modes, keeps a pinned window visible across
     session switches, and restores its browser-local state per saved workspace.
     A disposable short countdown should visibly alarm and mark the browser-tab
@@ -814,7 +829,7 @@ merely to test that the application itself has no login.
     movable staged-input editor without leaving Focus. Confirm edits mirror the
     full composer in both directions, an unpinned window closes on session
     switch, and a pinned window stays open with the newly active session's draft.
-14. On desktop, Host Pulse should take one initial CPU/memory sample, then remain
+15. On desktop, Host Pulse should take one initial CPU/memory sample, then remain
     idle until its movable/resizable panel is open and unpaused. Confirm Overview
     switches to Details, every logical core appears, and RAM headroom, PSI
     `some`/`full`, swap use, and swap-in/out rates render. Switch among 15-minute,
@@ -823,7 +838,7 @@ merely to test that the application itself has no login.
     the panel must stop five-second sampling, and both card and panel must disappear
     at compact mobile width. A fresh service should bootstrap its first aggregate
     and per-core CPU percentages within the initial API request.
-15. Against a deliberately disposable session, `Attach files` accepts a small
+16. Against a deliberately disposable session, `Attach files` accepts a small
     text or binary file through the picker and inserts an absolute path under
     the configured upload directory without sending it automatically. An image
     should additionally show a preview. Confirm that dropping another arbitrary
@@ -831,7 +846,7 @@ merely to test that the application itself has no login.
     without Enter, the run user can read both files, each file is `0600`, and all
     attachment affordances are hidden at compact mobile width. Do not upload
     sensitive material merely for a smoke test.
-16. In that disposable session, open the desktop pane-CWD browser and upload a
+17. In that disposable session, open the desktop pane-CWD browser and upload a
     small file into a disposable folder with both the picker and drag-and-drop.
     Confirm the files land in the folder shown with mode `0600`, a repeated name
     is rejected without changing the original bytes, and downloading returns the
@@ -856,13 +871,13 @@ merely to test that the application itself has no login.
     default, close and reopen the panel, and confirm that browser remembers the
     chosen text size; the percentage control must also reset it to 100%.
     Print disposable relative
-    `.md`, `.pdf`, `.txt`, `.png`, and `.json` paths in the live
+    `.md`, `.pdf`, `.txt`, `.png`, `.json`, and `.csv` paths in the live
     terminal; confirm a plain click remains terminal input while `Ctrl`+click
     (or `Cmd`+click on macOS) opens each in this browser without sending a
     terminal mouse frame. Delete only those disposable fixtures
     afterward; none of these file operations should send terminal input or
     change tmux identities.
-17. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
+18. On desktop, `Shortcuts` then `Customize` shows both direct and window keys.
     Change one unused test binding, save, reload, and confirm the visible hint
     and handler both use it; then restore the original binding. A duplicate key
     in either layer must be identified and must keep Save disabled.
@@ -912,9 +927,10 @@ For a failed replacement:
    does not understand it, so a later compatible release can recover the saved
    workspace list.
    When rolling back to a release that only understands workspace-file versions
-   1 through 9, retain the version-10 file separately and restore the pre-upgrade
-   workspace file; older releases cannot read named pane layouts or their session
-   assignments and split ratios.
+   1 through 10, retain the version-11 file separately and restore the pre-upgrade
+   workspace file; older releases cannot read callback lists. A release that only
+   understands versions 1 through 9 additionally cannot read named pane layouts
+   or their session assignments and split ratios.
    When rolling back to version 8 or earlier, retain the version-9 file separately
    and restore the pre-upgrade workspace file; older releases cannot read
    before-session separators. A separator anchors before or after a session and
@@ -930,12 +946,13 @@ For a failed replacement:
    `session-titles.json`; tags are unavailable to that older release and would be
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
-   When rolling back to a release that only understands shortcut-file version 4
-   or earlier, preserve the version-5 document and restore the pre-upgrade
-   `shortcuts.json`; the pane-navigation action is unavailable there. Version-3
-   releases additionally lack the utility-terminal action, and version-2
-   releases additionally lack the floating-input binding. A
-   version-1 release also lacks the quick temporary-session binding.
+   When rolling back to a release that only understands shortcut-file version 5
+   or earlier, preserve the version-6 document and restore the pre-upgrade
+   `shortcuts.json`; the workspace-callback action is unavailable there. A
+   release that only understands version 4 or earlier additionally lacks the
+   pane-navigation action. Version-3 releases also lack the utility-terminal
+   action, and version-2 releases additionally lack the floating-input binding.
+   A version-1 release also lacks the quick temporary-session binding.
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back
    application code.

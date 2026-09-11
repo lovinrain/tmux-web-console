@@ -539,7 +539,7 @@ describe("LiveTerminal web links", () => {
     expect(terminalElement).not.toHaveAttribute("title");
   });
 
-  it("previews JSON paths with the same conservative Ctrl-click interaction", () => {
+  it("previews JSON and CSV paths with the same conservative Ctrl-click interaction", () => {
     vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
     const onOpenFilePath = vi.fn();
     render(
@@ -552,11 +552,14 @@ describe("LiveTerminal web links", () => {
       />,
     );
     const terminal = terminalMocks.instances[0];
-    setTerminalBufferLine(terminal, "result: /work/config.JSON");
+    setTerminalBufferLine(terminal, "result: /work/config.JSON /work/report.CSV");
     let links: MockProvidedLink[] | undefined;
     fileLinkMocks.instances[0].provideLinks(1, (provided) => { links = provided; });
 
-    expect(links?.map((link) => link.text)).toEqual(["/work/config.JSON"]);
+    expect(links?.map((link) => link.text)).toEqual([
+      "/work/config.JSON",
+      "/work/report.CSV",
+    ]);
     links?.[0].activate(new MouseEvent("mouseup", { button: 0 }), links[0].text);
     expect(onOpenFilePath).not.toHaveBeenCalled();
     links?.[0].activate(
@@ -564,6 +567,11 @@ describe("LiveTerminal web links", () => {
       links[0].text,
     );
     expect(onOpenFilePath).toHaveBeenCalledWith("/work/config.JSON");
+    links?.[1].activate(
+      new MouseEvent("mouseup", { button: 0, ctrlKey: true }),
+      links[1].text,
+    );
+    expect(onOpenFilePath).toHaveBeenLastCalledWith("/work/report.CSV");
   });
 
   it("opens absolute HTML paths on a plain click while keeping relative files conservative", () => {

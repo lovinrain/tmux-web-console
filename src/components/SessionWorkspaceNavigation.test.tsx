@@ -1410,10 +1410,10 @@ describe("SessionWorkspaceNavigation", () => {
     const view = render(<SessionWorkspaceNavigation {...props} />);
 
     const quick = screen.getByRole("button", { name: "Quick new temporary session" });
-    expect(quick).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
+    expect(quick).not.toHaveAttribute("aria-keyshortcuts");
     expect(quick).toHaveAttribute(
       "title",
-      "Quick temporary session from workspace memory (Ctrl+Shift+K)",
+      "Quick temporary session from workspace memory (Ctrl+Shift+Z, then K)",
     );
     expect(quick).not.toBeDisabled();
 

@@ -959,6 +959,75 @@ html[data-theme="light"] .scoped-note-pinned-badge {
   border-color: color-mix(in srgb, var(--note-accent) 34%, #bbb4a8);
 }
 
+html[data-theme="light"] .scoped-note-page-toolbar,
+html[data-theme="light"] .scoped-note-page-sidebar {
+  background: color-mix(in srgb, var(--note-paper) 91%, #e8e1d5);
+  border-color: color-mix(in srgb, var(--note-accent) 22%, #c9c2b5);
+}
+
+html[data-theme="light"] .scoped-note-page-control,
+html[data-theme="light"] .scoped-note-page-sidebar-heading button {
+  color: color-mix(in srgb, var(--note-accent) 76%, #3f463d);
+  background: color-mix(in srgb, var(--note-accent) 6%, #fffdf7);
+  border-color: color-mix(in srgb, var(--note-accent) 32%, #bbb4a8);
+}
+
+html[data-theme="light"] .scoped-note-page-control:hover:not(:disabled),
+html[data-theme="light"] .scoped-note-page-control:focus-visible,
+html[data-theme="light"] .scoped-note-page-control[aria-pressed="true"],
+html[data-theme="light"] .scoped-note-page-sidebar-heading button:hover:not(:disabled),
+html[data-theme="light"] .scoped-note-page-sidebar-heading button:focus-visible {
+  color: #282d25;
+  background: color-mix(in srgb, var(--note-accent) 14%, #fffdf7);
+  border-color: color-mix(in srgb, var(--note-accent) 70%, #6c695f);
+}
+
+html[data-theme="light"] .scoped-note-page-control.danger {
+  color: #a64a40;
+}
+
+html[data-theme="light"] .scoped-note-page-control.danger:hover:not(:disabled),
+html[data-theme="light"] .scoped-note-page-control.danger:focus-visible {
+  color: #8d2f27;
+  background: #f8e4e0;
+  border-color: #bd6e66;
+}
+
+html[data-theme="light"] .scoped-note-page-name {
+  color: #282d25;
+  background: rgba(255, 255, 249, 0.76);
+  border-color: color-mix(in srgb, var(--note-accent) 38%, #bdb6aa);
+}
+
+html[data-theme="light"] .scoped-note-page-position {
+  color: #697164;
+}
+
+html[data-theme="light"] .scoped-note-page-sidebar-heading {
+  color: color-mix(in srgb, var(--note-accent) 72%, #424a3e);
+  border-color: color-mix(in srgb, var(--note-accent) 20%, #d0c9bc);
+}
+
+html[data-theme="light"] .scoped-note-page-list > button {
+  color: #596255;
+  border-color: color-mix(in srgb, var(--note-accent) 13%, #d5cec1);
+}
+
+html[data-theme="light"] .scoped-note-page-list > button:hover,
+html[data-theme="light"] .scoped-note-page-list > button:focus-visible {
+  color: #282d25;
+  background: color-mix(in srgb, var(--note-accent) 8%, #fffdf7);
+}
+
+html[data-theme="light"] .scoped-note-page-list > button.active {
+  color: #20251e;
+  background: color-mix(in srgb, var(--note-accent) 13%, #fffdf7);
+}
+
+html[data-theme="light"] .scoped-note-page-list > button > span {
+  color: color-mix(in srgb, var(--note-accent) 68%, #687064);
+}
+
 html[data-theme="light"] .scoped-sticky-note.window-pinned {
   box-shadow:
     0 5px 14px rgba(65, 55, 38, 0.2),
@@ -4713,4 +4782,94 @@ html[data-theme="light"] .sp-action-error {
 @keyframes light-skeleton-pulse {
   0%, 100% { background: #f8f5ef; }
   50% { background: #e9e3d8; }
+}
+
+@media (min-width: 1025px),
+  (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  html[data-theme="light"] .workspace-callback-card {
+    --callback-accent: #9a6500;
+    color: #3d4438;
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--callback-accent) 10%, transparent), transparent 62%),
+      #f7f0df;
+    border-color: color-mix(in srgb, var(--callback-accent) 36%, #c2b99f);
+  }
+
+  html[data-theme="light"] .workspace-callback-card.has-working {
+    --callback-accent: #4f7900;
+  }
+
+  html[data-theme="light"] .workspace-callback-card strong {
+    color: color-mix(in srgb, var(--callback-accent) 84%, #30392e);
+  }
+
+  html[data-theme="light"] .workspace-callback-card small { color: #596552; }
+
+  html[data-theme="light"] .workspace-callback-panel {
+    --callback-accent: #9a6500;
+    color: #30392e;
+    background:
+      radial-gradient(circle at 82% 8%, color-mix(in srgb, var(--callback-accent) 12%, transparent), transparent 34%),
+      #fbfaf5;
+    border-color: color-mix(in srgb, var(--callback-accent) 42%, #c5bda9);
+    box-shadow: 0 24px 76px rgba(75, 64, 43, 0.24), 0 3px 0 color-mix(in srgb, var(--callback-accent) 20%, transparent);
+  }
+
+  html[data-theme="light"] .workspace-callback-panel.has-working { --callback-accent: #4f7900; }
+
+  html[data-theme="light"] .workspace-callback-panel-header {
+    background: #f2eee4;
+    border-bottom-color: color-mix(in srgb, var(--callback-accent) 22%, #d7d0c1);
+  }
+
+  html[data-theme="light"] .workspace-callback-panel-header span { color: #71806d; }
+  html[data-theme="light"] .workspace-callback-panel-header h2 { color: #30392e; }
+  html[data-theme="light"] .workspace-callback-panel-header button {
+    color: color-mix(in srgb, var(--callback-accent) 75%, #4a5545);
+    background: color-mix(in srgb, var(--callback-accent) 7%, #fffdf8);
+    border-color: color-mix(in srgb, var(--callback-accent) 30%, #c8c0af);
+  }
+
+  html[data-theme="light"] .workspace-callback-summary { color: #71806d; }
+  html[data-theme="light"] .workspace-callback-summary strong { color: color-mix(in srgb, var(--callback-accent) 84%, #30392e); }
+
+  html[data-theme="light"] .workspace-callback-add select,
+  html[data-theme="light"] .workspace-callback-add button,
+  html[data-theme="light"] .workspace-callback-footer button {
+    color: #4f5d4a;
+    background: #f1eee5;
+    border-color: #c4c0b2;
+  }
+
+  html[data-theme="light"] .workspace-callback-add button.primary {
+    color: #fffdf6;
+    background: var(--callback-accent);
+    border-color: var(--callback-accent);
+  }
+
+  html[data-theme="light"] .workspace-callback-item {
+    color: #30392e;
+    background: rgba(248, 246, 238, 0.92);
+    border-color: #d5d1c4;
+  }
+
+  html[data-theme="light"] .workspace-callback-index { color: #899487; }
+  html[data-theme="light"] .workspace-callback-session { color: #30392e; }
+  html[data-theme="light"] .workspace-callback-session small { color: #71806d; }
+  html[data-theme="light"] .workspace-callback-status { color: #71806d; }
+  html[data-theme="light"] .workspace-callback-open,
+  html[data-theme="light"] .workspace-callback-remove {
+    color: #63705d;
+    background: #f1eee5;
+    border-color: #c4c0b2;
+  }
+
+  html[data-theme="light"] .workspace-callback-empty {
+    color: #71806d;
+    background: rgba(245, 242, 233, 0.72);
+    border-color: #c8c4b8;
+  }
+
+  html[data-theme="light"] .workspace-callback-empty strong { color: #30392e; }
+  html[data-theme="light"] .workspace-callback-footer { color: #7a8775; }
 }

@@ -7,7 +7,6 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.app import create_app
 from tmux_console.workspaces import (
-    MAX_SCOPED_NOTE_LENGTH,
     MAX_SESSION_RENAME_REVISION,
     MAX_WORKSPACE_GROUPS,
     MAX_WORKSPACE_NAME_LENGTH,
@@ -20,6 +19,14 @@ from tmux_console.workspaces import (
 def sequence(values):
     iterator = iter(values)
     return lambda: next(iterator)
+
+
+def note_payload(note, *, pages=None):
+    notebook = {
+        "pages": pages
+        or [{"id": "main", "name": "Page 1", "content": note}]
+    }
+    return {"note": notebook["pages"][0]["content"], "notebook": notebook}
 
 
 @pytest.mark.asyncio
@@ -131,6 +138,64 @@ async def test_workspace_pane_layout_api_create_update_and_validation(tmp_path):
         )
         assert response.status == 400
         assert "must be one of the workspace tabs" in (await response.json())["error"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_callback_api_persists_and_requires_current_session_revision(
+    tmp_path,
+):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Follow ups",
+                "tabs": ["agent"],
+                "activeSession": "agent",
+                "callbackSessions": ["agent", "ended-session"],
+            },
+        )
+        assert response.status == 201
+        created = (await response.json())["workspace"]
+        assert created["callbackSessions"] == ["agent", "ended-session"]
+
+        route = "/api/workspaces/workspace-id"
+        response = await client.patch(route, json={"callbackSessions": ["agent"]})
+        assert response.status == 400
+        assert await response.json() == {"error": "sessionRevision is required"}
+
+        assert store.rename_session("agent", "renamed-agent") == 1
+        response = await client.patch(
+            route,
+            json={"callbackSessions": ["agent"], "sessionRevision": 0},
+        )
+        assert response.status == 409
+        assert "reload the workspace" in (await response.json())["error"]
+
+        response = await client.patch(
+            route,
+            json={
+                "callbackSessions": ["renamed-agent"],
+                "sessionRevision": 1,
+            },
+        )
+        assert response.status == 200
+        updated = (await response.json())["workspace"]
+        assert updated["callbackSessions"] == ["renamed-agent"]
+        assert updated["tabs"] == ["renamed-agent"]
+
+        response = await client.patch(
+            route,
+            json={
+                "callbackSessions": ["renamed-agent", "renamed-agent"],
+                "sessionRevision": 1,
+            },
+        )
+        assert response.status == 400
+        assert "contains duplicate session" in (await response.json())["error"]
 
 
 @pytest.mark.asyncio
@@ -393,25 +458,25 @@ async def test_common_and_workspace_note_apis_are_scoped_and_persistent(tmp_path
 
     try:
         await client.start_server()
-        assert await (await client.get("/api/common-note")).json() == {"note": ""}
+        assert await (await client.get("/api/common-note")).json() == note_payload("")
         assert await (
             await client.get("/api/workspaces/workspace-id/note")
-        ).json() == {"note": ""}
+        ).json() == note_payload("")
 
         response = await client.put(
             "/api/common-note",
             json={"note": "Shared\r\nchecklist"},
         )
         assert response.status == 200
-        assert await response.json() == {"note": "Shared\nchecklist"}
+        assert await response.json() == note_payload("Shared\nchecklist")
         response = await client.put(
             "/api/workspaces/workspace-id/note",
             json={"note": "Workspace plan"},
         )
         assert response.status == 200
-        assert await response.json() == {"note": "Workspace plan"}
+        assert await response.json() == note_payload("Workspace plan")
         assert await (await client.get("/api/common-note")).json() == {
-            "note": "Shared\nchecklist"
+            **note_payload("Shared\nchecklist")
         }
 
         missing = await client.get("/api/workspaces/missing/note")
@@ -438,25 +503,77 @@ async def test_common_and_workspace_note_apis_are_scoped_and_persistent(tmp_path
             }
             missing_note = await client.put(endpoint, json={})
             assert missing_note.status == 400
-            assert await missing_note.json() == {"error": "note is required"}
+            assert await missing_note.json() == {
+                "error": "note or notebook is required"
+            }
             unknown = await client.put(endpoint, json={"note": "", "extra": True})
             assert unknown.status == 400
             assert await unknown.json() == {"error": "unknown field: extra"}
             invalid = await client.put(endpoint, json={"note": 7})
             assert invalid.status == 400
             assert await invalid.json() == {"error": "note must be a string"}
-            too_long = await client.put(
+            large_note = "large\n" * 3_000
+            large = await client.put(
                 endpoint,
-                json={"note": "x" * (MAX_SCOPED_NOTE_LENGTH + 1)},
+                json={"note": large_note},
             )
-            assert too_long.status == 400
-            assert "8000 characters or fewer" in (await too_long.json())["error"]
+            assert large.status == 200
+            assert (await large.json())["note"] == large_note
+        await client.put("/api/common-note", json={"note": "Shared\nchecklist"})
+        await client.put(
+            "/api/workspaces/workspace-id/note",
+            json={"note": "Workspace plan"},
+        )
     finally:
         await client.close()
 
     reloaded = WorkspaceStore(path)
     assert reloaded.get_common_note() == "Shared\nchecklist"
     assert reloaded.get_workspace_note("workspace-id") == "Workspace plan"
+
+
+@pytest.mark.asyncio
+async def test_workspace_note_api_saves_pages_and_legacy_writes_preserve_them(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    store.create_workspace(name="Project", tabs=["agent"], active_session="agent")
+    client = TestClient(TestServer(create_app(workspaces=store, base_path="")))
+    pages = [
+        {"id": "main", "name": "Plan", "content": "First"},
+        {"id": "runbook", "name": "Runbook", "content": "Second"},
+    ]
+
+    try:
+        await client.start_server()
+        endpoint = "/api/workspaces/workspace-id/note"
+        response = await client.put(endpoint, json={"notebook": {"pages": pages}})
+        assert response.status == 200
+        assert await response.json() == note_payload("First", pages=pages)
+        assert await (await client.get(endpoint)).json() == note_payload(
+            "First",
+            pages=pages,
+        )
+
+        response = await client.put(endpoint, json={"note": "Legacy update"})
+        assert response.status == 200
+        updated_pages = [{**pages[0], "content": "Legacy update"}, pages[1]]
+        assert await response.json() == note_payload(
+            "Legacy update",
+            pages=updated_pages,
+        )
+
+        both = await client.put(
+            endpoint,
+            json={"note": "No", "notebook": {"pages": pages}},
+        )
+        assert both.status == 400
+        assert await both.json() == {
+            "error": "provide either note or notebook, not both"
+        }
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -614,7 +731,7 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
         assert created.status == 201
 
         update_cases = [
-            ({}, "name, tabs, groups, separators, paneLayouts, or activeSession is required"),
+            ({}, "callbackSessions"),
             ({"extra": True}, "unknown field: extra"),
             ({"name": None}, "name must be a string"),
             (
@@ -627,6 +744,7 @@ async def test_workspaces_api_strict_request_validation(tmp_path):
             ),
             ({"tabs": []}, "sessionRevision is required"),
             ({"groups": []}, "sessionRevision is required"),
+            ({"callbackSessions": []}, "sessionRevision is required"),
         ]
         for payload, error in update_cases:
             response = await client.patch("/api/workspaces/workspace-id", json=payload)

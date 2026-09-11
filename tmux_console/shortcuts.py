@@ -13,10 +13,11 @@ from typing import Any
 
 LOGGER = logging.getLogger("muxdeck.shortcuts")
 MAX_SHORTCUT_REVISION = (1 << 53) - 1
-SHORTCUT_DOCUMENT_VERSION = 5
+SHORTCUT_DOCUMENT_VERSION = 6
 PREVIOUS_SHORTCUT_DOCUMENT_VERSION = 2
 LEGACY_SHORTCUT_DOCUMENT_VERSION = 1
 QUICK_SESSION_ACTION = "workspace-quick-new-session"
+CALLBACK_ACTION = "workspace-callback"
 FLOATING_INPUT_ACTION = "view-floating-input"
 FLOATING_TERMINAL_ACTION = "view-floating-terminal"
 PANE_NAVIGATION_ACTION = "view-pane-navigation"
@@ -52,7 +53,10 @@ DEFAULT_SHORTCUT_BINDINGS: dict[str, dict[str, str | None]] = {
     "command-palette": _binding("KeyH", "KeyH"),
     "shortcut-launcher": _binding("KeyZ", None),
     "workspace-new-session": _binding("KeyB", "KeyB"),
-    QUICK_SESSION_ACTION: _binding("KeyK", "KeyK"),
+    # K is reserved for the direct callback toggle; quick session creation
+    # remains available from the Z shortcut window (Z, then K).
+    QUICK_SESSION_ACTION: _binding(None, "KeyK"),
+    CALLBACK_ACTION: _binding("KeyK", None),
     "session-copy-new": _binding("KeyM", "KeyM"),
     "workspace-find-tab": _binding("Semicolon", "Semicolon"),
     "terminal-return-live": _binding("KeyL", "KeyL"),
@@ -192,19 +196,23 @@ def _validate_stored_bindings(
         PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
         3,
         4,
+        5,
     }:
         raise ValueError("unsupported document version")
     if not isinstance(value, dict):
         return validate_bindings(value)
 
     current_actions = set(DEFAULT_SHORTCUT_BINDINGS)
-    version_four_actions = current_actions - {PANE_NAVIGATION_ACTION}
+    version_five_actions = current_actions - {CALLBACK_ACTION}
+    version_four_actions = version_five_actions - {PANE_NAVIGATION_ACTION}
     version_three_actions = version_four_actions - {FLOATING_TERMINAL_ACTION}
     version_two_actions = version_three_actions - {FLOATING_INPUT_ACTION}
     version_one_actions = version_two_actions - {QUICK_SESSION_ACTION}
     if set(value) == set(DEFAULT_SHORTCUT_BINDINGS):
         return validate_bindings(value)
-    allowed_actions = [version_four_actions]
+    allowed_actions = [version_five_actions]
+    if version <= 4:
+        allowed_actions.append(version_four_actions)
     if version <= 3:
         allowed_actions.append(version_three_actions)
     if version <= 2:
@@ -238,7 +246,19 @@ def _validate_stored_bindings(
         add_available_binding(FLOATING_INPUT_ACTION, "KeyY")
     if FLOATING_TERMINAL_ACTION not in upgraded:
         add_available_binding(FLOATING_TERMINAL_ACTION, "KeyJ")
-    add_available_binding(PANE_NAVIGATION_ACTION, "KeyG")
+    if PANE_NAVIGATION_ACTION not in upgraded:
+        add_available_binding(PANE_NAVIGATION_ACTION, "KeyG")
+    if CALLBACK_ACTION not in upgraded:
+        quick_binding = upgraded.get(QUICK_SESSION_ACTION)
+        if (
+            isinstance(quick_binding, dict)
+            and quick_binding.get("direct") == "KeyK"
+            and quick_binding.get("launcher") == "KeyK"
+        ):
+            quick_binding["direct"] = None
+            upgraded[CALLBACK_ACTION] = _binding("KeyK", None)
+        else:
+            add_available_binding(CALLBACK_ACTION, "KeyK")
     return validate_bindings(upgraded)
 
 

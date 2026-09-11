@@ -132,6 +132,7 @@ from .workspaces import (
     WorkspaceStoreUnavailable,
     WorkspaceTransferConflictError,
     normalize_scoped_note,
+    validate_scoped_note_notebook,
     validate_workspace_quick_links,
 )
 
@@ -3385,10 +3386,13 @@ def create_app(
 
     async def get_common_note(_: web.Request) -> web.Response:
         try:
-            note = app[WORKSPACES_KEY].get_common_note()
+            notebook = app[WORKSPACES_KEY].get_common_notebook()
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
-        return web.json_response({"note": note})
+        return web.json_response({
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
 
     async def replace_common_note(request: web.Request) -> web.Response:
         try:
@@ -3397,13 +3401,21 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        if "note" not in payload:
-            return json_error("note is required", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"note"})
+        if "note" not in payload and "notebook" not in payload:
+            return json_error("note or notebook is required", 400)
+        if "note" in payload and "notebook" in payload:
+            return json_error("provide either note or notebook, not both", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"note", "notebook"})
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
         try:
-            note = app[WORKSPACES_KEY].replace_common_note(payload["note"])
+            if "notebook" in payload:
+                notebook = app[WORKSPACES_KEY].replace_common_notebook(
+                    payload["notebook"]
+                )
+            else:
+                app[WORKSPACES_KEY].replace_common_note(payload["note"])
+                notebook = app[WORKSPACES_KEY].get_common_notebook()
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
         except (TypeError, ValueError) as error:
@@ -3411,7 +3423,10 @@ def create_app(
         except OSError:
             LOGGER.exception("Unable to save common note")
             return json_error("unable to save common note", 500)
-        return web.json_response({"note": note})
+        return web.json_response({
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
 
     async def get_session_quick_links(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -3484,14 +3499,17 @@ def create_app(
         try:
             async with app[SESSION_RENAME_LOCK_KEY]:
                 await app[TMUX_KEY].get_session(session_name)
-                note = app[WORKSPACES_KEY].get_session_note(session_name)
+                notebook = app[WORKSPACES_KEY].get_session_notebook(session_name)
         except TmuxSessionNotFoundError as error:
             return json_error(str(error), 404)
         except TmuxError as error:
             return json_error(str(error), 503)
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
-        return web.json_response({"note": note})
+        return web.json_response({
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
 
     async def replace_session_note(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -3501,24 +3519,38 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        if "note" not in payload:
-            return json_error("note is required", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"note"})
+        if "note" not in payload and "notebook" not in payload:
+            return json_error("note or notebook is required", 400)
+        if "note" in payload and "notebook" in payload:
+            return json_error("provide either note or notebook, not both", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"note", "notebook"})
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
         try:
             session_name = validate_session_name(session_name)
-            normalize_scoped_note(payload["note"])
+            if "notebook" in payload:
+                validate_scoped_note_notebook(payload["notebook"])
+            else:
+                normalize_scoped_note(payload["note"])
         except (TypeError, ValueError) as error:
             return json_error(str(error), 400)
 
         try:
             async with app[SESSION_RENAME_LOCK_KEY]:
                 await app[TMUX_KEY].get_session(session_name)
-                note = app[WORKSPACES_KEY].replace_session_note(
-                    session_name,
-                    payload["note"],
-                )
+                if "notebook" in payload:
+                    notebook = app[WORKSPACES_KEY].replace_session_notebook(
+                        session_name,
+                        payload["notebook"],
+                    )
+                else:
+                    app[WORKSPACES_KEY].replace_session_note(
+                        session_name,
+                        payload["note"],
+                    )
+                    notebook = app[WORKSPACES_KEY].get_session_notebook(
+                        session_name
+                    )
         except TmuxSessionNotFoundError as error:
             return json_error(str(error), 404)
         except TmuxError as error:
@@ -3530,11 +3562,14 @@ def create_app(
         except OSError:
             LOGGER.exception("Unable to save note for tmux session %s", session_name)
             return json_error("unable to save session note", 500)
-        return web.json_response({"note": note})
+        return web.json_response({
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
 
     async def get_workspace_note(request: web.Request) -> web.Response:
         try:
-            note = app[WORKSPACES_KEY].get_workspace_note(
+            notebook = app[WORKSPACES_KEY].get_workspace_notebook(
                 request.match_info["workspace_id"]
             )
         except WorkspaceStoreUnavailable as error:
@@ -3543,7 +3578,10 @@ def create_app(
             return json_error(str(error), 404)
         except (TypeError, ValueError) as error:
             return json_error(str(error), 400)
-        return web.json_response({"note": note})
+        return web.json_response({
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
 
     async def replace_workspace_note(request: web.Request) -> web.Response:
         try:
@@ -3552,16 +3590,27 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        if "note" not in payload:
-            return json_error("note is required", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"note"})
+        if "note" not in payload and "notebook" not in payload:
+            return json_error("note or notebook is required", 400)
+        if "note" in payload and "notebook" in payload:
+            return json_error("provide either note or notebook, not both", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"note", "notebook"})
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
         try:
-            note = app[WORKSPACES_KEY].replace_workspace_note(
-                request.match_info["workspace_id"],
-                payload["note"],
-            )
+            if "notebook" in payload:
+                notebook = app[WORKSPACES_KEY].replace_workspace_notebook(
+                    request.match_info["workspace_id"],
+                    payload["notebook"],
+                )
+            else:
+                app[WORKSPACES_KEY].replace_workspace_note(
+                    request.match_info["workspace_id"],
+                    payload["note"],
+                )
+                notebook = app[WORKSPACES_KEY].get_workspace_notebook(
+                    request.match_info["workspace_id"]
+                )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
         except WorkspaceNotFoundError as error:
@@ -3571,7 +3620,10 @@ def create_app(
         except OSError:
             LOGGER.exception("Unable to save workspace note")
             return json_error("unable to save workspace note", 500)
-        return web.json_response({"note": note})
+        return web.json_response({
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
 
     async def get_workspace(request: web.Request) -> web.Response:
         try:
@@ -3648,6 +3700,7 @@ def create_app(
             "separators",
             "separatorsBefore",
             "paneLayouts",
+            "callbackSessions",
         }
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
@@ -3662,6 +3715,7 @@ def create_app(
                 separators=payload.get("separators", []),
                 separators_before=payload.get("separatorsBefore", []),
                 pane_layouts=payload.get("paneLayouts", []),
+                callback_sessions=payload.get("callbackSessions", []),
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
@@ -3690,6 +3744,7 @@ def create_app(
             "separators",
             "separatorsBefore",
             "paneLayouts",
+            "callbackSessions",
             "activeSession",
             "sessionRevision",
         }
@@ -3703,11 +3758,13 @@ def create_app(
             "separators",
             "separatorsBefore",
             "paneLayouts",
+            "callbackSessions",
             "activeSession",
         }
         if not set(payload) & workspace_fields:
             return json_error(
-                "name, tabs, groups, separators, paneLayouts, or activeSession is required",
+                "name, tabs, groups, separators, separatorsBefore, paneLayouts, "
+                "callbackSessions, or activeSession is required",
                 400,
             )
         if (
@@ -3718,6 +3775,7 @@ def create_app(
                 "separators",
                 "separatorsBefore",
                 "paneLayouts",
+                "callbackSessions",
                 "activeSession",
             }
             and "sessionRevision" not in payload
@@ -3740,6 +3798,8 @@ def create_app(
                 update_separators_before="separatorsBefore" in payload,
                 pane_layouts=payload.get("paneLayouts"),
                 update_pane_layouts="paneLayouts" in payload,
+                callback_sessions=payload.get("callbackSessions"),
+                update_callback_sessions="callbackSessions" in payload,
                 update_active_session="activeSession" in payload,
                 session_revision=payload.get("sessionRevision"),
             )

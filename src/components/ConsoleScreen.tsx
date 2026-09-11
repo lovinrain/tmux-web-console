@@ -28,6 +28,7 @@ import {
   ArrowLeftIcon,
   ArrowDownIcon,
   ArrowUpIcon,
+  CheckIcon,
   ContractIcon,
   ExpandIcon,
   ExternalLinkIcon,
@@ -139,6 +140,9 @@ interface ConsoleScreenProps {
     pinned: boolean,
     sessionRevision: number,
   ) => void | Promise<void>;
+  callbackSessionActive?: boolean;
+  callbackSessionBusy?: boolean;
+  onToggleCallbackSession?: () => void | Promise<void>;
   onSessionWorkspaceTransfer?: (
     sessionName: string,
     destinationWorkspaceId: string,
@@ -524,6 +528,9 @@ export function ConsoleScreen({
   onSessionsChange,
   onSessionUpdate,
   onWorkspacePinChange,
+  callbackSessionActive = false,
+  callbackSessionBusy = false,
+  onToggleCallbackSession,
   onSessionWorkspaceTransfer,
   workspaceTransferDisabled = false,
   onSessionRenamed,
@@ -1916,6 +1923,34 @@ export function ConsoleScreen({
             <PinIcon filled={Boolean(session?.workspacePinned)} />
             <span>{session?.workspacePinned ? "Pinned all" : "Pin all"}</span>
           </button>
+          {onToggleCallbackSession && (
+            <button
+              type="button"
+              className={callbackSessionActive
+                ? "callback-session-toggle active"
+                : "callback-session-toggle"}
+              aria-label={callbackSessionActive
+                ? `Remove ${sessionName} from callback list`
+                : `Add ${sessionName} to callback list`}
+              aria-pressed={callbackSessionActive}
+              aria-busy={callbackSessionBusy}
+              aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-callback"])}
+              disabled={!session || callbackSessionBusy}
+              title={`${callbackSessionActive
+                ? "Remove this session from the workspace callback list"
+                : "Add this session to the workspace callback list"}${directShortcutLabel(
+                  shortcutBindings["workspace-callback"],
+                ) ? ` (${directShortcutLabel(shortcutBindings["workspace-callback"])})` : ""}`}
+              onClick={() => {
+                void Promise.resolve()
+                  .then(() => onToggleCallbackSession())
+                  .catch(() => undefined);
+              }}
+            >
+              {callbackSessionActive ? <CheckIcon /> : <HistoryIcon />}
+              <span>{callbackSessionActive ? "Watching" : "Callback"}</span>
+            </button>
+          )}
           {onSessionWorkspaceTransfer && (
             <button
               type="button"

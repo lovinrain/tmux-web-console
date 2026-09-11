@@ -455,7 +455,7 @@ reloading the panel, and is neither uploaded to the backend nor shared with a
 different browser profile.
 
 On desktop, xterm also detects terminal-output candidates ending in `.md`,
-`.pdf`, `.png`, `.txt`, or `.json`. It understands absolute paths, `~/` paths,
+`.pdf`, `.png`, `.txt`, `.json`, or `.csv`. It understands absolute paths, `~/` paths,
 CWD-relative paths, quoted paths with spaces, and shell-escaped spaces; common
 trailing punctuation and
 `:line` suffixes are excluded from the target. A plain click remains available
@@ -731,7 +731,7 @@ current workspace is marked explicitly, and a temporary workspace can jump to
 the first or last saved workspace without visiting the landing page first.
 
 Each saved workspace keeps its name, ordered open tabs, tab groups,
-workspace-scoped quick links, named multi-pane layouts, active session,
+workspace-scoped quick links, callback sessions, named multi-pane layouts, active session,
 global-pin provenance, and
 server-generated creation, update, and last-active times in
 `MUXDECK_WORKSPACES_FILE`. Opening or changing a
@@ -954,8 +954,11 @@ active saved workspace, and `Session` follows the active native tmux session
 across workspaces. A temporary workspace cannot have its own note, but its Common
 and Session cards remain available. Selecting a card opens a focused editor;
 changes autosave after a short pause and are flushed before the editor closes.
-Each scope holds up to 8,000 characters. The cards and editor are desktop-only,
-and concurrent editors use last-write-wins replacement.
+Each scope is a notebook with up to 128 named pages. Existing single-note text
+is migrated into `Page 1`; page content has no separate character validator
+(the HTTP request boundary still protects the service). Page selection and the
+optional page sidebar are remembered in each browser window. The cards and
+editor are desktop-only, and concurrent editors use last-write-wins replacement.
 
 A compact `Countdown` / `Stopwatch` card sits beside those note cards on desktop.
 It opens a non-modal floating timer that moves by dragging its title strip and can
@@ -1077,7 +1080,7 @@ The live console defaults to exact `Ctrl+Shift` chords for session and terminal 
 session rename dialog, `L` returns to live output, `C` toggles browser Copy mode,
 and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
 creates a numbered session in the active pane's directory, `B` opens New session,
-`K` immediately creates a temporary assigned-name session from workspace memory,
+`K` adds or removes the active session from the workspace callback list,
 `F` enters or exits terminal Focus, `Y` toggles the floating staged-input
 window, and `S` shows or hides the session strip. The
 desktop command palette uses `Ctrl+Shift+H`. The console-only
@@ -1099,6 +1102,10 @@ hint and handler. Saving writes the versioned keymap to the backend, immediately
 updates buttons, command results, and both shortcut windows, and makes the same
 map available to every browser. Browser- or OS-reserved direct chords may never
 reach the page, so the shortcut-window layer remains the dependable fallback.
+
+Quick temporary session creation remains available through the shortcut window
+as `Ctrl+Shift+Z`, then `K`; its direct chord is intentionally unassigned because
+`Ctrl+Shift+K` is reserved for the callback toggle.
 
 `Recents` opens the route `/session/:name/recents`. The sheet separates open
 quick tabs, closed recently visited sessions, and other sessions currently on
@@ -1181,13 +1188,16 @@ browsers, uses revision-checked whole-document writes, and defaults to the
 built-in bindings until the first save. An unreadable, malformed, conflicting,
 or unsupported document makes shortcut persistence unavailable rather than
 overwriting the file; the browser continues with built-in defaults and exposes a
-retry state in the editor. Shortcut documents are version 5. Version 4 loads by
-adding pane navigation with `G` in each unoccupied layer. Version 3 additionally
-adds the floating utility terminal with `J`; version 2 adds floating input with
-`Y`, and version 1 first adds the quick temporary session with `K`. Upgrades add
-each later action in order, and a conflict leaves only that layer unbound instead
-of replacing a custom key. The first keymap save atomically rewrites a version 1
-through 4 document as version 5. Keep a pre-upgrade backup when rollback to an
+retry state in the editor. Shortcut documents are version 6. Version 5 loads by
+adding the workspace callback action with `K`; if the legacy quick temporary
+session still owns `K` directly, that direct binding is moved out of the way while
+its shortcut-window binding remains available. Version 4 loads by adding pane
+navigation with `G` in each unoccupied layer. Version 3 additionally adds the
+floating utility terminal with `J`; version 2 adds floating input with `Y`, and
+version 1 first adds the quick temporary session with `K`. Upgrades add each
+later action in order, and a conflict leaves only that layer unbound instead of
+replacing a custom key. The first keymap save atomically rewrites a version 1
+through 5 document as version 6. Keep a pre-upgrade backup when rollback to an
 older release is possible.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.
@@ -1259,7 +1269,24 @@ server workspace document, but the browser restores them when that workspace is
 resumed. Pinned Common and Workspace windows remain open across session-tab
 switches, while a Session window remains tied to its native tmux session.
 
-The workspace schema is version 10. Version 1 files load at session revision zero;
+### Workspace callback list
+
+The desktop `Callback` card is a deliberate follow-up queue for sessions that
+need a human check later. `Current` marks the active session, or the chooser can
+add another known session; each entry is deduplicated, ordered by the user's
+additions, and can be opened or marked reviewed with its check button. Live
+agent state is shown as `Working`, `Ready`, `Waiting`, or `Ended / unavailable`,
+so a completed session remains easy to find after the operator returns. `Clear
+ended` removes stale entries and `Clear all` empties the queue. Callback entries
+are stored inside the saved workspace and follow native session renames; moving
+a tracked session transfers its callback entry with it, while copying a session
+does not silently create a second callback. An unsaved temporary workspace keeps
+its queue in browser-local storage until it is explicitly saved. The list opens
+in a movable, resizable floating window; pinning keeps it visible when switching
+session tabs, and its open, pin, position, and size preferences are namespaced by
+workspace in that browser.
+
+The workspace schema is version 12. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
@@ -1268,17 +1295,20 @@ provenance. Versions 1 through 7 load with no sidebar separators; version 8 reta
 its after-session separators and loads with no before-session separators, and
 versions 1 through 9 load with no named pane views. A legacy document
 upgrades atomically on its next workspace,
-quick-link, note, or global-pin write. A workspace name is limited to 80
+quick-link, note, global-pin, or callback-list write. Versions 1 through 10 load
+with an empty callback list. A workspace name is limited to 80
 characters and a workspace can contain
 at most 256 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
 quick links. It can keep 16 named pane layouts, each with at most 12 leaves and
 six levels of nested splits. Pane names are limited to 64 characters and split
 ratios stay between 15% and 85%. The global common shelf and each native-session shelf also permit 16
 links. Group names are limited to 40 characters, quick-link labels to 48
-characters, quick-link URLs to 2,048 characters, and every scoped note to 8,000
-characters. Writes use an atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 9
-reject the version 10 document. If an existing workspace file is unreadable,
+characters, quick-link URLs to 2,048 characters, every notebook to 128 pages
+with 80-character names, and every callback list to 64 unique session names.
+Page content has no separate character validator. Writes use an
+atomic file replacement. Keep a pre-upgrade copy when
+rollback is possible because releases that only understand versions 1 through 11
+reject the version 12 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 

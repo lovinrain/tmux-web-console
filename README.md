@@ -60,7 +60,7 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Persistent named workspaces with colored, collapsible tab groups, ordered top
   or side tabs with desktop multi-select dragging, common/workspace/session
   quick-link shelves, scoped sticky notes, saved recursive multi-pane views,
-  and cross-device resume
+  workspace-scoped callback lists, and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
@@ -134,7 +134,18 @@ For frontend development, run `npm run dev`. Vite serves
   toggles a floating window that moves by dragging its title strip. Pinned Common
   and Workspace windows stay visible while switching session tabs. The browser
   remembers the open, pinned, and position state separately for each saved
-  workspace and restores that arrangement when the workspace is resumed.
+  workspace and restores that arrangement when the workspace is resumed. Each
+  note is a multi-page notebook: use the page bar or optional page sidebar to
+  add, rename, remove, and navigate pages; existing notes become Page 1 and
+  page text has no application-level character cap (the normal request-size
+  safety boundary still applies).
+- The desktop `Callback` card is a workspace-scoped follow-up queue. Add the
+  current session or choose another live session, then return to it with
+  `Open` or mark it reviewed with the check button. Working, ready, and ended
+  states remain visible while you are away. The queue is saved with a named
+  workspace; an unsaved workspace keeps a browser-local queue until it is saved.
+  Its list opens as a movable, resizable floating window, can be pinned across
+  session switches, and remembers its layout per workspace.
 - The adjacent desktop timer card provides countdown and stopwatch modes in a
   draggable floating window. Pinning keeps it visible while switching sessions;
   saved workspaces restore its browser-local clock, layout, and pin state. An
@@ -194,7 +205,7 @@ For frontend development, run `npm run dev`. Vite serves
   copies the absolute server path, while `Stage path` inserts its shell-quoted
   form into the composer without sending.
 - On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.json`,
-  `.html`, or `.htm` is also linkified.
+  `.csv`, `.html`, or `.htm` is also linkified.
   `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
   in the floating file browser; a relative path is resolved from the live pane
   CWD, while absolute and `~/` paths keep their server meaning. Plain clicks
@@ -230,7 +241,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+H` | Open fuzzy command search |
 | `Ctrl+Shift+Z` | Open the shortcut window; then press one action key |
 | `Ctrl+Shift+B` | Open New session in the current workspace |
-| `Ctrl+Shift+K` | Immediately create a temporary assigned-name session from workspace memory |
+| `Ctrl+Shift+K` | Add or remove the active session from the workspace callback list |
 | `Ctrl+Shift+,` | Previous tab |
 | `Ctrl+Shift+.` | Next tab |
 | `Ctrl+Shift+1...9` | Jump to a numbered tab |
@@ -248,6 +259,10 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+R` | Rename the active tmux session |
 | `Ctrl+Shift+E` | Open the End-session confirmation |
 | `Ctrl+Shift+Z`, then `T` | Toggle the saved light/dark theme |
+
+Quick temporary session creation remains available from the shortcut window as
+`Ctrl+Shift+Z`, then `K` (its direct chord is intentionally free because `K` is
+reserved for the callback toggle).
 
 The shortcut window provides a browser-safe second route to known actions. In
 particular, the defaults `Z` then `E`, `R`, or `H` open End confirmation, Rename,

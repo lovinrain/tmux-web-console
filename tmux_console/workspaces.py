@@ -28,7 +28,10 @@ MAX_WORKSPACE_QUICK_LINKS = 16
 MAX_WORKSPACE_QUICK_LINK_ID_LENGTH = 64
 MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH = 48
 MAX_WORKSPACE_QUICK_LINK_URL_LENGTH = 2048
-MAX_SCOPED_NOTE_LENGTH = 8_000
+MAX_WORKSPACE_CALLBACK_SESSIONS = 64
+MAX_SCOPED_NOTE_PAGES = 128
+MAX_SCOPED_NOTE_PAGE_ID_LENGTH = 64
+MAX_SCOPED_NOTE_PAGE_NAME_LENGTH = 80
 MAX_WORKSPACE_PANE_LAYOUTS = 16
 MAX_WORKSPACE_PANE_LAYOUT_ID_LENGTH = 64
 MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH = 64
@@ -52,8 +55,9 @@ _GROUPS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
 _SEPARATORS_OMITTED = object()
 _PANE_LAYOUTS_OMITTED = object()
+_CALLBACK_SESSIONS_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 10
+WORKSPACE_SCHEMA_VERSION = 12
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -112,6 +116,36 @@ def validate_workspace_tabs(value: object) -> tuple[str, ...]:
         seen.add(tab)
         tabs.append(tab)
     return tuple(tabs)
+
+
+def validate_workspace_callback_sessions(
+    value: object,
+    field: str = "callbackSessions",
+) -> tuple[str, ...]:
+    """Validate the ordered, workspace-scoped sessions a user wants to revisit."""
+    if not isinstance(value, list):
+        raise TypeError(f"{field} must be an array")
+    if len(value) > MAX_WORKSPACE_CALLBACK_SESSIONS:
+        raise ValueError(
+            f"{field} cannot contain more than {MAX_WORKSPACE_CALLBACK_SESSIONS} sessions"
+        )
+
+    sessions: list[str] = []
+    seen: set[str] = set()
+    for index, candidate in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if not isinstance(candidate, str):
+            raise TypeError(f"{item_field} must be a string")
+        try:
+            session_name = validate_session_name(candidate)
+            _validate_unicode(session_name, item_field)
+        except ValueError as error:
+            raise ValueError(f"{item_field}: {error}") from error
+        if session_name in seen:
+            raise ValueError(f"{field} contains duplicate session: {session_name}")
+        seen.add(session_name)
+        sessions.append(session_name)
+    return tuple(sessions)
 
 
 def _validate_pinned_session_names(value: object, field: str) -> tuple[str, ...]:
@@ -375,10 +409,6 @@ def normalize_scoped_note(value: object, field: str = "note") -> str:
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string")
     note = value.replace("\r\n", "\n").replace("\r", "\n")
-    if len(note) > MAX_SCOPED_NOTE_LENGTH:
-        raise ValueError(
-            f"{field} must be {MAX_SCOPED_NOTE_LENGTH} characters or fewer"
-        )
     if any(
         (ord(character) < 32 and character not in "\n\t")
         or ord(character) == 127
@@ -387,6 +417,137 @@ def normalize_scoped_note(value: object, field: str = "note") -> str:
         raise ValueError(f"{field} cannot contain control characters")
     _validate_unicode(note, field)
     return note if note.strip() else ""
+
+
+def _validate_scoped_note_page_id(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    if not value:
+        raise ValueError(f"{field} cannot be blank")
+    if len(value) > MAX_SCOPED_NOTE_PAGE_ID_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_SCOPED_NOTE_PAGE_ID_LENGTH} characters or fewer"
+        )
+    if not all(
+        character.isascii() and (character.isalnum() or character in "_-")
+        for character in value
+    ):
+        raise ValueError(
+            f"{field} can contain only ASCII letters, numbers, hyphens, and underscores"
+        )
+    return value
+
+
+def _normalize_scoped_note_page_name(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field} must be a string")
+    name = value.strip()
+    if not name:
+        raise ValueError(f"{field} cannot be blank")
+    if len(name) > MAX_SCOPED_NOTE_PAGE_NAME_LENGTH:
+        raise ValueError(
+            f"{field} must be {MAX_SCOPED_NOTE_PAGE_NAME_LENGTH} characters or fewer"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in name):
+        raise ValueError(f"{field} cannot contain control characters")
+    _validate_unicode(name, field)
+    return name
+
+
+@dataclass(frozen=True)
+class ScopedNotePage:
+    id: str
+    name: str
+    content: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"id": self.id, "name": self.name, "content": self.content}
+
+
+@dataclass(frozen=True)
+class ScopedNoteNotebook:
+    pages: tuple[ScopedNotePage, ...]
+
+    @property
+    def first_content(self) -> str:
+        return self.pages[0].content
+
+    def to_dict(self) -> dict[str, list[dict[str, str]]]:
+        return {"pages": [page.to_dict() for page in self.pages]}
+
+
+def default_scoped_note_notebook(note: str = "") -> ScopedNoteNotebook:
+    return ScopedNoteNotebook(
+        pages=(ScopedNotePage(id="main", name="Page 1", content=note),)
+    )
+
+
+def validate_scoped_note_notebook(
+    value: object,
+    field: str = "notebook",
+) -> ScopedNoteNotebook:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field} must be an object")
+    unknown = sorted(str(item) for item in set(value) - {"pages"})
+    if unknown:
+        raise ValueError(f"{field} has unknown field: {unknown[0]}")
+    if "pages" not in value:
+        raise ValueError(f"{field} is missing field: pages")
+    raw_pages = value["pages"]
+    if not isinstance(raw_pages, list):
+        raise TypeError(f"{field}.pages must be an array")
+    if not raw_pages:
+        raise ValueError(f"{field}.pages cannot be empty")
+    if len(raw_pages) > MAX_SCOPED_NOTE_PAGES:
+        raise ValueError(
+            f"{field}.pages cannot contain more than {MAX_SCOPED_NOTE_PAGES} pages"
+        )
+
+    pages: list[ScopedNotePage] = []
+    seen_ids: set[str] = set()
+    expected_fields = {"id", "name", "content"}
+    for index, candidate in enumerate(raw_pages):
+        path = f"{field}.pages[{index}]"
+        if not isinstance(candidate, dict):
+            raise TypeError(f"{path} must be an object")
+        missing = sorted(expected_fields - set(candidate))
+        if missing:
+            raise ValueError(f"{path} is missing field: {missing[0]}")
+        unknown = sorted(str(item) for item in set(candidate) - expected_fields)
+        if unknown:
+            raise ValueError(f"{path} has unknown field: {unknown[0]}")
+        page_id = _validate_scoped_note_page_id(candidate["id"], f"{path}.id")
+        if page_id in seen_ids:
+            raise ValueError(f"{field}.pages contains duplicate id: {page_id}")
+        seen_ids.add(page_id)
+        pages.append(
+            ScopedNotePage(
+                id=page_id,
+                name=_normalize_scoped_note_page_name(
+                    candidate["name"], f"{path}.name"
+                ),
+                content=normalize_scoped_note(candidate["content"], f"{path}.content"),
+            )
+        )
+    return ScopedNoteNotebook(pages=tuple(pages))
+
+
+def _scoped_note_notebook_from_legacy(value: object, field: str) -> ScopedNoteNotebook:
+    return default_scoped_note_notebook(normalize_scoped_note(value, field))
+
+
+def _is_default_scoped_note_notebook(notebook: ScopedNoteNotebook) -> bool:
+    return notebook == default_scoped_note_notebook()
+
+
+def _replace_notebook_first_content(
+    notebook: ScopedNoteNotebook,
+    note: str,
+) -> ScopedNoteNotebook:
+    first, *remaining = notebook.pages
+    return ScopedNoteNotebook(
+        pages=(replace(first, content=note), *remaining),
+    )
 
 
 def validate_workspace_notes(
@@ -429,11 +590,57 @@ def validate_session_notes(
     return notes
 
 
+def validate_workspace_notebooks(
+    value: object,
+    field: str = "workspaceNotebooks",
+) -> dict[str, ScopedNoteNotebook]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field} must be an object")
+
+    notebooks: dict[str, ScopedNoteNotebook] = {}
+    for raw_workspace_id, raw_notebook in value.items():
+        if not isinstance(raw_workspace_id, str):
+            raise TypeError(f"{field} workspace ids must be strings")
+        workspace_id = _validate_workspace_id(raw_workspace_id)
+        notebook = validate_scoped_note_notebook(
+            raw_notebook,
+            f"{field}[{workspace_id!r}]",
+        )
+        if not _is_default_scoped_note_notebook(notebook):
+            notebooks[workspace_id] = notebook
+    return notebooks
+
+
+def validate_session_notebooks(
+    value: object,
+    field: str = "sessionNotebooks",
+) -> dict[str, ScopedNoteNotebook]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{field} must be an object")
+
+    notebooks: dict[str, ScopedNoteNotebook] = {}
+    for raw_session_name, raw_notebook in value.items():
+        if not isinstance(raw_session_name, str):
+            raise TypeError(f"{field} session names must be strings")
+        try:
+            session_name = validate_session_name(raw_session_name)
+            _validate_unicode(session_name, f"{field} session name")
+        except ValueError as error:
+            raise ValueError(f"{field} session name: {error}") from error
+        notebook = validate_scoped_note_notebook(
+            raw_notebook,
+            f"{field}[{session_name!r}]",
+        )
+        if not _is_default_scoped_note_notebook(notebook):
+            notebooks[session_name] = notebook
+    return notebooks
+
+
 @dataclass(frozen=True)
 class ScopedNotes:
-    common: str
-    workspaces: dict[str, str]
-    sessions: dict[str, str]
+    common: ScopedNoteNotebook
+    workspaces: dict[str, ScopedNoteNotebook]
+    sessions: dict[str, ScopedNoteNotebook]
 
 
 def _validate_session_revision(value: object) -> int:
@@ -912,6 +1119,7 @@ class SavedWorkspace:
     separators: tuple[str, ...] = ()
     separators_before: tuple[str, ...] = ()
     pane_layouts: tuple[WorkspacePaneLayout, ...] = ()
+    callback_sessions: tuple[str, ...] = ()
 
     def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
         payload = {
@@ -928,6 +1136,10 @@ class SavedWorkspace:
             "updatedAt": self.updated_at,
             "lastActiveAt": self.last_active_at,
         }
+        # Empty lists remain optional in schema 12 and are represented as empty
+        # by both the API client and loader.
+        if self.callback_sessions:
+            payload["callbackSessions"] = list(self.callback_sessions)
         if include_internal:
             payload["inheritedPins"] = list(self.inherited_pins)
         return payload
@@ -1135,6 +1347,17 @@ class WorkspaceStore:
                 else None
             )
             destination_already_contained = session_name in destination.tabs
+            source_removed = bool(
+                operation == "move"
+                and source is not None
+                and session_name in source.tabs
+            )
+            transfer_callback_marker = bool(
+                source_removed
+                and source is not None
+                and session_name in source.callback_sessions
+                and session_name not in destination.callback_sessions
+            )
             if operation == "move" and session_name in self._pinned_sessions:
                 raise WorkspaceTransferConflictError(
                     f'cannot move globally pinned session "{session_name}"; unpin it first'
@@ -1147,12 +1370,17 @@ class WorkspaceStore:
                     f'cannot {operation} session "{session_name}": workspace '
                     f'"{destination.name}" already has {MAX_WORKSPACE_TABS} sessions'
                 )
+            if (
+                transfer_callback_marker
+                and len(destination.callback_sessions)
+                >= MAX_WORKSPACE_CALLBACK_SESSIONS
+            ):
+                raise WorkspaceTransferConflictError(
+                    f'cannot move session "{session_name}": workspace '
+                    f'"{destination.name}" already has '
+                    f'{MAX_WORKSPACE_CALLBACK_SESSIONS} callback sessions'
+                )
 
-            source_removed = bool(
-                operation == "move"
-                and source is not None
-                and session_name in source.tabs
-            )
             destination_added = not destination_already_contained
             if not source_removed and not destination_added:
                 return {
@@ -1176,6 +1404,9 @@ class WorkspaceStore:
                 source_active_session = source.active_session
                 if source_active_session == session_name:
                     source_active_session = source_tabs[0] if source_tabs else None
+                source_callback_sessions = tuple(
+                    item for item in source.callback_sessions if item != session_name
+                )
                 next_workspaces[source.id] = replace(
                     source,
                     tabs=source_tabs,
@@ -1188,13 +1419,24 @@ class WorkspaceStore:
                     inherited_pins=tuple(
                         tab for tab in source.inherited_pins if tab != session_name
                     ),
+                    callback_sessions=source_callback_sessions,
                     active_session=source_active_session,
                     updated_at=max(timestamp, source.updated_at + 1),
                 )
-            if destination_added:
+            if destination_added or transfer_callback_marker:
+                destination_callback_sessions = (
+                    (*destination.callback_sessions, session_name)
+                    if transfer_callback_marker
+                    else destination.callback_sessions
+                )
                 next_workspaces[destination.id] = replace(
                     destination,
-                    tabs=(*destination.tabs, session_name),
+                    tabs=(
+                        (*destination.tabs, session_name)
+                        if destination_added
+                        else destination.tabs
+                    ),
+                    callback_sessions=destination_callback_sessions,
                     updated_at=max(timestamp, destination.updated_at + 1),
                 )
 
@@ -1230,17 +1472,39 @@ class WorkspaceStore:
     def get_common_note(self) -> str:
         with self._lock:
             self._ensure_available()
-            return self._notes.common
+            return self._notes.common.first_content
+
+    def get_common_notebook(self) -> dict[str, list[dict[str, str]]]:
+        with self._lock:
+            self._ensure_available()
+            return self._notes.common.to_dict()
 
     def replace_common_note(self, note: object) -> str:
         validated_note = normalize_scoped_note(note)
         with self._lock:
             self._ensure_writable()
+            notebook = _replace_notebook_first_content(
+                self._notes.common,
+                validated_note,
+            )
             self._commit(
                 self._workspaces,
-                notes=replace(self._notes, common=validated_note),
+                notes=replace(self._notes, common=notebook),
             )
-            return self._notes.common
+            return self._notes.common.first_content
+
+    def replace_common_notebook(
+        self,
+        notebook: object,
+    ) -> dict[str, list[dict[str, str]]]:
+        validated_notebook = validate_scoped_note_notebook(notebook)
+        with self._lock:
+            self._ensure_writable()
+            self._commit(
+                self._workspaces,
+                notes=replace(self._notes, common=validated_notebook),
+            )
+            return self._notes.common.to_dict()
 
     def get_session_quick_links(self, session_name: str) -> list[dict[str, str]]:
         session_name = validate_session_name(session_name)
@@ -1275,7 +1539,22 @@ class WorkspaceStore:
         session_name = validate_session_name(session_name)
         with self._lock:
             self._ensure_available()
-            return self._notes.sessions.get(session_name, "")
+            return self._notes.sessions.get(
+                session_name,
+                default_scoped_note_notebook(),
+            ).first_content
+
+    def get_session_notebook(
+        self,
+        session_name: str,
+    ) -> dict[str, list[dict[str, str]]]:
+        session_name = validate_session_name(session_name)
+        with self._lock:
+            self._ensure_available()
+            return self._notes.sessions.get(
+                session_name,
+                default_scoped_note_notebook(),
+            ).to_dict()
 
     def replace_session_note(self, session_name: str, note: object) -> str:
         session_name = validate_session_name(session_name)
@@ -1283,15 +1562,39 @@ class WorkspaceStore:
         with self._lock:
             self._ensure_writable()
             next_session_notes = self._notes.sessions.copy()
-            if validated_note:
-                next_session_notes[session_name] = validated_note
+            notebook = _replace_notebook_first_content(
+                next_session_notes.get(session_name, default_scoped_note_notebook()),
+                validated_note,
+            )
+            if not _is_default_scoped_note_notebook(notebook):
+                next_session_notes[session_name] = notebook
             else:
                 next_session_notes.pop(session_name, None)
             self._commit(
                 self._workspaces,
                 notes=replace(self._notes, sessions=next_session_notes),
             )
-            return self._notes.sessions.get(session_name, "")
+            return self.get_session_note(session_name)
+
+    def replace_session_notebook(
+        self,
+        session_name: str,
+        notebook: object,
+    ) -> dict[str, list[dict[str, str]]]:
+        session_name = validate_session_name(session_name)
+        validated_notebook = validate_scoped_note_notebook(notebook)
+        with self._lock:
+            self._ensure_writable()
+            next_session_notebooks = self._notes.sessions.copy()
+            if not _is_default_scoped_note_notebook(validated_notebook):
+                next_session_notebooks[session_name] = validated_notebook
+            else:
+                next_session_notebooks.pop(session_name, None)
+            self._commit(
+                self._workspaces,
+                notes=replace(self._notes, sessions=next_session_notebooks),
+            )
+            return self.get_session_notebook(session_name)
 
     def get_workspace_quick_links(self, workspace_id: str) -> list[dict[str, str]]:
         workspace_id = _validate_workspace_id(workspace_id)
@@ -1323,7 +1626,23 @@ class WorkspaceStore:
         with self._lock:
             self._ensure_available()
             self._find(workspace_id)
-            return self._notes.workspaces.get(workspace_id, "")
+            return self._notes.workspaces.get(
+                workspace_id,
+                default_scoped_note_notebook(),
+            ).first_content
+
+    def get_workspace_notebook(
+        self,
+        workspace_id: str,
+    ) -> dict[str, list[dict[str, str]]]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        with self._lock:
+            self._ensure_available()
+            self._find(workspace_id)
+            return self._notes.workspaces.get(
+                workspace_id,
+                default_scoped_note_notebook(),
+            ).to_dict()
 
     def replace_workspace_note(self, workspace_id: str, note: object) -> str:
         workspace_id = _validate_workspace_id(workspace_id)
@@ -1332,15 +1651,40 @@ class WorkspaceStore:
             self._ensure_writable()
             self._find(workspace_id)
             next_workspace_notes = self._notes.workspaces.copy()
-            if validated_note:
-                next_workspace_notes[workspace_id] = validated_note
+            notebook = _replace_notebook_first_content(
+                next_workspace_notes.get(workspace_id, default_scoped_note_notebook()),
+                validated_note,
+            )
+            if not _is_default_scoped_note_notebook(notebook):
+                next_workspace_notes[workspace_id] = notebook
             else:
                 next_workspace_notes.pop(workspace_id, None)
             self._commit(
                 self._workspaces,
                 notes=replace(self._notes, workspaces=next_workspace_notes),
             )
-            return self._notes.workspaces.get(workspace_id, "")
+            return self.get_workspace_note(workspace_id)
+
+    def replace_workspace_notebook(
+        self,
+        workspace_id: str,
+        notebook: object,
+    ) -> dict[str, list[dict[str, str]]]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_notebook = validate_scoped_note_notebook(notebook)
+        with self._lock:
+            self._ensure_writable()
+            self._find(workspace_id)
+            next_workspace_notebooks = self._notes.workspaces.copy()
+            if not _is_default_scoped_note_notebook(validated_notebook):
+                next_workspace_notebooks[workspace_id] = validated_notebook
+            else:
+                next_workspace_notebooks.pop(workspace_id, None)
+            self._commit(
+                self._workspaces,
+                notes=replace(self._notes, workspaces=next_workspace_notebooks),
+            )
+            return self.get_workspace_notebook(workspace_id)
 
     def create_workspace(
         self,
@@ -1353,6 +1697,7 @@ class WorkspaceStore:
         separators: object = _SEPARATORS_OMITTED,
         separators_before: object = _SEPARATORS_OMITTED,
         pane_layouts: object = _PANE_LAYOUTS_OMITTED,
+        callback_sessions: object = _CALLBACK_SESSIONS_OMITTED,
     ) -> dict[str, Any]:
         normalized_name = normalize_workspace_name(name)
         validated_tabs = validate_workspace_tabs(tabs)
@@ -1374,6 +1719,9 @@ class WorkspaceStore:
             [] if pane_layouts is _PANE_LAYOUTS_OMITTED else pane_layouts,
             validated_tabs,
         )
+        validated_callback_sessions = validate_workspace_callback_sessions(
+            [] if callback_sessions is _CALLBACK_SESSIONS_OMITTED else callback_sessions,
+        )
         with self._lock:
             self._ensure_writable()
             merged_tabs, inherited_pins = self._merge_pinned_sessions(validated_tabs)
@@ -1391,6 +1739,7 @@ class WorkspaceStore:
                 separators=validated_separators,
                 separators_before=validated_separators_before,
                 pane_layouts=validated_pane_layouts,
+                callback_sessions=validated_callback_sessions,
                 inherited_pins=inherited_pins,
                 active_session=validated_active_session,
                 created_at=timestamp,
@@ -1419,14 +1768,28 @@ class WorkspaceStore:
         update_separators_before: bool = False,
         pane_layouts: object = None,
         update_pane_layouts: bool = False,
+        callback_sessions: object = None,
+        update_callback_sessions: bool = False,
         session_revision: object = None,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
         normalized_name = normalize_workspace_name(name) if update_name else None
         validated_tabs = validate_workspace_tabs(tabs) if update_tabs else None
+        validated_callback_sessions = (
+            validate_workspace_callback_sessions(callback_sessions)
+            if update_callback_sessions else None
+        )
         validated_session_revision = (
             _validate_session_revision(session_revision)
-            if update_tabs or update_groups or update_active_session or update_separators or update_separators_before or update_pane_layouts
+            if (
+                update_tabs
+                or update_groups
+                or update_active_session
+                or update_separators
+                or update_separators_before
+                or update_pane_layouts
+                or update_callback_sessions
+            )
             else None
         )
 
@@ -1464,6 +1827,11 @@ class WorkspaceStore:
                 if update_tabs
                 else current.pane_layouts
             )
+            if update_callback_sessions:
+                assert validated_callback_sessions is not None
+                next_callback_sessions = validated_callback_sessions
+            else:
+                next_callback_sessions = current.callback_sessions
             next_active_session = (
                 validate_active_session(active_session, next_tabs)
                 if update_active_session
@@ -1478,6 +1846,7 @@ class WorkspaceStore:
                 tabs=next_tabs,
                 groups=next_groups,
                 pane_layouts=next_pane_layouts,
+                callback_sessions=next_callback_sessions,
                 separators=(
                     validate_workspace_separators(separators, next_tabs)
                     if update_separators
@@ -1578,7 +1947,10 @@ class WorkspaceStore:
             changed = 0
             next_workspaces = self._workspaces.copy()
             for workspace_id, current in self._workspaces.items():
-                if current_name not in current.tabs:
+                if (
+                    current_name not in current.tabs
+                    and current_name not in current.callback_sessions
+                ):
                     continue
                 renamed_tabs = tuple(
                     dict.fromkeys(
@@ -1608,6 +1980,13 @@ class WorkspaceStore:
                         or current_name not in current.tabs
                     )
                 )
+                callback_sessions = tuple(
+                    dict.fromkeys(
+                        new_name if item == current_name else item
+                        for item in current.callback_sessions
+                        if item == current_name or item != new_name
+                    )
+                )
                 workspace = replace(
                     current,
                     tabs=renamed_tabs,
@@ -1628,6 +2007,7 @@ class WorkspaceStore:
                     inherited_pins=tuple(
                         item for item in inherited_pins if item in renamed_tabs
                     ),
+                    callback_sessions=callback_sessions,
                     active_session=active_session,
                     updated_at=max(timestamp, current.updated_at + 1),
                 )
@@ -1641,9 +2021,9 @@ class WorkspaceStore:
                 next_session_quick_links[new_name] = renamed_links
 
             next_session_notes = self._notes.sessions.copy()
-            renamed_note = next_session_notes.pop(current_name, "")
+            renamed_note = next_session_notes.pop(current_name, None)
             next_session_notes.pop(new_name, None)
-            if renamed_note:
+            if renamed_note is not None:
                 next_session_notes[new_name] = renamed_note
 
             next_pinned_sessions = tuple(
@@ -1764,20 +2144,69 @@ class WorkspaceStore:
                 if version >= 5
                 else {}
             )
-            notes = (
-                ScopedNotes(
-                    common=normalize_scoped_note(
+            if version >= 12:
+                legacy_workspace_notes = validate_workspace_notes(
+                    payload.get("workspaceNotes", {})
+                )
+                legacy_session_notes = validate_session_notes(
+                    payload.get("sessionNotes", {})
+                )
+                notes = ScopedNotes(
+                    common=(
+                        validate_scoped_note_notebook(
+                            payload["commonNotebook"],
+                            "commonNotebook",
+                        )
+                        if "commonNotebook" in payload
+                        else _scoped_note_notebook_from_legacy(
+                            payload.get("commonNote", ""),
+                            "commonNote",
+                        )
+                    ),
+                    workspaces=(
+                        validate_workspace_notebooks(
+                            payload["workspaceNotebooks"]
+                        )
+                        if "workspaceNotebooks" in payload
+                        else {
+                            workspace_id: default_scoped_note_notebook(note)
+                            for workspace_id, note in legacy_workspace_notes.items()
+                        }
+                    ),
+                    sessions=(
+                        validate_session_notebooks(payload["sessionNotebooks"])
+                        if "sessionNotebooks" in payload
+                        else {
+                            session_name: default_scoped_note_notebook(note)
+                            for session_name, note in legacy_session_notes.items()
+                        }
+                    ),
+                )
+            elif version >= 6:
+                notes = ScopedNotes(
+                    common=_scoped_note_notebook_from_legacy(
                         payload.get("commonNote"),
                         "commonNote",
                     ),
-                    workspaces=validate_workspace_notes(
-                        payload.get("workspaceNotes")
-                    ),
-                    sessions=validate_session_notes(payload.get("sessionNotes")),
+                    workspaces={
+                        workspace_id: default_scoped_note_notebook(note)
+                        for workspace_id, note in validate_workspace_notes(
+                            payload.get("workspaceNotes")
+                        ).items()
+                    },
+                    sessions={
+                        session_name: default_scoped_note_notebook(note)
+                        for session_name, note in validate_session_notes(
+                            payload.get("sessionNotes")
+                        ).items()
+                    },
                 )
-                if version >= 6
-                else ScopedNotes(common="", workspaces={}, sessions={})
-            )
+            else:
+                notes = ScopedNotes(
+                    common=default_scoped_note_notebook(),
+                    workspaces={},
+                    sessions={},
+                )
             pinned_sessions = (
                 _validate_pinned_session_names(
                     payload.get("pinnedSessions"),
@@ -1816,13 +2245,28 @@ class WorkspaceStore:
                     0,
                     (),
                     {},
-                    ScopedNotes(common="", workspaces={}, sessions={}),
+                    ScopedNotes(
+                        common=default_scoped_note_notebook(),
+                        workspaces={},
+                        sessions={},
+                    ),
                     (),
                 )
             self._record_load_error(error)
         except (OSError, TypeError, ValueError, RecursionError) as error:
             self._record_load_error(error)
-        return {}, 0, (), {}, ScopedNotes(common="", workspaces={}, sessions={}), ()
+        return (
+            {},
+            0,
+            (),
+            {},
+            ScopedNotes(
+                common=default_scoped_note_notebook(),
+                workspaces={},
+                sessions={},
+            ),
+            (),
+        )
 
     @staticmethod
     def _load_workspace(
@@ -1855,7 +2299,10 @@ class WorkspaceStore:
             expected.add("separatorsBefore")
         if version >= 10:
             expected.add("paneLayouts")
-        missing = sorted(expected - set(record))
+        if version >= 11:
+            expected.add("callbackSessions")
+        optional = {"callbackSessions"} if version >= 11 else set()
+        missing = sorted((expected - optional) - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
         unknown = sorted(str(field) for field in set(record) - expected)
@@ -1892,6 +2339,10 @@ class WorkspaceStore:
         if any(session_name not in tabs for session_name in pinned_sessions):
             raise ValueError(f"{path}.tabs must include every globally pinned session")
         active_session = validate_active_session(record["activeSession"], tabs)
+        callback_sessions = (
+            validate_workspace_callback_sessions(record.get("callbackSessions", []))
+            if version >= 11 else ()
+        )
         created_at = _validate_timestamp(record["createdAt"], "createdAt")
         updated_at = _validate_timestamp(record["updatedAt"], "updatedAt")
         last_active_at = _validate_timestamp(record["lastActiveAt"], "lastActiveAt")
@@ -1924,6 +2375,7 @@ class WorkspaceStore:
                 validate_workspace_pane_layouts(record["paneLayouts"], tabs)
                 if version >= 10 else ()
             ),
+            callback_sessions=callback_sessions,
         )
 
     def _record_load_error(self, error: BaseException) -> None:
@@ -2049,9 +2501,28 @@ class WorkspaceStore:
                             session_name: [link.to_dict() for link in links]
                             for session_name, links in session_quick_links.items()
                         },
-                        "commonNote": notes.common,
-                        "workspaceNotes": notes.workspaces,
-                        "sessionNotes": notes.sessions,
+                        # Scalar fields keep pre-notebook clients and operational
+                        # inspection tools useful during a rolling deployment.
+                        "commonNote": notes.common.first_content,
+                        "workspaceNotes": {
+                            workspace_id: notebook.first_content
+                            for workspace_id, notebook in notes.workspaces.items()
+                            if notebook.first_content
+                        },
+                        "sessionNotes": {
+                            session_name: notebook.first_content
+                            for session_name, notebook in notes.sessions.items()
+                            if notebook.first_content
+                        },
+                        "commonNotebook": notes.common.to_dict(),
+                        "workspaceNotebooks": {
+                            workspace_id: notebook.to_dict()
+                            for workspace_id, notebook in notes.workspaces.items()
+                        },
+                        "sessionNotebooks": {
+                            session_name: notebook.to_dict()
+                            for session_name, notebook in notes.sessions.items()
+                        },
                         "pinnedSessions": list(pinned_sessions),
                         "workspaces": [
                             workspace.to_dict(include_internal=True)

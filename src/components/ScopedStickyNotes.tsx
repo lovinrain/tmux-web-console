@@ -11,21 +11,28 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  getCommonNote,
-  getSessionNote,
-  getWorkspaceNote,
-  replaceCommonNote,
-  replaceSessionNote,
-  replaceWorkspaceNote,
+  getCommonNotebook,
+  getSessionNotebook,
+  getWorkspaceNotebook,
+  replaceCommonNotebook,
+  replaceSessionNotebook,
+  replaceWorkspaceNotebook,
+  type ScopedNoteNotebook,
+  type ScopedNotePage,
 } from "../api";
 import {
+  ArrowLeftIcon,
+  ChevronRightIcon,
   CloseIcon,
+  ListIcon,
   MemoIcon,
   PinIcon,
+  PlusIcon,
   TrashIcon,
 } from "../icons";
 
-export const MAX_SCOPED_NOTE_LENGTH = 8_000;
+export const MAX_SCOPED_NOTE_PAGES = 128;
+export const MAX_SCOPED_NOTE_PAGE_NAME_LENGTH = 80;
 export const DEFAULT_SCOPED_NOTE_WINDOW_WIDTH = 430;
 export const DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT = 430;
 export const MIN_SCOPED_NOTE_WINDOW_WIDTH = 220;
@@ -57,6 +64,8 @@ interface NoteWindowPreference {
   pinned: boolean;
   position: FloatingNotePosition | null;
   size: FloatingNoteSize | null;
+  selectedPageId: string | null;
+  sidebarOpen: boolean;
 }
 
 interface OpenNoteEditor {
@@ -64,11 +73,13 @@ interface OpenNoteEditor {
   scope: NoteScope;
   identity: string;
   scopeName: string;
-  note: string;
+  notebook: ScopedNoteNotebook;
   pinned: boolean;
   position: FloatingNotePosition;
   size: FloatingNoteSize;
   focusOnMount: boolean;
+  selectedPageId: string;
+  sidebarOpen: boolean;
 }
 
 interface ScopedStickyNotesProps {
@@ -79,7 +90,7 @@ interface ScopedStickyNotesProps {
 
 interface NoteSnapshot {
   identity: string | null;
-  note: string;
+  notebook: ScopedNoteNotebook;
   loading: boolean;
   error: string | null;
 }
@@ -88,20 +99,28 @@ interface StickyNoteEditorProps {
   editorKey: string;
   scope: NoteScope;
   scopeName: string;
-  note: string;
+  notebook: ScopedNoteNotebook;
   pinned: boolean;
   position: FloatingNotePosition;
   size: FloatingNoteSize;
   focusOnMount: boolean;
   active: boolean;
-  onSave: (note: string) => Promise<void>;
+  selectedPageId: string;
+  sidebarOpen: boolean;
+  onSave: (notebook: ScopedNoteNotebook) => Promise<void>;
   onClose: () => void;
   onPinnedChange: (pinned: boolean) => void;
   onPositionChange: (position: FloatingNotePosition) => void;
   onPositionCommit: (position: FloatingNotePosition) => void;
   onSizeChange: (size: FloatingNoteSize) => void;
   onSizeCommit: (size: FloatingNoteSize) => void;
+  onSelectedPageChange: (pageId: string) => void;
+  onSidebarOpenChange: (open: boolean) => void;
   onActivate: () => void;
+}
+
+function emptyNotebook(): ScopedNoteNotebook {
+  return { pages: [{ id: "main", name: "Page 1", content: "" }] };
 }
 
 function noteEditorKey(scope: NoteScope, identity: string): string {
@@ -151,6 +170,11 @@ function parseNoteWindowPreference(raw: string): NoteWindowPreference | null {
         ? candidate.position
         : null,
       size: validFloatingNoteSize(candidate.size) ? candidate.size : null,
+      selectedPageId: typeof candidate.selectedPageId === "string"
+        && candidate.selectedPageId
+        ? candidate.selectedPageId
+        : null,
+      sidebarOpen: candidate.sidebarOpen === true,
     };
   } catch {
     return null;
@@ -167,6 +191,8 @@ function readNoteWindowPreference(
     pinned: false,
     position: null,
     size: null,
+    selectedPageId: null,
+    sidebarOpen: false,
   };
   try {
     const raw = window.localStorage.getItem(`${SCOPED_NOTE_WINDOW_STORAGE_PREFIX}${key}`);
@@ -313,8 +339,27 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function notePreview(note: string): string {
-  return note.trim().replace(/\s+/g, " ") || "Add note";
+function notebookHasContent(notebook: ScopedNoteNotebook): boolean {
+  return notebook.pages.some((page) => Boolean(page.content.trim()));
+}
+
+function notebookPreview(notebook: ScopedNoteNotebook): string {
+  const page = notebook.pages.find((candidate) => candidate.content.trim());
+  const preview = page?.content.trim().replace(/\s+/g, " ") || "Add note";
+  return notebook.pages.length > 1
+    ? `${notebook.pages.length} pages - ${preview}`
+    : preview;
+}
+
+function newPageId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `page-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function notebookSignature(notebook: ScopedNoteNotebook): string {
+  return JSON.stringify(notebook);
 }
 
 function scopeDescription(scope: NoteScope, scopeName: string): string {
@@ -347,12 +392,14 @@ function StickyNoteCard({
     ? "Loading"
     : snapshot.error
       ? "Unavailable"
-      : disabledReason || notePreview(snapshot.note);
+      : disabledReason || notebookPreview(snapshot.notebook);
   const disabled = snapshot.loading || Boolean(snapshot.error) || Boolean(disabledReason);
+  const hasContent = notebookHasContent(snapshot.notebook);
+  const hasNotebook = hasContent || snapshot.notebook.pages.length > 1;
   const windowState = pinned ? "PIN" : open ? "OPEN" : null;
   const actionLabel = open
     ? `Hide ${label.toLowerCase()} note`
-    : `${snapshot.note ? "Edit" : "Add"} ${label.toLowerCase()} note`;
+    : `${hasNotebook ? "Edit" : "Add"} ${label.toLowerCase()} note`;
 
   return (
     <button
@@ -360,7 +407,7 @@ function StickyNoteCard({
       className={[
         "scoped-sticky-note",
         scope,
-        snapshot.note ? "has-note" : "empty",
+        hasNotebook ? "has-note" : "empty",
         snapshot.error ? "error" : "",
         open ? "window-open" : "",
         pinned ? "window-pinned" : "",
@@ -371,7 +418,7 @@ function StickyNoteCard({
       aria-expanded={open}
       title={disabledReason || snapshot.error || (open
         ? `Hide ${label.toLowerCase()} note`
-        : `${label}: ${notePreview(snapshot.note)}`)}
+        : `${label}: ${notebookPreview(snapshot.notebook)}`)}
     >
       <MemoIcon />
       <span>
@@ -391,12 +438,14 @@ function StickyNoteEditor({
   editorKey,
   scope,
   scopeName,
-  note,
+  notebook,
   pinned,
   position,
   size,
   focusOnMount,
   active,
+  selectedPageId,
+  sidebarOpen,
   onSave,
   onClose,
   onPinnedChange,
@@ -404,6 +453,8 @@ function StickyNoteEditor({
   onPositionCommit,
   onSizeChange,
   onSizeCommit,
+  onSelectedPageChange,
+  onSidebarOpenChange,
   onActivate,
 }: StickyNoteEditorProps) {
   const headingId = useId();
@@ -415,20 +466,30 @@ function StickyNoteEditor({
   const closingRef = useRef(false);
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
-  const draftRef = useRef(note);
-  const lastQueuedRef = useRef(note);
+  const draftRef = useRef(notebook);
+  const lastQueuedRef = useRef(notebookSignature(notebook));
   const failedValueRef = useRef<string | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
-  const latestRequestRef = useRef<{ value: string; promise: Promise<boolean> } | null>(null);
+  const latestRequestRef = useRef<{
+    signature: string;
+    promise: Promise<boolean>;
+  } | null>(null);
   const requestVersionRef = useRef(0);
   const queuedRequestCountRef = useRef(0);
   const autosaveTimerRef = useRef<number | null>(null);
   const interactionCleanupRef = useRef<(() => void) | null>(null);
-  const [draft, setDraft] = useState(note);
+  const [draft, setDraft] = useState(notebook);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
   const label = scope === "common" ? "Common" : scopeName;
+  const selectedIndex = Math.max(
+    0,
+    draft.pages.findIndex((page) => page.id === selectedPageId),
+  );
+  const selectedPage = draft.pages[selectedIndex] ?? draft.pages[0];
+  const pageNameRef = useRef(selectedPage.name);
+  const [pageName, setPageName] = useState(selectedPage.name);
 
   const clearAutosaveTimer = useCallback(() => {
     if (autosaveTimerRef.current === null) return;
@@ -436,20 +497,24 @@ function StickyNoteEditor({
     autosaveTimerRef.current = null;
   }, []);
 
-  const enqueueSave = useCallback((value: string, forceRetry = false): Promise<boolean> => {
+  const enqueueSave = useCallback((
+    value: ScopedNoteNotebook,
+    forceRetry = false,
+  ): Promise<boolean> => {
+    const signature = notebookSignature(value);
     const latestRequest = latestRequestRef.current;
     if (
       !forceRetry
-      && value === lastQueuedRef.current
-      && failedValueRef.current !== value
+      && signature === lastQueuedRef.current
+      && failedValueRef.current !== signature
     ) {
-      return latestRequest?.value === value
+      return latestRequest?.signature === signature
         ? latestRequest.promise
         : Promise.resolve(true);
     }
 
     const version = ++requestVersionRef.current;
-    lastQueuedRef.current = value;
+    lastQueuedRef.current = signature;
     failedValueRef.current = null;
     queuedRequestCountRef.current += 1;
     if (mountedRef.current) {
@@ -464,16 +529,18 @@ function StickyNoteEditor({
     const result = operation.then(
       () => {
         queuedRequestCountRef.current -= 1;
-        if (failedValueRef.current === value) failedValueRef.current = null;
+        if (failedValueRef.current === signature) failedValueRef.current = null;
         if (mountedRef.current && version === requestVersionRef.current) {
-          setSaveState(draftRef.current === value ? "saved" : "pending");
+          setSaveState(
+            notebookSignature(draftRef.current) === signature ? "saved" : "pending",
+          );
           setSaveError(null);
         }
         return true;
       },
       (error: unknown) => {
         queuedRequestCountRef.current -= 1;
-        failedValueRef.current = value;
+        failedValueRef.current = signature;
         if (mountedRef.current && version === requestVersionRef.current) {
           setSaveState("error");
           setSaveError(errorMessage(error, "Unable to save this note."));
@@ -481,15 +548,16 @@ function StickyNoteEditor({
         return false;
       },
     );
-    latestRequestRef.current = { value, promise: result };
+    latestRequestRef.current = { signature, promise: result };
     return result;
   }, []);
 
-  const scheduleSave = useCallback((value: string) => {
+  const scheduleSave = useCallback((value: ScopedNoteNotebook) => {
+    const signature = notebookSignature(value);
     clearAutosaveTimer();
     if (
-      value === lastQueuedRef.current
-      && failedValueRef.current !== value
+      signature === lastQueuedRef.current
+      && failedValueRef.current !== signature
     ) {
       setSaveState(queuedRequestCountRef.current > 0 ? "saving" : "saved");
       setSaveError(null);
@@ -499,17 +567,38 @@ function StickyNoteEditor({
     setSaveError(null);
     autosaveTimerRef.current = window.setTimeout(() => {
       autosaveTimerRef.current = null;
-      void enqueueSave(value, failedValueRef.current === value);
+      void enqueueSave(value, failedValueRef.current === signature);
     }, NOTE_AUTOSAVE_DELAY_MS);
   }, [clearAutosaveTimer, enqueueSave]);
+
+  const commitPageName = useCallback((): ScopedNoteNotebook => {
+    const current = draftRef.current;
+    const pageIndex = current.pages.findIndex((page) => page.id === selectedPageId);
+    if (pageIndex < 0) return current;
+    const existing = current.pages[pageIndex];
+    const normalized = pageNameRef.current.trim() || existing.name;
+    pageNameRef.current = normalized;
+    setPageName(normalized);
+    if (normalized === existing.name) return current;
+    const next = {
+      pages: current.pages.map((page, index) => (
+        index === pageIndex ? { ...page, name: normalized } : page
+      )),
+    };
+    draftRef.current = next;
+    setDraft(next);
+    scheduleSave(next);
+    return next;
+  }, [scheduleSave, selectedPageId]);
 
   const finish = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
     clearAutosaveTimer();
     setClosing(true);
-    const value = draftRef.current;
-    const saved = await enqueueSave(value, failedValueRef.current === value);
+    const value = commitPageName();
+    const signature = notebookSignature(value);
+    const saved = await enqueueSave(value, failedValueRef.current === signature);
     if (!mountedRef.current) return;
     if (saved) {
       onClose();
@@ -517,7 +606,7 @@ function StickyNoteEditor({
     }
     closingRef.current = false;
     setClosing(false);
-  }, [clearAutosaveTimer, enqueueSave, onClose]);
+  }, [clearAutosaveTimer, commitPageName, enqueueSave, onClose]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -530,9 +619,10 @@ function StickyNoteEditor({
         "scoped-note-resizing",
       );
       const latestDraft = draftRef.current;
+      const latestSignature = notebookSignature(latestDraft);
       if (
-        latestDraft !== lastQueuedRef.current
-        || failedValueRef.current === latestDraft
+        latestSignature !== lastQueuedRef.current
+        || failedValueRef.current === latestSignature
       ) {
         void queueRef.current
           .catch(() => undefined)
@@ -545,6 +635,14 @@ function StickyNoteEditor({
   useEffect(() => {
     if (focusOnMount) textareaRef.current?.focus();
   }, [focusOnMount]);
+
+  useEffect(() => {
+    const page = draftRef.current.pages.find(
+      (candidate) => candidate.id === selectedPageId,
+    ) ?? draftRef.current.pages[0];
+    pageNameRef.current = page.name;
+    setPageName(page.name);
+  }, [selectedPageId]);
 
   useEffect(() => {
     const keepWindowVisible = () => {
@@ -710,6 +808,68 @@ function StickyNoteEditor({
     commitSize(next);
   }, [commitSize, size]);
 
+  const selectPage = useCallback((pageId: string) => {
+    const current = commitPageName();
+    const page = current.pages.find((candidate) => candidate.id === pageId);
+    if (!page || page.id === selectedPageId) return;
+    pageNameRef.current = page.name;
+    setPageName(page.name);
+    onSelectedPageChange(page.id);
+  }, [commitPageName, onSelectedPageChange, selectedPageId]);
+
+  const addPage = useCallback(() => {
+    const current = commitPageName();
+    if (current.pages.length >= MAX_SCOPED_NOTE_PAGES) return;
+    const existingIds = new Set(current.pages.map((page) => page.id));
+    let id = newPageId();
+    while (existingIds.has(id)) id = newPageId();
+    const existingNames = new Set(current.pages.map((page) => page.name));
+    let number = current.pages.length + 1;
+    while (existingNames.has(`Page ${number}`)) number += 1;
+    const page: ScopedNotePage = { id, name: `Page ${number}`, content: "" };
+    const next = { pages: [...current.pages, page] };
+    draftRef.current = next;
+    setDraft(next);
+    scheduleSave(next);
+    pageNameRef.current = page.name;
+    setPageName(page.name);
+    onSelectedPageChange(page.id);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [commitPageName, onSelectedPageChange, scheduleSave]);
+
+  const deleteSelectedPage = useCallback(() => {
+    const current = commitPageName();
+    if (current.pages.length <= 1) return;
+    const pageIndex = current.pages.findIndex((page) => page.id === selectedPageId);
+    if (pageIndex < 0) return;
+    const page = current.pages[pageIndex];
+    if (
+      page.content.trim()
+      && !window.confirm(`Delete note page "${page.name}" and all of its text?`)
+    ) return;
+    const pages = current.pages.filter((candidate) => candidate.id !== page.id);
+    const nextPage = pages[Math.min(pageIndex, pages.length - 1)];
+    const next = { pages };
+    draftRef.current = next;
+    setDraft(next);
+    scheduleSave(next);
+    pageNameRef.current = nextPage.name;
+    setPageName(nextPage.name);
+    onSelectedPageChange(nextPage.id);
+  }, [commitPageName, onSelectedPageChange, scheduleSave, selectedPageId]);
+
+  const updateSelectedPageContent = useCallback((content: string) => {
+    const current = draftRef.current;
+    const next = {
+      pages: current.pages.map((page) => (
+        page.id === selectedPageId ? { ...page, content } : page
+      )),
+    };
+    draftRef.current = next;
+    setDraft(next);
+    scheduleSave(next);
+  }, [scheduleSave, selectedPageId]);
+
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void finish();
@@ -803,20 +963,129 @@ function StickyNoteEditor({
       <p id={descriptionId} className="scoped-note-description">
         {scopeDescription(scope, scopeName)} Changes save automatically.
       </p>
-      <label htmlFor={textareaId}>Note</label>
-      <textarea
-        ref={textareaRef}
-        id={textareaId}
-        value={draft}
-        maxLength={MAX_SCOPED_NOTE_LENGTH}
-        placeholder="Pin a reminder, command, handoff, or next step..."
-        onChange={(event) => {
-          const value = event.target.value;
-          draftRef.current = value;
-          setDraft(value);
-          scheduleSave(value);
-        }}
-      />
+      <nav className="scoped-note-page-toolbar" aria-label="Note pages">
+        <button
+          type="button"
+          className="scoped-note-page-control"
+          aria-label="Previous note page"
+          title="Previous page"
+          disabled={selectedIndex === 0 || closing}
+          onClick={() => selectPage(draft.pages[selectedIndex - 1]?.id)}
+        >
+          <ArrowLeftIcon />
+        </button>
+        <input
+          className="scoped-note-page-name"
+          value={pageName}
+          maxLength={MAX_SCOPED_NOTE_PAGE_NAME_LENGTH}
+          aria-label="Page name"
+          title="Name this page"
+          disabled={closing}
+          onChange={(event) => {
+            pageNameRef.current = event.target.value;
+            setPageName(event.target.value);
+          }}
+          onBlur={() => commitPageName()}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            event.currentTarget.blur();
+          }}
+        />
+        <span className="scoped-note-page-position" aria-label={`Page ${selectedIndex + 1} of ${draft.pages.length}`}>
+          {selectedIndex + 1} / {draft.pages.length}
+        </span>
+        <button
+          type="button"
+          className="scoped-note-page-control"
+          aria-label="Next note page"
+          title="Next page"
+          disabled={selectedIndex >= draft.pages.length - 1 || closing}
+          onClick={() => selectPage(draft.pages[selectedIndex + 1]?.id)}
+        >
+          <ChevronRightIcon />
+        </button>
+        <button
+          type="button"
+          className="scoped-note-page-control"
+          aria-label="Add note page"
+          title="Add page"
+          disabled={draft.pages.length >= MAX_SCOPED_NOTE_PAGES || closing}
+          onClick={addPage}
+        >
+          <PlusIcon />
+        </button>
+        <button
+          type="button"
+          className="scoped-note-page-control"
+          aria-label={`${sidebarOpen ? "Hide" : "Show"} page sidebar`}
+          aria-pressed={sidebarOpen}
+          title={`${sidebarOpen ? "Hide" : "Show"} page list`}
+          disabled={closing}
+          onClick={() => onSidebarOpenChange(!sidebarOpen)}
+        >
+          <ListIcon />
+        </button>
+        <button
+          type="button"
+          className="scoped-note-page-control danger"
+          aria-label="Delete current note page"
+          title={draft.pages.length === 1
+            ? "A notebook must keep one page"
+            : "Delete current page"}
+          disabled={draft.pages.length === 1 || closing}
+          onClick={deleteSelectedPage}
+        >
+          <TrashIcon />
+        </button>
+      </nav>
+
+      <div className={`scoped-note-book ${sidebarOpen ? "sidebar-open" : ""}`}>
+        {sidebarOpen && (
+          <aside className="scoped-note-page-sidebar" aria-label="Notebook pages">
+            <div className="scoped-note-page-sidebar-heading">
+              <span>PAGES</span>
+              <button
+                type="button"
+                aria-label="Add note page from sidebar"
+                title="Add page"
+                disabled={draft.pages.length >= MAX_SCOPED_NOTE_PAGES || closing}
+                onClick={addPage}
+              >
+                <PlusIcon />
+              </button>
+            </div>
+            <div className="scoped-note-page-list">
+              {draft.pages.map((page, index) => (
+                <button
+                  key={page.id}
+                  type="button"
+                  className={page.id === selectedPage.id ? "active" : ""}
+                  aria-current={page.id === selectedPage.id ? "page" : undefined}
+                  onClick={() => selectPage(page.id)}
+                  title={`${index + 1}. ${page.name}`}
+                >
+                  <span>{index + 1}</span>
+                  <strong>{page.id === selectedPage.id ? pageName || page.name : page.name}</strong>
+                  {page.content.trim() && <i aria-label="Has content" />}
+                </button>
+              ))}
+            </div>
+          </aside>
+        )}
+        <div className="scoped-note-page-canvas">
+          <label className="scoped-note-textarea-label" htmlFor={textareaId}>
+            Note
+          </label>
+          <textarea
+            ref={textareaRef}
+            id={textareaId}
+            value={selectedPage.content}
+            placeholder="Pin a reminder, command, handoff, or next step..."
+            onChange={(event) => updateSelectedPageContent(event.target.value)}
+          />
+        </div>
+      </div>
 
       <div className="scoped-note-editor-meta">
         <span
@@ -832,18 +1101,16 @@ function StickyNoteEditor({
                 ? "Saving..."
                 : saveError || "Save failed"}
         </span>
-        <span>{draft.length.toLocaleString()} / {MAX_SCOPED_NOTE_LENGTH.toLocaleString()}</span>
+        <span>{selectedPage.content.length.toLocaleString()} characters</span>
       </div>
 
       <div className="title-actions scoped-note-actions">
         <button
           type="button"
           className="secondary-button"
-          disabled={!draft || closing}
+          disabled={!selectedPage.content || closing}
           onClick={() => {
-            draftRef.current = "";
-            setDraft("");
-            scheduleSave("");
+            updateSelectedPageContent("");
             textareaRef.current?.focus();
           }}
         >
@@ -893,19 +1160,19 @@ export function ScopedStickyNotes({
   const windowWorkspaceIdentity = noteWorkspaceIdentity(workspaceId, sessionName);
   const [common, setCommon] = useState<NoteSnapshot>({
     identity: "common",
-    note: "",
+    notebook: emptyNotebook(),
     loading: true,
     error: null,
   });
   const [workspace, setWorkspace] = useState<NoteSnapshot>({
     identity: workspaceId,
-    note: "",
+    notebook: emptyNotebook(),
     loading: Boolean(workspaceId),
     error: null,
   });
   const [session, setSession] = useState<NoteSnapshot>({
     identity: sessionName,
-    note: "",
+    notebook: emptyNotebook(),
     loading: true,
     error: null,
   });
@@ -918,15 +1185,15 @@ export function ScopedStickyNotes({
 
   useEffect(() => {
     const controller = new AbortController();
-    void getCommonNote(controller.signal).then((note) => {
+    void getCommonNotebook(controller.signal).then((notebook) => {
       if (!controller.signal.aborted) {
-        setCommon({ identity: "common", note, loading: false, error: null });
+        setCommon({ identity: "common", notebook, loading: false, error: null });
       }
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) {
         setCommon({
           identity: "common",
-          note: "",
+          notebook: emptyNotebook(),
           loading: false,
           error: errorMessage(error, "Unable to load the common note."),
         });
@@ -947,21 +1214,21 @@ export function ScopedStickyNotes({
   useEffect(() => {
     setWorkspace({
       identity: workspaceId,
-      note: "",
+      notebook: emptyNotebook(),
       loading: Boolean(workspaceId),
       error: null,
     });
     if (!workspaceId) return;
     const controller = new AbortController();
-    void getWorkspaceNote(workspaceId, controller.signal).then((note) => {
+    void getWorkspaceNotebook(workspaceId, controller.signal).then((notebook) => {
       if (!controller.signal.aborted) {
-        setWorkspace({ identity: workspaceId, note, loading: false, error: null });
+        setWorkspace({ identity: workspaceId, notebook, loading: false, error: null });
       }
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) {
         setWorkspace({
           identity: workspaceId,
-          note: "",
+          notebook: emptyNotebook(),
           loading: false,
           error: errorMessage(error, "Unable to load the workspace note."),
         });
@@ -988,6 +1255,8 @@ export function ScopedStickyNotes({
         pinned: reopenWithSession,
         position: editor.position,
         size: editor.size,
+        selectedPageId: editor.selectedPageId,
+        sidebarOpen: editor.sidebarOpen,
       });
       return false;
     }));
@@ -995,17 +1264,22 @@ export function ScopedStickyNotes({
   }, [sessionName, workspaceId]);
 
   useEffect(() => {
-    setSession({ identity: sessionName, note: "", loading: true, error: null });
+    setSession({
+      identity: sessionName,
+      notebook: emptyNotebook(),
+      loading: true,
+      error: null,
+    });
     const controller = new AbortController();
-    void getSessionNote(sessionName, controller.signal).then((note) => {
+    void getSessionNotebook(sessionName, controller.signal).then((notebook) => {
       if (!controller.signal.aborted) {
-        setSession({ identity: sessionName, note, loading: false, error: null });
+        setSession({ identity: sessionName, notebook, loading: false, error: null });
       }
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) {
         setSession({
           identity: sessionName,
-          note: "",
+          notebook: emptyNotebook(),
           loading: false,
           error: errorMessage(error, "Unable to load the session note."),
         });
@@ -1030,22 +1304,26 @@ export function ScopedStickyNotes({
     setActiveEditorKey(openEditors.at(-1)?.key ?? null);
   }, [activeEditorKey, openEditors]);
 
-  const saveNote = async (scope: NoteScope, identity: string, note: string) => {
+  const saveNote = async (
+    scope: NoteScope,
+    identity: string,
+    notebook: ScopedNoteNotebook,
+  ) => {
     if (scope === "common") {
-      const saved = await replaceCommonNote(note);
-      setCommon({ identity: "common", note: saved, loading: false, error: null });
+      const saved = await replaceCommonNotebook(notebook);
+      setCommon({ identity: "common", notebook: saved, loading: false, error: null });
       return;
     }
     if (scope === "workspace") {
-      const saved = await replaceWorkspaceNote(identity, note);
+      const saved = await replaceWorkspaceNotebook(identity, notebook);
       if (workspaceId === identity) {
-        setWorkspace({ identity, note: saved, loading: false, error: null });
+        setWorkspace({ identity, notebook: saved, loading: false, error: null });
       }
       return;
     }
-    const saved = await replaceSessionNote(identity, note);
+    const saved = await replaceSessionNotebook(identity, notebook);
     if (sessionName === identity) {
-      setSession({ identity, note: saved, loading: false, error: null });
+      setSession({ identity, notebook: saved, loading: false, error: null });
     }
   };
 
@@ -1053,13 +1331,18 @@ export function ScopedStickyNotes({
     ? workspace
     : {
         identity: workspaceId,
-        note: "",
+        notebook: emptyNotebook(),
         loading: Boolean(workspaceId),
         error: null,
       };
   const currentSession: NoteSnapshot = session.identity === sessionName
     ? session
-    : { identity: sessionName, note: "", loading: true, error: null };
+    : {
+        identity: sessionName,
+        notebook: emptyNotebook(),
+        loading: true,
+        error: null,
+      };
 
   const openEditor = useCallback((scope: NoteScope, restoreOnly = false) => {
     if (!desktop) return;
@@ -1081,12 +1364,19 @@ export function ScopedStickyNotes({
     if (restoreOnly && !preference.open) return;
     const size = preferredFloatingNoteSize(preference);
     const position = preferredFloatingNotePosition(scope, preference, size);
+    const selectedPageId = snapshot.notebook.pages.some(
+      (page) => page.id === preference.selectedPageId,
+    )
+      ? preference.selectedPageId!
+      : snapshot.notebook.pages[0].id;
     writeNoteWindowPreference(key, {
       open: true,
       floating: true,
       pinned: preference.pinned,
       position,
       size,
+      selectedPageId,
+      sidebarOpen: preference.sidebarOpen,
     });
     const editor: OpenNoteEditor = {
       key,
@@ -1097,11 +1387,13 @@ export function ScopedStickyNotes({
         : scope === "workspace"
           ? workspaceName?.trim() || "This workspace"
           : sessionName,
-      note: snapshot.note,
+      notebook: snapshot.notebook,
       pinned: preference.pinned,
       position,
       size,
       focusOnMount: !restoreOnly,
+      selectedPageId,
+      sidebarOpen: preference.sidebarOpen,
     };
     setOpenEditors((current) => (
       current.some((candidate) => candidate.key === key)
@@ -1172,6 +1464,8 @@ export function ScopedStickyNotes({
       pinned: false,
       position: editor.position,
       size: editor.size,
+      selectedPageId: editor.selectedPageId,
+      sidebarOpen: editor.sidebarOpen,
     });
     setOpenEditors((current) => current.filter((candidate) => (
       candidate.key !== editor.key
@@ -1222,13 +1516,15 @@ export function ScopedStickyNotes({
           editorKey={editor.key}
           scope={editor.scope}
           scopeName={editor.scopeName}
-          note={editor.note}
+          notebook={editor.notebook}
           pinned={editor.pinned}
           position={editor.position}
           size={editor.size}
           focusOnMount={editor.focusOnMount}
           active={activeEditorKey === editor.key}
-          onSave={(note) => saveNote(editor.scope, editor.identity, note)}
+          selectedPageId={editor.selectedPageId}
+          sidebarOpen={editor.sidebarOpen}
+          onSave={(notebook) => saveNote(editor.scope, editor.identity, notebook)}
           onClose={() => closeEditor(editor)}
           onPinnedChange={(pinned) => {
             writeNoteWindowPreference(editor.key, {
@@ -1237,6 +1533,8 @@ export function ScopedStickyNotes({
               pinned,
               position: editor.position,
               size: editor.size,
+              selectedPageId: editor.selectedPageId,
+              sidebarOpen: editor.sidebarOpen,
             });
             setOpenEditors((current) => current.map((candidate) => (
               candidate.key === editor.key ? { ...candidate, pinned } : candidate
@@ -1255,6 +1553,8 @@ export function ScopedStickyNotes({
               pinned: editor.pinned,
               position,
               size: editor.size,
+              selectedPageId: editor.selectedPageId,
+              sidebarOpen: editor.sidebarOpen,
             });
           }}
           onSizeChange={(size) => {
@@ -1269,7 +1569,40 @@ export function ScopedStickyNotes({
               pinned: editor.pinned,
               position: editor.position,
               size,
+              selectedPageId: editor.selectedPageId,
+              sidebarOpen: editor.sidebarOpen,
             });
+          }}
+          onSelectedPageChange={(selectedPageId) => {
+            writeNoteWindowPreference(editor.key, {
+              open: true,
+              floating: true,
+              pinned: editor.pinned,
+              position: editor.position,
+              size: editor.size,
+              selectedPageId,
+              sidebarOpen: editor.sidebarOpen,
+            });
+            setOpenEditors((current) => current.map((candidate) => (
+              candidate.key === editor.key
+                ? { ...candidate, selectedPageId }
+                : candidate
+            )));
+          }}
+          onSidebarOpenChange={(sidebarOpen) => {
+            writeNoteWindowPreference(editor.key, {
+              open: true,
+              floating: true,
+              pinned: editor.pinned,
+              position: editor.position,
+              size: editor.size,
+              selectedPageId: editor.selectedPageId,
+              sidebarOpen,
+            });
+            setOpenEditors((current) => current.map((candidate) => (
+              candidate.key === editor.key ? { ...candidate, sidebarOpen } : candidate
+            )));
+            bringEditorToFront(editor.key);
           }}
           onActivate={() => bringEditorToFront(editor.key)}
         />

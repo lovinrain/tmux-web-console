@@ -857,6 +857,8 @@ export interface SavedWorkspace {
   separatorsBefore?: string[];
   quickLinks?: WorkspaceQuickLink[];
   paneLayouts?: WorkspacePaneLayout[];
+  /** Sessions explicitly marked for follow-up in this workspace. */
+  callbackSessions?: string[];
   activeSession: string | null;
   sessionRevision: number;
   createdAt: number;
@@ -906,6 +908,16 @@ export interface WorkspaceQuickLink {
   url: string;
 }
 
+export interface ScopedNotePage {
+  id: string;
+  name: string;
+  content: string;
+}
+
+export interface ScopedNoteNotebook {
+  pages: ScopedNotePage[];
+}
+
 export interface CreateWorkspaceInput {
   name: string;
   tabs: string[];
@@ -913,12 +925,13 @@ export interface CreateWorkspaceInput {
   separators?: string[];
   separatorsBefore?: string[];
   paneLayouts?: WorkspacePaneLayout[];
+  callbackSessions?: string[];
   activeSession: string | null;
 }
 
 export type WorkspaceUpdate = Partial<Pick<
   SavedWorkspace,
-  "name" | "tabs" | "groups" | "separators" | "separatorsBefore" | "paneLayouts" | "activeSession" | "sessionRevision"
+  "name" | "tabs" | "groups" | "separators" | "separatorsBefore" | "paneLayouts" | "callbackSessions" | "activeSession" | "sessionRevision"
 >>;
 
 function workspacePath(workspaceId: string): string {
@@ -1077,6 +1090,98 @@ export async function replaceSessionNote(
   return result.note;
 }
 
+interface ScopedNoteResponse {
+  note: string;
+  notebook?: ScopedNoteNotebook;
+}
+
+function notebookFromResponse(result: ScopedNoteResponse): ScopedNoteNotebook {
+  if (
+    result.notebook
+    && Array.isArray(result.notebook.pages)
+    && result.notebook.pages.length
+  ) {
+    return result.notebook;
+  }
+  return {
+    pages: [{
+      id: "main",
+      name: "Page 1",
+      content: typeof result.note === "string" ? result.note : "",
+    }],
+  };
+}
+
+export async function getCommonNotebook(
+  signal?: AbortSignal,
+): Promise<ScopedNoteNotebook> {
+  return notebookFromResponse(await jsonRequest<ScopedNoteResponse>(
+    "/api/common-note",
+    { signal },
+  ));
+}
+
+export async function replaceCommonNotebook(
+  notebook: ScopedNoteNotebook,
+): Promise<ScopedNoteNotebook> {
+  return notebookFromResponse(await jsonRequest<ScopedNoteResponse>(
+    "/api/common-note",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notebook }),
+    },
+  ));
+}
+
+export async function getWorkspaceNotebook(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<ScopedNoteNotebook> {
+  return notebookFromResponse(await jsonRequest<ScopedNoteResponse>(
+    workspaceNotePath(workspaceId),
+    { signal },
+  ));
+}
+
+export async function replaceWorkspaceNotebook(
+  workspaceId: string,
+  notebook: ScopedNoteNotebook,
+): Promise<ScopedNoteNotebook> {
+  return notebookFromResponse(await jsonRequest<ScopedNoteResponse>(
+    workspaceNotePath(workspaceId),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notebook }),
+    },
+  ));
+}
+
+export async function getSessionNotebook(
+  sessionName: string,
+  signal?: AbortSignal,
+): Promise<ScopedNoteNotebook> {
+  return notebookFromResponse(await jsonRequest<ScopedNoteResponse>(
+    sessionNotePath(sessionName),
+    { signal },
+  ));
+}
+
+export async function replaceSessionNotebook(
+  sessionName: string,
+  notebook: ScopedNoteNotebook,
+): Promise<ScopedNoteNotebook> {
+  return notebookFromResponse(await jsonRequest<ScopedNoteResponse>(
+    sessionNotePath(sessionName),
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notebook }),
+    },
+  ));
+}
+
 export async function listWorkspaces(signal?: AbortSignal): Promise<SavedWorkspace[]> {
   const result = await jsonRequest<{ workspaces: SavedWorkspace[] }>(
     "/api/workspaces",
@@ -1099,7 +1204,11 @@ export async function getWorkspace(
 export async function createWorkspace(
   workspace: CreateWorkspaceInput,
 ): Promise<SavedWorkspace> {
-  const request = async (body: CreateWorkspaceInput | Omit<CreateWorkspaceInput, "groups">) => {
+  const request = async (
+    body: CreateWorkspaceInput
+      | Omit<CreateWorkspaceInput, "groups" | "callbackSessions">
+      | Omit<CreateWorkspaceInput, "callbackSessions">,
+  ) => {
     const result = await jsonRequest<{ workspace: SavedWorkspace }>("/api/workspaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1111,6 +1220,19 @@ export async function createWorkspace(
   try {
     return await request(workspace);
   } catch (error) {
+    if (isUnknownFieldError(error, "callbackSessions")) {
+      // Older servers reject the request before creating anything, so retrying
+      // without the optional callback metadata is safe during a rolling deploy.
+      return request({
+        name: workspace.name,
+        tabs: workspace.tabs,
+        groups: workspace.groups,
+        separators: workspace.separators,
+        separatorsBefore: workspace.separatorsBefore,
+        paneLayouts: workspace.paneLayouts,
+        activeSession: workspace.activeSession,
+      });
+    }
     if (!isUnknownFieldError(error, "groups")) throw error;
     // Pre-group servers reject the request before creating anything, so retry is safe.
     return request({

@@ -10,12 +10,15 @@ import {
   deleteWorkspace,
   forgetRecoverableSession,
   downloadSessionFileEntries,
+  getCommonNotebook,
   getCommonNote,
   getCommonWorkspaceQuickLinks,
   getHostMetrics,
+  getSessionNotebook,
   getSessionNote,
   getSessionQuickLinks,
   getWorkspace,
+  getWorkspaceNotebook,
   getWorkspaceNote,
   getWorkspaceQuickLinks,
   getSnippetTree,
@@ -28,10 +31,13 @@ import {
   renameSession,
   recreateSession,
   recoverableSessionsFromList,
+  replaceCommonNotebook,
   replaceCommonNote,
   replaceCommonWorkspaceQuickLinks,
+  replaceSessionNotebook,
   replaceSessionNote,
   replaceSessionQuickLinks,
+  replaceWorkspaceNotebook,
   replaceWorkspaceNote,
   replaceWorkspaceQuickLinks,
   saveSnippetTree,
@@ -1136,6 +1142,52 @@ describe("saved workspace API", () => {
         body: JSON.stringify({ note: notes[5] }),
       }),
     ]);
+  });
+
+  it("loads and replaces scoped note notebooks with legacy response fallback", async () => {
+    const notebook = {
+      pages: [
+        { id: "main", name: "Plan", content: "First" },
+        { id: "next", name: "Next", content: "Second" },
+      ],
+    };
+    const response = (payload: unknown) => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        note: "First",
+        notebook,
+      }))
+      .mockResolvedValueOnce(response({ note: "Legacy" }))
+      .mockImplementation(async () => response({
+        note: "First",
+        notebook,
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCommonNotebook()).resolves.toEqual(notebook);
+    await expect(getWorkspaceNotebook("workspace/id")).resolves.toEqual({
+      pages: [{ id: "main", name: "Page 1", content: "Legacy" }],
+    });
+    await expect(getSessionNotebook("agent/name")).resolves.toEqual(notebook);
+    await expect(replaceCommonNotebook(notebook)).resolves.toEqual(notebook);
+    await expect(replaceWorkspaceNotebook("workspace/id", notebook))
+      .resolves.toEqual(notebook);
+    await expect(replaceSessionNotebook("agent/name", notebook))
+      .resolves.toEqual(notebook);
+
+    expect(fetchMock.mock.calls[3][1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ notebook }),
+    }));
+    expect(fetchMock.mock.calls[4][0]).toBe(
+      `${BASE_PATH}/api/workspaces/workspace%2Fid/note`,
+    );
+    expect(fetchMock.mock.calls[5][0]).toBe(
+      `${BASE_PATH}/api/sessions/agent%2Fname/note`,
+    );
   });
 
   it("creates a workspace with its ordered tabs and active session", async () => {

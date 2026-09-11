@@ -6,8 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tmux_console.workspaces import (
-    MAX_SCOPED_NOTE_LENGTH,
+    MAX_SCOPED_NOTE_PAGES,
     MAX_SESSION_RENAME_REVISION,
+    MAX_WORKSPACE_CALLBACK_SESSIONS,
     MAX_WORKSPACE_GROUP_ID_LENGTH,
     MAX_WORKSPACE_GROUP_NAME_LENGTH,
     MAX_WORKSPACE_GROUPS,
@@ -25,6 +26,7 @@ from tmux_console.workspaces import (
     _WorkspaceDirectorySyncError,
     default_workspaces_path,
     normalize_scoped_note,
+    validate_scoped_note_notebook,
     validate_session_notes,
     validate_session_quick_links,
     validate_workspace_notes,
@@ -192,6 +194,87 @@ def test_workspace_pane_layout_validation_is_strict(tmp_path, mutate, message):
             active_session="agent-a",
             pane_layouts=[layout],
         )
+
+
+def test_workspace_callback_sessions_persist_follow_renames_and_fence_stale_writes(
+    tmp_path,
+):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+    created = store.create_workspace(
+        name="Callbacks",
+        tabs=["agent-a", "agent-b"],
+        active_session="agent-a",
+        callback_sessions=["agent-a", "ended-session"],
+    )
+    assert created["callbackSessions"] == ["agent-a", "ended-session"]
+
+    updated = store.update_workspace(
+        "workspace-id",
+        callback_sessions=["agent-b", "ended-session"],
+        update_callback_sessions=True,
+        session_revision=0,
+    )
+    assert updated["callbackSessions"] == ["agent-b", "ended-session"]
+    assert updated["tabs"] == created["tabs"]
+    assert WorkspaceStore(path).get_workspace("workspace-id") == updated
+
+    assert store.rename_session("agent-b", "review-agent") == 1
+    renamed = store.get_workspace("workspace-id")
+    assert renamed["callbackSessions"] == ["review-agent", "ended-session"]
+    with pytest.raises(WorkspaceSessionRevisionConflict, match="reload the workspace"):
+        store.update_workspace(
+            "workspace-id",
+            callback_sessions=["agent-b"],
+            update_callback_sessions=True,
+            session_revision=0,
+        )
+    assert store.get_workspace("workspace-id") == renamed
+
+
+@pytest.mark.parametrize(
+    ("callback_sessions", "message"),
+    [
+        (None, "callbackSessions must be an array"),
+        (["agent", "agent"], "callbackSessions contains duplicate session"),
+        (
+            [f"agent-{index}" for index in range(MAX_WORKSPACE_CALLBACK_SESSIONS + 1)],
+            f"callbackSessions cannot contain more than {MAX_WORKSPACE_CALLBACK_SESSIONS}",
+        ),
+    ],
+)
+def test_workspace_callback_sessions_validate_strictly(
+    tmp_path,
+    callback_sessions,
+    message,
+):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    with pytest.raises((TypeError, ValueError), match=message):
+        store.create_workspace(
+            name="Callbacks",
+            tabs=["agent"],
+            active_session="agent",
+            callback_sessions=callback_sessions,
+        )
+
+
+def test_version_ten_workspace_loads_with_empty_callbacks_and_upgrades_on_write(
+    tmp_path,
+):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "legacy-id")
+    store.create_workspace(name="Legacy", tabs=["agent"], active_session="agent")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["version"] = 10
+    document["workspaces"][0].pop("callbackSessions", None)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    restored = WorkspaceStore(path)
+    assert restored.get_workspace("legacy-id").get("callbackSessions", []) == []
+    restored.update_workspace("legacy-id", name="Upgraded", update_name=True)
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == (
+        WORKSPACE_SCHEMA_VERSION
+    )
 
 
 def test_workspace_crud_activity_order_and_persistence(tmp_path):
@@ -675,6 +758,7 @@ def test_workspace_session_transfer_copies_deduplicates_and_moves_atomically(tmp
         tabs=["agent", "sidecar"],
         groups=[workspace_group("pair", ["agent", "sidecar"])],
         active_session="agent",
+        callback_sessions=["agent"],
     )
     destination = store.create_workspace(
         name="Destination",
@@ -694,7 +778,9 @@ def test_workspace_session_transfer_copies_deduplicates_and_moves_atomically(tmp
     assert copied["sourceRemoved"] is False
     assert copied["sessionRevision"] == 1
     assert copied["sourceWorkspace"]["tabs"] == source["tabs"]
+    assert copied["sourceWorkspace"]["callbackSessions"] == ["agent"]
     assert copied["destinationWorkspace"]["tabs"] == ["review", "agent"]
+    assert copied["destinationWorkspace"].get("callbackSessions", []) == []
 
     repeated = store.transfer_session(
         "agent",
@@ -724,9 +810,47 @@ def test_workspace_session_transfer_copies_deduplicates_and_moves_atomically(tmp
         workspace_group("pair", ["sidecar"])
     ]
     assert moved["sourceWorkspace"]["activeSession"] == "sidecar"
+    assert moved["sourceWorkspace"].get("callbackSessions", []) == []
     assert moved["destinationWorkspace"]["tabs"] == ["review", "agent"]
+    assert moved["destinationWorkspace"]["callbackSessions"] == ["agent"]
     assert WorkspaceStore(path).get_workspace("destination")["tabs"].count("agent") == 1
     assert destination["lastActiveAt"] == moved["destinationWorkspace"]["lastActiveAt"]
+
+
+def test_workspace_session_move_preserves_source_when_callback_destination_is_full(
+    tmp_path,
+):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=sequence(["source", "destination"]),
+    )
+    callbacks = [
+        f"callback-{index}" for index in range(MAX_WORKSPACE_CALLBACK_SESSIONS)
+    ]
+    source = store.create_workspace(
+        name="Source",
+        tabs=["agent"],
+        active_session="agent",
+        callback_sessions=["agent"],
+    )
+    destination = store.create_workspace(
+        name="Destination",
+        tabs=["agent"],
+        active_session="agent",
+        callback_sessions=callbacks,
+    )
+
+    with pytest.raises(WorkspaceTransferConflictError, match="callback sessions"):
+        store.transfer_session(
+            "agent",
+            source_workspace_id="source",
+            destination_workspace_id="destination",
+            operation="move",
+            session_revision=0,
+        )
+
+    assert store.get_workspace("source") == source
+    assert store.get_workspace("destination") == destination
 
 
 def test_workspace_session_transfer_rejects_stale_full_and_pinned_moves(tmp_path):
@@ -913,13 +1037,77 @@ def test_scoped_notes_are_independent_normalized_and_persistent(tmp_path):
     ("value", "message"),
     [
         (None, "note must be a string"),
-        ("x" * (MAX_SCOPED_NOTE_LENGTH + 1), "8000 characters or fewer"),
         ("unsafe\x00note", "cannot contain control characters"),
     ],
 )
 def test_scoped_note_validation_rejects_invalid_values(value, message):
     with pytest.raises((TypeError, ValueError), match=message):
         normalize_scoped_note(value)
+
+
+def test_scoped_note_validation_accepts_large_notes():
+    note = "large note\n" * 20_000
+    assert normalize_scoped_note(note) == note
+
+
+def test_scoped_notebooks_migrate_legacy_notes_and_persist_pages(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+    store.create_workspace(name="Project", tabs=["agent"], active_session="agent")
+    store.replace_workspace_note("workspace-id", "Legacy first page")
+    legacy_document = json.loads(path.read_text(encoding="utf-8"))
+    legacy_document["version"] = 11
+    legacy_document.pop("commonNotebook")
+    legacy_document.pop("workspaceNotebooks")
+    legacy_document.pop("sessionNotebooks")
+    path.write_text(json.dumps(legacy_document), encoding="utf-8")
+
+    migrated = WorkspaceStore(path)
+    assert migrated.get_workspace_notebook("workspace-id") == {
+        "pages": [
+            {"id": "main", "name": "Page 1", "content": "Legacy first page"}
+        ]
+    }
+
+    notebook = {
+        "pages": [
+            {"id": "main", "name": "Plan", "content": "First"},
+            {"id": "next-steps", "name": "Next steps", "content": "Second"},
+        ]
+    }
+    assert migrated.replace_workspace_notebook("workspace-id", notebook) == notebook
+    reloaded = WorkspaceStore(path)
+    assert reloaded.get_workspace_notebook("workspace-id") == notebook
+    assert reloaded.get_workspace_note("workspace-id") == "First"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["version"] == WORKSPACE_SCHEMA_VERSION
+    assert document["workspaceNotebooks"]["workspace-id"] == notebook
+
+
+@pytest.mark.parametrize(
+    ("notebook", "message"),
+    [
+        ({}, "missing field: pages"),
+        ({"pages": []}, "pages cannot be empty"),
+        (
+            {"pages": [
+                {"id": "same", "name": "One", "content": ""},
+                {"id": "same", "name": "Two", "content": ""},
+            ]},
+            "duplicate id",
+        ),
+        (
+            {"pages": [
+                {"id": f"p-{index}", "name": "Page", "content": ""}
+                for index in range(MAX_SCOPED_NOTE_PAGES + 1)
+            ]},
+            "cannot contain more than",
+        ),
+    ],
+)
+def test_scoped_notebook_validation_rejects_invalid_values(notebook, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        validate_scoped_note_notebook(notebook)
 
 
 @pytest.mark.parametrize(
