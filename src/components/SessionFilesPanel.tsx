@@ -423,6 +423,16 @@ function joinPath(directory: string, name: string): string {
   return trimmed ? `${trimmed}/${name}` : name;
 }
 
+function relativePathFromDirectory(path: string, directory: string): string {
+  const normalizedPath = path.split("/").filter(Boolean).join("/");
+  const normalizedDirectory = directory.split("/").filter(Boolean).join("/");
+  if (!normalizedDirectory) return normalizedPath;
+  const prefix = `${normalizedDirectory}/`;
+  return normalizedPath.startsWith(prefix)
+    ? normalizedPath.slice(prefix.length)
+    : normalizedPath;
+}
+
 function duplicateName(name: string): string {
   const dotIndex = name.lastIndexOf(".");
   if (dotIndex > 0) return `${name.slice(0, dotIndex)} copy${name.slice(dotIndex)}`;
@@ -561,6 +571,7 @@ export function SessionFilesPanel({
   const addressAbortRef = useRef<AbortController | null>(null);
   const listingAbortRef = useRef<AbortController | null>(null);
   const locatorAbortRef = useRef<AbortController | null>(null);
+  const nestedFilterAbortRef = useRef<AbortController | null>(null);
   const locatorResultRefs = useRef(new Map<string, HTMLButtonElement>());
   const handledOpenPathRequestRef = useRef<number | null>(null);
   const recentEntriesRef = useRef<SessionFileRecentEntry[]>([]);
@@ -594,6 +605,10 @@ export function SessionFilesPanel({
   const [imagePreviewStatus, setImagePreviewStatus] = useState<ImagePreviewStatus>("loading");
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
+  const [nestedFilterEnabled, setNestedFilterEnabled] = useState(false);
+  const [nestedFilterResults, setNestedFilterResults] = useState<SessionFileSearchResults | null>(null);
+  const [nestedFilterLoading, setNestedFilterLoading] = useState(false);
+  const [nestedFilterError, setNestedFilterError] = useState<string | null>(null);
   const [locatorOpen, setLocatorOpen] = useState(false);
   const [locatorQuery, setLocatorQuery] = useState("");
   const [locatorResults, setLocatorResults] = useState<SessionFileSearchResults | null>(null);
@@ -737,6 +752,8 @@ export function SessionFilesPanel({
     listingAbortRef.current = null;
     locatorAbortRef.current?.abort();
     locatorAbortRef.current = null;
+    nestedFilterAbortRef.current?.abort();
+    nestedFilterAbortRef.current = null;
     fileDragDepthRef.current = 0;
     pendingSelectionPathRef.current = null;
     directSelectionEntryRef.current = null;
@@ -753,6 +770,9 @@ export function SessionFilesPanel({
     setListingError(null);
     setPreviewError(null);
     setFilter("");
+    setNestedFilterResults(null);
+    setNestedFilterLoading(false);
+    setNestedFilterError(null);
     setLocatorOpen(false);
     setLocatorQuery("");
     setLocatorResults(null);
@@ -796,6 +816,7 @@ export function SessionFilesPanel({
     addressAbortRef.current?.abort();
     listingAbortRef.current?.abort();
     locatorAbortRef.current?.abort();
+    nestedFilterAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -858,6 +879,78 @@ export function SessionFilesPanel({
       if (listingAbortRef.current === controller) listingAbortRef.current = null;
     };
   }, [directoryPath, fileTarget, refreshToken, rememberRecentPath]);
+
+  // The ordinary filter stays instant and local. When the user opts into
+  // nested search, reuse the bounded server-side locator but anchor it at the
+  // directory currently shown. Results are rewritten to the browser's active
+  // root so every existing row action continues to address the right path.
+  useEffect(() => {
+    const query = filter.trim();
+    nestedFilterAbortRef.current?.abort();
+    nestedFilterAbortRef.current = null;
+    if (!nestedFilterEnabled || !query || !listing || listingLoading || listingError) {
+      setNestedFilterLoading(false);
+      setNestedFilterResults(null);
+      setNestedFilterError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    nestedFilterAbortRef.current = controller;
+    setNestedFilterLoading(true);
+    setNestedFilterResults(null);
+    setNestedFilterError(null);
+    const searchTarget: SessionFileTarget = {
+      ...fileTarget,
+      // Searching from the displayed directory keeps the scope explicit while
+      // preserving paths relative to the browser's original root below.
+      root: listing.absolutePath,
+    };
+    const timer = window.setTimeout(() => {
+      void searchSessionFiles(
+        searchTarget,
+        query,
+        showHidden,
+        controller.signal,
+      ).then((results) => {
+        if (controller.signal.aborted) return;
+        setNestedFilterResults({
+          ...results,
+          root: fileTarget.root ?? listing.root,
+          results: results.results.map((entry) => ({
+            ...entry,
+            path: joinPath(directoryPath, entry.path),
+          })),
+        });
+      }).catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setNestedFilterError(errorMessage(error, "Unable to search nested folders"));
+        }
+      }).finally(() => {
+        if (nestedFilterAbortRef.current === controller) {
+          nestedFilterAbortRef.current = null;
+          if (!controller.signal.aborted) setNestedFilterLoading(false);
+        }
+      });
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+      if (nestedFilterAbortRef.current === controller) {
+        nestedFilterAbortRef.current = null;
+      }
+    };
+  }, [
+    directoryPath,
+    fileTarget,
+    filter,
+    listing,
+    listingError,
+    listingLoading,
+    nestedFilterEnabled,
+    showHidden,
+  ]);
 
   // Keyed on the path and the refresh token rather than the entry object, so a
   // reloaded listing that hands back an identical object still refetches.
@@ -1062,14 +1155,22 @@ export function SessionFilesPanel({
     recentsOpen,
   ]);
 
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const nestedFilterActive = nestedFilterEnabled && Boolean(normalizedFilter);
+  const scopedEntries = useMemo(() => (
+    nestedFilterActive
+      ? (nestedFilterResults?.results ?? [])
+      : (listing?.entries ?? [])
+  ), [listing?.entries, nestedFilterActive, nestedFilterResults?.results]);
+
   const visibleEntries = useMemo(() => {
-    const normalizedFilter = filter.trim().toLocaleLowerCase();
-    const matching = (listing?.entries ?? []).filter((entry) => (
+    const matching = scopedEntries.filter((entry) => (
       (showHidden || !entry.hidden)
-      && (!normalizedFilter || entry.name.toLocaleLowerCase().includes(normalizedFilter))
+      && (!normalizedFilter || nestedFilterActive
+        || entry.name.toLocaleLowerCase().includes(normalizedFilter))
     ));
     const factor = sortDirection === "asc" ? 1 : -1;
-    return matching.sort((left, right) => {
+    return [...matching].sort((left, right) => {
       if ((left.kind === "directory") !== (right.kind === "directory")) {
         return left.kind === "directory" ? -1 : 1;
       }
@@ -1079,12 +1180,21 @@ export function SessionFilesPanel({
       if (comparison === 0) comparison = compareNames(left.name, right.name);
       return comparison * factor;
     });
-  }, [filter, listing?.entries, showHidden, sortDirection, sortKey]);
+  }, [nestedFilterActive, normalizedFilter, scopedEntries, showHidden, sortDirection, sortKey]);
 
   const checkedEntries = useMemo(() => {
     const wanted = new Set(checkedPaths);
-    return (listing?.entries ?? []).filter((entry) => wanted.has(entry.path));
-  }, [checkedPaths, listing?.entries]);
+    const candidates = [
+      ...(listing?.entries ?? []),
+      ...(nestedFilterResults?.results ?? []),
+    ];
+    const seen = new Set<string>();
+    return candidates.filter((entry) => {
+      if (!wanted.has(entry.path) || seen.has(entry.path)) return false;
+      seen.add(entry.path);
+      return true;
+    });
+  }, [checkedPaths, listing?.entries, nestedFilterResults?.results]);
 
   const selectableEntries = useMemo(
     () => visibleEntries.filter((entry) => entry.accessible),
@@ -1423,12 +1533,26 @@ export function SessionFilesPanel({
     setActionStatus("Preparing ZIP...");
 
     try {
-      const archive = await downloadSessionFileEntries(
-        fileTarget,
-        directoryPath,
-        entries.map((entry) => entry.name),
-        controller.signal,
+      const relativePaths = entries.map((entry) => (
+        relativePathFromDirectory(entry.path, directoryPath)
+      ));
+      const hasNestedPaths = relativePaths.some(
+        (path, index) => path !== entries[index].name,
       );
+      const archive = hasNestedPaths
+        ? await downloadSessionFileEntries(
+          fileTarget,
+          directoryPath,
+          entries.map((entry) => entry.name),
+          controller.signal,
+          relativePaths,
+        )
+        : await downloadSessionFileEntries(
+          fileTarget,
+          directoryPath,
+          entries.map((entry) => entry.name),
+          controller.signal,
+        );
       if (controller.signal.aborted || identityRef.current !== archiveIdentity) return;
       if (typeof URL.createObjectURL !== "function") {
         throw new Error("This browser cannot prepare local downloads");
@@ -2477,7 +2601,7 @@ export function SessionFilesPanel({
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
-      aria-busy={listingLoading || busy || locatorLoading}
+      aria-busy={listingLoading || busy || locatorLoading || nestedFilterLoading}
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
@@ -2694,10 +2818,25 @@ export function SessionFilesPanel({
             type="search"
             aria-label="Filter files"
             value={filter}
-            placeholder="Filter this folder..."
+            placeholder={nestedFilterEnabled
+              ? "Filter this folder and subfolders..."
+              : "Filter this folder..."}
             onChange={(event) => setFilter(event.target.value)}
           />
         </label>
+        <button
+          type="button"
+          className="session-files-filter-scope"
+          aria-label="Search nested folders"
+          aria-pressed={nestedFilterEnabled}
+          title={nestedFilterEnabled
+            ? "Nested search is on: include all folders below this one"
+            : "Search only this folder; click to include nested folders"}
+          disabled={busy || listingLoading}
+          onClick={() => setNestedFilterEnabled((current) => !current)}
+        >
+          <span>{nestedFilterEnabled ? "Nested" : "Here"}</span>
+        </button>
         <select
           className="session-files-sort"
           aria-label="Sort entries by"
@@ -3195,16 +3334,38 @@ export function SessionFilesPanel({
               )}
             </div>
           )}
-          {!listingLoading && !listingError && visibleEntries.length === 0 && (
-            <div className="session-files-state">
-              <strong>{filter ? "No matching files" : "This folder is empty"}</strong>
-              <span>{!showHidden && listing?.entries.some((entry) => entry.hidden)
-                ? "Hidden entries are available."
-                : "Nothing to show here."}</span>
+          {nestedFilterActive && nestedFilterLoading && (
+            <div className="session-files-state" role="status">
+              <span className="session-files-spinner" />
+              <strong>Searching nested folders</strong>
+              <span>Scanning this folder and its descendants.</span>
             </div>
           )}
-          {!listingLoading && !listingError && visibleEntries.map((entry) => {
+          {nestedFilterActive && !nestedFilterLoading && nestedFilterError && (
+            <div className="session-files-state error" role="alert">
+              <strong>Nested search unavailable</strong>
+              <span>{nestedFilterError}</span>
+            </div>
+          )}
+          {!listingLoading && !listingError && !nestedFilterLoading && !nestedFilterError
+            && visibleEntries.length === 0 && (
+            <div className="session-files-state">
+              <strong>{nestedFilterActive
+                ? "No matching entries in this folder tree"
+                : filter ? "No matching files" : "This folder is empty"}</strong>
+              <span>{nestedFilterActive
+                ? "Try a shorter name or turn off Nested to return to this folder."
+                : !showHidden && listing?.entries.some((entry) => entry.hidden)
+                  ? "Hidden entries are available."
+                  : "Nothing to show here."}</span>
+            </div>
+          )}
+          {!listingLoading && !listingError && !nestedFilterLoading && !nestedFilterError
+            && visibleEntries.map((entry) => {
             const relativePath = pathRelativeToPaneCwd(entry.absolutePath, panePath);
+            const nestedRelativePath = nestedFilterActive
+              ? relativePathFromDirectory(entry.path, directoryPath)
+              : null;
             return (
               <div
                 key={entry.path}
@@ -3257,9 +3418,13 @@ export function SessionFilesPanel({
                   onClick={() => {
                     if (entry.kind === "directory") navigateTo(entry.path);
                     else if (guardEditor()) {
-                      directSelectionEntryRef.current = null;
-                      setSelected(entry);
-                      setActionStatus(null);
+                      if (nestedFilterActive) {
+                        openLocatedEntry(entry);
+                      } else {
+                        directSelectionEntryRef.current = null;
+                        setSelected(entry);
+                        setActionStatus(null);
+                      }
                     }
                   }}
                 >
@@ -3271,6 +3436,11 @@ export function SessionFilesPanel({
                     <small>{entry.kind === "directory"
                       ? entry.symlink ? "linked folder" : "folder"
                       : `${formatBytes(entry.size)}${entry.symlink ? " / link" : ""}`}</small>
+                    {nestedRelativePath && (
+                      <code className="session-file-nested-path" title={entry.path}>
+                        ./{nestedRelativePath}
+                      </code>
+                    )}
                   </span>
                   {entry.kind === "directory" && <ChevronRightIcon />}
                 </button>
@@ -3362,7 +3532,19 @@ export function SessionFilesPanel({
               </div>
             );
           })}
-          {listing?.truncated && !listingLoading && (
+          {nestedFilterActive && nestedFilterResults && !nestedFilterLoading && !nestedFilterError && (
+            <p className="session-files-limit" role="status">
+              {nestedFilterResults.results.length.toLocaleString()} nested match{
+                nestedFilterResults.results.length === 1 ? "" : "es"
+              } from {nestedFilterResults.scannedEntries.toLocaleString()} scanned entr{
+                nestedFilterResults.scannedEntries === 1 ? "y" : "ies"
+              }.
+              {nestedFilterResults.truncated
+                ? " Best matches shown; refine the filter for a narrower scan."
+                : ""}
+            </p>
+          )}
+          {!nestedFilterActive && listing?.truncated && !listingLoading && (
             <p className="session-files-limit" role="status">
               Showing the first {listing.limit.toLocaleString()} entries.
             </p>

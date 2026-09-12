@@ -1084,6 +1084,14 @@ def _archive_source_name(value: str) -> str:
     return value
 
 
+def _archive_source_path(value: str) -> tuple[str, ...]:
+    """Validate a relative descendant path selected from the current folder."""
+    parts = _relative_parts(value)
+    if not parts:
+        raise ValueError("selected path must name an item in this folder")
+    return parts
+
+
 def _archive_timestamp(modified: float) -> tuple[int, int, int, int, int, int]:
     try:
         timestamp = time.localtime(modified)
@@ -1222,25 +1230,113 @@ def _add_archive_entry(
             os.close(file_descriptor)
 
 
+def _add_archive_path_entry(
+    archive: zipfile.ZipFile,
+    parent_descriptor: int,
+    source_parts: tuple[str, ...],
+    archive_parts: tuple[str, ...],
+    progress: _ArchiveProgress,
+) -> None:
+    """Add a descendant selected by a safe path, without following links."""
+    if len(source_parts) == 1:
+        _add_archive_entry(
+            archive,
+            parent_descriptor,
+            source_parts[0],
+            (*archive_parts, _archive_component(source_parts[0])),
+            progress,
+        )
+        return
+
+    source_name = source_parts[0]
+    entry_stat = os.stat(
+        source_name,
+        dir_fd=parent_descriptor,
+        follow_symlinks=False,
+    )
+    if stat.S_ISLNK(entry_stat.st_mode):
+        progress.skipped_count += 1
+        return
+    if not stat.S_ISDIR(entry_stat.st_mode):
+        raise NotADirectoryError("selected path has a non-directory parent")
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        directory_descriptor = os.open(
+            source_name,
+            flags,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            progress.skipped_count += 1
+            return
+        raise
+    try:
+        _add_archive_path_entry(
+            archive,
+            directory_descriptor,
+            source_parts[1:],
+            (*archive_parts, _archive_component(source_name)),
+            progress,
+        )
+    finally:
+        os.close(directory_descriptor)
+
+
 def create_download_archive(
     root_path: str,
     directory_path: str,
-    names: list[str],
+    names: list[str] | None = None,
     *,
+    paths: list[str] | None = None,
     boundary: Path | None,
 ) -> FileBrowserArchive:
     """Create a bounded temporary ZIP from entries in one displayed folder."""
-    if not isinstance(names, list):
-        raise TypeError("names must be an array")
-    if not names:
+    if (names is None) == (paths is None):
+        raise TypeError("provide names or paths, but not both")
+    selected: list[tuple[str, tuple[str, ...]]]
+    if names is not None:
+        if not isinstance(names, list):
+            raise TypeError("names must be an array")
+        selected = [(_archive_source_name(name), (name,)) for name in names]
+    else:
+        if not isinstance(paths, list):
+            raise TypeError("paths must be an array")
+        selected = [
+            (path, _archive_source_path(path))
+            for path in paths
+        ]
+    if not selected:
         raise ValueError("select at least one file or folder")
-    if len(names) > MAX_FILE_ARCHIVE_SELECTION:
+    if len(selected) > MAX_FILE_ARCHIVE_SELECTION:
         raise FileBrowserArchiveLimitError(
             f"select no more than {MAX_FILE_ARCHIVE_SELECTION:,} items at once"
         )
-    validated_names = [_archive_source_name(name) for name in names]
-    if len(set(validated_names)) != len(validated_names):
-        raise ValueError("selected names must be unique")
+    selected_keys = [
+        "/".join(parts)
+        for _display_name, parts in selected
+    ]
+    if len(set(selected_keys)) != len(selected_keys):
+        raise ValueError("selected paths must be unique")
+    if paths is not None:
+        # A directory selection already contains every descendant. Dropping
+        # those descendants prevents duplicate ZIP members when a nested
+        # search result and its parent are both checked.
+        selected_keys_set = set(selected_keys)
+        selected = [
+            item
+            for item in selected
+            if not any(
+                "/".join(item[1][:index]) in selected_keys_set
+                for index in range(1, len(item[1]))
+            )
+        ]
 
     _display_root, _resolved_root, directory, _parts = _resolve_target(
         root_path,
@@ -1270,12 +1366,12 @@ def create_download_archive(
                 compression=zipfile.ZIP_DEFLATED,
                 allowZip64=True,
             ) as archive:
-                for name in validated_names:
-                    _add_archive_entry(
+                for _display_name, parts in selected:
+                    _add_archive_path_entry(
                         archive,
                         directory_descriptor,
-                        name,
-                        (_archive_component(name),),
+                        parts,
+                        (),
                         progress,
                     )
         if progress.file_count == 0 and progress.directory_count == 0:

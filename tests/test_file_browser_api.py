@@ -400,6 +400,32 @@ def test_bulk_archive_keeps_selected_roots_and_recurses_without_links(tmp_path):
         result.path.unlink(missing_ok=True)
 
 
+def test_bulk_archive_accepts_safe_relative_descendant_paths(tmp_path):
+    current = tmp_path / "project"
+    nested = current / "reports" / "daily"
+    nested.mkdir(parents=True)
+    (nested / "monday.txt").write_text("monday\n", encoding="utf-8")
+    (nested / "tuesday.txt").write_text("tuesday\n", encoding="utf-8")
+
+    result = file_browser.create_download_archive(
+        str(tmp_path),
+        "project",
+        paths=["reports/daily/monday.txt", "reports/daily"],
+        boundary=None,
+    )
+    try:
+        with zipfile.ZipFile(result.path) as archive:
+            names = archive.namelist()
+            assert len(names) == len(set(names))
+            assert set(names) == {
+                "reports/daily/monday.txt",
+                "reports/daily/",
+                "reports/daily/tuesday.txt",
+            }
+    finally:
+        result.path.unlink(missing_ok=True)
+
+
 def test_bulk_archive_enforces_selection_entry_and_byte_limits(
     tmp_path,
     monkeypatch,
@@ -754,6 +780,26 @@ async def test_file_browser_api_streams_and_removes_a_bulk_archive(
             assert archive.read("daily/monday.txt") == b"monday\n"
         assert created_paths
         assert all(not path.exists() for path in created_paths)
+    finally:
+        await client.close()
+
+
+async def test_file_browser_archive_api_accepts_nested_relative_paths(tmp_path):
+    nested = tmp_path / "reports" / "daily"
+    nested.mkdir(parents=True)
+    (nested / "monday.txt").write_text("monday\n", encoding="utf-8")
+    client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
+    try:
+        response = await client.post(
+            "/api/sessions/files-agent/files/archive",
+            params={"sessionId": "$7", "paneId": "%3", "path": ""},
+            json={"paths": ["reports/daily/monday.txt"]},
+        )
+        assert response.status == 200
+        body = await response.read()
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            assert archive.namelist() == ["reports/daily/monday.txt"]
+            assert archive.read("reports/daily/monday.txt") == b"monday\n"
     finally:
         await client.close()
 

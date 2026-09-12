@@ -858,14 +858,18 @@ merely to test that the application itself has no login.
     in the address row and confirm its parent opens with that file previewed
     immediately. Open `Find`, fuzzy-locate a nested disposable file, and confirm
     selecting it opens the same parent and preview; a deliberately broad search
-    must report when its bounded traversal is partial. Open `Recent` and confirm
-    the file and its parent appear in All recent paths and Under current CWD
-    when inside the pane CWD, preserving the same relative order; paths outside
-    the CWD appear only in All recent paths. Confirm entries survive
-    closing and reopening the panel, reopen with one click, and do not appear for
-    another tmux session. Check the uploaded file plus a disposable nested folder,
-    use `Download ZIP`, and confirm one archive contains both selected roots and
-    the nested contents; the checked rows should remain selected afterward.
+    must report when its bounded traversal is partial. In the ordinary listing,
+    type a disposable filename, toggle `Nested`, and confirm a descendant match
+    appears with its relative path and opens through the same preview/actions;
+    turn the toggle off and confirm the local folder filter returns. Open
+    `Recent` and confirm the file and its parent appear in All recent paths and
+    Under current CWD when inside the pane CWD, preserving the same relative
+    order; paths outside the CWD appear only in All recent paths. Confirm entries
+    survive closing and reopening the panel, reopen with one click, and do not
+    appear for another tmux session. Check the uploaded file plus a disposable
+    nested folder, use `Download ZIP`, and confirm one archive contains both
+    selected roots and the nested contents; the checked rows should remain
+    selected afterward.
     Confirm an accessible regular-file row downloads directly without first
     selecting it. Render a disposable Markdown file, enlarge it from the 100%
     default, close and reopen the panel, and confirm that browser remembers the

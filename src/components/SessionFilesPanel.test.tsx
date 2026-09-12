@@ -590,6 +590,74 @@ describe("SessionFilesPanel", () => {
       .not.toBeInTheDocument();
   });
 
+  it("filters descendants when nested folder search is enabled", async () => {
+    const sourceFolder = entry("src", "src", "directory");
+    const nestedFile = entry("settings.json", "src/settings.json", "file", {
+      size: 31,
+    });
+    vi.mocked(listSessionFiles).mockImplementation(async (_target, path) => (
+      path === "src"
+        ? listing("src", [nestedFile])
+        : listing("", [sourceFolder])
+    ));
+    vi.mocked(searchSessionFiles).mockResolvedValue({
+      root: "/work/project/src",
+      query: "settings",
+      results: [entry("settings.json", "settings.json", "file", { size: 31 })],
+      scannedEntries: 7,
+      scanLimit: 50_000,
+      resultLimit: 80,
+      truncated: false,
+    });
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(
+      "settings.json",
+      "src/settings.json",
+      '{"ready": true}\n',
+    ));
+
+    renderPanel();
+    let panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Folder src" }));
+    await waitFor(() => expect(listSessionFiles).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "src",
+      expect.any(AbortSignal),
+    ));
+
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Search nested folders",
+    }));
+    expect(within(panel).getByRole("button", {
+      name: "Search nested folders",
+    })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.change(within(panel).getByLabelText("Filter files"), {
+      target: { value: "settings" },
+    });
+
+    await waitFor(() => expect(searchSessionFiles).toHaveBeenCalledWith(
+      {
+        session: "agent",
+        sessionId: "$7",
+        paneId: "%3",
+        root: "/work/project/src",
+      },
+      "settings",
+      false,
+      expect.any(AbortSignal),
+    ));
+    expect(await within(panel).findByText("./settings.json")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("1 nested match from 7 scanned entries.");
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File settings.json" }));
+    await waitFor(() => expect(previewSessionFile).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "src/settings.json",
+      expect.any(AbortSignal),
+    ));
+    panel = await screen.findByRole("dialog", { name: "Files" });
+    expect(await within(panel).findByText('{"ready": true}')).toBeInTheDocument();
+  });
+
   it("filters the shared recent order by CWD boundaries without recording duplicates", async () => {
     const paths = ["/work/project-old/docs", "/work/project/src", "/elsewhere", "/work/project/docs/readme.md"];
     const now = Date.now();

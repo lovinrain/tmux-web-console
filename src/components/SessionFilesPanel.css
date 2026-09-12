@@ -418,6 +418,11 @@
   border-color: rgba(104, 223, 208, 0.38);
 }
 
+.session-files-tools > .session-files-filter-scope {
+  min-width: 43px;
+  padding-inline: 7px;
+}
+
 .session-files-locator {
   display: flex;
   min-height: 0;
@@ -1474,7 +1479,8 @@ html.session-files-panel-splitting .session-files-splitter > span {
 }
 
 .session-file-name strong,
-.session-file-name small {
+.session-file-name small,
+.session-file-nested-path {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1489,6 +1495,12 @@ html.session-files-panel-splitting .session-files-splitter > span {
 .session-file-name small {
   margin-top: 2px;
   color: #66786f;
+  font-size: 7px;
+}
+
+.session-file-nested-path {
+  margin-top: 2px;
+  color: #7faaa0;
   font-size: 7px;
 }
 
@@ -3327,9 +3339,14 @@ html[data-theme="light"] .session-file-row.directory .session-file-kind {
 }
 
 html[data-theme="light"] .session-file-name small,
+html[data-theme="light"] .session-file-nested-path,
 html[data-theme="light"] .session-files-state,
 html[data-theme="light"] .session-file-preview-empty {
   color: #6c766e;
+}
+
+html[data-theme="light"] .session-file-nested-path {
+  color: #317d72;
 }
 
 html[data-theme="light"] .session-files-state strong,

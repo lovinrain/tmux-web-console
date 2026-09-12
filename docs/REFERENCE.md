@@ -409,13 +409,15 @@ attachment filename and have no preview-size limit. Each accessible file row
 has its own download shortcut, so selecting or previewing the file first is not
 required.
 
-Checked entries expose `Download ZIP` in the bulk bar. The server puts each
-selected file or folder at the archive root, recursively includes ordinary
-files and empty folders, and skips symlinks and special files rather than
-following them. The browser receives one archive, so it does not need permission
-for a burst of separate downloads. Preparing the archive is non-mutating and
-does not clear the checked rows; the status line reports file, folder, and
-skipped counts when the download starts.
+Checked entries expose `Download ZIP` in the bulk bar. Direct-listing selections
+are placed at the archive root; selections from a nested filter retain their
+path relative to the displayed folder. The server recursively includes ordinary
+files and empty folders, skips symlinks and special files rather than following
+them, and collapses a checked descendant when its parent folder is also checked.
+The browser receives one archive, so it does not need permission for a burst of
+separate downloads. Preparing the archive is non-mutating and does not clear the
+checked rows; the status line reports file, folder, and skipped counts when the
+download starts.
 
 Archive generation accepts at most 1,000 explicitly selected entries, inspects
 at most 10,000 entries after folder expansion, and stops above 256 MiB of
@@ -432,6 +434,14 @@ move through ranked results, and press Enter again to open the highlighted file
 or folder. Opening a nested file moves the ordinary browser to its parent and
 starts the same protected preview. The existing `Show dotfiles` setting also
 controls whether hidden trees participate.
+
+The ordinary directory filter remains a fast, case-insensitive basename match
+in the folder currently shown. Its `Here`/`Nested` scope button switches to the
+bounded locator for a convenient recursive filter: `Nested` searches that folder
+and its descendants as the query changes, displays each match relative to the
+current folder, and keeps the normal row actions (including selection, preview,
+download, move, and delete). Clearing the query returns to the live directory
+listing without starting a tree walk.
 
 Locator walks are on demand, never follow symlinks, and are bounded to 80 best
 results, 50,000 inspected entries, 32 directory levels, and roughly 1.5 seconds.

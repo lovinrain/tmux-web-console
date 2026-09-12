@@ -442,6 +442,7 @@ export async function downloadSessionFileEntries(
   directoryPath: string,
   names: string[],
   signal?: AbortSignal,
+  relativePaths?: string[],
 ): Promise<SessionFileArchiveDownload> {
   const response = await fetch(
     `${BASE_PATH}${sessionFileUrl(target, "archive", directoryPath)}`,
@@ -451,7 +452,9 @@ export async function downloadSessionFileEntries(
         Accept: "application/zip",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ names }),
+      // Direct listings keep the compact legacy `names` payload. Nested
+      // filters send safe paths relative to the displayed directory.
+      body: JSON.stringify(relativePaths ? { paths: relativePaths } : { names }),
       signal,
     },
   );

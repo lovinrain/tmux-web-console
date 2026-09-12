@@ -2165,16 +2165,23 @@ def create_app(
     ) -> web.StreamResponse:
         payload = await session_file_mutation_body(
             request,
-            frozenset({"names"}),
-            ("names",),
+            frozenset({"names", "paths"}),
+            (),
         )
         if isinstance(payload, web.Response):
             return payload
-        names = payload["names"]
-        if not isinstance(names, list) or any(
-            not isinstance(name, str) for name in names
+        has_names = "names" in payload
+        has_paths = "paths" in payload
+        if not has_names and not has_paths:
+            return json_error("names is required", 400)
+        if has_names and has_paths:
+            return json_error("provide exactly one of names or paths", 400)
+        selected = payload.get("names") if has_names else payload.get("paths")
+        if not isinstance(selected, list) or any(
+            not isinstance(value, str) for value in selected
         ):
-            return json_error("names must be an array of strings", 400)
+            field = "names" if has_names else "paths"
+            return json_error(f"{field} must be an array of strings", 400)
 
         context = await session_file_context(
             request,
@@ -2188,16 +2195,29 @@ def create_app(
             # Compression is deliberately serialized: one bounded archive is
             # cheap, while several concurrent 256 MiB requests are not.
             async with app[FILE_ARCHIVE_SEMAPHORE_KEY]:
+                if has_names:
+                    archive_operation = (
+                        lambda operation_root, operation_path: create_download_archive(
+                            operation_root,
+                            operation_path,
+                            selected,
+                            boundary=app[FILE_BROWSER_ROOT_KEY],
+                        )
+                    )
+                else:
+                    archive_operation = (
+                        lambda operation_root, operation_path: create_download_archive(
+                            operation_root,
+                            operation_path,
+                            paths=selected,
+                            boundary=app[FILE_BROWSER_ROOT_KEY],
+                        )
+                    )
                 return await execute_session_file_operation(
                     root_path,
                     relative_path,
                     pane_id,
-                    lambda operation_root, operation_path: create_download_archive(
-                        operation_root,
-                        operation_path,
-                        names,
-                        boundary=app[FILE_BROWSER_ROOT_KEY],
-                    ),
+                    archive_operation,
                 )
 
         archive_task = asyncio.create_task(build_archive())

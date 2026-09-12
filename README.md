@@ -183,6 +183,10 @@ For frontend development, run `npm run dev`. Vite serves
   `Find` opens a keyboard-friendly fuzzy locator for files and folders anywhere
   below the browser's current root. Searches run only when submitted, skip
   dotfiles unless they are enabled, and bound traversal on very large trees.
+  The directory filter starts with the current folder for instant local
+  matching; press `Nested` beside it to search the displayed folder and all of
+  its descendants. Nested results show their relative path and use the same
+  open, preview, and bulk actions as a normal listing.
   `Recent` keeps the last 32 successfully opened files and folders in two compact
   lists, scoped to the current tmux session. The list survives panel closes and
   reloads in that browser, supports one-click reopening and individual or bulk
