@@ -368,6 +368,7 @@ never target the default tmux server.
 
 ## Documentation
 
+- [HTTP and WebSocket API reference](docs/API.md)
 - [Detailed behavior and complete configuration](docs/REFERENCE.md)
 - [Deployment, migration, validation, and rollback](AGENT_DEPLOYMENT_GUIDE.md)
 - [Vulnerability reporting and the security boundary](SECURITY.md)

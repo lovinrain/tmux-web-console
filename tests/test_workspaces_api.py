@@ -97,6 +97,240 @@ def pane_layout(name="Pair"):
 
 
 @pytest.mark.asyncio
+async def test_api_capabilities_are_machine_readable(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.get("/api/capabilities")
+        assert response.status == 200
+        payload = await response.json()
+    assert payload["apiVersion"] == 1
+    assert payload["basePath"] == ""
+    assert payload["authentication"] == {"mode": "none"}
+    assert payload["workspace"]["limits"]["tabsPerWorkspace"] == MAX_WORKSPACE_TABS
+    assert "paneLayouts" in payload["resources"]["workspaces"]
+
+
+@pytest.mark.asyncio
+async def test_granular_workspace_session_api_is_ordered_and_idempotent(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        created = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Automation",
+                "tabs": ["a", "b"],
+                "activeSession": "a",
+            },
+        )
+        assert created.status == 201
+        route = "/api/workspaces/workspace-id/sessions"
+
+        response = await client.post(
+            route,
+            json={
+                "sessions": ["c", "a"],
+                "position": "before",
+                "relativeTo": "b",
+                "activeSession": "c",
+                "sessionRevision": 0,
+            },
+        )
+        assert response.status == 200
+        added = await response.json()
+        assert added["added"] == ["c"]
+        assert added["workspace"]["tabs"] == ["a", "c", "b"]
+        assert added["workspace"]["activeSession"] == "c"
+
+        response = await client.post(
+            route,
+            json={"sessions": ["c"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["added"] == []
+
+        response = await client.put(
+            route,
+            json={"sessions": ["c", "a"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        replaced = (await response.json())["workspace"]
+        assert replaced["tabs"] == ["c", "a"]
+        assert replaced["activeSession"] == "c"
+
+        response = await client.delete(
+            route,
+            json={"sessions": ["c", "missing"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        removed = await response.json()
+        assert removed["removed"] == ["c"]
+        assert removed["workspace"]["tabs"] == ["a"]
+        assert removed["workspace"]["activeSession"] == "a"
+
+        response = await client.get(route)
+        assert await response.json() == {
+            "sessions": ["a"],
+            "activeSession": "a",
+            "sessionRevision": 0,
+        }
+
+
+@pytest.mark.asyncio
+async def test_granular_workspace_sessions_enforce_revision_and_pins(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        await client.post(
+            "/api/workspaces",
+            json={"name": "Pinned", "tabs": ["a"], "activeSession": "a"},
+        )
+        assert store.set_session_workspace_pinned("pin", True)["sessionRevision"] == 1
+        route = "/api/workspaces/workspace-id/sessions"
+
+        stale = await client.post(
+            route,
+            json={"sessions": ["b"], "sessionRevision": 0},
+        )
+        assert stale.status == 409
+        assert "reload the workspace" in (await stale.json())["error"]
+
+        pinned = await client.delete(
+            route,
+            json={"sessions": ["pin"], "sessionRevision": 1},
+        )
+        assert pinned.status == 409
+        assert "unpin it first" in (await pinned.json())["error"]
+
+
+@pytest.mark.asyncio
+async def test_granular_workspace_callback_group_and_separator_apis(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Resources",
+                "tabs": ["a", "b", "c"],
+                "activeSession": "a",
+            },
+        )
+        base = "/api/workspaces/workspace-id"
+
+        response = await client.post(
+            f"{base}/callback-sessions",
+            json={"sessions": ["b", "ended"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["added"] == ["b", "ended"]
+        response = await client.delete(
+            f"{base}/callback-sessions",
+            json={"sessions": ["b"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["removed"] == ["b"]
+        response = await client.get(f"{base}/callback-sessions")
+        assert (await response.json())["callbackSessions"] == ["ended"]
+
+        group = workspace_group("middle", ["b", "c"])
+        response = await client.post(
+            f"{base}/groups",
+            json={"group": group, "sessionRevision": 0},
+        )
+        assert response.status == 201
+        assert (await response.json())["group"] == group
+        response = await client.patch(
+            f"{base}/groups/middle",
+            json={"name": "Review", "collapsed": True, "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["group"]["name"] == "Review"
+        response = await client.get(f"{base}/groups/middle")
+        assert (await response.json())["group"]["collapsed"] is True
+
+        response = await client.post(
+            f"{base}/separators",
+            json={"session": "b", "placement": "before", "sessionRevision": 0},
+        )
+        assert response.status == 200
+        separators = (await response.json())["separators"]
+        assert separators == {"before": ["b"], "after": []}
+        response = await client.delete(
+            f"{base}/separators",
+            json={"session": "b", "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["separators"] == {
+            "before": [],
+            "after": [],
+        }
+
+        response = await client.delete(
+            f"{base}/groups/middle",
+            json={"sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["workspace"]["groups"] == []
+
+
+@pytest.mark.asyncio
+async def test_granular_workspace_pane_layout_crud(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=lambda: "workspace-id",
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Panes",
+                "tabs": ["a", "b"],
+                "activeSession": "a",
+            },
+        )
+        base = "/api/workspaces/workspace-id/pane-layouts"
+        layout = pane_layout()
+
+        response = await client.post(
+            base,
+            json={"paneLayout": layout, "sessionRevision": 0},
+        )
+        assert response.status == 201
+        assert (await response.json())["paneLayout"] == layout
+
+        duplicate = await client.post(
+            base,
+            json={"paneLayout": layout, "sessionRevision": 0},
+        )
+        assert duplicate.status == 409
+
+        response = await client.patch(
+            f"{base}/pair-view",
+            json={"name": "Three terminals later", "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["paneLayout"]["name"] == "Three terminals later"
+        response = await client.get(f"{base}/pair-view")
+        assert (await response.json())["paneLayout"]["name"] == "Three terminals later"
+
+        response = await client.delete(
+            f"{base}/pair-view",
+            json={"sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["workspace"]["paneLayouts"] == []
+        missing = await client.get(f"{base}/pair-view")
+        assert missing.status == 404
+
+
+@pytest.mark.asyncio
 async def test_workspace_pane_layout_api_create_update_and_validation(tmp_path):
     store = WorkspaceStore(
         tmp_path / "workspaces.json",

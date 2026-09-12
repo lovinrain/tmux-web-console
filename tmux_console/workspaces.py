@@ -56,12 +56,38 @@ _QUICK_LINKS_OMITTED = object()
 _SEPARATORS_OMITTED = object()
 _PANE_LAYOUTS_OMITTED = object()
 _CALLBACK_SESSIONS_OMITTED = object()
+_ACTIVE_SESSION_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
 WORKSPACE_SCHEMA_VERSION = 12
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
 )
+
+
+def workspace_api_capabilities() -> dict[str, Any]:
+    """Return stable machine-readable limits for workspace automation clients."""
+    return {
+        "schemaVersion": WORKSPACE_SCHEMA_VERSION,
+        "limits": {
+            "tabsPerWorkspace": MAX_WORKSPACE_TABS,
+            "groupsPerWorkspace": MAX_WORKSPACE_GROUPS,
+            "quickLinksPerScope": MAX_WORKSPACE_QUICK_LINKS,
+            "callbackSessionsPerWorkspace": MAX_WORKSPACE_CALLBACK_SESSIONS,
+            "notePagesPerScope": MAX_SCOPED_NOTE_PAGES,
+            "paneLayoutsPerWorkspace": MAX_WORKSPACE_PANE_LAYOUTS,
+            "panesPerLayout": MAX_WORKSPACE_PANES_PER_LAYOUT,
+            "paneSplitDepth": MAX_WORKSPACE_PANE_DEPTH,
+            "paneRatio": {
+                "minimum": MIN_WORKSPACE_PANE_RATIO,
+                "maximum": MAX_WORKSPACE_PANE_RATIO,
+            },
+        },
+        "groupColors": list(WORKSPACE_GROUP_COLORS),
+        "sessionInsertPositions": ["start", "end", "before", "after"],
+        "separatorPlacements": ["before", "after"],
+        "paneSplitDirections": ["horizontal", "vertical"],
+    }
 
 
 def default_workspaces_path() -> Path:
@@ -1171,6 +1197,14 @@ class WorkspaceTransferConflictError(ValueError):
     pass
 
 
+class WorkspaceResourceNotFoundError(LookupError):
+    pass
+
+
+class WorkspaceResourceConflictError(ValueError):
+    pass
+
+
 class _WorkspaceDirectorySyncError(OSError):
     pass
 
@@ -1865,6 +1899,498 @@ class WorkspaceStore:
             self._commit(next_workspaces)
             return self._workspace_dict(workspace)
 
+    def add_workspace_sessions(
+        self,
+        workspace_id: str,
+        *,
+        sessions: object,
+        session_revision: object,
+        position: object = "end",
+        relative_to: object = None,
+        active_session: object = _ACTIVE_SESSION_OMITTED,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_sessions = validate_workspace_tabs(sessions)
+        validated_revision = _validate_session_revision(session_revision)
+        if position not in {"start", "end", "before", "after"}:
+            raise ValueError("position must be start, end, before, or after")
+        if position in {"before", "after"}:
+            if not isinstance(relative_to, str):
+                raise TypeError("relativeTo must be a string for before or after")
+            relative_to = validate_session_name(relative_to)
+        elif relative_to is not None:
+            raise ValueError("relativeTo is only valid with before or after")
+
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            if relative_to is not None and relative_to not in current.tabs:
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace session not found: {relative_to}"
+                )
+
+            existing = set(current.tabs)
+            added = tuple(item for item in validated_sessions if item not in existing)
+            if len(current.tabs) + len(added) > MAX_WORKSPACE_TABS:
+                raise WorkspaceResourceConflictError(
+                    f"workspace tabs cannot contain more than {MAX_WORKSPACE_TABS} sessions"
+                )
+            if position == "start":
+                insertion_index = 0
+            elif position == "end":
+                insertion_index = len(current.tabs)
+            else:
+                assert isinstance(relative_to, str)
+                insertion_index = current.tabs.index(relative_to)
+                if position == "after":
+                    insertion_index += 1
+            next_tabs = (
+                current.tabs[:insertion_index]
+                + added
+                + current.tabs[insertion_index:]
+            )
+            update_active = active_session is not _ACTIVE_SESSION_OMITTED
+            if not added and not update_active:
+                workspace = self._workspace_dict(current)
+            else:
+                workspace = self.update_workspace(
+                    workspace_id,
+                    tabs=list(next_tabs),
+                    update_tabs=True,
+                    active_session=(
+                        active_session if update_active else current.active_session
+                    ),
+                    update_active_session=True,
+                    session_revision=validated_revision,
+                )
+            return {"added": list(added), "workspace": workspace}
+
+    def replace_workspace_sessions(
+        self,
+        workspace_id: str,
+        *,
+        sessions: object,
+        session_revision: object,
+        active_session: object = _ACTIVE_SESSION_OMITTED,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_sessions = validate_workspace_tabs(sessions)
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            missing_pins = [
+                item for item in self._pinned_sessions if item not in validated_sessions
+            ]
+            if missing_pins:
+                raise WorkspaceResourceConflictError(
+                    f'cannot remove globally pinned session "{missing_pins[0]}"; '
+                    "unpin it first"
+                )
+            next_active: object
+            if active_session is _ACTIVE_SESSION_OMITTED:
+                next_active = (
+                    current.active_session
+                    if current.active_session in validated_sessions
+                    else validated_sessions[0]
+                    if validated_sessions
+                    else None
+                )
+            else:
+                next_active = active_session
+            workspace = self.update_workspace(
+                workspace_id,
+                tabs=list(validated_sessions),
+                update_tabs=True,
+                active_session=next_active,
+                update_active_session=True,
+                session_revision=validated_revision,
+            )
+            return {"workspace": workspace}
+
+    def remove_workspace_sessions(
+        self,
+        workspace_id: str,
+        *,
+        sessions: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_sessions = validate_workspace_tabs(sessions)
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            current_set = set(current.tabs)
+            removed = tuple(item for item in validated_sessions if item in current_set)
+            pinned_removed = [
+                item for item in removed if item in self._pinned_sessions
+            ]
+            if pinned_removed:
+                raise WorkspaceResourceConflictError(
+                    f'cannot remove globally pinned session "{pinned_removed[0]}"; '
+                    "unpin it first"
+                )
+            if not removed:
+                return {"removed": [], "workspace": self._workspace_dict(current)}
+            removed_set = set(removed)
+            next_tabs = tuple(item for item in current.tabs if item not in removed_set)
+            next_active = (
+                current.active_session
+                if current.active_session in next_tabs
+                else next_tabs[0]
+                if next_tabs
+                else None
+            )
+            workspace = self.update_workspace(
+                workspace_id,
+                tabs=list(next_tabs),
+                update_tabs=True,
+                active_session=next_active,
+                update_active_session=True,
+                session_revision=validated_revision,
+            )
+            return {"removed": list(removed), "workspace": workspace}
+
+    def add_workspace_callback_sessions(
+        self,
+        workspace_id: str,
+        *,
+        sessions: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_sessions = validate_workspace_callback_sessions(sessions, "sessions")
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            existing = set(current.callback_sessions)
+            added = tuple(item for item in validated_sessions if item not in existing)
+            next_sessions = (*current.callback_sessions, *added)
+            if len(next_sessions) > MAX_WORKSPACE_CALLBACK_SESSIONS:
+                raise WorkspaceResourceConflictError(
+                    "callback sessions cannot contain more than "
+                    f"{MAX_WORKSPACE_CALLBACK_SESSIONS} sessions"
+                )
+            if not added:
+                workspace = self._workspace_dict(current)
+            else:
+                workspace = self.update_workspace(
+                    workspace_id,
+                    callback_sessions=list(next_sessions),
+                    update_callback_sessions=True,
+                    session_revision=validated_revision,
+                )
+            return {"added": list(added), "workspace": workspace}
+
+    def remove_workspace_callback_sessions(
+        self,
+        workspace_id: str,
+        *,
+        sessions: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_sessions = validate_workspace_callback_sessions(sessions, "sessions")
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            requested = set(validated_sessions)
+            removed = tuple(
+                item for item in current.callback_sessions if item in requested
+            )
+            if not removed:
+                return {"removed": [], "workspace": self._workspace_dict(current)}
+            next_sessions = tuple(
+                item for item in current.callback_sessions if item not in requested
+            )
+            workspace = self.update_workspace(
+                workspace_id,
+                callback_sessions=list(next_sessions),
+                update_callback_sessions=True,
+                session_revision=validated_revision,
+            )
+            return {"removed": list(removed), "workspace": workspace}
+
+    def create_workspace_group(
+        self,
+        workspace_id: str,
+        *,
+        group: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            candidate = validate_workspace_groups([group], current.tabs)[0]
+            if any(item.id == candidate.id for item in current.groups):
+                raise WorkspaceResourceConflictError(
+                    f"workspace group already exists: {candidate.id}"
+                )
+            positions = {tab: index for index, tab in enumerate(current.tabs)}
+            next_groups = sorted(
+                (*current.groups, candidate),
+                key=lambda item: positions[item.tabs[0]],
+            )
+            workspace = self.update_workspace(
+                workspace_id,
+                groups=[item.to_dict() for item in next_groups],
+                update_groups=True,
+                session_revision=validated_revision,
+            )
+            created = next(
+                item for item in workspace["groups"] if item["id"] == candidate.id
+            )
+            return {"group": created, "workspace": workspace}
+
+    def update_workspace_group(
+        self,
+        workspace_id: str,
+        group_id: str,
+        *,
+        changes: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        group_id = _validate_workspace_group_id(group_id, "group id")
+        validated_revision = _validate_session_revision(session_revision)
+        if not isinstance(changes, dict):
+            raise TypeError("group changes must be an object")
+        unknown = sorted(str(item) for item in set(changes) - {"name", "color", "collapsed", "tabs"})
+        if unknown:
+            raise ValueError(f"group changes has unknown field: {unknown[0]}")
+        if not changes:
+            raise ValueError("at least one group field is required")
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            matched = next((item for item in current.groups if item.id == group_id), None)
+            if matched is None:
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace group not found: {group_id}"
+                )
+            candidate_payload = {**matched.to_dict(), **changes}
+            candidate = validate_workspace_groups([candidate_payload], current.tabs)[0]
+            positions = {tab: index for index, tab in enumerate(current.tabs)}
+            next_groups = [
+                candidate if item.id == group_id else item for item in current.groups
+            ]
+            next_groups.sort(key=lambda item: positions[item.tabs[0]])
+            workspace = self.update_workspace(
+                workspace_id,
+                groups=[item.to_dict() for item in next_groups],
+                update_groups=True,
+                session_revision=validated_revision,
+            )
+            updated = next(
+                item for item in workspace["groups"] if item["id"] == group_id
+            )
+            return {"group": updated, "workspace": workspace}
+
+    def delete_workspace_group(
+        self,
+        workspace_id: str,
+        group_id: str,
+        *,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        group_id = _validate_workspace_group_id(group_id, "group id")
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            if not any(item.id == group_id for item in current.groups):
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace group not found: {group_id}"
+                )
+            next_groups = [
+                item.to_dict() for item in current.groups if item.id != group_id
+            ]
+            workspace = self.update_workspace(
+                workspace_id,
+                groups=next_groups,
+                update_groups=True,
+                session_revision=validated_revision,
+            )
+            return {"workspace": workspace}
+
+    def create_workspace_pane_layout(
+        self,
+        workspace_id: str,
+        *,
+        layout: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            candidate = validate_workspace_pane_layouts([layout], current.tabs)[0]
+            if any(item.id == candidate.id for item in current.pane_layouts):
+                raise WorkspaceResourceConflictError(
+                    f"workspace pane layout already exists: {candidate.id}"
+                )
+            next_layouts = (*current.pane_layouts, candidate)
+            workspace = self.update_workspace(
+                workspace_id,
+                pane_layouts=[item.to_dict() for item in next_layouts],
+                update_pane_layouts=True,
+                session_revision=validated_revision,
+            )
+            return {
+                "paneLayout": candidate.to_dict(),
+                "workspace": workspace,
+            }
+
+    def update_workspace_pane_layout(
+        self,
+        workspace_id: str,
+        layout_id: str,
+        *,
+        changes: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        layout_id = _validate_workspace_group_id(layout_id, "pane layout id")
+        validated_revision = _validate_session_revision(session_revision)
+        if not isinstance(changes, dict):
+            raise TypeError("pane layout changes must be an object")
+        unknown = sorted(str(item) for item in set(changes) - {"name", "root"})
+        if unknown:
+            raise ValueError(f"pane layout changes has unknown field: {unknown[0]}")
+        if not changes:
+            raise ValueError("name or root is required")
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            matched = next(
+                (item for item in current.pane_layouts if item.id == layout_id), None
+            )
+            if matched is None:
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace pane layout not found: {layout_id}"
+                )
+            candidate = validate_workspace_pane_layouts(
+                [{**matched.to_dict(), **changes}], current.tabs
+            )[0]
+            next_layouts = [
+                candidate if item.id == layout_id else item
+                for item in current.pane_layouts
+            ]
+            workspace = self.update_workspace(
+                workspace_id,
+                pane_layouts=[item.to_dict() for item in next_layouts],
+                update_pane_layouts=True,
+                session_revision=validated_revision,
+            )
+            return {
+                "paneLayout": candidate.to_dict(),
+                "workspace": workspace,
+            }
+
+    def delete_workspace_pane_layout(
+        self,
+        workspace_id: str,
+        layout_id: str,
+        *,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        layout_id = _validate_workspace_group_id(layout_id, "pane layout id")
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            if not any(item.id == layout_id for item in current.pane_layouts):
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace pane layout not found: {layout_id}"
+                )
+            next_layouts = [
+                item.to_dict()
+                for item in current.pane_layouts
+                if item.id != layout_id
+            ]
+            workspace = self.update_workspace(
+                workspace_id,
+                pane_layouts=next_layouts,
+                update_pane_layouts=True,
+                session_revision=validated_revision,
+            )
+            return {"workspace": workspace}
+
+    def set_workspace_separator(
+        self,
+        workspace_id: str,
+        *,
+        session: object,
+        placement: object,
+        present: bool,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        if not isinstance(session, str):
+            raise TypeError("session must be a string")
+        session = validate_session_name(session)
+        if placement not in {"before", "after", "both"}:
+            raise ValueError("placement must be before, after, or both")
+        if present and placement == "both":
+            raise ValueError("placement cannot be both when adding a separator")
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(validated_revision)
+            if session not in current.tabs:
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace session not found: {session}"
+                )
+            after = list(current.separators)
+            before = list(current.separators_before)
+            if present:
+                target = before if placement == "before" else after
+                other = after if placement == "before" else before
+                if session not in target:
+                    target.append(session)
+                if session in other:
+                    other.remove(session)
+            else:
+                if placement in {"after", "both"} and session in after:
+                    after.remove(session)
+                if placement in {"before", "both"} and session in before:
+                    before.remove(session)
+            workspace = self.update_workspace(
+                workspace_id,
+                separators=after,
+                update_separators=True,
+                separators_before=before,
+                update_separators_before=True,
+                session_revision=validated_revision,
+            )
+            return {
+                "separators": {
+                    "before": workspace["separatorsBefore"],
+                    "after": workspace["separators"],
+                },
+                "workspace": workspace,
+            }
+
     def record_activity(
         self,
         workspace_id: str,
@@ -2072,6 +2598,13 @@ class WorkspaceStore:
             raise WorkspaceNotFoundError(
                 f"workspace not found: {workspace_id}"
             ) from error
+
+    def _check_session_revision(self, received: int) -> None:
+        if received != self._session_rename_revision:
+            raise WorkspaceSessionRevisionConflict(
+                self._session_rename_revision,
+                received,
+            )
 
     def _merge_pinned_sessions(
         self,

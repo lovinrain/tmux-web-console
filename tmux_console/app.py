@@ -127,6 +127,8 @@ from .uploads import (
 from .workspaces import (
     WorkspaceNotFoundError,
     WorkspacePinCapacityError,
+    WorkspaceResourceConflictError,
+    WorkspaceResourceNotFoundError,
     WorkspaceSessionRevisionConflict,
     WorkspaceStore,
     WorkspaceStoreUnavailable,
@@ -134,6 +136,7 @@ from .workspaces import (
     normalize_scoped_note,
     validate_scoped_note_notebook,
     validate_workspace_quick_links,
+    workspace_api_capabilities,
 )
 
 LOGGER = logging.getLogger("muxdeck")
@@ -1233,6 +1236,43 @@ def create_app(
             return web.json_response({"ok": True, "sessions": len(sessions)})
         except TmuxError as error:
             return web.json_response({"ok": False, "error": str(error)}, status=503)
+
+    async def api_capabilities(_: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "apiVersion": 1,
+                "basePath": prefix,
+                "authentication": {"mode": app[AUTH_MODE_KEY].value},
+                "workspace": workspace_api_capabilities(),
+                "resources": {
+                    "sessions": [
+                        "create",
+                        "copy",
+                        "rename",
+                        "terminate",
+                        "metadata",
+                        "messages",
+                        "files",
+                        "attachments",
+                    ],
+                    "workspaces": [
+                        "create",
+                        "update",
+                        "delete",
+                        "sessions",
+                        "groups",
+                        "separators",
+                        "paneLayouts",
+                        "callbackSessions",
+                        "quickLinks",
+                        "notes",
+                    ],
+                    "configuration": ["shortcuts", "snippets"],
+                    "observability": ["sessionStream", "hostMetrics"],
+                },
+                "documentation": "docs/API.md",
+            }
+        )
 
     async def host_metrics_snapshot(request: web.Request) -> web.Response:
         unknown_fields = sorted(set(request.query) - {"range"})
@@ -3645,6 +3685,599 @@ def create_app(
             "notebook": notebook,
         })
 
+    async def workspace_resource_payload(
+        request: web.Request,
+        *,
+        required: set[str],
+        optional: set[str] | None = None,
+    ) -> tuple[dict[str, Any] | None, web.Response | None]:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return None, json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return None, json_error("request body must be an object", 400)
+        missing = sorted(required - set(payload))
+        if missing:
+            return None, json_error(f"{missing[0]} is required", 400)
+        unknown = sorted(
+            str(item) for item in set(payload) - required - (optional or set())
+        )
+        if unknown:
+            return None, json_error(f"unknown field: {unknown[0]}", 400)
+        return payload, None
+
+    def workspace_resource_error(
+        error: Exception,
+        *,
+        action: str,
+    ) -> web.Response:
+        if isinstance(error, WorkspaceStoreUnavailable):
+            return json_error(str(error), 503)
+        if isinstance(
+            error,
+            (WorkspaceNotFoundError, WorkspaceResourceNotFoundError),
+        ):
+            return json_error(str(error), 404)
+        if isinstance(
+            error,
+            (WorkspaceSessionRevisionConflict, WorkspaceResourceConflictError),
+        ):
+            return json_error(str(error), 409)
+        if isinstance(error, (TypeError, ValueError)):
+            return json_error(str(error), 400)
+        if isinstance(error, OSError):
+            LOGGER.exception("Unable to %s", action)
+            return json_error(f"unable to {action}", 500)
+        raise error
+
+    async def list_workspace_sessions(request: web.Request) -> web.Response:
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(error, action="list workspace sessions")
+        return web.json_response(
+            {
+                "sessions": workspace["tabs"],
+                "activeSession": workspace["activeSession"],
+                "sessionRevision": workspace["sessionRevision"],
+            }
+        )
+
+    async def add_workspace_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+            optional={"position", "relativeTo", "activeSession"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            kwargs: dict[str, Any] = {}
+            if "activeSession" in payload:
+                kwargs["active_session"] = payload["activeSession"]
+            result = app[WORKSPACES_KEY].add_workspace_sessions(
+                request.match_info["workspace_id"],
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+                position=payload.get("position", "end"),
+                relative_to=payload.get("relativeTo"),
+                **kwargs,
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="add workspace sessions")
+        return web.json_response(result)
+
+    async def replace_workspace_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+            optional={"activeSession"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            kwargs: dict[str, Any] = {}
+            if "activeSession" in payload:
+                kwargs["active_session"] = payload["activeSession"]
+            result = app[WORKSPACES_KEY].replace_workspace_sessions(
+                request.match_info["workspace_id"],
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+                **kwargs,
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="replace workspace sessions")
+        return web.json_response(result)
+
+    async def remove_workspace_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].remove_workspace_sessions(
+                request.match_info["workspace_id"],
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="remove workspace sessions")
+        return web.json_response(result)
+
+    async def list_workspace_callback_sessions(
+        request: web.Request,
+    ) -> web.Response:
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="list workspace callback sessions"
+            )
+        return web.json_response(
+            {
+                "callbackSessions": workspace.get("callbackSessions", []),
+                "sessionRevision": workspace["sessionRevision"],
+            }
+        )
+
+    async def add_workspace_callback_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].add_workspace_callback_sessions(
+                request.match_info["workspace_id"],
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="add workspace callback sessions"
+            )
+        return web.json_response(result)
+
+    async def remove_workspace_callback_sessions(
+        request: web.Request,
+    ) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].remove_workspace_callback_sessions(
+                request.match_info["workspace_id"],
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="remove workspace callback sessions"
+            )
+        return web.json_response(result)
+
+    async def list_workspace_groups(request: web.Request) -> web.Response:
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(error, action="list workspace groups")
+        return web.json_response(
+            {
+                "groups": workspace["groups"],
+                "sessionRevision": workspace["sessionRevision"],
+            }
+        )
+
+    async def get_workspace_group(request: web.Request) -> web.Response:
+        group_id = request.match_info["group_id"]
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+            group = next(
+                (item for item in workspace["groups"] if item["id"] == group_id),
+                None,
+            )
+            if group is None:
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace group not found: {group_id}"
+                )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(error, action="get workspace group")
+        return web.json_response(
+            {"group": group, "sessionRevision": workspace["sessionRevision"]}
+        )
+
+    async def create_workspace_group(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"group", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].create_workspace_group(
+                request.match_info["workspace_id"],
+                group=payload["group"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="create workspace group")
+        return web.json_response(result, status=201)
+
+    async def update_workspace_group(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessionRevision"},
+            optional={"name", "color", "collapsed", "tabs"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].update_workspace_group(
+                request.match_info["workspace_id"],
+                request.match_info["group_id"],
+                changes={
+                    key: value
+                    for key, value in payload.items()
+                    if key != "sessionRevision"
+                },
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="update workspace group")
+        return web.json_response(result)
+
+    async def delete_workspace_group(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].delete_workspace_group(
+                request.match_info["workspace_id"],
+                request.match_info["group_id"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="delete workspace group")
+        return web.json_response(result)
+
+    async def list_workspace_pane_layouts(request: web.Request) -> web.Response:
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="list workspace pane layouts"
+            )
+        return web.json_response(
+            {
+                "paneLayouts": workspace["paneLayouts"],
+                "sessionRevision": workspace["sessionRevision"],
+            }
+        )
+
+    async def get_workspace_pane_layout(request: web.Request) -> web.Response:
+        layout_id = request.match_info["layout_id"]
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+            layout = next(
+                (
+                    item
+                    for item in workspace["paneLayouts"]
+                    if item["id"] == layout_id
+                ),
+                None,
+            )
+            if layout is None:
+                raise WorkspaceResourceNotFoundError(
+                    f"workspace pane layout not found: {layout_id}"
+                )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(error, action="get workspace pane layout")
+        return web.json_response(
+            {
+                "paneLayout": layout,
+                "sessionRevision": workspace["sessionRevision"],
+            }
+        )
+
+    async def create_workspace_pane_layout(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"paneLayout", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].create_workspace_pane_layout(
+                request.match_info["workspace_id"],
+                layout=payload["paneLayout"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="create workspace pane layout"
+            )
+        return web.json_response(result, status=201)
+
+    async def update_workspace_pane_layout(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessionRevision"},
+            optional={"name", "root"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].update_workspace_pane_layout(
+                request.match_info["workspace_id"],
+                request.match_info["layout_id"],
+                changes={
+                    key: value
+                    for key, value in payload.items()
+                    if key != "sessionRevision"
+                },
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="update workspace pane layout"
+            )
+        return web.json_response(result)
+
+    async def delete_workspace_pane_layout(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].delete_workspace_pane_layout(
+                request.match_info["workspace_id"],
+                request.match_info["layout_id"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="delete workspace pane layout"
+            )
+        return web.json_response(result)
+
+    async def list_workspace_separators(request: web.Request) -> web.Response:
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"]
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            TypeError,
+            ValueError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="list workspace separators"
+            )
+        return web.json_response(
+            {
+                "separators": {
+                    "before": workspace["separatorsBefore"],
+                    "after": workspace["separators"],
+                },
+                "sessionRevision": workspace["sessionRevision"],
+            }
+        )
+
+    async def add_workspace_separator(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"session", "placement", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].set_workspace_separator(
+                request.match_info["workspace_id"],
+                session=payload["session"],
+                placement=payload["placement"],
+                present=True,
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(error, action="add workspace separator")
+        return web.json_response(result)
+
+    async def remove_workspace_separator(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"session", "sessionRevision"},
+            optional={"placement"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].set_workspace_separator(
+                request.match_info["workspace_id"],
+                session=payload["session"],
+                placement=payload.get("placement", "both"),
+                present=False,
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError,
+            WorkspaceSessionRevisionConflict,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="remove workspace separator"
+            )
+        return web.json_response(result)
+
     async def get_workspace(request: web.Request) -> web.Response:
         try:
             workspace = app[WORKSPACES_KEY].get_workspace(
@@ -4123,6 +4756,7 @@ def create_app(
     session_segment = "{session:[^/]+}"
 
     app.router.add_get(f"{prefix}/api/health", health)
+    app.router.add_get(f"{prefix}/api/capabilities", api_capabilities)
     app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
@@ -4257,6 +4891,86 @@ def create_app(
     )
     app.router.add_get(f"{prefix}/api/workspaces", list_workspaces)
     app.router.add_post(f"{prefix}/api/workspaces", create_workspace)
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/sessions",
+        list_workspace_sessions,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/sessions",
+        add_workspace_sessions,
+    )
+    app.router.add_put(
+        f"{prefix}/api/workspaces/{{workspace_id}}/sessions",
+        replace_workspace_sessions,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/workspaces/{{workspace_id}}/sessions",
+        remove_workspace_sessions,
+    )
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/callback-sessions",
+        list_workspace_callback_sessions,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/callback-sessions",
+        add_workspace_callback_sessions,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/workspaces/{{workspace_id}}/callback-sessions",
+        remove_workspace_callback_sessions,
+    )
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/groups",
+        list_workspace_groups,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/groups",
+        create_workspace_group,
+    )
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/groups/{{group_id}}",
+        get_workspace_group,
+    )
+    app.router.add_patch(
+        f"{prefix}/api/workspaces/{{workspace_id}}/groups/{{group_id}}",
+        update_workspace_group,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/workspaces/{{workspace_id}}/groups/{{group_id}}",
+        delete_workspace_group,
+    )
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/pane-layouts",
+        list_workspace_pane_layouts,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/pane-layouts",
+        create_workspace_pane_layout,
+    )
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/pane-layouts/{{layout_id}}",
+        get_workspace_pane_layout,
+    )
+    app.router.add_patch(
+        f"{prefix}/api/workspaces/{{workspace_id}}/pane-layouts/{{layout_id}}",
+        update_workspace_pane_layout,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/workspaces/{{workspace_id}}/pane-layouts/{{layout_id}}",
+        delete_workspace_pane_layout,
+    )
+    app.router.add_get(
+        f"{prefix}/api/workspaces/{{workspace_id}}/separators",
+        list_workspace_separators,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/separators",
+        add_workspace_separator,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/workspaces/{{workspace_id}}/separators",
+        remove_workspace_separator,
+    )
     app.router.add_get(
         f"{prefix}/api/workspaces/{{workspace_id}}/quick-links",
         get_workspace_quick_links,
