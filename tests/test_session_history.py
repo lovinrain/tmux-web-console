@@ -4,7 +4,11 @@ import sqlite3
 from dataclasses import replace
 
 from tmux_console.agent_reference import AgentReference
-from tmux_console.session_registry import REGISTRY_COLUMN_NAMES, SessionRegistry
+from tmux_console.session_registry import (
+    REGISTRY_COLUMN_NAMES,
+    SESSION_REGISTRY_SCHEMA_VERSION,
+    SessionRegistry,
+)
 from tmux_console.tmux import Session
 
 
@@ -106,4 +110,6 @@ def test_migrates_legacy_registry_without_changing_recovery_records(tmp_path):
     registry.close()
     with sqlite3.connect(path) as check:
         assert check.execute("SELECT * FROM sessions").fetchone() == original
-        assert check.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert check.execute("PRAGMA user_version").fetchone()[0] == (
+            SESSION_REGISTRY_SCHEMA_VERSION
+        )

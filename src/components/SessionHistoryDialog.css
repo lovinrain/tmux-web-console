@@ -30,3 +30,39 @@
 .session-history-confirm button { margin-right: 8px; }
 .session-history-empty { padding: 20px 0; color: var(--muted); font-size: 13px; }
 @media (max-width: 640px) { .session-history-backdrop { padding: 8px; } .session-history-dialog { max-height: calc(100dvh - 16px); } .session-history-filters > span { width: 100%; } }
+
+/* Every agent that ran in a session, oldest first. */
+.session-history-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 0;
+}
+
+.session-history-agents > span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.session-history-agents code {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.session-history-agents em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  opacity: 0.8;
+}
+
+html[data-theme="light"] .session-history-agents > span {
+  background: rgba(20, 24, 18, 0.04);
+}

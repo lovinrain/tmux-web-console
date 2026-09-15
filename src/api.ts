@@ -46,6 +46,13 @@ export interface SessionHistoryEntry {
   endedAt: number | null;
   tabClosedAt: number | null;
   workspaces: Array<{ id: string; name: string; present: boolean; lastSeenAt: number; closedAt: number | null }>;
+  /** Every agent seen in this session, oldest first. Optional: an older server omits it. */
+  agents?: Array<{
+    agentType: string;
+    agentSessionId: string | null;
+    firstSeenAt: number;
+    lastSeenAt: number;
+  }>;
 }
 
 export function listSessionHistory(workspaceId: string | null, query: string, recycled: boolean, offset = 0, signal?: AbortSignal): Promise<{ entries: SessionHistoryEntry[]; nextOffset: number | null }> {

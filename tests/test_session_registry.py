@@ -181,3 +181,83 @@ def test_rejects_a_malformed_unversioned_sessions_table(tmp_path: Path):
         row[1] for row in connection.execute("PRAGMA table_info(sessions)")
     ] == ["registry_id"]
     connection.close()
+
+
+def _agents(registry: SessionRegistry, history_id: str):
+    return [
+        (item["agentType"], item["agentSessionId"])
+        for item in registry.list_session_agents(history_id)
+    ]
+
+
+def test_records_every_agent_a_session_runs_not_only_the_latest(tmp_path: Path):
+    """session_history keeps a single agent and overwrites it, so running one
+    agent after another used to erase the earlier one."""
+    clock = {"now": 100}
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: clock["now"])
+    live = session()
+
+    history_id = registry.observe_history(live, AgentReference("claude", "aaaa-1"))
+    clock["now"] += 600
+    registry.observe_history(live, AgentReference("codex", "bbbb-2"))
+    clock["now"] += 600
+    registry.observe_history(live, AgentReference("cursor", "cccc-3"))
+
+    assert _agents(registry, history_id) == [
+        ("claude", "aaaa-1"), ("codex", "bbbb-2"), ("cursor", "cccc-3"),
+    ]
+
+
+def test_repeated_observation_of_one_agent_stays_a_single_entry(tmp_path: Path):
+    clock = {"now": 100}
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: clock["now"])
+    live = session()
+
+    history_id = registry.observe_history(live, AgentReference("claude", "aaaa-1"))
+    for _ in range(5):
+        clock["now"] += 300
+        registry.observe_history(live, AgentReference("claude", "aaaa-1"))
+
+    assert _agents(registry, history_id) == [("claude", "aaaa-1")]
+
+
+def test_an_agent_without_a_session_id_is_recorded_once_and_reads_back_as_none(tmp_path: Path):
+    """An unknown id is stored as an empty string because SQLite treats NULLs as
+    distinct in a primary key, which would let duplicates accumulate."""
+    clock = {"now": 100}
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: clock["now"])
+    live = session()
+
+    history_id = registry.observe_history(live, AgentReference("claude", None))
+    clock["now"] += 600
+    registry.observe_history(live, AgentReference("claude", None))
+
+    assert _agents(registry, history_id) == [("claude", None)]
+
+    # Once the id is discovered it is a distinct run of that agent.
+    clock["now"] += 600
+    registry.observe_history(live, AgentReference("claude", "aaaa-1"))
+    assert _agents(registry, history_id) == [("claude", None), ("claude", "aaaa-1")]
+
+
+def test_a_session_with_no_agent_records_nothing(tmp_path: Path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 100)
+    history_id = registry.observe_history(session(), None)
+    assert _agents(registry, history_id) == []
+
+
+def test_migration_seeds_agents_from_history_recorded_before_the_table_existed(tmp_path: Path):
+    database = tmp_path / "sessions.sqlite3"
+    registry = SessionRegistry(database, clock=lambda: 100)
+    history_id = registry.observe_history(session(), AgentReference("claude", "aaaa-1"))
+    registry.close()
+
+    # Drop the new table and rewind the schema, as an older database would be.
+    connection = sqlite3.connect(database)
+    with connection:
+        connection.execute("DROP TABLE session_agents")
+        connection.execute("PRAGMA user_version=2")
+    connection.close()
+
+    reopened = SessionRegistry(database, clock=lambda: 200)
+    assert _agents(reopened, history_id) == [("claude", "aaaa-1")]

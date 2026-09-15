@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { listSessionHistory, restoreSessionHistory, type SessionHistoryEntry } from "../api";
 import { CloseIcon, HistoryIcon, RefreshIcon, SearchIcon } from "../icons";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
+import { agentDisplayLabel } from "../agentResume";
 import "./SessionHistoryDialog.css";
 
 interface Props {
@@ -138,7 +139,19 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, onClos
           <code>{entry.directory}</code>
           {entry.names.length > 1 && <p>Previous names: {entry.names.filter((name) => name !== entry.name).join(", ")}</p>}
           <div className="session-history-memberships">{entry.workspaces.length ? entry.workspaces.map((workspace) => <span key={workspace.id} title={`Last associated: ${date(workspace.lastSeenAt)}${workspace.closedAt ? ` / Tab removed: ${date(workspace.closedAt)}` : ""}`}>{workspace.name}{workspace.present ? "" : " (previous)"}</span>) : <span>No saved workspace recorded</span>}</div>
-          <p className="session-history-agent">{entry.agentType || "Agent not detected"}{entry.agentSessionId && <> / Reference ID: <code>{entry.agentSessionId}</code></>}</p>
+          {entry.agents?.length
+            ? <div className="session-history-agents" aria-label={`Agents that ran in ${entry.name}`}>
+                {entry.agents.map((agent) => <span key={`${agent.agentType}:${agent.agentSessionId ?? ""}`}
+                  title={`First seen ${date(agent.firstSeenAt)} / Last seen ${date(agent.lastSeenAt)}`}>
+                  <span className={`agent-badge ${agent.agentType}`}>{agentDisplayLabel(
+                    agent.agentType as Parameters<typeof agentDisplayLabel>[0],
+                  )}</span>
+                  {agent.agentSessionId
+                    ? <code>{agent.agentSessionId}</code>
+                    : <em>no session id recorded</em>}
+                </span>)}
+              </div>
+            : <p className="session-history-agent">{entry.agentType || "Agent not detected"}{entry.agentSessionId && <> / Reference ID: <code>{entry.agentSessionId}</code></>}</p>}
           <footer><div><span>First seen {date(entry.firstSeenAt)}</span><span>Last seen {date(entry.lastSeenAt)}</span>{(entry.endedAt || entry.tabClosedAt) && <span>{entry.endedAt ? "End/disappearance recorded" : "Tab closed"} {date(entry.endedAt || entry.tabClosedAt)}</span>}</div>
             <button type="button" disabled={Boolean(busy) || loading || (entry.state !== "live" && !entry.directoryAvailable)}
               onClick={() => entry.state === "live" ? void restore(entry, false) : setConfirm(entry)}>
