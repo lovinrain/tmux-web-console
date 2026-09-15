@@ -83,6 +83,7 @@ import {
 } from "./InputBar";
 import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
+import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
@@ -602,6 +603,7 @@ export function ConsoleScreen({
     return () => window.cancelAnimationFrame(frame);
   }, [terminalFocusRequest]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [fileBrowserTarget, setFileBrowserTarget] = useState<{
     sessionName: string; sessionId: string; paneId: string; panePath: string;
@@ -1941,6 +1943,16 @@ export function ConsoleScreen({
           <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback">
             <HistoryIcon /><span>Scrollback</span>
           </button>
+          <button
+            type="button"
+            className="history-button"
+            onClick={() => setAgentHistoryOpen(true)}
+            aria-haspopup="dialog"
+            aria-label={`Coding agents recorded in ${sessionName}`}
+            title={`Every Claude, Codex, Cursor or Grok session recorded in ${sessionName}`}
+          >
+            <HistoryIcon /><span>Agents</span>
+          </button>
           {onSessionCopied && (
             <button
               type="button"
@@ -2494,6 +2506,15 @@ export function ConsoleScreen({
           onClose={() => setHistoryOpen(false)}
           preferredWidth={visibleHistoryPanelWidth}
           onPreferredWidthChange={setHistoryPanelWidth}
+        />
+      )}
+      {!workspaceOverlayOpen && agentHistoryOpen && (
+        <SessionHistoryDialog
+          sessionName={sessionName}
+          onClose={() => setAgentHistoryOpen(false)}
+          onOpenSession={(name) => {
+            window.location.href = `${BASE_PATH}/session/${encodeURIComponent(name)}`;
+          }}
         />
       )}
       {!workspaceOverlayOpen && titleEditorOpen && session && (

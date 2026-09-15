@@ -113,3 +113,32 @@ def test_migrates_legacy_registry_without_changing_recovery_records(tmp_path):
         assert check.execute("PRAGMA user_version").fetchone()[0] == (
             SESSION_REGISTRY_SCHEMA_VERSION
         )
+
+
+def test_history_can_be_scoped_to_one_session_without_matching_similar_names(tmp_path: Path):
+    """names is a JSON array, so the filter matches the quoted element: asking
+    for "work" must not drag in "work_2"."""
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 100)
+    registry.observe_history(session(name="work"), AgentReference("claude", "aaaa-1"))
+    registry.observe_history(
+        replace(session(name="work_2"), id="$2"), AgentReference("codex", "bbbb-2"),
+    )
+
+    scoped = registry.list_history(recycled=False, session_name="work")["entries"]
+    assert [entry["name"] for entry in scoped] == ["work"]
+    assert [a["agentType"] for a in scoped[0]["agents"]] == ["claude"]
+
+    everything = registry.list_history(recycled=False)["entries"]
+    assert sorted(entry["name"] for entry in everything) == ["work", "work_2"]
+
+
+def test_session_scope_follows_a_renamed_session_through_its_old_names(tmp_path: Path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 100)
+    live = session(name="before")
+    registry.observe_history(live, AgentReference("claude", "aaaa-1"))
+    registry.observe_history(replace(live, name="after"), AgentReference("codex", "bbbb-2"))
+
+    for name in ("before", "after"):
+        scoped = registry.list_history(recycled=False, session_name=name)["entries"]
+        assert [entry["name"] for entry in scoped] == ["after"], name
+        assert [a["agentType"] for a in scoped[0]["agents"]] == ["claude", "codex"]

@@ -1658,7 +1658,7 @@ def create_app(
 
     async def list_session_history(request: web.Request) -> web.Response:
         try:
-            if set(request.query) - {"workspace", "q", "recycled", "offset"}:
+            if set(request.query) - {"workspace", "q", "recycled", "offset", "session"}:
                 raise ValueError("unknown history query field")
             offset = int(request.query.get("offset", "0"))
             if not 0 <= offset <= 1_000_000:
@@ -1666,11 +1666,15 @@ def create_app(
             query = request.query.get("q", "").strip()
             if len(query) > 256:
                 raise ValueError("search cannot exceed 256 characters")
+            session_name = request.query.get("session", "").strip() or None
+            if session_name is not None and len(session_name) > 256:
+                raise ValueError("session name cannot exceed 256 characters")
             # Reconcile only from a successful full inventory, never from an error/partial result.
             await app[SESSION_SNAPSHOTS_KEY].build()
             result = app[SESSION_REGISTRY_KEY].list_history(
                 workspace_id=request.query.get("workspace"), query=query,
                 recycled=request.query.get("recycled", "0") == "1", offset=offset,
+                session_name=session_name,
             )
             return web.json_response(result)
         except ValueError as error:

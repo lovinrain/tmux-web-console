@@ -55,9 +55,10 @@ export interface SessionHistoryEntry {
   }>;
 }
 
-export function listSessionHistory(workspaceId: string | null, query: string, recycled: boolean, offset = 0, signal?: AbortSignal): Promise<{ entries: SessionHistoryEntry[]; nextOffset: number | null }> {
+export function listSessionHistory(workspaceId: string | null, query: string, recycled: boolean, offset = 0, signal?: AbortSignal, sessionName?: string | null): Promise<{ entries: SessionHistoryEntry[]; nextOffset: number | null }> {
   const search = new URLSearchParams({ q: query, recycled: recycled ? "1" : "0", offset: String(offset) });
   if (workspaceId) search.set("workspace", workspaceId);
+  if (sessionName) search.set("session", sessionName);
   return jsonRequest(`/api/session-history?${search}`, { signal });
 }
 

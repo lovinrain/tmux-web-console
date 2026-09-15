@@ -18,6 +18,7 @@ import {
   updateSessionTags,
   updateSessionTitle,
   uploadSessionAttachment,
+  listSessionHistory,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import { dispatchShortcutAction } from "../shortcutSettings";
@@ -46,6 +47,8 @@ vi.mock("../api", () => ({
   releaseUtilityTerminal: vi.fn().mockResolvedValue(undefined),
   copySession: vi.fn(),
   listSessions: vi.fn(),
+  listSessionHistory: vi.fn(),
+  restoreSessionHistory: vi.fn(),
   listQueuedMessages: vi.fn(),
   createQueuedMessage: vi.fn(),
   updateQueuedMessage: vi.fn(),
@@ -1699,6 +1702,23 @@ describe("ConsoleScreen session identity", () => {
     expect(shortcutsToggle).not.toHaveAttribute("aria-controls");
     expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "ended" })).toBeVisible();
+  });
+
+  it("lists the coding agents recorded in this session", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(listSessionHistory).mockResolvedValue({ entries: [], nextOffset: null });
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Coding agents recorded in test",
+    }));
+
+    expect(await screen.findByRole("dialog", { name: "Agents in test" })).toBeVisible();
+    // Scoped to this session, and not limited to the Recycle Bin, so the agent
+    // running right now is included.
+    await waitFor(() => expect(listSessionHistory).toHaveBeenLastCalledWith(
+      null, "", false, 0, expect.any(AbortSignal), "test",
+    ));
   });
 
   it("recreates a missing shell from the unavailable view", async () => {

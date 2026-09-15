@@ -713,7 +713,7 @@ class SessionRegistry:
 
     def list_history(
         self, *, workspace_id: str | None = None, query: str = "",
-        recycled: bool = False, offset: int = 0,
+        recycled: bool = False, offset: int = 0, session_name: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             try:
@@ -723,6 +723,11 @@ class SessionRegistry:
                 if workspace_id:
                     clauses.append("EXISTS (SELECT 1 FROM history_workspaces w WHERE w.history_id = h.id AND w.workspace_id = ?)")
                     params.append(workspace_id)
+                if session_name:
+                    # names is a JSON array, so match the quoted element rather
+                    # than a bare substring: "251" must not match "251_2".
+                    clauses.append("(h.name = ? OR instr(h.names, ?) > 0)")
+                    params.extend([session_name, json.dumps(session_name)])
                 if query:
                     clauses.append("(instr(lower(h.names || ' ' || coalesce(h.title, '') || ' ' || h.directory || ' ' || coalesce(h.agent_type, '') || ' ' || coalesce(h.agent_id, '')), lower(?)) > 0)")
                     params.append(query)

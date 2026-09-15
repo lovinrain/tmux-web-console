@@ -102,3 +102,37 @@ async def test_recycle_history_workspace_close_end_and_safe_restore(tmp_path):
     finally:
         await client.close()
         await asyncio.to_thread(subprocess.run, ["tmux", "-L", socket, "kill-server"], check=False, capture_output=True)
+
+
+@pytest.mark.asyncio
+async def test_history_can_be_scoped_to_one_session_over_http(tmp_path):
+    """The handler whitelists query fields, so the session filter has to be
+    accepted explicitly - and it must match a name exactly, not by substring."""
+    socket = f"muxdeck-history-scope-{os.getpid()}-{time.time_ns()}"
+    tmux = TmuxClient(socket_name=socket)
+    client = TestClient(TestServer(create_app(tmux=tmux, agent_references=References(), base_path="")))
+    try:
+        await client.start_server()
+        await tmux.create_session("scope-a", start_directory=str(tmp_path))
+        await tmux.create_session("scope-a_2", start_directory=str(tmp_path))
+        await client.get("/api/sessions")
+
+        scoped = await client.get("/api/session-history?session=scope-a&recycled=0")
+        assert scoped.status == 200
+        entries = (await scoped.json())["entries"]
+        assert [entry["name"] for entry in entries] == ["scope-a"]
+        assert [a["agentType"] for a in entries[0]["agents"]] == ["copilot"]
+
+        everything = await client.get("/api/session-history?recycled=0")
+        assert sorted(e["name"] for e in (await everything.json())["entries"]) == [
+            "scope-a", "scope-a_2",
+        ]
+
+        unknown = await client.get("/api/session-history?nope=1")
+        assert unknown.status == 400
+    finally:
+        await client.close()
+        await asyncio.to_thread(
+            subprocess.run, ["tmux", "-L", socket, "kill-server"],
+            check=False, capture_output=True,
+        )

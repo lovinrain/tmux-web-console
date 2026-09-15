@@ -21,7 +21,7 @@ describe("SessionHistoryDialog", () => {
     render(<SessionHistoryDialog workspaceId="project" workspaceName="Project" onClose={vi.fn()} onOpenSession={vi.fn()} />);
     const dialog = screen.getByRole("dialog", { name: "Recent Sessions" });
     await within(dialog).findByText("named-agent");
-    expect(listSessionHistory).toHaveBeenCalledWith("project", "", true, 0, expect.any(AbortSignal));
+    expect(listSessionHistory).toHaveBeenCalledWith("project", "", true, 0, expect.any(AbortSignal), null);
     expect(dialog).toHaveTextContent("old-agent");
     expect(dialog).toHaveTextContent("Project notes");
     expect(dialog).toHaveTextContent("reference-id");
@@ -29,7 +29,7 @@ describe("SessionHistoryDialog", () => {
     fireEvent.change(screen.getByLabelText("Search session history"), { target: { value: "reference" } });
     expect(listSessionHistory).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
-    await waitFor(() => expect(listSessionHistory).toHaveBeenLastCalledWith("project", "reference", true, 0, expect.any(AbortSignal)));
+    await waitFor(() => expect(listSessionHistory).toHaveBeenLastCalledWith("project", "reference", true, 0, expect.any(AbortSignal), null));
   });
 
   it("requires confirmation to recreate and never creates while viewing", async () => {

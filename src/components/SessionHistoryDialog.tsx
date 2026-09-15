@@ -9,6 +9,8 @@ import "./SessionHistoryDialog.css";
 interface Props {
   workspaceId?: string | null;
   workspaceName?: string | null;
+  /** Scope to a single tmux session, across every time it was recreated. */
+  sessionName?: string | null;
   onClose: () => void;
   onOpenSession: (name: string) => void;
 }
@@ -17,10 +19,10 @@ function date(value: number | null): string {
   return value ? new Date(value * 1000).toLocaleString() : "Not recorded";
 }
 
-export function SessionHistoryDialog({ workspaceId = null, workspaceName, onClose, onOpenSession }: Props) {
+export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessionName = null, onClose, onOpenSession }: Props) {
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
-  const [recycled, setRecycled] = useState(true);
+  const [recycled, setRecycled] = useState(!sessionName);
   const [entries, setEntries] = useState<SessionHistoryEntry[]>([]);
   const [offset, setOffset] = useState(0);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -36,7 +38,9 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, onClos
   const actionRef = useRef({ busy, confirm });
   actionRef.current = { busy, confirm };
   const cancel = useRef<HTMLButtonElement>(null);
-  const title = workspaceId ? "Recent Sessions" : "Recycle Bin";
+  const title = sessionName
+    ? `Agents in ${sessionName}`
+    : workspaceId ? "Recent Sessions" : "Recycle Bin";
 
   useEffect(() => {
     const trigger = document.activeElement;
@@ -78,7 +82,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, onClos
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    void listSessionHistory(workspaceId, search, recycled, offset, controller.signal).then((result) => {
+    void listSessionHistory(workspaceId, search, recycled, offset, controller.signal, sessionName).then((result) => {
       if (controller.signal.aborted) return;
       setEntries((previous) => offset ? [...previous, ...result.entries.filter((entry) => !previous.some((item) => item.id === entry.id))] : result.entries);
       setNextOffset(result.nextOffset);
@@ -113,7 +117,9 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, onClos
         <div><p className="eyebrow">PERSISTENT SESSION HISTORY</p><h2>{title}</h2></div>
         <button type="button" aria-label="Close session history" disabled={Boolean(busy)} onClick={onClose}><CloseIcon /></button>
       </header>
-      <p className="session-history-explainer">{workspaceId ? `Previously associated with ${workspaceName || "this workspace"}. ` : "Closed tabs and ended or missing sessions. "}
+      <p className="session-history-explainer">{sessionName
+        ? `Every coding agent recorded in ${sessionName}, including earlier shells under this name. `
+        : workspaceId ? `Previously associated with ${workspaceName || "this workspace"}. ` : "Closed tabs and ended or missing sessions. "}
         Reopen a running session, or explicitly create a fresh shell. Agent IDs are references only; terminal output and running processes are not restored.</p>
       <form className="session-history-search" onSubmit={(event) => { event.preventDefault(); setOffset(0); setSearch(query.trim()); setRevision((current) => current + 1); }}>
         <SearchIcon /><input ref={input} aria-label="Search session history" placeholder="Session name, old name, directory, or agent ID" maxLength={256} value={query} onChange={(event) => setQuery(event.target.value)} />
