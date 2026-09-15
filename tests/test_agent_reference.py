@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -127,3 +129,247 @@ async def test_detector_does_not_walk_proc_for_a_plain_shell(tmp_path: Path):
     assert await detector.detect_sessions([session(pane(command="bash"))]) == {
         "agent": AgentReference(None, None)
     }
+
+
+def claude_process(
+    proc_root: Path,
+    process_id: int,
+    *,
+    started_ticks: int,
+    parent: Path | None = None,
+) -> Path:
+    """An agent process whose /proc/<pid>/stat carries a start time."""
+    root = process(proc_root, process_id, ["/root/.local/bin/claude"])
+    (root / "stat").write_text(
+        f"{process_id} (claude) S 1 " + " ".join(["0"] * 17) + f" {started_ticks} 0 0\n",
+        encoding="ascii",
+    )
+    if parent is not None:
+        (parent / "task" / parent.name / "children").write_text(
+            str(process_id), encoding="ascii",
+        )
+    return root
+
+
+def transcript(
+    projects_root: Path,
+    slug: str,
+    session_id: str,
+    *,
+    directory: str,
+    timestamp: str,
+    modified: float,
+) -> Path:
+    folder = projects_root / slug
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{session_id}.jsonl"
+    path.write_text(
+        json.dumps({"type": "mode", "mode": "normal", "sessionId": session_id}) + "\n"
+        + json.dumps({
+            "sessionId": session_id,
+            "cwd": directory,
+            "timestamp": timestamp,
+            "type": "user",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(path, (modified, modified))
+    return path
+
+
+def boot(proc_root: Path, btime: int) -> None:
+    proc_root.mkdir(parents=True, exist_ok=True)
+    (proc_root / "stat").write_text(f"cpu 0 0\nbtime {btime}\n", encoding="ascii")
+
+
+BOOT = 1_700_000_000
+HZ = os.sysconf("SC_CLK_TCK")
+
+
+def test_recovers_a_claude_session_id_from_its_transcript(tmp_path: Path):
+    """Claude closes its transcript after each append, so the descriptor scan
+    finds nothing and the id has to come from the transcript itself."""
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    projects = tmp_path / "projects"
+    transcript(
+        projects, "-work", "5b2759bc-e27c-4843-bc50-6a194ae416eb",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT + 605, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 900,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) == "5b2759bc-e27c-4843-bc50-6a194ae416eb"
+
+
+def test_picks_the_conversation_that_started_with_this_process(tmp_path: Path):
+    """Directories are routinely shared by many conversations - 62 of this
+    host's Claude sessions live in such a directory - so the newest transcript
+    is not necessarily this pane's."""
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    projects = tmp_path / "projects"
+    # An older conversation in the same directory, written more recently.
+    transcript(
+        projects, "-work", "11111111-1111-4111-8111-111111111111",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT + 100, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 5000,
+    )
+    transcript(
+        projects, "-work", "22222222-2222-4222-8222-222222222222",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT + 604, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 900,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) == "22222222-2222-4222-8222-222222222222"
+
+
+def test_ignores_a_transcript_recorded_for_another_directory(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    projects = tmp_path / "projects"
+    transcript(
+        projects, "-work", "33333333-3333-4333-8333-333333333333",
+        directory="/somewhere/else",
+        timestamp=datetime.fromtimestamp(BOOT + 605, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 900,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) is None
+
+
+def test_explicit_resume_argument_still_wins_over_the_transcript_scan(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    resumed = process(proc_root, 101, [
+        "/root/.local/bin/claude", "--resume", "44444444-4444-4444-8444-444444444444",
+    ])
+    (resumed / "stat").write_text(
+        "101 (claude) S 1 " + " ".join(["0"] * 17) + f" {600 * HZ} 0 0\n", encoding="ascii",
+    )
+    (parent / "task" / "100" / "children").write_text("101", encoding="ascii")
+
+    projects = tmp_path / "projects"
+    transcript(
+        projects, "-work", "55555555-5555-4555-8555-555555555555",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT + 605, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 900,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) == "44444444-4444-4444-8444-444444444444"
+
+
+def test_claude_transcript_scan_tolerates_a_missing_projects_directory(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=tmp_path / "absent",
+    ) is None
+
+
+def test_recovers_a_continued_conversation_that_predates_its_process(tmp_path: Path):
+    """Resuming does not always put an id in argv: a restarted process can carry
+    on a conversation opened hours earlier. The live one is the transcript still
+    being appended to, not the one that merely started most recently."""
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    projects = tmp_path / "projects"
+    # Opened long before this process, but still being written to right now.
+    transcript(
+        projects, "-work", "66666666-6666-4666-8666-666666666666",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT - 7000, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 3000,
+    )
+    # Same directory, also old, but abandoned before this process started.
+    transcript(
+        projects, "-work", "77777777-7777-4777-8777-777777777777",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT - 6000, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 100,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) == "66666666-6666-4666-8666-666666666666"
+
+
+def test_a_conversation_started_with_this_process_wins_over_a_continued_one(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    projects = tmp_path / "projects"
+    # Older conversation, most recently written of the two.
+    transcript(
+        projects, "-work", "88888888-8888-4888-8888-888888888888",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT - 7000, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 9000,
+    )
+    # Opened moments after this process started: unambiguously its own.
+    transcript(
+        projects, "-work", "99999999-9999-4999-8999-999999999999",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT + 603, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT + 800,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) == "99999999-9999-4999-8999-999999999999"
+
+
+def test_ignores_conversations_abandoned_before_the_process_started(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    parent = process(proc_root, 100, ["/bin/bash"])
+    claude_process(proc_root, 101, started_ticks=600 * HZ, parent=parent)
+
+    projects = tmp_path / "projects"
+    transcript(
+        projects, "-work", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        directory="/work",
+        timestamp=datetime.fromtimestamp(BOOT - 7000, UTC).isoformat().replace("+00:00", "Z"),
+        modified=BOOT - 100,
+    )
+
+    assert discover_agent_session_id(
+        pane(command="claude"), "claude",
+        proc_root=proc_root, claude_projects_root=projects,
+    ) is None
