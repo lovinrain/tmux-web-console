@@ -53,6 +53,7 @@ import {
   FolderIcon,
   HistoryIcon,
   ImageIcon,
+  LockIcon,
   MoveIcon,
   PlusIcon,
   RefreshIcon,
@@ -60,6 +61,7 @@ import {
   SearchIcon,
   TerminalIcon,
   TrashIcon,
+  UnlockIcon,
   WindowCopyIcon,
 } from "../icons";
 import "./SessionFilesPanel.css";
@@ -115,7 +117,13 @@ interface PanelDrag {
   startPosition: PanelPosition;
 }
 
-type PanelResizeDirection = "bottom-right" | "left" | "bottom-left";
+type PanelResizeDirection =
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
+  | "left";
+type PanelResizeCorner = Exclude<PanelResizeDirection, "left">;
 
 interface PanelResizeDrag {
   pointerId: number;
@@ -635,6 +643,10 @@ export function SessionFilesPanel({
   const [checkedPaths, setCheckedPaths] = useState<string[]>([]);
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  // Destructive actions are locked by default. This is intentionally kept in
+  // component state rather than storage: closing the browser (or switching to
+  // another session) should never silently leave deletion confirmations off.
+  const [unsafeActionsUnlocked, setUnsafeActionsUnlocked] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editorValue, setEditorValue] = useState("");
   // The text the buffer started from, and the modification time the save must
@@ -791,6 +803,7 @@ export function SessionFilesPanel({
     setFileDropActive(false);
     setPrompt(null);
     setConfirm(null);
+    setUnsafeActionsUnlocked(false);
     setCheckedPaths([]);
     setEditing(false);
     setEditorError(null);
@@ -798,6 +811,15 @@ export function SessionFilesPanel({
     setManualCopyPath(null);
     handledOpenPathRequestRef.current = null;
   }, [identity, panePath, sessionId]);
+
+  useEffect(() => {
+    // Hiding/backgrounding the browser is a security boundary too: returning
+    // later should not silently retain a bypass for destructive actions.
+    if (backgrounded) {
+      setUnsafeActionsUnlocked(false);
+      setConfirm(null);
+    }
+  }, [backgrounded]);
 
   useEffect(() => {
     const syncRecents = (event: StorageEvent) => {
@@ -1673,10 +1695,12 @@ export function SessionFilesPanel({
       { active: "DELETING", done: "DELETE RESULTS" },
       async (entry) => {
         try {
+          const recursiveDelete = recursive
+            || (unsafeActionsUnlocked && entry.kind === "directory");
           const removal = await deleteSessionFileEntry(
             fileTarget,
             entry.path,
-            recursive,
+            recursiveDelete,
           );
           return removal.removedEntries > 0
             ? `Deleted with ${removal.removedEntries} nested item${removal.removedEntries === 1 ? "" : "s"}`
@@ -1692,7 +1716,7 @@ export function SessionFilesPanel({
     );
 
     if (stale) return;
-    if (notEmpty.length > 0) {
+    if (notEmpty.length > 0 && !unsafeActionsUnlocked) {
       setConfirm({
         entries: notEmpty,
         recursive: true,
@@ -1711,7 +1735,7 @@ export function SessionFilesPanel({
     } else {
       setActionStatus(`${succeeded.length} deleted, ${failures.length} failed.`);
     }
-  }, [fileTarget, runBatch]);
+  }, [fileTarget, runBatch, unsafeActionsUnlocked]);
 
   const performMove = useCallback(async (
     entries: SessionFileEntry[],
@@ -1905,6 +1929,15 @@ export function SessionFilesPanel({
     if (entries.length === 0) return;
     if (!guardBusy("Wait for the current operation to finish")) return;
     if (!guardEditor()) return;
+    if (unsafeActionsUnlocked) {
+      // The explicit unlock opts into immediate deletion. Directories are
+      // sent recursively while regular files retain the ordinary API shape.
+      setPrompt(null);
+      setConfirm(null);
+      setActionStatus("Deleting without confirmation");
+      void performDelete(entries, false);
+      return;
+    }
     openLayerFrom();
     setPrompt(null);
     setActionStatus(null);
@@ -1913,7 +1946,23 @@ export function SessionFilesPanel({
       recursive: false,
       message: `Permanently delete ${describeEntries(entries)} from the pane working directory?`,
     });
-  }, [guardBusy, guardEditor, openLayerFrom]);
+  }, [guardBusy, guardEditor, openLayerFrom, performDelete, unsafeActionsUnlocked]);
+
+  const toggleUnsafeActions = useCallback(() => {
+    if (unsafeActionsUnlocked) {
+      setUnsafeActionsUnlocked(false);
+      setConfirm(null);
+      setActionStatus("Unsafe actions locked; deletion will ask again");
+      return;
+    }
+    setUnsafeActionsUnlocked(true);
+    // If a locked confirmation was already open, the newly selected mode is
+    // explicit enough to supersede that stale prompt.
+    setConfirm(null);
+    setActionStatus(
+      "Unsafe actions unlocked for this file browser; deletes run immediately",
+    );
+  }, [unsafeActionsUnlocked]);
 
   const saveEditor = useCallback(async () => {
     if (!preview || editorSaving) return;
@@ -2080,34 +2129,44 @@ export function SessionFilesPanel({
     ));
   };
 
-  const applyPanelSize = (requested: PanelSize) => {
-    const size = clampPanelSize(requested);
-    setPanelLayout((current) => ({ ...current, size }));
-    setPosition((current) => clampPositionForSize(current, size));
-  };
-
-  const applyLeftAnchoredPanelSize = (
+  const applyAnchoredPanelSize = (
     requested: PanelSize,
-    anchoredRight: number,
-    requestedTop: number,
+    startPosition: PanelPosition,
+    startSize: PanelSize,
+    direction: PanelResizeDirection,
   ) => {
+    if (direction === "bottom-right") {
+      const size = clampPanelSize(requested);
+      setPanelLayout((current) => ({ ...current, size }));
+      setPosition(clampPositionForSize(startPosition, size));
+      return;
+    }
     const viewport = viewportSize();
-    const viewportMaxWidth = Math.max(1, viewport.width - PANEL_MARGIN * 2);
-    const maxWidth = Math.max(
-      1,
-      Math.min(viewportMaxWidth, anchoredRight - PANEL_MARGIN),
-    );
+    const fromLeft = direction === "left" || direction.endsWith("left");
+    const fromTop = direction.startsWith("top");
+    const anchoredRight = startPosition.x + startSize.width;
+    const anchoredBottom = startPosition.y + startSize.height;
+    const availableWidth = fromLeft
+      ? anchoredRight - PANEL_MARGIN
+      : viewport.width - startPosition.x - PANEL_MARGIN;
+    const availableHeight = fromTop
+      ? anchoredBottom - PANEL_MARGIN
+      : viewport.height - startPosition.y - PANEL_MARGIN;
+    const maxWidth = Math.max(1, availableWidth);
+    const maxHeight = Math.max(1, availableHeight);
     const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
-    const normalized = clampPanelSize(requested);
+    const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
     const size = {
       width: Math.round(Math.min(Math.max(minWidth, requested.width), maxWidth)),
-      height: normalized.height,
+      height: direction === "left"
+        ? startSize.height
+        : Math.round(Math.min(Math.max(minHeight, requested.height), maxHeight)),
     };
     setPanelLayout((current) => ({ ...current, size }));
-    setPosition(clampPositionForSize({
-      x: anchoredRight - size.width,
-      y: requestedTop,
-    }, size));
+    setPosition({
+      x: Math.round(fromLeft ? anchoredRight - size.width : startPosition.x),
+      y: Math.round(fromTop ? anchoredBottom - size.height : startPosition.y),
+    });
   };
 
   const beginPanelResize = (
@@ -2138,19 +2197,19 @@ export function SessionFilesPanel({
     event.preventDefault();
     const deltaX = event.clientX - drag.startClientX;
     const deltaY = event.clientY - drag.startClientY;
-    if (drag.direction !== "bottom-right") {
-      applyLeftAnchoredPanelSize({
-        width: drag.startSize.width - deltaX,
-        height: drag.direction === "bottom-left"
-          ? drag.startSize.height + deltaY
-          : drag.startSize.height,
-      }, drag.startPosition.x + drag.startSize.width, drag.startPosition.y);
-      return;
-    }
-    applyPanelSize({
-      width: drag.startSize.width + deltaX,
-      height: drag.startSize.height + deltaY,
-    });
+    const fromLeft = drag.direction === "left" || drag.direction.endsWith("left");
+    const fromTop = drag.direction.startsWith("top");
+    applyAnchoredPanelSize(
+      {
+        width: drag.startSize.width + (fromLeft ? -deltaX : deltaX),
+        height: drag.direction === "left"
+          ? drag.startSize.height
+          : drag.startSize.height + (fromTop ? -deltaY : deltaY),
+      },
+      drag.startPosition,
+      drag.startSize,
+      drag.direction,
+    );
   };
 
   const finishPanelResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -2161,6 +2220,8 @@ export function SessionFilesPanel({
       "session-files-panel-resizing-bottom-right",
       "session-files-panel-resizing-left",
       "session-files-panel-resizing-bottom-left",
+      "session-files-panel-resizing-top-left",
+      "session-files-panel-resizing-top-right",
     );
     try {
       event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -2169,7 +2230,10 @@ export function SessionFilesPanel({
     }
   };
 
-  const resizePanelFromKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+  const resizePanelFromCornerKeyboard = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    corner: PanelResizeCorner,
+  ) => {
     if (![
       "ArrowLeft",
       "ArrowRight",
@@ -2182,66 +2246,64 @@ export function SessionFilesPanel({
     event.preventDefault();
     event.stopPropagation();
     const step = event.shiftKey ? PANEL_RESIZE_LARGE_STEP : PANEL_RESIZE_STEP;
-    const viewport = viewportSize();
     let size = panelLayout.size;
-    if (event.key === "ArrowLeft") size = { ...size, width: size.width - step };
-    if (event.key === "ArrowRight") size = { ...size, width: size.width + step };
-    if (event.key === "ArrowUp") size = { ...size, height: size.height - step };
-    if (event.key === "ArrowDown") size = { ...size, height: size.height + step };
+    if (event.key === "ArrowLeft") {
+      size = {
+        ...size,
+        width: size.width + (corner.endsWith("left") ? step : -step),
+      };
+    }
+    if (event.key === "ArrowRight") {
+      size = {
+        ...size,
+        width: size.width + (corner.endsWith("left") ? -step : step),
+      };
+    }
+    if (event.key === "ArrowUp") {
+      size = {
+        ...size,
+        height: size.height + (corner.startsWith("top") ? step : -step),
+      };
+    }
+    if (event.key === "ArrowDown") {
+      size = {
+        ...size,
+        height: size.height + (corner.startsWith("top") ? -step : step),
+      };
+    }
     if (event.key === "Home") {
       size = { width: PANEL_MIN_WIDTH, height: PANEL_MIN_HEIGHT };
     }
     if (event.key === "End") {
-      size = {
-        width: viewport.width - PANEL_MARGIN * 2,
-        height: viewport.height - PANEL_MARGIN * 2,
-      };
+      size = { width: Number.MAX_SAFE_INTEGER, height: Number.MAX_SAFE_INTEGER };
     }
     if (event.key === "Enter") {
       size = { width: PANEL_DEFAULT_WIDTH, height: PANEL_DEFAULT_HEIGHT };
     }
-    applyPanelSize(size);
+    applyAnchoredPanelSize(size, position, panelLayout.size, corner);
   };
 
   const resizePanelFromLeftKeyboard = (
     event: ReactKeyboardEvent<HTMLButtonElement>,
-    includeHeight: boolean,
   ) => {
-    const supportedKeys = includeHeight
-      ? ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Enter"]
-      : ["ArrowLeft", "ArrowRight", "Home", "End", "Enter"];
+    const supportedKeys = ["ArrowLeft", "ArrowRight", "Home", "End", "Enter"];
     if (!supportedKeys.includes(event.key)) return;
     event.preventDefault();
     event.stopPropagation();
     const step = event.shiftKey ? PANEL_RESIZE_LARGE_STEP : PANEL_RESIZE_STEP;
-    const viewport = viewportSize();
-    const anchoredRight = position.x + panelLayout.size.width;
     let size = panelLayout.size;
     if (event.key === "ArrowLeft") size = { ...size, width: size.width + step };
     if (event.key === "ArrowRight") size = { ...size, width: size.width - step };
-    if (event.key === "ArrowUp") size = { ...size, height: size.height - step };
-    if (event.key === "ArrowDown") size = { ...size, height: size.height + step };
     if (event.key === "Home") {
-      size = {
-        width: PANEL_MIN_WIDTH,
-        height: includeHeight ? PANEL_MIN_HEIGHT : size.height,
-      };
+      size = { ...size, width: PANEL_MIN_WIDTH };
     }
     if (event.key === "End") {
-      size = {
-        width: anchoredRight - PANEL_MARGIN,
-        height: includeHeight
-          ? viewport.height - PANEL_MARGIN * 2
-          : size.height,
-      };
+      size = { ...size, width: Number.MAX_SAFE_INTEGER };
     }
     if (event.key === "Enter") {
-      size = {
-        width: PANEL_DEFAULT_WIDTH,
-        height: includeHeight ? PANEL_DEFAULT_HEIGHT : size.height,
-      };
+      size = { ...size, width: PANEL_DEFAULT_WIDTH };
     }
-    applyLeftAnchoredPanelSize(size, anchoredRight, position.y);
+    applyAnchoredPanelSize(size, position, panelLayout.size, "left");
   };
 
   const beginSplitResize = (event: ReactPointerEvent<HTMLElement>) => {
@@ -2629,6 +2691,22 @@ export function SessionFilesPanel({
             title="Hide and retain this view, selection, scroll position, and unsaved edits"
             onClick={onBackground}><ArrowDownIcon /><span>Background</span></button>
         )}
+        <button
+          type="button"
+          className={`session-files-unsafe-toggle${unsafeActionsUnlocked ? " unlocked" : ""}`}
+          aria-label={unsafeActionsUnlocked
+            ? "Lock unsafe file actions"
+            : "Unlock unsafe file actions"}
+          aria-pressed={unsafeActionsUnlocked}
+          title={unsafeActionsUnlocked
+            ? "Lock unsafe actions; deletion will ask for confirmation"
+            : "Unlock unsafe actions; deletion will run without confirmation until this panel is hidden or changes session"}
+          disabled={busy}
+          onClick={toggleUnsafeActions}
+        >
+          {unsafeActionsUnlocked ? <UnlockIcon /> : <LockIcon />}
+          <span>{unsafeActionsUnlocked ? "Unsafe on" : "Unlock"}</span>
+        </button>
         <button type="button" aria-label="Close file browser" onClick={onClose}>
           <CloseIcon />
         </button>
@@ -2915,6 +2993,9 @@ export function SessionFilesPanel({
             key={confirm.recursive ? "recursive" : "initial"}
             type="button"
             className="danger"
+            title={unsafeActionsUnlocked
+              ? "Delete everything now (unsafe actions unlocked)"
+              : undefined}
             disabled={busy}
             onClick={() => void performDelete(confirm.entries, confirm.recursive)}
           >
@@ -2957,6 +3038,9 @@ export function SessionFilesPanel({
           <button
             type="button"
             className="danger"
+            title={unsafeActionsUnlocked
+              ? "Delete selected immediately (unsafe actions unlocked)"
+              : undefined}
             disabled={busy}
             onClick={() => requestDelete(checkedEntries)}
           >
@@ -3522,7 +3606,9 @@ export function SessionFilesPanel({
                     type="button"
                     className="danger"
                     aria-label={`Delete ${entry.name}`}
-                    title="Delete (Del)"
+                    title={unsafeActionsUnlocked
+                      ? "Delete immediately (unsafe actions unlocked)"
+                      : "Delete (Del)"}
                     disabled={busy}
                     onClick={() => requestDelete([entry])}
                   >
@@ -3940,6 +4026,50 @@ export function SessionFilesPanel({
 
       <button
         type="button"
+        className="session-files-resize-top-left"
+        aria-label="Resize file browser from top-left corner"
+        aria-description="Drag while the bottom-right corner stays fixed. Arrow keys resize; Home minimizes, End maximizes, and Enter resets."
+        title="Drag the top-left corner to resize. Arrow keys resize; Enter resets."
+        onPointerDown={(event) => beginPanelResize(event, "top-left")}
+        onPointerMove={resizePanel}
+        onPointerUp={finishPanelResize}
+        onPointerCancel={finishPanelResize}
+        onLostPointerCapture={finishPanelResize}
+        onDoubleClick={() => applyAnchoredPanelSize(
+          { width: PANEL_DEFAULT_WIDTH, height: PANEL_DEFAULT_HEIGHT },
+          position,
+          panelLayout.size,
+          "top-left",
+        )}
+        onKeyDown={(event) => resizePanelFromCornerKeyboard(event, "top-left")}
+      >
+        <span aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
+        className="session-files-resize-top-right"
+        aria-label="Resize file browser from top-right corner"
+        aria-description="Drag while the bottom-left corner stays fixed. Arrow keys resize; Home minimizes, End maximizes, and Enter resets."
+        title="Drag the top-right corner to resize. Arrow keys resize; Enter resets."
+        onPointerDown={(event) => beginPanelResize(event, "top-right")}
+        onPointerMove={resizePanel}
+        onPointerUp={finishPanelResize}
+        onPointerCancel={finishPanelResize}
+        onLostPointerCapture={finishPanelResize}
+        onDoubleClick={() => applyAnchoredPanelSize(
+          { width: PANEL_DEFAULT_WIDTH, height: PANEL_DEFAULT_HEIGHT },
+          position,
+          panelLayout.size,
+          "top-right",
+        )}
+        onKeyDown={(event) => resizePanelFromCornerKeyboard(event, "top-right")}
+      >
+        <span aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
         className="session-files-resize-left-edge"
         aria-label="Resize file browser from left edge"
         aria-description="Drag left or right while the right edge stays fixed. Arrow keys resize; Home minimizes, End maximizes, and Enter resets the width."
@@ -3949,11 +4079,13 @@ export function SessionFilesPanel({
         onPointerUp={finishPanelResize}
         onPointerCancel={finishPanelResize}
         onLostPointerCapture={finishPanelResize}
-        onDoubleClick={() => applyLeftAnchoredPanelSize({
-          width: PANEL_DEFAULT_WIDTH,
-          height: panelLayout.size.height,
-        }, position.x + panelLayout.size.width, position.y)}
-        onKeyDown={(event) => resizePanelFromLeftKeyboard(event, false)}
+        onDoubleClick={() => applyAnchoredPanelSize(
+          { width: PANEL_DEFAULT_WIDTH, height: panelLayout.size.height },
+          position,
+          panelLayout.size,
+          "left",
+        )}
+        onKeyDown={resizePanelFromLeftKeyboard}
       >
         <span aria-hidden="true" />
       </button>
@@ -3969,11 +4101,13 @@ export function SessionFilesPanel({
         onPointerUp={finishPanelResize}
         onPointerCancel={finishPanelResize}
         onLostPointerCapture={finishPanelResize}
-        onDoubleClick={() => applyLeftAnchoredPanelSize({
-          width: PANEL_DEFAULT_WIDTH,
-          height: PANEL_DEFAULT_HEIGHT,
-        }, position.x + panelLayout.size.width, position.y)}
-        onKeyDown={(event) => resizePanelFromLeftKeyboard(event, true)}
+        onDoubleClick={() => applyAnchoredPanelSize(
+          { width: PANEL_DEFAULT_WIDTH, height: PANEL_DEFAULT_HEIGHT },
+          position,
+          panelLayout.size,
+          "bottom-left",
+        )}
+        onKeyDown={(event) => resizePanelFromCornerKeyboard(event, "bottom-left")}
       >
         <span aria-hidden="true" />
       </button>
@@ -3989,11 +4123,13 @@ export function SessionFilesPanel({
         onPointerUp={finishPanelResize}
         onPointerCancel={finishPanelResize}
         onLostPointerCapture={finishPanelResize}
-        onDoubleClick={() => applyPanelSize({
-          width: PANEL_DEFAULT_WIDTH,
-          height: PANEL_DEFAULT_HEIGHT,
-        })}
-        onKeyDown={resizePanelFromKeyboard}
+        onDoubleClick={() => applyAnchoredPanelSize(
+          { width: PANEL_DEFAULT_WIDTH, height: PANEL_DEFAULT_HEIGHT },
+          position,
+          panelLayout.size,
+          "bottom-right",
+        )}
+        onKeyDown={(event) => resizePanelFromCornerKeyboard(event, "bottom-right")}
       >
         <span aria-hidden="true" />
       </button>

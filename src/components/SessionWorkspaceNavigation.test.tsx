@@ -168,6 +168,58 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it("quickly finds and adds a running session without leaving the workspace", () => {
+    const onAddSession = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({ onAddSession })}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "Add running sessions to workspace, 2 available",
+    });
+    expect(trigger).toHaveTextContent("Add sessions");
+    expect(trigger).toHaveTextContent("2");
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "Add running sessions" });
+    fireEvent.change(within(dialog).getByRole("combobox"), {
+      target: { value: "arch logs" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "Add archive to workspace",
+    }));
+    expect(onAddSession).toHaveBeenCalledWith("archive", false);
+  });
+
+  it("disables quick add while syncing or when every running session is open", () => {
+    const { rerender } = render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          onAddSession: vi.fn(),
+          workspacePersistenceState: "loading",
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: "Add running sessions to workspace, 2 available",
+    })).toBeDisabled();
+
+    rerender(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          onAddSession: vi.fn(),
+          openSessions: sessions.map((item) => item.name),
+        })}
+      />,
+    );
+    expect(screen.getByRole("button", {
+      name: "Add running sessions to workspace, 0 available",
+    })).toBeDisabled();
+  });
+
   it("shows saved pane views beside sessions and can create or open one", () => {
     const onCreatePaneLayout = vi.fn();
     const onSelectPaneLayout = vi.fn();
@@ -1629,6 +1681,7 @@ describe("SessionWorkspaceNavigation", () => {
       onMoveTab: vi.fn(),
       onMoveTabs: vi.fn(),
       onTabSelectionChange: vi.fn(),
+      onTransferSelectedSessions: vi.fn(),
     });
     render(<SessionWorkspaceNavigation {...props} />);
 
@@ -1645,6 +1698,14 @@ describe("SessionWorkspaceNavigation", () => {
     expect(zulu.closest(".workspace-tab")).not.toHaveAttribute("data-tab-move-selected");
     expect(screen.getByRole("group", { name: "3 tabs selected for moving" }))
       .toHaveTextContent("3selectedDrag together");
+    fireEvent.click(screen.getByRole("button", {
+      name: "Move or copy 3 selected sessions to a workspace",
+    }));
+    expect(props.onTransferSelectedSessions).toHaveBeenCalledWith([
+      "alpha",
+      "beta",
+      "archive",
+    ]);
     expect(props.onSelect).not.toHaveBeenCalled();
 
     fireEvent.keyDown(archive, { key: "Escape" });
@@ -2600,10 +2661,18 @@ describe("SessionWorkspaceNavigation", () => {
     const dialog = screen.getByRole("dialog", { name: "Rename workspace" });
     const name = within(dialog).getByRole("textbox", { name: "New workspace name" });
     const submit = within(dialog).getByRole("button", { name: "Rename workspace" });
+    const attributes = within(dialog).getByRole("region", {
+      name: "Workspace attributes",
+    });
     expect(openRename).toHaveAttribute("aria-expanded", "true");
     expect(name).toHaveValue("Release command center");
     expect(name).toHaveFocus();
     expect(submit).toBeDisabled();
+    expect(attributes).toHaveTextContent("Server saved");
+    expect(attributes).toHaveTextContent("workspace-one");
+    expect(attributes).toHaveTextContent("Session tabs2");
+    expect(attributes).toHaveTextContent("Tab groups0");
+    expect(attributes).toHaveTextContent("Pane views0");
     expect(dialog).toHaveTextContent(
       "Its tabs, groups, links, notes, and activity history stay attached.",
     );
@@ -2642,6 +2711,64 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.queryByRole("button", {
       name: "Rename workspace Release command center",
     })).not.toBeInTheDocument();
+  });
+
+  it("exposes workspace rename from Overview on compact mobile layouts", () => {
+    vi.stubGlobal("innerWidth", 390);
+    const onCloseRecents = vi.fn();
+    const view = render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          recentsOpen: true,
+          workspacePersistenceState: "saved",
+          activeWorkspaceId: "workspace-one",
+          workspaceName: "Release command center",
+          onRenameWorkspace: vi.fn().mockResolvedValue(undefined),
+          onCloseRecents,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+    expect(onCloseRecents).toHaveBeenCalledOnce();
+    view.rerender(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          recentsOpen: false,
+          workspacePersistenceState: "saved",
+          activeWorkspaceId: "workspace-one",
+          workspaceName: "Release command center",
+          onRenameWorkspace: vi.fn().mockResolvedValue(undefined),
+          onCloseRecents,
+        })}
+      />,
+    );
+    expect(screen.getByRole("dialog", { name: "Rename workspace" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Workspace attributes" }))
+      .toHaveTextContent("workspace-one");
+  });
+
+  it("finds workspace rename through the desktop command palette", () => {
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          workspacePersistenceState: "saved",
+          activeWorkspaceId: "workspace-one",
+          workspaceName: "Release command center",
+          onRenameWorkspace: vi.fn().mockResolvedValue(undefined),
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open command palette" }));
+    const palette = screen.getByRole("dialog", { name: "Run a command" });
+    fireEvent.change(within(palette).getByRole("combobox"), {
+      target: { value: "workspace attr" },
+    });
+    fireEvent.click(within(palette).getByRole("option", {
+      name: /Rename this workspace/,
+    }));
+    expect(screen.getByRole("dialog", { name: "Rename workspace" })).toBeVisible();
   });
 
   it.each([

@@ -1,3 +1,4 @@
+import type { RecoverableSession } from "./api";
 import {
   SESSION_TAGS,
   type AgentState,
@@ -435,6 +436,24 @@ export function filterSessions(
       && matchesState
       && sessionMatchesTagFilters(session, filters);
   });
+}
+
+/**
+ * Search for shells the registry can rebuild. Uses the same needle as
+ * filterSessions so one query covers live and missing shells alike.
+ */
+export function filterRecoverableSessions(
+  recoverable: readonly RecoverableSession[],
+  query: string,
+): RecoverableSession[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...recoverable];
+  return recoverable.filter((record) => [
+    record.name,
+    record.directory,
+    record.agentType,
+    record.agentSessionId,
+  ].filter(Boolean).some((value) => value!.toLowerCase().includes(needle)));
 }
 
 export interface SessionTagGroup {

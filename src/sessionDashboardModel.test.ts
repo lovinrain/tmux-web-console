@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { RecoverableSession } from "./api";
 import type { Pane, Session } from "./types";
 import {
   canonicalizeSessionDashboardSearch,
   createDefaultSessionDashboardRoute,
+  filterRecoverableSessions,
   filterSessions,
   groupSessionsByTag,
   parseSessionDashboardSearch,
@@ -310,5 +312,52 @@ describe("session dashboard filters", () => {
       { tag: "urgent", names: ["one"] },
       { tag: null, names: ["three"] },
     ]);
+  });
+});
+
+describe("filterRecoverableSessions", () => {
+  const records: RecoverableSession[] = [
+    {
+      id: "r1",
+      name: "rose-ee-3",
+      directory: "/srv/mm_rose",
+      agentType: "claude",
+      agentSessionId: "agent-9",
+      firstSeenAt: 1,
+      lastSeenAt: 2,
+      directoryAvailable: true,
+    },
+    {
+      id: "r2",
+      name: "toolings",
+      directory: "/srv/mm/toolings",
+      agentType: null,
+      agentSessionId: null,
+      firstSeenAt: 1,
+      lastSeenAt: 2,
+      directoryAvailable: false,
+    },
+  ];
+
+  it("returns every record when the query is blank", () => {
+    expect(filterRecoverableSessions(records, "").map((item) => item.name))
+      .toEqual(["rose-ee-3", "toolings"]);
+    expect(filterRecoverableSessions(records, "   ").map((item) => item.name))
+      .toEqual(["rose-ee-3", "toolings"]);
+  });
+
+  it("matches name, directory, agent type, and agent reference", () => {
+    expect(filterRecoverableSessions(records, "rose").map((item) => item.name))
+      .toEqual(["rose-ee-3"]);
+    expect(filterRecoverableSessions(records, "MM/TOOL").map((item) => item.name))
+      .toEqual(["toolings"]);
+    expect(filterRecoverableSessions(records, "claude").map((item) => item.name))
+      .toEqual(["rose-ee-3"]);
+    expect(filterRecoverableSessions(records, "agent-9").map((item) => item.name))
+      .toEqual(["rose-ee-3"]);
+  });
+
+  it("returns nothing when no record matches", () => {
+    expect(filterRecoverableSessions(records, "nonexistent")).toEqual([]);
   });
 });

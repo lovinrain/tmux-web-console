@@ -17,6 +17,9 @@ interface WorkspaceSaveDialogProps {
   onFallbackFocus?: () => void;
   variant?: "save" | "rename";
   initialName?: string;
+  workspaceId?: string;
+  groupCount?: number;
+  paneViewCount?: number;
 }
 
 export function WorkspaceSaveDialog({
@@ -27,6 +30,9 @@ export function WorkspaceSaveDialog({
   onFallbackFocus,
   variant = "save",
   initialName = "",
+  workspaceId,
+  groupCount = 0,
+  paneViewCount = 0,
 }: WorkspaceSaveDialogProps) {
   const renaming = variant === "rename";
   const dialogPrefix = renaming ? "workspace-rename" : "workspace-save";
@@ -207,6 +213,33 @@ export function WorkspaceSaveDialog({
                   their current order. Future tab and active-session changes will sync automatically.</>
               )}
           </p>
+          {renaming && workspaceId && (
+            <section
+              className="workspace-settings-attributes"
+              aria-label="Workspace attributes"
+            >
+              <div>
+                <span>Storage</span>
+                <strong>Server saved</strong>
+              </div>
+              <div>
+                <span>Session tabs</span>
+                <strong>{orderedTabs.length}</strong>
+              </div>
+              <div>
+                <span>Tab groups</span>
+                <strong>{groupCount}</strong>
+              </div>
+              <div>
+                <span>Pane views</span>
+                <strong>{paneViewCount}</strong>
+              </div>
+              <div className="workspace-settings-stable-id">
+                <span>Stable workspace ID</span>
+                <code title={workspaceId}>{workspaceId}</code>
+              </div>
+            </section>
+          )}
           <p
             id={`${dialogPrefix}-hint`}
             className={nameError || (!renaming && tooManyTabs) ? "title-error" : undefined}

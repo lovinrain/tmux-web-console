@@ -196,7 +196,15 @@ beforeEach(() => {
     absolutePath: path,
     entry: null,
   }));
-  document.documentElement.classList.remove("session-files-panel-moving");
+  document.documentElement.classList.remove(
+    "session-files-panel-moving",
+    "session-files-panel-resizing",
+    "session-files-panel-resizing-top-left",
+    "session-files-panel-resizing-top-right",
+    "session-files-panel-resizing-bottom-left",
+    "session-files-panel-resizing-bottom-right",
+    "session-files-panel-resizing-left",
+  );
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn(async () => undefined) },
@@ -1145,6 +1153,60 @@ describe("SessionFilesPanel", () => {
     ).size).toEqual({ width: 800, height: 610 }));
   });
 
+  it("resizes from both top corners while anchoring the opposite edge", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    const topLeft = within(panel).getByRole("button", {
+      name: "Resize file browser from top-left corner",
+    });
+    const topRight = within(panel).getByRole("button", {
+      name: "Resize file browser from top-right corner",
+    });
+    expect(within(panel).getByRole("button", {
+      name: "Resize file browser from bottom-left corner",
+    })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", {
+      name: "Resize file browser window",
+    })).toBeInTheDocument();
+
+    const initialX = Number.parseFloat(
+      panel.style.getPropertyValue("--session-files-x"),
+    );
+    const initialY = Number.parseFloat(
+      panel.style.getPropertyValue("--session-files-y"),
+    );
+    const initialRight = initialX + 760;
+    const initialBottom = initialY + 560;
+
+    dispatchPointer(topLeft, "pointerdown", 27, initialX, initialY);
+    dispatchPointer(topLeft, "pointermove", 27, initialX + 60, initialY + 40);
+    expect(document.documentElement)
+      .toHaveClass("session-files-panel-resizing-top-left");
+    expect(panel).toHaveStyle({ width: "700px", height: "520px" });
+    expect(Number.parseFloat(panel.style.getPropertyValue("--session-files-x")) + 700)
+      .toBe(initialRight);
+    expect(Number.parseFloat(panel.style.getPropertyValue("--session-files-y")) + 520)
+      .toBe(initialBottom);
+    dispatchPointer(topLeft, "pointerup", 27, initialX + 60, initialY + 40);
+    expect(document.documentElement)
+      .not.toHaveClass("session-files-panel-resizing-top-left");
+
+    fireEvent.keyDown(topLeft, { key: "Enter" });
+    expect(panel).toHaveStyle({ width: "760px", height: "560px" });
+    expect(panel.style.getPropertyValue("--session-files-x")).toBe(`${initialX}px`);
+    expect(panel.style.getPropertyValue("--session-files-y")).toBe(`${initialY}px`);
+
+    fireEvent.keyDown(topRight, { key: "ArrowDown" });
+    expect(panel).toHaveStyle({ width: "760px", height: "548px" });
+    expect(Number.parseFloat(panel.style.getPropertyValue("--session-files-y")) + 548)
+      .toBe(initialBottom);
+
+    await waitFor(() => expect(JSON.parse(
+      window.localStorage.getItem(SESSION_FILES_LAYOUT_STORAGE_KEY) || "null",
+    ).size).toEqual({ width: 760, height: 548 }));
+  });
+
   it("adjusts and remembers the file-list and preview split", async () => {
     vi.mocked(listSessionFiles).mockResolvedValue(listing("", []));
     renderPanel();
@@ -1452,6 +1514,76 @@ describe("SessionFilesPanel", () => {
 
     expect(within(panel).queryByText(/Permanently delete/)).not.toBeInTheDocument();
     expect(deleteSessionFileEntry).not.toHaveBeenCalled();
+  });
+
+  it("unlocks immediate destructive actions for this browser panel only", async () => {
+    const folder = entry("logs", "logs", "directory");
+    vi.mocked(listSessionFiles)
+      .mockResolvedValueOnce(listing("", [folder]))
+      .mockResolvedValue(listing("", []));
+    vi.mocked(deleteSessionFileEntry).mockResolvedValue({
+      name: "logs",
+      path: "logs",
+      absolutePath: "/work/project/logs",
+      terminalText: "/work/project/logs",
+      kind: "directory",
+      symlink: false,
+      removedEntries: 3,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    const unlock = within(panel).getByRole("button", {
+      name: "Unlock unsafe file actions",
+    });
+    expect(unlock).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(unlock);
+    expect(within(panel).getByRole("button", {
+      name: "Lock unsafe file actions",
+    })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Delete logs" }));
+    expect(within(panel).queryByText(/Permanently delete/)).not.toBeInTheDocument();
+    await waitFor(() => expect(deleteSessionFileEntry).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "logs",
+      true,
+    ));
+
+    await waitFor(() => expect(
+      within(panel).queryByRole("button", { name: "Folder logs" }),
+    ).not.toBeInTheDocument());
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Lock unsafe file actions",
+    }));
+    expect(within(panel).getByRole("button", {
+      name: "Unlock unsafe file actions",
+    })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("relocks unsafe actions when a retained browser is backgrounded", async () => {
+    const target = entry("scratch.txt", "scratch.txt", "file");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [target]));
+    const props = {
+      sessionName: "agent",
+      sessionId: "$7",
+      paneId: "%3",
+      panePath: "/work/project",
+      onClose: vi.fn(),
+      onBackground: vi.fn(),
+      onInsertPath: vi.fn(() => true),
+    };
+    const view = render(<SessionFilesPanel {...props} />);
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Unlock unsafe file actions",
+    }));
+
+    view.rerender(<SessionFilesPanel {...props} backgrounded />);
+    view.rerender(<SessionFilesPanel {...props} />);
+    expect(within(panel).getByRole("button", {
+      name: "Unlock unsafe file actions",
+    })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("downloads checked files and folders together without clearing selection", async () => {

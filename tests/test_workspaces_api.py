@@ -281,6 +281,117 @@ async def test_granular_workspace_callback_group_and_separator_apis(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_global_callback_api_includes_workspace_entries_and_deduplicates(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["one", "two"]).__next__,
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        first = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "One",
+                "tabs": ["a"],
+                "activeSession": "a",
+                "callbackSessions": ["a"],
+            },
+        )
+        assert first.status == 201
+        second = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Two",
+                "tabs": ["b"],
+                "activeSession": "b",
+                "callbackSessions": ["a", "b"],
+            },
+        )
+        assert second.status == 201
+
+        response = await client.get("/api/callback-sessions")
+        assert response.status == 200
+        snapshot = await response.json()
+        assert snapshot["callbackSessions"] == ["a", "b"]
+        assert snapshot["globalCallbackSessions"] == []
+        assert [source["workspaceName"] for source in snapshot["workspaceCallbacks"]] == [
+            "One", "Two"
+        ]
+
+        response = await client.post(
+            "/api/callback-sessions",
+            json={"sessions": ["global", "a"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        added = await response.json()
+        assert added["added"] == ["global", "a"]
+        assert added["callbackSessions"] == ["global", "a", "b"]
+
+        response = await client.delete(
+            "/api/callback-sessions",
+            json={"sessions": ["a"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        removed = await response.json()
+        assert removed["removed"] == ["a"]
+        assert removed["callbackSessions"] == ["global", "a", "b"]
+
+        response = await client.put(
+            "/api/callback-sessions",
+            json={"sessions": ["global-two"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+        assert (await response.json())["globalCallbackSessions"] == ["global-two"]
+
+
+@pytest.mark.asyncio
+async def test_review_global_callback_session_removes_every_owned_marker(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["one", "two"]).__next__,
+    )
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        await client.post(
+            "/api/workspaces",
+            json={
+                "name": "One",
+                "tabs": ["shared"],
+                "activeSession": "shared",
+                "callbackSessions": ["shared"],
+            },
+        )
+        await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Two",
+                "tabs": ["shared", "other"],
+                "activeSession": "shared",
+                "callbackSessions": ["shared", "other"],
+            },
+        )
+        response = await client.post(
+            "/api/callback-sessions",
+            json={"sessions": ["shared"], "sessionRevision": 0},
+        )
+        assert response.status == 200
+
+        response = await client.post(
+            "/api/callback-sessions/review",
+            json={"session": "shared", "sessionRevision": 0},
+        )
+        assert response.status == 200
+        reviewed = await response.json()
+        assert reviewed["removed"] == ["shared"]
+        assert reviewed["callbackSessions"] == ["other"]
+        assert reviewed["globalCallbackSessions"] == []
+        assert reviewed["workspaceCallbacks"] == [
+            {"workspaceId": "two", "workspaceName": "Two", "sessions": ["other"]}
+        ]
+
+        assert store.get_workspace("one").get("callbackSessions", []) == []
+        assert store.get_workspace("two")["callbackSessions"] == ["other"]
+
+
+@pytest.mark.asyncio
 async def test_granular_workspace_pane_layout_crud(tmp_path):
     store = WorkspaceStore(
         tmp_path / "workspaces.json",

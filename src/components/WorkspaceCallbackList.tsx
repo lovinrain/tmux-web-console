@@ -18,6 +18,7 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "../icons";
+import type { GlobalCallbackSnapshot } from "../api";
 import type { AgentState, Session } from "../types";
 import {
   directShortcutAria,
@@ -27,6 +28,7 @@ import {
 
 const DESKTOP_CALLBACK_QUERY = "(min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine)";
 const CALLBACK_STORAGE_PREFIX = "muxdeck.workspace-callback-panel.v1:";
+export const CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY = `${CALLBACK_STORAGE_PREFIX}scope`;
 const CALLBACK_PANEL_MARGIN = 12;
 const CALLBACK_PANEL_WIDTH = 390;
 const CALLBACK_PANEL_HEIGHT = 520;
@@ -58,10 +60,21 @@ interface WorkspaceCallbackListProps {
   workspaceName?: string | null;
   temporaryKey?: string;
   sessions: readonly Session[];
+  /** Names currently open as tabs in this workspace. */
+  workspaceSessionNames?: readonly string[];
   callbackSessions: readonly string[];
   onChange: (sessions: string[]) => Promise<void>;
+  /** Global callback state; omitted for backwards-compatible workspace-only use. */
+  globalCallbackSnapshot?: GlobalCallbackSnapshot | null;
+  onGlobalChange?: (sessions: string[]) => Promise<void>;
+  globalCallbackBusy?: boolean;
+  onGlobalRefresh?: () => void;
+  /** Mark a callback reviewed across all global/workspace queues. */
+  onReviewSession?: (sessionName: string) => Promise<void>;
   onSelectSession: (sessionName: string) => void;
 }
+
+export type CallbackScope = "global" | "workspace";
 
 interface CallbackPanelState {
   open: boolean;
@@ -211,14 +224,52 @@ function sessionDisplayName(session: Session | undefined, fallback: string): str
   return session?.customTitle?.trim() || fallback;
 }
 
+function normalizeCallbackSessions(value: readonly string[] | null | undefined): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of value ?? []) {
+    if (typeof candidate !== "string" || !candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    result.push(candidate);
+  }
+  return result;
+}
+
+function isCallbackScope(value: unknown): value is CallbackScope {
+  return value === "global" || value === "workspace";
+}
+
+function readPreferredCallbackScope(fallback: CallbackScope): CallbackScope {
+  try {
+    const stored = window.localStorage.getItem(CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY);
+    return isCallbackScope(stored) ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writePreferredCallbackScope(scope: CallbackScope): void {
+  try {
+    window.localStorage.setItem(CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY, scope);
+  } catch {
+    // Scope preference is optional when browser storage is unavailable.
+  }
+}
+
 export function WorkspaceCallbackList({
   sessionName,
   workspaceId = null,
   workspaceName = null,
   temporaryKey = "default",
   sessions,
+  workspaceSessionNames,
   callbackSessions,
   onChange,
+  globalCallbackSnapshot = null,
+  onGlobalChange,
+  globalCallbackBusy = false,
+  onGlobalRefresh,
+  onReviewSession,
   onSelectSession,
 }: WorkspaceCallbackListProps) {
   const { bindings: shortcutBindings } = useShortcutSettings();
@@ -227,13 +278,22 @@ export function WorkspaceCallbackList({
   const panelId = `${headingId}-panel`;
   const panelRef = useRef<HTMLElement>(null);
   const interactionCleanupRef = useRef<(() => void) | null>(null);
-  const identity = workspaceId ? `workspace:${workspaceId}` : `temporary:${temporaryKey}`;
+  const globalEnabled = globalCallbackSnapshot !== null || Boolean(onGlobalChange);
+  const initialScopeRef = useRef<CallbackScope | null>(null);
+  if (initialScopeRef.current === null) {
+    initialScopeRef.current = readPreferredCallbackScope(globalEnabled ? "global" : "workspace");
+  }
+  const [scope, setScope] = useState<CallbackScope>(initialScopeRef.current);
+  const activeScope: CallbackScope = globalEnabled ? scope : "workspace";
+  const workspaceIdentity = workspaceId ? `workspace:${workspaceId}` : `temporary:${temporaryKey}`;
+  const identity = activeScope === "global" ? "global" : workspaceIdentity;
   const initialStoreRef = useRef<CallbackPanelStore | null>(null);
   if (initialStoreRef.current === null) {
     initialStoreRef.current = { identity, panel: readPreference(identity) };
   }
   const [store, setStore] = useState<CallbackPanelStore>(initialStoreRef.current);
   const [busy, setBusy] = useState(false);
+  const isBusy = busy || globalCallbackBusy;
   const [error, setError] = useState("");
   const [selectedSession, setSelectedSession] = useState("");
   const previousSessionRef = useRef({ identity, sessionName });
@@ -272,11 +332,50 @@ export function WorkspaceCallbackList({
     size: defaultSize(),
   };
 
+  const workspaceSessionList = normalizeCallbackSessions(callbackSessions);
+  const workspaceSessionSet = workspaceSessionNames === undefined
+    ? null
+    : new Set(workspaceSessionNames);
+  const explicitGlobalSessions = normalizeCallbackSessions(
+    globalCallbackSnapshot?.globalCallbackSessions
+      ?? (globalEnabled ? undefined : callbackSessions),
+  );
+  const sourceRecords = (globalCallbackSnapshot?.workspaceCallbacks ?? []).map((source) => ({
+    ...source,
+    sessions: normalizeCallbackSessions(source.sessions),
+  }));
+  const currentSourceId = workspaceId || `temporary:${temporaryKey}`;
+  const currentSource = {
+    workspaceId: currentSourceId,
+    workspaceName: workspaceName?.trim() || "This workspace",
+    sessions: workspaceSessionList,
+  };
+  const sourceIndex = sourceRecords.findIndex((source) => source.workspaceId === currentSourceId);
+  if (sourceIndex >= 0) sourceRecords[sourceIndex] = currentSource;
+  else if (workspaceSessionList.length > 0) sourceRecords.push(currentSource);
+  const globalSessionList = normalizeCallbackSessions([
+    ...explicitGlobalSessions,
+    ...(globalCallbackSnapshot?.callbackSessions ?? []),
+    ...sourceRecords.flatMap((source) => source.sessions),
+  ]);
+  const visibleCallbackSessions = activeScope === "global"
+    ? globalSessionList
+    : workspaceSessionList;
+  const globalWorkspaceSources = new Map<string, typeof sourceRecords>();
+  sourceRecords.forEach((source) => {
+    source.sessions.forEach((name) => {
+      const existing = globalWorkspaceSources.get(name) ?? [];
+      existing.push(source);
+      globalWorkspaceSources.set(name, existing);
+    });
+  });
+
   useEffect(() => {
     const previous = previousSessionRef.current;
     if (
       previous.identity === identity
       && previous.sessionName !== sessionName
+      && activeScope !== "global"
       && !panel.pinned
       && panel.open
     ) {
@@ -285,7 +384,7 @@ export function WorkspaceCallbackList({
         : current);
     }
     previousSessionRef.current = { identity, sessionName };
-  }, [identity, panel.open, panel.pinned, sessionName]);
+  }, [activeScope, identity, panel.open, panel.pinned, sessionName]);
 
   useEffect(() => () => {
     interactionCleanupRef.current?.();
@@ -348,33 +447,79 @@ export function WorkspaceCallbackList({
     return () => observer.disconnect();
   }, [active, desktop, panel.open, updatePanel]);
 
-  const changeCallbacks = useCallback(async (next: readonly string[]) => {
-    const unique = [...new Set(next.filter(Boolean))];
+  const persistCallbacks = useCallback(async (
+    targetScope: CallbackScope,
+    next: readonly string[],
+  ) => {
+    const unique = normalizeCallbackSessions(next);
     setBusy(true);
     setError("");
     try {
-      await onChange(unique);
+      if (targetScope === "global") {
+        if (!onGlobalChange) throw new Error("Global callback list is unavailable.");
+        await onGlobalChange(unique);
+      } else {
+        await onChange(unique);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to save callback list");
     } finally {
       setBusy(false);
     }
-  }, [onChange]);
+  }, [onChange, onGlobalChange]);
+
+  const changeCallbacks = useCallback((next: readonly string[]) => (
+    persistCallbacks(activeScope, next)
+  ), [activeScope, persistCallbacks]);
 
   const addSession = useCallback((name: string) => {
-    if (!name || callbackSessions.includes(name)) return;
-    void changeCallbacks([...callbackSessions, name]);
+    if (!name || visibleCallbackSessions.includes(name)) return;
+    const base = activeScope === "global"
+      ? explicitGlobalSessions
+      : workspaceSessionList;
+    void changeCallbacks([...base, name]);
     setSelectedSession("");
-  }, [callbackSessions, changeCallbacks]);
+  }, [activeScope, changeCallbacks, explicitGlobalSessions, visibleCallbackSessions, workspaceSessionList]);
 
   const removeSession = useCallback((name: string) => {
-    void changeCallbacks(callbackSessions.filter((item) => item !== name));
-  }, [callbackSessions, changeCallbacks]);
+    if (activeScope === "global") {
+      if (!explicitGlobalSessions.includes(name)) {
+        const sources = globalWorkspaceSources.get(name) ?? [];
+        const currentSourceOwnsEntry = sources.some((source) => source.workspaceId === currentSourceId);
+        if (!currentSourceOwnsEntry) return;
+        void persistCallbacks("workspace", workspaceSessionList.filter((item) => item !== name));
+        return;
+      }
+      void changeCallbacks(explicitGlobalSessions.filter((item) => item !== name));
+      return;
+    }
+    void changeCallbacks(workspaceSessionList.filter((item) => item !== name));
+  }, [activeScope, changeCallbacks, currentSourceId, explicitGlobalSessions, globalWorkspaceSources, persistCallbacks, workspaceSessionList]);
+
+  const reviewSession = useCallback(async (name: string) => {
+    if (!onReviewSession) {
+      removeSession(name);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onReviewSession(name);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to review callback");
+    } finally {
+      setBusy(false);
+    }
+  }, [onReviewSession, removeSession]);
 
   const clearUnavailable = useCallback(() => {
     const liveNames = new Set(sessions.map((item) => item.name));
-    void changeCallbacks(callbackSessions.filter((name) => liveNames.has(name)));
-  }, [callbackSessions, changeCallbacks, sessions]);
+    if (activeScope === "global") {
+      void changeCallbacks(explicitGlobalSessions.filter((name) => liveNames.has(name)));
+    } else {
+      void changeCallbacks(workspaceSessionList.filter((name) => liveNames.has(name)));
+    }
+  }, [activeScope, changeCallbacks, explicitGlobalSessions, sessions, workspaceSessionList]);
 
   const startDragging = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
@@ -441,12 +586,40 @@ export function WorkspaceCallbackList({
     }));
   }, [updatePanel]);
 
+  const selectScope = useCallback((nextScope: CallbackScope) => {
+    if (nextScope === activeScope || (nextScope === "global" && !globalEnabled)) return;
+    writePreferredCallbackScope(nextScope);
+    const nextIdentity = nextScope === "global" ? "global" : workspaceIdentity;
+    setScope(nextScope);
+    setStore({
+      identity: nextIdentity,
+      panel: { ...readPreference(nextIdentity), open: true },
+    });
+    setSelectedSession("");
+    setError("");
+    if (nextScope === "global") onGlobalRefresh?.();
+  }, [activeScope, globalEnabled, onGlobalRefresh, workspaceIdentity]);
+
   if (!desktop) return null;
 
   const sessionMap = new Map(sessions.map((item) => [item.name, item]));
-  const availableSessions = sessions.filter((item) => !callbackSessions.includes(item.name));
-  const workingCount = callbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
-  const unavailableCount = callbackSessions.filter((name) => !sessionMap.has(name)).length;
+  const availableSessions = sessions.filter((item) => !visibleCallbackSessions.includes(item.name));
+  const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
+  const unavailableCount = visibleCallbackSessions.filter((name) => !sessionMap.has(name)).length;
+  const removableUnavailableCount = activeScope === "global"
+    ? explicitGlobalSessions.filter((name) => !sessionMap.has(name)).length
+    : unavailableCount;
+  const inheritedCount = activeScope === "global"
+    ? visibleCallbackSessions.filter((name) => !explicitGlobalSessions.includes(name)).length
+    : 0;
+  const scopeLabel = activeScope === "global"
+    ? "Global"
+    : workspaceName?.trim() || "Workspace";
+  const scopeDescription = activeScope === "global"
+    ? "Global queue · includes every workspace callback"
+    : workspaceId
+      ? "Workspace queue · saved with this workspace"
+      : "Workspace queue · temporary workspace in this browser";
   const panelStyle: CSSProperties = {
     left: panel.position.x,
     top: panel.position.y,
@@ -463,6 +636,7 @@ export function WorkspaceCallbackList({
       role="dialog"
       aria-labelledby={headingId}
       data-pinned={panel.pinned ? "true" : "false"}
+      data-scope={activeScope}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -483,7 +657,7 @@ export function WorkspaceCallbackList({
       >
         <HistoryIcon />
         <div>
-          <span>{workspaceName?.trim() || "Workspace"}</span>
+          <span>{scopeLabel}</span>
           <h2 id={headingId}>Callback list</h2>
         </div>
         {panel.pinned && <em aria-hidden="true">PINNED</em>}
@@ -514,15 +688,34 @@ export function WorkspaceCallbackList({
 
       <div className="workspace-callback-body">
         <div className="workspace-callback-summary">
-          <strong>{callbackSessions.length} watching</strong>
+          <strong>{visibleCallbackSessions.length} watching</strong>
           <span>{workingCount} working</span>
           {unavailableCount > 0 && <span className="ended">{unavailableCount} ended</span>}
+          {activeScope === "global" && inheritedCount > 0 && (
+            <span>{inheritedCount} from workspaces</span>
+          )}
         </div>
+        {globalEnabled && (
+          <div className="workspace-callback-scope" role="group" aria-label="Callback scope">
+            {(["global", "workspace"] as const).map((candidate) => (
+              <button
+                key={candidate}
+                type="button"
+                aria-pressed={activeScope === candidate}
+                aria-label={`${candidate[0].toUpperCase()}${candidate.slice(1)} callback scope`}
+                onClick={() => selectScope(candidate)}
+              >
+                {candidate === "global" ? "Global" : "Workspace"}
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="workspace-callback-scope-description">{scopeDescription}</p>
         <div className="workspace-callback-add" role="group" aria-label="Add a session to the callback list">
           <select
             aria-label="Choose a session to watch"
             value={selectedSession}
-            disabled={busy || availableSessions.length === 0}
+            disabled={isBusy || availableSessions.length === 0}
             onChange={(event) => setSelectedSession(event.target.value)}
           >
             <option value="">Choose session...</option>
@@ -535,7 +728,7 @@ export function WorkspaceCallbackList({
           <button
             type="button"
             className="primary"
-            disabled={busy || !selectedSession}
+            disabled={isBusy || !selectedSession}
             onClick={() => addSession(selectedSession)}
           >
             <PlusIcon />
@@ -543,9 +736,9 @@ export function WorkspaceCallbackList({
           </button>
           <button
             type="button"
-            disabled={busy || callbackSessions.includes(sessionName)}
+            disabled={isBusy || visibleCallbackSessions.includes(sessionName)}
             onClick={() => addSession(sessionName)}
-            title={callbackSessions.includes(sessionName)
+            title={visibleCallbackSessions.includes(sessionName)
               ? "The current session is already being watched"
               : "Add the current session"}
           >
@@ -559,49 +752,111 @@ export function WorkspaceCallbackList({
             <button type="button" onClick={() => setError("")}>Dismiss</button>
           </div>
         )}
-        {callbackSessions.length === 0 ? (
+        {visibleCallbackSessions.length === 0 ? (
           <div className="workspace-callback-empty">
             <HistoryIcon />
             <strong>Nothing queued for a callback</strong>
-            <span>Add sessions here before you step away. Their live status stays visible.</span>
+            <span>{activeScope === "global"
+              ? "Add sessions globally, or mark one in any workspace to inherit it here."
+              : "Add sessions here before you step away. Their live status stays visible."}</span>
           </div>
         ) : (
           <ol className="workspace-callback-list" aria-label="Sessions to call back">
-            {callbackSessions.map((name, index) => {
+            {visibleCallbackSessions.map((name, index) => {
               const session = sessionMap.get(name);
               const status = callbackStatus(session);
+              const globalOnly = activeScope === "global" && explicitGlobalSessions.includes(name);
+              const sources = globalWorkspaceSources.get(name) ?? [];
+              const inCurrentWorkspace = workspaceSessionSet === null
+                || workspaceSessionSet.has(name);
+              const sourceLabel = sources.length > 0
+                ? sources.length === 1
+                  ? sources[0].workspaceName
+                  : `${sources.length} workspaces`
+                : "Global queue";
+              const locationLabel = activeScope === "global"
+                ? inCurrentWorkspace
+                  ? "This workspace"
+                  : sources.length > 0
+                    ? `Other · ${sourceLabel}`
+                    : "Global only"
+                : inCurrentWorkspace
+                  ? (session && session.customTitle ? name : status.label)
+                  : "Not in this workspace";
+              const canOpen = Boolean(session && inCurrentWorkspace);
+              const currentSourceOwnsEntry = sources.some(
+                (source) => source.workspaceId === currentSourceId,
+              );
+              const canRemove = activeScope !== "global"
+                || Boolean(onReviewSession)
+                || globalOnly
+                || currentSourceOwnsEntry;
+              const removeLabel = activeScope === "global"
+                ? onReviewSession
+                  ? `Mark ${name} reviewed and remove from all callback lists`
+                  : globalOnly
+                    ? `Remove ${name} from the global callback list`
+                    : `Remove ${name} from this workspace callback list`
+                : `Mark ${name} reviewed and remove from callback list`;
+              const sessionTitle = !session
+                ? `${name} is no longer live`
+                : canOpen
+                  ? `Open ${name}`
+                  : `${name} is not open in this workspace; switch workspaces to open it`;
               return (
-                <li key={name} className={`workspace-callback-item ${status.tone}`}>
+                  <li
+                    key={name}
+                    className={`workspace-callback-item ${status.tone}${activeScope === "global" && !inCurrentWorkspace ? " inherited" : ""}`}
+                    data-workspace-presence={activeScope === "global"
+                      ? inCurrentWorkspace ? "current" : "other"
+                      : inCurrentWorkspace ? "current" : "other"}
+                  >
                   <span className="workspace-callback-index" aria-hidden="true">{index + 1}</span>
                   <span className={`workspace-callback-status-dot ${status.tone}`} aria-hidden="true" />
                   <button
                     type="button"
                     className="workspace-callback-session"
                     onClick={() => onSelectSession(name)}
-                    disabled={!session}
-                    title={session ? `Open ${name}` : `${name} is no longer live`}
+                    disabled={!canOpen}
+                    title={sessionTitle}
                   >
                     <strong>{sessionDisplayName(session, name)}</strong>
-                    <small>{session && session.customTitle ? name : status.label}</small>
+                    <small>{locationLabel}</small>
                   </button>
                   <span className={`workspace-callback-status ${status.tone}`}>{status.label}</span>
                   <button
                     type="button"
                     className="workspace-callback-open"
-                    disabled={!session}
-                    onClick={() => session && onSelectSession(name)}
+                    disabled={!canOpen}
+                    onClick={() => canOpen && onSelectSession(name)}
                     aria-label={`Open ${name}`}
-                    title={session ? "Open this session" : "Session is unavailable"}
+                    title={sessionTitle}
                   >
                     <TerminalIcon />
                   </button>
                   <button
                     type="button"
                     className="workspace-callback-remove"
-                    disabled={busy}
-                    onClick={() => removeSession(name)}
-                    aria-label={`Mark ${name} reviewed and remove from callback list`}
-                    title="Mark reviewed and remove"
+                    disabled={isBusy || !canRemove}
+                    onClick={() => {
+                      if (activeScope === "global" && onReviewSession) {
+                        void reviewSession(name);
+                      } else {
+                        removeSession(name);
+                      }
+                    }}
+                    aria-label={removeLabel}
+                    title={canRemove
+                      ? activeScope === "global" && onReviewSession
+                        ? "Mark reviewed and remove it from every callback scope"
+                        : activeScope === "global" && !globalOnly
+                          ? "Remove this workspace-owned entry from its current workspace"
+                          : activeScope === "global"
+                            ? sources.length > 0
+                              ? "Remove the global marker; workspace-owned entries remain"
+                              : "Remove this global callback entry"
+                            : "Mark reviewed and remove"
+                      : "This entry is owned by another workspace; remove it there"}
                   >
                     <CheckIcon />
                   </button>
@@ -611,22 +866,26 @@ export function WorkspaceCallbackList({
           </ol>
         )}
         <footer className="workspace-callback-footer">
-          <span>{workspaceId ? "Saved with this workspace" : "Temporary workspace; saved in this browser"}</span>
+          <span>{scopeDescription}</span>
           <div>
-            {unavailableCount > 0 && (
-              <button type="button" disabled={busy} onClick={clearUnavailable}>
+            {removableUnavailableCount > 0 && (
+              <button type="button" disabled={isBusy} onClick={clearUnavailable}>
                 <TrashIcon />
                 <span>Clear ended</span>
               </button>
             )}
-            {callbackSessions.length > 0 && (
+            {(activeScope === "global"
+              ? explicitGlobalSessions.length > 0
+              : visibleCallbackSessions.length > 0) && (
               <button
                 type="button"
-                disabled={busy}
+                disabled={isBusy}
                 onClick={() => void changeCallbacks([])}
-                title="Remove every session from the callback list"
+                title={activeScope === "global"
+                  ? "Remove every explicitly global session; workspace-owned entries remain"
+                  : "Remove every session from this workspace callback list"}
               >
-                Clear all
+                {activeScope === "global" ? "Clear global" : "Clear all"}
               </button>
             )}
           </div>
@@ -635,9 +894,9 @@ export function WorkspaceCallbackList({
     </section>
   ) : null;
 
-  const summaryLabel = callbackSessions.length === 0
+  const summaryLabel = visibleCallbackSessions.length === 0
     ? "No sessions"
-    : `${callbackSessions.length} ${callbackSessions.length === 1 ? "session" : "sessions"}`;
+    : `${visibleCallbackSessions.length} ${visibleCallbackSessions.length === 1 ? "session" : "sessions"}`;
   return (
     <>
       <button
@@ -646,19 +905,23 @@ export function WorkspaceCallbackList({
         aria-label={panel.open ? "Hide callback list" : "Show callback list"}
         aria-expanded={panel.open}
         aria-controls={panelId}
+        data-scope={activeScope}
         aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-callback"])}
         title={`Keep sessions here for a later callback${directShortcutLabel(
           shortcutBindings["workspace-callback"],
         ) ? ` (${directShortcutLabel(shortcutBindings["workspace-callback"])})` : ""}`}
-        onClick={() => updatePanel((current) => (
-          current.open
-            ? { ...current, open: false, pinned: false }
-            : { ...current, open: true }
-        ))}
+        onClick={() => {
+          if (!panel.open && activeScope === "global") onGlobalRefresh?.();
+          updatePanel((current) => (
+            current.open
+              ? { ...current, open: false, pinned: false }
+              : { ...current, open: true }
+          ));
+        }}
       >
         <HistoryIcon />
         <span>
-          <strong>Callback</strong>
+          <strong>{activeScope === "global" ? "Global callback" : "Callback"}</strong>
           <small>{summaryLabel}{workingCount > 0 ? ` / ${workingCount} working` : ""}</small>
         </span>
         {(panel.open || panel.pinned) && <em aria-hidden="true">{panel.pinned ? "PIN" : "OPEN"}</em>}

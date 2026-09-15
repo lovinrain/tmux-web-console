@@ -107,6 +107,10 @@ beforeEach(() => {
   document.documentElement.classList.remove(
     "scoped-note-moving",
     "scoped-note-resizing",
+    "scoped-note-resizing-top-left",
+    "scoped-note-resizing-top-right",
+    "scoped-note-resizing-bottom-left",
+    "scoped-note-resizing-bottom-right",
   );
   vi.mocked(getCommonNote).mockResolvedValue("Shared checklist");
   vi.mocked(getWorkspaceNote).mockResolvedValue("Workspace plan");
@@ -684,8 +688,13 @@ describe("ScopedStickyNotes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
     const editor = screen.getByRole("dialog", { name: "Common" });
     const handle = within(editor).getByRole("button", {
-      name: "Resize common note window",
+      name: "Resize common note window from bottom right corner",
     });
+    for (const corner of ["top left", "top right", "bottom left"]) {
+      expect(within(editor).getByRole("button", {
+        name: `Resize common note window from ${corner} corner`,
+      })).toBeInTheDocument();
+    }
     expect(editor).toHaveStyle({
       width: `${DEFAULT_SCOPED_NOTE_WINDOW_WIDTH}px`,
       height: `${DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT}px`,
@@ -721,7 +730,7 @@ describe("ScopedStickyNotes", () => {
     expect(restored).toHaveStyle({ width: "260px", height: "240px" });
 
     const restoredHandle = within(restored).getByRole("button", {
-      name: "Resize common note window",
+      name: "Resize common note window from bottom right corner",
     });
     fireEvent.keyDown(restoredHandle, { key: "Home" });
     expect(restored).toHaveStyle({
@@ -733,6 +742,59 @@ describe("ScopedStickyNotes", () => {
       width: `${DEFAULT_SCOPED_NOTE_WINDOW_WIDTH}px`,
       height: `${DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT}px`,
     });
+  });
+
+  it("anchors the opposite corner when a note is resized from the top-left", async () => {
+    class TestPointerEvent extends MouseEvent {
+      readonly pointerId: number;
+
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 0;
+      }
+    }
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    await renderLoadedNotes();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    const storageKey = workspaceWindowStorageKey("workspace-one", "common:common");
+    const initial = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+    const initialRight = initial.position.x + DEFAULT_SCOPED_NOTE_WINDOW_WIDTH;
+    const initialBottom = initial.position.y + DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT;
+    const handle = within(editor).getByRole("button", {
+      name: "Resize common note window from top left corner",
+    });
+
+    fireEvent.pointerDown(handle, {
+      pointerId: 12,
+      button: 0,
+      clientX: initial.position.x,
+      clientY: initial.position.y,
+    });
+    fireEvent.pointerMove(window, {
+      pointerId: 12,
+      clientX: initial.position.x + 100,
+      clientY: initial.position.y + 80,
+    });
+    expect(document.documentElement).toHaveClass("scoped-note-resizing-top-left");
+    expect(editor).toHaveStyle({ width: "330px", height: "350px" });
+    expect(Number.parseFloat(editor.style.left) + 330).toBe(initialRight);
+    expect(Number.parseFloat(editor.style.top) + 350).toBe(initialBottom);
+    fireEvent.pointerUp(window, {
+      pointerId: 12,
+      clientX: initial.position.x + 100,
+      clientY: initial.position.y + 80,
+    });
+
+    const saved = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+    expect(saved.position).toEqual({
+      x: initial.position.x + 100,
+      y: initial.position.y + 80,
+    });
+    expect(saved.size).toEqual({ width: 330, height: 350 });
+    expect(document.documentElement).not.toHaveClass("scoped-note-resizing");
+    expect(document.documentElement).not.toHaveClass("scoped-note-resizing-top-left");
   });
 
   it("does not render saved floating windows in the compact mobile view", async () => {

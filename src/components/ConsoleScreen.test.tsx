@@ -1701,6 +1701,89 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("heading", { name: "ended" })).toBeVisible();
   });
 
+  it("recreates a missing shell from the unavailable view", async () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const onRecreateSession = vi.fn();
+    const onRecreateAllMissing = vi.fn();
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="ended"
+        onBack={vi.fn()}
+        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+        sessionRecovery={{
+          id: "registry-ended",
+          name: "ended",
+          directory: "/srv/ended",
+          agentType: "claude",
+          agentSessionId: "agent-1",
+          firstSeenAt: 10,
+          lastSeenAt: 20,
+          directoryAvailable: true,
+        }}
+        onRecreateSession={onRecreateSession}
+        missingSessionCount={3}
+        onRecreateAllMissing={onRecreateAllMissing}
+      />,
+    );
+
+    expect(await screen.findByText("This tmux session no longer exists.")).toBeVisible();
+    expect(screen.getByText("/srv/ended")).toBeVisible();
+    expect(screen.getByText("agent-1")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Recreate shell" }));
+    expect(onRecreateSession).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "Recreate all missing (3)" }));
+    expect(onRecreateAllMissing).toHaveBeenCalledOnce();
+  });
+
+  it("blocks recreate when the saved directory is gone or unknown", async () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const view = renderWithTheme(
+      <ConsoleScreen
+        sessionName="ended"
+        onBack={vi.fn()}
+        sessionRecovery={{
+          id: "registry-ended",
+          name: "ended",
+          directory: "/srv/ended",
+          agentType: null,
+          agentSessionId: null,
+          firstSeenAt: 10,
+          lastSeenAt: 20,
+          directoryAvailable: false,
+        }}
+        onRecreateSession={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Recreate shell" })).toBeDisabled();
+    expect(screen.getByText("The saved directory is unavailable. Restore it before recreating."))
+      .toBeVisible();
+    view.unmount();
+
+    // No registry record at all: say so instead of offering a dead button.
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="forgotten"
+        onBack={vi.fn()}
+        sessionRecovery={null}
+        onRecreateSession={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Recreate shell" })).toBeDisabled();
+    expect(screen.getByText("No saved working directory for this tab, so it cannot be recreated."))
+      .toBeVisible();
+  });
+
+  it("omits recovery entirely when the workspace offers no recreate action", async () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    renderWithTheme(<ConsoleScreen sessionName="ended" onBack={vi.fn()} />);
+
+    expect(await screen.findByText("This tmux session no longer exists.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Recreate shell" })).not.toBeInTheDocument();
+  });
+
   it("replaces a loaded console with the unavailable view when its session ends", async () => {
     vi.useFakeTimers();
     try {
@@ -1869,11 +1952,11 @@ describe("ConsoleScreen session identity", () => {
       lastActiveAt: 1,
     }]);
     const onSessionWorkspaceTransfer = vi.fn().mockResolvedValue({
-      session: "test",
+      sessions: ["test"],
       operation: "copy",
-      destinationAlreadyContained: false,
-      destinationAdded: true,
-      sourceRemoved: false,
+      destinationAlreadyContained: [],
+      destinationAdded: ["test"],
+      sourceRemoved: [],
       sourceWorkspace: null,
       destinationWorkspace: {
         id: "destination",
@@ -1912,7 +1995,69 @@ describe("ConsoleScreen session identity", () => {
     })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Copy test to Release room" }));
     await waitFor(() => expect(onSessionWorkspaceTransfer).toHaveBeenCalledWith(
-      "test",
+      ["test"],
+      "destination",
+      "copy",
+      4,
+    ));
+  });
+
+  it("uses the complete multi-tab selection from the desktop header transfer action", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(listWorkspaces).mockResolvedValue([{
+      id: "destination",
+      name: "Release room",
+      tabs: ["alpha"],
+      groups: [],
+      quickLinks: [],
+      activeSession: "alpha",
+      sessionRevision: 4,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveAt: 1,
+    }]);
+    const onSessionWorkspaceTransfer = vi.fn().mockResolvedValue({
+      sessions: ["alpha", "test"],
+      operation: "copy",
+      destinationAlreadyContained: ["alpha"],
+      destinationAdded: ["test"],
+      sourceRemoved: [],
+      sourceWorkspace: null,
+      destinationWorkspace: {
+        id: "destination",
+        name: "Release room",
+        tabs: ["alpha", "test"],
+        groups: [],
+        quickLinks: [],
+        activeSession: "alpha",
+        sessionRevision: 5,
+        createdAt: 1,
+        updatedAt: 3,
+        lastActiveAt: 1,
+      },
+      sessionRevision: 5,
+    });
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        workspaceName="Current room"
+        workspaceTransferSessionNames={["alpha", "test"]}
+        workspaceTransferPinnedSessionNames={[]}
+        onBack={vi.fn()}
+        onSessionWorkspaceTransfer={onSessionWorkspaceTransfer}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Move or copy 2 selected sessions to a workspace",
+    }));
+    expect(await screen.findByText("alpha, test")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", {
+      name: "Copy 1 missing selected session to Release room",
+    }));
+
+    await waitFor(() => expect(onSessionWorkspaceTransfer).toHaveBeenCalledWith(
+      ["alpha", "test"],
       "destination",
       "copy",
       4,

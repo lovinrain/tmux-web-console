@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
+import { fuzzyFieldsScore } from "../fuzzySearch";
 import {
   directShortcutAria,
   directShortcutLabel,
@@ -57,75 +58,22 @@ interface WorkspaceCommandPaletteProps {
 }
 
 const MAX_VISIBLE_COMMANDS = 60;
-const COMMAND_LABEL_SCORE_BONUS = 2_200;
-
-function normalizeSearchText(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function fuzzyTokenScore(token: string, candidate: string): number | null {
-  if (!token || !candidate) return null;
-  if (candidate === token) return 5_000;
-  if (candidate.startsWith(token)) return 4_000 - (candidate.length - token.length);
-
-  const substringIndex = candidate.indexOf(token);
-  if (substringIndex >= 0) {
-    const boundaryBonus = substringIndex === 0 || candidate[substringIndex - 1] === " "
-      ? 300
-      : 0;
-    return 3_000 + boundaryBonus - substringIndex * 3 - (candidate.length - token.length);
-  }
-
-  let tokenIndex = 0;
-  let previousMatch = -2;
-  let score = 1_000;
-  for (let candidateIndex = 0; candidateIndex < candidate.length; candidateIndex += 1) {
-    if (candidate[candidateIndex] !== token[tokenIndex]) continue;
-    score += candidateIndex === previousMatch + 1 ? 45 : 12;
-    if (candidateIndex === 0 || candidate[candidateIndex - 1] === " ") score += 35;
-    score -= Math.max(0, candidateIndex - previousMatch - 1) * 2;
-    previousMatch = candidateIndex;
-    tokenIndex += 1;
-    if (tokenIndex === token.length) {
-      return score - Math.max(0, candidate.length - token.length);
-    }
-  }
-  return null;
-}
 
 export function rankWorkspaceCommands(
   commands: readonly WorkspaceCommand[],
   query: string,
 ): RankedWorkspaceCommand[] {
-  const tokens = normalizeSearchText(query).split(" ").filter(Boolean);
   return commands
     .flatMap((command, sourceIndex) => {
-      if (tokens.length === 0) return [{ command, score: 0, sourceIndex }];
       const fields = [
         command.label,
         command.description,
         command.category,
         command.shortcut || "",
         ...(command.keywords || []),
-      ].map(normalizeSearchText).filter(Boolean);
-      let score = 0;
-      for (const token of tokens) {
-        let bestScore: number | null = null;
-        fields.forEach((field, fieldIndex) => {
-          const fieldScore = fuzzyTokenScore(token, field);
-          if (fieldScore === null) return;
-          const weightedScore = fieldScore
-            + (fieldIndex === 0 ? COMMAND_LABEL_SCORE_BONUS : 0);
-          bestScore = bestScore === null ? weightedScore : Math.max(bestScore, weightedScore);
-        });
-        if (bestScore === null) return [];
-        score += bestScore;
-      }
+      ];
+      const score = fuzzyFieldsScore(query, fields);
+      if (score === null) return [];
       return [{ command, score, sourceIndex }];
     })
     .sort((left, right) => right.score - left.score || left.sourceIndex - right.sourceIndex)

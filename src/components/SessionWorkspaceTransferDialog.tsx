@@ -9,7 +9,7 @@ import {
   listWorkspaces,
   type SavedWorkspace,
   type WorkspaceSessionTransferOperation,
-  type WorkspaceSessionTransferResult,
+  type WorkspaceSessionsTransferResult,
 } from "../api";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
@@ -21,16 +21,17 @@ import {
 } from "../icons";
 
 interface SessionWorkspaceTransferDialogProps {
-  sessionName: string;
+  sessionNames: string[];
   sourceWorkspaceId: string | null;
   sourceWorkspaceName: string | null;
-  workspacePinned: boolean;
+  workspacePinnedSessions?: string[];
   onClose: () => void;
   onTransfer: (
+    sessionNames: string[],
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
-  ) => Promise<WorkspaceSessionTransferResult>;
+  ) => Promise<WorkspaceSessionsTransferResult>;
 }
 
 interface PendingTransfer {
@@ -48,10 +49,10 @@ function tabCountLabel(count: number): string {
 }
 
 export function SessionWorkspaceTransferDialog({
-  sessionName,
+  sessionNames,
   sourceWorkspaceId,
   sourceWorkspaceName,
-  workspacePinned,
+  workspacePinnedSessions = [],
   onClose,
   onTransfer,
 }: SessionWorkspaceTransferDialogProps) {
@@ -69,6 +70,16 @@ export function SessionWorkspaceTransferDialog({
   const [pending, setPending] = useState<PendingTransfer | null>(null);
   const [transferError, setTransferError] = useState<TransferError | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const sessionCount = sessionNames.length;
+  const singleSessionName = sessionNames[0] ?? "session";
+  const pinnedSessionSet = useMemo(
+    () => new Set(workspacePinnedSessions),
+    [workspacePinnedSessions],
+  );
+  const selectedPinnedSessions = sessionNames.filter((name) => (
+    pinnedSessionSet.has(name)
+  ));
+  const workspacePinned = selectedPinnedSessions.length > 0;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -155,6 +166,7 @@ export function SessionWorkspaceTransferDialog({
     setStatus(null);
     try {
       const result = await onTransfer(
+        sessionNames,
         workspace.id,
         operation,
         workspace.sessionRevision,
@@ -172,9 +184,20 @@ export function SessionWorkspaceTransferDialog({
         onClose();
         return;
       }
-      setStatus(result.destinationAlreadyContained
-        ? `${sessionName} was already in ${workspace.name}; no duplicate was added.`
-        : `Copied ${sessionName} to ${workspace.name}.`);
+      if (sessionCount === 1) {
+        setStatus(result.destinationAlreadyContained.includes(singleSessionName)
+          ? `${singleSessionName} was already in ${workspace.name}; no duplicate was added.`
+          : `Copied ${singleSessionName} to ${workspace.name}.`);
+      } else if (result.destinationAdded.length === 0) {
+        setStatus(
+          `All ${sessionCount} selected sessions were already in ${workspace.name}; no duplicates were added.`,
+        );
+      } else {
+        const alreadyThere = result.destinationAlreadyContained.length;
+        setStatus(
+          `Copied ${result.destinationAdded.length} session${result.destinationAdded.length === 1 ? "" : "s"} to ${workspace.name}${alreadyThere > 0 ? `; ${alreadyThere} ${alreadyThere === 1 ? "was" : "were"} already there.` : "."}`,
+        );
+      }
     } catch (error) {
       setTransferError({
         workspaceId: workspace.id,
@@ -210,7 +233,9 @@ export function SessionWorkspaceTransferDialog({
       >
         <header className="workspace-transfer-header">
           <div>
-            <p className="eyebrow">PLACE THIS SESSION</p>
+            <p className="eyebrow">
+              {sessionCount === 1 ? "PLACE THIS SESSION" : "PLACE SELECTED SESSIONS"}
+            </p>
             <h2 id={headingId}>Move or copy to a workspace</h2>
           </div>
           <button
@@ -225,20 +250,34 @@ export function SessionWorkspaceTransferDialog({
         </header>
 
         <div className="workspace-transfer-context">
-          <strong>{sessionName}</strong>
+          <strong>
+            {sessionCount === 1
+              ? singleSessionName
+              : `${sessionCount} selected sessions`}
+          </strong>
           <span>From {sourceLabel}</span>
+          {sessionCount > 1 && (
+            <span
+              className="workspace-transfer-selection-preview"
+              title={sessionNames.join(", ")}
+            >
+              {sessionNames.join(", ")}
+            </span>
+          )}
         </div>
 
         {workspacePinned && (
           <p className="workspace-transfer-pinned" role="note">
-            This session is pinned to every workspace, so it is already copied everywhere.
-            Unpin it before moving it out of {sourceLabel}.
+            {sessionCount === 1
+              ? `This session is pinned to every workspace, so it is already copied everywhere. Unpin it before moving it out of ${sourceLabel}.`
+              : `Move is unavailable because ${selectedPinnedSessions.length} selected session${selectedPinnedSessions.length === 1 ? " is" : "s are"} pinned to every workspace: ${selectedPinnedSessions.join(", ")}. Unpin ${selectedPinnedSessions.length === 1 ? "it" : "them"} first.`}
           </p>
         )}
         {!sourceWorkspaceId && !workspacePinned && (
           <p className="workspace-transfer-hint">
-            Moving copies the session to the destination, then removes its tab from this
-            browser&apos;s unsaved workspace.
+            Moving copies {sessionCount === 1 ? "the session" : "the selected sessions"} to
+            the destination, then removes {sessionCount === 1 ? "its tab" : "their tabs"} from
+            this browser&apos;s unsaved workspace.
           </p>
         )}
 
@@ -297,7 +336,12 @@ export function SessionWorkspaceTransferDialog({
             </div>
           )}
           {!loading && !loadError && destinations.map((workspace) => {
-            const alreadyContains = workspace.tabs.includes(sessionName);
+            const alreadyContainsCount = sessionNames.filter((name) => (
+              workspace.tabs.includes(name)
+            )).length;
+            const alreadyContains = alreadyContainsCount > 0;
+            const allAlreadyContained = alreadyContainsCount === sessionCount;
+            const missingCount = sessionCount - alreadyContainsCount;
             const copyPending = pending?.workspaceId === workspace.id
               && pending.operation === "copy";
             const movePending = pending?.workspaceId === workspace.id
@@ -315,34 +359,52 @@ export function SessionWorkspaceTransferDialog({
                 <div className="workspace-transfer-row-copy">
                   <strong>{workspace.name}</strong>
                   <span>
-                    {alreadyContains
-                      ? `Already contains ${sessionName}`
-                      : tabCountLabel(workspace.tabs.length)}
+                    {sessionCount === 1 && alreadyContains
+                      ? `Already contains ${singleSessionName}`
+                      : sessionCount > 1 && alreadyContains
+                        ? `${alreadyContainsCount} of ${sessionCount} already here`
+                        : tabCountLabel(workspace.tabs.length)}
                   </span>
                 </div>
                 <div className="workspace-transfer-row-actions">
                   <button
                     type="button"
                     className="workspace-transfer-copy"
-                    disabled={Boolean(pending) || alreadyContains}
-                    aria-label={alreadyContains
-                      ? `${sessionName} is already in ${workspace.name}`
-                      : `Copy ${sessionName} to ${workspace.name}`}
+                    disabled={Boolean(pending) || allAlreadyContained}
+                    aria-label={sessionCount === 1
+                      ? allAlreadyContained
+                        ? `${singleSessionName} is already in ${workspace.name}`
+                        : `Copy ${singleSessionName} to ${workspace.name}`
+                      : allAlreadyContained
+                        ? `${workspace.name} already contains all ${sessionCount} selected sessions`
+                        : `Copy ${missingCount} missing selected session${missingCount === 1 ? "" : "s"} to ${workspace.name}`}
                     onClick={() => void transfer(workspace, "copy")}
                   >
                     <WindowCopyIcon />
-                    <span>{copyPending ? "Copying..." : alreadyContains ? "Added" : "Copy"}</span>
+                    <span>
+                      {copyPending
+                        ? "Copying..."
+                        : allAlreadyContained
+                          ? "Added"
+                          : sessionCount > 1 && alreadyContains
+                            ? `Copy ${missingCount}`
+                            : "Copy"}
+                    </span>
                   </button>
                   <button
                     type="button"
                     className="workspace-transfer-move"
                     disabled={Boolean(pending) || workspacePinned}
-                    aria-label={`Move ${sessionName} to ${workspace.name}`}
-                    title={workspacePinned ? "Unpin this session before moving it" : undefined}
+                    aria-label={sessionCount === 1
+                      ? `Move ${singleSessionName} to ${workspace.name}`
+                      : `Move ${sessionCount} selected sessions to ${workspace.name}`}
+                    title={workspacePinned
+                      ? `Unpin ${selectedPinnedSessions.length === 1 ? "the selected session" : "the selected sessions"} before moving`
+                      : undefined}
                     onClick={() => void transfer(workspace, "move")}
                   >
                     <WindowMoveIcon />
-                    <span>{movePending ? "Moving..." : "Move"}</span>
+                    <span>{movePending ? "Moving..." : sessionCount > 1 ? `Move ${sessionCount}` : "Move"}</span>
                   </button>
                 </div>
                 {rowError && (
@@ -357,7 +419,8 @@ export function SessionWorkspaceTransferDialog({
 
         <footer className="workspace-transfer-footer">
           <p>
-            Copy keeps the session here. Move removes it from {sourceLabel}. Existing
+            Copy keeps {sessionCount === 1 ? "the session" : "the selected sessions"} here.
+            Move removes {sessionCount === 1 ? "it" : "them"} from {sourceLabel}. Existing
             destination tabs are never duplicated.
           </p>
           <button type="button" className="secondary-button" onClick={onClose} disabled={Boolean(pending)}>

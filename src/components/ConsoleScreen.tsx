@@ -22,7 +22,8 @@ import {
   updateSessionTags,
   updateSessionTitle,
   type WorkspaceSessionTransferOperation,
-  type WorkspaceSessionTransferResult,
+  type WorkspaceSessionsTransferResult,
+  type RecoverableSession,
 } from "../api";
 import {
   ArrowLeftIcon,
@@ -81,6 +82,7 @@ import {
   type MemoDraftSource,
 } from "./InputBar";
 import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
+import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
@@ -144,11 +146,13 @@ interface ConsoleScreenProps {
   callbackSessionBusy?: boolean;
   onToggleCallbackSession?: () => void | Promise<void>;
   onSessionWorkspaceTransfer?: (
-    sessionName: string,
+    sessionNames: string[],
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
-  ) => Promise<WorkspaceSessionTransferResult>;
+  ) => Promise<WorkspaceSessionsTransferResult>;
+  workspaceTransferSessionNames?: string[];
+  workspaceTransferPinnedSessionNames?: string[];
   workspaceTransferDisabled?: boolean;
   onSessionRenamed?: (
     previousName: string,
@@ -173,6 +177,11 @@ interface ConsoleScreenProps {
   copySessionDisabled?: boolean;
   renameWarning?: SessionRenameWarning | null;
   onDismissRenameWarning?: (sessionId: string) => void;
+  sessionRecovery?: RecoverableSession | null;
+  onRecreateSession?: () => void | Promise<void>;
+  recreateSessionBusy?: boolean;
+  missingSessionCount?: number;
+  onRecreateAllMissing?: () => void;
 }
 
 export interface SessionRenameWarning {
@@ -532,6 +541,8 @@ export function ConsoleScreen({
   callbackSessionBusy = false,
   onToggleCallbackSession,
   onSessionWorkspaceTransfer,
+  workspaceTransferSessionNames,
+  workspaceTransferPinnedSessionNames = [],
   workspaceTransferDisabled = false,
   onSessionRenamed,
   onSessionTerminated,
@@ -541,6 +552,11 @@ export function ConsoleScreen({
   copySessionDisabled = false,
   renameWarning,
   onDismissRenameWarning,
+  sessionRecovery = null,
+  onRecreateSession,
+  recreateSessionBusy = false,
+  missingSessionCount = 0,
+  onRecreateAllMissing,
 }: ConsoleScreenProps) {
   const { theme } = useTheme();
   const { bindings: shortcutBindings } = useShortcutSettings();
@@ -668,6 +684,15 @@ export function ConsoleScreen({
   } as CSSProperties;
 
   const session = loadedSession?.name === sessionName ? loadedSession : null;
+  const selectedWorkspaceTransferSessions = workspaceTransferSessionNames
+    && workspaceTransferSessionNames.length > 1
+    ? [...new Set(workspaceTransferSessionNames)]
+    : [sessionName];
+  const selectedWorkspaceTransferPinnedSessions = selectedWorkspaceTransferSessions.filter(
+    (name) => workspaceTransferPinnedSessionNames.includes(name)
+      || (name === sessionName && Boolean(session?.workspacePinned)),
+  );
+  const workspaceTransferSessionCount = selectedWorkspaceTransferSessions.length;
   const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId)
     || (session ? activePane(session) : undefined);
   const classification = classifyPane(pane);
@@ -1674,6 +1699,51 @@ export function ConsoleScreen({
           <p className="eyebrow">SESSION UNAVAILABLE</p>
           <h1>{sessionName}</h1>
           <p>{currentLookupError}</p>
+          {onRecreateSession && (
+            <div className="missing-session-recovery">
+              {sessionRecovery ? (
+                <>
+                  <code>{sessionRecovery.directory}</code>
+                  <AgentRecoveryReference
+                    sessionName={sessionName}
+                    agentType={sessionRecovery.agentType}
+                    agentSessionId={sessionRecovery.agentSessionId}
+                  />
+                  {!sessionRecovery.directoryAvailable && (
+                    <p className="recovery-directory-warning">
+                      The saved directory is unavailable. Restore it before recreating.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="recovery-directory-warning">
+                  No saved working directory for this tab, so it cannot be recreated.
+                </p>
+              )}
+              <div className="missing-session-recovery-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={recreateSessionBusy
+                    || !sessionRecovery
+                    || !sessionRecovery.directoryAvailable}
+                  onClick={() => void onRecreateSession()}
+                >
+                  <TerminalIcon />
+                  {recreateSessionBusy ? "Recreating..." : "Recreate shell"}
+                </button>
+                {onRecreateAllMissing && missingSessionCount > 1 && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={onRecreateAllMissing}
+                  >
+                    Recreate all missing ({missingSessionCount})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {!embedded && (
             <button type="button" className="primary-button" onClick={onBack}>Back to sessions</button>
           )}
@@ -1955,17 +2025,25 @@ export function ConsoleScreen({
             <button
               type="button"
               className="workspace-transfer-button"
-              aria-label={`Move or copy ${sessionName} to a workspace`}
+              aria-label={workspaceTransferSessionCount > 1
+                ? `Move or copy ${workspaceTransferSessionCount} selected sessions to a workspace`
+                : `Move or copy ${sessionName} to a workspace`}
               aria-haspopup="dialog"
               aria-expanded={workspaceTransferOpen}
               disabled={!session || workspaceTransferDisabled}
               title={workspaceTransferDisabled
                 ? "Wait for the current workspace to finish syncing"
-                : "Move or copy this session to a saved workspace"}
+                : workspaceTransferSessionCount > 1
+                  ? `Move or copy the ${workspaceTransferSessionCount} selected sessions to a saved workspace`
+                  : "Move or copy this session to a saved workspace"}
               onClick={() => setWorkspaceTransferOpen(true)}
             >
               <WindowMoveIcon />
-              <span>Move / Copy</span>
+              <span>
+                Move / Copy{workspaceTransferSessionCount > 1
+                  ? ` (${workspaceTransferSessionCount})`
+                  : ""}
+              </span>
             </button>
           )}
           <AccountLink />
@@ -2437,14 +2515,14 @@ export function ConsoleScreen({
         && session
         && onSessionWorkspaceTransfer && (
           <SessionWorkspaceTransferDialog
-            sessionName={session.name}
+            sessionNames={selectedWorkspaceTransferSessions}
             sourceWorkspaceId={workspaceId}
             sourceWorkspaceName={workspaceName}
-            workspacePinned={Boolean(session.workspacePinned)}
+            workspacePinnedSessions={selectedWorkspaceTransferPinnedSessions}
             onClose={() => setWorkspaceTransferOpen(false)}
-            onTransfer={(destinationWorkspaceId, operation, sessionRevision) => (
+            onTransfer={(sessionNames, destinationWorkspaceId, operation, sessionRevision) => (
               onSessionWorkspaceTransfer(
-                session.name,
+                sessionNames,
                 destinationWorkspaceId,
                 operation,
                 sessionRevision,

@@ -31,6 +31,10 @@ is locked by `package-lock.json`, while Python currently allows compatible
    until the replacement passes all validation gates.
 8. Restart only `muxdeck.service` during a normal deployment. Validate Caddy
    before reloading it. Do not restart Caddy when a reload is sufficient.
+9. Before restarting Muxdeck, prove the restart cannot take tmux with it: confirm
+   `systemctl show muxdeck -p KillMode` reports `process`, and that no tmux server
+   appears under `systemctl status muxdeck`. A frontend-only change needs no
+   restart - rebuild `dist/` instead. See section 13.
 
 Stop and ask the human if the tmux owner, socket, public exposure, base path, or
 state-migration intent cannot be established safely.
@@ -279,8 +283,8 @@ timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
 upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
-the first workspace-state write can upgrade it to schema 12, and a release that
-only understands versions 1 through 11 cannot read the upgraded document.
+the first workspace-state write can upgrade it to schema 13, and a release that
+only understands versions 1 through 12 cannot read the upgraded document.
 
 ## 5. Build a clean release
 
@@ -417,7 +421,7 @@ rollback requires stopping only Muxdeck, preserving the upgraded database, and
 restoring the pre-upgrade database alongside the previous application code.
 Never downgrade `user_version` in place or discard the upgraded history.
 
-The workspace file uses schema version 12. Version 1 loads at workspace session
+The workspace file uses schema version 13. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
 through 3 load with no common or workspace-specific quick links. Versions 1
 through 4 load with no session-specific quick links, versions 1 through 5 load
@@ -435,9 +439,11 @@ pane layouts, each with at most 12 leaves and six split levels. Pane-layout name
 are limited to 64 characters and divider ratios to 15%-85%. Quick-link labels
 are limited to 48 characters and URLs to 2,048 characters. Each notebook has at
 most 128 pages with 80-character names; page content has no separate character
-validator. Each callback list permits 64 unique session names.
+validator. Each workspace callback list permits 64 unique session names, and the
+explicit global callback list permits 256 unique session names. Workspace
+callback entries are always included in the deduplicated global queue.
 Keep a pre-upgrade copy for rollback because a release that only understands
-versions 1 through 11 rejects the version 12 document. As with snippets, an
+versions 1 through 12 rejects the version 13 document. As with snippets, an
 unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
@@ -932,7 +938,10 @@ For a failed replacement:
    workspace list.
    When rolling back to a release that only understands workspace-file versions
    1 through 10, retain the version-11 file separately and restore the pre-upgrade
-   workspace file; older releases cannot read callback lists. A release that only
+   workspace file; older releases cannot read workspace callback lists. A release
+   that only understands versions 1 through 12 additionally cannot read the
+   explicit global callback list in the version-13 document; retain that file
+   separately and restore the pre-upgrade workspace file. A release that only
    understands versions 1 through 9 additionally cannot read named pane layouts
    or their session assignments and split ratios.
    When rolling back to version 8 or earlier, retain the version-9 file separately
@@ -987,7 +996,26 @@ tree:
 8. keep the previous release for rollback.
 
 A Muxdeck restart resets in-memory state-change timestamps and disconnects open
-web consoles, but it should not stop the underlying tmux sessions or agents.
+web consoles. It stops the underlying tmux sessions **only** if the tmux server
+shares Muxdeck's cgroup - which happens whenever Muxdeck was the first thing to
+run a tmux command (typically after a host reboot). The tmux server daemonizes to
+`PPID 1`, so process parentage will not reveal this. Check the cgroup, not the
+parent:
+
+```bash
+systemctl show muxdeck -p KillMode          # must be: process
+cat /proc/<tmux-server-pid>/cgroup          # must NOT be muxdeck.service
+```
+
+With the default `KillMode=control-group`, `systemctl restart muxdeck` signals
+every process in the cgroup and destroys every live tmux session. This happened
+on 2026-09-15. `KillMode=process` prevents it, including on a hung stop, because
+the escalation SIGKILL also targets only the main PID.
+
+Most redeployments do not need a restart at all. The frontend is served from disk
+(`add_static` over `dist/assets`, `FileResponse` for `index.html`), so rebuilding
+`dist/` ships frontend changes immediately with no restart and no risk to tmux.
+Restart only when Python code or unit environment actually changed.
 
 ## 14. Troubleshooting
 

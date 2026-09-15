@@ -746,6 +746,81 @@ export function subscribeToSessions({
   };
 }
 
+export type CallbackStreamStatus = "connecting" | "open" | "error";
+
+export interface CallbackStreamOptions {
+  onSnapshot: (snapshot: GlobalCallbackSnapshot) => void;
+  onStatus?: (status: CallbackStreamStatus) => void;
+  onError?: (error: Error) => void;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+export function subscribeToCallbackSessions({
+  onSnapshot,
+  onStatus,
+  onError,
+}: CallbackStreamOptions): () => void {
+  if (typeof EventSource === "undefined") {
+    throw new Error("Server-sent events are not supported by this browser");
+  }
+
+  onStatus?.("connecting");
+  const source = new EventSource(`${BASE_PATH}/api/callback-sessions/stream`);
+  let closed = false;
+
+  const handleCallbacks = (event: MessageEvent<string>) => {
+    if (closed) return;
+
+    try {
+      const payload = JSON.parse(event.data) as Partial<GlobalCallbackSnapshot>;
+      const sessionRevision = payload?.sessionRevision;
+      if (
+        !payload
+        || !isStringArray(payload.callbackSessions)
+        || !isStringArray(payload.globalCallbackSessions)
+        || !Array.isArray(payload.workspaceCallbacks)
+        || !payload.workspaceCallbacks.every((sourceRecord) => (
+          sourceRecord
+          && typeof sourceRecord === "object"
+          && typeof sourceRecord.workspaceId === "string"
+          && typeof sourceRecord.workspaceName === "string"
+          && isStringArray(sourceRecord.sessions)
+        ))
+        || typeof sessionRevision !== "number"
+        || !Number.isSafeInteger(sessionRevision)
+        || sessionRevision < 0
+      ) {
+        throw new Error("Callback stream event contained an invalid snapshot");
+      }
+      onSnapshot(payload as GlobalCallbackSnapshot);
+    } catch (error) {
+      const streamError = error instanceof Error ? error : new Error(String(error));
+      onStatus?.("error");
+      onError?.(streamError);
+    }
+  };
+
+  source.addEventListener("callbacks", handleCallbacks);
+  source.onopen = () => {
+    if (!closed) onStatus?.("open");
+  };
+  source.onerror = () => {
+    if (closed) return;
+    onStatus?.("error");
+    onError?.(new Error("Callback stream connection failed"));
+  };
+
+  return () => {
+    if (closed) return;
+    closed = true;
+    source.removeEventListener("callbacks", handleCallbacks);
+    source.close();
+  };
+}
+
 export async function updateSessionTitle(
   session: string,
   title: string,
@@ -869,6 +944,23 @@ export interface SavedWorkspace {
   lastActiveAt: number;
 }
 
+export interface WorkspaceCallbackSource {
+  workspaceId: string;
+  workspaceName: string;
+  sessions: string[];
+}
+
+/** Global callback state plus the workspace-owned entries it inherits. */
+export interface GlobalCallbackSnapshot {
+  /** Effective, deduplicated queue (global entries first, then workspace entries). */
+  callbackSessions: string[];
+  /** Entries explicitly registered at global scope. */
+  globalCallbackSessions: string[];
+  /** Workspace queues contributing entries to the effective global queue. */
+  workspaceCallbacks: WorkspaceCallbackSource[];
+  sessionRevision: number;
+}
+
 export interface WorkspaceSessionPane {
   id: string;
   kind: "pane";
@@ -900,6 +992,17 @@ export interface WorkspaceSessionTransferResult {
   destinationAlreadyContained: boolean;
   destinationAdded: boolean;
   sourceRemoved: boolean;
+  sourceWorkspace: SavedWorkspace | null;
+  destinationWorkspace: SavedWorkspace;
+  sessionRevision: number;
+}
+
+export interface WorkspaceSessionsTransferResult {
+  sessions: string[];
+  operation: WorkspaceSessionTransferOperation;
+  destinationAlreadyContained: string[];
+  destinationAdded: string[];
+  sourceRemoved: string[];
   sourceWorkspace: SavedWorkspace | null;
   destinationWorkspace: SavedWorkspace;
   sessionRevision: number;
@@ -1261,6 +1364,65 @@ export async function updateWorkspace(
   return result.workspace;
 }
 
+export async function getGlobalCallbackSessions(
+  signal?: AbortSignal,
+): Promise<GlobalCallbackSnapshot> {
+  return jsonRequest<GlobalCallbackSnapshot>("/api/callback-sessions", { signal });
+}
+
+export async function replaceGlobalCallbackSessions(
+  sessions: string[],
+  sessionRevision: number,
+): Promise<GlobalCallbackSnapshot> {
+  return jsonRequest<GlobalCallbackSnapshot>("/api/callback-sessions", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessions, sessionRevision }),
+  });
+}
+
+export async function addGlobalCallbackSessions(
+  sessions: string[],
+  sessionRevision: number,
+): Promise<GlobalCallbackSnapshot & { added: string[] }> {
+  return jsonRequest<GlobalCallbackSnapshot & { added: string[] }>(
+    "/api/callback-sessions",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessions, sessionRevision }),
+    },
+  );
+}
+
+export async function removeGlobalCallbackSessions(
+  sessions: string[],
+  sessionRevision: number,
+): Promise<GlobalCallbackSnapshot & { removed: string[] }> {
+  return jsonRequest<GlobalCallbackSnapshot & { removed: string[] }>(
+    "/api/callback-sessions",
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessions, sessionRevision }),
+    },
+  );
+}
+
+export async function reviewGlobalCallbackSession(
+  session: string,
+  sessionRevision: number,
+): Promise<GlobalCallbackSnapshot & { removed: string[] }> {
+  return jsonRequest<GlobalCallbackSnapshot & { removed: string[] }>(
+    "/api/callback-sessions/review",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, sessionRevision }),
+    },
+  );
+}
+
 export async function transferSessionToWorkspace(
   session: string,
   sourceWorkspaceId: string | null,
@@ -1275,6 +1437,29 @@ export async function transferSessionToWorkspace(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session,
+        sourceWorkspaceId,
+        destinationWorkspaceId,
+        operation,
+        sessionRevision,
+      }),
+    },
+  );
+}
+
+export async function transferSessionsToWorkspace(
+  sessions: string[],
+  sourceWorkspaceId: string | null,
+  destinationWorkspaceId: string,
+  operation: WorkspaceSessionTransferOperation,
+  sessionRevision: number,
+): Promise<WorkspaceSessionsTransferResult> {
+  return jsonRequest<WorkspaceSessionsTransferResult>(
+    "/api/session-workspace-transfer/bulk",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessions,
         sourceWorkspaceId,
         destinationWorkspaceId,
         operation,

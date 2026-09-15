@@ -172,6 +172,7 @@ SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
+CALLBACK_STREAM_HEARTBEAT_SECONDS = 15.0
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 DEFAULT_ORIGIN_PORTS = {"http": 80, "https": 443}
 AUTH_COOKIE_NAME = "muxdeck_device"
@@ -415,6 +416,71 @@ class SessionStreamBroker:
 
 
 SESSION_STREAM_BROKER_KEY = web.AppKey("session_stream_broker", SessionStreamBroker)
+
+CallbackStreamQueue = asyncio.Queue[str | None]
+
+
+class CallbackStreamBroker:
+    """Fan out the latest callback snapshot to every authenticated browser tab."""
+
+    def __init__(self) -> None:
+        self._subscribers: set[CallbackStreamQueue] = set()
+        self._latest: str | None = None
+        self._lock = asyncio.Lock()
+        self._closed = False
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscribers)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def publish(self, snapshot: dict[str, Any]) -> None:
+        """Offer a changed snapshot without queueing unbounded history."""
+        if self._closed:
+            return
+        serialized = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+        if serialized == self._latest:
+            return
+        self._latest = serialized
+        for queue in tuple(self._subscribers):
+            self._offer_latest(queue, serialized)
+
+    async def subscribe(self) -> CallbackStreamQueue:
+        queue: CallbackStreamQueue = asyncio.Queue(maxsize=1)
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("callback stream broker is closed")
+            self._subscribers.add(queue)
+            if self._latest is not None:
+                queue.put_nowait(self._latest)
+        return queue
+
+    async def unsubscribe(self, queue: CallbackStreamQueue) -> None:
+        async with self._lock:
+            self._subscribers.discard(queue)
+
+    async def close(self) -> None:
+        async with self._lock:
+            self._closed = True
+            subscribers = tuple(self._subscribers)
+            self._subscribers.clear()
+            self._latest = None
+            for queue in subscribers:
+                self._offer_latest(queue, None)
+
+    @staticmethod
+    def _offer_latest(queue: CallbackStreamQueue, snapshot: str | None) -> None:
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(snapshot)
+
+
+CALLBACK_STREAM_BROKER_KEY = web.AppKey(
+    "callback_stream_broker", CallbackStreamBroker
+)
 
 
 def normalize_base_path(value: str) -> str:
@@ -899,18 +965,37 @@ def create_app(
         workspace_write = request.method not in SAFE_HTTP_METHODS and any(
             part in request.path for part in ("/api/workspaces", "/api/session-workspace", "/api/session-name")
         )
-        if not workspace_write:
+        callback_write = request.method not in SAFE_HTTP_METHODS and (
+            workspace_write or "/api/callback-sessions" in request.path
+        )
+        if not callback_write:
             return await handler(request)
-        try:
-            app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
-        except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
-            return json_error(str(error), 503)
+        if workspace_write:
+            try:
+                app[SESSION_REGISTRY_KEY].sync_history_workspaces(
+                    app[WORKSPACES_KEY].list_workspaces()
+                )
+            except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
+                return json_error(str(error), 503)
         response = await handler(request)
         if response.status < 400:
+            if workspace_write:
+                try:
+                    app[SESSION_REGISTRY_KEY].sync_history_workspaces(
+                        app[WORKSPACES_KEY].list_workspaces()
+                    )
+                except (SessionRegistryUnavailable, WorkspaceStoreUnavailable):
+                    LOGGER.exception(
+                        "Workspace changed but history membership could not be updated"
+                    )
             try:
-                app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
-            except (SessionRegistryUnavailable, WorkspaceStoreUnavailable):
-                LOGGER.exception("Workspace changed but history membership could not be updated")
+                app[CALLBACK_STREAM_BROKER_KEY].publish(
+                    app[WORKSPACES_KEY].get_global_callback_sessions()
+                )
+            except WorkspaceStoreUnavailable:
+                # The write response is already committed; a transient stream
+                # refresh failure must not turn it into a client error.
+                LOGGER.exception("Unable to publish the callback stream snapshot")
         return response
 
     app.middlewares.append(history_workspace_middleware)
@@ -918,6 +1003,14 @@ def create_app(
         app[SESSION_SNAPSHOTS_KEY],
         sample_seconds=SESSION_STREAM_SAMPLE_SECONDS,
     )
+    callback_stream_broker = CallbackStreamBroker()
+    app[CALLBACK_STREAM_BROKER_KEY] = callback_stream_broker
+    try:
+        callback_stream_broker.publish(
+            app[WORKSPACES_KEY].get_global_callback_sessions()
+        )
+    except WorkspaceStoreUnavailable:
+        LOGGER.warning("Unable to prime the callback stream snapshot")
     app[BASE_PATH_KEY] = normalize_base_path(
         base_path
         if base_path is not None
@@ -928,10 +1021,14 @@ def create_app(
     async def close_session_stream_broker(application: web.Application) -> None:
         await application[SESSION_STREAM_BROKER_KEY].close()
 
+    async def close_callback_stream_broker(application: web.Application) -> None:
+        await application[CALLBACK_STREAM_BROKER_KEY].close()
+
     async def close_session_registry(application: web.Application) -> None:
         application[SESSION_REGISTRY_KEY].close()
 
     app.on_cleanup.append(close_session_stream_broker)
+    app.on_cleanup.append(close_callback_stream_broker)
     app.on_cleanup.append(close_session_registry)
     app.on_response_prepare.append(add_browser_security_headers)
 
@@ -1267,6 +1364,7 @@ def create_app(
                         "quickLinks",
                         "notes",
                     ],
+                    "callback": ["global", "workspace"],
                     "configuration": ["shortcuts", "snippets"],
                     "observability": ["sessionStream", "hostMetrics"],
                 },
@@ -2867,6 +2965,67 @@ def create_app(
                 await response.write_eof()
         return response
 
+    async def callback_sessions_stream(request: web.Request) -> web.StreamResponse:
+        broker = app[CALLBACK_STREAM_BROKER_KEY]
+        try:
+            # Prime lazily as well as during app construction. This covers a
+            # store that was unavailable briefly while the application started.
+            broker.publish(app[WORKSPACES_KEY].get_global_callback_sessions())
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+
+        queue = await broker.subscribe()
+        response = web.StreamResponse(
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "X-Accel-Buffering": "no",
+            }
+        )
+        loop = asyncio.get_running_loop()
+
+        try:
+            await response.prepare(request)
+            next_heartbeat = loop.time() + CALLBACK_STREAM_HEARTBEAT_SECONDS
+            while True:
+                transport = request.transport
+                if transport is None or transport.is_closing():
+                    break
+                if not await request_auth_still_valid(request):
+                    with contextlib.suppress(ConnectionError, RuntimeError):
+                        await response.write(
+                            b'event: auth\ndata: {"authenticated":false}\n\n'
+                        )
+                    break
+
+                try:
+                    timeout = max(0.001, next_heartbeat - loop.time())
+                    serialized = await asyncio.wait_for(queue.get(), timeout=timeout)
+                except TimeoutError:
+                    serialized = ""
+
+                if serialized is None:
+                    break
+                if serialized:
+                    await response.write(
+                        f"event: callbacks\ndata: {serialized}\n\n".encode()
+                    )
+
+                now = loop.time()
+                if now >= next_heartbeat:
+                    await response.write(b": heartbeat\n\n")
+                    next_heartbeat = now + CALLBACK_STREAM_HEARTBEAT_SECONDS
+        except asyncio.CancelledError:
+            raise
+        except ConnectionError:
+            LOGGER.debug("Callback stream client disconnected")
+        finally:
+            await broker.unsubscribe(queue)
+            with contextlib.suppress(ConnectionError, RuntimeError):
+                await response.write_eof()
+        return response
+
     async def update_session_title(request: web.Request) -> web.Response:
         try:
             payload = await request.json()
@@ -3093,6 +3252,71 @@ def create_app(
                 destination_workspace_id,
             )
             return json_error("unable to transfer session between workspaces", 500)
+        return web.json_response(result)
+
+    async def transfer_sessions_workspace(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+
+        required = {
+            "sessions",
+            "destinationWorkspaceId",
+            "operation",
+            "sessionRevision",
+        }
+        missing = sorted(required - set(payload))
+        if missing:
+            return json_error(f"{missing[0]} is required", 400)
+        allowed = required | {"sourceWorkspaceId"}
+        unknown = sorted(str(field) for field in set(payload) - allowed)
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+
+        sessions = payload["sessions"]
+        if not isinstance(sessions, list):
+            return json_error("sessions must be an array", 400)
+        source_workspace_id = payload.get("sourceWorkspaceId")
+        if source_workspace_id is not None and not isinstance(source_workspace_id, str):
+            return json_error("sourceWorkspaceId must be a string or null", 400)
+        destination_workspace_id = payload["destinationWorkspaceId"]
+        if not isinstance(destination_workspace_id, str):
+            return json_error("destinationWorkspaceId must be a string", 400)
+        operation = payload["operation"]
+        if not isinstance(operation, str):
+            return json_error("operation must be a string", 400)
+
+        try:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                result = app[WORKSPACES_KEY].transfer_sessions(
+                    sessions,
+                    source_workspace_id=source_workspace_id,
+                    destination_workspace_id=destination_workspace_id,
+                    operation=operation,
+                    session_revision=payload["sessionRevision"],
+                )
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except (
+            WorkspaceSessionRevisionConflict,
+            WorkspaceTransferConflictError,
+        ) as error:
+            return json_error(str(error), 409)
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception(
+                "Unable to %s %d sessions to workspace %s",
+                operation,
+                len(sessions),
+                destination_workspace_id,
+            )
+            return json_error("unable to transfer sessions between workspaces", 500)
         return web.json_response(result)
 
     async def update_session_tags(request: web.Request) -> web.Response:
@@ -3864,6 +4088,117 @@ def create_app(
                 "sessionRevision": workspace["sessionRevision"],
             }
         )
+
+    async def list_global_callback_sessions(_: web.Request) -> web.Response:
+        try:
+            snapshot = app[WORKSPACES_KEY].get_global_callback_sessions()
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        return web.json_response(snapshot)
+
+    async def replace_global_callback_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            snapshot = app[WORKSPACES_KEY].replace_global_callback_sessions(
+                payload["sessions"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="replace global callback sessions"
+            )
+        return web.json_response(snapshot)
+
+    async def add_global_callback_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].add_global_callback_sessions(
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="add global callback sessions"
+            )
+        return web.json_response(result)
+
+    async def remove_global_callback_sessions(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"sessions", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].remove_global_callback_sessions(
+                sessions=payload["sessions"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="remove global callback sessions"
+            )
+        return web.json_response(result)
+
+    async def review_callback_session(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request,
+            required={"session", "sessionRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            result = app[WORKSPACES_KEY].review_callback_session(
+                payload["session"],
+                session_revision=payload["sessionRevision"],
+            )
+        except (
+            WorkspaceStoreUnavailable,
+            WorkspaceSessionRevisionConflict,
+            WorkspaceResourceConflictError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as error:
+            return workspace_resource_error(
+                error, action="review callback session"
+            )
+        return web.json_response(result)
 
     async def add_workspace_callback_sessions(request: web.Request) -> web.Response:
         payload, error_response = await workspace_resource_payload(
@@ -4845,6 +5180,7 @@ def create_app(
     app.router.add_delete(f"{prefix}/api/sessions/{session_segment}", terminate_session)
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
+    app.router.add_get(f"{prefix}/api/callback-sessions/stream", callback_sessions_stream)
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/messages", list_session_messages
     )
@@ -4906,6 +5242,26 @@ def create_app(
     app.router.add_delete(
         f"{prefix}/api/workspaces/{{workspace_id}}/sessions",
         remove_workspace_sessions,
+    )
+    app.router.add_get(
+        f"{prefix}/api/callback-sessions",
+        list_global_callback_sessions,
+    )
+    app.router.add_put(
+        f"{prefix}/api/callback-sessions",
+        replace_global_callback_sessions,
+    )
+    app.router.add_post(
+        f"{prefix}/api/callback-sessions",
+        add_global_callback_sessions,
+    )
+    app.router.add_delete(
+        f"{prefix}/api/callback-sessions",
+        remove_global_callback_sessions,
+    )
+    app.router.add_post(
+        f"{prefix}/api/callback-sessions/review",
+        review_callback_session,
     )
     app.router.add_get(
         f"{prefix}/api/workspaces/{{workspace_id}}/callback-sessions",
@@ -5004,6 +5360,10 @@ def create_app(
     app.router.add_post(
         f"{prefix}/api/session-workspace-transfer",
         transfer_session_workspace,
+    )
+    app.router.add_post(
+        f"{prefix}/api/session-workspace-transfer/bulk",
+        transfer_sessions_workspace,
     )
     app.router.add_put(f"{prefix}/api/session-tags", update_session_tags)
     app.router.add_put(f"{prefix}/api/session-details", update_session_details)

@@ -223,4 +223,163 @@ describe("WorkspaceCallbackList", () => {
     });
     expect(disconnect).not.toHaveBeenCalled();
   });
+
+  it("defaults to the global queue and includes workspace-owned entries once", () => {
+    const onGlobalChange = vi.fn(async () => undefined);
+    const onChange = vi.fn(async () => undefined);
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[
+          session("agent-one", "working"),
+          session("agent-two"),
+          session("agent-three", "waiting_command"),
+        ]}
+        callbackSessions={["agent-one"]}
+        onChange={onChange}
+        globalCallbackSnapshot={{
+          callbackSessions: ["agent-global", "agent-one", "agent-two"],
+          globalCallbackSessions: ["agent-global"],
+          workspaceCallbacks: [
+            { workspaceId: "workspace-one", workspaceName: "Launch room", sessions: ["agent-one"] },
+            { workspaceId: "workspace-two", workspaceName: "Review room", sessions: ["agent-one", "agent-two"] },
+          ],
+          sessionRevision: 0,
+        }}
+        onGlobalChange={onGlobalChange}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(panel).toHaveAttribute("data-scope", "global");
+    expect(within(panel).getByText("agent-global")).toBeInTheDocument();
+    expect(within(panel).getByText("agent-one")).toBeInTheDocument();
+    expect(within(panel).getByText("agent-two")).toBeInTheDocument();
+    expect(within(panel).getByText("This workspace")).toBeInTheDocument();
+    expect(within(panel).getByText("Other · Review room")).toBeInTheDocument();
+    expect(within(panel).getByText("Global only")).toBeInTheDocument();
+
+    fireEvent.change(within(panel).getByRole("combobox", { name: "Choose a session to watch" }), {
+      target: { value: "agent-three" },
+    });
+    fireEvent.click(within(panel).getByRole("button", { name: "Add" }));
+    expect(onGlobalChange).toHaveBeenLastCalledWith(["agent-global", "agent-three"]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("removes a current workspace-owned entry from the global view without removing another workspace's entry", () => {
+    const onGlobalChange = vi.fn(async () => undefined);
+    const onChange = vi.fn(async () => undefined);
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+        sessions={[session("agent-one"), session("agent-two")]}
+        callbackSessions={["agent-one"]}
+        onChange={onChange}
+        globalCallbackSnapshot={{
+          callbackSessions: ["agent-one", "agent-two"],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [
+            { workspaceId: "workspace-one", workspaceName: "Launch room", sessions: ["agent-one"] },
+            { workspaceId: "workspace-two", workspaceName: "Review room", sessions: ["agent-two"] },
+          ],
+          sessionRevision: 0,
+        }}
+        onGlobalChange={onGlobalChange}
+        onSelectSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Remove agent-one from this workspace callback list",
+    }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+    expect(onGlobalChange).not.toHaveBeenCalled();
+    expect(within(panel).getByRole("button", {
+      name: "Remove agent-two from this workspace callback list",
+    })).toBeDisabled();
+  });
+
+  it("labels workspace presence and keeps sessions outside the workspace display-only", () => {
+    const onSelectSession = vi.fn();
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[session("agent-one"), session("agent-two"), session("agent-three")]}
+        callbackSessions={[]}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: ["agent-one", "agent-two", "agent-three"],
+          globalCallbackSessions: ["agent-three"],
+          workspaceCallbacks: [
+            { workspaceId: "workspace-one", workspaceName: "Launch room", sessions: ["agent-one"] },
+            { workspaceId: "workspace-two", workspaceName: "Review room", sessions: ["agent-two"] },
+          ],
+          sessionRevision: 0,
+        }}
+        onGlobalChange={vi.fn(async () => undefined)}
+        onSelectSession={onSelectSession}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(within(panel).getByText("This workspace")).toBeInTheDocument();
+    expect(within(panel).getByText("Other · Review room")).toBeInTheDocument();
+    expect(within(panel).getByText("Global only")).toBeInTheDocument();
+
+    const outsideOpen = within(panel).getByRole("button", { name: "Open agent-two" });
+    expect(outsideOpen).toBeDisabled();
+    fireEvent.click(outsideOpen);
+    expect(onSelectSession).not.toHaveBeenCalled();
+    expect(within(panel).getByRole("button", { name: "Open agent-one" })).toBeEnabled();
+  });
+
+  it("allows reviewing inherited global entries from any workspace", async () => {
+    const onReviewSession = vi.fn(async () => undefined);
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[session("agent-one"), session("agent-two")]}
+        callbackSessions={[]}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: ["agent-two"],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [{
+            workspaceId: "workspace-two",
+            workspaceName: "Review room",
+            sessions: ["agent-two"],
+          }],
+          sessionRevision: 0,
+        }}
+        onGlobalChange={vi.fn(async () => undefined)}
+        onReviewSession={onReviewSession}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    const review = within(panel).getByRole("button", {
+      name: "Mark agent-two reviewed and remove from all callback lists",
+    });
+    expect(review).toBeEnabled();
+    fireEvent.click(review);
+    await waitFor(() => expect(onReviewSession).toHaveBeenCalledWith("agent-two"));
+  });
 });

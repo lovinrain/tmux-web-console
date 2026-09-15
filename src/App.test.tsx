@@ -7,19 +7,25 @@ import {
   createSession,
   createWorkspace,
   getCommonWorkspaceQuickLinks,
+  getGlobalCallbackSessions,
   getSessionQuickLinks,
   getShortcutSettings,
   getWorkspace,
   getWorkspaceQuickLinks,
   listSessions,
   listWorkspaces,
+  reviewGlobalCallbackSession,
+  subscribeToCallbackSessions,
   terminateSession,
   transferSessionToWorkspace,
+  transferSessionsToWorkspace,
   updateWorkspace,
   updateWorkspaceActivity,
   type SavedWorkspace,
   type WorkspaceSessionTransferOperation,
-  type WorkspaceSessionTransferResult,
+  type WorkspaceSessionsTransferResult,
+  recreateSession,
+  type RecoverableSession,
 } from "./api";
 import { App } from "./App";
 import { DEFAULT_SHORTCUT_BINDINGS, cloneShortcutBindings } from "./shortcutSettings";
@@ -34,15 +40,20 @@ vi.mock("./api", async (importOriginal) => {
     createSession: vi.fn(),
     createWorkspace: vi.fn(),
     getCommonWorkspaceQuickLinks: vi.fn(),
+    getGlobalCallbackSessions: vi.fn(),
     getSessionQuickLinks: vi.fn(),
     getShortcutSettings: vi.fn(),
     getWorkspace: vi.fn(),
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
     recordClosedSessionTab: vi.fn(async () => undefined),
+    recreateSession: vi.fn(),
     listWorkspaces: vi.fn(),
     terminateSession: vi.fn(),
     transferSessionToWorkspace: vi.fn(),
+    transferSessionsToWorkspace: vi.fn(),
+    reviewGlobalCallbackSession: vi.fn(),
+    subscribeToCallbackSessions: vi.fn(),
     updateWorkspace: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
   };
@@ -51,18 +62,25 @@ vi.mock("./api", async (importOriginal) => {
 const createWorkspaceMock = vi.mocked(createWorkspace);
 const createSessionMock = vi.mocked(createSession);
 const getCommonWorkspaceQuickLinksMock = vi.mocked(getCommonWorkspaceQuickLinks);
+const getGlobalCallbackSessionsMock = vi.mocked(getGlobalCallbackSessions);
 const getSessionQuickLinksMock = vi.mocked(getSessionQuickLinks);
 const getShortcutSettingsMock = vi.mocked(getShortcutSettings);
 const getWorkspaceMock = vi.mocked(getWorkspace);
 const getWorkspaceQuickLinksMock = vi.mocked(getWorkspaceQuickLinks);
 const listSessionsMock = vi.mocked(listSessions);
+const recreateSessionMock = vi.mocked(recreateSession);
 const listWorkspacesMock = vi.mocked(listWorkspaces);
 const terminateSessionMock = vi.mocked(terminateSession);
 const transferSessionToWorkspaceMock = vi.mocked(transferSessionToWorkspace);
+const transferSessionsToWorkspaceMock = vi.mocked(transferSessionsToWorkspace);
+const reviewGlobalCallbackSessionMock = vi.mocked(reviewGlobalCallbackSession);
+const subscribeToCallbackSessionsMock = vi.mocked(subscribeToCallbackSessions);
 const updateWorkspaceMock = vi.mocked(updateWorkspace);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
 
 let pendingNewSessionCompletion: ((session: string, sessionId?: string) => void) | null = null;
+let consoleSessionRecovery: RecoverableSession | null = null;
+let recreateConsoleSession: (() => void | Promise<void>) | null = null;
 let reportSessionRename: (
   (
     previousName: string,
@@ -93,11 +111,11 @@ let reportWorkspacePinChange: (
 ) | null = null;
 let reportSessionWorkspaceTransfer: (
   (
-    sessionName: string,
+    sessionNames: string[],
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
-  ) => Promise<WorkspaceSessionTransferResult>
+  ) => Promise<WorkspaceSessionsTransferResult>
 ) | null = null;
 let dashboardActiveWorkspaceId: string | null = null;
 let dashboardMountCount = 0;
@@ -113,6 +131,7 @@ vi.mock("./components/SessionDashboard", () => ({
     onResumeWorkspace,
     workspaceReturnSession,
     workspaceTabCount,
+    workspaceLiveTabCount,
     onOpenSnippets,
     onNewSession,
     onSessionsChange,
@@ -127,6 +146,7 @@ vi.mock("./components/SessionDashboard", () => ({
     onResumeWorkspace?: () => void;
     workspaceReturnSession?: string;
     workspaceTabCount?: number;
+    workspaceLiveTabCount?: number;
     onOpenSnippets: () => void;
     onNewSession: () => void;
     onSessionsChange?: (sessions: Session[]) => void;
@@ -171,6 +191,7 @@ vi.mock("./components/SessionDashboard", () => ({
           <button
             type="button"
             onClick={onResumeWorkspace}
+            data-live-tabs={workspaceLiveTabCount}
             aria-label={`Resume workspace at ${workspaceReturnSession}, ${workspaceTabCount} open tabs`}
           >
             Resume workspace
@@ -260,6 +281,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     onSplitWorkspace,
     renameWarning,
     onDismissRenameWarning,
+    sessionRecovery,
+    onRecreateSession,
   }: {
     sessionName: string;
     workspaceName?: string | null;
@@ -293,11 +316,11 @@ vi.mock("./components/ConsoleScreen", () => ({
       sessionRevision: number,
     ) => void | Promise<void>;
     onSessionWorkspaceTransfer?: (
-      sessionName: string,
+      sessionNames: string[],
       destinationWorkspaceId: string,
       operation: WorkspaceSessionTransferOperation,
       sessionRevision: number,
-    ) => Promise<WorkspaceSessionTransferResult>;
+    ) => Promise<WorkspaceSessionsTransferResult>;
     onSessionRenamed?: (
       previousName: string,
       nextName: string,
@@ -323,6 +346,8 @@ vi.mock("./components/ConsoleScreen", () => ({
       messages: string[];
     } | null;
     onDismissRenameWarning?: (sessionId: string) => void;
+    sessionRecovery?: RecoverableSession | null;
+    onRecreateSession?: () => void | Promise<void>;
   }) => {
     reportKnownSessions = onSessionsChange ?? null;
     reportWorkspacePinChange = onWorkspacePinChange ?? null;
@@ -330,6 +355,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     reportSessionRename = onSessionRenamed ?? null;
     reportSessionTerminate = onSessionTerminated ?? null;
     reportSessionCopy = onSessionCopied ?? null;
+    consoleSessionRecovery = sessionRecovery ?? null;
+    recreateConsoleSession = onRecreateSession ?? null;
     const bars = [
       ["sessionTabs", "Session tabs", "muxdeck-session-tabs"],
       ["stagedInput", "Staged input", "muxdeck-staged-input"],
@@ -480,6 +507,35 @@ function replaceUrl(url: string): void {
   window.history.replaceState({}, "", url);
 }
 
+function recoverable(
+  name: string,
+  overrides: Partial<RecoverableSession> = {},
+): RecoverableSession {
+  return {
+    id: `registry-${name}`,
+    name,
+    directory: `/srv/${name}`,
+    agentType: null,
+    agentSessionId: null,
+    firstSeenAt: 10,
+    lastSeenAt: 20,
+    directoryAvailable: true,
+    ...overrides,
+  };
+}
+
+/** Mirrors listSessions(), which hangs the recovery list off the array. */
+function withRecovery(
+  sessions: Session[],
+  records: RecoverableSession[],
+): Session[] {
+  Object.defineProperty(sessions, "recoverableSessions", {
+    configurable: true,
+    value: records,
+  });
+  return sessions;
+}
+
 function openTabs(): string[] {
   return new URLSearchParams(window.location.search).getAll("tab");
 }
@@ -594,6 +650,7 @@ describe("App routing", () => {
     createSessionMock.mockReset();
     createWorkspaceMock.mockReset();
     getCommonWorkspaceQuickLinksMock.mockReset();
+    getGlobalCallbackSessionsMock.mockReset();
     getSessionQuickLinksMock.mockReset();
     getShortcutSettingsMock.mockReset();
     getWorkspaceMock.mockReset();
@@ -602,11 +659,20 @@ describe("App routing", () => {
     listWorkspacesMock.mockReset();
     terminateSessionMock.mockReset();
     transferSessionToWorkspaceMock.mockReset();
+    transferSessionsToWorkspaceMock.mockReset();
+    reviewGlobalCallbackSessionMock.mockReset();
+    subscribeToCallbackSessionsMock.mockReset();
     updateWorkspaceMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     createSessionMock.mockResolvedValue({ name: "muxdeck-quick", id: "$quick" });
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
+    getGlobalCallbackSessionsMock.mockResolvedValue({
+      callbackSessions: [],
+      globalCallbackSessions: [],
+      workspaceCallbacks: [],
+      sessionRevision: 0,
+    });
     getSessionQuickLinksMock.mockResolvedValue([]);
     getShortcutSettingsMock.mockResolvedValue({
       revision: 0,
@@ -619,11 +685,21 @@ describe("App routing", () => {
     terminateSessionMock.mockResolvedValue(undefined);
     updateWorkspaceActivityMock.mockResolvedValue(savedWorkspace());
     updateWorkspaceMock.mockResolvedValue(savedWorkspace());
+    reviewGlobalCallbackSessionMock.mockResolvedValue({
+      callbackSessions: [],
+      globalCallbackSessions: [],
+      workspaceCallbacks: [],
+      sessionRevision: 0,
+      removed: [],
+    });
+    subscribeToCallbackSessionsMock.mockReturnValue(vi.fn());
     pendingNewSessionCompletion = null;
     reportSessionRename = null;
     reportSessionTerminate = null;
     reportSessionCopy = null;
     reportKnownSessions = null;
+    consoleSessionRecovery = null;
+    recreateConsoleSession = null;
     openSessionFromDashboard = null;
     openSavedWorkspaceFromDashboard = null;
     reportSavedWorkspaceDeleted = null;
@@ -3261,10 +3337,10 @@ describe("App routing", () => {
 
       await waitFor(() => expect(openTabs()).toEqual(["alpha", "beta"]));
       expect(reportSessionWorkspaceTransfer).not.toBeNull();
-      let transferResult: WorkspaceSessionTransferResult | undefined;
+      let transferResult: WorkspaceSessionsTransferResult | undefined;
       await act(async () => {
         transferResult = await reportSessionWorkspaceTransfer?.(
-          "alpha",
+          ["alpha"],
           "destination",
           "move",
           4,
@@ -3283,6 +3359,87 @@ describe("App routing", () => {
       await waitFor(() => expect(openTabs()).toEqual(["beta"]));
       expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
       expect(window.location.search).toBe("?workspace=workspace-one&tab=beta");
+    });
+
+    it("moves a multi-selected tab batch in workspace order and clears the selection", async () => {
+      const initial = savedWorkspace({
+        tabs: ["alpha", "beta", "gamma"],
+        activeSession: "alpha",
+        sessionRevision: 4,
+      });
+      const afterMove = savedWorkspace({
+        tabs: ["gamma"],
+        activeSession: "gamma",
+        sessionRevision: 5,
+        updatedAt: 2_000,
+      });
+      const destination = savedWorkspace({
+        id: "destination",
+        name: "Destination",
+        tabs: ["alpha", "review", "beta"],
+        activeSession: "review",
+        sessionRevision: 5,
+      });
+      getWorkspaceMock.mockResolvedValue(initial);
+      listWorkspacesMock.mockResolvedValue([
+        initial,
+        savedWorkspace({
+          id: "destination",
+          name: "Destination",
+          tabs: ["alpha", "review"],
+          activeSession: "review",
+          sessionRevision: 4,
+        }),
+      ]);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+        session("gamma", "$gamma"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue(initial);
+      transferSessionsToWorkspaceMock.mockResolvedValue({
+        sessions: ["alpha", "beta"],
+        operation: "move",
+        destinationAlreadyContained: ["alpha"],
+        destinationAdded: ["beta"],
+        sourceRemoved: ["alpha", "beta"],
+        sourceWorkspace: afterMove,
+        destinationWorkspace: destination,
+        sessionRevision: 5,
+      });
+      replaceUrl(
+        sessionUrl(
+          "alpha",
+          "?workspace=workspace-one&tab=alpha&tab=beta&tab=gamma",
+        ),
+      );
+
+      render(<App />);
+
+      await waitFor(() => expect(openTabs()).toEqual(["alpha", "beta", "gamma"]));
+      fireEvent.click(screen.getByRole("tab", { name: /beta/i }), { shiftKey: true });
+      fireEvent.click(screen.getByRole("button", {
+        name: "Move or copy 2 selected sessions to a workspace",
+      }));
+      expect(await screen.findByRole("dialog", {
+        name: "Move or copy to a workspace",
+      })).toBeVisible();
+      fireEvent.click(screen.getByRole("button", {
+        name: "Move 2 selected sessions to Destination",
+      }));
+
+      await waitFor(() => expect(transferSessionsToWorkspaceMock).toHaveBeenCalledWith(
+        ["alpha", "beta"],
+        "workspace-one",
+        "destination",
+        "move",
+        4,
+      ));
+      await waitFor(() => expect(openTabs()).toEqual(["gamma"]));
+      expect(screen.queryByRole("group", { name: /tabs selected for moving/ }))
+        .not.toBeInTheDocument();
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma`);
+      expect(window.location.search).toBe("?workspace=workspace-one&tab=gamma");
     });
 
     it("creates the exact open workspace and binds it in place without a redundant activity save", async () => {
@@ -4292,7 +4449,7 @@ describe("App routing", () => {
       expect(openTabs()).toEqual(serverWorkspace.tabs);
     });
 
-    it("keeps saved tabs but routes to the dashboard when none are live", async () => {
+    it("reopens the workspace on its saved tab when a restart left none live", async () => {
       const serverWorkspace = savedWorkspace({
         tabs: ["ended-one", "ended-two"],
         activeSession: "ended-two",
@@ -4305,15 +4462,107 @@ describe("App routing", () => {
 
       render(<App />);
 
+      // A host restart kills every shell. The workspace is still open, so it
+      // stays open on its saved tab instead of dropping back to the dashboard.
       await waitFor(() => {
-        expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+        expect(window.location.pathname).toBe(`${BASE_PATH}/session/ended-two`);
         expect(openTabs()).toEqual(["ended-one", "ended-two"]);
       });
-      expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
-      expect(screen.queryByRole("button", { name: /Resume workspace/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("main", { name: "Dashboard" })).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "ended-one, unavailable" })).toBeVisible();
+      expect(screen.getByRole("tab", { name: "ended-two, unavailable" })).toBeVisible();
       expect(new URLSearchParams(window.location.search).get("workspace")).toBe(
         "workspace-one",
       );
+    });
+
+    it("reports the live tab count to the dashboard after a restart", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["ended-one", "ended-two"],
+        activeSession: "ended-two",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([]);
+      replaceUrl(`${BASE_PATH}/?workspace=workspace-one`);
+
+      render(<App />);
+
+      const resume = await screen.findByRole("button", {
+        name: "Resume workspace at ended-two, 2 open tabs",
+      });
+      expect(resume).toHaveAttribute("data-live-tabs", "0");
+
+      // Resuming with nothing running must still open the workspace.
+      fireEvent.click(resume);
+      await waitFor(() => {
+        expect(window.location.pathname).toBe(`${BASE_PATH}/session/ended-two`);
+      });
+    });
+
+    it("recreates a missing shell from inside the workspace", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["ended-one", "ended-two"],
+        activeSession: "ended-two",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue(withRecovery([], [
+        recoverable("ended-one"),
+        recoverable("ended-two"),
+      ]));
+      recreateSessionMock.mockResolvedValue({ name: "ended-two", id: "$new" });
+      replaceUrl(`${BASE_PATH}/session/ended-two?workspace=workspace-one`);
+
+      render(<App />);
+
+      await waitFor(() => expect(consoleSessionRecovery?.id).toBe("registry-ended-two"));
+      expect(consoleSessionRecovery?.directory).toBe("/srv/ended-two");
+
+      await act(async () => { await recreateConsoleSession?.(); });
+      expect(recreateSessionMock).toHaveBeenCalledWith("registry-ended-two");
+      // The refreshed inventory must be re-read so the tab can go live again.
+      expect(listSessionsMock.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    it("offers bulk recovery for every missing tab the registry can rebuild", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["ended-one", "ended-two", "forgotten"],
+        activeSession: "ended-two",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      // "forgotten" has no recovery record, so it is not a bulk target.
+      listSessionsMock.mockResolvedValue(withRecovery([], [
+        recoverable("ended-one"),
+        recoverable("ended-two"),
+      ]));
+      replaceUrl(`${BASE_PATH}/session/ended-two?workspace=workspace-one`);
+
+      render(<App />);
+
+      const bulk = await screen.findByRole("button", {
+        name: "Recreate 2 missing shells in this workspace",
+      });
+      fireEvent.click(bulk);
+      expect(await screen.findByRole("alertdialog", {
+        name: "Recreate 2 missing shells?",
+      })).toBeVisible();
+    });
+
+    it("hides bulk recovery when every tab is live", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue(withRecovery(
+        [session("alpha", "$alpha"), session("beta", "$beta")],
+        [],
+      ));
+      replaceUrl(`${BASE_PATH}/session/alpha?workspace=workspace-one`);
+
+      render(<App />);
+
+      await screen.findByRole("tab", { name: /alpha/ });
+      expect(screen.queryByRole("button", { name: /Recreate .* missing/ })).not.toBeInTheDocument();
     });
 
     it("autosyncs reordered saved tabs with the current workspace revision", async () => {
@@ -4373,6 +4622,83 @@ describe("App routing", () => {
         7,
       );
       expect(screen.getByTitle("Renamed remotely - Saved")).toBeVisible();
+    });
+
+    it("quick-adds a running session while preserving focus and autosaves membership", async () => {
+      vi.useFakeTimers();
+      const serverWorkspace = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+        sessionRevision: 12,
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+        session("gamma-worker", "$gamma"),
+      ]);
+      updateWorkspaceActivityMock.mockResolvedValue({
+        ...serverWorkspace,
+        tabs: ["alpha", "beta", "gamma-worker"],
+        sessionRevision: 13,
+      });
+      replaceUrl(sessionUrl("alpha", "?workspace=workspace-one&tab=stale"));
+
+      render(<App />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      fireEvent.click(screen.getByRole("button", {
+        name: "Add running sessions to workspace, 1 available",
+      }));
+      fireEvent.click(screen.getByRole("button", {
+        name: "Add gamma-worker to workspace",
+      }));
+
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      expect(openTabs()).toEqual(["alpha", "beta", "gamma-worker"]);
+      expect(screen.getByRole("dialog", { name: "Add running sessions" })).toBeVisible();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
+        "workspace-one",
+        ["alpha", "beta", "gamma-worker"],
+        [],
+        "alpha",
+        12,
+      );
+    });
+
+    it("can add a running session and focus it in one action", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "alpha",
+        sessionRevision: 4,
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+        session("gamma-worker", "$gamma"),
+      ]);
+      replaceUrl(sessionUrl("alpha", "?workspace=workspace-one&tab=stale"));
+
+      render(<App />);
+      await waitFor(() => expect(screen.getByRole("button", {
+        name: "Add running sessions to workspace, 1 available",
+      })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", {
+        name: "Add running sessions to workspace, 1 available",
+      }));
+      fireEvent.click(screen.getByRole("button", {
+        name: "Add gamma-worker and open",
+      }));
+
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma-worker`);
+      expect(openTabs()).toEqual(["alpha", "beta", "gamma-worker"]);
+      expect(screen.queryByRole("dialog", { name: "Add running sessions" }))
+        .not.toBeInTheDocument();
     });
 
     it("autosyncs a saved workspace without dropping its tab groups", async () => {

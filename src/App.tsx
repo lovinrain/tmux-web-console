@@ -11,17 +11,26 @@ import {
   BASE_PATH,
   createSession,
   createWorkspace,
+  getGlobalCallbackSessions,
   getWorkspace,
   listSessions,
   recordClosedSessionTab,
+  recreateSession,
+  replaceGlobalCallbackSessions,
+  reviewGlobalCallbackSession,
   releaseUtilityTerminal,
+  subscribeToCallbackSessions,
   terminateSession,
   transferSessionToWorkspace,
+  transferSessionsToWorkspace,
   updateWorkspace,
   updateWorkspaceActivity,
+  type GlobalCallbackSnapshot,
+  type RecoverableSession,
   type SavedWorkspace,
   type WorkspacePaneLayout,
   type WorkspaceSessionTransferOperation,
+  type WorkspaceSessionsTransferResult,
 } from "./api";
 import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
 import {
@@ -35,6 +44,11 @@ import { SessionDashboard } from "./components/SessionDashboard";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
 import { BulkSessionActionsDialog, type BulkSessionAction, type BulkSessionTarget } from "./components/BulkSessionActionsDialog";
+import { SessionWorkspaceTransferDialog } from "./components/SessionWorkspaceTransferDialog";
+import {
+  WorkspaceRecreateDialog,
+  type WorkspaceRecreateTarget,
+} from "./components/WorkspaceRecreateDialog";
 import { FLOATING_TERMINAL_STORAGE_PREFIX, newTemporaryTerminalKey } from "./floatingTerminalState";
 import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
 import { WorkspaceTimer } from "./components/WorkspaceTimer";
@@ -353,11 +367,32 @@ function liveWorkspaceSession(
   return savedWorkspace.tabs.find((sessionName) => liveNames.has(sessionName)) ?? null;
 }
 
+/**
+ * A host restart leaves every tab dead, but the workspace itself is still open.
+ * Prefer a live tab, then fall back to the saved active tab so the tab strip and
+ * its recovery actions stay reachable with nothing running.
+ */
+function workspaceLandingSession(
+  savedWorkspace: SavedWorkspace,
+  sessions: readonly Session[],
+): string | null {
+  return liveWorkspaceSession(savedWorkspace, sessions)
+    ?? savedWorkspace.activeSession
+    ?? savedWorkspace.tabs[0]
+    ?? null;
+}
+
 function hasSessionIdentity(session: Session, identity: SessionIdentity): boolean {
   return session.id === identity.id
     && session.created === identity.created
     && session.serverStarted === identity.serverStarted
     && session.serverPid === identity.serverPid;
+}
+
+function timerSessionIdentity(session: Session | undefined, sessionName: string): string {
+  return session
+    ? `${session.id}:${session.created}:${session.serverStarted}:${session.serverPid}`
+    : sessionName;
 }
 
 function withoutTerminatedSessions(
@@ -368,6 +403,20 @@ function withoutTerminatedSessions(
   return sessions.filter((session) => !terminatedSessions.some(
     (identity) => hasSessionIdentity(session, identity),
   ));
+}
+
+/**
+ * listSessions() hangs the recovery list off the array as a non-enumerable
+ * property, which any filtering copy drops. Return null for "this snapshot
+ * carried no list" so a filtered array never clears known recovery records.
+ */
+function attachedRecoverableSessions(
+  sessions: Session[],
+): RecoverableSession[] | null {
+  const attached = (
+    sessions as Session[] & { recoverableSessions?: RecoverableSession[] }
+  ).recoverableSessions;
+  return Array.isArray(attached) ? attached : null;
 }
 
 function isDashboardPath(path: string): boolean {
@@ -760,6 +809,12 @@ function AppRoutes() {
   const [bulkSessionAction, setBulkSessionAction] = useState<{
     action: BulkSessionAction; targets: BulkSessionTarget[]; workspaceKey: string;
   } | null>(null);
+  const [bulkWorkspaceTransfer, setBulkWorkspaceTransfer] = useState<{
+    sessionNames: string[];
+    workspaceKey: string;
+    sourceWorkspaceId: string | null;
+    sourceWorkspaceName: string | null;
+  } | null>(null);
   const [mobileConsoleMode, setMobileConsoleMode] = useState<MobileConsoleMode>(
     "terminal",
   );
@@ -787,8 +842,17 @@ function AppRoutes() {
     readTemporaryCallbackSessions(temporaryTerminalKey)
   ));
   const [workspaceCallbackBusy, setWorkspaceCallbackBusy] = useState(false);
+  const [globalCallbackSnapshot, setGlobalCallbackSnapshot] = useState<GlobalCallbackSnapshot>({
+    callbackSessions: [],
+    globalCallbackSessions: [],
+    workspaceCallbacks: [],
+    sessionRevision: 0,
+  });
+  const [globalCallbackBusy, setGlobalCallbackBusy] = useState(false);
   const workspaceCallbackSessionsRef = useRef<string[]>(workspaceCallbackSessions);
   workspaceCallbackSessionsRef.current = workspaceCallbackSessions;
+  const globalCallbackSnapshotRef = useRef<GlobalCallbackSnapshot>(globalCallbackSnapshot);
+  globalCallbackSnapshotRef.current = globalCallbackSnapshot;
   const temporaryTerminalUsed = useRef(false);
   const temporaryTerminalKeyRef = useRef(temporaryTerminalKey);
   temporaryTerminalKeyRef.current = temporaryTerminalKey;
@@ -832,6 +896,9 @@ function AppRoutes() {
   const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
     useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
+  const [recoverableSessions, setRecoverableSessions] = useState<RecoverableSession[]>([]);
+  const [recreatingSession, setRecreatingSession] = useState<string | null>(null);
+  const [recreateDialogOpen, setRecreateDialogOpen] = useState(false);
   const [historySaveError, setHistorySaveError] = useState<string | null>(null);
   const [quickSessionBusy, setQuickSessionBusy] = useState(false);
   const [quickSessionError, setQuickSessionError] = useState<string | null>(null);
@@ -844,6 +911,7 @@ function AppRoutes() {
   const activeNewSessionView = useRef<NewSessionViewToken | null>(null);
   const sessionRenames = useRef<SessionRenameAliases>(new Map());
   const knownSessionsRef = useRef<Session[]>([]);
+  const recoverableSessionsRef = useRef<RecoverableSession[]>([]);
   const terminatedSessionsRef = useRef<SessionIdentity[]>([]);
   const locationRef = useRef(location);
   const workspaceRef = useRef(workspace);
@@ -903,6 +971,7 @@ function AppRoutes() {
 
   locationRef.current = location;
   workspaceRef.current = workspace;
+  recoverableSessionsRef.current = recoverableSessions;
   workspacePaneLayoutsRef.current = workspacePaneLayouts;
 
   useEffect(() => {
@@ -954,6 +1023,59 @@ function AppRoutes() {
     setActiveWorkspaceIdentity(workspace);
   }, []);
 
+  const applyGlobalCallbackSnapshot = useCallback((snapshot: GlobalCallbackSnapshot) => {
+    // EventSource and the initial fetch can complete in either order. The
+    // workspace revision is a monotonic fence, so never let an older response
+    // roll a newer callback state back.
+    if (
+      snapshot.sessionRevision < globalCallbackSnapshotRef.current.sessionRevision
+    ) return;
+    globalCallbackSnapshotRef.current = snapshot;
+    setGlobalCallbackSnapshot(snapshot);
+
+    // A callback event also carries the saved workspace queues. Keep the local
+    // workspace scope aligned when another browser tab changes this workspace.
+    const workspaceId = savedWorkspaceIdFromSearch(currentLocation().search);
+    if (!workspaceId || hydratedWorkspaceIdRef.current !== workspaceId) return;
+    const currentRevision = workspaceSessionRevision.current;
+    if (
+      currentRevision?.workspaceId === workspaceId
+      && snapshot.sessionRevision < currentRevision.value
+    ) return;
+    const source = snapshot.workspaceCallbacks.find((item) => item.workspaceId === workspaceId);
+    const nextSessions = normalizeCallbackSessions(source?.sessions);
+    const currentSessions = workspaceCallbackSessionsRef.current;
+    if (
+      currentSessions.length !== nextSessions.length
+      || currentSessions.some((session, index) => session !== nextSessions[index])
+    ) {
+      workspaceCallbackSessionsRef.current = nextSessions;
+      setWorkspaceCallbackSessions(nextSessions);
+      const identity = activeWorkspaceIdentityRef.current;
+      if (identity?.id === workspaceId) {
+        setWorkspaceIdentity({ ...identity, callbackSessions: nextSessions });
+      }
+    }
+    if (workspaceSessionRevision.current?.workspaceId === workspaceId) {
+      workspaceSessionRevision.current = {
+        workspaceId,
+        value: snapshot.sessionRevision,
+      };
+    }
+  }, [setWorkspaceIdentity]);
+
+  const refreshGlobalCallbackSnapshot = useCallback(async () => {
+    try {
+      const snapshot = await getGlobalCallbackSessions();
+      if (!appMounted.current) return;
+      applyGlobalCallbackSnapshot(snapshot);
+    } catch (error) {
+      // Keep the last known snapshot when the optional global endpoint is
+      // unavailable (for example during a rolling deployment).
+      console.warn("Unable to refresh global callback list", error);
+    }
+  }, [applyGlobalCallbackSnapshot]);
+
   useEffect(() => {
     appMounted.current = true;
     return () => {
@@ -966,6 +1088,32 @@ function AppRoutes() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    void refreshGlobalCallbackSnapshot();
+  }, [refreshGlobalCallbackSnapshot]);
+
+  useEffect(() => {
+    let unsubscribe: () => void = () => undefined;
+    try {
+      unsubscribe = subscribeToCallbackSessions({
+        onSnapshot: (snapshot) => {
+          if (!appMounted.current) return;
+          applyGlobalCallbackSnapshot(snapshot);
+        },
+        onError: (error) => {
+          // EventSource reconnects automatically; keep the last good snapshot
+          // visible while a transient connection is being retried.
+          console.warn("Callback stream connection lost", error);
+        },
+      });
+    } catch (error) {
+      // Older deployments or browsers without EventSource retain the existing
+      // fetch-on-open behavior as a safe fallback.
+      console.warn("Unable to subscribe to the callback stream", error);
+    }
+    return () => unsubscribe();
+  }, [applyGlobalCallbackSnapshot]);
 
   const stateForLocation = useCallback((
     state: unknown,
@@ -1091,6 +1239,7 @@ function AppRoutes() {
         terminatedSessionsRef.current,
       );
       const targetSession = liveWorkspaceSession(savedWorkspace, currentSessions);
+      const landingSession = workspaceLandingSession(savedWorkspace, currentSessions);
       const restoredWorkspace = restoreWorkspaceTabs(
         createSessionWorkspace(),
         savedWorkspace.activeSession ?? targetSession ?? undefined,
@@ -1108,6 +1257,8 @@ function AppRoutes() {
       setWorkspacePaneLayouts(restoredPaneLayouts);
       knownSessionsRef.current = currentSessions;
       setKnownSessions(currentSessions);
+      const hydratedRecoverable = attachedRecoverableSessions(sessions);
+      if (hydratedRecoverable) setRecoverableSessions(hydratedRecoverable);
       failedWorkspaceActivity.current = null;
       lastSavedWorkspaceActivity.current = null;
       recordWorkspaceGroupsSupport(Array.isArray(savedWorkspace.groups));
@@ -1124,14 +1275,14 @@ function AppRoutes() {
       const paneRoute = parsePaneLayoutRoute(current.path);
       let path = current.path;
       if (route || (resume && isDashboardPath(current.path))) {
-        path = targetSession
-          ? sessionPath(targetSession, Boolean(route?.recentsOpen))
+        path = landingSession
+          ? sessionPath(landingSession, Boolean(route?.recentsOpen))
           : "/";
       } else if (
         paneRoute
         && !restoredPaneLayouts.some((layout) => layout.id === paneRoute.layoutId)
       ) {
-        path = targetSession ? sessionPath(targetSession) : "/";
+        path = landingSession ? sessionPath(landingSession) : "/";
       }
       const search = searchWithSavedWorkspaceId(
         searchWithWorkspaceState(
@@ -1296,6 +1447,7 @@ function AppRoutes() {
       sessionRevision: created.sessionRevision,
     };
     setWorkspaceIdentity(created);
+    void refreshGlobalCallbackSnapshot();
     setNewlySavedWorkspaceId(created.id);
     setHydratedWorkspaceBinding(created.id);
     setWorkspaceSyncProblem(null);
@@ -1315,6 +1467,7 @@ function AppRoutes() {
     replaceLocation,
     setHydratedWorkspaceBinding,
     setWorkspaceIdentity,
+    refreshGlobalCallbackSnapshot,
     workspaceSeparators.anchors,
     workspaceSeparators.beforeAnchors,
   ]);
@@ -1374,6 +1527,7 @@ function AppRoutes() {
         value: updated.sessionRevision,
       };
       setWorkspaceIdentity(updated);
+      void refreshGlobalCallbackSnapshot();
       setWorkspaceSyncProblem((current) => (
         current?.kind === "save" ? null : current
       ));
@@ -1396,7 +1550,7 @@ function AppRoutes() {
     } finally {
       if (appMounted.current) setWorkspaceCallbackBusy(false);
     }
-  }, [hydrateSavedWorkspace, setWorkspaceIdentity]);
+  }, [hydrateSavedWorkspace, refreshGlobalCallbackSnapshot, setWorkspaceIdentity]);
 
   const toggleWorkspaceCallbackSession = useCallback(async (sessionName: string) => {
     const current = workspaceCallbackSessionsRef.current;
@@ -1405,6 +1559,114 @@ function AppRoutes() {
       : [...current, sessionName];
     await updateWorkspaceCallbackSessions(next);
   }, [updateWorkspaceCallbackSessions]);
+
+  const updateGlobalCallbackSessions = useCallback(async (
+    nextSessions: readonly string[],
+  ) => {
+    const normalized = normalizeCallbackSessions(nextSessions);
+    const previous = globalCallbackSnapshotRef.current;
+    setGlobalCallbackBusy(true);
+    try {
+      const updated = await replaceGlobalCallbackSessions(
+        normalized,
+        previous.sessionRevision,
+      );
+      if (!appMounted.current) return;
+      globalCallbackSnapshotRef.current = updated;
+      setGlobalCallbackSnapshot(updated);
+      setWorkspaceSyncProblem((current) => (
+        current?.kind === "save" ? null : current
+      ));
+    } catch (error) {
+      if (appMounted.current) {
+        setWorkspaceSyncProblem({
+          kind: "save",
+          message: workspaceErrorMessage(error, "Unable to save global callback list"),
+        });
+      }
+      if (error instanceof ApiRequestError && error.status === 409) {
+        void refreshGlobalCallbackSnapshot();
+      }
+      throw error;
+    } finally {
+      if (appMounted.current) setGlobalCallbackBusy(false);
+    }
+  }, [refreshGlobalCallbackSnapshot]);
+
+  const reviewCallbackSession = useCallback(async (sessionName: string) => {
+    const current = currentLocation();
+    const workspaceId = savedWorkspaceIdFromSearch(current.search);
+    const localBefore = workspaceCallbackSessionsRef.current;
+    const localAfter = localBefore.filter((name) => name !== sessionName);
+    const snapshot = globalCallbackSnapshotRef.current;
+    const serverOwnsEntry = snapshot.globalCallbackSessions.includes(sessionName)
+      || snapshot.workspaceCallbacks.some((source) => (
+        source.sessions.includes(sessionName)
+      ));
+
+    // Temporary workspaces keep their callback queue in this browser only. If
+    // the session is not present in the server snapshot, remove that local
+    // marker without requiring a workspace-store write.
+    if (!serverOwnsEntry && !workspaceId) {
+      if (localAfter.length !== localBefore.length) {
+        workspaceCallbackSessionsRef.current = localAfter;
+        setWorkspaceCallbackSessions(localAfter);
+        writeTemporaryCallbackSessions(temporaryTerminalKeyRef.current, localAfter);
+      }
+      return;
+    }
+
+    // A saved workspace may still be waiting for its global snapshot. Let the
+    // existing workspace update path handle that local marker in the meantime.
+    if (!serverOwnsEntry && workspaceId) {
+      await updateWorkspaceCallbackSessions(localAfter);
+      return;
+    }
+
+    setGlobalCallbackBusy(true);
+    try {
+      const updated = await reviewGlobalCallbackSession(
+        sessionName,
+        snapshot.sessionRevision,
+      );
+      if (!appMounted.current) return;
+      globalCallbackSnapshotRef.current = updated;
+      setGlobalCallbackSnapshot(updated);
+
+      if (localAfter.length !== localBefore.length) {
+        workspaceCallbackSessionsRef.current = localAfter;
+        setWorkspaceCallbackSessions(localAfter);
+        if (workspaceId) {
+          if (workspaceSessionRevision.current?.workspaceId === workspaceId) {
+            workspaceSessionRevision.current = {
+              workspaceId,
+              value: updated.sessionRevision,
+            };
+          }
+          const identity = activeWorkspaceIdentityRef.current;
+          if (identity?.id === workspaceId) {
+            setWorkspaceIdentity({ ...identity, callbackSessions: localAfter });
+          }
+        } else {
+          writeTemporaryCallbackSessions(temporaryTerminalKeyRef.current, localAfter);
+        }
+      }
+      setWorkspaceSyncProblem((currentProblem) => (
+        currentProblem?.kind === "save" ? null : currentProblem
+      ));
+    } catch (error) {
+      setWorkspaceSyncProblem({
+        kind: "save",
+        message: workspaceErrorMessage(error, "Unable to review callback"),
+      });
+      if (error instanceof ApiRequestError && error.status === 409) {
+        void refreshGlobalCallbackSnapshot();
+      }
+      throw error;
+    } finally {
+      if (appMounted.current) setGlobalCallbackBusy(false);
+    }
+  }, [refreshGlobalCallbackSnapshot, setWorkspaceIdentity, updateWorkspaceCallbackSessions]);
 
   const syncLocation = useCallback(() => {
     const restoredLocation = currentLocation();
@@ -1603,6 +1865,21 @@ function AppRoutes() {
             : "saved"
           : "loading"
   );
+
+  const recoveryByName = new Map(
+    recoverableSessions.map((recovery) => [recovery.name, recovery]),
+  );
+  // Tabs with no live tmux session that the registry can still rebuild.
+  const workspaceRecoveryTargets: WorkspaceRecreateTarget[] = workspace.openSessions
+    .filter((sessionName) => (
+      !knownSessions.some((session) => session.name === sessionName)
+      && recoveryByName.has(sessionName)
+    ))
+    .map((sessionName) => ({
+      name: sessionName,
+      recovery: recoveryByName.get(sessionName),
+    }));
+  const openRecreateDialog = useCallback(() => setRecreateDialogOpen(true), []);
 
   useEffect(() => {
     const browserLocation = currentLocation();
@@ -1960,14 +2237,17 @@ function AppRoutes() {
   const resumeWorkspace = useCallback(() => {
     const currentWorkspace = workspaceRef.current;
     const liveNames = new Set(knownSessionsRef.current.map((session) => session.name));
+    // Ordering ignoring liveness; also the fallback when nothing is running.
+    const orderedReturn = currentWorkspace.recentSessions.find(
+      (sessionName) => currentWorkspace.openSessions.includes(sessionName),
+    ) ?? currentWorkspace.openSessions.at(-1);
     const target = hydratedWorkspaceIdRef.current
       ? currentWorkspace.recentSessions.find((sessionName) => (
           currentWorkspace.openSessions.includes(sessionName)
           && liveNames.has(sessionName)
         )) ?? currentWorkspace.openSessions.find((sessionName) => liveNames.has(sessionName))
-      : currentWorkspace.recentSessions.find(
-          (sessionName) => currentWorkspace.openSessions.includes(sessionName),
-        ) ?? currentWorkspace.openSessions.at(-1);
+          ?? orderedReturn
+      : orderedReturn;
     if (target) openSession(target);
   }, [openSession]);
 
@@ -2075,7 +2355,8 @@ function AppRoutes() {
       [{ name: sessionName, sessionId }],
     );
     syncLocation();
-  }, [replaceLocation, syncLocation]);
+    void refreshGlobalCallbackSnapshot();
+  }, [refreshGlobalCallbackSnapshot, replaceLocation, syncLocation]);
 
   const createQuickSession = useCallback(async () => {
     if (quickSessionCreating.current || workspacePersistenceState === "loading") return;
@@ -2264,6 +2545,47 @@ function AppRoutes() {
     setWorkspace(nextWorkspace);
     finishSessionSwitch(sessionName, nextWorkspace);
   }, [finishSessionSwitch, workspace]);
+
+  const addSessionToWorkspace = useCallback((sessionName: string, open: boolean) => {
+    const liveSession = knownSessionsRef.current.find((session) => (
+      session.name === sessionName
+    ));
+    const recoverableSession = liveSession ? undefined : recoverableSessionsRef.current.find(
+      (record) => record.name === sessionName,
+    );
+    if (!liveSession && !recoverableSession) return;
+    const currentWorkspace = workspaceRef.current;
+    const nextWorkspace = open
+      ? visitWorkspaceSession(currentWorkspace, sessionName)
+      : currentWorkspace.openSessions.includes(sessionName)
+        ? currentWorkspace
+        : {
+            ...currentWorkspace,
+            openSessions: [...currentWorkspace.openSessions, sessionName],
+          };
+    if (nextWorkspace === currentWorkspace && !open) return;
+
+    workspaceRef.current = nextWorkspace;
+    setWorkspace(nextWorkspace);
+    if (open) {
+      finishSessionSwitch(sessionName, nextWorkspace);
+      return;
+    }
+
+    const current = currentLocation();
+    const nextSearch = searchWithWorkspaceState(
+      current.search,
+      nextWorkspace.openSessions,
+      nextWorkspace.groups,
+    );
+    replaceLocation(
+      window.history.state,
+      current.path,
+      nextSearch,
+      liveSession ? [{ name: liveSession.name, sessionId: liveSession.id }] : [],
+    );
+    syncLocation();
+  }, [finishSessionSwitch, replaceLocation, syncLocation]);
 
   const persistWorkspacePaneLayouts = useCallback(async (
     paneLayouts: WorkspacePaneLayout[],
@@ -2908,6 +3230,26 @@ function AppRoutes() {
     if (targets.length) setBulkSessionAction({ action, targets, workspaceKey });
   }, []);
 
+  const requestBulkWorkspaceTransfer = useCallback((names: string[]) => {
+    const selected = new Set(names);
+    const ordered = workspaceRef.current.openSessions.filter((name) => selected.has(name));
+    if (ordered.length === 0) return;
+    const current = currentLocation();
+    const savedWorkspaceId = savedWorkspaceIdFromSearch(current.search);
+    const sourceWorkspaceId = savedWorkspaceId
+      && hydratedWorkspaceIdRef.current === savedWorkspaceId
+      ? savedWorkspaceId
+      : null;
+    setBulkWorkspaceTransfer({
+      sessionNames: ordered,
+      workspaceKey: sourceWorkspaceId || temporaryTerminalKeyRef.current,
+      sourceWorkspaceId,
+      sourceWorkspaceName: sourceWorkspaceId
+        ? activeWorkspaceIdentityRef.current?.name ?? null
+        : null,
+    });
+  }, []);
+
   const applyBulkSessionAction = async (target: BulkSessionTarget) => {
     if (bulkSessionAction?.action === "close") {
       const currentKey = savedWorkspaceIdFromSearch(currentLocation().search) || temporaryTerminalKeyRef.current;
@@ -2938,10 +3280,42 @@ function AppRoutes() {
       sessions,
       terminatedSessionsRef.current,
     );
+    const recoverable = attachedRecoverableSessions(sessions);
+    if (recoverable) setRecoverableSessions(recoverable);
     knownSessionsRef.current = currentSessions;
     setKnownSessions(currentSessions);
     syncLocation();
   }, [syncLocation]);
+
+  const refreshSessionInventory = useCallback(async () => {
+    const sessions = await listSessions();
+    if (!appMounted.current) return;
+    const recoverable = attachedRecoverableSessions(sessions);
+    if (recoverable) setRecoverableSessions(recoverable);
+    const currentSessions = withoutTerminatedSessions(
+      sessions,
+      terminatedSessionsRef.current,
+    );
+    knownSessionsRef.current = currentSessions;
+    setKnownSessions(currentSessions);
+  }, []);
+
+  const recreateWorkspaceSession = useCallback(async (
+    target: WorkspaceRecreateTarget,
+  ) => {
+    if (!target.recovery) {
+      throw new Error("No saved directory for this tab; it cannot be recreated.");
+    }
+    setRecreatingSession(target.name);
+    try {
+      await recreateSession(target.recovery.id);
+      // The shell returns under its original name, so the existing tab goes
+      // live again as soon as the inventory refreshes.
+      await refreshSessionInventory();
+    } finally {
+      if (appMounted.current) setRecreatingSession(null);
+    }
+  }, [refreshSessionInventory]);
 
   useEffect(() => {
     if (!parsePaneLayoutRoute(location.path)) return;
@@ -2991,12 +3365,19 @@ function AppRoutes() {
     if (workspaceId) await hydrateSavedWorkspace(workspaceId, false, sessionRevision);
   }, [hydrateSavedWorkspace]);
 
-  const transferOpenSessionToWorkspace = useCallback(async (
-    sessionName: string,
+  const transferOpenSessionsToWorkspace = useCallback(async (
+    sessionNames: string[],
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
   ) => {
+    const requestedSessions = new Set(sessionNames);
+    const orderedSessionNames = workspaceRef.current.openSessions.filter((name) => (
+      requestedSessions.has(name)
+    ));
+    if (orderedSessionNames.length === 0) {
+      throw new Error("Select at least one open session to move or copy.");
+    }
     const current = currentLocation();
     const locationWorkspaceId = savedWorkspaceIdFromSearch(current.search);
     const sourceWorkspaceId = (
@@ -3011,13 +3392,36 @@ function AppRoutes() {
       workspaceActivitySuppressedFor.current = sourceWorkspaceId;
     }
     try {
-      const result = await transferSessionToWorkspace(
-        sessionName,
-        sourceWorkspaceId,
-        destinationWorkspaceId,
-        operation,
-        sessionRevision,
-      );
+      let result: WorkspaceSessionsTransferResult;
+      if (orderedSessionNames.length === 1) {
+        const single = await transferSessionToWorkspace(
+          orderedSessionNames[0],
+          sourceWorkspaceId,
+          destinationWorkspaceId,
+          operation,
+          sessionRevision,
+        );
+        result = {
+          sessions: [single.session],
+          operation: single.operation,
+          destinationAlreadyContained: single.destinationAlreadyContained
+            ? [single.session]
+            : [],
+          destinationAdded: single.destinationAdded ? [single.session] : [],
+          sourceRemoved: single.sourceRemoved ? [single.session] : [],
+          sourceWorkspace: single.sourceWorkspace,
+          destinationWorkspace: single.destinationWorkspace,
+          sessionRevision: single.sessionRevision,
+        };
+      } else {
+        result = await transferSessionsToWorkspace(
+          orderedSessionNames,
+          sourceWorkspaceId,
+          destinationWorkspaceId,
+          operation,
+          sessionRevision,
+        );
+      }
       if (!appMounted.current) return result;
 
       if (sourceWorkspaceId) {
@@ -3094,6 +3498,7 @@ function AppRoutes() {
             );
             setLocation({ path, search });
           }
+          setSelectedWorkspaceTabs([]);
         } else {
           const rebaseSnapshot = (snapshot: WorkspaceActivitySnapshot | null) => (
             snapshot?.workspaceId === sourceWorkspaceId
@@ -3114,7 +3519,13 @@ function AppRoutes() {
           );
         }
       } else if (operation === "move") {
-        closeSessionTab(sessionName);
+        const activeSessionName = parseSessionRoute(currentLocation().path)?.sessionName;
+        const closeOrder = [
+          ...orderedSessionNames.filter((name) => name !== activeSessionName),
+          ...orderedSessionNames.filter((name) => name === activeSessionName),
+        ];
+        closeOrder.forEach(closeSessionTab);
+        setSelectedWorkspaceTabs([]);
       }
       return result;
     } finally {
@@ -3370,6 +3781,13 @@ function AppRoutes() {
       : workspace.recentSessions.find((sessionName) => (
         workspace.openSessions.includes(sessionName)
       )) ?? null);
+  const selectedWorkspaceTabSet = new Set(selectedWorkspaceTabs);
+  const orderedSelectedWorkspaceTabs = workspace.openSessions.filter((name) => (
+    selectedWorkspaceTabSet.has(name)
+  ));
+  const selectedWorkspacePinnedTabs = orderedSelectedWorkspaceTabs.filter((name) => (
+    knownSessions.some((session) => session.name === name && session.workspacePinned)
+  ));
   const workspaceSyncNoticeDismissed = (
     workspaceSyncProblem !== null
     && dismissedWorkspaceSyncProblem === workspaceSyncProblem
@@ -3390,6 +3808,40 @@ function AppRoutes() {
         action={bulkSessionAction.action} targets={bulkSessionAction.targets}
         onApply={applyBulkSessionAction} onClose={() => setBulkSessionAction(null)}
       />}
+      {bulkWorkspaceTransfer && (
+        <SessionWorkspaceTransferDialog
+          sessionNames={bulkWorkspaceTransfer.sessionNames}
+          sourceWorkspaceId={bulkWorkspaceTransfer.sourceWorkspaceId}
+          sourceWorkspaceName={bulkWorkspaceTransfer.sourceWorkspaceName}
+          workspacePinnedSessions={bulkWorkspaceTransfer.sessionNames.filter((name) => (
+            knownSessions.some((session) => (
+              session.name === name && session.workspacePinned
+            ))
+          ))}
+          onClose={() => setBulkWorkspaceTransfer(null)}
+          onTransfer={async (sessionNames, destinationId, operation, revision) => {
+            const current = currentLocation();
+            const savedWorkspaceId = savedWorkspaceIdFromSearch(current.search);
+            const currentSourceId = savedWorkspaceId
+              && hydratedWorkspaceIdRef.current === savedWorkspaceId
+              ? savedWorkspaceId
+              : null;
+            const currentWorkspaceKey = currentSourceId
+              || temporaryTerminalKeyRef.current;
+            if (currentWorkspaceKey !== bulkWorkspaceTransfer.workspaceKey) {
+              throw new Error(
+                "Workspace changed; reselect sessions in the intended workspace.",
+              );
+            }
+            return transferOpenSessionsToWorkspace(
+              sessionNames,
+              destinationId,
+              operation,
+              revision,
+            );
+          }}
+        />
+      )}
       {historySaveError && <aside className="workspace-sync-notice" role="alert">
         <p>{historySaveError}</p><button type="button" onClick={() => setHistorySaveError(null)}>Dismiss</button>
       </aside>}
@@ -3448,6 +3900,14 @@ function AppRoutes() {
           </div>
         </aside>
       )}
+      {recreateDialogOpen && (
+        <WorkspaceRecreateDialog
+          targets={workspaceRecoveryTargets}
+          workspaceName={workspaceName}
+          onRecreate={recreateWorkspaceSession}
+          onClose={() => setRecreateDialogOpen(false)}
+        />
+      )}
       {tabSearchOpen && (activeRoute || newSessionRoute || paneLayoutRoute) && (
         <WorkspaceTabSearchDialog
           activeSession={tabSearchActiveSession}
@@ -3504,7 +3964,12 @@ function AppRoutes() {
           workspaceId={hydratedWorkspaceId === locationWorkspaceId
             ? locationWorkspaceId
             : null}
+          workspaceKey={temporaryTerminalKey}
           workspaceName={workspaceName}
+          sessionIdentity={timerSessionIdentity(
+            knownSessions.find((session) => session.name === widgetSessionName),
+            widgetSessionName,
+          )}
         />
         <HostPulse
           sessionName={widgetSessionName}
@@ -3521,8 +3986,14 @@ function AppRoutes() {
           workspaceName={workspaceName}
           temporaryKey={temporaryTerminalKey}
           sessions={knownSessions}
+          workspaceSessionNames={workspace.openSessions}
           callbackSessions={workspaceCallbackSessions}
           onChange={updateWorkspaceCallbackSessions}
+          globalCallbackSnapshot={globalCallbackSnapshot}
+          onGlobalChange={updateGlobalCallbackSessions}
+          globalCallbackBusy={globalCallbackBusy}
+          onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
+          onReviewSession={reviewCallbackSession}
           onSelectSession={switchSession}
         />
       </div>
@@ -3559,6 +4030,7 @@ function AppRoutes() {
         onMoveTab={moveSessionTab}
         onMoveTabs={moveSessionTabs}
         onTabSelectionChange={setSelectedWorkspaceTabs}
+        onTransferSelectedSessions={requestBulkWorkspaceTransfer}
         onBulkSessionAction={requestBulkSessionAction}
         onSortTabsByWorkingState={sortSessionTabsByWorkingState}
         onToggleTabActions={() => setDesktopTabActionsVisible(
@@ -3576,6 +4048,7 @@ function AppRoutes() {
         onOpenDashboard={returnToDashboard}
         dashboardWindowHref={dashboardWindowHref}
         onNewSession={openNewSession}
+        onAddSession={addSessionToWorkspace}
         onQuickNewSession={createQuickSession}
         onToggleCallbackSession={widgetSessionName
           ? () => toggleWorkspaceCallbackSession(widgetSessionName)
@@ -3584,6 +4057,13 @@ function AppRoutes() {
         quickNewSessionError={quickSessionError}
         onDismissQuickNewSessionError={() => setQuickSessionError(null)}
         onOpenTabSearch={openTabSearch}
+            missingSessionCount={workspaceRecoveryTargets.length}
+            onRecreateAllMissing={openRecreateDialog}
+            recoverableSessions={recoverableSessions}
+            onRecreateSession={(name) => recreateWorkspaceSession({
+              name,
+              recovery: recoveryByName.get(name),
+            })}
         paneLayouts={workspacePaneLayouts}
         activePaneLayoutId={paneLayout.id}
         paneLayoutsBusy={workspacePaneLayoutsBusy}
@@ -3636,7 +4116,11 @@ function AppRoutes() {
             callbackSessionActive={workspaceCallbackSessions.includes(sessionName)}
             callbackSessionBusy={workspaceCallbackBusy}
             onToggleCallbackSession={() => toggleWorkspaceCallbackSession(sessionName)}
-            onSessionWorkspaceTransfer={transferOpenSessionToWorkspace}
+            onSessionWorkspaceTransfer={transferOpenSessionsToWorkspace}
+            workspaceTransferSessionNames={orderedSelectedWorkspaceTabs.length > 1
+              ? orderedSelectedWorkspaceTabs
+              : undefined}
+            workspaceTransferPinnedSessionNames={selectedWorkspacePinnedTabs}
             workspaceTransferDisabled={workspacePersistenceState === "loading"
               || workspacePersistenceState === "error"}
             onSessionRenamed={renameOpenSession}
@@ -3668,6 +4152,14 @@ function AppRoutes() {
     return withWorkspaceSyncNotice(
       <ConsoleScreen
         sessionName={sessionName}
+        sessionRecovery={recoveryByName.get(sessionName) ?? null}
+        onRecreateSession={() => recreateWorkspaceSession({
+          name: sessionName,
+          recovery: recoveryByName.get(sessionName),
+        })}
+        recreateSessionBusy={recreatingSession === sessionName}
+        missingSessionCount={workspaceRecoveryTargets.length}
+        onRecreateAllMissing={openRecreateDialog}
         temporaryTerminalKey={temporaryTerminalKey}
         onTemporaryTerminalUsed={onTemporaryTerminalUsed}
         workspaceId={hydratedWorkspaceId === locationWorkspaceId
@@ -3688,7 +4180,9 @@ function AppRoutes() {
               workspaceId={hydratedWorkspaceId === locationWorkspaceId
                 ? locationWorkspaceId
                 : null}
+              workspaceKey={temporaryTerminalKey}
               workspaceName={workspaceName}
+              sessionIdentity={timerSessionIdentity(liveSession, sessionName)}
             />
             <HostPulse
               sessionName={sessionName}
@@ -3705,8 +4199,14 @@ function AppRoutes() {
               workspaceName={workspaceName}
               temporaryKey={temporaryTerminalKey}
               sessions={knownSessions}
+              workspaceSessionNames={workspace.openSessions}
               callbackSessions={workspaceCallbackSessions}
               onChange={updateWorkspaceCallbackSessions}
+              globalCallbackSnapshot={globalCallbackSnapshot}
+              onGlobalChange={updateGlobalCallbackSessions}
+              globalCallbackBusy={globalCallbackBusy}
+              onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
+              onReviewSession={reviewCallbackSession}
               onSelectSession={switchSession}
             />
           </div>
@@ -3743,7 +4243,11 @@ function AppRoutes() {
         callbackSessionActive={workspaceCallbackSessions.includes(sessionName)}
         callbackSessionBusy={workspaceCallbackBusy}
         onToggleCallbackSession={() => toggleWorkspaceCallbackSession(sessionName)}
-        onSessionWorkspaceTransfer={transferOpenSessionToWorkspace}
+        onSessionWorkspaceTransfer={transferOpenSessionsToWorkspace}
+        workspaceTransferSessionNames={orderedSelectedWorkspaceTabs.length > 1
+          ? orderedSelectedWorkspaceTabs
+          : undefined}
+        workspaceTransferPinnedSessionNames={selectedWorkspacePinnedTabs}
         workspaceTransferDisabled={workspacePersistenceState === "loading"
           || workspacePersistenceState === "error"}
         onSessionRenamed={renameOpenSession}
@@ -3777,6 +4281,7 @@ function AppRoutes() {
             onMoveTab={moveSessionTab}
             onMoveTabs={moveSessionTabs}
             onTabSelectionChange={setSelectedWorkspaceTabs}
+            onTransferSelectedSessions={requestBulkWorkspaceTransfer}
             onBulkSessionAction={requestBulkSessionAction}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onToggleTabActions={() => setDesktopTabActionsVisible(
@@ -3794,12 +4299,20 @@ function AppRoutes() {
             onOpenDashboard={returnToDashboard}
             dashboardWindowHref={dashboardWindowHref}
             onNewSession={openNewSession}
+            onAddSession={addSessionToWorkspace}
             onQuickNewSession={createQuickSession}
             onToggleCallbackSession={() => toggleWorkspaceCallbackSession(sessionName)}
             quickNewSessionBusy={quickSessionBusy}
             quickNewSessionError={quickSessionError}
             onDismissQuickNewSessionError={() => setQuickSessionError(null)}
             onOpenTabSearch={openTabSearch}
+            missingSessionCount={workspaceRecoveryTargets.length}
+            onRecreateAllMissing={openRecreateDialog}
+            recoverableSessions={recoverableSessions}
+            onRecreateSession={(name) => recreateWorkspaceSession({
+              name,
+              recovery: recoveryByName.get(name),
+            })}
             paneLayouts={workspacePaneLayouts}
             activePaneLayoutId={null}
             paneLayoutsBusy={workspacePaneLayoutsBusy}
@@ -3849,6 +4362,7 @@ function AppRoutes() {
             onMoveTab={moveSessionTab}
             onMoveTabs={moveSessionTabs}
             onTabSelectionChange={setSelectedWorkspaceTabs}
+            onTransferSelectedSessions={requestBulkWorkspaceTransfer}
             onBulkSessionAction={requestBulkSessionAction}
             onSortTabsByWorkingState={sortSessionTabsByWorkingState}
             onToggleTabActions={() => setDesktopTabActionsVisible(
@@ -3867,12 +4381,20 @@ function AppRoutes() {
             onOpenDashboard={returnToDashboard}
             dashboardWindowHref={dashboardWindowHref}
             onNewSession={openNewSession}
+            onAddSession={addSessionToWorkspace}
             onQuickNewSession={createQuickSession}
             onToggleCallbackSession={undefined}
             quickNewSessionBusy={quickSessionBusy}
             quickNewSessionError={quickSessionError}
             onDismissQuickNewSessionError={() => setQuickSessionError(null)}
             onOpenTabSearch={openTabSearch}
+            missingSessionCount={workspaceRecoveryTargets.length}
+            onRecreateAllMissing={openRecreateDialog}
+            recoverableSessions={recoverableSessions}
+            onRecreateSession={(name) => recreateWorkspaceSession({
+              name,
+              recovery: recoveryByName.get(name),
+            })}
             paneLayouts={workspacePaneLayouts}
             activePaneLayoutId={null}
             paneLayoutsBusy={workspacePaneLayoutsBusy}
@@ -3897,16 +4419,20 @@ function AppRoutes() {
     );
   }
 
+  const workspaceOrderedReturn = workspace.recentSessions.find(
+    (sessionName) => workspace.openSessions.includes(sessionName),
+  ) ?? workspace.openSessions.at(-1);
   const workspaceReturnSession = hydratedWorkspaceId
     ? workspace.recentSessions.find((sessionName) => (
         workspace.openSessions.includes(sessionName)
         && knownSessions.some((session) => session.name === sessionName)
       )) ?? workspace.openSessions.find((sessionName) => (
         knownSessions.some((session) => session.name === sessionName)
-      ))
-    : workspace.recentSessions.find(
-        (sessionName) => workspace.openSessions.includes(sessionName),
-      ) ?? workspace.openSessions.at(-1);
+      )) ?? workspaceOrderedReturn
+    : workspaceOrderedReturn;
+  const workspaceLiveTabCount = workspace.openSessions.filter((sessionName) => (
+    knownSessions.some((session) => session.name === sessionName)
+  )).length;
 
   return withWorkspaceSyncNotice(
     <SessionDashboard
@@ -3915,6 +4441,7 @@ function AppRoutes() {
       onResumeWorkspace={workspaceReturnSession ? resumeWorkspace : undefined}
       workspaceReturnSession={workspaceReturnSession}
       workspaceTabCount={workspace.openSessions.length}
+      workspaceLiveTabCount={workspaceLiveTabCount}
       onOpenSnippets={openSnippets}
       onNewSession={openNewSession}
       onSessionsChange={replaceKnownSessions}

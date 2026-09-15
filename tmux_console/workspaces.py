@@ -29,6 +29,9 @@ MAX_WORKSPACE_QUICK_LINK_ID_LENGTH = 64
 MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH = 48
 MAX_WORKSPACE_QUICK_LINK_URL_LENGTH = 2048
 MAX_WORKSPACE_CALLBACK_SESSIONS = 64
+# The global queue is intentionally larger than one workspace queue because it
+# aggregates entries registered by every workspace.
+MAX_GLOBAL_CALLBACK_SESSIONS = 256
 MAX_SCOPED_NOTE_PAGES = 128
 MAX_SCOPED_NOTE_PAGE_ID_LENGTH = 64
 MAX_SCOPED_NOTE_PAGE_NAME_LENGTH = 80
@@ -58,7 +61,7 @@ _PANE_LAYOUTS_OMITTED = object()
 _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 12
+WORKSPACE_SCHEMA_VERSION = 13
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -74,6 +77,7 @@ def workspace_api_capabilities() -> dict[str, Any]:
             "groupsPerWorkspace": MAX_WORKSPACE_GROUPS,
             "quickLinksPerScope": MAX_WORKSPACE_QUICK_LINKS,
             "callbackSessionsPerWorkspace": MAX_WORKSPACE_CALLBACK_SESSIONS,
+            "callbackSessionsGlobal": MAX_GLOBAL_CALLBACK_SESSIONS,
             "notePagesPerScope": MAX_SCOPED_NOTE_PAGES,
             "paneLayoutsPerWorkspace": MAX_WORKSPACE_PANE_LAYOUTS,
             "panesPerLayout": MAX_WORKSPACE_PANES_PER_LAYOUT,
@@ -147,13 +151,15 @@ def validate_workspace_tabs(value: object) -> tuple[str, ...]:
 def validate_workspace_callback_sessions(
     value: object,
     field: str = "callbackSessions",
+    *,
+    maximum: int = MAX_WORKSPACE_CALLBACK_SESSIONS,
 ) -> tuple[str, ...]:
-    """Validate the ordered, workspace-scoped sessions a user wants to revisit."""
+    """Validate an ordered callback queue of session names."""
     if not isinstance(value, list):
         raise TypeError(f"{field} must be an array")
-    if len(value) > MAX_WORKSPACE_CALLBACK_SESSIONS:
+    if len(value) > maximum:
         raise ValueError(
-            f"{field} cannot contain more than {MAX_WORKSPACE_CALLBACK_SESSIONS} sessions"
+            f"{field} cannot contain more than {maximum} sessions"
         )
 
     sessions: list[str] = []
@@ -1162,7 +1168,7 @@ class SavedWorkspace:
             "updatedAt": self.updated_at,
             "lastActiveAt": self.last_active_at,
         }
-        # Empty lists remain optional in schema 12 and are represented as empty
+        # Empty lists remain optional in schema 13 and are represented as empty
         # by both the API client and loader.
         if self.callback_sessions:
             payload["callbackSessions"] = list(self.callback_sessions)
@@ -1230,6 +1236,7 @@ class WorkspaceStore:
             self._session_quick_links,
             self._notes,
             self._pinned_sessions,
+            self._global_callback_sessions,
         ) = self._load()
         if (
             self._load_error is None
@@ -1261,6 +1268,155 @@ class WorkspaceStore:
         with self._lock:
             self._ensure_available()
             return self._pinned_sessions
+
+    def get_global_callback_sessions(self) -> dict[str, Any]:
+        """Return the global queue and the workspace queues it aggregates.
+
+        A workspace callback is intentionally included in ``callbackSessions``
+        so the global view is a reliable superset of every workspace view.
+        ``globalCallbackSessions`` remains the independently managed portion of
+        the queue; clients can use the source records to explain why an entry
+        is present and avoid removing a workspace-owned marker accidentally.
+        """
+        with self._lock:
+            self._ensure_available()
+            return self._global_callback_snapshot()
+
+    def replace_global_callback_sessions(
+        self,
+        sessions: object,
+        *,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        validated_sessions = validate_workspace_callback_sessions(
+            sessions,
+            "globalCallbackSessions",
+            maximum=MAX_GLOBAL_CALLBACK_SESSIONS,
+        )
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            self._check_session_revision(validated_revision)
+            if validated_sessions != self._global_callback_sessions:
+                self._commit(
+                    self._workspaces,
+                    global_callback_sessions=validated_sessions,
+                )
+            return self._global_callback_snapshot()
+
+    def add_global_callback_sessions(
+        self,
+        *,
+        sessions: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        validated_sessions = validate_workspace_callback_sessions(
+            sessions,
+            "sessions",
+            maximum=MAX_GLOBAL_CALLBACK_SESSIONS,
+        )
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            self._check_session_revision(validated_revision)
+            existing = set(self._global_callback_sessions)
+            added = tuple(item for item in validated_sessions if item not in existing)
+            next_sessions = (*self._global_callback_sessions, *added)
+            if len(next_sessions) > MAX_GLOBAL_CALLBACK_SESSIONS:
+                raise WorkspaceResourceConflictError(
+                    "global callback sessions cannot contain more than "
+                    f"{MAX_GLOBAL_CALLBACK_SESSIONS} sessions"
+                )
+            if added:
+                self._commit(
+                    self._workspaces,
+                    global_callback_sessions=next_sessions,
+                )
+            return {"added": list(added), **self._global_callback_snapshot()}
+
+    def remove_global_callback_sessions(
+        self,
+        *,
+        sessions: object,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        validated_sessions = validate_workspace_callback_sessions(
+            sessions,
+            "sessions",
+            maximum=MAX_GLOBAL_CALLBACK_SESSIONS,
+        )
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            self._check_session_revision(validated_revision)
+            requested = set(validated_sessions)
+            removed = tuple(
+                item for item in self._global_callback_sessions if item in requested
+            )
+            if removed:
+                next_sessions = tuple(
+                    item
+                    for item in self._global_callback_sessions
+                    if item not in requested
+                )
+                self._commit(
+                    self._workspaces,
+                    global_callback_sessions=next_sessions,
+                )
+            return {"removed": list(removed), **self._global_callback_snapshot()}
+
+    def review_callback_session(
+        self,
+        session: object,
+        *,
+        session_revision: object,
+    ) -> dict[str, Any]:
+        """Mark one callback as reviewed across global and workspace queues.
+
+        The effective global queue is a union of independently owned markers.
+        Reviewing an entry from that queue should therefore clear every marker
+        for the session in one atomic state-file write, regardless of which
+        workspace currently displays the queue.
+        """
+        if not isinstance(session, str):
+            raise TypeError("session must be a string")
+        session_name = validate_session_name(session)
+        validated_revision = _validate_session_revision(session_revision)
+        with self._lock:
+            self._ensure_writable()
+            self._check_session_revision(validated_revision)
+
+            next_workspaces = dict(self._workspaces)
+            timestamp = self._timestamp()
+            removed = session_name in self._global_callback_sessions
+            for workspace_id, current in self._workspaces.items():
+                if session_name not in current.callback_sessions:
+                    continue
+                removed = True
+                next_workspaces[workspace_id] = replace(
+                    current,
+                    callback_sessions=tuple(
+                        item
+                        for item in current.callback_sessions
+                        if item != session_name
+                    ),
+                    updated_at=max(timestamp, current.updated_at + 1),
+                )
+
+            next_global = tuple(
+                item
+                for item in self._global_callback_sessions
+                if item != session_name
+            )
+            if removed:
+                self._commit(
+                    next_workspaces,
+                    global_callback_sessions=next_global,
+                )
+            return {
+                "removed": [session_name] if removed else [],
+                **self._global_callback_snapshot(),
+            }
 
     def set_session_workspace_pinned(
         self,
@@ -1356,7 +1512,41 @@ class WorkspaceStore:
         session_revision: object,
         source_workspace_id: str | None = None,
     ) -> dict[str, Any]:
-        session_name = validate_session_name(session_name)
+        result = self.transfer_sessions(
+            [session_name],
+            destination_workspace_id=destination_workspace_id,
+            operation=operation,
+            session_revision=session_revision,
+            source_workspace_id=source_workspace_id,
+        )
+        return {
+            "session": session_name,
+            "operation": result["operation"],
+            "destinationAlreadyContained": (
+                session_name in result["destinationAlreadyContained"]
+            ),
+            "destinationAdded": session_name in result["destinationAdded"],
+            "sourceRemoved": session_name in result["sourceRemoved"],
+            "sourceWorkspace": result["sourceWorkspace"],
+            "destinationWorkspace": result["destinationWorkspace"],
+            "sessionRevision": result["sessionRevision"],
+        }
+
+    def transfer_sessions(
+        self,
+        session_names: object,
+        *,
+        destination_workspace_id: str,
+        operation: str,
+        session_revision: object,
+        source_workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        validated_session_names = _validate_pinned_session_names(
+            session_names,
+            "sessions",
+        )
+        if not validated_session_names:
+            raise ValueError("sessions cannot be empty")
         destination_workspace_id = _validate_workspace_id(destination_workspace_id)
         if source_workspace_id is not None:
             source_workspace_id = _validate_workspace_id(source_workspace_id)
@@ -1380,49 +1570,86 @@ class WorkspaceStore:
                 if source_workspace_id is not None
                 else None
             )
-            destination_already_contained = session_name in destination.tabs
-            source_removed = bool(
-                operation == "move"
-                and source is not None
-                and session_name in source.tabs
+            destination_tab_set = set(destination.tabs)
+            destination_already_contained = tuple(
+                name
+                for name in validated_session_names
+                if name in destination_tab_set
             )
-            transfer_callback_marker = bool(
-                source_removed
-                and source is not None
-                and session_name in source.callback_sessions
-                and session_name not in destination.callback_sessions
+            destination_added = tuple(
+                name
+                for name in validated_session_names
+                if name not in destination_tab_set
             )
-            if operation == "move" and session_name in self._pinned_sessions:
+            source_tab_set = set(source.tabs) if source is not None else set()
+            source_removed = tuple(
+                name
+                for name in validated_session_names
+                if operation == "move" and name in source_tab_set
+            )
+            source_removed_set = set(source_removed)
+            destination_callback_set = set(destination.callback_sessions)
+            transfer_callback_markers = tuple(
+                name
+                for name in (source.callback_sessions if source is not None else ())
+                if name in source_removed_set and name not in destination_callback_set
+            )
+            pinned_sessions = tuple(
+                name
+                for name in validated_session_names
+                if name in self._pinned_sessions
+            )
+            if operation == "move" and pinned_sessions:
+                if len(pinned_sessions) == 1 and len(validated_session_names) == 1:
+                    message = (
+                        f'cannot move globally pinned session "{pinned_sessions[0]}"; '
+                        "unpin it first"
+                    )
+                else:
+                    quoted = ", ".join(f'"{name}"' for name in pinned_sessions)
+                    message = (
+                        "cannot move selected sessions while globally pinned: "
+                        f"{quoted}; unpin them first"
+                    )
+                raise WorkspaceTransferConflictError(message)
+            if len(destination.tabs) + len(destination_added) > MAX_WORKSPACE_TABS:
+                if len(validated_session_names) == 1:
+                    raise WorkspaceTransferConflictError(
+                        f'cannot {operation} session "{validated_session_names[0]}": '
+                        f'workspace "{destination.name}" already has '
+                        f"{MAX_WORKSPACE_TABS} sessions"
+                    )
+                else:
+                    subject = f"{len(validated_session_names)} selected sessions"
                 raise WorkspaceTransferConflictError(
-                    f'cannot move globally pinned session "{session_name}"; unpin it first'
+                    f"cannot {operation} {subject}: workspace "
+                    f'"{destination.name}" would exceed {MAX_WORKSPACE_TABS} sessions'
                 )
             if (
-                not destination_already_contained
-                and len(destination.tabs) >= MAX_WORKSPACE_TABS
+                len(destination.callback_sessions) + len(transfer_callback_markers)
+                > MAX_WORKSPACE_CALLBACK_SESSIONS
             ):
+                if len(validated_session_names) == 1:
+                    callback_subject = (
+                        f'session "{validated_session_names[0]}"'
+                    )
+                else:
+                    callback_subject = "selected sessions"
                 raise WorkspaceTransferConflictError(
-                    f'cannot {operation} session "{session_name}": workspace '
-                    f'"{destination.name}" already has {MAX_WORKSPACE_TABS} sessions'
-                )
-            if (
-                transfer_callback_marker
-                and len(destination.callback_sessions)
-                >= MAX_WORKSPACE_CALLBACK_SESSIONS
-            ):
-                raise WorkspaceTransferConflictError(
-                    f'cannot move session "{session_name}": workspace '
+                    f"cannot move {callback_subject}: workspace "
                     f'"{destination.name}" already has '
                     f'{MAX_WORKSPACE_CALLBACK_SESSIONS} callback sessions'
                 )
 
-            destination_added = not destination_already_contained
             if not source_removed and not destination_added:
                 return {
-                    "session": session_name,
+                    "sessions": list(validated_session_names),
                     "operation": operation,
-                    "destinationAlreadyContained": destination_already_contained,
-                    "destinationAdded": False,
-                    "sourceRemoved": False,
+                    "destinationAlreadyContained": list(
+                        destination_already_contained
+                    ),
+                    "destinationAdded": [],
+                    "sourceRemoved": [],
                     "sourceWorkspace": self._workspace_dict(source) if source else None,
                     "destinationWorkspace": self._workspace_dict(destination),
                     "sessionRevision": self._session_rename_revision,
@@ -1434,12 +1661,16 @@ class WorkspaceStore:
             timestamp = self._timestamp()
             next_workspaces = self._workspaces.copy()
             if source_removed and source is not None:
-                source_tabs = tuple(tab for tab in source.tabs if tab != session_name)
+                source_tabs = tuple(
+                    tab for tab in source.tabs if tab not in source_removed_set
+                )
                 source_active_session = source.active_session
-                if source_active_session == session_name:
+                if source_active_session in source_removed_set:
                     source_active_session = source_tabs[0] if source_tabs else None
                 source_callback_sessions = tuple(
-                    item for item in source.callback_sessions if item != session_name
+                    item
+                    for item in source.callback_sessions
+                    if item not in source_removed_set
                 )
                 next_workspaces[source.id] = replace(
                     source,
@@ -1451,22 +1682,21 @@ class WorkspaceStore:
                     separators=tuple(tab for tab in source.separators if tab in source_tabs),
                     separators_before=tuple(tab for tab in source.separators_before if tab in source_tabs),
                     inherited_pins=tuple(
-                        tab for tab in source.inherited_pins if tab != session_name
+                        tab for tab in source.inherited_pins if tab not in source_removed_set
                     ),
                     callback_sessions=source_callback_sessions,
                     active_session=source_active_session,
                     updated_at=max(timestamp, source.updated_at + 1),
                 )
-            if destination_added or transfer_callback_marker:
+            if destination_added or transfer_callback_markers:
                 destination_callback_sessions = (
-                    (*destination.callback_sessions, session_name)
-                    if transfer_callback_marker
-                    else destination.callback_sessions
+                    *destination.callback_sessions,
+                    *transfer_callback_markers,
                 )
                 next_workspaces[destination.id] = replace(
                     destination,
                     tabs=(
-                        (*destination.tabs, session_name)
+                        (*destination.tabs, *destination_added)
                         if destination_added
                         else destination.tabs
                     ),
@@ -1477,11 +1707,11 @@ class WorkspaceStore:
             next_revision = self._session_rename_revision + 1
             self._commit(next_workspaces, next_revision)
             return {
-                "session": session_name,
+                "sessions": list(validated_session_names),
                 "operation": operation,
-                "destinationAlreadyContained": destination_already_contained,
-                "destinationAdded": destination_added,
-                "sourceRemoved": source_removed,
+                "destinationAlreadyContained": list(destination_already_contained),
+                "destinationAdded": list(destination_added),
+                "sourceRemoved": list(source_removed),
                 "sourceWorkspace": (
                     self._workspace_dict(next_workspaces[source.id]) if source else None
                 ),
@@ -2559,14 +2789,26 @@ class WorkspaceStore:
                     if item == current_name or item != new_name
                 )
             )
+            next_global_callback_sessions = tuple(
+                dict.fromkeys(
+                    new_name if item == current_name else item
+                    for item in self._global_callback_sessions
+                    if item == current_name or item != new_name
+                )
+            )
 
             try:
+                commit_kwargs: dict[str, Any] = {
+                    "session_quick_links": next_session_quick_links,
+                    "notes": replace(self._notes, sessions=next_session_notes),
+                    "pinned_sessions": next_pinned_sessions,
+                }
+                if next_global_callback_sessions != self._global_callback_sessions:
+                    commit_kwargs["global_callback_sessions"] = next_global_callback_sessions
                 self._commit(
                     next_workspaces,
                     self._session_rename_revision + 1,
-                    session_quick_links=next_session_quick_links,
-                    notes=replace(self._notes, sessions=next_session_notes),
-                    pinned_sessions=next_pinned_sessions,
+                    **commit_kwargs,
                 )
             except _WorkspaceDirectorySyncError:
                 raise
@@ -2581,6 +2823,30 @@ class WorkspaceStore:
     def _workspace_dict(self, workspace: SavedWorkspace) -> dict[str, Any]:
         return {
             **workspace.to_dict(),
+            "sessionRevision": self._session_rename_revision,
+        }
+
+    def _global_callback_snapshot(self) -> dict[str, Any]:
+        effective: list[str] = list(self._global_callback_sessions)
+        seen = set(effective)
+        workspace_callbacks: list[dict[str, Any]] = []
+        for workspace in self._workspaces.values():
+            if not workspace.callback_sessions:
+                continue
+            workspace_callbacks.append({
+                "workspaceId": workspace.id,
+                "workspaceName": workspace.name,
+                "sessions": list(workspace.callback_sessions),
+            })
+            for session_name in workspace.callback_sessions:
+                if session_name in seen:
+                    continue
+                seen.add(session_name)
+                effective.append(session_name)
+        return {
+            "callbackSessions": effective,
+            "globalCallbackSessions": list(self._global_callback_sessions),
+            "workspaceCallbacks": workspace_callbacks,
             "sessionRevision": self._session_rename_revision,
         }
 
@@ -2645,6 +2911,7 @@ class WorkspaceStore:
         tuple[WorkspaceQuickLink, ...],
         dict[str, tuple[WorkspaceQuickLink, ...]],
         ScopedNotes,
+        tuple[str, ...],
         tuple[str, ...],
     ]:
         try:
@@ -2748,6 +3015,15 @@ class WorkspaceStore:
                 if version >= 7
                 else ()
             )
+            global_callback_sessions = (
+                validate_workspace_callback_sessions(
+                    payload.get("globalCallbackSessions", []),
+                    "globalCallbackSessions",
+                    maximum=MAX_GLOBAL_CALLBACK_SESSIONS,
+                )
+                if version >= 13
+                else ()
+            )
             records = payload.get("workspaces")
             if not isinstance(records, list):
                 raise TypeError("workspaces must be an array")
@@ -2770,6 +3046,7 @@ class WorkspaceStore:
                 session_quick_links,
                 notes,
                 pinned_sessions,
+                global_callback_sessions,
             )
         except FileNotFoundError as error:
             if not self.path.is_symlink():
@@ -2783,6 +3060,7 @@ class WorkspaceStore:
                         workspaces={},
                         sessions={},
                     ),
+                    (),
                     (),
                 )
             self._record_load_error(error)
@@ -2798,6 +3076,7 @@ class WorkspaceStore:
                 workspaces={},
                 sessions={},
             ),
+            (),
             (),
         )
 
@@ -2947,6 +3226,7 @@ class WorkspaceStore:
         ) = None,
         notes: ScopedNotes | None = None,
         pinned_sessions: tuple[str, ...] | None = None,
+        global_callback_sessions: tuple[str, ...] | None = None,
     ) -> None:
         next_revision = (
             self._session_rename_revision
@@ -2967,8 +3247,13 @@ class WorkspaceStore:
         next_pinned_sessions = (
             self._pinned_sessions if pinned_sessions is None else pinned_sessions
         )
+        next_global_callback_sessions = (
+            self._global_callback_sessions
+            if global_callback_sessions is None
+            else global_callback_sessions
+        )
         try:
-            self._persist(
+            persist_args = (
                 workspaces,
                 next_revision,
                 next_common_quick_links,
@@ -2976,6 +3261,13 @@ class WorkspaceStore:
                 next_notes,
                 next_pinned_sessions,
             )
+            if global_callback_sessions is None:
+                # Keep the historical six-argument call shape for integrations
+                # that wrap the persistence hook; the method reads the current
+                # global queue when no replacement was requested.
+                self._persist(*persist_args)
+            else:
+                self._persist(*persist_args, next_global_callback_sessions)
         except _WorkspaceDirectorySyncError:
             # The atomic rename committed; keep memory consistent with disk even
             # though the caller must be told durability could not be confirmed.
@@ -2985,6 +3277,7 @@ class WorkspaceStore:
             self._session_quick_links = next_session_quick_links
             self._notes = next_notes
             self._pinned_sessions = next_pinned_sessions
+            self._global_callback_sessions = next_global_callback_sessions
             if next_revision == MAX_SESSION_RENAME_REVISION:
                 self._fence_writes("the session rename revision is exhausted")
             raise
@@ -2994,6 +3287,7 @@ class WorkspaceStore:
         self._session_quick_links = next_session_quick_links
         self._notes = next_notes
         self._pinned_sessions = next_pinned_sessions
+        self._global_callback_sessions = next_global_callback_sessions
         if next_revision == MAX_SESSION_RENAME_REVISION:
             self._fence_writes("the session rename revision is exhausted")
 
@@ -3005,7 +3299,10 @@ class WorkspaceStore:
         session_quick_links: dict[str, tuple[WorkspaceQuickLink, ...]],
         notes: ScopedNotes,
         pinned_sessions: tuple[str, ...],
+        global_callback_sessions: tuple[str, ...] | None = None,
     ) -> None:
+        if global_callback_sessions is None:
+            global_callback_sessions = self._global_callback_sessions
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
         directory_fd: int | None = None
@@ -3057,6 +3354,7 @@ class WorkspaceStore:
                             for session_name, notebook in notes.sessions.items()
                         },
                         "pinnedSessions": list(pinned_sessions),
+                        "globalCallbackSessions": list(global_callback_sessions),
                         "workspaces": [
                             workspace.to_dict(include_internal=True)
                             for workspace in workspaces.values()

@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithTheme } from "../test-utils";
 import {
+  TIMER_SCOPE_PREFERENCE_STORAGE_KEY,
   WORKSPACE_TIMER_STORAGE_PREFIX,
+  type TimerScope,
   WorkspaceTimer,
 } from "./WorkspaceTimer";
 
@@ -24,8 +26,12 @@ function renderTimer(
     sessionName?: string;
     workspaceId?: string | null;
     workspaceName?: string | null;
+    scope?: TimerScope;
   } = {},
 ) {
+  if (props.scope) {
+    window.localStorage.setItem(TIMER_SCOPE_PREFERENCE_STORAGE_KEY, props.scope);
+  }
   return renderWithTheme(
     <WorkspaceTimer
       sessionName={props.sessionName ?? "agent-one"}
@@ -42,7 +48,9 @@ function openTimer() {
 
 function storedTimer(workspaceId = "workspace-one") {
   return JSON.parse(window.localStorage.getItem(
-    `${WORKSPACE_TIMER_STORAGE_PREFIX}workspace:${workspaceId}`,
+    `${WORKSPACE_TIMER_STORAGE_PREFIX}${workspaceId === "global"
+      ? "global"
+      : `workspace:${workspaceId}`}`,
   ) || "null");
 }
 
@@ -78,7 +86,7 @@ describe("WorkspaceTimer", () => {
       name: "Countdown seconds",
     }), { target: { value: "30" } });
     expect(within(timer).getByRole("timer")).toHaveTextContent("02:30");
-    expect(storedTimer()).toMatchObject({
+    expect(storedTimer("global")).toMatchObject({
       version: 1,
       timer: { durationMs: 150_000, remainingMs: 150_000 },
       panel: { open: true, pinned: false },
@@ -194,7 +202,7 @@ describe("WorkspaceTimer", () => {
   });
 
   it("keeps a pinned panel across sessions but closes an unpinned panel", () => {
-    const view = renderTimer();
+    const view = renderTimer({ scope: "workspace" });
     let timer = openTimer();
     fireEvent.click(within(timer).getByRole("button", { name: "Pin workspace timer" }));
 
@@ -221,8 +229,89 @@ describe("WorkspaceTimer", () => {
       .toBeInTheDocument();
   });
 
-  it("persists keyboard movement and isolates panel state by workspace", () => {
+  it("defaults to the global scope and keeps it across workspace and session changes", () => {
+    const view = renderTimer({
+      workspaceId: "workspace-one",
+      sessionName: "agent-one",
+    });
+    let timer = openTimer();
+
+    expect(within(timer).getByRole("button", { name: "Global timer scope" }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(timer).toHaveAttribute("data-scope", "global");
+    fireEvent.click(within(timer).getByRole("button", {
+      name: "Set countdown to 5 minutes",
+    }));
+
+    view.rerender(
+      <WorkspaceTimer
+        sessionName="agent-two"
+        workspaceId="workspace-two"
+        workspaceName="Second room"
+      />,
+    );
+    timer = screen.getByRole("dialog", { name: "Timer" });
+    expect(timer).toHaveAttribute("data-scope", "global");
+    expect(within(timer).getByRole("timer")).toHaveTextContent("05:00");
+    expect(within(timer).getByText("Shared across workspaces in this browser"))
+      .toBeVisible();
+  });
+
+  it("keeps independent workspace and session timer state", () => {
+    const view = renderTimer({ scope: "workspace" });
+    let timer = openTimer();
+    fireEvent.click(within(timer).getByRole("button", {
+      name: "Set countdown to 15 minutes",
+    }));
+
+    // Workspace state follows its tabs, while the global timer remains separate.
+    fireEvent.click(within(timer).getByRole("button", { name: "Global timer scope" }));
+    expect(within(screen.getByRole("dialog", { name: "Timer" })).getByRole("timer"))
+      .toHaveTextContent("25:00");
+    fireEvent.click(screen.getByRole("dialog", { name: "Timer" }).querySelector(
+      "button[aria-label='Workspace timer scope']",
+    )!);
+    timer = screen.getByRole("dialog", { name: "Timer" });
+    expect(within(timer).getByRole("timer")).toHaveTextContent("15:00");
+
+    fireEvent.click(within(timer).getByRole("button", { name: "Session timer scope" }));
+    timer = screen.getByRole("dialog", { name: "Timer" });
+    expect(timer).toHaveAttribute("data-scope", "session");
+    expect(within(timer).getByRole("timer")).toHaveTextContent("25:00");
+    fireEvent.click(within(timer).getByRole("button", {
+      name: "Set countdown to 5 minutes",
+    }));
+
+    view.rerender(
+      <WorkspaceTimer
+        sessionName="agent-two"
+        sessionIdentity="$agent-two:2:20:200"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+      />,
+    );
+    expect(screen.queryByRole("dialog", { name: "Timer" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show workspace timer" }));
+    timer = screen.getByRole("dialog", { name: "Timer" });
+    expect(within(timer).getByRole("timer")).toHaveTextContent("25:00");
+  });
+
+  it("remembers the selected scope while defaulting fresh browsers to Global", () => {
     const first = renderTimer();
+    const timer = openTimer();
+    fireEvent.click(within(timer).getByRole("button", { name: "Workspace timer scope" }));
+    expect(window.localStorage.getItem(TIMER_SCOPE_PREFERENCE_STORAGE_KEY)).toBe("workspace");
+    first.unmount();
+
+    renderTimer();
+    expect(screen.getByRole("dialog", { name: "Timer" })).toHaveAttribute(
+      "data-scope",
+      "workspace",
+    );
+  });
+
+  it("persists keyboard movement and isolates panel state by workspace", () => {
+    const first = renderTimer({ scope: "workspace" });
     const timer = openTimer();
     const titleStrip = within(timer).getByLabelText("Move workspace timer window");
     const initialLeft = Number.parseInt(timer.style.left, 10);
@@ -231,7 +320,7 @@ describe("WorkspaceTimer", () => {
     fireEvent.click(within(timer).getByRole("button", { name: "Pin workspace timer" }));
     first.unmount();
 
-    renderTimer({ workspaceId: "workspace-two", workspaceName: "Second room" });
+    renderTimer({ workspaceId: "workspace-two", workspaceName: "Second room", scope: "workspace" });
     expect(screen.queryByRole("dialog", { name: "Timer" })).not.toBeInTheDocument();
     expect(storedTimer("workspace-one").panel.position.x).toBe(initialLeft + 12);
     expect(storedTimer("workspace-two").panel.open).toBe(false);
@@ -261,7 +350,7 @@ describe("WorkspaceTimer", () => {
       }),
     );
 
-    renderTimer();
+    renderTimer({ scope: "workspace" });
     expect(screen.getByRole("timer")).toHaveTextContent("TIME'S UP");
     expect(document.title).toBe("[TIMER] Muxdeck");
     expect(storedTimer().timer.phase).toBe("alarm");

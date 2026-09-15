@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listWorkspaces,
   type SavedWorkspace,
-  type WorkspaceSessionTransferResult,
+  type WorkspaceSessionsTransferResult,
 } from "../api";
 import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
 
@@ -43,12 +43,12 @@ describe("SessionWorkspaceTransferDialog", () => {
 
   it("filters out the source, copies once, and marks the destination as added", async () => {
     const destination = workspace("destination", "Release room", ["review", "agent"], 5);
-    const result: WorkspaceSessionTransferResult = {
-      session: "agent",
+    const result: WorkspaceSessionsTransferResult = {
+      sessions: ["agent"],
       operation: "copy",
-      destinationAlreadyContained: false,
-      destinationAdded: true,
-      sourceRemoved: false,
+      destinationAlreadyContained: [],
+      destinationAdded: ["agent"],
+      sourceRemoved: [],
       sourceWorkspace: workspace("source", "Current project", ["agent", "shell"], 5),
       destinationWorkspace: destination,
       sessionRevision: 5,
@@ -56,10 +56,10 @@ describe("SessionWorkspaceTransferDialog", () => {
     const onTransfer = vi.fn().mockResolvedValue(result);
     render(
       <SessionWorkspaceTransferDialog
-        sessionName="agent"
+        sessionNames={["agent"]}
         sourceWorkspaceId="source"
         sourceWorkspaceName="Current project"
-        workspacePinned={false}
+        workspacePinnedSessions={[]}
         onClose={vi.fn()}
         onTransfer={onTransfer}
       />,
@@ -73,6 +73,7 @@ describe("SessionWorkspaceTransferDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy agent to Release room" }));
     await waitFor(() => expect(onTransfer).toHaveBeenCalledWith(
+      ["agent"],
       "destination",
       "copy",
       4,
@@ -85,21 +86,21 @@ describe("SessionWorkspaceTransferDialog", () => {
   it("searches by workspace tabs and closes after a move", async () => {
     const onClose = vi.fn();
     const onTransfer = vi.fn().mockResolvedValue({
-      session: "agent",
+      sessions: ["agent"],
       operation: "move",
-      destinationAlreadyContained: true,
-      destinationAdded: false,
-      sourceRemoved: true,
+      destinationAlreadyContained: ["agent"],
+      destinationAdded: [],
+      sourceRemoved: ["agent"],
       sourceWorkspace: workspace("source", "Current project", ["shell"], 5),
       destinationWorkspace: workspace("existing", "Agent archive", ["agent"], 5),
       sessionRevision: 5,
-    } satisfies WorkspaceSessionTransferResult);
+    } satisfies WorkspaceSessionsTransferResult);
     render(
       <SessionWorkspaceTransferDialog
-        sessionName="agent"
+        sessionNames={["agent"]}
         sourceWorkspaceId="source"
         sourceWorkspaceName="Current project"
-        workspacePinned={false}
+        workspacePinnedSessions={[]}
         onClose={onClose}
         onTransfer={onTransfer}
       />,
@@ -114,17 +115,22 @@ describe("SessionWorkspaceTransferDialog", () => {
       name: "Move agent to Agent archive",
     }));
 
-    await waitFor(() => expect(onTransfer).toHaveBeenCalledWith("existing", "move", 4));
+    await waitFor(() => expect(onTransfer).toHaveBeenCalledWith(
+      ["agent"],
+      "existing",
+      "move",
+      4,
+    ));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("explains why a globally pinned session cannot be moved", async () => {
     render(
       <SessionWorkspaceTransferDialog
-        sessionName="agent"
+        sessionNames={["agent"]}
         sourceWorkspaceId="source"
         sourceWorkspaceName="Current project"
-        workspacePinned
+        workspacePinnedSessions={["agent"]}
         onClose={vi.fn()}
         onTransfer={vi.fn()}
       />,
@@ -133,5 +139,89 @@ describe("SessionWorkspaceTransferDialog", () => {
     expect(await screen.findByText(/already copied everywhere/i)).toBeVisible();
     expect(screen.getByRole("button", { name: "Move agent to Release room" }))
       .toBeDisabled();
+  });
+
+  it("copies only missing sessions from an ordered multi-selection", async () => {
+    vi.mocked(listWorkspaces).mockResolvedValue([
+      workspace("source", "Current project", ["alpha", "beta", "gamma"]),
+      workspace("destination", "Release room", ["review", "beta"]),
+      workspace("existing", "Complete archive", ["alpha", "beta", "gamma"]),
+    ]);
+    const result: WorkspaceSessionsTransferResult = {
+      sessions: ["alpha", "beta", "gamma"],
+      operation: "copy",
+      destinationAlreadyContained: ["beta"],
+      destinationAdded: ["alpha", "gamma"],
+      sourceRemoved: [],
+      sourceWorkspace: workspace(
+        "source",
+        "Current project",
+        ["alpha", "beta", "gamma"],
+        5,
+      ),
+      destinationWorkspace: workspace(
+        "destination",
+        "Release room",
+        ["review", "beta", "alpha", "gamma"],
+        5,
+      ),
+      sessionRevision: 5,
+    };
+    const onTransfer = vi.fn().mockResolvedValue(result);
+
+    render(
+      <SessionWorkspaceTransferDialog
+        sessionNames={["alpha", "beta", "gamma"]}
+        sourceWorkspaceId="source"
+        sourceWorkspaceName="Current project"
+        workspacePinnedSessions={[]}
+        onClose={vi.fn()}
+        onTransfer={onTransfer}
+      />,
+    );
+
+    expect(await screen.findByText("3 selected sessions")).toBeVisible();
+    expect(screen.getByText("alpha, beta, gamma")).toBeVisible();
+    expect(screen.getByText("1 of 3 already here")).toBeVisible();
+    expect(screen.getByRole("button", {
+      name: "Complete archive already contains all 3 selected sessions",
+    })).toBeDisabled();
+    expect(screen.getByRole("button", {
+      name: "Move 3 selected sessions to Complete archive",
+    })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Copy 2 missing selected sessions to Release room",
+    }));
+    await waitFor(() => expect(onTransfer).toHaveBeenCalledWith(
+      ["alpha", "beta", "gamma"],
+      "destination",
+      "copy",
+      4,
+    ));
+    expect(await screen.findByText(
+      "Copied 2 sessions to Release room; 1 was already there.",
+    )).toBeVisible();
+  });
+
+  it("blocks the complete multi-session move when any selection is globally pinned", async () => {
+    render(
+      <SessionWorkspaceTransferDialog
+        sessionNames={["agent", "shell"]}
+        sourceWorkspaceId="source"
+        sourceWorkspaceName="Current project"
+        workspacePinnedSessions={["shell"]}
+        onClose={vi.fn()}
+        onTransfer={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/shell.*unpin it first/i)).toBeVisible();
+    expect(screen.getByRole("button", {
+      name: "Move 2 selected sessions to Release room",
+    })).toBeDisabled();
+    expect(screen.getByRole("button", {
+      name: "Copy 2 missing selected sessions to Release room",
+    })).toBeEnabled();
   });
 });

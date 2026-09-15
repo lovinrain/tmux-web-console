@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tmux_console.workspaces import (
+    MAX_GLOBAL_CALLBACK_SESSIONS,
     MAX_SCOPED_NOTE_PAGES,
     MAX_SESSION_RENAME_REVISION,
     MAX_WORKSPACE_CALLBACK_SESSIONS,
@@ -230,6 +231,80 @@ def test_workspace_callback_sessions_persist_follow_renames_and_fence_stale_writ
             session_revision=0,
         )
     assert store.get_workspace("workspace-id") == renamed
+
+
+def test_global_callback_sessions_union_workspace_entries_and_persist(tmp_path):
+    path = tmp_path / "workspaces.json"
+    ids = iter(["workspace-one", "workspace-two"])
+    store = WorkspaceStore(path, id_factory=lambda: next(ids))
+    store.create_workspace(
+        name="One",
+        tabs=["agent-a", "agent-b"],
+        active_session="agent-a",
+        callback_sessions=["agent-a", "ended"],
+    )
+    store.create_workspace(
+        name="Two",
+        tabs=["agent-b", "agent-c"],
+        active_session="agent-b",
+        callback_sessions=["agent-b", "agent-a"],
+    )
+
+    snapshot = store.get_global_callback_sessions()
+    assert snapshot["globalCallbackSessions"] == []
+    assert snapshot["callbackSessions"] == ["agent-a", "ended", "agent-b"]
+    assert snapshot["workspaceCallbacks"] == [
+        {
+            "workspaceId": "workspace-one",
+            "workspaceName": "One",
+            "sessions": ["agent-a", "ended"],
+        },
+        {
+            "workspaceId": "workspace-two",
+            "workspaceName": "Two",
+            "sessions": ["agent-b", "agent-a"],
+        },
+    ]
+
+    added = store.add_global_callback_sessions(
+        sessions=["agent-global", "agent-a"],
+        session_revision=0,
+    )
+    assert added["added"] == ["agent-global", "agent-a"]
+    assert added["globalCallbackSessions"] == ["agent-global", "agent-a"]
+    assert added["callbackSessions"] == [
+        "agent-global", "agent-a", "ended", "agent-b"
+    ]
+    assert WorkspaceStore(path).get_global_callback_sessions() == {
+        key: value for key, value in added.items() if key != "added"
+    }
+
+    removed = store.remove_global_callback_sessions(
+        sessions=["agent-a", "missing"],
+        session_revision=0,
+    )
+    assert removed["removed"] == ["agent-a"]
+    # Workspace-owned agent-a remains in the higher-level effective queue.
+    assert "agent-a" in removed["callbackSessions"]
+
+    assert store.rename_session("agent-global", "renamed-global") == 0
+    assert store.get_global_callback_sessions()["globalCallbackSessions"] == [
+        "renamed-global"
+    ]
+
+
+@pytest.mark.parametrize(
+    "sessions",
+    [
+        None,
+        ["agent", "agent"],
+        [f"agent-{index}" for index in range(MAX_GLOBAL_CALLBACK_SESSIONS + 1)],
+    ],
+)
+def test_global_callback_sessions_validate_strictly(tmp_path, sessions):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    with pytest.raises((TypeError, ValueError)):
+        store.replace_global_callback_sessions(sessions, session_revision=0)
 
 
 @pytest.mark.parametrize(
@@ -815,6 +890,150 @@ def test_workspace_session_transfer_copies_deduplicates_and_moves_atomically(tmp
     assert moved["destinationWorkspace"]["callbackSessions"] == ["agent"]
     assert WorkspaceStore(path).get_workspace("destination")["tabs"].count("agent") == 1
     assert destination["lastActiveAt"] == moved["destinationWorkspace"]["lastActiveAt"]
+
+
+def test_workspace_session_batch_transfer_preserves_order_and_reconciles_source(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        clock=lambda: 10,
+        id_factory=sequence(["source", "destination"]),
+    )
+    store.create_workspace(
+        name="Source",
+        tabs=["agent-a", "agent-b", "agent-c"],
+        groups=[workspace_group("agents", ["agent-a", "agent-b", "agent-c"])],
+        separators=["agent-a", "agent-b", "agent-c"],
+        separators_before=["agent-a", "agent-b", "agent-c"],
+        pane_layouts=[three_pane_layout()],
+        active_session="agent-a",
+        callback_sessions=["agent-b", "agent-a"],
+    )
+    store.create_workspace(
+        name="Destination",
+        tabs=["review", "agent-b"],
+        active_session="review",
+    )
+
+    copied = store.transfer_sessions(
+        ["agent-a", "agent-b", "agent-c"],
+        source_workspace_id="source",
+        destination_workspace_id="destination",
+        operation="copy",
+        session_revision=0,
+    )
+    assert copied["destinationAlreadyContained"] == ["agent-b"]
+    assert copied["destinationAdded"] == ["agent-a", "agent-c"]
+    assert copied["sourceRemoved"] == []
+    assert copied["destinationWorkspace"]["tabs"] == [
+        "review",
+        "agent-b",
+        "agent-a",
+        "agent-c",
+    ]
+    assert copied["sessionRevision"] == 1
+
+    moved = store.transfer_sessions(
+        ["agent-a", "agent-b"],
+        source_workspace_id="source",
+        destination_workspace_id="destination",
+        operation="move",
+        session_revision=1,
+    )
+    assert moved["destinationAlreadyContained"] == ["agent-a", "agent-b"]
+    assert moved["destinationAdded"] == []
+    assert moved["sourceRemoved"] == ["agent-a", "agent-b"]
+    assert moved["sourceWorkspace"]["tabs"] == ["agent-c"]
+    assert moved["sourceWorkspace"]["groups"] == [
+        workspace_group("agents", ["agent-c"])
+    ]
+    assert moved["sourceWorkspace"]["separators"] == ["agent-c"]
+    assert moved["sourceWorkspace"]["separatorsBefore"] == ["agent-c"]
+    assert moved["sourceWorkspace"]["activeSession"] == "agent-c"
+    pane_root = moved["sourceWorkspace"]["paneLayouts"][0]["root"]
+    assert pane_root["first"]["session"] is None
+    assert pane_root["second"]["first"]["session"] is None
+    assert moved["sourceWorkspace"].get("callbackSessions", []) == []
+    assert moved["destinationWorkspace"]["callbackSessions"] == [
+        "agent-b",
+        "agent-a",
+    ]
+    assert moved["destinationWorkspace"]["tabs"] == [
+        "review",
+        "agent-b",
+        "agent-a",
+        "agent-c",
+    ]
+    assert moved["sessionRevision"] == 2
+
+
+def test_workspace_session_batch_move_rejects_pins_and_capacity_atomically(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=sequence(["source", "destination"]),
+    )
+    store.create_workspace(
+        name="Source",
+        tabs=["agent-a", "agent-b"],
+        active_session="agent-a",
+    )
+    store.create_workspace(
+        name="Destination",
+        tabs=["review"],
+        active_session="review",
+    )
+    store.set_session_workspace_pinned("agent-b", True)
+    pinned_source = store.get_workspace("source")
+    pinned_destination = store.get_workspace("destination")
+
+    with pytest.raises(WorkspaceTransferConflictError, match="agent-b"):
+        store.transfer_sessions(
+            ["agent-a", "agent-b"],
+            source_workspace_id="source",
+            destination_workspace_id="destination",
+            operation="move",
+            session_revision=1,
+        )
+    assert store.get_workspace("source") == pinned_source
+    assert store.get_workspace("destination") == pinned_destination
+
+    capacity_store = WorkspaceStore(
+        tmp_path / "capacity-workspaces.json",
+        id_factory=sequence(["capacity-source", "capacity-destination"]),
+    )
+    capacity_store.create_workspace(
+        name="Source",
+        tabs=["new-a", "new-b"],
+        active_session="new-a",
+    )
+    destination_tabs = [
+        f"session-{index}" for index in range(MAX_WORKSPACE_TABS - 1)
+    ]
+    full_destination = capacity_store.create_workspace(
+        name="Nearly full",
+        tabs=destination_tabs,
+        active_session=destination_tabs[0],
+    )
+    capacity_source = capacity_store.get_workspace("capacity-source")
+
+    with pytest.raises(WorkspaceTransferConflictError, match="would exceed"):
+        capacity_store.transfer_sessions(
+            ["new-a", "new-b"],
+            source_workspace_id="capacity-source",
+            destination_workspace_id="capacity-destination",
+            operation="move",
+            session_revision=0,
+        )
+    assert capacity_store.get_workspace("capacity-source") == capacity_source
+    assert capacity_store.get_workspace("capacity-destination") == full_destination
+
+    with pytest.raises(WorkspaceSessionRevisionConflict):
+        capacity_store.transfer_sessions(
+            ["new-a", "new-b"],
+            source_workspace_id="capacity-source",
+            destination_workspace_id="capacity-destination",
+            operation="copy",
+            session_revision=99,
+        )
 
 
 def test_workspace_session_move_preserves_source_when_callback_destination_is_full(

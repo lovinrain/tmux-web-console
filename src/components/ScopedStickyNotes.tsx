@@ -58,6 +58,17 @@ interface FloatingNoteSize {
   height: number;
 }
 
+type FloatingNoteResizeCorner =
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
+
+interface FloatingNoteGeometry {
+  position: FloatingNotePosition;
+  size: FloatingNoteSize;
+}
+
 interface NoteWindowPreference {
   open: boolean;
   floating: boolean;
@@ -113,7 +124,7 @@ interface StickyNoteEditorProps {
   onPositionChange: (position: FloatingNotePosition) => void;
   onPositionCommit: (position: FloatingNotePosition) => void;
   onSizeChange: (size: FloatingNoteSize) => void;
-  onSizeCommit: (size: FloatingNoteSize) => void;
+  onGeometryCommit: (geometry: FloatingNoteGeometry) => void;
   onSelectedPageChange: (pageId: string) => void;
   onSidebarOpenChange: (open: boolean) => void;
   onActivate: () => void;
@@ -249,6 +260,42 @@ function clampFloatingNoteSize(
       maxHeight,
       Math.max(MIN_SCOPED_NOTE_WINDOW_HEIGHT, size.height),
     )),
+  };
+}
+
+function resizeFloatingNoteFromCorner(
+  position: FloatingNotePosition,
+  size: FloatingNoteSize,
+  requestedSize: FloatingNoteSize,
+  corner: FloatingNoteResizeCorner,
+): FloatingNoteGeometry {
+  const viewport = floatingNoteViewport();
+  const fromLeft = corner.endsWith("left");
+  const fromTop = corner.startsWith("top");
+  const anchoredRight = position.x + size.width;
+  const anchoredBottom = position.y + size.height;
+  const availableWidth = fromLeft
+    ? anchoredRight - NOTE_WINDOW_MARGIN
+    : viewport.width - position.x - NOTE_WINDOW_MARGIN;
+  const availableHeight = fromTop
+    ? anchoredBottom - NOTE_WINDOW_MARGIN
+    : viewport.height - position.y - NOTE_WINDOW_MARGIN;
+  const nextSize = {
+    width: Math.round(Math.min(
+      Math.max(MIN_SCOPED_NOTE_WINDOW_WIDTH, availableWidth),
+      Math.max(MIN_SCOPED_NOTE_WINDOW_WIDTH, requestedSize.width),
+    )),
+    height: Math.round(Math.min(
+      Math.max(MIN_SCOPED_NOTE_WINDOW_HEIGHT, availableHeight),
+      Math.max(MIN_SCOPED_NOTE_WINDOW_HEIGHT, requestedSize.height),
+    )),
+  };
+  return {
+    position: {
+      x: Math.round(fromLeft ? anchoredRight - nextSize.width : position.x),
+      y: Math.round(fromTop ? anchoredBottom - nextSize.height : position.y),
+    },
+    size: nextSize,
   };
 }
 
@@ -452,7 +499,7 @@ function StickyNoteEditor({
   onPositionChange,
   onPositionCommit,
   onSizeChange,
-  onSizeCommit,
+  onGeometryCommit,
   onSelectedPageChange,
   onSidebarOpenChange,
   onActivate,
@@ -617,6 +664,10 @@ function StickyNoteEditor({
       document.documentElement.classList.remove(
         "scoped-note-moving",
         "scoped-note-resizing",
+        "scoped-note-resizing-top-left",
+        "scoped-note-resizing-top-right",
+        "scoped-note-resizing-bottom-left",
+        "scoped-note-resizing-bottom-right",
       );
       const latestDraft = draftRef.current;
       const latestSignature = notebookSignature(latestDraft);
@@ -727,14 +778,28 @@ function StickyNoteEditor({
     onPositionCommit(next);
   }, [onActivate, onPositionChange, onPositionCommit, position, size]);
 
-  const commitSize = useCallback((candidate: FloatingNoteSize) => {
-    const next = clampFloatingNoteSize(candidate, position);
+  const commitResize = useCallback((
+    candidate: FloatingNoteSize,
+    corner: FloatingNoteResizeCorner,
+  ) => {
+    const next = resizeFloatingNoteFromCorner(position, size, candidate, corner);
     onActivate();
-    onSizeChange(next);
-    onSizeCommit(next);
-  }, [onActivate, onSizeChange, onSizeCommit, position]);
+    onPositionChange(next.position);
+    onSizeChange(next.size);
+    onGeometryCommit(next);
+  }, [
+    onActivate,
+    onPositionChange,
+    onSizeChange,
+    onGeometryCommit,
+    position,
+    size,
+  ]);
 
-  const startResizing = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+  const startResizing = useCallback((
+    event: ReactPointerEvent<HTMLButtonElement>,
+    corner: FloatingNoteResizeCorner,
+  ) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -744,14 +809,18 @@ function StickyNoteEditor({
     const pointerId = event.pointerId;
     const startX = event.clientX;
     const startY = event.clientY;
+    const startPosition = position;
     const startSize = size;
-    let latestSize = size;
+    let latestGeometry = { position, size };
 
     const cleanupResize = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
-      document.documentElement.classList.remove("scoped-note-resizing");
+      document.documentElement.classList.remove(
+        "scoped-note-resizing",
+        `scoped-note-resizing-${corner}`,
+      );
       if (interactionCleanupRef.current === cleanupResize) {
         interactionCleanupRef.current = null;
       }
@@ -759,34 +828,75 @@ function StickyNoteEditor({
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
       moveEvent.preventDefault();
-      latestSize = clampFloatingNoteSize({
-        width: startSize.width + moveEvent.clientX - startX,
-        height: startSize.height + moveEvent.clientY - startY,
-      }, position);
-      onSizeChange(latestSize);
+      const deltaX = moveEvent.clientX - startX;
+      const deltaY = moveEvent.clientY - startY;
+      latestGeometry = resizeFloatingNoteFromCorner(
+        startPosition,
+        startSize,
+        {
+          width: startSize.width + (corner.endsWith("left") ? -deltaX : deltaX),
+          height: startSize.height + (corner.startsWith("top") ? -deltaY : deltaY),
+        },
+        corner,
+      );
+      onPositionChange(latestGeometry.position);
+      onSizeChange(latestGeometry.size);
     };
     const handlePointerEnd = (endEvent: PointerEvent) => {
       if (endEvent.pointerId !== pointerId) return;
       cleanupResize();
-      onSizeCommit(latestSize);
+      onGeometryCommit(latestGeometry);
     };
 
     interactionCleanupRef.current = cleanupResize;
-    document.documentElement.classList.add("scoped-note-resizing");
+    document.documentElement.classList.add(
+      "scoped-note-resizing",
+      `scoped-note-resizing-${corner}`,
+    );
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerEnd);
     window.addEventListener("pointercancel", handlePointerEnd);
-  }, [onActivate, onSizeChange, onSizeCommit, position, size]);
+  }, [
+    onActivate,
+    onPositionChange,
+    onSizeChange,
+    onGeometryCommit,
+    position,
+    size,
+  ]);
 
-  const resizeWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+  const resizeWithKeyboard = useCallback((
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    corner: FloatingNoteResizeCorner,
+  ) => {
     const step = event.shiftKey
       ? NOTE_WINDOW_KEYBOARD_LARGE_STEP
       : NOTE_WINDOW_KEYBOARD_STEP;
     let next: FloatingNoteSize | null = null;
-    if (event.key === "ArrowLeft") next = { ...size, width: size.width - step };
-    if (event.key === "ArrowRight") next = { ...size, width: size.width + step };
-    if (event.key === "ArrowUp") next = { ...size, height: size.height - step };
-    if (event.key === "ArrowDown") next = { ...size, height: size.height + step };
+    if (event.key === "ArrowLeft") {
+      next = {
+        ...size,
+        width: size.width + (corner.endsWith("left") ? step : -step),
+      };
+    }
+    if (event.key === "ArrowRight") {
+      next = {
+        ...size,
+        width: size.width + (corner.endsWith("left") ? -step : step),
+      };
+    }
+    if (event.key === "ArrowUp") {
+      next = {
+        ...size,
+        height: size.height + (corner.startsWith("top") ? step : -step),
+      };
+    }
+    if (event.key === "ArrowDown") {
+      next = {
+        ...size,
+        height: size.height + (corner.startsWith("top") ? -step : step),
+      };
+    }
     if (event.key === "Home") {
       next = {
         width: MIN_SCOPED_NOTE_WINDOW_WIDTH,
@@ -805,8 +915,8 @@ function StickyNoteEditor({
     if (!next) return;
     event.preventDefault();
     event.stopPropagation();
-    commitSize(next);
-  }, [commitSize, size]);
+    commitResize(next, corner);
+  }, [commitResize, size]);
 
   const selectPage = useCallback((pageId: string) => {
     const current = commitPageName();
@@ -1130,21 +1240,29 @@ function StickyNoteEditor({
           {closing ? "Saving..." : "Done"}
         </button>
       </div>
-      <button
-        type="button"
-        className="scoped-note-resize-handle"
-        aria-label={`Resize ${scope} note window`}
-        aria-description="Drag to resize in both directions. Arrow keys resize one dimension; Home minimizes and Enter resets."
-        title="Drag to resize. Arrow keys resize; Home minimizes; Enter resets."
-        onPointerDown={startResizing}
-        onDoubleClick={() => commitSize({
-          width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
-          height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
-        })}
-        onKeyDown={resizeWithKeyboard}
-      >
-        <span aria-hidden="true" />
-      </button>
+      {([
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+      ] as const).map((corner) => (
+        <button
+          key={corner}
+          type="button"
+          className={`scoped-note-resize-handle ${corner}`}
+          aria-label={`Resize ${scope} note window from ${corner.replace("-", " ")} corner`}
+          aria-description="Drag this corner while the opposite corner stays fixed. Arrow keys resize one dimension; Home minimizes, End maximizes, and Enter resets."
+          title={`Drag the ${corner.replace("-", " ")} corner to resize. Arrow keys resize; Enter resets.`}
+          onPointerDown={(event) => startResizing(event, corner)}
+          onDoubleClick={() => commitResize({
+            width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
+            height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
+          }, corner)}
+          onKeyDown={(event) => resizeWithKeyboard(event, corner)}
+        >
+          <span aria-hidden="true" />
+        </button>
+      ))}
     </form>
   );
 
@@ -1562,12 +1680,12 @@ export function ScopedStickyNotes({
               candidate.key === editor.key ? { ...candidate, size } : candidate
             )));
           }}
-          onSizeCommit={(size) => {
+          onGeometryCommit={({ position, size }) => {
             writeNoteWindowPreference(editor.key, {
               open: true,
               floating: true,
               pinned: editor.pinned,
-              position: editor.position,
+              position,
               size,
               selectedPageId: editor.selectedPageId,
               sidebarOpen: editor.sidebarOpen,

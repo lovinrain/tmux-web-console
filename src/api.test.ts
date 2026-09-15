@@ -13,6 +13,7 @@ import {
   getCommonNotebook,
   getCommonNote,
   getCommonWorkspaceQuickLinks,
+  getGlobalCallbackSessions,
   getHostMetrics,
   getSessionNotebook,
   getSessionNote,
@@ -34,6 +35,8 @@ import {
   replaceCommonNotebook,
   replaceCommonNote,
   replaceCommonWorkspaceQuickLinks,
+  replaceGlobalCallbackSessions,
+  reviewGlobalCallbackSession,
   replaceSessionNotebook,
   replaceSessionNote,
   replaceSessionQuickLinks,
@@ -47,9 +50,11 @@ import {
   sessionFileHtmlUrl,
   sessionFileImageUrl,
   sessionFilePdfUrl,
+  subscribeToCallbackSessions,
   subscribeToSessions,
   terminateSession,
   transferSessionToWorkspace,
+  transferSessionsToWorkspace,
   uploadSessionAttachment,
   uploadSessionFile,
   updateSessionIgnored,
@@ -929,6 +934,57 @@ describe("session workspace transfer API", () => {
       }),
     );
   });
+
+  it("posts an ordered session batch to the atomic bulk endpoint", async () => {
+    const destinationWorkspace = {
+      id: "destination",
+      name: "Destination",
+      tabs: ["existing", "alpha", "gamma"],
+      groups: [],
+      quickLinks: [],
+      activeSession: "existing",
+      sessionRevision: 10,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveAt: 1,
+    };
+    const result = {
+      sessions: ["alpha", "beta", "gamma"],
+      operation: "copy" as const,
+      destinationAlreadyContained: ["beta"],
+      destinationAdded: ["alpha", "gamma"],
+      sourceRemoved: [],
+      sourceWorkspace: null,
+      destinationWorkspace,
+      sessionRevision: 10,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(transferSessionsToWorkspace(
+      ["alpha", "beta", "gamma"],
+      "source",
+      "destination",
+      "copy",
+      9,
+    )).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/session-workspace-transfer/bulk`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sessions: ["alpha", "beta", "gamma"],
+          sourceWorkspaceId: "source",
+          destinationWorkspaceId: "destination",
+          operation: "copy",
+          sessionRevision: 9,
+        }),
+      }),
+    );
+  });
 });
 
 describe("session tags API", () => {
@@ -1011,6 +1067,62 @@ describe("saved workspace API", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/workspaces`);
     expect(fetchMock.mock.calls[1][0]).toBe(
       `${BASE_PATH}/api/workspaces/workspace%2Fid`,
+    );
+  });
+
+  it("reads and replaces the global callback queue", async () => {
+    const snapshot = {
+      callbackSessions: ["global", "workspace-session"],
+      globalCallbackSessions: ["global"],
+      workspaceCallbacks: [{
+        workspaceId: "workspace/id",
+        workspaceName: "Release train",
+        sessions: ["workspace-session"],
+      }],
+      sessionRevision: 7,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(snapshot), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(snapshot), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGlobalCallbackSessions()).resolves.toEqual(snapshot);
+    await expect(replaceGlobalCallbackSessions(["global"], 7)).resolves.toEqual(snapshot);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/callback-sessions`);
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ sessions: ["global"], sessionRevision: 7 }),
+    }));
+  });
+
+  it("reviews a callback across global and workspace queues", async () => {
+    const snapshot = {
+      removed: ["workspace-session"],
+      callbackSessions: [],
+      globalCallbackSessions: [],
+      workspaceCallbacks: [],
+      sessionRevision: 7,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshot), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(reviewGlobalCallbackSession("workspace-session", 7))
+      .resolves.toEqual(snapshot);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/callback-sessions/review`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ session: "workspace-session", sessionRevision: 7 }),
+      }),
     );
   });
 
@@ -1426,6 +1538,57 @@ describe("saved workspace API", () => {
       `${BASE_PATH}/api/workspaces/workspace%2Fid`,
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+});
+
+describe("subscribeToCallbackSessions", () => {
+  it("subscribes at the configured base path and delivers callback snapshots", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+
+    const unsubscribe = subscribeToCallbackSessions({ onSnapshot, onStatus });
+    const source = MockEventSource.instances[0];
+
+    expect(source.url).toBe(`${BASE_PATH}/api/callback-sessions/stream`);
+    expect(onStatus).toHaveBeenCalledWith("connecting");
+    source.onopen?.(new Event("open"));
+    expect(onStatus).toHaveBeenLastCalledWith("open");
+
+    const snapshot = {
+      callbackSessions: ["agent-one", "agent-two"],
+      globalCallbackSessions: ["agent-two"],
+      workspaceCallbacks: [{
+        workspaceId: "workspace-one",
+        workspaceName: "Launch room",
+        sessions: ["agent-one"],
+      }],
+      sessionRevision: 4,
+    };
+    source.emit("callbacks", new MessageEvent("callbacks", {
+      data: JSON.stringify(snapshot),
+    }));
+    expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+
+    unsubscribe();
+    unsubscribe();
+    expect(source.close).toHaveBeenCalledOnce();
+  });
+
+  it("reports malformed callback snapshots and connection errors", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+
+    subscribeToCallbackSessions({ onSnapshot, onStatus, onError });
+    const source = MockEventSource.instances[0];
+    source.emit("callbacks", new MessageEvent("callbacks", { data: "not json" }));
+    expect(onStatus).toHaveBeenLastCalledWith("error");
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    source.onerror?.(new Event("error"));
+    expect(onError).toHaveBeenLastCalledWith(expect.any(Error));
+    expect(onSnapshot).not.toHaveBeenCalled();
   });
 });
 

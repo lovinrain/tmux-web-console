@@ -70,6 +70,14 @@ CLAUDE_ACTIVE_STATUS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CLAUDE_PROMPT_MARKER = "\u276f"
+# ``claude attach`` inherits the shell/host title instead of publishing the
+# spinner frame.  Its input footer remains stable and identifies an idle
+# Claude prompt even when the title contains no Claude-specific glyph.
+CLAUDE_INPUT_FOOTER_PATTERN = re.compile(
+    r"(?:\bbypass\s+permissions\b|\baccept\s+edits\b|"
+    r"\bshift\s*\+\s*tab\s+to\s+cycle\b)",
+    re.IGNORECASE,
+)
 CLAUDE_STATUS_LOOKBACK = 5
 CLAUDE_FOOTER_LINES = 12
 # Cursor's interrupt hint sits in the footer during a live turn, but it is drawn
@@ -174,6 +182,30 @@ def _claude_turn_is_live(screen: str) -> bool:
         return False
     status_rows = footer[max(0, prompt - CLAUDE_STATUS_LOOKBACK) : prompt]
     return any(CLAUDE_ACTIVE_STATUS_PATTERN.fullmatch(line) for line in status_rows)
+
+
+def _claude_prompt_is_ready(screen: str) -> bool:
+    """Return whether the visible Claude footer is at an input prompt.
+
+    A plain hostname title is common for ``claude attach``.  Requiring both the
+    prompt marker and Claude's mode footer keeps arbitrary terminal output from
+    being mistaken for an idle agent.
+    """
+    footer = _rendered_lines(screen)[-CLAUDE_FOOTER_LINES:]
+    prompt = next(
+        (
+            index
+            for index in reversed(range(len(footer)))
+            if footer[index].lstrip().startswith(CLAUDE_PROMPT_MARKER)
+        ),
+        -1,
+    )
+    if prompt < 0:
+        return False
+    return any(
+        CLAUDE_INPUT_FOOTER_PATTERN.search(line)
+        for line in footer[prompt + 1 :]
+    )
 
 
 def _title_has_live_activity(command: str, title: str) -> bool:
@@ -320,6 +352,18 @@ def classify_agent_state(
                 return AgentState("unknown", "Agent activity indicator is stale")
             return AgentState("working", "Claude is running a turn")
         return AgentState("waiting_human", "Claude is paused at its input prompt")
+    if command == "claude" and visible_screen:
+        # ``claude attach`` can leave the title at a hostname, so inspect the
+        # rendered footer when the title has no state signal of its own.
+        background_state = _claude_background_work_state(visible_screen)
+        if background_state:
+            return background_state
+        if _claude_turn_is_live(visible_screen):
+            if _activity_is_stale(pane, now):
+                return AgentState("unknown", "Agent activity indicator is stale")
+            return AgentState("working", "Claude is running a turn")
+        if _claude_prompt_is_ready(visible_screen):
+            return AgentState("waiting_human", "Claude is paused at its input prompt")
     if command == "codex" and title:
         return AgentState("waiting_human", "Codex is paused at its input prompt")
     normalized_title = title.casefold()
@@ -343,6 +387,9 @@ def _needs_screen_capture(pane: Pane, state: AgentState) -> bool:
             command == "claude"
             and pane.title.strip().startswith(CLAUDE_AMBIGUOUS_TITLE_FRAME)
         )
+        # A Claude pane with a non-Claude title (for example ``claude attach``)
+        # needs a screen capture to determine whether its prompt is idle or live.
+        or (command == "claude" and state.name == "unknown")
     )
 
 

@@ -375,7 +375,9 @@ configured directory. File attachments are deliberately hidden in compact
 mobile layouts.
 
 The working-directory line beneath the desktop session title opens a separate
-movable and resizable file browser. It opens at the live pane CWD and can be
+movable file browser. Any of its four corners resizes both dimensions, and the
+left-edge grip changes width while keeping the right edge anchored. It opens at
+the live pane CWD and can be
 pointed elsewhere: `Go up` keeps stepping above that directory, and the address
 row takes an absolute file or directory path (`~` is expanded by the server).
 A directory opens in place. A regular file opens its parent directory, selects
@@ -514,7 +516,12 @@ Deleting always asks first. Files, symlinks, and empty folders are removed on th
 first confirmation. A folder with contents returns a conflict naming how many
 entries it holds and needs a second, explicit recursive confirmation; trees above
 20,000 entries are refused outright and left for the terminal. Deletes act on the
-named entry itself, so removing a symlink never touches what it points at.
+named entry itself, so removing a symlink never touches what it points at. For a
+deliberate high-throughput cleanup, `Unlock` in the title strip enables the
+temporary unsafe-delete mode for this browser panel: row and bulk deletes are
+sent immediately (including recursive folders) until the panel is locked again.
+The unlock is never persisted, and switching sessions or reopening the browser
+starts locked.
 
 Row checkboxes select several entries at once, and the tools row toggles only
 the rows currently on screen, so a checked entry hidden by the filter keeps its
@@ -684,16 +691,16 @@ that organizes landing-page results.
 
 On desktop, `Move / Copy` sits immediately beside `Pin all`. It opens a
 searchable list of the other saved workspaces, with an explicit `Copy` and
-`Move` action on every destination. Copy adds the current native tmux session
-without changing the current workspace. Move adds it to the destination and
-removes it from the current workspace; an unsaved current workspace removes
-only the browser's local tab. A destination that already contains the session
-is marked `Added`: Copy becomes a no-op, and Move removes only the source tab,
-so neither action can create duplicates. A globally pinned session cannot be
-moved until it is unpinned, because the pin requires it to remain in every
-workspace. Transfers are atomic, reject a full destination without touching
-the source, and advance the workspace revision fence so an older browser
-autosave cannot undo the result.
+`Move` action on every destination. When two or more tabs are selected, both
+that header action and the `Move / Copy` action in the selection toolbar use
+the complete selection in workspace order. Copy keeps the source tabs and adds
+only missing destination tabs. Move removes every selected source tab even if
+some were already present at the destination. An unsaved current workspace
+removes only the browser's local tabs. Existing tabs are never duplicated. If
+any selected session is globally pinned, the complete move is rejected until
+it is unpinned. Batch transfers are atomic, reject a full destination without
+touching the source, and advance the workspace revision fence once so an older
+browser autosave cannot undo the result.
 
 Selecting the main body of a card or list row opens its console in the current
 window. Use the adjacent `New window` link to open that console in a separate
@@ -708,6 +715,18 @@ dashboard query and the complete current quick-tab or saved-workspace context.
 The fixed `Sessions` control in the horizontal tab bar or vertical tab rail is
 split the same way: its labeled segment navigates this window, and its external
 link segment opens the same preserved landing-page URL in a new window.
+
+`Add sessions` beside the workspace's `New session` control opens a compact
+picker over the current multi-tab view. It lists running tmux sessions that are
+not already tabs in this workspace and fuzzily searches display title, native
+name, CWD, agent, command, pane title, state, reason, and tags. With no query,
+non-ignored and starred sessions are favored before actionable state and recent
+activity. `Add` appends a tab without moving focus and keeps the picker open for
+repeated additions; `Open` appends the tab, closes the picker, and focuses that
+session. Up/Down selects a result, Enter adds it, and Shift+Enter adds and opens
+it. Existing tabs are excluded, so repeated adds cannot duplicate a session.
+Changes to a named workspace enter the same automatic persistence flow as tab
+movement and closing; temporary workspaces remain encoded in the current URL.
 
 The landing page lists named saved workspaces in rough last-active order. `New
 workspace` starts with an empty tab set by default; choose `Copy current tabs`
@@ -727,9 +746,15 @@ current console stays open, its saved name replaces the temporary label, and its
 URL gains the stable workspace identifier. The accompanying `Saved`, `Opening`,
 or `Sync issue` state reports whether later tab-order and active-session changes
 are synchronizing automatically. On desktop, a saved identity has an adjacent
-`Rename` action in both the horizontal strip and vertical rail. Renaming changes
-the shared server name in place; the stable workspace ID, current URL, tabs,
-groups, links, notes, timers, and activity history remain attached.
+`Rename` action in both the horizontal strip and vertical rail. `Overview`
+repeats that explicitly labeled action on every viewport, including compact and
+mobile layouts, and desktop command search finds it by workspace name,
+settings, attributes, or details. The rename dialog also summarizes whether the
+workspace is server-saved, its session-tab, tab-group, and pane-view counts, and
+its stable workspace ID, making it the home for future workspace-level
+attributes. Renaming changes only the shared server name; the stable ID,
+current URL, tabs, groups, links, notes, timers, and activity history remain
+attached.
 
 On desktop, the compact workspace quick switcher beside that identity changes
 the saved workspace in the current browser tab. Its left and right buttons move
@@ -741,7 +766,7 @@ current workspace is marked explicitly, and a temporary workspace can jump to
 the first or last saved workspace without visiting the landing page first.
 
 Each saved workspace keeps its name, ordered open tabs, tab groups,
-workspace-scoped quick links, callback sessions, named multi-pane layouts, active session,
+workspace-scoped quick links, workspace callback sessions, named multi-pane layouts, active session,
 global-pin provenance, and
 server-generated creation, update, and last-active times in
 `MUXDECK_WORKSPACES_FILE`. Opening or changing a
@@ -976,9 +1001,14 @@ be pinned across session-tab switches. Countdown duration can be entered exactly
 or selected from 5, 15, 25, and 45 minute presets; completion rings for up to one
 minute, keeps a visible `TIME'S UP` state, and prefixes the browser-tab title until
 the alarm is dismissed. Stopwatch and countdown progress use wall-clock timestamps,
-so they remain accurate through background-tab throttling and reloads. Timer state,
-the pin/open choice, and window position are browser-local and isolated by saved
-workspace ID; they do not alter tmux or the server-side workspace record.
+so they remain accurate through background-tab throttling and reloads. The timer
+has independent `Global`, `Workspace`, and `Session` scopes. Global is the fresh
+browser default and follows the browser across workspaces; Workspace follows a
+saved (or temporary browser) workspace; Session follows the full native tmux
+identity so a recreated session with the same name starts clean. Timer state,
+the pin/open choice, and window position are browser-local per scope; they do
+not alter tmux or the server-side workspace record. The selected timer scope is
+remembered in that browser.
 
 `Host Pulse` is the adjacent desktop server-health card. It always shows the
 latest aggregate CPU and memory percentages; selecting it opens a non-modal panel
@@ -1090,7 +1120,8 @@ The live console defaults to exact `Ctrl+Shift` chords for session and terminal 
 session rename dialog, `L` returns to live output, `C` toggles browser Copy mode,
 and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
 creates a numbered session in the active pane's directory, `B` opens New session,
-`K` adds or removes the active session from the workspace callback list,
+`K` adds or removes the active session from the workspace callback list (and that
+entry is automatically visible in the global callback list),
 `F` enters or exits terminal Focus, `Y` toggles the floating staged-input
 window, and `S` shows or hides the session strip. The
 desktop command palette uses `Ctrl+Shift+H`. The console-only
@@ -1274,29 +1305,46 @@ but does not affect the Common note, a session note, or tmux. The file contains
 workspace names, tmux session names, user-defined quick-link labels and URLs, and
 user-authored notes, so treat it as potentially sensitive runtime state.
 Desktop note-window layout is separate browser-local state, namespaced by saved
-workspace ID. The open, floating, pinned, and position values do not modify the
-server workspace document, but the browser restores them when that workspace is
-resumed. Pinned Common and Workspace windows remain open across session-tab
-switches, while a Session window remains tied to its native tmux session.
+workspace ID. Any corner resizes the window while keeping its opposite corner
+anchored. The open, floating, pinned, position, and size values do not modify
+the server workspace document, but the browser restores them when that
+workspace is resumed. Pinned Common and Workspace windows remain open across
+session-tab switches, while a Session window remains tied to its native tmux
+session.
 
 ### Workspace callback list
 
 The desktop `Callback` card is a deliberate follow-up queue for sessions that
-need a human check later. `Current` marks the active session, or the chooser can
-add another known session; each entry is deduplicated, ordered by the user's
-additions, and can be opened or marked reviewed with its check button. Live
-agent state is shown as `Working`, `Ready`, `Waiting`, or `Ended / unavailable`,
-so a completed session remains easy to find after the operator returns. `Clear
-ended` removes stale entries and `Clear all` empties the queue. Callback entries
-are stored inside the saved workspace and follow native session renames; moving
-a tracked session transfers its callback entry with it, while copying a session
-does not silently create a second callback. An unsaved temporary workspace keeps
-its queue in browser-local storage until it is explicitly saved. The list opens
-in a movable, resizable floating window; pinning keeps it visible when switching
-session tabs, and its open, pin, position, and size preferences are namespaced by
-workspace in that browser.
+need a human check later. It has two scopes: `Global` (the default) and
+`Workspace`. `Current` marks the active session, or the chooser can add another
+known session; each entry is deduplicated, ordered by the user's additions, and
+can be opened or marked reviewed with its check button. Live agent state is
+shown as `Working`, `Ready`, `Waiting`, or `Ended / unavailable`, so a completed
+session remains easy to find after the operator returns. `Clear ended` removes
+stale entries and `Clear all` empties the active queue.
 
-The workspace schema is version 12. Version 1 files load at session revision zero;
+The global queue is the higher-level union of explicitly global entries and all
+workspace callback entries. A session registered in any workspace therefore
+always appears in the global list, with its owning workspace shown as provenance.
+Entries not open as tabs in the current workspace are display-only for
+navigation, so selecting one cannot accidentally add it to the current
+workspace; the review check remains enabled from any workspace. Reviewing a
+session clears its explicit global marker and every workspace-owned marker in
+one operation. Open pages subscribe to the authenticated callback event stream,
+so a review or add/remove action in another browser tab is reflected without
+waiting for a manual refresh. Explicit global entries are persisted in the shared workspace
+store, while workspace entries remain attached to their saved workspace. Both
+follow native session renames, and moving a tracked session transfers its
+workspace callback entry with it; copying a session does not silently create a
+second callback. An
+unsaved temporary workspace keeps its queue in browser-local storage until it is
+explicitly saved. The list opens in a movable, resizable floating window;
+pinning keeps it visible when switching session tabs, and its open, pin,
+position, and size preferences are namespaced by callback scope in that browser.
+The selected scope is remembered in browser storage and a fresh browser starts
+at `Global`.
+
+The workspace schema is version 13. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
@@ -1306,7 +1354,8 @@ its after-session separators and loads with no before-session separators, and
 versions 1 through 9 load with no named pane views. A legacy document
 upgrades atomically on its next workspace,
 quick-link, note, global-pin, or callback-list write. Versions 1 through 10 load
-with an empty callback list. A workspace name is limited to 80
+with an empty callback list, and older files load with an empty explicit global
+callback list. A workspace name is limited to 80
 characters and a workspace can contain
 at most 256 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
 quick links. It can keep 16 named pane layouts, each with at most 12 leaves and
@@ -1314,11 +1363,12 @@ six levels of nested splits. Pane names are limited to 64 characters and split
 ratios stay between 15% and 85%. The global common shelf and each native-session shelf also permit 16
 links. Group names are limited to 40 characters, quick-link labels to 48
 characters, quick-link URLs to 2,048 characters, every notebook to 128 pages
-with 80-character names, and every callback list to 64 unique session names.
+with 80-character names, workspace callback lists to 64 unique session names,
+and the explicit global callback list to 256 unique session names.
 Page content has no separate character validator. Writes use an
 atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 11
-reject the version 12 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 12
+reject the version 13 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 

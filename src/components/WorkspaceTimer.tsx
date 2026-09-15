@@ -23,9 +23,11 @@ const ALARM_REPEAT_MS = 1_250;
 const ALARM_SOUND_LIMIT_MS = 60_000;
 
 export const WORKSPACE_TIMER_STORAGE_PREFIX = "muxdeck.workspace-timer.v1:";
+export const TIMER_SCOPE_PREFERENCE_STORAGE_KEY = `${WORKSPACE_TIMER_STORAGE_PREFIX}scope`;
 
 type TimerMode = "countdown" | "stopwatch";
 type TimerPhase = "idle" | "running" | "paused" | "alarm";
+export type TimerScope = "global" | "workspace" | "session";
 
 interface TimerState {
   mode: TimerMode;
@@ -63,7 +65,11 @@ interface PersistedWorkspaceTimer {
 interface WorkspaceTimerProps {
   sessionName: string;
   workspaceId?: string | null;
+  /** Unique browser-local key for an unsaved workspace, when available. */
+  workspaceKey?: string | null;
   workspaceName?: string | null;
+  /** Full tmux identity; prevents a reused native name inheriting an old timer. */
+  sessionIdentity?: string | null;
 }
 
 type AudioContextWithOptionalClose = AudioContext & {
@@ -123,6 +129,65 @@ function defaultPanelState(): TimerPanelState {
     pinned: false,
     position: defaultTimerPosition(),
   };
+}
+
+function isTimerScope(value: unknown): value is TimerScope {
+  return value === "global" || value === "workspace" || value === "session";
+}
+
+function readPreferredTimerScope(): TimerScope {
+  try {
+    const stored = window.localStorage.getItem(TIMER_SCOPE_PREFERENCE_STORAGE_KEY);
+    return isTimerScope(stored) ? stored : "global";
+  } catch {
+    return "global";
+  }
+}
+
+function writePreferredTimerScope(scope: TimerScope): void {
+  try {
+    window.localStorage.setItem(TIMER_SCOPE_PREFERENCE_STORAGE_KEY, scope);
+  } catch {
+    // Scope preference is optional; a fresh browser still defaults to Global.
+  }
+}
+
+function timerScopeIdentity(
+  scope: TimerScope,
+  workspaceId: string | null,
+  workspaceKey: string | null,
+  sessionName: string,
+  sessionIdentity: string | null,
+): string {
+  if (scope === "global") return "global";
+  if (scope === "workspace") {
+    if (workspaceId) return `workspace:${workspaceId}`;
+    if (workspaceKey) return `workspace:${workspaceKey}`;
+    return "temporary-workspace";
+  }
+  return `session:${sessionIdentity || sessionName}`;
+}
+
+function timerScopeName(
+  scope: TimerScope,
+  workspaceName: string | null,
+  sessionName: string,
+): string {
+  if (scope === "global") return "Global";
+  if (scope === "workspace") return workspaceName?.trim() || "Workspace";
+  return `Session · ${sessionName}`;
+}
+
+function timerScopeDescription(
+  scope: TimerScope,
+  workspaceName: string | null,
+  sessionName: string,
+): string {
+  if (scope === "global") return "Shared across workspaces in this browser";
+  if (scope === "workspace") {
+    return `${workspaceName?.trim() || "This workspace"} · follows its session tabs`;
+  }
+  return `${sessionName} · follows this tmux session`;
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -305,45 +370,58 @@ function phaseLabel(phase: TimerPhase): string {
 export function WorkspaceTimer({
   sessionName,
   workspaceId = null,
+  workspaceKey = null,
   workspaceName = null,
+  sessionIdentity = null,
 }: WorkspaceTimerProps) {
   const desktop = useDesktopTimer();
   const headingId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const interactionCleanupRef = useRef<(() => void) | null>(null);
   const audioContextRef = useRef<AudioContextWithOptionalClose | null>(null);
-  const storageIdentity = workspaceId ? `workspace:${workspaceId}` : null;
-  const renderIdentity = storageIdentity ?? "temporary-workspace";
+  const initialScopeRef = useRef<TimerScope | null>(null);
+  if (initialScopeRef.current === null) initialScopeRef.current = readPreferredTimerScope();
+  const [scope, setScope] = useState<TimerScope>(initialScopeRef.current);
+  const storageIdentity = timerScopeIdentity(
+    scope,
+    workspaceId,
+    workspaceKey,
+    sessionName,
+    sessionIdentity,
+  );
+  const persistScope = scope !== "workspace" || Boolean(workspaceId || workspaceKey);
+  const renderIdentity = storageIdentity;
   const initialStoreRef = useRef<WorkspaceTimerStore | null>(null);
   if (initialStoreRef.current === null) {
-    const initial = storageIdentity
+    const initial = persistScope
       ? readWorkspaceTimer(storageIdentity)
       : { timer: defaultTimerState(), panel: defaultPanelState() };
     initialStoreRef.current = { identity: renderIdentity, ...initial };
   }
   const [store, setStore] = useState<WorkspaceTimerStore>(initialStoreRef.current);
   const [now, setNow] = useState(Date.now);
-  const previousSessionRef = useRef({ identity: renderIdentity, sessionName });
+  const previousSessionRef = useRef({ identity: renderIdentity, sessionName, scope });
 
   useEffect(() => {
     if (store.identity === renderIdentity) return;
-    const restored = storageIdentity
+    const restored = persistScope
       ? readWorkspaceTimer(storageIdentity)
       : { timer: defaultTimerState(), panel: defaultPanelState() };
     setNow(Date.now());
     setStore({ identity: renderIdentity, ...restored });
-  }, [renderIdentity, storageIdentity, store.identity]);
+  }, [persistScope, renderIdentity, storageIdentity, store.identity]);
 
   useEffect(() => {
-    if (!storageIdentity || store.identity !== renderIdentity) return;
+    if (!persistScope || store.identity !== renderIdentity) return;
     writeWorkspaceTimer(storageIdentity, store.timer, store.panel);
-  }, [renderIdentity, storageIdentity, store]);
+  }, [persistScope, renderIdentity, storageIdentity, store]);
 
   useEffect(() => {
     const previous = previousSessionRef.current;
     if (
       previous.identity === renderIdentity
       && previous.sessionName !== sessionName
+      && previous.scope !== "global"
     ) {
       setStore((current) => {
         if (
@@ -357,8 +435,8 @@ export function WorkspaceTimer({
         };
       });
     }
-    previousSessionRef.current = { identity: renderIdentity, sessionName };
-  }, [renderIdentity, sessionName]);
+    previousSessionRef.current = { identity: renderIdentity, sessionName, scope };
+  }, [renderIdentity, scope, sessionName]);
 
   const active = store.identity === renderIdentity;
   const timer = active ? store.timer : defaultTimerState();
@@ -534,6 +612,31 @@ export function WorkspaceTimer({
       ? { ...current, panel: updater(current.panel) }
       : current);
   }, [renderIdentity]);
+
+  const selectScope = useCallback((nextScope: TimerScope) => {
+    if (nextScope === scope) return;
+    writePreferredTimerScope(nextScope);
+    const nextIdentity = timerScopeIdentity(
+      nextScope,
+      workspaceId,
+      workspaceKey,
+      sessionName,
+      sessionIdentity,
+    );
+    const nextPersistScope = nextScope !== "workspace"
+      || Boolean(workspaceId || workspaceKey);
+    const restored = nextPersistScope
+      ? readWorkspaceTimer(nextIdentity)
+      : { timer: defaultTimerState(), panel: defaultPanelState() };
+    setScope(nextScope);
+    setNow(Date.now());
+    // Keep the panel open while changing scope so the new scope's controls are visible.
+    setStore({
+      identity: nextIdentity,
+      timer: restored.timer,
+      panel: { ...restored.panel, open: true },
+    });
+  }, [scope, sessionIdentity, sessionName, workspaceId, workspaceKey]);
 
   const setMode = (mode: TimerMode) => {
     updateTimer((current) => {
@@ -718,6 +821,8 @@ export function WorkspaceTimer({
   const countdownMinutes = Math.floor((timer.durationMs % 3_600_000) / 60_000);
   const countdownSeconds = Math.floor((timer.durationMs % 60_000) / 1_000);
   const timerLabel = timer.mode === "countdown" ? "Countdown" : "Stopwatch";
+  const scopeLabel = timerScopeName(scope, workspaceName, sessionName);
+  const scopeDescription = timerScopeDescription(scope, workspaceName, sessionName);
   const panelStyle: CSSProperties = {
     left: panel.position.x,
     top: panel.position.y,
@@ -731,6 +836,7 @@ export function WorkspaceTimer({
       role="dialog"
       aria-labelledby={headingId}
       data-pinned={panel.pinned ? "true" : "false"}
+      data-scope={scope}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -751,7 +857,7 @@ export function WorkspaceTimer({
       >
         <ClockIcon />
         <div>
-          <span>{workspaceName?.trim() || "Workspace"}</span>
+          <span>{scopeLabel}</span>
           <h2 id={headingId}>Timer</h2>
         </div>
         {panel.pinned && <em aria-hidden="true">PINNED</em>}
@@ -784,6 +890,24 @@ export function WorkspaceTimer({
       </header>
 
       <div className="workspace-timer-body">
+        <div className="workspace-timer-scope" role="group" aria-label="Timer scope">
+          {(["global", "workspace", "session"] as const).map((candidate) => (
+            <button
+              key={candidate}
+              type="button"
+              aria-pressed={scope === candidate}
+              aria-label={`${candidate[0].toUpperCase()}${candidate.slice(1)} timer scope`}
+              onClick={() => selectScope(candidate)}
+            >
+              {candidate === "global"
+                ? "Global"
+                : candidate === "workspace"
+                  ? "Workspace"
+                  : "Session"}
+            </button>
+          ))}
+        </div>
+        <p className="workspace-timer-scope-description">{scopeDescription}</p>
         <div className="workspace-timer-mode" role="group" aria-label="Timer mode">
           <button
             type="button"
@@ -930,13 +1054,14 @@ export function WorkspaceTimer({
         className={`workspace-timer-card ${timer.mode} ${timer.phase}${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}`}
         aria-label={panel.open ? "Hide workspace timer" : "Show workspace timer"}
         aria-expanded={panel.open}
-        title={`${timerLabel}: ${display} - ${phaseLabel(timer.phase)}`}
+        title={`${scopeLabel} ${timerLabel}: ${display} - ${phaseLabel(timer.phase)}`}
+        data-scope={scope}
         onClick={togglePanel}
       >
         <ClockIcon />
         <span>
           <strong>{timerLabel}</strong>
-          <small>{display}</small>
+          <small>{scopeLabel} · {display}</small>
         </span>
         {(panel.pinned || panel.open) && (
           <em aria-hidden="true">{panel.pinned ? "PIN" : "OPEN"}</em>

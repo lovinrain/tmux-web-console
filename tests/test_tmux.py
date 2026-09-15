@@ -1017,6 +1017,44 @@ CLAUDE_RUNNING_WITH_TYPED_FOLLOW_UP_SCREEN = (
 )
 
 
+CLAUDE_IDLE_SCREEN = (
+    "\u25cf Finished the requested update.\n"
+    "\n"
+    "\u276f \n"
+    "\u23f5\u23f5 bypass permissions on (shift+tab to cycle)"
+)
+
+
+def test_claude_plain_title_uses_the_visible_idle_prompt():
+    pane = agent_pane(command="claude", title="my-greencloud-la")
+
+    state = classify_agent_state(pane, visible_screen=CLAUDE_IDLE_SCREEN, now=1000)
+
+    assert state.name == "waiting_human"
+    assert state.reason == "Claude is paused at its input prompt"
+
+
+def test_claude_plain_title_uses_the_visible_active_footer():
+    pane = agent_pane(command="claude", title="my-greencloud-la")
+
+    state = classify_agent_state(pane, visible_screen=CLAUDE_RUNNING_SCREEN, now=1000)
+
+    assert state.name == "working"
+    assert state.reason == "Claude is running a turn"
+
+
+def test_claude_plain_title_stays_unknown_without_a_claude_screen_signal():
+    pane = agent_pane(command="claude", title="my-greencloud-la")
+
+    state = classify_agent_state(
+        pane,
+        visible_screen="A shell command printed a line containing \u276f.",
+        now=1000,
+    )
+
+    assert state.name == "unknown"
+
+
 def test_claude_ambiguous_title_uses_the_active_footer_signal():
     pane = agent_pane(command="claude", title="\u2733 Active task")
 
@@ -1658,6 +1696,33 @@ async def test_detect_sessions_captures_ambiguous_claude_titles():
     )
 
     assert states["claude-ambiguous"].name == "working"
+    assert tmux.captured == [claude.id]
+
+
+async def test_detect_sessions_captures_plain_title_claude_panes():
+    claude = agent_pane(
+        id="%49",
+        command="claude",
+        title="my-greencloud-la",
+        activity=int(time.time()),
+    )
+    tmux = RecordingTmux({claude.id: CLAUDE_IDLE_SCREEN})
+    sessions = [
+        Session(
+            name="claude-attached",
+            id="$7",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[claude],
+        )
+    ]
+
+    states = await AgentStateDetector().detect_sessions(
+        cast(TmuxClient, tmux), sessions
+    )
+
+    assert states["claude-attached"].name == "waiting_human"
     assert tmux.captured == [claude.id]
 
 

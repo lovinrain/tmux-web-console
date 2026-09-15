@@ -60,7 +60,7 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Persistent named workspaces with colored, collapsible tab groups, ordered top
   or side tabs with desktop multi-select dragging, common/workspace/session
   quick-link shelves, scoped sticky notes, saved recursive multi-pane views,
-  workspace-scoped callback lists, and cross-device resume
+  workspace and global callback lists, and cross-device resume
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input
@@ -131,21 +131,27 @@ For frontend development, run `npm run dev`. Vite serves
 - Desktop consoles place Common, Workspace, and Session sticky notes beside the
   header controls. They autosave to the server; temporary workspaces can use the
   Common and Session notes until the workspace itself is saved. Each note button
-  toggles a floating window that moves by dragging its title strip. Pinned Common
-  and Workspace windows stay visible while switching session tabs. The browser
-  remembers the open, pinned, and position state separately for each saved
-  workspace and restores that arrangement when the workspace is resumed. Each
+  toggles a floating window that moves by dragging its title strip and resizes
+  from any corner. Pinned Common and Workspace windows stay visible while
+  switching session tabs. The browser remembers the open, pinned, position, and
+  size state separately for each saved workspace and restores that arrangement
+  when the workspace is resumed. Each
   note is a multi-page notebook: use the page bar or optional page sidebar to
   add, rename, remove, and navigate pages; existing notes become Page 1 and
   page text has no application-level character cap (the normal request-size
   safety boundary still applies).
-- The desktop `Callback` card is a workspace-scoped follow-up queue. Add the
-  current session or choose another live session, then return to it with
-  `Open` or mark it reviewed with the check button. Working, ready, and ended
-  states remain visible while you are away. The queue is saved with a named
-  workspace; an unsaved workspace keeps a browser-local queue until it is saved.
+- The desktop `Callback` card has Global and Workspace scopes. Add the current
+  session or choose another live session, then return to it with `Open` or mark
+  it reviewed with the check button. Working, ready, and ended states remain
+  visible while you are away. The global list identifies entries from this
+  workspace, other workspaces, or the global-only queue; entries outside the
+  current workspace are display-only for navigation, but can still be reviewed
+  from here. Workspace entries are saved with a named workspace, while an
+  unsaved workspace keeps a browser-local queue until it is explicitly saved.
   Its list opens as a movable, resizable floating window, can be pinned across
-  session switches, and remembers its layout per workspace.
+  session switches, and remembers its layout per scope/workspace. Open pages
+  receive callback changes from other browser tabs immediately over the
+  authenticated event stream.
 - The adjacent desktop timer card provides countdown and stopwatch modes in a
   draggable floating window. Pinning keeps it visible while switching sessions;
   saved workspaces restore its browser-local clock, layout, and pin state. An
@@ -174,7 +180,8 @@ For frontend development, run `npm run dev`. Vite serves
   pastes those paths at its cursor without pressing Enter. The active CLI agent
   runs as the same Unix user and can read the private host files directly.
 - On desktop, click the working-directory line beneath the session title to open
-  a movable, resizable file browser. It starts at the live tmux pane, while the
+  a movable file browser that resizes from any corner or its left edge. It starts
+  at the live tmux pane, while the
   address row can open an absolute directory or open and preview an absolute file
   directly anywhere inside `MUXDECK_FILE_BROWSER_ROOT`. Every operation remains
   scoped to the displayed directory and cannot follow a symlink outside it. Text
@@ -207,7 +214,12 @@ For frontend development, run `npm run dev`. Vite serves
   drag-and-drop write up to six files at once into the folder shown (12 MiB
   each, mode `0600`) and refuse to overwrite an existing name. `Copy path`
   copies the absolute server path, while `Stage path` inserts its shell-quoted
-  form into the composer without sending.
+  form into the composer without sending. Deletion is locked behind a
+  confirmation by default; use the title-strip `Unlock` control for a
+  deliberate, temporary unsafe-delete mode when cleaning up many entries. In
+  that mode row and bulk deletes (including non-empty folders) run immediately;
+  the mode is local to the open browser panel and resets when it is closed or
+  pointed at another session.
 - On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.json`,
   `.csv`, `.html`, or `.htm` is also linkified.
   `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
@@ -245,7 +257,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+H` | Open fuzzy command search |
 | `Ctrl+Shift+Z` | Open the shortcut window; then press one action key |
 | `Ctrl+Shift+B` | Open New session in the current workspace |
-| `Ctrl+Shift+K` | Add or remove the active session from the workspace callback list |
+| `Ctrl+Shift+K` | Add or remove the active session from the workspace callback list (which also appears globally) |
 | `Ctrl+Shift+,` | Previous tab |
 | `Ctrl+Shift+.` | Next tab |
 | `Ctrl+Shift+1...9` | Jump to a numbered tab |

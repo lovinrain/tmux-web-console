@@ -13,6 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from tmux_console import app as app_module
 from tmux_console.agent_reference import AgentReference
 from tmux_console.app import (
+    CALLBACK_STREAM_BROKER_KEY,
     SESSION_RENAME_LOCK_KEY,
     SESSION_SNAPSHOTS_KEY,
     SESSION_STREAM_BROKER_KEY,
@@ -315,6 +316,13 @@ async def wait_until(predicate: Callable[[], bool], timeout: float = 1) -> None:
 def event_payload(record: str) -> dict:
     lines = record.rstrip().splitlines()
     assert lines[0] == "event: sessions"
+    assert lines[1].startswith("data: ")
+    return json.loads(lines[1].removeprefix("data: "))
+
+
+def callback_event_payload(record: str) -> dict:
+    lines = record.rstrip().splitlines()
+    assert lines[0] == "event: callbacks"
     assert lines[1].startswith("data: ")
     return json.loads(lines[1].removeprefix("data: "))
 
@@ -2884,6 +2892,83 @@ async def test_session_workspace_transfer_api_copies_then_moves_without_duplicat
 
 
 @pytest.mark.asyncio
+async def test_session_workspace_bulk_transfer_is_atomic_and_accepts_saved_session_refs(
+    tmp_path,
+):
+    live_session = make_session("live-session")
+    workspaces = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["source", "destination"]).__next__,
+    )
+    workspaces.create_workspace(
+        name="Source",
+        tabs=["ended-a", "ended-b", "ended-c"],
+        active_session="ended-a",
+    )
+    workspaces.create_workspace(
+        name="Destination",
+        tabs=["review", "ended-b"],
+        active_session="review",
+    )
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=FakeTmux([[live_session]]),
+                workspaces=workspaces,
+                base_path="",
+            )
+        )
+    )
+
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/session-workspace-transfer/bulk",
+            json={
+                "sessions": ["ended-a", "ended-b", "ended-c"],
+                "sourceWorkspaceId": "source",
+                "destinationWorkspaceId": "destination",
+                "operation": "copy",
+                "sessionRevision": 0,
+            },
+        )
+        assert response.status == 200
+        result = await response.json()
+        assert result["sessions"] == ["ended-a", "ended-b", "ended-c"]
+        assert result["destinationAlreadyContained"] == ["ended-b"]
+        assert result["destinationAdded"] == ["ended-a", "ended-c"]
+        assert result["destinationWorkspace"]["tabs"] == [
+            "review",
+            "ended-b",
+            "ended-a",
+            "ended-c",
+        ]
+        assert result["sessionRevision"] == 1
+
+        invalid = await client.post(
+            "/api/session-workspace-transfer/bulk",
+            json={
+                "sessions": ["ended-a", "ended-a"],
+                "sourceWorkspaceId": "source",
+                "destinationWorkspaceId": "destination",
+                "operation": "move",
+                "sessionRevision": 1,
+            },
+        )
+        assert invalid.status == 400
+        assert await invalid.json() == {
+            "error": "sessions contains duplicate session: ended-a"
+        }
+        assert workspaces.get_workspace("source")["tabs"] == [
+            "ended-a",
+            "ended-b",
+            "ended-c",
+        ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_session_workspace_transfer_api_validates_request_and_live_session(
     tmp_path,
 ):
@@ -3156,6 +3241,61 @@ async def test_session_tags_api_reports_storage_failure_without_mutating_state(
         assert response.status == 500
         assert await response.json() == {"error": "unable to save session tags"}
         assert titles.get_tags(session.name) == ["work"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_callback_stream_fans_out_initial_and_mutated_snapshots(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        id_factory=iter(["workspace-one"]).__next__,
+    )
+    application = create_app(workspaces=store, base_path="")
+    broker = application[CALLBACK_STREAM_BROKER_KEY]
+    client = TestClient(TestServer(application))
+
+    try:
+        await client.start_server()
+        first_response, second_response = await asyncio.gather(
+            client.get("/api/callback-sessions/stream"),
+            client.get("/api/callback-sessions/stream"),
+        )
+        first_initial, second_initial = await asyncio.gather(
+            read_sse_record(first_response),
+            read_sse_record(second_response),
+        )
+        assert callback_event_payload(first_initial) == callback_event_payload(second_initial)
+        assert callback_event_payload(first_initial)["callbackSessions"] == []
+        assert broker.subscriber_count == 2
+
+        response = await client.post(
+            "/api/workspaces",
+            json={
+                "name": "Follow up",
+                "tabs": ["agent-one"],
+                "activeSession": "agent-one",
+                "callbackSessions": ["agent-one"],
+            },
+        )
+        assert response.status == 201
+        first_changed, second_changed = await asyncio.gather(
+            read_sse_record(first_response),
+            read_sse_record(second_response),
+        )
+        first_payload = callback_event_payload(first_changed)
+        second_payload = callback_event_payload(second_changed)
+        assert first_payload == second_payload
+        assert first_payload["callbackSessions"] == ["agent-one"]
+        assert first_payload["workspaceCallbacks"] == [{
+            "workspaceId": "workspace-one",
+            "workspaceName": "Follow up",
+            "sessions": ["agent-one"],
+        }]
+
+        first_response.close()
+        second_response.close()
+        await wait_until(lambda: broker.subscriber_count == 0)
     finally:
         await client.close()
 

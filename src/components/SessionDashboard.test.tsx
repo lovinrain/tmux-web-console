@@ -193,16 +193,42 @@ describe("session classification", () => {
         onResumeWorkspace={onResumeWorkspace}
         workspaceReturnSession="work/name #1"
         workspaceTabCount={3}
+        workspaceLiveTabCount={2}
       />,
     );
 
     const resume = screen.getByRole("button", {
-      name: "Resume workspace at work/name #1, 3 open tabs",
+      name: "Resume workspace at work/name #1, 3 open tabs, 2 live",
     });
     expect(resume.closest(".dashboard-intro")).not.toBeNull();
     expect(resume).toHaveTextContent("Resume workspace");
     expect(resume).toHaveTextContent("Resume at · work/name #1");
-    expect(resume).toHaveTextContent("3 tabs");
+    expect(resume).toHaveTextContent("3 tabs · 2 live");
+    expect(resume).not.toHaveAttribute("data-workspace-shells-missing");
+
+    fireEvent.click(resume);
+    expect(onResumeWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("still offers the return when a restart left the workspace with no live shells", () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const onResumeWorkspace = vi.fn();
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        onResumeWorkspace={onResumeWorkspace}
+        workspaceReturnSession="work/name #1"
+        workspaceTabCount={3}
+        workspaceLiveTabCount={0}
+      />,
+    );
+
+    const resume = screen.getByRole("button", {
+      name: "Resume workspace at work/name #1, 3 open tabs, 0 live",
+    });
+    expect(resume).toHaveAttribute("data-workspace-shells-missing", "true");
+    expect(resume).toHaveTextContent("Shells are gone · reopen to recreate them");
+    expect(resume).toHaveTextContent("3 tabs · 0 live");
 
     fireEvent.click(resume);
     expect(onResumeWorkspace).toHaveBeenCalledOnce();
@@ -1219,6 +1245,77 @@ describe("session classification", () => {
     expect(onOpen).toHaveBeenCalledWith("restored-work");
     expect(screen.queryByText("12345678-1234-1234-1234-1234567890ab"))
       .not.toBeInTheDocument();
+  });
+
+  it("filters missing shells with the same search as live sessions", async () => {
+    let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
+    window.history.replaceState({}, "", "/mux/?q=rose");
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(subscribeToSessions).mockImplementation((options) => {
+      streamOptions = options;
+      return vi.fn();
+    });
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await waitFor(() => expect(streamOptions).toBeDefined());
+    act(() => streamOptions?.onSessions([], [
+      {
+        id: "r1",
+        name: "rose-ee-3",
+        directory: "/srv/mm_rose",
+        agentType: null,
+        agentSessionId: null,
+        firstSeenAt: 10,
+        lastSeenAt: 20,
+        directoryAvailable: true,
+      },
+      {
+        id: "r2",
+        name: "toolings",
+        directory: "/srv/mm/toolings",
+        agentType: null,
+        agentSessionId: null,
+        firstSeenAt: 10,
+        lastSeenAt: 20,
+        directoryAvailable: true,
+      },
+    ]));
+
+    // The section stays visible so the count is honest, but only matches list.
+    expect(screen.getByRole("heading", { name: /Missing after restart/i })).toBeVisible();
+    expect(screen.getByText("rose-ee-3")).toBeVisible();
+    expect(screen.queryByText("toolings")).not.toBeInTheDocument();
+    expect(screen.getByText("1 / 2")).toBeVisible();
+
+    window.history.replaceState({}, "", "/mux/");
+  });
+
+  it("says so when a search matches no missing shell", async () => {
+    let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
+    window.history.replaceState({}, "", "/mux/?q=nothingmatches");
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(subscribeToSessions).mockImplementation((options) => {
+      streamOptions = options;
+      return vi.fn();
+    });
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    await waitFor(() => expect(streamOptions).toBeDefined());
+    act(() => streamOptions?.onSessions([], [{
+      id: "r1",
+      name: "rose-ee-3",
+      directory: "/srv/mm_rose",
+      agentType: null,
+      agentSessionId: null,
+      firstSeenAt: 10,
+      lastSeenAt: 20,
+      directoryAvailable: true,
+    }]));
+
+    expect(screen.getByText("No missing shells match this search.")).toBeVisible();
+    expect(screen.queryByText("rose-ee-3")).not.toBeInTheDocument();
+
+    window.history.replaceState({}, "", "/mux/");
   });
 
   it("can forget only a recovery record and disables unavailable directories", async () => {

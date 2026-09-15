@@ -108,7 +108,7 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 9px;
-  padding: 5px 6px 5px 10px;
+  padding: 5px 26px;
   background: rgba(6, 10, 8, 0.82);
   border-bottom: 1px solid #2c3d37;
   cursor: grab;
@@ -225,10 +225,46 @@
   padding: 0;
 }
 
+.session-files-header > .session-files-unsafe-toggle {
+  width: auto;
+  min-width: 32px;
+  gap: 5px;
+  padding: 0 8px;
+  color: #d8b477;
+  border-color: rgba(216, 180, 119, 0.42);
+  font-size: 8px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-files-header > .session-files-unsafe-toggle:hover:not(:disabled) {
+  color: #ffe6b6;
+  background: rgba(216, 180, 119, 0.12);
+  border-color: rgba(216, 180, 119, 0.72);
+}
+
+.session-files-header > .session-files-unsafe-toggle.unlocked {
+  color: #ffd2cd;
+  background: rgba(255, 107, 99, 0.16);
+  border-color: rgba(255, 107, 99, 0.62);
+}
+
+.session-files-header > .session-files-unsafe-toggle.unlocked:hover:not(:disabled) {
+  color: #fff5f3;
+  background: rgba(255, 107, 99, 0.28);
+  border-color: rgba(255, 107, 99, 0.9);
+}
+
 .session-files-header > button svg,
 .session-files-toolbar > button svg {
   width: 16px;
   height: 16px;
+}
+
+.session-files-header > .session-files-unsafe-toggle svg {
+  width: 14px;
+  height: 14px;
 }
 
 .session-files-toolbar {
@@ -2163,10 +2199,106 @@ html.session-files-panel-splitting .session-files-splitter > span {
   font-size: 8px;
 }
 
+.session-files-resize-top-left,
+.session-files-resize-top-right {
+  position: absolute;
+  z-index: 7;
+  top: 0;
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  color: rgba(104, 223, 208, 0.58);
+  background: rgba(11, 18, 14, 0.84);
+  border: 0;
+  border-bottom: 1px solid rgba(104, 223, 208, 0.15);
+  touch-action: none;
+}
+
+.session-files-resize-top-left {
+  left: 0;
+  border-right: 1px solid rgba(104, 223, 208, 0.15);
+  border-radius: 4px 0 5px;
+  cursor: nwse-resize;
+}
+
+.session-files-resize-top-right {
+  right: 0;
+  border-left: 1px solid rgba(104, 223, 208, 0.15);
+  border-radius: 0 4px 0 5px;
+  cursor: nesw-resize;
+}
+
+.session-files-resize-top-left > span,
+.session-files-resize-top-left::before,
+.session-files-resize-top-left::after,
+.session-files-resize-top-right > span,
+.session-files-resize-top-right::before,
+.session-files-resize-top-right::after {
+  position: absolute;
+  top: 5px;
+  width: 11px;
+  height: 1px;
+  content: "";
+  background: currentColor;
+  border-radius: 99px;
+}
+
+.session-files-resize-top-left > span,
+.session-files-resize-top-left::before,
+.session-files-resize-top-left::after {
+  left: 3px;
+  transform: rotate(-45deg);
+}
+
+.session-files-resize-top-right > span,
+.session-files-resize-top-right::before,
+.session-files-resize-top-right::after {
+  right: 3px;
+  transform: rotate(45deg);
+}
+
+.session-files-resize-top-left::before,
+.session-files-resize-top-right::before {
+  top: 3px;
+  width: 7px;
+}
+
+.session-files-resize-top-left::before {
+  left: 2px;
+}
+
+.session-files-resize-top-right::before {
+  right: 2px;
+}
+
+.session-files-resize-top-left::after,
+.session-files-resize-top-right::after {
+  top: 8px;
+  width: 8px;
+}
+
+.session-files-resize-top-left::after {
+  left: 6px;
+}
+
+.session-files-resize-top-right::after {
+  right: 6px;
+}
+
+.session-files-resize-top-left:hover,
+.session-files-resize-top-left:focus-visible,
+.session-files-resize-top-right:hover,
+.session-files-resize-top-right:focus-visible {
+  color: #d8fff8;
+  background: rgba(104, 223, 208, 0.13);
+  outline: 1px solid rgba(104, 223, 208, 0.72);
+  outline-offset: -2px;
+}
+
 .session-files-resize-left-edge {
   position: absolute;
   z-index: 5;
-  top: 3px;
+  top: 23px;
   bottom: 24px;
   left: 0;
   width: 9px;
@@ -2330,6 +2462,16 @@ html.session-files-panel-resizing-left * {
 
 html.session-files-panel-resizing-bottom-left,
 html.session-files-panel-resizing-bottom-left * {
+  cursor: nesw-resize !important;
+}
+
+html.session-files-panel-resizing-top-left,
+html.session-files-panel-resizing-top-left * {
+  cursor: nwse-resize !important;
+}
+
+html.session-files-panel-resizing-top-right,
+html.session-files-panel-resizing-top-right * {
   cursor: nesw-resize !important;
 }
 
@@ -3159,6 +3301,30 @@ html[data-theme="light"] .session-files-state button {
   border-color: #beb9ad;
 }
 
+html[data-theme="light"] .session-files-header > .session-files-unsafe-toggle {
+  color: #8a5b12;
+  background: #fff8e9;
+  border-color: #d8bc88;
+}
+
+html[data-theme="light"] .session-files-header > .session-files-unsafe-toggle:hover:not(:disabled) {
+  color: #6e4607;
+  background: #f8ead3;
+  border-color: #c69a4a;
+}
+
+html[data-theme="light"] .session-files-header > .session-files-unsafe-toggle.unlocked {
+  color: #8b2821;
+  background: #fbdedc;
+  border-color: #e79c96;
+}
+
+html[data-theme="light"] .session-files-header > .session-files-unsafe-toggle.unlocked:hover:not(:disabled) {
+  color: #6f1d17;
+  background: #f4c8c4;
+  border-color: #d66e65;
+}
+
 html[data-theme="light"] .session-files-toolbar > .session-files-upload {
   color: #f6fffc;
   background: #087f75;
@@ -3291,6 +3457,8 @@ html[data-theme="light"] .session-files-resize-left-edge:focus-visible {
   background: linear-gradient(90deg, rgba(8, 127, 117, 0.12), transparent);
 }
 
+html[data-theme="light"] .session-files-resize-top-left,
+html[data-theme="light"] .session-files-resize-top-right,
 html[data-theme="light"] .session-files-resize-bottom-left,
 html[data-theme="light"] .session-files-resize-corner {
   color: rgba(8, 127, 117, 0.72);
@@ -3298,6 +3466,10 @@ html[data-theme="light"] .session-files-resize-corner {
   border-color: rgba(8, 127, 117, 0.22);
 }
 
+html[data-theme="light"] .session-files-resize-top-left:hover,
+html[data-theme="light"] .session-files-resize-top-left:focus-visible,
+html[data-theme="light"] .session-files-resize-top-right:hover,
+html[data-theme="light"] .session-files-resize-top-right:focus-visible,
 html[data-theme="light"] .session-files-resize-bottom-left:hover,
 html[data-theme="light"] .session-files-resize-bottom-left:focus-visible,
 html[data-theme="light"] .session-files-resize-corner:hover,
@@ -3445,6 +3617,15 @@ html[data-theme="light"] .session-file-image-message strong {
 }
 
 @container (max-width: 570px) {
+  .session-files-header > .session-files-unsafe-toggle {
+    width: 32px;
+    padding: 0;
+  }
+
+  .session-files-header > .session-files-unsafe-toggle span {
+    display: none;
+  }
+
   .session-files-toolbar {
     flex-wrap: wrap;
   }

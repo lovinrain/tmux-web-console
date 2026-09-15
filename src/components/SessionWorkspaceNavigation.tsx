@@ -13,7 +13,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { SavedWorkspace, WorkspacePaneLayout } from "../api";
+import type {
+  RecoverableSession,
+  SavedWorkspace,
+  WorkspacePaneLayout,
+} from "../api";
 import { adjacentSeparatorCrossing, type SeparatorCrossing } from "../workspaceSeparatorMovement";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
@@ -48,6 +52,7 @@ import {
   type ShortcutActionId,
 } from "../shortcutSettings";
 import type { AgentState, Pane, Session } from "../types";
+import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
 import {
   expandWorkspaceTabSelection,
   MAX_WORKSPACE_TAB_GROUPS,
@@ -66,6 +71,7 @@ import { WorkspaceQuickSwitcher } from "./WorkspaceQuickSwitcher";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
+import { WorkspaceSessionAddDialog } from "./WorkspaceSessionAddDialog";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
@@ -91,6 +97,7 @@ export interface SessionWorkspaceNavigationProps {
   onMoveTab?: (sessionName: string, targetIndex: number) => void;
   onMoveTabs?: (sessionNames: string[], targetIndex: number) => void;
   onTabSelectionChange?: (sessionNames: string[]) => void;
+  onTransferSelectedSessions?: (sessionNames: string[]) => void;
   onBulkSessionAction?: (action: "close" | "end", sessionNames: string[]) => void;
   onSortTabsByWorkingState?: () => void;
   onToggleTabActions?: () => void;
@@ -109,12 +116,17 @@ export interface SessionWorkspaceNavigationProps {
   onOpenDashboard: () => void;
   dashboardWindowHref?: string;
   onNewSession?: () => void;
+  onAddSession?: (sessionName: string, open: boolean) => void;
   onQuickNewSession?: () => void | Promise<void>;
   onToggleCallbackSession?: () => void | Promise<void>;
   quickNewSessionBusy?: boolean;
   quickNewSessionError?: string | null;
   onDismissQuickNewSessionError?: () => void;
   onOpenTabSearch?: () => void;
+  missingSessionCount?: number;
+  onRecreateAllMissing?: () => void;
+  recoverableSessions?: RecoverableSession[];
+  onRecreateSession?: (sessionName: string) => void | Promise<void>;
   paneLayouts?: WorkspacePaneLayout[];
   activePaneLayoutId?: string | null;
   paneLayoutsBusy?: boolean;
@@ -401,6 +413,7 @@ interface WorkspaceCommandContext {
   onOpenDashboard: () => void;
   onSelect: (sessionName: string) => void;
   onRequestSaveWorkspace?: () => void;
+  onRequestRenameWorkspace?: () => void;
   onCreateTabGroup?: () => void;
   onSortTabsByWorkingState?: () => void;
   onToggleTabActions?: () => void;
@@ -437,6 +450,7 @@ function buildWorkspaceCommands({
   onOpenDashboard,
   onSelect,
   onRequestSaveWorkspace,
+  onRequestRenameWorkspace,
   onCreateTabGroup,
   onSortTabsByWorkingState,
   onToggleTabActions,
@@ -703,6 +717,16 @@ function buildWorkspaceCommands({
       category: "Workspace",
       keywords: ["persist", "resume", "workspace name"],
       run: onRequestSaveWorkspace,
+    });
+  }
+  if (onRequestRenameWorkspace) {
+    commands.push({
+      id: "workspace-rename",
+      label: "Rename this workspace",
+      description: "Open workspace details and update its shared name.",
+      category: "Workspace",
+      keywords: ["workspace settings", "workspace attributes", "edit name", "details"],
+      run: onRequestRenameWorkspace,
     });
   }
   if (onCreateTabGroup) {
@@ -1366,6 +1390,7 @@ interface WorkspaceRecentsDialogProps extends SessionWorkspaceNavigationProps {
   onQueryChange: (query: string) => void;
   onScrollPositionChange: (scrollTop: number) => void;
   onRequestSaveWorkspace: () => void;
+  onRequestRenameWorkspace?: () => void;
   onRequestTerminateSession: (session: Session) => void;
   onRequestNewTabGroup: (initialSession?: string | null) => void;
   onRequestEditTabGroup: (groupId: string) => void;
@@ -1396,6 +1421,7 @@ function WorkspaceRecentsDialog({
   workspaceName,
   onSaveWorkspace,
   onRequestSaveWorkspace,
+  onRequestRenameWorkspace,
   onRequestTerminateSession,
   onRequestNewTabGroup,
   onRequestEditTabGroup,
@@ -1867,6 +1893,17 @@ function WorkspaceRecentsDialog({
                 {persistenceCopy.label}
               </span>
             )}
+            {onRequestRenameWorkspace && (
+              <button
+                type="button"
+                className="secondary-button workspace-recents-rename-button"
+                onClick={onRequestRenameWorkspace}
+                aria-haspopup="dialog"
+                aria-controls="workspace-rename-dialog"
+              >
+                <EditIcon /> Rename
+              </button>
+            )}
             <button type="button" className="secondary-button" onClick={onOpenDashboard}>
               <GridIcon /> Browse all
             </button>
@@ -1913,6 +1950,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onOpenDashboard,
     dashboardWindowHref,
     onNewSession,
+    onAddSession,
     onQuickNewSession,
     onToggleCallbackSession,
     quickNewSessionBusy = false,
@@ -1931,11 +1969,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onSaveWorkspace,
     onRenameWorkspace,
     onSessionTerminated,
+    missingSessionCount = 0,
+    onRecreateAllMissing,
+    recoverableSessions = [],
+    onRecreateSession,
   } = props;
   const { orientation, compactViewport } = useWorkspaceTabOrientation(
     preferredOrientation,
   );
   const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
+  const [sessionAddOpen, setSessionAddOpen] = useState(false);
   const { bindings: shortcutBindings } = useShortcutSettings();
   const quickSessionShortcutHint = (() => {
     const launcher = launcherShortcutLabel(
@@ -2027,16 +2070,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     return items;
   }, [groupsBySession, openSessions]);
   const closedRecentCount = recentSessions.filter((name) => !openSessions.includes(name)).length;
+  const addableSessionCount = sessions.filter((session) => (
+    !openSessions.includes(session.name)
+  )).length;
   const persistenceCopy = workspacePersistenceState === "unsaved"
     ? null
     : WORKSPACE_PERSISTENCE_COPY[workspacePersistenceState];
   const identityName = workspaceIdentityName(workspacePersistenceState, workspaceName);
   const canRenameWorkspace = Boolean(
-    !compactViewport
-    && activeWorkspaceId
+    activeWorkspaceId
     && onRenameWorkspace
     && ["saved", "limited"].includes(workspacePersistenceState),
   );
+  const showRenameWorkspaceButton = canRenameWorkspace && !compactViewport;
   const newSessionDisabled = newSessionActive || workspacePersistenceState === "loading";
   const quickNewSessionDisabled = quickNewSessionBusy
     || workspacePersistenceState === "loading";
@@ -2647,6 +2693,13 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, []);
 
   const focusRenameReplacement = useCallback(() => {
+    if (isCompactWorkspaceViewport()) {
+      const overviewControl = document.getElementById(MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID);
+      if (overviewControl instanceof HTMLElement) {
+        overviewControl.focus();
+        return;
+      }
+    }
     renameButtonRef.current?.focus();
   }, []);
 
@@ -2926,6 +2979,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     if (!onSaveWorkspace || workspacePersistenceState !== "unsaved") return;
     setSaveAfterRecents(true);
     onCloseRecents();
+  };
+
+  const requestRenameFromRecents = () => {
+    if (!canRenameWorkspace) return;
+    onCloseRecents();
+    setRenameDialogOpen(true);
   };
 
   const terminateSelectedSession = useCallback(async () => {
@@ -3218,6 +3277,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onRequestSaveWorkspace: workspacePersistenceState === "unsaved" && onSaveWorkspace
       ? () => setSaveDialogOpen(true)
       : undefined,
+    onRequestRenameWorkspace: canRenameWorkspace
+      ? () => setRenameDialogOpen(true)
+      : undefined,
     onCreateTabGroup: canCreateGroup
       ? () => openGroupDialog(null, activeSession, null)
       : undefined,
@@ -3333,6 +3395,32 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 </button>
               )}
             </div>
+          )}
+          {onAddSession && (
+            <button
+              type="button"
+              className="workspace-add-session-button"
+              onClick={() => setSessionAddOpen(true)}
+              disabled={workspacePersistenceState === "loading"
+                || workspacePersistenceState === "error"
+                || openSessions.length >= MAX_WORKSPACE_TABS
+                || addableSessionCount === 0}
+              aria-label={`Add running sessions to workspace, ${addableSessionCount} available`}
+              aria-haspopup="dialog"
+              aria-expanded={sessionAddOpen}
+              title={openSessions.length >= MAX_WORKSPACE_TABS
+                ? `Workspace already has the maximum ${MAX_WORKSPACE_TABS} sessions`
+                : addableSessionCount === 0
+                  ? "Every running session is already in this workspace"
+                  : workspacePersistenceState === "loading"
+                    || workspacePersistenceState === "error"
+                    ? "Wait for the workspace to finish syncing"
+                    : "Find and add running sessions without leaving this workspace"}
+            >
+              <PlusIcon />
+              <span>Add sessions</span>
+              {addableSessionCount > 0 && <strong>{addableSessionCount}</strong>}
+            </button>
           )}
           {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (
             <button
@@ -3618,7 +3706,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           </div>
-          {selectedWorkspaceTabs.length > 0 && (
+          {orderedSelection.length > 0 && (
             <div
               className="workspace-tab-selection-status"
               role="group"
@@ -3647,6 +3735,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     title={`Move selected tabs ${orientation === "vertical" ? "down" : "right"}`}
                   >{orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}</button>
                 </>
+              )}
+              {props.onTransferSelectedSessions && (
+                <button
+                  type="button"
+                  className="workspace-selection-bulk-action"
+                  disabled={workspacePersistenceState === "loading"
+                    || workspacePersistenceState === "error"}
+                  aria-label={`Move or copy ${orderedSelection.length} selected sessions to a workspace`}
+                  title="Move or copy the selected sessions to another workspace"
+                  onClick={() => props.onTransferSelectedSessions?.(orderedSelection)}
+                >
+                  <WindowMoveIcon /><span>Move / Copy</span>
+                </button>
               )}
               {props.onBulkSessionAction && <>
                 <button type="button" className="workspace-selection-bulk-action" aria-label={`Close ${orderedSelection.length} selected tabs`}
@@ -3714,7 +3815,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               </span>
             </span>
           )}
-          {canRenameWorkspace && (
+          {onRecreateAllMissing && missingSessionCount > 0 && (
+            <button
+              type="button"
+              className="workspace-recreate-missing"
+              onClick={onRecreateAllMissing}
+              aria-label={`Recreate ${missingSessionCount} missing ${missingSessionCount === 1 ? "shell" : "shells"} in this workspace`}
+              title={`Recreate ${missingSessionCount} missing ${missingSessionCount === 1 ? "shell" : "shells"}`}
+            >
+              <TerminalIcon />
+              <span>Recreate {missingSessionCount}</span>
+            </button>
+          )}
+          {showRenameWorkspaceButton && (
             <button
               ref={renameButtonRef}
               type="button"
@@ -3809,6 +3922,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       {sessionHistoryOpen && <SessionHistoryDialog workspaceId={activeWorkspaceId} workspaceName={workspaceName}
         onClose={() => setSessionHistoryOpen(false)} onOpenSession={onSelect} />}
 
+      {sessionAddOpen && onAddSession && (
+        <WorkspaceSessionAddDialog
+          sessions={sessions}
+          openSessions={openSessions}
+          recoverableSessions={recoverableSessions}
+          onRecreate={onRecreateSession}
+          workspaceName={identityName}
+          workspaceFull={openSessions.length >= MAX_WORKSPACE_TABS}
+          onAdd={onAddSession}
+          onClose={() => setSessionAddOpen(false)}
+        />
+      )}
+
       {quickNewSessionError && onDismissQuickNewSessionError && (
         <WorkspaceWindowActionError
           message={quickNewSessionError}
@@ -3842,6 +3968,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             recentsScrollTopRef.current = scrollTop;
           }}
           onRequestSaveWorkspace={requestSaveFromRecents}
+          onRequestRenameWorkspace={canRenameWorkspace
+            ? requestRenameFromRecents
+            : undefined}
           onRequestTerminateSession={setTerminateTarget}
           onRequestNewTabGroup={(initialSession) => openGroupDialog(
             null,
@@ -3880,6 +4009,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         <WorkspaceSaveDialog
           variant="rename"
           initialName={identityName}
+          workspaceId={activeWorkspaceId ?? undefined}
+          groupCount={groups.length}
+          paneViewCount={paneLayouts.length}
           tabs={openSessions}
           activeSession={activeSession}
           onSave={onRenameWorkspace}

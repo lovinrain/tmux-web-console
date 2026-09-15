@@ -325,10 +325,23 @@ exposed as server resources at this time.
 
 ### Callback sessions
 
-Callback entries may refer to live or ended sessions.
+Callback entries may refer to live or ended sessions. The global queue is the
+deduplicated union of explicitly global entries and every workspace callback
+entry. A workspace registration therefore always appears in the global view.
+Entries that are not open in the current workspace are shown as inherited and
+are read-only for navigation (opening one would otherwise add it to the current
+workspace), while their review action remains available from any workspace.
+Reviewing an entry atomically removes that session from the explicit global
+queue and every workspace callback queue.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
+| `GET /api/callback-sessions` | None | Effective `callbackSessions`, explicit `globalCallbackSessions`, contributing `workspaceCallbacks`, and `sessionRevision`. |
+| `GET /api/callback-sessions/stream` | None | Authenticated `text/event-stream`; emits `callbacks` records whenever the callback snapshot changes. |
+| `PUT /api/callback-sessions` | `sessions`, `sessionRevision` | Replaces explicitly global entries and returns the refreshed snapshot. |
+| `POST /api/callback-sessions` | `sessions`, `sessionRevision` | Idempotently appends explicitly global entries and returns `added` plus the refreshed snapshot. |
+| `DELETE /api/callback-sessions` | `sessions`, `sessionRevision` | Removes explicitly global entries and returns `removed` plus the refreshed snapshot. |
+| `POST /api/callback-sessions/review` | `session`, `sessionRevision` | Marks one session reviewed and removes it from the explicit global queue and every workspace callback queue atomically. |
 | `GET /api/workspaces/{workspaceId}/callback-sessions` | None | `callbackSessions` and `sessionRevision`. |
 | `POST /api/workspaces/{workspaceId}/callback-sessions` | `sessions`, `sessionRevision` | Idempotently appends missing entries and returns `added`. |
 | `DELETE /api/workspaces/{workspaceId}/callback-sessions` | `sessions`, `sessionRevision` | Removes present entries and returns `removed`. |
@@ -338,11 +351,18 @@ Callback entries may refer to live or ended sessions.
 | Method and route | Request | Result |
 | --- | --- | --- |
 | `POST /api/session-workspace-transfer` | `session`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId` | Atomically `copy` or `move` one live session between workspaces. |
+| `POST /api/session-workspace-transfer/bulk` | Ordered, unique `sessions`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId` | Atomically transfers the complete batch, including saved references to ended sessions. |
 | `PUT /api/session-workspace-pin` | `session`, `pinned` | Adds/removes a live session across every saved workspace with deduplication. |
 
 Moving a globally pinned session returns `409`. A transfer reports whether the
 destination already contained the session, whether it was added, and whether
 the source entry was removed.
+
+The bulk response returns ordered arrays in `destinationAlreadyContained`,
+`destinationAdded`, and `sourceRemoved`. Destination additions follow the
+request order and existing tabs are never duplicated. A move that includes any
+globally pinned session, exceeds either workspace capacity, or uses a stale
+revision returns `409` without moving any member of the batch.
 
 ### Quick links
 
@@ -560,6 +580,7 @@ Do not hard-code these where discovery is possible. Read
 | Sessions per workspace | 256 |
 | Groups per workspace | 16 |
 | Callback sessions per workspace | 64 |
+| Explicit global callback sessions | 256 |
 | Quick links per scope | 16 |
 | Notebook pages per scope | 128 |
 | Pane layouts per workspace | 16 |

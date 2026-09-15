@@ -42,6 +42,7 @@ import {
 import {
   DEFAULT_SESSION_SORT,
   SESSION_STATE_ORDER,
+  filterRecoverableSessions,
   filterSessions,
   groupSessionsByTag,
   paneCommandKind,
@@ -81,6 +82,7 @@ import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { ThemeToggle } from "./ThemeToggle";
+import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 
 interface SessionDashboardProps {
@@ -89,6 +91,7 @@ interface SessionDashboardProps {
   onResumeWorkspace?: () => void;
   workspaceReturnSession?: string;
   workspaceTabCount?: number;
+  workspaceLiveTabCount?: number;
   onOpenSnippets?: () => void;
   onNewSession?: () => void;
   newSessionWindowHref?: string;
@@ -509,6 +512,7 @@ export function SessionDashboard({
   onResumeWorkspace,
   workspaceReturnSession,
   workspaceTabCount = 0,
+  workspaceLiveTabCount = 0,
   onOpenSnippets,
   onNewSession,
   newSessionWindowHref,
@@ -696,6 +700,13 @@ export function SessionDashboard({
   const visibleSessions = useMemo(
     () => filterSessions(sessions, route),
     [route, sessions],
+  );
+
+  // One query covers live and missing shells; after a restart most matches are
+  // missing, so leaving this section unfiltered made search look broken.
+  const visibleRecoverableSessions = useMemo(
+    () => filterRecoverableSessions(recoverableSessions, route.query),
+    [recoverableSessions, route.query],
   );
 
   const tagVisibleSessions = useMemo(
@@ -1051,16 +1062,22 @@ export function SessionDashboard({
             <button
               type="button"
               className="secondary-button dashboard-workspace-resume"
+              data-workspace-shells-missing={workspaceLiveTabCount === 0 ? "true" : undefined}
               onClick={onResumeWorkspace}
-              aria-label={`Resume workspace at ${workspaceReturnSession}, ${workspaceTabCount} open ${workspaceTabCount === 1 ? "tab" : "tabs"}`}
+              aria-label={`Resume workspace at ${workspaceReturnSession}, ${workspaceTabCount} open ${workspaceTabCount === 1 ? "tab" : "tabs"}, ${workspaceLiveTabCount} live`}
             >
               <span className="dashboard-workspace-resume-icon"><TerminalIcon /></span>
               <span className="dashboard-workspace-resume-copy">
                 <strong>Resume workspace</strong>
-                <small title={workspaceReturnSession}>Resume at · {workspaceReturnSession}</small>
+                <small title={workspaceReturnSession}>
+                  {workspaceLiveTabCount === 0
+                    ? "Shells are gone · reopen to recreate them"
+                    : `Resume at · ${workspaceReturnSession}`}
+                </small>
               </span>
               <span className="dashboard-workspace-resume-count" aria-hidden="true">
                 {workspaceTabCount} {workspaceTabCount === 1 ? "tab" : "tabs"}
+                {` · ${workspaceLiveTabCount} live`}
               </span>
               <ChevronRightIcon />
             </button>
@@ -1222,14 +1239,21 @@ export function SessionDashboard({
               <p className="eyebrow">RECOVERY</p>
               <h2 id="recovery-heading"><HistoryIcon /> Missing after restart</h2>
             </div>
-            <span>{recoverableSessions.length}</span>
+            <span>
+              {query
+                ? `${visibleRecoverableSessions.length} / ${recoverableSessions.length}`
+                : recoverableSessions.length}
+            </span>
           </header>
           <p className="recovery-section-copy">
             Recreate starts a fresh detached shell at the saved directory. Agent IDs are
             identification references only; Muxdeck never resumes an agent automatically.
           </p>
+          {query && visibleRecoverableSessions.length === 0 && (
+            <p className="recovery-section-copy">No missing shells match this search.</p>
+          )}
           <div className="recovery-list">
-            {recoverableSessions.map((recovery) => {
+            {visibleRecoverableSessions.map((recovery) => {
               const busy = recoveryBusyIds.has(recovery.id);
               return (
                 <article className="recovery-card" key={recovery.id}>
@@ -1243,11 +1267,12 @@ export function SessionDashboard({
                   <p className={recovery.directoryAvailable ? "" : "unavailable"}>
                     {recovery.directory}
                   </p>
-                  {recovery.agentSessionId && (
-                    <p className="recovery-agent-reference" title={recovery.agentSessionId}>
-                      Reference ID / <code>{recovery.agentSessionId}</code>
-                    </p>
-                  )}
+                  <AgentRecoveryReference
+                    sessionName={recovery.name}
+                    agentType={recovery.agentType}
+                    agentSessionId={recovery.agentSessionId}
+                    compact
+                  />
                   {!recovery.directoryAvailable && (
                     <p className="recovery-directory-warning">
                       The saved directory is unavailable. Restore it before recreating.
