@@ -3883,14 +3883,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             aria-expanded={recentsOpen}
             aria-label={`Open session switcher${closedRecentCount > 0 ? `, ${closedRecentCount} recently visited` : ""}`}
           >
-            <HistoryIcon />
-            <span>Recents</span>
+            <ListIcon />
+            <span>Switch session</span>
             {closedRecentCount > 0 && <strong>{closedRecentCount}</strong>}
           </button>
           <button type="button" className="workspace-recents-button"
             onClick={() => setSessionHistoryOpen(true)} aria-haspopup="dialog"
-            title={activeWorkspaceId ? "Persistent session history for this workspace" : "Recycle Bin: save this workspace to track its own session history"}>
-            <HistoryIcon /><span>{activeWorkspaceId ? "Recent Sessions" : "Recycle Bin"}</span>
+            title={activeWorkspaceId ? "Session history for this workspace" : "Session history: save this workspace to track its own sessions"}>
+            <HistoryIcon /><span>Session history</span>
           </button>
           {orientation === "vertical" && (
             <div

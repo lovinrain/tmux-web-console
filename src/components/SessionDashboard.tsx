@@ -1048,7 +1048,7 @@ export function SessionDashboard({
           />
           <ThemeToggle />
           <button type="button" className="secondary-button" onClick={() => setSessionHistoryOpen(true)} aria-haspopup="dialog">
-            <HistoryIcon /> Recycle Bin
+            <HistoryIcon /> Session history
           </button>
         </div>
       </header>

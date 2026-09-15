@@ -35,6 +35,7 @@ import {
   ExternalLinkIcon,
   FolderIcon,
   GridIcon,
+  ClockIcon,
   HistoryIcon,
   KeyboardIcon,
   ListIcon,
@@ -1951,7 +1952,7 @@ export function ConsoleScreen({
             aria-label={`Coding agents recorded in ${sessionName}`}
             title={`Every Claude, Codex, Cursor or Grok session recorded in ${sessionName}`}
           >
-            <HistoryIcon /><span>Agents</span>
+            <ClockIcon /><span>Agents</span>
           </button>
           {onSessionCopied && (
             <button

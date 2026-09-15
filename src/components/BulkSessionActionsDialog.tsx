@@ -47,8 +47,8 @@ export function BulkSessionActionsDialog({ action, targets, onApply, onClose }: 
         ? "This ends the selected tmux sessions and every pane and program running in them, across all workspaces. Unsaved terminal work can be lost. Their owned session terminals will also end."
         : "Remove these tabs from this workspace only. Their tmux sessions and session terminals keep running, and other workspaces are unchanged."}</p>
       <p>{ending
-        ? "Session metadata remains in Recycle Bin history; terminal contents and running programs cannot be restored from it."
-        : "Closed tabs are recorded in Recent Sessions / Recycle Bin history so they can be reopened."}</p>
+        ? "Session metadata remains in Session history; terminal contents and running programs cannot be restored from it."
+        : "Closed tabs are recorded in Session history so they can be reopened."}</p>
       <ul className="bulk-session-targets" aria-label="Selected sessions">
         {targets.map((target) => <li key={target.name}>
           <strong>{target.session?.customTitle || target.name}</strong>

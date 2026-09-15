@@ -1714,7 +1714,7 @@ describe("ConsoleScreen session identity", () => {
     }));
 
     expect(await screen.findByRole("dialog", { name: "Agents in test" })).toBeVisible();
-    // Scoped to this session, and not limited to the Recycle Bin, so the agent
+    // Scoped to this session, and not limited to closed sessions, so the agent
     // running right now is included.
     await waitFor(() => expect(listSessionHistory).toHaveBeenLastCalledWith(
       null, "", false, 0, expect.any(AbortSignal), "test",

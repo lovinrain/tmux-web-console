@@ -40,7 +40,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
   const cancel = useRef<HTMLButtonElement>(null);
   const title = sessionName
     ? `Agents in ${sessionName}`
-    : workspaceId ? "Recent Sessions" : "Recycle Bin";
+    : "Session history";
 
   useEffect(() => {
     const trigger = document.activeElement;
@@ -128,7 +128,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
       </form>
       <div className="session-history-filters">
         <button type="button" aria-pressed={!recycled} disabled={Boolean(busy)} onClick={() => { setOffset(0); setRecycled(false); }}>All history</button>
-        <button type="button" aria-pressed={recycled} disabled={Boolean(busy)} onClick={() => { setOffset(0); setRecycled(true); }}>Recycle Bin</button>
+        <button type="button" aria-pressed={recycled} disabled={Boolean(busy)} onClick={() => { setOffset(0); setRecycled(true); }}>Closed &amp; ended</button>
         <span>Newest activity first / shared across browsers</span>
       </div>
       {error && <p className="session-history-error" role="alert">{error}</p>}

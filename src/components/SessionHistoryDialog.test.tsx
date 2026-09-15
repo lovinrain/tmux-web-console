@@ -19,7 +19,7 @@ beforeEach(() => {
 describe("SessionHistoryDialog", () => {
   it("filters workspace history on demand and shows names, agent references and membership", async () => {
     render(<SessionHistoryDialog workspaceId="project" workspaceName="Project" onClose={vi.fn()} onOpenSession={vi.fn()} />);
-    const dialog = screen.getByRole("dialog", { name: "Recent Sessions" });
+    const dialog = screen.getByRole("dialog", { name: "Session history" });
     await within(dialog).findByText("named-agent");
     expect(listSessionHistory).toHaveBeenCalledWith("project", "", true, 0, expect.any(AbortSignal), null);
     expect(dialog).toHaveTextContent("old-agent");

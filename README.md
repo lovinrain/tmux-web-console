@@ -239,11 +239,12 @@ For frontend development, run `npm run dev`. Vite serves
   may be shown solely as a reference, and a missing directory or live name
   conflict blocks recovery instead of changing another session. Sessions ended
   through Muxdeck are intentionally excluded from recovery.
-- SQLite also retains a searchable session history and Recycle Bin: native and
-  previous names, display titles, CWD, saved-workspace membership, timestamps,
-  and captured agent references. Open `Recycle Bin` on the landing page or
-  `Recent Sessions` in a saved workspace. Reopen attaches to the original live
-  session; confirmed recreation starts a fresh shell without resuming an agent.
+- SQLite also retains a searchable session history: native and previous names,
+  display titles, CWD, saved-workspace membership, timestamps, and every coding
+  agent observed in a session. Open `Session history` from the landing page, or
+  from a workspace's tab controls to scope it to that workspace. Reopen attaches
+  to the original live session; confirmed recreation starts a fresh shell without
+  resuming an agent.
 - Alternate-screen applications may leave no retained tmux history; Muxdeck
   cannot reconstruct output tmux did not save.
 

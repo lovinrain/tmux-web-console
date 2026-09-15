@@ -80,7 +80,7 @@ Both show a confirmation listing the captured selection, native names, and
 display titles. `Close tabs` removes tabs only from the current workspace and
 records their history without stopping tmux. `End sessions` terminates the
 selected sessions everywhere, including their panes, programs, and owned
-session terminals, using full captured tmux identities. Recycle Bin retains
+session terminals, using full captured tmux identities. Session history retains
 metadata, not recoverable running programs or terminal transcripts.
 Items are processed independently, with the active tab last. Partial failures
 remain visible alongside successful results; retry only attempts failed items
@@ -192,14 +192,21 @@ than an exit shortcut; `Ctrl+Shift+F` enters or exits Focus and
 `Ctrl+Shift+Y` toggles floating input even while xterm or staged input owns
 keyboard focus.
 
-### Recycle Bin and workspace Recent Sessions
+### Session history
 
-`Recycle Bin` on the landing page opens the SQLite-backed history of closed
-tabs and ended/missing sessions. Saved workspaces expose `Recent Sessions` in
-their tab-strip/side-rail controls, filtered by that workspace's stable ID.
-This is distinct from the existing browser-local `Recents` live-session
-switcher. Temporary workspaces offer the global Recycle Bin; save a workspace
-to retain its own membership history across browsers and reloads.
+`Session history` on the landing page opens the SQLite-backed record of closed
+tabs and ended/missing sessions. The same control in a workspace's
+tab-strip/side-rail is filtered by that workspace's stable ID, and its `Closed
+& ended` filter narrows the list to sessions that are gone. This is distinct
+from `Switch session`, the browser-local switcher for sessions that are running
+right now; the two carry different icons. Temporary workspaces see the global
+history; save a workspace to retain its own membership history across browsers
+and reloads.
+
+A session's own `Agents` control, beside `Scrollback` in the console header,
+opens the same history scoped to that session: every coding agent recorded in
+it, oldest first, following the session across renames and recreations under
+the same name.
 
 Each observed tmux process identity has a separate history record, even when
 its native name is reused later. The record retains native and previous names,
