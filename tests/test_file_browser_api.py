@@ -17,6 +17,10 @@ from tmux_console.tmux import Pane, Session, TmuxClient, TmuxError
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"preview payload"
 PDF_BYTES = b"%PDF-1.7\n% muxdeck test\n%%EOF\n"
 HTML_BYTES = b"<!doctype html><html><body><h1>Muxdeck</h1></body></html>\n"
+SVG_BYTES = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8">'
+    b'<rect width="8" height="8"/></svg>\n'
+)
 
 
 def make_pane(path: Path, pane_id: str = "%3") -> Pane:
@@ -2159,5 +2163,63 @@ async def test_file_browser_reads_are_not_embeddable_cross_origin(tmp_path):
                 headers={"Sec-Fetch-Site": "cross-site"},
             )
             assert response.headers["Cross-Origin-Resource-Policy"] == "same-origin", route
+    finally:
+        await client.close()
+
+
+async def test_file_browser_api_sandboxes_svg_previews(tmp_path):
+    """An SVG is a document, not a bitmap: opened directly it would run script
+    in the authenticated origin, so it carries the untrusted-document sandbox
+    rather than the raster image headers."""
+    nested = tmp_path / "incoming"
+    nested.mkdir()
+    svg_name = "site diagram.SVG"
+    (nested / svg_name).write_bytes(SVG_BYTES)
+    png_name = "raster.png"
+    (nested / png_name).write_bytes(PNG_BYTES)
+    client = await make_client(FileBrowserFakeTmux([make_session(tmp_path)]))
+    try:
+        preview = await client.get(
+            "/api/sessions/files-agent/files/preview",
+            params={"sessionId": "$7", "paneId": "%3", "path": f"incoming/{svg_name}"},
+        )
+        assert preview.status == 200
+        payload = await preview.json()
+        assert payload["kind"] == "svg"
+        assert payload["mediaType"] == "image/svg+xml"
+        assert payload["editable"] is False
+        # The source is still carried, so nothing readable before is lost.
+        assert payload["content"] == SVG_BYTES.decode("utf-8")
+
+        svg = await client.get(
+            "/api/sessions/files-agent/files/svg",
+            params={"sessionId": "$7", "paneId": "%3", "path": f"incoming/{svg_name}"},
+        )
+        assert svg.status == 200
+        assert await svg.read() == SVG_BYTES
+        assert svg.headers["Content-Type"] == "image/svg+xml"
+        assert svg.headers["Cache-Control"] == "private, no-store"
+        assert svg.headers["Content-Disposition"].startswith("inline;")
+        assert "sandbox" in svg.headers["Content-Security-Policy"]
+        assert "script-src 'none'" in svg.headers["Content-Security-Policy"]
+        assert "connect-src 'none'" in svg.headers["Content-Security-Policy"]
+        assert "form-action 'none'" in svg.headers["Content-Security-Policy"]
+        assert svg.headers["X-Frame-Options"] == "DENY"
+        assert svg.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert svg.headers["X-Content-Type-Options"] == "nosniff"
+
+        # The endpoint must never become a content-type override for other files.
+        not_svg = await client.get(
+            "/api/sessions/files-agent/files/svg",
+            params={"sessionId": "$7", "paneId": "%3", "path": f"incoming/{png_name}"},
+        )
+        assert not_svg.status == 415
+
+        # And the raster endpoint must not serve the SVG either.
+        not_raster = await client.get(
+            "/api/sessions/files-agent/files/image",
+            params={"sessionId": "$7", "paneId": "%3", "path": f"incoming/{svg_name}"},
+        )
+        assert not_raster.status == 415
     finally:
         await client.close()

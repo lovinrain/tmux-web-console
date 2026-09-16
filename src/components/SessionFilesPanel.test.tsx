@@ -16,6 +16,7 @@ import {
   sessionFileHtmlUrl,
   sessionFileImageUrl,
   sessionFilePdfUrl,
+  sessionFileSvgUrl,
   uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
@@ -51,6 +52,7 @@ vi.mock("../api", () => ({
   sessionFileHtmlUrl: vi.fn(),
   sessionFileImageUrl: vi.fn(),
   sessionFilePdfUrl: vi.fn(),
+  sessionFileSvgUrl: vi.fn(),
   uploadSessionFile: vi.fn(),
 }));
 
@@ -189,6 +191,7 @@ beforeEach(() => {
   vi.mocked(sessionFileHtmlUrl).mockReturnValue("/files/html");
   vi.mocked(sessionFileImageUrl).mockReturnValue("/files/image");
   vi.mocked(sessionFilePdfUrl).mockReturnValue("/files/pdf");
+  vi.mocked(sessionFileSvgUrl).mockReturnValue("/files/svg");
   vi.mocked(resolveSessionFilePath).mockImplementation(async (_target, path) => ({
     kind: "directory",
     root: path,
@@ -1019,6 +1022,70 @@ describe("SessionFilesPanel", () => {
     expect(within(panel).getByRole("alert")).toHaveTextContent(
       "Image preview unavailable",
     );
+  });
+
+  it("renders an SVG through the sandboxed endpoint, not the raster one", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("logo.svg", "logo.svg", "file", { size: 2_048 }),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/project",
+      name: "logo.svg",
+      path: "logo.svg",
+      absolutePath: "/work/project/logo.svg",
+      terminalText: "/work/project/logo.svg",
+      kind: "svg",
+      mediaType: "image/svg+xml",
+      size: 2_048,
+      modified: 1_700_000_000,
+      truncated: false,
+      previewBytes: 2_048,
+      content: "<svg></svg>",
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File logo.svg" }));
+    const image = await within(panel).findByRole("img", { name: "Preview of logo.svg" });
+    expect(image).toHaveAttribute("src", "/files/svg");
+    expect(sessionFileSvgUrl).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      "logo.svg",
+    );
+    // The raster endpoint would serve it without the script sandbox.
+    expect(sessionFileImageUrl).not.toHaveBeenCalled();
+
+    fireEvent.load(image);
+    expect(within(panel).getByRole("link", { name: "Open logo.svg full size" }))
+      .toHaveAttribute("href", "/files/svg");
+  });
+
+  it("keeps an oversized SVG downloadable without requesting inline content", async () => {
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [
+      entry("huge.svg", "huge.svg", "file", { size: 8 * 1_024 * 1_024 }),
+    ]));
+    vi.mocked(previewSessionFile).mockResolvedValue({
+      root: "/work/project",
+      name: "huge.svg",
+      path: "huge.svg",
+      absolutePath: "/work/project/huge.svg",
+      terminalText: "/work/project/huge.svg",
+      kind: "svg",
+      mediaType: "image/svg+xml",
+      size: 8 * 1_024 * 1_024,
+      modified: 1_700_000_000,
+      truncated: true,
+      previewBytes: 5 * 1_024 * 1_024,
+      content: null,
+    });
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+
+    fireEvent.click(within(panel).getByRole("button", { name: "File huge.svg" }));
+    expect(await within(panel).findByText("SVG is too large to preview"))
+      .toBeInTheDocument();
+    expect(within(panel).queryByRole("img")).not.toBeInTheDocument();
+    expect(sessionFileSvgUrl).not.toHaveBeenCalled();
   });
 
   it("keeps oversized raster images downloadable without requesting inline content", async () => {

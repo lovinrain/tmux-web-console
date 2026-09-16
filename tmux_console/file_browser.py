@@ -22,6 +22,7 @@ MAX_PDF_PREVIEW_BYTES = 50 * 1024 * 1024
 # HTML is rendered in an isolated browser document. Keep the response bounded
 # so opening a generated report cannot turn into an unbounded file transfer.
 MAX_HTML_PREVIEW_BYTES = 10 * 1024 * 1024
+MAX_SVG_PREVIEW_BYTES = 5 * 1024 * 1024
 PDF_HEADER_SCAN_BYTES = 1_024
 MAX_FILE_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_FILE_NAME_BYTES = 255
@@ -115,6 +116,14 @@ class FileBrowserHtmlTooLargeError(ValueError):
     pass
 
 
+class FileBrowserUnsupportedSvgError(ValueError):
+    pass
+
+
+class FileBrowserSvgTooLargeError(ValueError):
+    pass
+
+
 class FileBrowserContentTooLargeError(ValueError):
     """A file body exceeds the limit for the requested operation."""
 
@@ -171,6 +180,12 @@ class FileBrowserPdfPreview:
 
 @dataclass(frozen=True)
 class FileBrowserHtmlPreview:
+    path: Path
+    name: str
+
+
+@dataclass(frozen=True)
+class FileBrowserSvgPreview:
     path: Path
     name: str
 
@@ -1007,6 +1022,30 @@ def preview_file(
             "editable": False,
         }
 
+    if Path(parts[-1]).suffix.casefold() == ".svg":
+        with target.open("rb") as handle:
+            svg_bytes = handle.read(MAX_SVG_PREVIEW_BYTES + 1)
+        svg_truncated = len(svg_bytes) > MAX_SVG_PREVIEW_BYTES
+        svg_text: str | None = None
+        if not svg_truncated:
+            try:
+                svg_text = svg_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                svg_text = None
+        return {
+            "root": str(display_root),
+            **_path_payload(display_root, parts),
+            "name": target.name,
+            "kind": "svg",
+            "mediaType": "image/svg+xml",
+            "size": target_stat.st_size,
+            "modified": target_stat.st_mtime,
+            "truncated": svg_truncated,
+            "previewBytes": min(target_stat.st_size, MAX_SVG_PREVIEW_BYTES),
+            "content": svg_text,
+            "editable": False,
+        }
+
     with target.open("rb") as handle:
         content = handle.read(MAX_PREVIEW_BYTES + 1)
     truncated = len(content) > MAX_PREVIEW_BYTES
@@ -1474,6 +1513,39 @@ def resolve_file_pdf_preview(
             "PDF exceeds the 50 MiB inline preview limit"
         )
     return FileBrowserPdfPreview(path=target, name=parts[-1])
+
+
+def resolve_file_svg_preview(
+    root_path: str,
+    relative_path: str,
+    *,
+    boundary: Path | None,
+) -> FileBrowserSvgPreview:
+    """Resolve an SVG that may be rendered by the browser.
+
+    Like the HTML endpoint, the extension check is deliberate: this response
+    declares ``image/svg+xml``, which a browser executes as a document, so it
+    must never become a content-type override for arbitrary files.
+    """
+    _display_root, _resolved_root, target, parts = _resolve_target(
+        root_path,
+        relative_path,
+        boundary,
+    )
+    target_stat = target.stat()
+    if stat.S_ISDIR(target_stat.st_mode):
+        raise IsADirectoryError("path is a directory")
+    if not stat.S_ISREG(target_stat.st_mode):
+        raise FileBrowserUnsupportedFileError("path is not a regular file")
+    # Check the requested name, not the resolved target: a contained symlink
+    # may point at a file with another suffix.
+    if Path(parts[-1]).suffix.casefold() != ".svg":
+        raise FileBrowserUnsupportedSvgError("path is not an SVG image")
+    if target_stat.st_size > MAX_SVG_PREVIEW_BYTES:
+        raise FileBrowserSvgTooLargeError(
+            "SVG exceeds the 5 MiB inline preview limit"
+        )
+    return FileBrowserSvgPreview(path=target, name=parts[-1])
 
 
 def resolve_file_html_preview(

@@ -29,6 +29,7 @@ import {
   sessionFileHtmlUrl,
   sessionFileImageUrl,
   sessionFilePdfUrl,
+  sessionFileSvgUrl,
   uploadSessionFile,
   type SessionDirectoryListing,
   type SessionFileEntry,
@@ -1236,6 +1237,9 @@ export function SessionFilesPanel({
   const pathTarget: PathTarget | null = selected ?? listing;
   const imagePreviewUrl = preview?.kind === "image" && !preview.truncated
     ? sessionFileImageUrl(fileTarget, preview.path)
+    : null;
+  const svgPreviewUrl = preview?.kind === "svg" && !preview.truncated
+    ? sessionFileSvgUrl(fileTarget, preview.path)
     : null;
   const pdfPreviewUrl = preview?.kind === "pdf" && !preview.truncated
     ? sessionFilePdfUrl(fileTarget, preview.path)
@@ -3961,6 +3965,51 @@ export function SessionFilesPanel({
                         <ImageIcon />
                         <strong>Image preview unavailable</strong>
                         <span>The file may have changed or the browser cannot decode it. Download remains available.</span>
+                      </div>
+                    )}
+                  </div>
+                ) : null
+              ) : preview.kind === "svg" ? (
+                preview.truncated ? (
+                  <div className="session-file-preview-empty image-limit">
+                    <strong>SVG is too large to preview</strong>
+                    <span>
+                      Inline viewing is limited to {formatBytes(preview.previewBytes)}.
+                      Download the original file instead.
+                    </span>
+                  </div>
+                ) : svgPreviewUrl ? (
+                  <div
+                    className="session-file-image-preview"
+                    data-image-status={imagePreviewStatus}
+                  >
+                    <a
+                      className="session-file-image-link"
+                      href={svgPreviewUrl}
+                      target="_blank"
+                      rel="noopener"
+                      aria-label={`Open ${preview.name} full size`}
+                      title="Open the original SVG in a new tab"
+                    >
+                      <img
+                        src={svgPreviewUrl}
+                        alt={`Preview of ${preview.name}`}
+                        draggable={false}
+                        decoding="async"
+                        onLoad={() => setImagePreviewStatus("ready")}
+                        onError={() => setImagePreviewStatus("error")}
+                      />
+                      {imagePreviewStatus === "ready" && (
+                        <span className="session-file-image-open">
+                          <ExternalLinkIcon /> Open full size
+                        </span>
+                      )}
+                    </a>
+                    {imagePreviewStatus === "error" && (
+                      <div className="session-file-image-message error" role="alert">
+                        <ImageIcon />
+                        <strong>SVG preview unavailable</strong>
+                        <span>The file may have changed or the browser cannot render it. Download remains available.</span>
                       </div>
                     )}
                   </div>

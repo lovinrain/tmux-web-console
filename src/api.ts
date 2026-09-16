@@ -292,7 +292,7 @@ export interface SessionFilePreview {
   path: string;
   absolutePath: string;
   terminalText: string;
-  kind: "text" | "image" | "pdf" | "binary";
+  kind: "text" | "image" | "svg" | "pdf" | "binary";
   mediaType: string;
   size: number;
   modified: number;
@@ -408,6 +408,13 @@ export function sessionFileImageUrl(
   path: string,
 ): string {
   return `${BASE_PATH}${sessionFileUrl(target, "image", path)}`;
+}
+
+export function sessionFileSvgUrl(
+  target: SessionFileTarget,
+  path: string,
+): string {
+  return `${BASE_PATH}${sessionFileUrl(target, "svg", path)}`;
 }
 
 export function sessionFilePdfUrl(

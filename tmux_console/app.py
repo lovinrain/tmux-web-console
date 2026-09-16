@@ -53,10 +53,13 @@ from .file_browser import (
     FileBrowserPathOutsideRootError,
     FileBrowserPdfPreview,
     FileBrowserPdfTooLargeError,
+    FileBrowserSvgPreview,
+    FileBrowserSvgTooLargeError,
     FileBrowserUnsupportedFileError,
     FileBrowserUnsupportedHtmlError,
     FileBrowserUnsupportedImageError,
     FileBrowserUnsupportedPdfError,
+    FileBrowserUnsupportedSvgError,
     copy_entry,
     create_download_archive,
     create_entry,
@@ -70,6 +73,7 @@ from .file_browser import (
     resolve_file_download,
     resolve_file_html_preview,
     resolve_file_image_preview,
+    resolve_file_svg_preview,
     resolve_file_pdf_preview,
     search_files,
     upload_file,
@@ -1941,6 +1945,7 @@ def create_app(
             FileBrowserImageTooLargeError,
             FileBrowserHtmlTooLargeError,
             FileBrowserPdfTooLargeError,
+            FileBrowserSvgTooLargeError,
             FileBrowserContentTooLargeError,
             FileBrowserArchiveLimitError,
         ) as error:
@@ -1949,6 +1954,7 @@ def create_app(
             FileBrowserUnsupportedHtmlError,
             FileBrowserUnsupportedImageError,
             FileBrowserUnsupportedPdfError,
+            FileBrowserUnsupportedSvgError,
         ) as error:
             return json_error(str(error), 415)
         except FileBrowserPathOutsideRootError as error:
@@ -2138,6 +2144,51 @@ def create_app(
                 ),
                 "Content-Type": result.media_type,
                 "Cross-Origin-Resource-Policy": "same-origin",
+            },
+        )
+
+    async def preview_session_file_svg(request: web.Request) -> web.StreamResponse:
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        result = await execute_session_file_operation(
+            root_path,
+            relative_path,
+            pane_id,
+            within_boundary(resolve_file_svg_preview),
+        )
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, FileBrowserSvgPreview):
+            raise TypeError("SVG preview operation returned an invalid result")
+
+        # An SVG is a document, not a bitmap: a browser runs script and fetches
+        # external references inside one. The panel renders it through <img>,
+        # where script never runs, but this URL is also opened directly in a new
+        # tab, so it is sandboxed exactly like the untrusted HTML endpoint.
+        return web.FileResponse(
+            result.path,
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": _file_content_disposition(
+                    result.name,
+                    "inline",
+                    fallback="image",
+                ),
+                "Content-Type": "image/svg+xml",
+                "Content-Security-Policy": (
+                    "sandbox; default-src 'none'; base-uri 'none'; "
+                    "connect-src 'none'; form-action 'none'; "
+                    "frame-ancestors 'none'; object-src 'none'; "
+                    "script-src 'none'; style-src 'unsafe-inline'; "
+                    "img-src data:; font-src data:"
+                ),
+                "Cross-Origin-Resource-Policy": "same-origin",
+                "X-Frame-Options": "DENY",
             },
         )
 
@@ -5140,6 +5191,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/image",
         preview_session_file_image,
+    )
+    app.router.add_get(
+        f"{prefix}/api/sessions/{session_segment}/files/svg",
+        preview_session_file_svg,
     )
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/pdf",
