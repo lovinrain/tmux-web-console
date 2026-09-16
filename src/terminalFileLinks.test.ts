@@ -9,7 +9,7 @@ import {
 
 describe("terminal file path detection", () => {
   it("finds absolute, relative, home, and bare previewable file paths", () => {
-    const text = "open /tmp/chart.PNG, ./notes.txt:12 ~/shots/final.png report.TXT README.md config.JSON export.CSV design.PDF /tmp/report.html page.htm";
+    const text = "open /tmp/chart.PNG, ./notes.txt:12 ~/shots/final.png report.TXT README.md config.JSON export.CSV design.PDF /tmp/report.html page.htm icons/logo.SVG";
     expect(findTerminalFilePaths(text).map((match) => match.text)).toEqual([
       "/tmp/chart.PNG",
       "./notes.txt",
@@ -21,6 +21,7 @@ describe("terminal file path detection", () => {
       "design.PDF",
       "/tmp/report.html",
       "page.htm",
+      "icons/logo.SVG",
     ]);
   });
 
@@ -68,6 +69,8 @@ describe("terminal file path resolution", () => {
       .toBe("/work/project/docs/guide.md");
     expect(resolveTerminalFileLinkPath("config.json", "/work/project"))
       .toBe("/work/project/config.json");
+    expect(resolveTerminalFileLinkPath("assets/logo.svg", "/work/project"))
+      .toBe("/work/project/assets/logo.svg");
     expect(resolveTerminalFileLinkPath("reports/data.csv", "/work/project"))
       .toBe("/work/project/reports/data.csv");
     expect(resolveTerminalFileLinkPath("artifacts/report.pdf", "/work/project"))
