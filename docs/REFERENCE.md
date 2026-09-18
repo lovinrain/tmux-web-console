@@ -148,8 +148,10 @@ or delete from the cursor to the end. `^Q` sends a literal `Ctrl+Q` byte, which
 Copilot CLI uses to enqueue its current prompt. `^T` sends a literal `Ctrl+T`
 byte, which Codex CLI uses to open earlier messages and the full transcript. The
 `Other Keys` control reveals
-`Up`, `Down`, `Left`, and `Right` in a secondary row so those less-frequent
-controls do not crowd the main shortcut strip.
+`Up`, `Down`, `Left`, `Right`, `Home`, and `End` in a secondary row so those
+less-frequent controls do not crowd the main shortcut strip. `Home` and `End`
+send the xterm sequences for those keys, which tmux re-encodes for the
+foreground application; use them where `^A` and `^E` are bound to something else.
 
 `Raw keys` focuses the live xterm input. It does not enable a separate mode or
 send a control sequence; subsequent keyboard input goes directly to the

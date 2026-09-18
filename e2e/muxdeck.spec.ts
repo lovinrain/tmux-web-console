@@ -2334,8 +2334,10 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   await moreKeys.click();
   const otherKeys = page.getByRole("group", { name: "Other keys" });
   await expect(otherKeys).toBeVisible();
-  await expect(otherKeys.getByRole("button")).toHaveCount(4);
+  await expect(otherKeys.getByRole("button")).toHaveCount(6);
   await expect(otherKeys.getByRole("button", { name: "Right" })).toBeInViewport();
+  await expect(otherKeys.getByRole("button", { name: "End - move to end of line" }))
+    .toBeInViewport();
   await moreKeys.click();
   await expect(otherKeys).toBeHidden();
 
@@ -6929,7 +6931,8 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   const otherKeyPanel = page.getByRole("group", { name: "Other keys" });
   await expect(otherKeysToggle).toHaveAccessibleName("Hide other keys");
   await expect(otherKeysToggle).toHaveAttribute("aria-expanded", "true");
-  await expect(otherKeyPanel.getByRole("button")).toHaveText(["Up", "Down", "Left", "Right"]);
+  await expect(otherKeyPanel.getByRole("button"))
+    .toHaveText(["Up", "Down", "Left", "Right", "Home", "End"]);
   expect(await otherKeyPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/console-mobile-other-keys.png" });

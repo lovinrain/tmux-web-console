@@ -154,6 +154,12 @@ describe("InputBar", () => {
     fireEvent.click(within(otherKeys).getByRole("button", { name: "Down" }));
     fireEvent.click(within(otherKeys).getByRole("button", { name: "Left" }));
     fireEvent.click(within(otherKeys).getByRole("button", { name: "Right" }));
+    fireEvent.click(within(otherKeys).getByRole("button", {
+      name: "Home - move to start of line",
+    }));
+    fireEvent.click(within(otherKeys).getByRole("button", {
+      name: "End - move to end of line",
+    }));
 
     expect(onSend.mock.calls).toEqual([
       ["\x02\x1b[5~"],
@@ -172,6 +178,8 @@ describe("InputBar", () => {
       ["\x1b[B"],
       ["\x1b[D"],
       ["\x1b[C"],
+      ["\x1b[H"],
+      ["\x1b[F"],
     ]);
   });
 
@@ -256,7 +264,7 @@ describe("InputBar", () => {
     expect(showOtherKeys).toHaveAttribute("aria-expanded", "true");
     expect(showOtherKeys).toHaveAttribute("aria-controls", otherKeys.id);
     expect(within(otherKeys).getAllByRole("button").map((button) => button.textContent))
-      .toEqual(["Up", "Down", "Left", "Right"]);
+      .toEqual(["Up", "Down", "Left", "Right", "Home", "End"]);
     expect(textarea).toHaveFocus();
 
     const upButton = within(otherKeys).getByRole("button", { name: "Up" });
@@ -296,8 +304,15 @@ describe("InputBar", () => {
     expect(showOtherKeys).toBeEnabled();
     fireEvent.click(showOtherKeys);
     const otherKeys = screen.getByRole("group", { name: "Other keys" });
-    for (const arrow of ["Up", "Down", "Left", "Right"]) {
-      expect(within(otherKeys).getByRole("button", { name: arrow })).toBeDisabled();
+    for (const key of [
+      "Up",
+      "Down",
+      "Left",
+      "Right",
+      "Home - move to start of line",
+      "End - move to end of line",
+    ]) {
+      expect(within(otherKeys).getByRole("button", { name: key })).toBeDisabled();
     }
     expect(window.localStorage.getItem("muxdeck-terminal-draft:test-session")).toBe("prepare this offline");
   });

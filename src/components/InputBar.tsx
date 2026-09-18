@@ -104,6 +104,10 @@ interface StagedAttachmentUpload extends UploadedSessionAttachment {
 
 const PAGE_UP_SEQUENCE = "\x1b[5~";
 const PAGE_DOWN_SEQUENCE = "\x1b[6~";
+// tmux is attached as xterm-256color, so send the keys an xterm keyboard sends
+// and let tmux re-encode them for whatever the pane is running.
+const HOME_SEQUENCE = "\x1b[H";
+const END_SEQUENCE = "\x1b[F";
 const CLEAR_TERMINAL_INPUT_SEQUENCE = "\x01\x0b";
 
 const ESSENTIAL_KEYS: TerminalKey[] = [
@@ -184,6 +188,18 @@ const OTHER_KEYS: TerminalKey[] = [
   { label: "Down", data: "\x1b[B" },
   { label: "Left", data: "\x1b[D" },
   { label: "Right", data: "\x1b[C" },
+  {
+    label: "Home",
+    data: HOME_SEQUENCE,
+    ariaLabel: "Home - move to start of line",
+    title: "Move to the start of the line in the foreground application (Home)",
+  },
+  {
+    label: "End",
+    data: END_SEQUENCE,
+    ariaLabel: "End - move to end of line",
+    title: "Move to the end of the line in the foreground application (End)",
+  },
 ];
 
 interface TerminalKeyButtonProps {

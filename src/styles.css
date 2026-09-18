@@ -10787,7 +10787,7 @@ html.scoped-note-resizing-bottom-left * {
 .other-key-panel {
   order: 1;
   display: grid;
-  grid-template-columns: auto repeat(4, minmax(44px, 64px));
+  grid-template-columns: auto repeat(6, minmax(44px, 64px));
   min-width: 0;
   align-items: center;
   justify-content: end;
@@ -14186,7 +14186,7 @@ html.history-resizing * {
   }
 
   .other-key-panel {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .other-key-panel-label {
