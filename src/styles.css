@@ -10980,13 +10980,29 @@ html.scoped-note-resizing-bottom-left * {
     height: 14px;
   }
 
+  .console-identity {
+    min-width: 112px;
+  }
+
   .workspace-header-widgets {
     display: flex;
     min-width: 0;
-    max-width: 452px;
-    flex: 0 1 452px;
+    max-width: 560px;
+    flex: 0 1 560px;
     align-items: center;
     gap: 5px;
+    /* Widgets stay inside their own box. When the identity and the action
+       buttons leave too little room the row scrolls instead of spilling over
+       them; the padding keeps each card's hover lift out of the clip. */
+    padding-block: 3px;
+    margin-block: -3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .workspace-header-widgets::-webkit-scrollbar {
+    display: none;
   }
 
   .workspace-timer-card {
@@ -11224,13 +11240,21 @@ html.scoped-note-resizing-bottom-left * {
     max-width: 390px;
     flex: 0 1 390px;
     align-items: center;
-    justify-content: flex-end;
+    /* Overflow past the start edge cannot be scrolled back into view, so the
+       rail packs toward the start and lets any spill fall to the end. */
+    justify-content: flex-start;
     gap: 5px;
+    container-name: scoped-note-rail;
+    container-type: inline-size;
   }
 
   .workspace-header-widgets .scoped-sticky-notes {
+    /* Three full cards, their gaps, and the rail label. The basis makes the
+       rail shrink alongside the other widgets; the floor keeps three icon
+       cards inside the rail so they never sit on top of a neighbour. */
+    min-width: 112px;
     max-width: none;
-    flex: 1 1 auto;
+    flex: 1 1 372px;
   }
 
   .scoped-sticky-notes-label {
@@ -11250,7 +11274,7 @@ html.scoped-note-resizing-bottom-left * {
     position: relative;
     display: grid;
     width: min(116px, 9vw);
-    min-width: 72px;
+    min-width: 34px;
     height: 46px;
     min-height: 46px;
     grid-template-columns: 18px minmax(0, 1fr);
@@ -11371,6 +11395,37 @@ html.scoped-note-resizing-bottom-left * {
     font-weight: 850;
     letter-spacing: 0.05em;
     line-height: 1;
+  }
+
+  /* The rail's query size is the room the header leaves for three cards and
+     their two 5px gaps, so each step drops the detail that stopped fitting
+     rather than letting a card spill over the session identity. */
+  @container scoped-note-rail (max-width: 311px) {
+    .scoped-sticky-note small {
+      display: none;
+    }
+  }
+
+  @container scoped-note-rail (max-width: 255px) {
+    .scoped-sticky-notes-label {
+      display: none;
+    }
+
+    .scoped-sticky-note {
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: center;
+      padding: 0;
+    }
+
+    .scoped-sticky-note > span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
   }
 
   .desktop-tab-orientation-toggle,
@@ -13111,18 +13166,17 @@ html.history-resizing * {
 
 @media (min-width: 801px) and (max-width: 1600px) {
   .workspace-header-widgets {
-    max-width: 356px;
-    flex-basis: 356px;
+    max-width: 372px;
+    flex-basis: 372px;
   }
 
-  .scoped-sticky-notes {
-    max-width: 248px;
+  .workspace-header-widgets .scoped-sticky-notes {
     flex-basis: 248px;
   }
 
   .scoped-sticky-note {
     width: auto;
-    min-width: 62px;
+    min-width: 34px;
   }
 
   .scoped-sticky-note small {

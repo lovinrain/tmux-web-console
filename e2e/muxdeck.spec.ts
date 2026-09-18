@@ -5878,6 +5878,29 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
     expect(cardBoxes[1]!.x).toBeLessThan(cardBoxes[2]!.x);
     expect(notesBox!.x + notesBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
 
+    // Cards that outgrow the rail spill out of its start edge and cover the
+    // session identity, so check both boundaries at a squeezed and a roomy
+    // header width.
+    for (const width of [1440, 2048]) {
+      await page.setViewportSize({ width, height: 900 });
+      const identityBox = await page.locator(".console-identity").boundingBox();
+      const railBox = await noteRegion.boundingBox();
+      const boxes = await Promise.all([
+        commonCard.boundingBox(),
+        workspaceCard.boundingBox(),
+        sessionCard.boundingBox(),
+      ]);
+      expect(identityBox).not.toBeNull();
+      expect(railBox).not.toBeNull();
+      for (const box of boxes) {
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(identityBox!.x + identityBox!.width);
+        expect(box!.x).toBeGreaterThanOrEqual(railBox!.x - 1);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(railBox!.x + railBox!.width + 1);
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
     await saveNote("Add common note", "Common", "Shared release checklist");
     await saveNote("Add workspace note", firstWorkspaceName, "First workspace plan");
     await saveNote("Add session note", sessionName, "Primary session handoff");

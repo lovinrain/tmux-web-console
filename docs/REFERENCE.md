@@ -1001,6 +1001,9 @@ is migrated into `Page 1`; page content has no separate character validator
 (the HTTP request boundary still protects the service). Page selection and the
 optional page sidebar are remembered in each browser window. The cards and
 editor are desktop-only, and concurrent editors use last-write-wins replacement.
+The cards keep whatever room the session identity and the action buttons leave:
+as that narrows they drop their preview line, then their labels, and finally the
+whole widget row scrolls horizontally instead of covering its neighbours.
 
 A compact `Countdown` / `Stopwatch` card sits beside those note cards on desktop.
 It opens a non-modal floating timer that moves by dragging its title strip and can
