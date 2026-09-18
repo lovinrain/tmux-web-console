@@ -5904,8 +5904,10 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
       animations: "disabled",
     });
     const initialEditorBox = await persistedEditor.boundingBox();
+    // The editor grew three more corner handles; this drag shrinks it toward the
+    // fixed top-left corner, so it belongs to the bottom-right one.
     const noteResizeHandle = persistedEditor.getByRole("button", {
-      name: "Resize workspace note window",
+      name: "Resize workspace note window from bottom right corner",
     });
     const resizeHandleBox = await noteResizeHandle.boundingBox();
     expect(initialEditorBox).not.toBeNull();
