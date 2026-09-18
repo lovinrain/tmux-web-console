@@ -36,6 +36,7 @@ import {
   FolderIcon,
   GridIcon,
   ClockIcon,
+  CloseIcon,
   HistoryIcon,
   KeyboardIcon,
   ListIcon,
@@ -54,6 +55,11 @@ import {
   rememberAgentScrollMode,
   type AgentScrollMode,
 } from "../agentScrollPreferences";
+import {
+  hiddenHeaderControls,
+  type OverflowBox,
+  type OverflowCandidate,
+} from "../headerOverflow";
 import { paneCommandKind } from "../sessionDashboardModel";
 import { isHtmlFilePath, resolveTerminalFileLinkPath } from "../terminalFileLinks";
 import {
@@ -227,6 +233,13 @@ const MOBILE_CONSOLE_LAYOUT_QUERY = [
   "(max-width: 640px)",
   "(max-width: 1024px) and (pointer: coarse)",
   "(max-width: 1024px) and (max-height: 500px)",
+].join(", ");
+// Cards the widget row can clip: sticky notes, countdown, host pulse, callbacks.
+const HEADER_WIDGET_SELECTOR = [
+  ".scoped-sticky-note",
+  ".workspace-timer-card",
+  ".host-pulse-card",
+  ".workspace-callback-card",
 ].join(", ");
 const DESKTOP_FOCUS_SHORTCUTS_GUTTER = 12;
 const DESKTOP_FOCUS_SHORTCUTS_KEY_STEP = 16;
@@ -565,6 +578,9 @@ export function ConsoleScreen({
   const resolvedDashboardWindowHref = dashboardWindowHref
     ?? `${BASE_PATH}/${window.location.search}`;
   const consoleShellRef = useRef<HTMLElement>(null);
+  const consoleHeaderRef = useRef<HTMLElement>(null);
+  const headerTrayToggleRef = useRef<HTMLButtonElement>(null);
+  const headerTrayPanelRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<LiveTerminalHandle>(null);
   const inputBarRef = useRef<InputBarHandle>(null);
   const floatingInputRef = useRef<FloatingStagedInputHandle>(null);
@@ -585,6 +601,9 @@ export function ConsoleScreen({
     ? `${idScope}-terminal-shortcuts`
     : "muxdeck-terminal-shortcuts";
   const filesControlId = idScope ? `${idScope}-files` : "muxdeck-session-files";
+  const headerTrayControlId = idScope
+    ? `${idScope}-header-controls`
+    : "muxdeck-header-controls";
   const [floatingTerminalOpen, setFloatingTerminalOpen] = useState(false);
   const toggleFloatingTerminal = useCallback(() => floatingTerminalRef.current?.toggle(), []);
   const onWorkspaceTerminalOpen = useCallback((open: boolean) => {
@@ -662,6 +681,8 @@ export function ConsoleScreen({
     FloatingStagedInputPanelState
   >({ open: false, pinned: false });
   const [desktopFocusShortcutsOpen, setDesktopFocusShortcutsOpen] = useState(false);
+  const [headerTrayOpen, setHeaderTrayOpen] = useState(false);
+  const [hiddenHeaderControlCount, setHiddenHeaderControlCount] = useState(0);
   const [desktopFocusShortcutsPosition, setDesktopFocusShortcutsPosition] = useState<
     DesktopFocusShortcutsPosition
   >({ x: 0, y: 0 });
@@ -1121,6 +1142,134 @@ export function ConsoleScreen({
     desktopTerminalFocus,
     moveDesktopFocusShortcutsBy,
   ]);
+
+  // Controls the header cannot show belong in the tray, so find the ones a
+  // breakpoint removed, collapsed, or cut off inside the widget row.
+  const measureHeaderOverflow = useCallback(() => {
+    const header = consoleHeaderRef.current;
+    // An open tray gives its controls a panel of their own, so the header's
+    // measurements no longer say anything about what it could not show.
+    if (!header || headerTrayOpen) return;
+    const boxOf = (element: Element): OverflowBox => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width };
+    };
+    const candidates: OverflowCandidate[] = [];
+    const collect = (element: Element, clip?: OverflowBox) => {
+      candidates.push({
+        key: String(candidates.length),
+        box: boxOf(element),
+        clip,
+        removed: window.getComputedStyle(element).display === "none",
+      });
+    };
+    const actions = header.querySelector(".console-actions");
+    if (actions) {
+      // The row scrolls once the header runs short, so it - not the header -
+      // is what cuts its buttons off.
+      const clip = boxOf(actions);
+      actions.querySelectorAll(":scope > button, :scope > a")
+        .forEach((control) => collect(control, clip));
+    }
+    const widgets = header.querySelector(".workspace-header-widgets");
+    if (widgets) {
+      const clip = boxOf(widgets);
+      widgets.querySelectorAll(HEADER_WIDGET_SELECTOR)
+        .forEach((widget) => collect(widget, clip));
+    }
+    const hidden = hiddenHeaderControls(boxOf(header), candidates).length;
+    setHiddenHeaderControlCount((current) => (current === hidden ? current : hidden));
+  }, [headerTrayOpen]);
+
+  useEffect(() => {
+    if (mobileLayout || embedded) {
+      setHiddenHeaderControlCount(0);
+      return;
+    }
+    let frame = 0;
+    const schedule = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(measureHeaderOverflow);
+    };
+    const header = consoleHeaderRef.current;
+    const observer = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(schedule)
+      : null;
+    if (header && observer) {
+      observer.observe(header);
+      const actions = header.querySelector(".console-actions");
+      if (actions) observer.observe(actions);
+      const widgets = header.querySelector(".workspace-header-widgets");
+      if (widgets) observer.observe(widgets);
+    }
+    schedule();
+    window.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+    };
+  }, [
+    callbackSessionActive,
+    connection,
+    embedded,
+    measureHeaderOverflow,
+    mobileLayout,
+    pane?.command,
+    session,
+  ]);
+
+  const headerTrayAvailable = !embedded
+    && !mobileLayout
+    && (headerTrayOpen || hiddenHeaderControlCount > 0);
+
+  const closeHeaderTray = useCallback((restoreFocus = false) => {
+    setHeaderTrayOpen(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => headerTrayToggleRef.current?.focus());
+    }
+  }, []);
+
+  const openHeaderTray = useCallback((fromKeyboard: boolean) => {
+    setHeaderTrayOpen(true);
+    // The panel precedes the toggle in the document, so a keyboard user would
+    // have to tab backwards to reach it. A pointer user keeps terminal focus.
+    if (!fromKeyboard) return;
+    window.requestAnimationFrame(() => {
+      headerTrayPanelRef.current
+        ?.querySelector<HTMLElement>(".console-header-tray-close")
+        ?.focus();
+    });
+  }, []);
+
+  useEffect(() => {
+    if (mobileLayout || embedded) setHeaderTrayOpen(false);
+  }, [embedded, mobileLayout]);
+
+  useEffect(() => {
+    if (!headerTrayOpen) return;
+    const closeFromOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && consoleHeaderRef.current?.contains(target)) return;
+      closeHeaderTray();
+    };
+    const closeFromKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // A dialog opened from a tray control owns Escape until it closes.
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeHeaderTray(true);
+    };
+    window.addEventListener("pointerdown", closeFromOutside, true);
+    window.addEventListener("keydown", closeFromKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeFromOutside, true);
+      window.removeEventListener("keydown", closeFromKey, true);
+    };
+  }, [closeHeaderTray, headerTrayOpen]);
 
   useEffect(() => {
     if (embedded) return;
@@ -1774,6 +1923,7 @@ export function ConsoleScreen({
       data-desktop-copy-mode={desktopCopyMode ? "true" : "false"}
       data-desktop-focus={desktopTerminalFocus ? "true" : "false"}
       data-desktop-focus-shortcuts={desktopFocusShortcutsOpen ? "true" : "false"}
+      data-console-header-tray={headerTrayOpen ? "true" : "false"}
       data-scroll-agent={scrollAgentKind}
       data-scroll-mode={preferredScrollMode}
       data-desktop-tabs={desktopTabOrientation}
@@ -1859,7 +2009,7 @@ export function ConsoleScreen({
           )}
         </button>
       </nav>}
-      <header className="console-header">
+      <header className="console-header" ref={consoleHeaderRef}>
         {!embedded && <div
           className="console-dashboard-navigation"
           role="group"
@@ -1930,155 +2080,201 @@ export function ConsoleScreen({
             </button>
           )}
         </div>
-        {headerNotes}
-        <div className="console-actions">
-          <span className={`connection-badge ${connection}`}><span />{STATE_LABEL[connection]}</span>
-          <button
-            type="button"
-            className={ignoreSize ? "size-mode protected" : "size-mode"}
-            onClick={() => setIgnoreSize((current) => !current)}
-            title={ignoreSize ? "This browser will not resize the shared tmux window" : "This browser controls the shared tmux window size"}
-          >
-            {ignoreSize ? "Size protected" : "Fit active"}
-          </button>
-          <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback">
-            <HistoryIcon /><span>Scrollback</span>
-          </button>
-          <button
-            type="button"
-            className="history-button"
-            onClick={() => setAgentHistoryOpen(true)}
-            aria-haspopup="dialog"
-            aria-label={`Coding agents recorded in ${sessionName}`}
-            title={`Every Claude, Codex, Cursor or Grok session recorded in ${sessionName}`}
-          >
-            <ClockIcon /><span>Agents</span>
-          </button>
-          {onSessionCopied && (
-            <button
-              type="button"
-              className="copy-new-button"
-              aria-keyshortcuts={directShortcutAria(shortcutBindings["session-copy-new"])}
-              aria-busy={copyingSource === sessionName}
-              disabled={copySessionDisabled || !session || copyingSource !== null}
-              title={`Create and open a fresh session in this pane's working directory${directShortcutLabel(shortcutBindings["session-copy-new"])
-                ? ` (${directShortcutLabel(shortcutBindings["session-copy-new"])})`
-                : ""}`}
-              onClick={() => void copyNewSession()}
-            >
-              <WindowCopyIcon />
-              <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
-            </button>
+        <div
+          id={headerTrayControlId}
+          className="console-header-tray-group"
+          ref={headerTrayPanelRef}
+          role={headerTrayOpen ? "group" : undefined}
+          aria-label={headerTrayOpen ? "All console controls" : undefined}
+        >
+          {headerTrayOpen && (
+            <div className="console-header-tray-chrome">
+              <span>All console controls</span>
+              <button
+                type="button"
+                className="console-header-tray-close"
+                aria-label="Close control panel"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => closeHeaderTray(true)}
+              >
+                <CloseIcon />
+              </button>
+            </div>
           )}
-          {!mobileLayout && onSplitWorkspace && (
+          {headerNotes}
+          <div className="console-actions">
+            <span className={`connection-badge ${connection}`}><span />{STATE_LABEL[connection]}</span>
             <button
               type="button"
-              className="split-workspace-button"
-              disabled={!session}
-              aria-label={splitWorkspaceSelectionCount > 1
-                ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
-                : `Split ${sessionName} into a new temporary workspace`}
-              title={splitWorkspaceSelectionCount > 1
-                ? `Open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
-                : "Open this session alone in a new temporary workspace window"}
-              onClick={splitIntoNewWorkspace}
+              className={ignoreSize ? "size-mode protected" : "size-mode"}
+              onClick={() => setIgnoreSize((current) => !current)}
+              title={ignoreSize ? "This browser will not resize the shared tmux window" : "This browser controls the shared tmux window size"}
             >
-              <ExternalLinkIcon />
-              <span>Split workspace{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
+              {ignoreSize ? "Size protected" : "Fit active"}
             </button>
-          )}
-          <button
-            type="button"
-            className={session?.workspacePinned
-              ? "workspace-pin-button active"
-              : "workspace-pin-button"}
-            aria-label={session?.workspacePinned
-              ? `Unpin ${sessionName} from every workspace`
-              : `Pin ${sessionName} to every workspace`}
-            aria-pressed={Boolean(session?.workspacePinned)}
-            aria-busy={workspacePinSource === sessionName}
-            disabled={!session || workspacePinSource !== null}
-            title={session?.workspacePinned
-              ? "Stop adding this session to every workspace"
-              : "Add this session once to every saved and future workspace"}
-            onClick={() => void toggleWorkspacePin()}
-          >
-            <PinIcon filled={Boolean(session?.workspacePinned)} />
-            <span>{session?.workspacePinned ? "Pinned all" : "Pin all"}</span>
-          </button>
-          {onToggleCallbackSession && (
+            <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback">
+              <HistoryIcon /><span>Scrollback</span>
+            </button>
             <button
               type="button"
-              className={callbackSessionActive
-                ? "callback-session-toggle active"
-                : "callback-session-toggle"}
-              aria-label={callbackSessionActive
-                ? `Remove ${sessionName} from callback list`
-                : `Add ${sessionName} to callback list`}
-              aria-pressed={callbackSessionActive}
-              aria-busy={callbackSessionBusy}
-              aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-callback"])}
-              disabled={!session || callbackSessionBusy}
-              title={`${callbackSessionActive
-                ? "Remove this session from the workspace callback list"
-                : "Add this session to the workspace callback list"}${directShortcutLabel(
-                  shortcutBindings["workspace-callback"],
-                ) ? ` (${directShortcutLabel(shortcutBindings["workspace-callback"])})` : ""}`}
-              onClick={() => {
-                void Promise.resolve()
-                  .then(() => onToggleCallbackSession())
-                  .catch(() => undefined);
-              }}
-            >
-              {callbackSessionActive ? <CheckIcon /> : <HistoryIcon />}
-              <span>{callbackSessionActive ? "Watching" : "Callback"}</span>
-            </button>
-          )}
-          {onSessionWorkspaceTransfer && (
-            <button
-              type="button"
-              className="workspace-transfer-button"
-              aria-label={workspaceTransferSessionCount > 1
-                ? `Move or copy ${workspaceTransferSessionCount} selected sessions to a workspace`
-                : `Move or copy ${sessionName} to a workspace`}
+              className="history-button"
+              onClick={() => setAgentHistoryOpen(true)}
               aria-haspopup="dialog"
-              aria-expanded={workspaceTransferOpen}
-              disabled={!session || workspaceTransferDisabled}
-              title={workspaceTransferDisabled
-                ? "Wait for the current workspace to finish syncing"
-                : workspaceTransferSessionCount > 1
-                  ? `Move or copy the ${workspaceTransferSessionCount} selected sessions to a saved workspace`
-                  : "Move or copy this session to a saved workspace"}
-              onClick={() => setWorkspaceTransferOpen(true)}
+              aria-label={`Coding agents recorded in ${sessionName}`}
+              title={`Every Claude, Codex, Cursor or Grok session recorded in ${sessionName}`}
             >
-              <WindowMoveIcon />
-              <span>
-                Move / Copy{workspaceTransferSessionCount > 1
-                  ? ` (${workspaceTransferSessionCount})`
-                  : ""}
-              </span>
+              <ClockIcon /><span>Agents</span>
             </button>
-          )}
-          <AccountLink />
-          <ThemeToggle />
-          {pane?.command === "grok" && !pane.dead && (
+            {onSessionCopied && (
+              <button
+                type="button"
+                className="copy-new-button"
+                aria-keyshortcuts={directShortcutAria(shortcutBindings["session-copy-new"])}
+                aria-busy={copyingSource === sessionName}
+                disabled={copySessionDisabled || !session || copyingSource !== null}
+                title={`Create and open a fresh session in this pane's working directory${directShortcutLabel(shortcutBindings["session-copy-new"])
+                  ? ` (${directShortcutLabel(shortcutBindings["session-copy-new"])})`
+                  : ""}`}
+                onClick={() => void copyNewSession()}
+              >
+                <WindowCopyIcon />
+                <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
+              </button>
+            )}
+            {!mobileLayout && onSplitWorkspace && (
+              <button
+                type="button"
+                className="split-workspace-button"
+                disabled={!session}
+                aria-label={splitWorkspaceSelectionCount > 1
+                  ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
+                  : `Split ${sessionName} into a new temporary workspace`}
+                title={splitWorkspaceSelectionCount > 1
+                  ? `Open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
+                  : "Open this session alone in a new temporary workspace window"}
+                onClick={splitIntoNewWorkspace}
+              >
+                <ExternalLinkIcon />
+                <span>Split workspace{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
+              </button>
+            )}
             <button
               type="button"
-              className="grok-theme-stage"
-              aria-label={`Stage ${grokThemeName} theme command for Grok`}
-              aria-controls={stagedInputControlId}
-              aria-describedby="muxdeck-grok-theme-help"
-              title={`Stage "${grokThemeCommand}" to match full-screen Grok to Muxdeck. Review it, then use Send + Enter; Grok saves this choice globally.`}
-              onClick={stageGrokTheme}
+              className={session?.workspacePinned
+                ? "workspace-pin-button active"
+                : "workspace-pin-button"}
+              aria-label={session?.workspacePinned
+                ? `Unpin ${sessionName} from every workspace`
+                : `Pin ${sessionName} to every workspace`}
+              aria-pressed={Boolean(session?.workspacePinned)}
+              aria-busy={workspacePinSource === sessionName}
+              disabled={!session || workspacePinSource !== null}
+              title={session?.workspacePinned
+                ? "Stop adding this session to every workspace"
+                : "Add this session once to every saved and future workspace"}
+              onClick={() => void toggleWorkspacePin()}
             >
-              <RefreshIcon />
-              <span>Apply to Grok</span>
-              <span id="muxdeck-grok-theme-help" className="grok-theme-help">
-                Stages a command without sending it. Sending changes Grok's saved user theme globally; Grok minimal mode does not support this command.
-              </span>
+              <PinIcon filled={Boolean(session?.workspacePinned)} />
+              <span>{session?.workspacePinned ? "Pinned all" : "Pin all"}</span>
             </button>
-          )}
+            {onToggleCallbackSession && (
+              <button
+                type="button"
+                className={callbackSessionActive
+                  ? "callback-session-toggle active"
+                  : "callback-session-toggle"}
+                aria-label={callbackSessionActive
+                  ? `Remove ${sessionName} from callback list`
+                  : `Add ${sessionName} to callback list`}
+                aria-pressed={callbackSessionActive}
+                aria-busy={callbackSessionBusy}
+                aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-callback"])}
+                disabled={!session || callbackSessionBusy}
+                title={`${callbackSessionActive
+                  ? "Remove this session from the workspace callback list"
+                  : "Add this session to the workspace callback list"}${directShortcutLabel(
+                    shortcutBindings["workspace-callback"],
+                  ) ? ` (${directShortcutLabel(shortcutBindings["workspace-callback"])})` : ""}`}
+                onClick={() => {
+                  void Promise.resolve()
+                    .then(() => onToggleCallbackSession())
+                    .catch(() => undefined);
+                }}
+              >
+                {callbackSessionActive ? <CheckIcon /> : <HistoryIcon />}
+                <span>{callbackSessionActive ? "Watching" : "Callback"}</span>
+              </button>
+            )}
+            {onSessionWorkspaceTransfer && (
+              <button
+                type="button"
+                className="workspace-transfer-button"
+                aria-label={workspaceTransferSessionCount > 1
+                  ? `Move or copy ${workspaceTransferSessionCount} selected sessions to a workspace`
+                  : `Move or copy ${sessionName} to a workspace`}
+                aria-haspopup="dialog"
+                aria-expanded={workspaceTransferOpen}
+                disabled={!session || workspaceTransferDisabled}
+                title={workspaceTransferDisabled
+                  ? "Wait for the current workspace to finish syncing"
+                  : workspaceTransferSessionCount > 1
+                    ? `Move or copy the ${workspaceTransferSessionCount} selected sessions to a saved workspace`
+                    : "Move or copy this session to a saved workspace"}
+                onClick={() => setWorkspaceTransferOpen(true)}
+              >
+                <WindowMoveIcon />
+                <span>
+                  Move / Copy{workspaceTransferSessionCount > 1
+                    ? ` (${workspaceTransferSessionCount})`
+                    : ""}
+                </span>
+              </button>
+            )}
+            <AccountLink />
+            <ThemeToggle />
+            {pane?.command === "grok" && !pane.dead && (
+              <button
+                type="button"
+                className="grok-theme-stage"
+                aria-label={`Stage ${grokThemeName} theme command for Grok`}
+                aria-controls={stagedInputControlId}
+                aria-describedby="muxdeck-grok-theme-help"
+                title={`Stage "${grokThemeCommand}" to match full-screen Grok to Muxdeck. Review it, then use Send + Enter; Grok saves this choice globally.`}
+                onClick={stageGrokTheme}
+              >
+                <RefreshIcon />
+                <span>Apply to Grok</span>
+                <span id="muxdeck-grok-theme-help" className="grok-theme-help">
+                  Stages a command without sending it. Sending changes Grok's saved user theme globally; Grok minimal mode does not support this command.
+                </span>
+              </button>
+            )}
+          </div>
         </div>
+        {headerTrayAvailable && (
+          <button
+            type="button"
+            className="console-header-tray-toggle"
+            ref={headerTrayToggleRef}
+            aria-expanded={headerTrayOpen}
+            aria-controls={headerTrayControlId}
+            aria-label={headerTrayOpen
+              ? "Hide all console controls"
+              : `Show all console controls, ${hiddenHeaderControlCount} without room in the header`}
+            title={headerTrayOpen
+              ? "Return these controls to the header"
+              : `${hiddenHeaderControlCount} control${hiddenHeaderControlCount === 1 ? "" : "s"} does not fit in this window; show them all in a panel`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              if (headerTrayOpen) closeHeaderTray(true);
+              // A click from Enter or Space reports no pointer detail.
+              else openHeaderTray(event.detail === 0);
+            }}
+          >
+            <ListIcon />
+            <span className="console-header-tray-count">{hiddenHeaderControlCount}</span>
+          </button>
+        )}
       </header>
 
       {copySessionError?.sourceName === sessionName && (

@@ -3655,6 +3655,60 @@ html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]
   border-color: #087a70;
 }
 
+html[data-theme="light"] .console-header-tray-toggle {
+  color: #424c40;
+  background: #eeeae2;
+  border-color: #c6bfb3;
+}
+
+html[data-theme="light"] .console-header-tray-toggle:hover,
+html[data-theme="light"] .console-header-tray-toggle:focus-visible {
+  color: #20261e;
+  background: #fffdf8;
+  border-color: #828d7c;
+}
+
+html[data-theme="light"] .console-header-tray-toggle[aria-expanded="true"] {
+  color: #fff;
+  background: #087a70;
+  border-color: #087a70;
+}
+
+html[data-theme="light"] .console-header-tray-count {
+  color: #fff;
+  background: #087a70;
+}
+
+html[data-theme="light"]
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group {
+  background: rgba(250, 248, 242, 0.96);
+  border-color: #9eaa99;
+  box-shadow: 0 18px 54px rgba(65, 55, 38, 0.28);
+  scrollbar-color: #aaa599 transparent;
+}
+
+html[data-theme="light"]
+  .console-shell[data-console-header-tray="true"] .console-header-tray-chrome {
+  color: #52604f;
+  border-color: rgba(112, 127, 105, 0.34);
+}
+
+html[data-theme="light"]
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close {
+  color: #52604f;
+  background: #eeeae2;
+  border-color: #c6bfb3;
+}
+
+html[data-theme="light"]
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close:hover,
+html[data-theme="light"]
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close:focus-visible {
+  color: #20261e;
+  background: #fffdf8;
+  border-color: #828d7c;
+}
+
 html[data-theme="light"]
   .console-shell[data-desktop-focus="true"][data-desktop-focus-shortcuts="true"]
   > .input-dock {

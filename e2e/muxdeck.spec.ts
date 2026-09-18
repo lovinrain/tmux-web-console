@@ -5914,6 +5914,27 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
     await expect(noteRegion.getByRole("button", { name: "Edit session note" }))
       .toContainText("Primary session handoff");
     await page.screenshot({ path: "artifacts/scoped-sticky-notes-desktop.png" });
+
+    // A window this narrow cannot show every control, so the ones it drops have
+    // to stay reachable - with their content - in the tray.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const trayToggle = page.getByRole("button", { name: /Show all console controls/ });
+    await expect(trayToggle).toBeVisible();
+    await trayToggle.click();
+    const tray = page.getByRole("group", { name: "All console controls" });
+    await expect(tray).toBeVisible();
+    for (const control of ["Fit active", "Scrollback", "Agents"]) {
+      await expect(tray.getByRole("button", { name: control })).toBeVisible();
+    }
+    await expect(tray.getByRole("button", { name: "Edit common note" }))
+      .toContainText("Shared release checklist");
+    await expect(tray.getByRole("button", { name: "Show host metrics" })).toBeVisible();
+    await page.screenshot({ path: "artifacts/console-header-tray.png" });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("group", { name: "All console controls" }))
+      .toHaveCount(0);
+    await expect(trayToggle).toBeFocused();
+    await page.setViewportSize({ width: 1440, height: 900 });
     await noteRegion.getByRole("button", { name: "Edit workspace note" }).click();
     const persistedEditor = page.getByRole("dialog", { name: firstWorkspaceName });
     await expect(persistedEditor).toHaveClass(/floating/);

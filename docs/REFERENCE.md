@@ -1007,6 +1007,20 @@ The cards keep whatever room the session identity and the action buttons leave:
 as that narrows they drop their preview line, then their labels, and finally the
 whole widget row scrolls horizontally instead of covering its neighbours.
 
+Nothing the header cannot show is lost. A counted tray button appears at the end
+of the header whenever a control has been dropped by a breakpoint, collapsed to
+nothing, or clipped out of the widget row, and its number is how many. Opening
+it lifts the real controls - both the widget cards and the action buttons - into
+a panel below the header, at full size and with every label and reading
+restored; they are the same controls, not copies, so their state, shortcuts and
+disabled reasons come with them. Opening it from the keyboard moves focus to its
+`Close control panel` button, while a click leaves terminal focus alone. The
+panel closes on `Escape`, on that button, or on a click outside the header, and
+returns keyboard focus to the tray button; a dialog opened from a control inside
+it keeps `Escape` for itself. Clicking a control leaves the panel open. The tray
+is desktop-only, like the widgets it exposes, and the embedded pane header
+scrolls instead.
+
 A compact `Countdown` / `Stopwatch` card sits beside those note cards on desktop.
 It opens a non-modal floating timer that moves by dragging its title strip and can
 be pinned across session-tab switches. Countdown duration can be entered exactly

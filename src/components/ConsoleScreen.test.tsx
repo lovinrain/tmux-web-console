@@ -193,6 +193,44 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
+function layoutRect(left: number, width: number): DOMRect {
+  return {
+    x: left,
+    y: 0,
+    left,
+    top: 0,
+    width,
+    height: 38,
+    right: left + width,
+    bottom: 38,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
+/**
+ * jsdom reports no geometry, so give the header a width and lay its action
+ * controls out side by side, with `offscreen` ones parked beyond its right
+ * edge. Dispatches the resize the console listens for.
+ */
+function layOutHeader(container: HTMLElement, offscreen: HTMLElement[]) {
+  const header = container.querySelector("header.console-header") as HTMLElement;
+  const actions = container.querySelector(".console-actions") as HTMLElement;
+  vi.spyOn(header, "getBoundingClientRect").mockReturnValue(layoutRect(0, 1_000));
+  vi.spyOn(actions, "getBoundingClientRect").mockReturnValue(layoutRect(0, 1_000));
+  let left = 0;
+  container
+    .querySelectorAll<HTMLElement>(".console-actions > button, .console-actions > a")
+    .forEach((control) => {
+      const parked = offscreen.includes(control);
+      vi.spyOn(control, "getBoundingClientRect")
+        .mockReturnValue(parked ? layoutRect(1_200, 100) : layoutRect(left, 60));
+      left += 60;
+    });
+  act(() => {
+    window.dispatchEvent(new Event("resize"));
+  });
+}
+
 describe("ConsoleScreen session identity", () => {
   it("focuses an embedded xterm when its pane receives a focus request", async () => {
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -381,8 +419,75 @@ describe("ConsoleScreen session identity", () => {
 
     await screen.findByRole("heading", { name: "test" });
     const notes = screen.getByTestId("header-notes");
-    expect(notes.parentElement).toHaveClass("console-header");
+    // The notes and the action cluster share a wrapper so the overflow tray can
+    // lift both at once; the wrapper is display: contents, so the header's own
+    // layout is unchanged.
+    expect(notes.parentElement).toHaveClass("console-header-tray-group");
+    expect(notes.parentElement?.parentElement).toHaveClass("console-header");
     expect(notes.nextElementSibling).toBe(view.container.querySelector(".console-actions"));
+  });
+
+  it("offers header controls the window cannot show in a tray", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const view = renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    // Nothing is measurable in jsdom, so the header claims no width and the
+    // tray keeps out of the way until a layout says otherwise.
+    expect(screen.queryByRole("button", { name: /Show all console controls/ }))
+      .not.toBeInTheDocument();
+
+    const scrollback = screen.getByRole("button", { name: "Pane scrollback" });
+    layOutHeader(view.container, [scrollback]);
+
+    const toggle = await screen.findByRole("button", {
+      name: "Show all console controls, 1 without room in the header",
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("1");
+
+    // A keyboard activation reports no pointer detail and hands focus over.
+    fireEvent.click(toggle, { detail: 0 });
+
+    const tray = screen.getByRole("group", { name: "All console controls" });
+    await waitFor(() => expect(screen.getByRole("button", {
+      name: "Close control panel",
+    })).toHaveFocus());
+    expect(view.container.querySelector(".console-shell"))
+      .toHaveAttribute("data-console-header-tray", "true");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls", tray.id);
+    // The controls move into the tray; they are not copies with their own state.
+    expect(within(tray).getByRole("button", { name: "Pane scrollback" })).toBe(scrollback);
+    expect(within(tray).getByRole("button", { name: /Coding agents recorded/ }))
+      .toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("group", {
+      name: "All console controls",
+    })).not.toBeInTheDocument());
+    await waitFor(() => expect(toggle).toHaveFocus());
+  });
+
+  it("keeps the header tray open while a dialog owns Escape", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const view = renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "test" });
+    layOutHeader(view.container, [screen.getByRole("button", { name: "Pane scrollback" })]);
+    fireEvent.click(await screen.findByRole("button", {
+      name: /Show all console controls/,
+    }));
+    const tray = screen.getByRole("group", { name: "All console controls" });
+    const dialog = document.createElement("div");
+    dialog.setAttribute("aria-modal", "true");
+    document.body.append(dialog);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(tray).toBeInTheDocument();
+    dialog.remove();
   });
 
   it("stages the current browser theme for Grok without sending terminal input", async () => {

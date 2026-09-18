@@ -7675,6 +7675,7 @@ span.workspace-tab-group-toggle {
 }
 
 .console-header {
+  position: relative;
   z-index: 5;
   display: flex;
   min-height: 64px;
@@ -7774,6 +7775,17 @@ span.workspace-tab-group-toggle {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+}
+
+/* The wrapper exists only so the tray can lift both control groups at once; it
+   stays out of the header's own layout until then. */
+.console-header-tray-group {
+  display: contents;
+}
+
+.console-header-tray-toggle,
+.console-header-tray-chrome {
+  display: none;
 }
 
 .scoped-sticky-notes {
@@ -10982,6 +10994,233 @@ html.scoped-note-resizing-bottom-left * {
 
   .console-identity {
     min-width: 112px;
+  }
+
+  /* The tray button is the way back to anything the header drops, so it must
+     never be what gets pushed out: the action row yields and scrolls instead,
+     and the tray counts whatever ends up clipped. */
+  .console-actions {
+    min-width: 0;
+    flex: 0 1 auto;
+    padding-block: 3px;
+    margin-block: -3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .console-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Anything the header cannot show is one click away: the toggle counts the
+     controls that were removed, collapsed, or clipped, and opening it lifts
+     the real controls into a panel instead of duplicating them. */
+  .console-header-tray-toggle {
+    position: relative;
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    color: #bcc5b9;
+    background: #222821;
+    border: 1px solid #374034;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .console-header-tray-toggle:hover,
+  .console-header-tray-toggle:focus-visible {
+    color: var(--paper);
+    border-color: #626f5d;
+    outline: 0;
+  }
+
+  .console-header-tray-toggle[aria-expanded="true"] {
+    color: var(--acid);
+    background: rgba(187, 244, 81, 0.1);
+    border-color: var(--acid);
+  }
+
+  .console-header-tray-toggle svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .console-header-tray-count {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 15px;
+    padding: 1px 3px;
+    color: #14180f;
+    background: var(--acid);
+    border-radius: 7px;
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1.4;
+    text-align: center;
+  }
+
+  /* The session tab bar sits above the header by default; an open panel has to
+     clear it. */
+  .console-shell[data-console-header-tray="true"] .console-header {
+    z-index: 12;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group {
+    position: absolute;
+    z-index: 9;
+    top: calc(100% + 6px);
+    right: max(14px, env(safe-area-inset-right, 0px));
+    display: flex;
+    width: min(1080px, calc(100% - 28px));
+    max-height: min(52vh, 420px);
+    flex-wrap: wrap;
+    align-content: flex-start;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    overflow-y: auto;
+    background: rgba(17, 22, 16, 0.97);
+    border: 1px solid rgba(134, 151, 128, 0.62);
+    border-radius: 8px;
+    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.52);
+    backdrop-filter: blur(14px);
+    scrollbar-color: #56614f transparent;
+    animation: fade-in 130ms ease-out both;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-chrome {
+    display: flex;
+    width: 100%;
+    flex: 0 0 100%;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    color: #9eaa9a;
+    border-bottom: 1px solid rgba(134, 151, 128, 0.32);
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: #9eaa9a;
+    background: #20271e;
+    border: 1px solid #3b4638;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close:hover,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close:focus-visible {
+    color: var(--paper);
+    border-color: #626f5d;
+    outline: 0;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-close svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .console-actions {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    padding-block: 0;
+    margin-block: 0;
+    overflow: visible;
+  }
+
+  /* The row is a clipped scroller in the header; in the panel it has room. */
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .workspace-header-widgets {
+    max-width: none;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    padding-block: 0;
+    margin-block: 0;
+    overflow: visible;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .scoped-sticky-notes {
+    max-width: 372px;
+    flex: 0 1 372px;
+  }
+
+  /* The widget cards shed their readings to fit a squeezed row; in the panel
+     they are shown whole. */
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .workspace-timer-card,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .host-pulse-card,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .workspace-callback-card {
+    width: auto;
+    min-width: 0;
+    flex-basis: auto;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .workspace-timer-card strong,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .host-pulse-card small,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .scoped-sticky-note small {
+    display: block;
+  }
+
+  /* Whatever a breakpoint took away, the panel gives back. */
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .size-mode {
+    display: flex !important;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .copy-new-button,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .split-workspace-button,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .workspace-pin-button,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .workspace-transfer-button,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .callback-session-toggle,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .account-link,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .theme-toggle,
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .grok-theme-stage {
+    width: auto;
+    padding: 0 12px;
+    justify-content: flex-start;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    button > span:not(.grok-theme-help):not(.console-header-tray-count),
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    a > span:not(.grok-theme-help) {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
   }
 
   .workspace-header-widgets {
