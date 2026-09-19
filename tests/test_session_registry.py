@@ -7,6 +7,7 @@ import pytest
 
 from tmux_console.agent_reference import AgentReference
 from tmux_console.session_registry import (
+    RecoveryRecordConflictError,
     RecoveryRecordNotFoundError,
     SessionRegistry,
     SessionRegistryUnavailable,
@@ -150,6 +151,35 @@ def test_forget_is_idempotent_and_removes_only_the_registry_row(tmp_path: Path):
     assert registry.forget("forget-me") is False
     with pytest.raises(RecoveryRecordNotFoundError):
         registry.get_recoverable("forget-me")
+
+
+def test_restore_forgotten_preserves_exact_identity_and_agent_metadata(tmp_path: Path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "restore-me")
+    registry.reconcile(
+        [session(path=str(tmp_path))],
+        {"work": AgentReference("codex", "agent-id")}, observed_at=100,
+    )
+    original = registry.get_recoverable("restore-me")
+    registry.forget(original.id)
+    registry.restore_forgotten(original)
+    assert registry.get_recoverable(original.id) == original
+    with pytest.raises(RecoveryRecordConflictError):
+        registry.restore_forgotten(original)
+
+
+def test_restore_forgotten_does_not_replace_a_new_record_with_same_name(tmp_path: Path):
+    ids = iter(["old-id", "new-id"])
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: next(ids))
+    registry.reconcile([session(path=str(tmp_path))], observed_at=100)
+    original = registry.get_recoverable("old-id")
+    registry.forget(original.id)
+    registry.reconcile([session(session_id="$replacement", path=str(tmp_path))], observed_at=200)
+    replacement = registry.get_recoverable("new-id")
+    with pytest.raises(RecoveryRecordConflictError):
+        registry.restore_forgotten(original)
+    assert registry.get_recoverable("new-id") == replacement
+    with pytest.raises(RecoveryRecordNotFoundError):
+        registry.get_recoverable("old-id")
 
 
 def test_rejects_an_unknown_database_schema_without_overwriting_it(tmp_path: Path):

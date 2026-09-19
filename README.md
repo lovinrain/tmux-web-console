@@ -104,6 +104,17 @@ For frontend development, run `npm run dev`. Vite serves
   that client but leaves the tmux session and foreground process running.
 - A tab's `X` and workspace deletion only remove Muxdeck navigation records.
   `End` terminates the entire tmux session after confirmation.
+- Closing or forgetting entries keeps a long sidebar at the current position,
+  including when the selected entry disappears. Selecting a different tab
+  deliberately still brings it into view.
+- Dashboard sessions show their saved workspace membership. An amber
+  `No workspace` label highlights live and recoverable sessions that belong
+  to none; additional memberships appear as a count with all names on hover.
+- Open pages of the same saved workspace receive changes in real time. Closing
+  a tab in one page removes it from the others, while each page keeps its own
+  selected session when it still exists. Concurrent tab edits are reconciled,
+  and stale saves cannot restore a tab another page closed. Reconnecting loads
+  the current server state; a four-second poll backs up unavailable streaming.
 - Landing-page workspace cards can resume in place or open the same saved
   workspace in a separate browser window. The console header uses a joined
   back/new-window control so the Sessions and Workspaces landing page can also
@@ -232,11 +243,16 @@ For frontend development, run `npm run dev`. Vite serves
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Muxdeck records live tmux reconstruction metadata in a private SQLite registry.
-  If a session is missing after a host or tmux restart, the landing page offers
-  an explicit `Recreate shell` action using its saved native name and last CWD,
-  plus `Forget` to remove only that recovery record. Recreate never launches or
-  resumes a coding agent. A passively detected agent type and conversation ID
-  may be shown solely as a reference, and a missing directory or live name
+  If a session is missing after a host or tmux restart, the landing page and the
+  unavailable session view offer an explicit `Recreate shell` action using its
+  saved native name and last CWD, plus `Forget` to remove that recovery record.
+  Forgetting also removes that dead shell from open and recent navigation in
+  the current browser and from every saved workspace. A floating `Undo`
+  notification remains for 30 seconds and restores its recovery record and
+  workspace placement while retaining later edits. After the deadline,
+  Forget is final. Recreate never launches
+  or resumes a coding agent. A passively detected agent type and conversation
+  ID may be shown solely as a reference, and a missing directory or live name
   conflict blocks recovery instead of changing another session. Sessions ended
   through Muxdeck are intentionally excluded from recovery.
 - SQLite also retains a searchable session history: native and previous names,

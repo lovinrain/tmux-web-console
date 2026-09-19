@@ -30,6 +30,10 @@ class RecoveryRecordNotFoundError(KeyError):
     pass
 
 
+class RecoveryRecordConflictError(ValueError):
+    pass
+
+
 def default_session_registry_path() -> Path:
     configured = os.environ.get("MUXDECK_SESSION_REGISTRY_FILE")
     if configured:
@@ -505,6 +509,37 @@ class SessionRegistry:
                         (registry_id,),
                     )
                 return cursor.rowcount > 0
+            except (OSError, sqlite3.Error) as error:
+                raise self._database_error(error) from error
+
+    def restore_forgotten(self, record: RecoveryRecord) -> None:
+        """Restore an exact recovery record without replacing any newer identity."""
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    connection.execute(
+                        f"INSERT INTO sessions ({REGISTRY_COLUMNS}) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            record.id,
+                            record.name,
+                            record.directory,
+                            record.tmux_session_id,
+                            record.session_created,
+                            record.server_started,
+                            record.server_pid,
+                            record.agent_type,
+                            record.agent_session_id,
+                            record.first_seen_at,
+                            record.last_seen_at,
+                            int(record.recoverable),
+                        ),
+                    )
+            except sqlite3.IntegrityError as error:
+                raise RecoveryRecordConflictError(
+                    "a newer session already uses this recovery identity or name"
+                ) from error
             except (OSError, sqlite3.Error) as error:
                 raise self._database_error(error) from error
 

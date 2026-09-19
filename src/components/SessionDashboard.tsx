@@ -84,6 +84,7 @@ import { SessionTitleDialog } from "./SessionTitleDialog";
 import { ThemeToggle } from "./ThemeToggle";
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
+import "./SessionWorkspaceMembership.css";
 
 interface SessionDashboardProps {
   onOpen: (session: string) => void;
@@ -103,6 +104,9 @@ interface SessionDashboardProps {
   onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
   onSavedWorkspaceDeleted?: (workspaceId: string) => void;
   onSavedWorkspaceUpdated?: (workspace: SavedWorkspace) => void;
+  onRecoveryForgotten?: (sessionName: string) => void;
+  onForgetSession?: (recovery: RecoverableSession) => Promise<void>;
+  recoveryRefreshKey?: number;
   onWorkspacePinChange?: (
     sessionName: string,
     pinned: boolean,
@@ -290,8 +294,40 @@ function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
   return `${BASE_PATH}${path}${search}`;
 }
 
+function SessionWorkspaceMembership({
+  id,
+  workspaces,
+}: {
+  id?: string;
+  workspaces: readonly SavedWorkspace[] | null;
+}) {
+  const names = workspaces?.map((workspace) => workspace.name);
+  const unassigned = names?.length === 0;
+  const label = names === undefined
+    ? "Workspace unknown"
+    : unassigned
+      ? "No workspace"
+      : `Workspace${names.length === 1 ? "" : "s"}: ${names.join(", ")}`;
+  return (
+    <span
+      id={id}
+      className={`session-workspace-membership${unassigned ? " unassigned" : ""}${names === undefined ? " unknown" : ""}`}
+      title={label}
+      aria-label={label}
+    >
+      <GridIcon />
+      <span>
+        {names && names.length > 0
+          ? `${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ""}`
+          : label}
+      </span>
+    </span>
+  );
+}
+
 interface SessionItemProps {
   session: Session;
+  workspaces: readonly SavedWorkspace[] | null;
   index: number;
   viewMode: SessionViewMode;
   showStateChangeTime: boolean;
@@ -309,6 +345,7 @@ interface SessionItemProps {
 
 function SessionItem({
   session,
+  workspaces,
   index,
   viewMode,
   showStateChangeTime,
@@ -325,6 +362,7 @@ function SessionItem({
 }: SessionItemProps) {
   const stateDescriptionId = useId();
   const tagsDescriptionId = useId();
+  const workspaceDescriptionId = useId();
   const pane = activePane(session);
   const classification = classifyPane(pane);
   const tags = session.tags ?? [];
@@ -349,7 +387,7 @@ function SessionItem({
         className="session-card-main"
         onClick={() => onOpen(session.name)}
         aria-label={`Open ${displayName}`}
-        aria-describedby={`${stateDescriptionId}${tags.length > 0 ? ` ${tagsDescriptionId}` : ""}`}
+        aria-describedby={`${stateDescriptionId} ${workspaceDescriptionId}${tags.length > 0 ? ` ${tagsDescriptionId}` : ""}`}
       >
         <div className="session-card-top">
           <span className="session-badges">
@@ -392,6 +430,7 @@ function SessionItem({
           </span>
         )}
         <p className="session-path">{pane?.path || "-"}</p>
+        <SessionWorkspaceMembership id={workspaceDescriptionId} workspaces={workspaces} />
         <div className="session-meta">
           <span>{session.windows} win / {session.panes.length} pane</span>
           <span>{pane?.width || 0}x{pane?.height || 0}</span>
@@ -524,6 +563,9 @@ export function SessionDashboard({
   onOpenSavedWorkspace,
   onSavedWorkspaceDeleted,
   onSavedWorkspaceUpdated,
+  onRecoveryForgotten,
+  onForgetSession,
+  recoveryRefreshKey = 0,
   onWorkspacePinChange,
   onSessionTerminated,
 }: SessionDashboardProps) {
@@ -537,6 +579,8 @@ export function SessionDashboard({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [workspaceListRefreshKey, setWorkspaceListRefreshKey] = useState(0);
+  const [savedWorkspaces, setSavedWorkspaces] = useState<SavedWorkspace[] | null>(null);
   const [tagFilterMode, setTagFilterMode] = useState<"include" | "exclude">(
     () => route.excludedTags.length > 0 ? "exclude" : "include",
   );
@@ -573,6 +617,35 @@ export function SessionDashboard({
     return next.filter((session) => !terminatedSessionsRef.current.some(
       (terminated) => hasSameSessionIdentity(session, terminated),
     ));
+  }, []);
+
+  const workspacesBySession = useMemo(() => {
+    if (!savedWorkspaces) return null;
+    const memberships = new Map<string, SavedWorkspace[]>();
+    for (const workspace of savedWorkspaces) {
+      for (const sessionName of new Set(workspace.tabs)) {
+        const current = memberships.get(sessionName) ?? [];
+        current.push(workspace);
+        memberships.set(sessionName, current);
+      }
+    }
+    return memberships;
+  }, [savedWorkspaces]);
+
+  useEffect(() => {
+    const refreshWorkspaces = () => {
+      if (document.visibilityState !== "hidden") {
+        setWorkspaceListRefreshKey((key) => key + 1);
+      }
+    };
+    const timer = window.setInterval(refreshWorkspaces, 4_000);
+    window.addEventListener("focus", refreshWorkspaces);
+    document.addEventListener("visibilitychange", refreshWorkspaces);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshWorkspaces);
+      document.removeEventListener("visibilitychange", refreshWorkspaces);
+    };
   }, []);
 
   useEffect(() => {
@@ -695,7 +768,7 @@ export function SessionDashboard({
       stopPolling();
       unsubscribe();
     };
-  }, [refreshKey, withoutTerminatedSessions]);
+  }, [refreshKey, recoveryRefreshKey, withoutTerminatedSessions]);
 
   const visibleSessions = useMemo(
     () => filterSessions(sessions, route),
@@ -1008,8 +1081,14 @@ export function SessionDashboard({
     setActionError(null);
     setRecoveryBusyIds((current) => new Set(current).add(recovery.id));
     try {
-      await forgetRecoverableSession(recovery.id);
+      if (onForgetSession) {
+        await onForgetSession(recovery);
+      } else {
+        await forgetRecoverableSession(recovery.id);
+        onRecoveryForgotten?.(recovery.name);
+      }
       setRecoverableSessions((current) => current.filter((item) => item.id !== recovery.id));
+      setWorkspaceListRefreshKey((current) => current + 1);
     } catch (forgetError) {
       setActionError(
         forgetError instanceof Error
@@ -1023,7 +1102,7 @@ export function SessionDashboard({
         return next;
       });
     }
-  }, []);
+  }, [onForgetSession, onRecoveryForgotten]);
 
   return (
     <main className="dashboard-shell">
@@ -1104,6 +1183,8 @@ export function SessionDashboard({
       </section>
 
       <SavedWorkspaceList
+        refreshKey={workspaceListRefreshKey + refreshKey + recoveryRefreshKey}
+        onWorkspacesChange={setSavedWorkspaces}
         currentTabs={currentWorkspaceTabs}
         currentWorkspaceGroups={currentWorkspaceGroups}
         activeSession={activeSession}
@@ -1267,6 +1348,9 @@ export function SessionDashboard({
                   <p className={recovery.directoryAvailable ? "" : "unavailable"}>
                     {recovery.directory}
                   </p>
+                  <SessionWorkspaceMembership
+                    workspaces={workspacesBySession ? workspacesBySession.get(recovery.name) ?? [] : null}
+                  />
                   <AgentRecoveryReference
                     sessionName={recovery.name}
                     agentType={recovery.agentType}
@@ -1350,6 +1434,7 @@ export function SessionDashboard({
                   <SessionItem
                     key={session.id}
                     session={session}
+                    workspaces={workspacesBySession ? workspacesBySession.get(session.name) ?? [] : null}
                     index={index}
                     viewMode={viewMode}
                     showStateChangeTime={showStateChangeTime}
@@ -1393,6 +1478,7 @@ export function SessionDashboard({
                         <SessionItem
                           key={session.id}
                           session={session}
+                          workspaces={workspacesBySession ? workspacesBySession.get(session.name) ?? [] : null}
                           index={index}
                           viewMode={viewMode}
                           showStateChangeTime
@@ -1435,6 +1521,7 @@ export function SessionDashboard({
                           <SessionItem
                             key={session.id}
                             session={session}
+                            workspaces={workspacesBySession ? workspacesBySession.get(session.name) ?? [] : null}
                             index={index}
                             viewMode={viewMode}
                             showStateChangeTime={showStateChangeTime}
@@ -1464,6 +1551,7 @@ export function SessionDashboard({
                   <SessionItem
                     key={session.id}
                     session={session}
+                    workspaces={workspacesBySession ? workspacesBySession.get(session.name) ?? [] : null}
                     index={index}
                     viewMode={viewMode}
                     showStateChangeTime={showStateChangeTime}
@@ -1502,6 +1590,7 @@ export function SessionDashboard({
                 <SessionItem
                   key={session.id}
                   session={session}
+                  workspaces={workspacesBySession ? workspacesBySession.get(session.name) ?? [] : null}
                   index={index}
                   viewMode={viewMode}
                   showStateChangeTime={showStateChangeTime}

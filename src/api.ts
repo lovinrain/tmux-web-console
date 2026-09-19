@@ -8,7 +8,7 @@ import type {
   SnippetNode,
   SnippetTree,
 } from "./types";
-import type { WorkspaceTabGroup } from "./workspaceState";
+import { WORKSPACE_TAB_GROUP_COLORS, type WorkspaceTabGroup } from "./workspaceState";
 import type { Theme } from "./theme";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -226,10 +226,37 @@ export async function recreateSession(
   );
 }
 
-export async function forgetRecoverableSession(recoveryId: string): Promise<void> {
-  await jsonRequest<unknown>(
+export interface ForgottenSessionUndo {
+  undoToken: string;
+  expiresAt: number;
+}
+
+export async function forgetRecoverableSession(
+  recoveryId: string,
+): Promise<ForgottenSessionUndo | undefined> {
+  const result = await jsonRequest<Partial<ForgottenSessionUndo>>(
     `/api/recoverable-sessions/${encodeURIComponent(recoveryId)}`,
     { method: "DELETE" },
+  );
+  // Older servers return 204 and cannot promise a reversible forget.
+  if (
+    typeof result.undoToken !== "string" || result.undoToken.length === 0
+    || typeof result.expiresAt !== "number" || !Number.isFinite(result.expiresAt)
+  ) return undefined;
+  return { undoToken: result.undoToken, expiresAt: result.expiresAt };
+}
+
+export function undoForgetRecoverableSession(
+  recoveryId: string,
+  undoToken: string,
+): Promise<{ recovery: RecoverableSession; workspaces: SavedWorkspace[] }> {
+  return jsonRequest(
+    `/api/recoverable-sessions/${encodeURIComponent(recoveryId)}/undo-forget`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ undoToken }),
+    },
   );
 }
 
@@ -773,6 +800,20 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function isGlobalCallbackSnapshot(value: unknown): value is GlobalCallbackSnapshot {
+  return isRecord(value)
+    && isStringArray(value.callbackSessions)
+    && isStringArray(value.globalCallbackSessions)
+    && Array.isArray(value.workspaceCallbacks)
+    && value.workspaceCallbacks.every((source) => (
+      isRecord(source)
+      && typeof source.workspaceId === "string"
+      && typeof source.workspaceName === "string"
+      && isStringArray(source.sessions)
+    ))
+    && isNonnegativeSafeInteger(value.sessionRevision);
+}
+
 export function subscribeToCallbackSessions({
   onSnapshot,
   onStatus,
@@ -790,27 +831,11 @@ export function subscribeToCallbackSessions({
     if (closed) return;
 
     try {
-      const payload = JSON.parse(event.data) as Partial<GlobalCallbackSnapshot>;
-      const sessionRevision = payload?.sessionRevision;
-      if (
-        !payload
-        || !isStringArray(payload.callbackSessions)
-        || !isStringArray(payload.globalCallbackSessions)
-        || !Array.isArray(payload.workspaceCallbacks)
-        || !payload.workspaceCallbacks.every((sourceRecord) => (
-          sourceRecord
-          && typeof sourceRecord === "object"
-          && typeof sourceRecord.workspaceId === "string"
-          && typeof sourceRecord.workspaceName === "string"
-          && isStringArray(sourceRecord.sessions)
-        ))
-        || typeof sessionRevision !== "number"
-        || !Number.isSafeInteger(sessionRevision)
-        || sessionRevision < 0
-      ) {
+      const payload: unknown = JSON.parse(event.data);
+      if (!isGlobalCallbackSnapshot(payload)) {
         throw new Error("Callback stream event contained an invalid snapshot");
       }
-      onSnapshot(payload as GlobalCallbackSnapshot);
+      onSnapshot(payload);
     } catch (error) {
       const streamError = error instanceof Error ? error : new Error(String(error));
       onStatus?.("error");
@@ -1053,7 +1078,14 @@ export interface CreateWorkspaceInput {
 export type WorkspaceUpdate = Partial<Pick<
   SavedWorkspace,
   "name" | "tabs" | "groups" | "separators" | "separatorsBefore" | "paneLayouts" | "callbackSessions" | "activeSession" | "sessionRevision"
->>;
+>> & { expectedUpdatedAt?: number };
+
+let workspaceVersionChecksSupported = true;
+
+/** False only after an older server explicitly rejects the version field. */
+export function supportsWorkspaceVersionChecks(): boolean {
+  return workspaceVersionChecksSupported;
+}
 
 function workspacePath(workspaceId: string): string {
   return `/api/workspaces/${encodeURIComponent(workspaceId)}`;
@@ -1322,6 +1354,129 @@ export async function getWorkspace(
   return result.workspace;
 }
 
+export type WorkspaceStreamStatus = "connecting" | "open" | "error";
+
+export interface WorkspaceStreamOptions {
+  onWorkspace: (workspace: SavedWorkspace | null) => void;
+  onCallbacks?: (snapshot: GlobalCallbackSnapshot) => void;
+  onStatus?: (status: WorkspaceStreamStatus) => void;
+  onError?: (error: Error) => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonnegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isWorkspacePaneNode(value: unknown): value is WorkspacePaneNode {
+  if (!isRecord(value) || typeof value.id !== "string") return false;
+  if (value.kind === "pane") {
+    return value.session === null || typeof value.session === "string";
+  }
+  return value.kind === "split"
+    && (value.direction === "horizontal" || value.direction === "vertical")
+    && typeof value.ratio === "number"
+    && Number.isFinite(value.ratio)
+    && value.ratio > 0
+    && value.ratio < 1
+    && isWorkspacePaneNode(value.first)
+    && isWorkspacePaneNode(value.second);
+}
+
+function isWorkspaceSnapshot(value: unknown, workspaceId: string): value is SavedWorkspace {
+  if (!isRecord(value)) return false;
+  return value.id === workspaceId
+    && typeof value.name === "string"
+    && isStringArray(value.tabs)
+    && (value.activeSession === null || typeof value.activeSession === "string")
+    && isNonnegativeSafeInteger(value.sessionRevision)
+    && isNonnegativeSafeInteger(value.updatedAt)
+    && isNonnegativeSafeInteger(value.createdAt)
+    && isNonnegativeSafeInteger(value.lastActiveAt)
+    && (value.groups === undefined || (
+      Array.isArray(value.groups) && value.groups.every((group) => (
+        isRecord(group)
+        && typeof group.id === "string"
+        && typeof group.name === "string"
+        && WORKSPACE_TAB_GROUP_COLORS.some((color) => group.color === color)
+        && typeof group.collapsed === "boolean"
+        && isStringArray(group.tabs)
+      ))
+    ))
+    && (value.separators === undefined || isStringArray(value.separators))
+    && (value.separatorsBefore === undefined || isStringArray(value.separatorsBefore))
+    && (value.callbackSessions === undefined || isStringArray(value.callbackSessions))
+    && (value.quickLinks === undefined || (
+      Array.isArray(value.quickLinks) && value.quickLinks.every((link) => (
+        isRecord(link)
+        && typeof link.id === "string"
+        && typeof link.label === "string"
+        && typeof link.url === "string"
+      ))
+    ))
+    && (value.paneLayouts === undefined || (
+      Array.isArray(value.paneLayouts) && value.paneLayouts.every((layout) => (
+        isRecord(layout)
+        && typeof layout.id === "string"
+        && typeof layout.name === "string"
+        && isWorkspacePaneNode(layout.root)
+      ))
+    ));
+}
+
+export function subscribeToWorkspace(
+  workspaceId: string,
+  { onWorkspace, onCallbacks, onStatus, onError }: WorkspaceStreamOptions,
+): () => void {
+  if (typeof EventSource === "undefined") {
+    throw new Error("Server-sent events are not supported by this browser");
+  }
+
+  onStatus?.("connecting");
+  const source = new EventSource(`${BASE_PATH}${workspacePath(workspaceId)}/stream`);
+  let closed = false;
+
+  const handleWorkspace = (event: MessageEvent<string>) => {
+    if (closed) return;
+    try {
+      const payload: unknown = JSON.parse(event.data);
+      if (!isRecord(payload) || (
+        payload.workspace !== null && !isWorkspaceSnapshot(payload.workspace, workspaceId)
+      ) || (
+        payload.callbacks !== undefined && !isGlobalCallbackSnapshot(payload.callbacks)
+      )) {
+        throw new Error("Workspace stream event contained an invalid snapshot");
+      }
+      onWorkspace(payload.workspace as SavedWorkspace | null);
+      if (payload.callbacks !== undefined) onCallbacks?.(payload.callbacks as GlobalCallbackSnapshot);
+    } catch (error) {
+      onStatus?.("error");
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
+  source.addEventListener("workspace", handleWorkspace);
+  source.onopen = () => {
+    if (!closed) onStatus?.("open");
+  };
+  // EventSource reconnects automatically and receives a fresh canonical snapshot.
+  source.onerror = () => {
+    if (closed) return;
+    onStatus?.("error");
+    onError?.(new Error("Workspace stream connection failed"));
+  };
+
+  return () => {
+    if (closed) return;
+    closed = true;
+    source.removeEventListener("workspace", handleWorkspace);
+    source.close();
+  };
+}
+
 export async function createWorkspace(
   workspace: CreateWorkspaceInput,
 ): Promise<SavedWorkspace> {
@@ -1368,15 +1523,30 @@ export async function updateWorkspace(
   workspaceId: string,
   update: WorkspaceUpdate,
 ): Promise<SavedWorkspace> {
-  const result = await jsonRequest<{ workspace: SavedWorkspace }>(
-    workspacePath(workspaceId),
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(update),
-    },
-  );
-  return result.workspace;
+  const { expectedUpdatedAt, ...changes } = update;
+  const request = async (includeVersion: boolean) => {
+    const result = await jsonRequest<{ workspace: SavedWorkspace }>(
+      workspacePath(workspaceId),
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...changes,
+          ...(includeVersion ? { expectedUpdatedAt } : {}),
+        }),
+      },
+    );
+    return result.workspace;
+  };
+  const includeVersion = supportsWorkspaceVersionChecks() && expectedUpdatedAt !== undefined;
+  try {
+    return await request(includeVersion);
+  } catch (error) {
+    if (!includeVersion || !isUnknownFieldError(error, "expectedUpdatedAt")) throw error;
+    // This exact validation failure happens before any mutation on an older server.
+    workspaceVersionChecksSupported = false;
+    return request(false);
+  }
 }
 
 export async function getGlobalCallbackSessions(
@@ -1490,8 +1660,11 @@ export async function updateWorkspaceActivity(
   groups: WorkspaceTabGroup[] | undefined,
   activeSession: string | null,
   sessionRevision: number,
+  expectedUpdatedAt?: number,
 ): Promise<SavedWorkspace> {
-  const request = async (includeGroups: boolean) => {
+  let includeGroups = groups !== undefined;
+  let includeVersion = supportsWorkspaceVersionChecks() && expectedUpdatedAt !== undefined;
+  const request = async () => {
     const result = await jsonRequest<{ workspace: SavedWorkspace }>(
       `${workspacePath(workspaceId)}/activity`,
       {
@@ -1502,19 +1675,28 @@ export async function updateWorkspaceActivity(
           ...(includeGroups ? { groups } : {}),
           activeSession,
           sessionRevision,
+          ...(includeVersion ? { expectedUpdatedAt } : {}),
         }),
       },
     );
     return result.workspace;
   };
 
-  if (groups === undefined) return request(false);
-  try {
-    return await request(true);
-  } catch (error) {
-    if (!isUnknownFieldError(error, "groups")) throw error;
-    // The rejected request never mutated an older server.
-    return request(false);
+  for (;;) {
+    try {
+      return await request();
+    } catch (error) {
+      // Both optional fields may be rejected, in either order. Each explicit
+      // unknown-field response guarantees the older server did not mutate.
+      if (includeGroups && isUnknownFieldError(error, "groups")) {
+        includeGroups = false;
+      } else if (includeVersion && isUnknownFieldError(error, "expectedUpdatedAt")) {
+        includeVersion = false;
+        workspaceVersionChecksSupported = false;
+      } else {
+        throw error;
+      }
+    }
   }
 }
 

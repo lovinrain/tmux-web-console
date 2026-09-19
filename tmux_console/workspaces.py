@@ -60,6 +60,7 @@ _SEPARATORS_OMITTED = object()
 _PANE_LAYOUTS_OMITTED = object()
 _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
+_EXPECTED_UPDATED_AT_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
 WORKSPACE_SCHEMA_VERSION = 13
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
@@ -1177,6 +1178,82 @@ class SavedWorkspace:
         return payload
 
 
+@dataclass(frozen=True)
+class ForgottenWorkspaceSession:
+    workspace: SavedWorkspace
+    tab_order: tuple[str, ...]
+    callback_order: tuple[str, ...]
+    restore_active_session: bool
+
+
+@dataclass(frozen=True)
+class WorkspaceForgetSnapshot:
+    """Ephemeral undo data. The caller owns expiry and must discard it promptly."""
+
+    session_name: str
+    workspaces: tuple[ForgottenWorkspaceSession, ...]
+    pinned_sessions: tuple[str, ...]
+    global_callback_sessions: tuple[str, ...]
+
+
+def _restore_ordered_session(
+    current: tuple[str, ...], original: tuple[str, ...], session_name: str,
+) -> tuple[str, ...]:
+    if session_name in current or session_name not in original:
+        return current
+    original_index = original.index(session_name)
+    for neighbor in original[original_index + 1:]:
+        if neighbor in current:
+            index = current.index(neighbor)
+            return (*current[:index], session_name, *current[index:])
+    for neighbor in reversed(original[:original_index]):
+        if neighbor in current:
+            index = current.index(neighbor) + 1
+            return (*current[:index], session_name, *current[index:])
+    index = min(original_index, len(current))
+    return (*current[:index], session_name, *current[index:])
+
+
+def _restore_forgotten_panes(
+    current: WorkspacePaneNode, original: WorkspacePaneNode, session_name: str,
+) -> WorkspacePaneNode:
+    original_ids: set[str] = set()
+    already_assigned = False
+
+    def inspect(node: WorkspacePaneNode, *, before: bool) -> None:
+        nonlocal already_assigned
+        if node.kind == "pane":
+            if node.session == session_name:
+                if before:
+                    original_ids.add(node.id)
+                else:
+                    already_assigned = True
+        else:
+            if node.first is not None:
+                inspect(node.first, before=before)
+            if node.second is not None:
+                inspect(node.second, before=before)
+
+    inspect(original, before=True)
+    inspect(current, before=False)
+    if already_assigned:
+        return current
+
+    def restore(node: WorkspacePaneNode) -> WorkspacePaneNode:
+        if node.kind == "pane":
+            return (
+                replace(node, session=session_name)
+                if node.id in original_ids and node.session is None else node
+            )
+        return replace(
+            node,
+            first=restore(node.first) if node.first is not None else None,
+            second=restore(node.second) if node.second is not None else None,
+        )
+
+    return restore(current)
+
+
 class WorkspaceNotFoundError(LookupError):
     pass
 
@@ -1186,6 +1263,16 @@ class WorkspaceSessionRevisionConflict(RuntimeError):
         super().__init__(
             "workspace session revision conflict: "
             f"current revision is {current}, received {received}; reload the workspace"
+        )
+        self.current = current
+        self.received = received
+
+
+class WorkspaceUpdateConflict(RuntimeError):
+    def __init__(self, current: int, received: int) -> None:
+        super().__init__(
+            "workspace update conflict: "
+            f"current updatedAt is {current}, received {received}; reload the workspace"
         )
         self.current = current
         self.received = received
@@ -2035,8 +2122,14 @@ class WorkspaceStore:
         callback_sessions: object = None,
         update_callback_sessions: bool = False,
         session_revision: object = None,
+        expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
+        validated_expected_updated_at = (
+            _validate_timestamp(expected_updated_at, "expectedUpdatedAt")
+            if expected_updated_at is not _EXPECTED_UPDATED_AT_OMITTED
+            else None
+        )
         normalized_name = normalize_workspace_name(name) if update_name else None
         validated_tabs = validate_workspace_tabs(tabs) if update_tabs else None
         validated_callback_sessions = (
@@ -2060,6 +2153,13 @@ class WorkspaceStore:
         with self._lock:
             self._ensure_writable()
             current = self._find(workspace_id)
+            if (
+                validated_expected_updated_at is not None
+                and validated_expected_updated_at != current.updated_at
+            ):
+                raise WorkspaceUpdateConflict(
+                    current.updated_at, validated_expected_updated_at
+                )
             if (
                 validated_session_revision is not None
                 and validated_session_revision != self._session_rename_revision
@@ -2630,14 +2730,27 @@ class WorkspaceStore:
         session_revision: object,
         groups: object = None,
         update_groups: bool = False,
+        expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
         validated_tabs = validate_workspace_tabs(tabs)
         validated_session_revision = _validate_session_revision(session_revision)
+        validated_expected_updated_at = (
+            _validate_timestamp(expected_updated_at, "expectedUpdatedAt")
+            if expected_updated_at is not _EXPECTED_UPDATED_AT_OMITTED
+            else None
+        )
 
         with self._lock:
             self._ensure_writable()
             current = self._find(workspace_id)
+            if (
+                validated_expected_updated_at is not None
+                and validated_expected_updated_at != current.updated_at
+            ):
+                raise WorkspaceUpdateConflict(
+                    current.updated_at, validated_expected_updated_at
+                )
             if validated_session_revision != self._session_rename_revision:
                 raise WorkspaceSessionRevisionConflict(
                     self._session_rename_revision, validated_session_revision
@@ -2690,6 +2803,301 @@ class WorkspaceStore:
                 next_workspaces,
                 notes=replace(self._notes, workspaces=next_workspace_notes),
             )
+
+    def capture_forget_session(
+        self,
+        session_name: str,
+        previous_snapshots: tuple[WorkspaceForgetSnapshot, ...] = (),
+    ) -> WorkspaceForgetSnapshot:
+        session_name = validate_session_name(session_name)
+        with self._lock:
+            self._ensure_writable()
+            records: list[ForgottenWorkspaceSession] = []
+            for workspace in self._workspaces.values():
+                if (
+                    session_name not in workspace.tabs
+                    and session_name not in workspace.callback_sessions
+                    and session_name not in workspace.inherited_pins
+                ):
+                    continue
+                tab_order = workspace.tabs
+                callback_order = workspace.callback_sessions
+                restore_active = workspace.active_session == session_name
+                # Include pending removals as ordering anchors. This makes
+                # consecutive undos restore the original order in either order.
+                for previous in reversed(previous_snapshots):
+                    old = next((
+                        item for item in previous.workspaces
+                        if item.workspace.id == workspace.id
+                    ), None)
+                    if old is None:
+                        continue
+                    if old.restore_active_session:
+                        remaining = tuple(
+                            tab for tab in old.tab_order
+                            if tab != previous.session_name and tab in workspace.tabs
+                        )
+                        if workspace.active_session == (remaining[0] if remaining else None):
+                            restore_active = False
+                    tab_order = _restore_ordered_session(
+                        tab_order, old.tab_order, previous.session_name,
+                    )
+                    callback_order = _restore_ordered_session(
+                        callback_order, old.callback_order, previous.session_name,
+                    )
+                records.append(ForgottenWorkspaceSession(
+                    workspace=workspace,
+                    tab_order=tab_order,
+                    callback_order=callback_order,
+                    restore_active_session=restore_active,
+                ))
+            pinned_sessions = self._pinned_sessions
+            callbacks = self._global_callback_sessions
+            for previous in reversed(previous_snapshots):
+                pinned_sessions = _restore_ordered_session(
+                    pinned_sessions, previous.pinned_sessions, previous.session_name,
+                )
+                callbacks = _restore_ordered_session(
+                    callbacks, previous.global_callback_sessions, previous.session_name,
+                )
+            return WorkspaceForgetSnapshot(
+                session_name=session_name,
+                workspaces=tuple(records),
+                pinned_sessions=pinned_sessions,
+                global_callback_sessions=callbacks,
+            )
+
+    def restore_forgotten_session(
+        self, snapshot: WorkspaceForgetSnapshot,
+    ) -> list[dict[str, Any]]:
+        """Undo this session's removal without replacing subsequent user edits."""
+        session_name = snapshot.session_name
+        with self._lock:
+            self._ensure_writable()
+            next_pins = _restore_ordered_session(
+                self._pinned_sessions, snapshot.pinned_sessions, session_name,
+            )
+            next_callbacks = _restore_ordered_session(
+                self._global_callback_sessions,
+                snapshot.global_callback_sessions,
+                session_name,
+            )
+            if len(next_pins) > MAX_WORKSPACE_TABS:
+                raise WorkspacePinCapacityError("cannot restore session: global pins are full")
+            if len(next_callbacks) > MAX_GLOBAL_CALLBACK_SESSIONS:
+                raise WorkspacePinCapacityError("cannot restore session: global callback queue is full")
+            timestamp = self._timestamp()
+            next_workspaces = self._workspaces.copy()
+            changed_ids: list[str] = []
+            for record in snapshot.workspaces:
+                before = record.workspace
+                current = self._workspaces.get(before.id)
+                if current is None:
+                    continue
+                tabs = _restore_ordered_session(
+                    current.tabs, record.tab_order, session_name,
+                )
+                original_group = next((
+                    group for group in before.groups if session_name in group.tabs
+                ), None)
+                groups = list(current.groups)
+                if session_name not in current.tabs and session_name in tabs:
+                    matching_group = next((
+                        group for group in groups
+                        if original_group is not None and group.id == original_group.id
+                    ), None)
+                    if matching_group is not None and original_group is not None:
+                        # Keep a subsequently moved group intact while restoring
+                        # the forgotten member at its place inside that group.
+                        members = _restore_ordered_session(
+                            matching_group.tabs, record.tab_order, session_name,
+                        )
+                        start = current.tabs.index(matching_group.tabs[0])
+                        tabs = (
+                            *current.tabs[:start], *members,
+                            *current.tabs[start + len(matching_group.tabs):],
+                        )
+                        groups = [
+                            replace(group, tabs=members)
+                            if group.id == matching_group.id else group
+                            for group in groups
+                        ]
+                    else:
+                        # Do not split an unrelated group if its members moved
+                        # across the remembered insertion point in the meantime.
+                        for group in current.groups:
+                            start = tabs.index(group.tabs[0])
+                            end = tabs.index(group.tabs[-1])
+                            if start < tabs.index(session_name) < end:
+                                index = current.tabs.index(group.tabs[-1]) + 1
+                                tabs = (
+                                    *current.tabs[:index], session_name,
+                                    *current.tabs[index:],
+                                )
+                                break
+                        if original_group is not None and not any(
+                            member in current.tabs for member in original_group.tabs
+                            if member != session_name
+                        ):
+                            groups.append(replace(original_group, tabs=(session_name,)))
+                callbacks = _restore_ordered_session(
+                    current.callback_sessions, record.callback_order, session_name,
+                )
+                if len(tabs) > MAX_WORKSPACE_TABS:
+                    raise WorkspacePinCapacityError(
+                        f'cannot restore session: workspace "{current.name}" has no free tabs'
+                    )
+                if len(callbacks) > MAX_WORKSPACE_CALLBACK_SESSIONS:
+                    raise WorkspacePinCapacityError(
+                        f'cannot restore session: workspace "{current.name}" callback queue is full'
+                    )
+                reconciled_groups = _reconcile_workspace_groups(tuple(groups), tabs)
+                if len(reconciled_groups) > MAX_WORKSPACE_GROUPS:
+                    raise WorkspacePinCapacityError(
+                        f'cannot restore session: workspace "{current.name}" has no free groups'
+                    )
+                old_layouts = {layout.id: layout for layout in before.pane_layouts}
+                layouts = tuple(
+                    replace(layout, root=_restore_forgotten_panes(
+                        layout.root, old_layouts[layout.id].root, session_name,
+                    ))
+                    if layout.id in old_layouts and session_name in tabs else layout
+                    for layout in current.pane_layouts
+                )
+                active_session = current.active_session
+                remaining_before = tuple(
+                    tab for tab in record.tab_order
+                    if tab != session_name and tab in current.tabs
+                )
+                fallback = remaining_before[0] if remaining_before else None
+                if record.restore_active_session and active_session in (None, fallback):
+                    active_session = session_name
+                restored = replace(
+                    current,
+                    tabs=tabs,
+                    groups=reconciled_groups,
+                    pane_layouts=layouts,
+                    callback_sessions=callbacks,
+                    inherited_pins=_restore_ordered_session(
+                        current.inherited_pins, before.inherited_pins, session_name,
+                    ),
+                    separators=tuple(tab for tab in tabs if (
+                        tab in current.separators
+                        or tab == session_name and tab in before.separators
+                    )),
+                    separators_before=tuple(tab for tab in tabs if (
+                        tab in current.separators_before
+                        or tab == session_name and tab in before.separators_before
+                    )),
+                    active_session=active_session,
+                )
+                if restored != current:
+                    next_workspaces[before.id] = replace(
+                        restored, updated_at=max(timestamp, current.updated_at + 1),
+                    )
+                    changed_ids.append(before.id)
+
+            # Workspaces created during the undo window should also inherit a
+            # restored global pin, exactly as any newly pinned session would.
+            if session_name in next_pins:
+                for workspace_id, current in tuple(next_workspaces.items()):
+                    if session_name in current.tabs:
+                        continue
+                    if len(current.tabs) >= MAX_WORKSPACE_TABS:
+                        raise WorkspacePinCapacityError(
+                            f'cannot restore pinned session "{session_name}": workspace '
+                            f'"{current.name}" already has {MAX_WORKSPACE_TABS} sessions'
+                        )
+                    next_workspaces[workspace_id] = replace(
+                        current,
+                        tabs=(*current.tabs, session_name),
+                        inherited_pins=(*current.inherited_pins, session_name),
+                        updated_at=max(timestamp, current.updated_at + 1),
+                    )
+                    if workspace_id not in changed_ids:
+                        changed_ids.append(workspace_id)
+            if (
+                not changed_ids and next_pins == self._pinned_sessions
+                and next_callbacks == self._global_callback_sessions
+            ):
+                return []
+            if self._session_rename_revision == MAX_SESSION_RENAME_REVISION:
+                self._fence_writes("the session rename revision is exhausted")
+                raise WorkspaceStoreUnavailable(WORKSPACE_STORE_UNAVAILABLE_MESSAGE)
+            self._commit(
+                next_workspaces, self._session_rename_revision + 1,
+                pinned_sessions=next_pins, global_callback_sessions=next_callbacks,
+            )
+            return [self._workspace_dict(next_workspaces[item]) for item in changed_ids]
+
+    def forget_session(self, session_name: str) -> int:
+        session_name = validate_session_name(session_name)
+        with self._lock:
+            self._ensure_writable()
+            next_pinned_sessions = tuple(
+                item for item in self._pinned_sessions if item != session_name
+            )
+            next_global_callback_sessions = tuple(
+                item
+                for item in self._global_callback_sessions
+                if item != session_name
+            )
+            timestamp = self._timestamp()
+            changed = 0
+            next_workspaces = self._workspaces.copy()
+            for workspace_id, current in self._workspaces.items():
+                if (
+                    session_name not in current.tabs
+                    and session_name not in current.callback_sessions
+                    and session_name not in current.inherited_pins
+                ):
+                    continue
+                tabs = tuple(tab for tab in current.tabs if tab != session_name)
+                active_session = current.active_session
+                if active_session == session_name:
+                    active_session = tabs[0] if tabs else None
+                next_workspaces[workspace_id] = replace(
+                    current,
+                    tabs=tabs,
+                    groups=_reconcile_workspace_groups(current.groups, tabs),
+                    pane_layouts=_reconcile_workspace_pane_layouts(
+                        current.pane_layouts, tabs
+                    ),
+                    separators=tuple(tab for tab in current.separators if tab in tabs),
+                    separators_before=tuple(
+                        tab for tab in current.separators_before if tab in tabs
+                    ),
+                    inherited_pins=tuple(
+                        item
+                        for item in current.inherited_pins
+                        if item != session_name
+                    ),
+                    callback_sessions=tuple(
+                        item
+                        for item in current.callback_sessions
+                        if item != session_name
+                    ),
+                    active_session=active_session,
+                    updated_at=max(timestamp, current.updated_at + 1),
+                )
+                changed += 1
+
+            global_changed = (
+                next_pinned_sessions != self._pinned_sessions
+                or next_global_callback_sessions != self._global_callback_sessions
+            )
+            if not changed and not global_changed:
+                return 0
+            if self._session_rename_revision == MAX_SESSION_RENAME_REVISION:
+                self._fence_writes("the session rename revision is exhausted")
+                raise WorkspaceStoreUnavailable(WORKSPACE_STORE_UNAVAILABLE_MESSAGE)
+            self._commit(
+                next_workspaces,
+                self._session_rename_revision + 1,
+                pinned_sessions=next_pinned_sessions,
+                global_callback_sessions=next_global_callback_sessions,
+            )
+            return changed
 
     def rename_session(self, current_name: str, new_name: str) -> int:
         current_name = validate_session_name(current_name)

@@ -17,6 +17,7 @@ from tmux_console.app import (
     SESSION_RENAME_LOCK_KEY,
     SESSION_SNAPSHOTS_KEY,
     SESSION_STREAM_BROKER_KEY,
+    WORKSPACE_STREAM_BROKER_KEY,
     SessionSnapshotBuilder,
     create_app,
 )
@@ -775,27 +776,239 @@ async def test_recreate_session_api_refuses_name_and_directory_conflicts(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_forget_recoverable_session_removes_only_the_registry_record(tmp_path):
+async def test_forget_recoverable_session_removes_registry_and_workspace_references(tmp_path):
     registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
     registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "project")
+    workspaces.create_workspace(
+        name="Project",
+        tabs=["saved-work", "other"],
+        active_session="saved-work",
+        callback_sessions=["saved-work"],
+    )
     tmux = FakeTmux([[]])
-    client = TestClient(TestServer(create_app(
+    application = create_app(
         tmux=tmux,
         session_registry=registry,
+        workspaces=workspaces,
         base_path="",
-    )))
+    )
+    workspace_broker = application[WORKSPACE_STREAM_BROKER_KEY]
+    callback_broker = application[CALLBACK_STREAM_BROKER_KEY]
+    client = TestClient(TestServer(application))
 
     try:
         await client.start_server()
+        workspace_queue = await workspace_broker.subscribe(
+            "project", workspaces.get_workspace("project"),
+            workspaces.get_global_callback_sessions(),
+        )
+        callback_queue = await callback_broker.subscribe()
+        await workspace_queue.get()
+        await callback_queue.get()
         response = await client.delete("/api/recoverable-sessions/saved-id")
 
-        assert response.status == 204
+        assert response.status == 200
+        forgotten = await response.json()
+        assert isinstance(forgotten["undoToken"], str)
+        assert 29_000 <= forgotten["expiresAt"] - int(app_module.time.time() * 1000) <= 30_000
         with pytest.raises(RecoveryRecordNotFoundError):
             registry.get_recoverable("saved-id")
+        assert workspaces.get_workspace("project")["tabs"] == ["other"]
+        assert workspaces.get_workspace("project").get("callbackSessions", []) == []
+        assert json.loads(workspace_queue.get_nowait())["workspace"] == (
+            workspaces.get_workspace("project")
+        )
+        assert json.loads(callback_queue.get_nowait())["callbackSessions"] == []
         assert tmux.list_calls == 1
 
         repeated = await client.delete("/api/recoverable-sessions/saved-id")
         assert repeated.status == 404
+        assert workspace_queue.empty()
+        assert callback_queue.empty()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_forget_undo_restores_identity_and_workspace_and_publishes_changes(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    original_record = registry.get_recoverable("saved-id")
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "project")
+    workspaces.create_workspace(
+        name="Project", tabs=["first", "saved-work", "last"],
+        active_session="saved-work", callback_sessions=["saved-work"],
+        separators=["saved-work"],
+    )
+    tmux = FakeTmux([[]])
+    application = create_app(tmux=tmux, session_registry=registry, workspaces=workspaces, base_path="/console")
+    client = TestClient(TestServer(application))
+    try:
+        await client.start_server()
+        forgotten_response = await client.delete("/console/api/recoverable-sessions/saved-id")
+        assert forgotten_response.status == 200
+        forgotten = await forgotten_response.json()
+        queue = await application[WORKSPACE_STREAM_BROKER_KEY].subscribe(
+            "project", workspaces.get_workspace("project"),
+            workspaces.get_global_callback_sessions(),
+        )
+        await queue.get()
+        # An unrelated edit while the toast is visible must survive Undo.
+        workspaces.update_workspace("project", name="Renamed project", update_name=True)
+        undo_response = await client.post(
+            "/console/api/recoverable-sessions/saved-id/undo-forget",
+            json={"undoToken": forgotten["undoToken"]},
+        )
+        assert undo_response.status == 200
+        restored = await undo_response.json()
+        assert registry.get_recoverable("saved-id") == original_record
+        assert restored["recovery"] == original_record.to_dict()
+        assert restored["workspaces"] == [workspaces.get_workspace("project")]
+        assert restored["workspaces"][0]["tabs"] == ["first", "saved-work", "last"]
+        assert restored["workspaces"][0]["separators"] == ["saved-work"]
+        assert restored["workspaces"][0]["name"] == "Renamed project"
+        assert json.loads(queue.get_nowait())["workspace"] == restored["workspaces"][0]
+        repeated = await client.post(
+            "/console/api/recoverable-sessions/saved-id/undo-forget",
+            json={"undoToken": forgotten["undoToken"]},
+        )
+        assert repeated.status == 404
+        assert tmux.list_calls == 2
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_forget_undo_expires_and_cannot_resurrect_the_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "FORGET_UNDO_SECONDS", 0.02)
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "project")
+    workspaces.create_workspace(name="Project", tabs=["saved-work"], active_session="saved-work")
+    tmux = FakeTmux([[]])
+    client = TestClient(TestServer(create_app(
+        tmux=tmux, session_registry=registry, workspaces=workspaces, base_path="",
+    )))
+    try:
+        await client.start_server()
+        response = await client.delete("/api/recoverable-sessions/saved-id")
+        forgotten = await response.json()
+        await asyncio.sleep(0.03)
+        response = await client.post(
+            "/api/recoverable-sessions/saved-id/undo-forget",
+            json={"undoToken": forgotten["undoToken"]},
+        )
+        assert response.status == 410
+        with pytest.raises(RecoveryRecordNotFoundError):
+            registry.get_recoverable("saved-id")
+        assert workspaces.get_workspace("project")["tabs"] == []
+        assert tmux.list_calls == 1
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_forget_undo_rejects_reused_live_name_without_consuming_token(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "project")
+    workspaces.create_workspace(name="Project", tabs=["saved-work"], active_session="saved-work")
+    tmux = FakeTmux([[], [make_session("saved-work")], []])
+    client = TestClient(TestServer(create_app(
+        tmux=tmux, session_registry=registry, workspaces=workspaces, base_path="",
+    )))
+    try:
+        await client.start_server()
+        response = await client.delete("/api/recoverable-sessions/saved-id")
+        forgotten = await response.json()
+        undo_url = "/api/recoverable-sessions/saved-id/undo-forget"
+        payload = {"undoToken": forgotten["undoToken"]}
+        response = await client.post(undo_url, json=payload)
+        assert response.status == 409
+        assert workspaces.get_workspace("project")["tabs"] == []
+        response = await client.post(undo_url, json=payload)
+        assert response.status == 200
+        assert workspaces.get_workspace("project")["tabs"] == ["saved-work"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [None, [], {}, {"undoToken": ""}, {"undoToken": True}, {"undoToken": "a", "extra": 1}])
+async def test_forget_undo_validates_request(tmp_path, payload):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3")
+    client = TestClient(TestServer(create_app(
+        tmux=FakeTmux([[]]), session_registry=registry,
+        workspaces=WorkspaceStore(tmp_path / "workspaces.json"), base_path="",
+    )))
+    try:
+        await client.start_server()
+        response = await client.post(
+            "/api/recoverable-sessions/saved-id/undo-forget", json=payload,
+        )
+        assert response.status == 400
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_forget_workspace_write_failure_restores_registry(tmp_path, monkeypatch):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    original_record = registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "project")
+    original_workspace = workspaces.create_workspace(
+        name="Project", tabs=["saved-work"], active_session="saved-work",
+    )
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(workspaces, "_persist", fail_write)
+    client = TestClient(TestServer(create_app(
+        tmux=FakeTmux([[]]), session_registry=registry, workspaces=workspaces, base_path="",
+    )))
+    try:
+        await client.start_server()
+        response = await client.delete("/api/recoverable-sessions/saved-id")
+        assert response.status == 503
+        assert registry.get_recoverable("saved-id") == original_record
+        assert workspaces.get_workspace("project") == original_workspace
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError("disk full"), ValueError("workspace tabs are full")])
+async def test_forget_undo_failure_rolls_back_registry_and_allows_retry(tmp_path, monkeypatch, error):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", id_factory=lambda: "saved-id")
+    registry.record_created(CreatedSession("saved-work", "$old"), str(tmp_path))
+    workspaces = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "project")
+    workspaces.create_workspace(name="Project", tabs=["saved-work"], active_session="saved-work")
+    client = TestClient(TestServer(create_app(
+        tmux=FakeTmux([[]]), session_registry=registry, workspaces=workspaces, base_path="",
+    )))
+    try:
+        await client.start_server()
+        response = await client.delete("/api/recoverable-sessions/saved-id")
+        forgotten = await response.json()
+        restore = workspaces.restore_forgotten_session
+
+        def fail_restore(_snapshot):
+            raise error
+
+        monkeypatch.setattr(workspaces, "restore_forgotten_session", fail_restore)
+        undo_url = "/api/recoverable-sessions/saved-id/undo-forget"
+        payload = {"undoToken": forgotten["undoToken"]}
+        response = await client.post(undo_url, json=payload)
+        assert response.status == (503 if isinstance(error, OSError) else 409)
+        with pytest.raises(RecoveryRecordNotFoundError):
+            registry.get_recoverable("saved-id")
+        assert workspaces.get_workspace("project")["tabs"] == []
+        monkeypatch.setattr(workspaces, "restore_forgotten_session", restore)
+        response = await client.post(undo_url, json=payload)
+        assert response.status == 200
+        assert workspaces.get_workspace("project")["tabs"] == ["saved-work"]
     finally:
         await client.close()
 

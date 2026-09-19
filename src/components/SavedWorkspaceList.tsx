@@ -42,6 +42,8 @@ export interface SavedWorkspaceListProps {
   getOpenInNewWindowHref?: (workspace: SavedWorkspace) => string;
   onDeleted?: (workspaceId: string) => void;
   onUpdated?: (workspace: SavedWorkspace) => void;
+  refreshKey?: number;
+  onWorkspacesChange?: (workspaces: SavedWorkspace[] | null) => void;
 }
 
 type WorkspaceCreationMode = "fresh" | "copy";
@@ -87,8 +89,11 @@ export function SavedWorkspaceList({
   getOpenInNewWindowHref,
   onDeleted,
   onUpdated,
+  refreshKey = 0,
+  onWorkspacesChange,
 }: SavedWorkspaceListProps) {
   const [workspaces, setWorkspaces] = useState<SavedWorkspace[]>([]);
+  const [workspacesKnown, setWorkspacesKnown] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -106,6 +111,7 @@ export function SavedWorkspaceList({
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const deleteTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const mutationVersionRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
   const tabsToSave = useMemo(() => uniqueWorkspaceTabs(currentTabs), [currentTabs]);
   const groupsToSave = useMemo(
@@ -121,11 +127,16 @@ export function SavedWorkspaceList({
   useEffect(() => {
     const controller = new AbortController();
     const mutationVersion = mutationVersionRef.current;
-    setLoading(true);
+    setLoading(!hasLoadedRef.current);
     setLoadError(null);
     void listWorkspaces(controller.signal)
       .then((loaded) => {
-        if (mutationVersion === mutationVersionRef.current) setWorkspaces(loaded);
+        if (controller.signal.aborted) return;
+        if (mutationVersion === mutationVersionRef.current) {
+          setWorkspaces(loaded);
+          setWorkspacesKnown(true);
+          hasLoadedRef.current = true;
+        }
         setLoading(false);
       })
       .catch((error: unknown) => {
@@ -135,10 +146,15 @@ export function SavedWorkspaceList({
           return;
         }
         setLoadError(errorMessage(error, "Unable to load saved workspaces"));
+        setWorkspacesKnown(false);
         setLoading(false);
       });
     return () => controller.abort();
-  }, [reloadKey]);
+  }, [reloadKey, refreshKey]);
+
+  useEffect(() => {
+    onWorkspacesChange?.(workspacesKnown ? workspaces : null);
+  }, [onWorkspacesChange, workspaces, workspacesKnown]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);

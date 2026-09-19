@@ -9,6 +9,7 @@ import {
   deleteQueuedMessage,
   deleteWorkspace,
   forgetRecoverableSession,
+  undoForgetRecoverableSession,
   downloadSessionFileEntries,
   getCommonNotebook,
   getCommonNote,
@@ -53,6 +54,7 @@ import {
   sessionFileSvgUrl,
   subscribeToCallbackSessions,
   subscribeToSessions,
+  subscribeToWorkspace,
   terminateSession,
   transferSessionToWorkspace,
   transferSessionsToWorkspace,
@@ -241,6 +243,56 @@ describe("session creation API", () => {
       `${BASE_PATH}/api/recoverable-sessions/id%2Fone`,
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+
+  it("returns the deadline and token for undoing a forgotten recovery record", async () => {
+    const undo = { undoToken: "one-use-token", expiresAt: 1_800_000_030_000 };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(undo), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+
+    await expect(forgetRecoverableSession("registry-id")).resolves.toEqual(undo);
+  });
+
+  it("restores a forgotten record with its token and returns restored workspaces", async () => {
+    const restored = {
+      recovery: {
+        id: "id/one",
+        name: "missing-work",
+        directory: "/work",
+        agentType: "codex",
+        agentSessionId: "reference-id",
+        firstSeenAt: 1,
+        lastSeenAt: 2,
+        directoryAvailable: true,
+      },
+      workspaces: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(restored), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(undoForgetRecoverableSession("id/one", "one-use-token")).resolves.toEqual(restored);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/recoverable-sessions/id%2Fone/undo-forget`,
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ undoToken: "one-use-token" }),
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      }),
+    );
+  });
+
+  it("preserves the server's error when a forget undo has expired", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "Undo window expired",
+    }), { status: 410, headers: { "Content-Type": "application/json" } })));
+
+    await expect(undoForgetRecoverableSession("registry-id", "expired-token"))
+      .rejects.toMatchObject({ status: 410, message: "Undo window expired" });
   });
 
   it("sends an exact requested native session name", async () => {
@@ -1454,7 +1506,7 @@ describe("saved workspace API", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7))
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7, workspace.updatedAt))
       .resolves.toEqual(legacyWorkspace);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1465,6 +1517,7 @@ describe("saved workspace API", () => {
           groups: [],
           activeSession: "api",
           sessionRevision: 7,
+          expectedUpdatedAt: workspace.updatedAt,
         }),
       }),
     );
@@ -1476,9 +1529,109 @@ describe("saved workspace API", () => {
           tabs: ["api"],
           activeSession: "api",
           sessionRevision: 7,
+          expectedUpdatedAt: workspace.updatedAt,
         }),
       }),
     );
+  });
+
+  it("includes the last observed workspace version in conditional metadata updates", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ workspace }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const update = { tabs: ["api"], expectedUpdatedAt: workspace.updatedAt };
+    await expect(updateWorkspace(workspace.id, update)).resolves.toEqual(workspace);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/workspaces/workspace%2Fid`,
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify(update) }),
+    );
+  });
+
+  it("surfaces workspace version conflicts without retrying an unguarded write", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: "workspace has changed",
+    }), { status: 409, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateWorkspaceActivity("workspace/id", ["api"], [], "api", 7, 0))
+      .rejects.toMatchObject({ status: 409, message: "workspace has changed" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ expectedUpdatedAt: 0 });
+  });
+
+  it.each([
+    ["groups", "expectedUpdatedAt"],
+    ["expectedUpdatedAt", "groups"],
+  ])("handles legacy activity fields rejected in order %s then %s", async (first, second) => {
+    vi.resetModules();
+    const api = await import("./api");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: `unknown field: ${first}` }), {
+        status: 400, headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: `unknown field: ${second}` }), {
+        status: 400, headers: { "Content-Type": "application/json" },
+      }))
+      .mockImplementation(async () => new Response(JSON.stringify({ workspace }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(api.supportsWorkspaceVersionChecks()).toBe(true);
+    await expect(api.updateWorkspaceActivity(workspace.id, ["api"], [], "api", 7, workspace.updatedAt))
+      .resolves.toEqual(workspace);
+    const original = {
+      tabs: ["api"], groups: [], activeSession: "api", sessionRevision: 7,
+      expectedUpdatedAt: workspace.updatedAt,
+    };
+    const afterFirst = { ...original };
+    Reflect.deleteProperty(afterFirst, first);
+    const afterSecond = { ...afterFirst };
+    Reflect.deleteProperty(afterSecond, second);
+    expect(fetchMock.mock.calls.slice(0, 3).map((call) => JSON.parse(call[1].body)))
+      .toEqual([original, afterFirst, afterSecond]);
+    expect(api.supportsWorkspaceVersionChecks()).toBe(false);
+    await api.updateWorkspace(workspace.id, { name: "Renamed", expectedUpdatedAt: workspace.updatedAt });
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({ name: "Renamed" });
+  });
+
+  it("retries a metadata update only when an older server explicitly rejects its version field", async () => {
+    vi.resetModules();
+    const api = await import("./api");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "unknown field: expectedUpdatedAt" }), {
+        status: 400, headers: { "Content-Type": "application/json" },
+      }))
+      .mockImplementation(async () => new Response(JSON.stringify({ workspace }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const changes = { name: "Renamed", expectedUpdatedAt: workspace.updatedAt };
+    await expect(api.updateWorkspace(workspace.id, changes)).resolves.toEqual(workspace);
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(call[1].body))).toEqual([
+      changes, { name: "Renamed" },
+    ]);
+    expect(api.supportsWorkspaceVersionChecks()).toBe(false);
+    await api.updateWorkspaceActivity(workspace.id, ["api"], [], "api", 7, workspace.updatedAt);
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      tabs: ["api"], groups: [], activeSession: "api", sessionRevision: 7,
+    });
+  });
+
+  it.each([409, 400])("does not remove metadata version protection after an unrelated %s rejection", async (status) => {
+    vi.resetModules();
+    const api = await import("./api");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "workspace has changed" }), {
+      status, headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api.updateWorkspace(workspace.id, { name: "Renamed", expectedUpdatedAt: 1_000 }))
+      .rejects.toMatchObject({ status });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(api.supportsWorkspaceVersionChecks()).toBe(true);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ name: "Renamed", expectedUpdatedAt: 1_000 });
   });
 
   it("propagates a failed legacy activity retry without issuing a third request", async () => {
@@ -1541,6 +1694,142 @@ describe("saved workspace API", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `${BASE_PATH}/api/workspaces/workspace%2Fid`,
       expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("subscribeToWorkspace", () => {
+  const workspace = {
+    id: "workspace/id",
+    name: "Release train",
+    tabs: ["api", "web client"],
+    groups: [{ id: "group-1", name: "Backend", color: "blue", collapsed: false, tabs: ["api"] }],
+    separators: ["api"],
+    separatorsBefore: ["web client"],
+    callbackSessions: ["api"],
+    quickLinks: [{ id: "docs", label: "Docs", url: "https://docs.test/" }],
+    paneLayouts: [{
+      id: "layout-1", name: "Services", root: {
+        id: "split-1", kind: "split", direction: "horizontal", ratio: 0.5,
+        first: { id: "pane-1", kind: "pane", session: "api" },
+        second: { id: "pane-2", kind: "pane", session: null },
+      },
+    }],
+    activeSession: "web client",
+    sessionRevision: 7,
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_010_000,
+    lastActiveAt: 1_700_000_020_000,
+  };
+
+  it("shares the workspace stream with validated callback snapshots", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onWorkspace = vi.fn();
+    const onCallbacks = vi.fn();
+    const onError = vi.fn();
+    subscribeToWorkspace(workspace.id, { onWorkspace, onCallbacks, onError });
+    const source = MockEventSource.instances[0];
+    const callbacks = {
+      callbackSessions: ["api"], globalCallbackSessions: [], sessionRevision: 7,
+      workspaceCallbacks: [{ workspaceId: workspace.id, workspaceName: workspace.name, sessions: ["api"] }],
+    };
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace, callbacks }) }));
+    expect(onWorkspace).toHaveBeenCalledWith(workspace);
+    expect(onCallbacks).toHaveBeenCalledWith(callbacks);
+    onWorkspace.mockClear();
+    onCallbacks.mockClear();
+    source.emit("workspace", new MessageEvent("workspace", {
+      data: JSON.stringify({ workspace, callbacks: { ...callbacks, sessionRevision: -1 } }),
+    }));
+    expect(onWorkspace).not.toHaveBeenCalled();
+    expect(onCallbacks).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace }) }));
+    expect(onWorkspace).toHaveBeenCalledWith(workspace);
+    expect(onCallbacks).not.toHaveBeenCalled();
+  });
+
+  it("streams canonical workspace snapshots and explicit deletion at an encoded URL", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onWorkspace = vi.fn();
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+    const unsubscribe = subscribeToWorkspace(workspace.id, { onWorkspace, onStatus, onError });
+    const source = MockEventSource.instances[0];
+
+    expect(source.url).toBe(`${BASE_PATH}/api/workspaces/workspace%2Fid/stream`);
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
+    source.onopen?.(new Event("open"));
+    expect(onStatus).toHaveBeenLastCalledWith("open");
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace }) }));
+    expect(onWorkspace).toHaveBeenLastCalledWith(workspace);
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace: null }) }));
+    expect(onWorkspace).toHaveBeenLastCalledWith(null);
+    expect(onError).not.toHaveBeenCalled();
+
+    unsubscribe();
+    unsubscribe();
+    expect(source.close).toHaveBeenCalledOnce();
+    onWorkspace.mockClear();
+    onStatus.mockClear();
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace }) }));
+    source.onopen?.(new Event("open"));
+    source.onerror?.(new Event("error"));
+    expect(onWorkspace).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["invalid JSON", "not json"],
+    ["null frame", "null"],
+    ["missing workspace", "{}"],
+    ["wrong workspace", JSON.stringify({ workspace: { ...workspace, id: "other" } })],
+    ["invalid tabs", JSON.stringify({ workspace: { ...workspace, tabs: [1] } })],
+    ["invalid groups", JSON.stringify({ workspace: { ...workspace, groups: [{}] } })],
+    ["invalid group color", JSON.stringify({ workspace: { ...workspace, groups: [{ ...workspace.groups[0], color: "invalid" }] } })],
+    ["invalid separators", JSON.stringify({ workspace: { ...workspace, separators: "api" } })],
+    ["invalid callbacks", JSON.stringify({ workspace: { ...workspace, callbackSessions: [null] } })],
+    ["invalid quick links", JSON.stringify({ workspace: { ...workspace, quickLinks: [null] } })],
+    ["invalid pane tree", JSON.stringify({ workspace: { ...workspace, paneLayouts: [{ ...workspace.paneLayouts[0], root: { kind: "split" } }] } })],
+    ["negative version", JSON.stringify({ workspace: { ...workspace, updatedAt: -1 } })],
+    ["fractional version", JSON.stringify({ workspace: { ...workspace, updatedAt: 1.5 } })],
+    ["unsafe version", JSON.stringify({ workspace: { ...workspace, updatedAt: Number.MAX_SAFE_INTEGER + 1 } })],
+    ["invalid session revision", JSON.stringify({ workspace: { ...workspace, sessionRevision: -1 } })],
+  ])("rejects %s without replacing canonical state and accepts later valid frames", (_label, data) => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onWorkspace = vi.fn();
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+    subscribeToWorkspace(workspace.id, { onWorkspace, onStatus, onError });
+    const source = MockEventSource.instances[0];
+    source.emit("workspace", new MessageEvent("workspace", { data }));
+    expect(onWorkspace).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onStatus).toHaveBeenLastCalledWith("error");
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace }) }));
+    expect(onWorkspace).toHaveBeenCalledWith(workspace);
+  });
+
+  it("allows EventSource to reconnect and reports unsupported browsers", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onWorkspace = vi.fn();
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+    subscribeToWorkspace(workspace.id, { onWorkspace, onStatus, onError });
+    const source = MockEventSource.instances[0];
+    source.onerror?.(new Event("error"));
+    expect(onStatus).toHaveBeenLastCalledWith("error");
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "Workspace stream connection failed" }));
+    expect(source.close).not.toHaveBeenCalled();
+    source.onopen?.(new Event("open"));
+    expect(onStatus).toHaveBeenLastCalledWith("open");
+    source.emit("workspace", new MessageEvent("workspace", { data: JSON.stringify({ workspace }) }));
+    expect(onWorkspace).toHaveBeenCalledWith(workspace);
+
+    vi.stubGlobal("EventSource", undefined);
+    expect(() => subscribeToWorkspace(workspace.id, { onWorkspace })).toThrow(
+      "Server-sent events are not supported",
     );
   });
 });

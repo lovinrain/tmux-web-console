@@ -6,6 +6,8 @@ import {
   BASE_PATH,
   createSession,
   createWorkspace,
+  forgetRecoverableSession,
+  undoForgetRecoverableSession,
   getCommonWorkspaceQuickLinks,
   getGlobalCallbackSessions,
   getSessionQuickLinks,
@@ -16,12 +18,14 @@ import {
   listWorkspaces,
   reviewGlobalCallbackSession,
   subscribeToCallbackSessions,
+  subscribeToWorkspace,
   terminateSession,
   transferSessionToWorkspace,
   transferSessionsToWorkspace,
   updateWorkspace,
   updateWorkspaceActivity,
   type SavedWorkspace,
+  type WorkspaceStreamOptions,
   type WorkspaceSessionTransferOperation,
   type WorkspaceSessionsTransferResult,
   recreateSession,
@@ -39,6 +43,8 @@ vi.mock("./api", async (importOriginal) => {
     ...actual,
     createSession: vi.fn(),
     createWorkspace: vi.fn(),
+    forgetRecoverableSession: vi.fn(),
+    undoForgetRecoverableSession: vi.fn(),
     getCommonWorkspaceQuickLinks: vi.fn(),
     getGlobalCallbackSessions: vi.fn(),
     getSessionQuickLinks: vi.fn(),
@@ -54,6 +60,7 @@ vi.mock("./api", async (importOriginal) => {
     transferSessionsToWorkspace: vi.fn(),
     reviewGlobalCallbackSession: vi.fn(),
     subscribeToCallbackSessions: vi.fn(),
+    subscribeToWorkspace: vi.fn(),
     updateWorkspace: vi.fn(),
     updateWorkspaceActivity: vi.fn(),
   };
@@ -61,6 +68,8 @@ vi.mock("./api", async (importOriginal) => {
 
 const createWorkspaceMock = vi.mocked(createWorkspace);
 const createSessionMock = vi.mocked(createSession);
+const forgetRecoverableSessionMock = vi.mocked(forgetRecoverableSession);
+const undoForgetRecoverableSessionMock = vi.mocked(undoForgetRecoverableSession);
 const getCommonWorkspaceQuickLinksMock = vi.mocked(getCommonWorkspaceQuickLinks);
 const getGlobalCallbackSessionsMock = vi.mocked(getGlobalCallbackSessions);
 const getSessionQuickLinksMock = vi.mocked(getSessionQuickLinks);
@@ -75,12 +84,21 @@ const transferSessionToWorkspaceMock = vi.mocked(transferSessionToWorkspace);
 const transferSessionsToWorkspaceMock = vi.mocked(transferSessionsToWorkspace);
 const reviewGlobalCallbackSessionMock = vi.mocked(reviewGlobalCallbackSession);
 const subscribeToCallbackSessionsMock = vi.mocked(subscribeToCallbackSessions);
+const subscribeToWorkspaceMock = vi.mocked(subscribeToWorkspace);
+const workspaceSubscriptions: Array<{
+  workspaceId: string;
+  options: WorkspaceStreamOptions;
+  unsubscribe: ReturnType<typeof vi.fn>;
+}> = [];
 const updateWorkspaceMock = vi.mocked(updateWorkspace);
 const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
 
 let pendingNewSessionCompletion: ((session: string, sessionId?: string) => void) | null = null;
 let consoleSessionRecovery: RecoverableSession | null = null;
 let recreateConsoleSession: (() => void | Promise<void>) | null = null;
+let forgetConsoleSession: (() => void | Promise<void>) | null = null;
+let forgetDashboardSession: ((recovery: RecoverableSession) => Promise<void>) | null = null;
+let dashboardRecoveryRefreshKey: number | undefined;
 let reportSessionRename: (
   (
     previousName: string,
@@ -141,6 +159,8 @@ vi.mock("./components/SessionDashboard", () => ({
     onWorkspacePinChange,
     onSessionTerminated,
     activeWorkspaceId,
+    onForgetSession,
+    recoveryRefreshKey,
   }: {
     onOpen: (session: string) => void;
     onResumeWorkspace?: () => void;
@@ -166,6 +186,8 @@ vi.mock("./components/SessionDashboard", () => ({
       serverPid: number,
     ) => Promise<void>;
     activeWorkspaceId?: string | null;
+    onForgetSession?: (recovery: RecoverableSession) => Promise<void>;
+    recoveryRefreshKey?: number;
   }) => {
     useEffect(() => {
       dashboardMountCount += 1;
@@ -178,6 +200,8 @@ vi.mock("./components/SessionDashboard", () => ({
     reportWorkspacePinChange = onWorkspacePinChange ?? null;
     reportSessionTerminate = onSessionTerminated ?? null;
     dashboardActiveWorkspaceId = activeWorkspaceId ?? null;
+    forgetDashboardSession = onForgetSession ?? null;
+    dashboardRecoveryRefreshKey = recoveryRefreshKey;
     return (
       <main aria-label="Dashboard" data-search={window.location.search}>
         <label className="search-field">
@@ -283,6 +307,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onDismissRenameWarning,
     sessionRecovery,
     onRecreateSession,
+    onForgetSession,
   }: {
     sessionName: string;
     workspaceName?: string | null;
@@ -348,6 +373,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onDismissRenameWarning?: (sessionId: string) => void;
     sessionRecovery?: RecoverableSession | null;
     onRecreateSession?: () => void | Promise<void>;
+    onForgetSession?: () => void | Promise<void>;
   }) => {
     reportKnownSessions = onSessionsChange ?? null;
     reportWorkspacePinChange = onWorkspacePinChange ?? null;
@@ -357,6 +383,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     reportSessionCopy = onSessionCopied ?? null;
     consoleSessionRecovery = sessionRecovery ?? null;
     recreateConsoleSession = onRecreateSession ?? null;
+    forgetConsoleSession = onForgetSession ?? null;
     const bars = [
       ["sessionTabs", "Session tabs", "muxdeck-session-tabs"],
       ["stagedInput", "Staged input", "muxdeck-staged-input"],
@@ -649,6 +676,8 @@ describe("App routing", () => {
   beforeEach(() => {
     createSessionMock.mockReset();
     createWorkspaceMock.mockReset();
+    forgetRecoverableSessionMock.mockReset();
+    undoForgetRecoverableSessionMock.mockReset();
     getCommonWorkspaceQuickLinksMock.mockReset();
     getGlobalCallbackSessionsMock.mockReset();
     getSessionQuickLinksMock.mockReset();
@@ -662,10 +691,13 @@ describe("App routing", () => {
     transferSessionsToWorkspaceMock.mockReset();
     reviewGlobalCallbackSessionMock.mockReset();
     subscribeToCallbackSessionsMock.mockReset();
+    subscribeToWorkspaceMock.mockReset();
+    workspaceSubscriptions.length = 0;
     updateWorkspaceMock.mockReset();
     updateWorkspaceActivityMock.mockReset();
     createWorkspaceMock.mockResolvedValue(savedWorkspace());
     createSessionMock.mockResolvedValue({ name: "muxdeck-quick", id: "$quick" });
+    forgetRecoverableSessionMock.mockResolvedValue(undefined);
     getCommonWorkspaceQuickLinksMock.mockResolvedValue([]);
     getGlobalCallbackSessionsMock.mockResolvedValue({
       callbackSessions: [],
@@ -693,6 +725,11 @@ describe("App routing", () => {
       removed: [],
     });
     subscribeToCallbackSessionsMock.mockReturnValue(vi.fn());
+    subscribeToWorkspaceMock.mockImplementation((workspaceId, options) => {
+      const unsubscribe = vi.fn();
+      workspaceSubscriptions.push({ workspaceId, options, unsubscribe });
+      return unsubscribe;
+    });
     pendingNewSessionCompletion = null;
     reportSessionRename = null;
     reportSessionTerminate = null;
@@ -700,6 +737,9 @@ describe("App routing", () => {
     reportKnownSessions = null;
     consoleSessionRecovery = null;
     recreateConsoleSession = null;
+    forgetConsoleSession = null;
+    forgetDashboardSession = null;
+    dashboardRecoveryRefreshKey = undefined;
     openSessionFromDashboard = null;
     openSavedWorkspaceFromDashboard = null;
     reportSavedWorkspaceDeleted = null;
@@ -774,6 +814,7 @@ describe("App routing", () => {
       expect.objectContaining({
         paneLayouts: [expect.objectContaining({ id: "review-wall" })],
         sessionRevision: 0,
+        expectedUpdatedAt: 1_000,
       }),
     ));
 
@@ -1019,6 +1060,7 @@ describe("App routing", () => {
       [],
       "alpha",
       5,
+      1_000,
     );
     updateWorkspaceActivityMock.mockClear();
 
@@ -1040,6 +1082,7 @@ describe("App routing", () => {
       [],
       "fresh/session",
       5,
+      1_000,
     );
   });
 
@@ -2197,7 +2240,9 @@ describe("App routing", () => {
     act(() => window.dispatchEvent(addShortcut));
     await waitFor(() => expect(updateWorkspaceMock).toHaveBeenCalledWith(
       "workspace-one",
-      expect.objectContaining({ callbackSessions: ["alpha"], sessionRevision: 0 }),
+      expect.objectContaining({
+        callbackSessions: ["alpha"], sessionRevision: 0, expectedUpdatedAt: 1_000,
+      }),
     ));
     expect(addShortcut.defaultPrevented).toBe(true);
 
@@ -2212,7 +2257,9 @@ describe("App routing", () => {
     act(() => window.dispatchEvent(removeShortcut));
     await waitFor(() => expect(updateWorkspaceMock).toHaveBeenLastCalledWith(
       "workspace-one",
-      expect.objectContaining({ callbackSessions: [], sessionRevision: 1 }),
+      expect.objectContaining({
+        callbackSessions: [], sessionRevision: 1, expectedUpdatedAt: 2_000,
+      }),
     ));
     expect(removeShortcut.defaultPrevented).toBe(true);
   });
@@ -3263,6 +3310,228 @@ describe("App routing", () => {
       .toHaveAttribute("data-tab-rail-width", "480");
   });
 
+  describe("live workspace synchronization", () => {
+    async function openSynchronizedWorkspace() {
+      vi.useFakeTimers();
+      const initial = savedWorkspace({ tabs: ["alpha", "beta", "gamma"] });
+      getWorkspaceMock.mockResolvedValue(initial);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+        session("gamma", "$gamma"),
+      ]);
+      updateWorkspaceActivityMock.mockImplementation(async (
+        workspaceId, tabs, groups, activeSession, sessionRevision, expectedUpdatedAt,
+      ) => ({
+        ...initial, id: workspaceId, tabs, groups, activeSession, sessionRevision,
+        updatedAt: (expectedUpdatedAt ?? initial.updatedAt) + 1,
+      }));
+      replaceUrl(sessionUrl("alpha", "?workspace=workspace-one"));
+      const view = render(<App />);
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      updateWorkspaceActivityMock.mockClear();
+      const subscription = workspaceSubscriptions.at(-1)!;
+      expect(subscription.workspaceId).toBe(initial.id);
+      return { view, subscription, canonical: { ...initial, updatedAt: 1_001 } };
+    }
+
+    it("removes remotely closed tabs from the sidebar and URL while preserving local selection", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      act(() => subscription.options.onWorkspace({
+        ...canonical, tabs: ["alpha", "gamma"], activeSession: "gamma", updatedAt: 1_002,
+      }));
+      expect(openTabs()).toEqual(["alpha", "gamma"]);
+      expectWorkspaceSearch("?workspace=workspace-one", ["alpha", "gamma"]);
+      expect(screen.queryByRole("button", { name: "Close beta quick tab" })).not.toBeInTheDocument();
+      expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "alpha");
+
+      act(() => subscription.options.onWorkspace({
+        ...canonical, tabs: ["gamma"], activeSession: "gamma", updatedAt: 1_003,
+      }));
+      expect(openTabs()).toEqual(["gamma"]);
+      expectWorkspaceSearch("?workspace=workspace-one", ["gamma"]);
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/gamma`);
+      await act(async () => vi.advanceTimersByTimeAsync(800));
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+    });
+
+    it("does not echo remote selection changes or accept obsolete snapshots", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      act(() => subscription.options.onWorkspace({
+        ...canonical, activeSession: "beta", updatedAt: 1_002,
+      }));
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      await act(async () => vi.advanceTimersByTimeAsync(800));
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+
+      act(() => subscription.options.onWorkspace({
+        ...canonical, tabs: ["gamma"], activeSession: "gamma", updatedAt: 1_001,
+      }));
+      expect(openTabs()).toEqual(["alpha", "beta", "gamma"]);
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+      await act(async () => vi.advanceTimersByTimeAsync(800));
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+    });
+
+    it("shares callbacks on the workspace stream and closes the standalone callback subscription", async () => {
+      const { subscription } = await openSynchronizedWorkspace();
+      expect(subscribeToCallbackSessionsMock).toHaveBeenCalledOnce();
+      const standaloneCleanup = subscribeToCallbackSessionsMock.mock.results[0].value;
+      expect(standaloneCleanup).toHaveBeenCalledOnce();
+      expect(subscribeToWorkspaceMock).toHaveBeenCalledOnce();
+      expect(subscription.options.onCallbacks).toEqual(expect.any(Function));
+
+      act(() => subscription.options.onCallbacks?.({
+        callbackSessions: ["gamma"], globalCallbackSessions: ["gamma"],
+        workspaceCallbacks: [], sessionRevision: 0,
+      }));
+      fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
+      expect(subscribeToCallbackSessionsMock).toHaveBeenCalledOnce();
+      expect(subscribeToWorkspaceMock).toHaveBeenCalledOnce();
+    });
+
+    it("merges concurrent closes before saving against the newly received version", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      fireEvent.click(screen.getByRole("button", { name: "Close beta quick tab" }));
+      act(() => subscription.options.onWorkspace({
+        ...canonical, tabs: ["alpha", "beta"], updatedAt: 1_002,
+      }));
+      expect(openTabs()).toEqual(["alpha"]);
+      expectWorkspaceSearch("?workspace=workspace-one", ["alpha"]);
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledExactlyOnceWith(
+        "workspace-one", ["alpha"], [], "alpha", 0, 1_002,
+      );
+    });
+
+    it("refreshes and merges a rejected stale save without reviving either browser's closed tab", async () => {
+      const { canonical } = await openSynchronizedWorkspace();
+      getWorkspaceMock.mockResolvedValue({
+        ...canonical, tabs: ["alpha", "beta"], updatedAt: 1_002,
+      });
+      updateWorkspaceActivityMock.mockRejectedValueOnce(new ApiRequestError("workspace has changed", 409));
+      fireEvent.click(screen.getByRole("button", { name: "Close beta quick tab" }));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(getWorkspaceMock).toHaveBeenCalledTimes(2);
+      expect(openTabs()).toEqual(["alpha"]);
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock.mock.calls).toEqual([
+        ["workspace-one", ["alpha", "gamma"], [], "alpha", 0, 1_001],
+        ["workspace-one", ["alpha"], [], "alpha", 0, 1_002],
+      ]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("preserves newer local edits when an own stream echo arrives before the save response", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      const pending = deferred<SavedWorkspace>();
+      updateWorkspaceActivityMock.mockImplementationOnce(() => pending.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Close beta quick tab" }));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      const echoed = { ...canonical, tabs: ["alpha", "gamma"], updatedAt: 1_002 };
+      act(() => subscription.options.onWorkspace(echoed));
+
+      fireEvent.click(screen.getByRole("button", { name: "New session" }));
+      fireEvent.click(screen.getByRole("button", { name: "Create test session" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close gamma quick tab" }));
+      expect(openTabs()).toEqual(["alpha", "fresh/session"]);
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      await act(async () => {
+        pending.resolve(echoed);
+        await pending.promise;
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(openTabs()).toEqual(["alpha", "fresh/session"]);
+      expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
+        "workspace-one", ["alpha", "fresh/session"], [], "fresh/session", 0, 1_002,
+      );
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not report a failed HTTP response after the stream already confirmed that save", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      const pending = deferred<SavedWorkspace>();
+      updateWorkspaceActivityMock.mockImplementationOnce(() => pending.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Close beta quick tab" }));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      act(() => subscription.options.onWorkspace({
+        ...canonical, tabs: ["alpha", "gamma"], updatedAt: 1_002,
+      }));
+      await act(async () => {
+        pending.reject(new Error("save response connection lost"));
+        await Promise.resolve();
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(800));
+      expect(openTabs()).toEqual(["alpha", "gamma"]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expect(getWorkspaceMock).toHaveBeenCalledOnce();
+    });
+
+    it("retries local edits when a conflict refresh matches the version already received by stream", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      const pending = deferred<SavedWorkspace>();
+      updateWorkspaceActivityMock.mockImplementationOnce(() => pending.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Close beta quick tab" }));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      const remote = { ...canonical, tabs: ["alpha", "beta"], updatedAt: 1_002 };
+      getWorkspaceMock.mockResolvedValue(remote);
+      act(() => subscription.options.onWorkspace(remote));
+      expect(openTabs()).toEqual(["alpha"]);
+      await act(async () => {
+        pending.reject(new ApiRequestError("workspace has changed", 409));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(getWorkspaceMock).toHaveBeenCalledTimes(2);
+      expect(updateWorkspaceActivityMock.mock.calls).toEqual([
+        ["workspace-one", ["alpha", "gamma"], [], "alpha", 0, 1_001],
+        ["workspace-one", ["alpha"], [], "alpha", 0, 1_002],
+      ]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(openTabs()).toEqual(["alpha"]);
+    });
+
+    it("closes subscriptions on workspace switches and ignores their delayed events", async () => {
+      const { view, subscription, canonical } = await openSynchronizedWorkspace();
+      const other = savedWorkspace({
+        id: "workspace-two", name: "Workspace two", tabs: ["gamma"], activeSession: "gamma",
+      });
+      getWorkspaceMock.mockResolvedValue(other);
+      fireEvent.click(screen.getByRole("button", { name: "All sessions" }));
+      expect(openSavedWorkspaceFromDashboard).not.toBeNull();
+      act(() => openSavedWorkspaceFromDashboard?.(other));
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      expect(subscription.unsubscribe).toHaveBeenCalledOnce();
+      const current = workspaceSubscriptions.at(-1)!;
+      expect(current.workspaceId).toBe(other.id);
+      act(() => {
+        subscription.options.onWorkspace(null);
+        subscription.options.onWorkspace({ ...canonical, tabs: [], updatedAt: 2_000 });
+      });
+      expectWorkspaceSearch("?workspace=workspace-two", ["gamma"]);
+      expect(screen.getByTitle("Workspace two - Saved")).toBeVisible();
+      view.unmount();
+      expect(current.unsubscribe).toHaveBeenCalledOnce();
+    });
+
+    it("detaches a remotely deleted workspace while keeping its open tabs usable", async () => {
+      const { subscription } = await openSynchronizedWorkspace();
+      act(() => subscription.options.onWorkspace(null));
+      expect(new URLSearchParams(window.location.search).has("workspace")).toBe(false);
+      expect(openTabs()).toEqual(["alpha", "beta", "gamma"]);
+      expect(subscription.unsubscribe).toHaveBeenCalledOnce();
+      await act(async () => vi.advanceTimersByTimeAsync(800));
+      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("saved workspace lifecycle", () => {
     it("rehydrates the active saved workspace after a global session pin changes", async () => {
       const initial = savedWorkspace({ sessionRevision: 4 });
@@ -3964,6 +4233,7 @@ describe("App routing", () => {
         [],
         "alpha",
         4,
+        1_000,
       );
     });
 
@@ -4031,6 +4301,7 @@ describe("App routing", () => {
         [],
         "alpha",
         4,
+        1_000,
       );
       expect(replace).toHaveBeenCalledTimes(2);
       for (const [destination] of replace.mock.calls) {
@@ -4138,6 +4409,7 @@ describe("App routing", () => {
         groups: [],
         activeSession: "alpha",
         sessionRevision: 4,
+        expectedUpdatedAt: 1_000,
       });
       expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
       expect(terminateSessionMock).not.toHaveBeenCalled();
@@ -4523,6 +4795,160 @@ describe("App routing", () => {
       expect(listSessionsMock.mock.calls.length).toBeGreaterThan(1);
     });
 
+    it("forgets a missing shell from inside the workspace", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["ended-one", "ended-two"],
+        activeSession: "ended-two",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue(withRecovery([], [
+        recoverable("ended-one"),
+        recoverable("ended-two"),
+      ]));
+      replaceUrl(`${BASE_PATH}/session/ended-two?workspace=workspace-one`);
+
+      render(<App />);
+
+      await waitFor(() => expect(consoleSessionRecovery?.id).toBe("registry-ended-two"));
+      await act(async () => { await forgetConsoleSession?.(); });
+
+      expect(forgetRecoverableSessionMock).toHaveBeenCalledWith("registry-ended-two");
+      await waitFor(() => {
+        expect(window.location.pathname).toBe(`${BASE_PATH}/session/ended-one`);
+      });
+      expect(openTabs()).toEqual(["ended-one"]);
+      expect(renderedTabs()).toEqual(["ended-one"]);
+      expect(consoleSessionRecovery?.id).toBe("registry-ended-one");
+    });
+
+    it("restores a forgotten saved tab from the undo response when no stream event arrives", async () => {
+      const recovery = recoverable("ended-two");
+      const initial = savedWorkspace({
+        tabs: ["ended-one", "ended-two"],
+        activeSession: "ended-two",
+        groups: [{ ...coreGroup, tabs: ["ended-one", "ended-two"] }],
+      });
+      const forgotten = {
+        ...initial,
+        tabs: ["ended-one"],
+        activeSession: "ended-one",
+        groups: [{ ...coreGroup, tabs: ["ended-one"] }],
+        sessionRevision: 1,
+        updatedAt: 1_001,
+      };
+      const restored = { ...initial, sessionRevision: 2, updatedAt: 1_002 };
+      getWorkspaceMock.mockResolvedValueOnce(initial).mockResolvedValue(forgotten);
+      listSessionsMock.mockResolvedValue(withRecovery([], [recoverable("ended-one"), recovery]));
+      forgetRecoverableSessionMock.mockResolvedValue({
+        undoToken: "saved-undo", expiresAt: Date.now() + 30_000,
+      });
+      undoForgetRecoverableSessionMock.mockResolvedValue({ recovery, workspaces: [restored] });
+      replaceUrl(`${BASE_PATH}/session/ended-two?workspace=workspace-one`);
+
+      render(<App />);
+      await waitFor(() => expect(consoleSessionRecovery?.id).toBe(recovery.id));
+      await act(async () => { await forgetConsoleSession?.(); });
+      await waitFor(() => expect(openTabs()).toEqual(["ended-one"]));
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/ended-one`);
+
+      fireEvent.click(screen.getByRole("button", { name: "Undo forgetting ended-two" }));
+
+      await waitFor(() => expect(openTabs()).toEqual(initial.tabs));
+      expect(urlGroups()).toEqual(initial.groups);
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/ended-two`);
+      expect(consoleSessionRecovery?.id).toBe(recovery.id);
+      expect(undoForgetRecoverableSessionMock).toHaveBeenCalledExactlyOnceWith(recovery.id, "saved-undo");
+      expect(screen.queryByRole("button", { name: "Undo forgetting ended-two" })).not.toBeInTheDocument();
+    });
+
+    it("allows retrying failed undo and restores the last forgotten unsaved tab", async () => {
+      const recovery = recoverable("ended");
+      listSessionsMock.mockResolvedValue(withRecovery([], [recovery]));
+      forgetRecoverableSessionMock.mockResolvedValue({
+        undoToken: "retry-undo", expiresAt: Date.now() + 30_000,
+      });
+      undoForgetRecoverableSessionMock
+        .mockRejectedValueOnce(new Error("Undo connection interrupted"))
+        .mockResolvedValueOnce({ recovery, workspaces: [] });
+      replaceUrl(sessionUrl("ended", "?tab=ended"));
+
+      render(<App />);
+      act(() => reportKnownSessions?.(withRecovery([], [recovery])));
+      await waitFor(() => expect(consoleSessionRecovery?.id).toBe(recovery.id));
+      await act(async () => { await forgetConsoleSession?.(); });
+      expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+      expect(openTabs()).toEqual([]);
+      fireEvent.click(screen.getByRole("button", { name: "Undo forgetting ended" }));
+
+      expect(await screen.findByText("Undo connection interrupted")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Undo forgetting ended" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Undo forgetting ended" }));
+
+      await waitFor(() => expect(openTabs()).toEqual(["ended"]));
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/ended`);
+      expect(consoleSessionRecovery?.id).toBe(recovery.id);
+      expect(undoForgetRecoverableSessionMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("Undo connection interrupted")).not.toBeInTheDocument();
+    });
+
+    it("restores an unsaved forgotten tab without undoing later tab edits or changing the new active session", async () => {
+      const recovery = recoverable("ended");
+      listSessionsMock.mockResolvedValue(withRecovery([
+        session("alpha", "$alpha"), session("beta", "$beta"), session("gamma", "$gamma"),
+      ], [recovery]));
+      forgetRecoverableSessionMock.mockResolvedValue({
+        undoToken: "local-undo", expiresAt: Date.now() + 30_000,
+      });
+      undoForgetRecoverableSessionMock.mockResolvedValue({ recovery, workspaces: [] });
+      replaceUrl(sessionUrl("ended", "?tab=alpha&tab=ended&tab=beta&tab=gamma"));
+
+      render(<App />);
+      act(() => reportKnownSessions?.(withRecovery([
+        session("alpha", "$alpha"), session("beta", "$beta"), session("gamma", "$gamma"),
+      ], [recovery])));
+      await waitFor(() => expect(consoleSessionRecovery?.id).toBe(recovery.id));
+      await act(async () => { await forgetConsoleSession?.(); });
+      fireEvent.click(screen.getByRole("button", { name: "Close gamma quick tab" }));
+      fireEvent.click(screen.getByRole("button", { name: "New session" }));
+      fireEvent.click(screen.getByRole("button", { name: "Create test session" }));
+      expect(openTabs()).toEqual(["alpha", "beta", "fresh/session"]);
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/fresh%2Fsession`);
+      fireEvent.click(screen.getByRole("button", { name: "Undo forgetting ended" }));
+
+      await waitFor(() => expect(openTabs()).toEqual(["alpha", "ended", "beta", "fresh/session"]));
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/fresh%2Fsession`);
+      expect(screen.getByRole("tab", { name: "ended, unavailable" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Undo forgetting ended" })).not.toBeInTheDocument();
+    });
+
+    it("uses the dashboard forget callback and refreshes restored recovery data without remounting the dashboard", async () => {
+      const recovery = recoverable("ended");
+      listSessionsMock.mockResolvedValue(withRecovery([session("alpha", "$alpha")], [recovery]));
+      forgetRecoverableSessionMock.mockResolvedValue({
+        undoToken: "dashboard-undo", expiresAt: Date.now() + 30_000,
+      });
+      undoForgetRecoverableSessionMock.mockResolvedValue({ recovery, workspaces: [] });
+      replaceUrl(dashboardUrl("?tab=alpha&tab=ended"));
+
+      render(<App />);
+      const search = screen.getByRole("textbox", { name: "Find a session" });
+      fireEvent.change(search, { target: { value: "unfinished search" } });
+      const mounts = dashboardMountCount;
+      const refreshKey = dashboardRecoveryRefreshKey;
+      expect(forgetDashboardSession).not.toBeNull();
+      await act(async () => { await forgetDashboardSession?.(recovery); });
+      expect(forgetRecoverableSessionMock).toHaveBeenCalledExactlyOnceWith(recovery.id);
+      expect(openTabs()).toEqual(["alpha"]);
+      fireEvent.click(screen.getByRole("button", { name: "Undo forgetting ended" }));
+
+      await waitFor(() => expect(dashboardRecoveryRefreshKey).toBe((refreshKey ?? 0) + 1));
+      expect(openTabs()).toEqual(["alpha", "ended"]);
+      expect(dashboardMountCount).toBe(mounts);
+      expect(screen.getByRole("textbox", { name: "Find a session" })).toBe(search);
+      expect(search).toHaveValue("unfinished search");
+      expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+    });
+
     it("offers bulk recovery for every missing tab the registry can rebuild", async () => {
       const serverWorkspace = savedWorkspace({
         tabs: ["ended-one", "ended-two", "forgotten"],
@@ -4620,6 +5046,7 @@ describe("App routing", () => {
         [],
         "beta",
         7,
+        1_000,
       );
       expect(screen.getByTitle("Renamed remotely - Saved")).toBeVisible();
     });
@@ -4667,6 +5094,7 @@ describe("App routing", () => {
         [],
         "alpha",
         12,
+        1_000,
       );
     });
 
@@ -4740,6 +5168,7 @@ describe("App routing", () => {
         [coreGroup],
         "beta",
         9,
+        1_000,
       );
     });
 
@@ -4782,6 +5211,7 @@ describe("App routing", () => {
         [collapsedCoreGroup],
         "alpha",
         9,
+        1_000,
       );
     });
 
@@ -4828,6 +5258,7 @@ describe("App routing", () => {
         [],
         "alpha",
         0,
+        1_000,
       );
 
       fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
@@ -4854,6 +5285,7 @@ describe("App routing", () => {
         [],
         "beta",
         0,
+        1_000,
       );
 
       await act(async () => {
@@ -4910,6 +5342,7 @@ describe("App routing", () => {
         groups: [pageHideGroup],
         activeSession: "second work",
         sessionRevision: 0,
+        expectedUpdatedAt: 1_000,
       });
     });
 
@@ -4943,6 +5376,7 @@ describe("App routing", () => {
         [],
         "second work",
         0,
+        1_000,
       );
       expect(screen.getByRole("status", {
         name: "Workspace saved automatically",
@@ -4983,6 +5417,7 @@ describe("App routing", () => {
         tabs: ["second work"],
         activeSession: "second work",
         sessionRevision: 0,
+        expectedUpdatedAt: 1_000,
       });
       expect(payload).not.toHaveProperty("groups");
     });
@@ -5045,7 +5480,7 @@ describe("App routing", () => {
         name: "Workspace tabs saved; tab groups are not stored by this server",
       })).toBeVisible();
 
-      getWorkspaceMock.mockResolvedValueOnce({
+      getWorkspaceMock.mockResolvedValue({
         ...legacyWorkspace,
         groups: [],
       });
@@ -5054,7 +5489,7 @@ describe("App routing", () => {
         await Promise.resolve();
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(getWorkspaceMock).toHaveBeenCalledTimes(2);
+      expect(getWorkspaceMock).toHaveBeenCalledTimes(3);
       expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
       expect(updateWorkspaceActivityMock.mock.calls[1]?.[2]).toEqual([
         expect.objectContaining({
@@ -5100,6 +5535,7 @@ describe("App routing", () => {
         [],
         "alpha",
         0,
+        1_000,
       );
 
       fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
@@ -5129,6 +5565,7 @@ describe("App routing", () => {
         [],
         "beta",
         0,
+        1_000,
       );
 
       await act(async () => {
@@ -5187,6 +5624,7 @@ describe("App routing", () => {
         [],
         "beta",
         0,
+        1_000,
       );
 
       fireEvent.click(screen.getByRole("button", { name: "Close alpha quick tab" }));
@@ -5215,6 +5653,7 @@ describe("App routing", () => {
         [],
         "beta",
         0,
+        1_000,
       );
 
       await act(async () => {
@@ -5227,9 +5666,9 @@ describe("App routing", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(updateWorkspaceActivityMock.mock.calls).toEqual([
-        ["workspace-one", ["alpha", "beta"], [], "alpha", 0],
-        ["workspace-one", ["alpha", "beta"], [], "beta", 0],
-        ["workspace-one", ["beta"], [], "beta", 0],
+        ["workspace-one", ["alpha", "beta"], [], "alpha", 0, 1_000],
+        ["workspace-one", ["alpha", "beta"], [], "beta", 0, 1_000],
+        ["workspace-one", ["beta"], [], "beta", 0, 1_000],
       ]);
       expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     });
@@ -5269,6 +5708,7 @@ describe("App routing", () => {
         [],
         "alpha",
         0,
+        1_000,
       );
       expect(openSavedWorkspaceFromDashboard).not.toBeNull();
 
@@ -5305,6 +5745,7 @@ describe("App routing", () => {
         [],
         "gamma",
         0,
+        1_000,
       );
     });
 
@@ -5466,6 +5907,7 @@ describe("App routing", () => {
         [],
         "old-name",
         0,
+        1_000,
       );
 
       act(() => openSessionFromDashboard?.("second work"));
@@ -5488,14 +5930,8 @@ describe("App routing", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });
-      expect(updateWorkspaceActivityMock).toHaveBeenCalledTimes(2);
-      expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
-        "workspace-one",
-        ["new-name"],
-        [],
-        "new-name",
-        1,
-      );
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expectWorkspaceSearch("?workspace=workspace-one", ["new-name"]);
     });
 
     it("does not let an older success lower a rehydrated session revision", async () => {
@@ -5560,6 +5996,7 @@ describe("App routing", () => {
         groups: [],
         activeSession: "new-name",
         sessionRevision: 1,
+        expectedUpdatedAt: 1_000,
       });
       view.unmount();
     });
@@ -5628,6 +6065,7 @@ describe("App routing", () => {
         [],
         "new-name",
         1,
+        1_000,
       );
     });
 

@@ -2019,6 +2019,13 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const recentsScrollTopRef = useRef(0);
   const completedTerminationRef = useRef<Session | null>(null);
   const focusActiveTabAfterClose = useRef(false);
+  const previousTabNavigation = useRef<{
+    activeSession: string | null;
+    activeWorkspaceId: string | null;
+    newSessionActive: boolean;
+    orientation: WorkspaceTabOrientation;
+    tabsVisible: boolean;
+  } | null>(null);
   const reorderFocusIntent = useRef<{
     sessionName: string;
     direction: "previous" | "next";
@@ -2711,7 +2718,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         const style = window.getComputedStyle(element);
         if (style.display === "none" || style.visibility === "hidden") return false;
       }
-      target.focus();
+      target.focus({ preventScroll: true });
       return document.activeElement === target;
     };
 
@@ -2782,7 +2789,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const activeTab = activeTabRef.current;
-      if (activeTab && orientation === "vertical") {
+      const previous = previousTabNavigation.current;
+      // Removing tabs can select a replacement, but must leave the list where
+      // the user was working. Reconcile/list refreshes are not navigation.
+      const revealActiveTab = !previous
+        || previous.activeWorkspaceId !== activeWorkspaceId
+        || previous.orientation !== orientation
+        || (!previous.tabsVisible && tabsVisible)
+        || previous.newSessionActive !== newSessionActive
+        || (previous.activeSession !== activeSession
+          && (!previous.activeSession || openSessions.includes(previous.activeSession)));
+      previousTabNavigation.current = {
+        activeSession,
+        activeWorkspaceId,
+        newSessionActive,
+        orientation,
+        tabsVisible,
+      };
+      if (revealActiveTab && activeTab && orientation === "vertical") {
         const viewport = activeTab.closest<HTMLElement>(".workspace-tab-viewport");
         if (viewport) {
           const viewportBounds = viewport.getBoundingClientRect();
@@ -2793,7 +2817,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         } else {
           activeTab.scrollIntoView?.({ block: "center", inline: "nearest" });
         }
-      } else {
+      } else if (revealActiveTab) {
         activeTab?.scrollIntoView?.({ block: "nearest", inline: "center" });
       }
       if (focusActiveTabAfterClose.current && activeTab) {
@@ -2838,6 +2862,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     return () => window.cancelAnimationFrame(frame);
   }, [
     activeSession,
+    activeWorkspaceId,
     newSessionActive,
     openSessions,
     groups,

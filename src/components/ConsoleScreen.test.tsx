@@ -1829,6 +1829,7 @@ describe("ConsoleScreen session identity", () => {
   it("recreates a missing shell from the unavailable view", async () => {
     vi.mocked(listSessions).mockResolvedValue([]);
     const onRecreateSession = vi.fn();
+    const onForgetSession = vi.fn();
     const onRecreateAllMissing = vi.fn();
     renderWithTheme(
       <ConsoleScreen
@@ -1846,6 +1847,7 @@ describe("ConsoleScreen session identity", () => {
           directoryAvailable: true,
         }}
         onRecreateSession={onRecreateSession}
+        onForgetSession={onForgetSession}
         missingSessionCount={3}
         onRecreateAllMissing={onRecreateAllMissing}
       />,
@@ -1860,6 +1862,11 @@ describe("ConsoleScreen session identity", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Recreate all missing (3)" }));
     expect(onRecreateAllMissing).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Forget recovery record for ended",
+    }));
+    expect(onForgetSession).toHaveBeenCalledOnce();
   });
 
   it("blocks recreate when the saved directory is gone or unknown", async () => {
@@ -1926,6 +1933,8 @@ describe("ConsoleScreen session identity", () => {
 
       await act(async () => { await Promise.resolve(); });
       expect(screen.getByTestId("live-terminal")).toBeVisible();
+      const navigation = screen.getByRole("navigation", { name: "Quick sessions" });
+      navigation.scrollTop = 850;
       fireEvent.click(screen.getByRole("button", { name: "Edit title and tags" }));
       expect(screen.getByRole("dialog", { name: "Edit title and tags" })).toBeVisible();
 
@@ -1936,10 +1945,14 @@ describe("ConsoleScreen session identity", () => {
       expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
         .not.toBeInTheDocument();
       expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
+      expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBe(navigation);
+      expect(navigation.scrollTop).toBe(850);
 
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
       expect(screen.getByTestId("live-terminal")).toBeVisible();
+      expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBe(navigation);
+      expect(navigation.scrollTop).toBe(850);
       expect(screen.queryByRole("dialog", { name: "Edit title and tags" }))
         .not.toBeInTheDocument();
     } finally {

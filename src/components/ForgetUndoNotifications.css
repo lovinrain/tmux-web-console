@@ -1,0 +1,95 @@
+.forget-undo-notifications {
+  position: fixed;
+  z-index: 95;
+  right: 20px;
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(440px, calc(100vw - 40px));
+  max-height: min(50dvh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: none;
+}
+
+.forget-undo-notification {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 7px;
+  background: var(--ink-raised);
+  color: var(--paper);
+  box-shadow: 0 6px 24px #0004;
+  font-size: 12px;
+  pointer-events: auto;
+}
+
+.forget-undo-notification-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.forget-undo-notification-message p {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.forget-undo-notification-message > p:first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.forget-undo-notification-message .forget-undo-notification-error {
+  margin-top: 4px;
+  color: var(--red);
+}
+
+.forget-undo-notification-countdown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.forget-undo-notification button {
+  flex-shrink: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  background: var(--ink-soft);
+  color: var(--amber);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.forget-undo-notification button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--amber) 12%, var(--ink-soft));
+}
+
+.forget-undo-notification button:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+}
+
+.forget-undo-notification button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (max-width: 640px) {
+  .forget-undo-notifications {
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    width: calc(100vw - 20px);
+  }
+
+  .forget-undo-notification button {
+    min-height: 44px;
+  }
+}

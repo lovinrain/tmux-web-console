@@ -782,13 +782,33 @@ server-generated creation, update, and last-active times in
 saved workspace refreshes its rough last-active time. Workspace names, tab
 membership, and workspace links are shared by every browser connected to the
 same Muxdeck instance, so a phone or another computer can resume the same group.
-Concurrent pages use last-write-wins semantics; the most recently accepted full
-tab/activity or workspace-link update becomes the saved state. Each tab snapshot
-also carries the server's workspace session revision. Native renames and global
-pin/unpin changes and session transfers advance that fence. If another device tries to save tabs
-captured before either change, the server rejects that stale snapshot and the
-page reloads the authoritative workspace instead of restoring an obsolete name
-or inherited pin.
+Open pages subscribe to a workspace event stream, so tab additions, closes,
+group changes, and other workspace updates propagate without a reload. Each
+page keeps its current selected session when that tab remains available. If it
+is removed, the page selects a surviving tab or returns to the landing page.
+Connecting or reconnecting receives the full current server record; when
+streaming is unavailable, pages fetch it every four seconds and on refocus.
+The same connection carries the global callback snapshot, so saved-workspace
+pages do not need an additional callback stream.
+
+Browser tab/activity saves include the last observed workspace `updatedAt`
+value as `expectedUpdatedAt`. A concurrent change causes `409` instead of
+letting an old full snapshot overwrite the workspace. The browser reconciles
+pending local tab/group edits with the new record before retrying, retaining
+independent additions and removals from both pages. Page-exit activity saves
+carry the same protection. Older API callers may omit `expectedUpdatedAt` for
+compatibility and therefore do not get that version check.
+During a mixed-version rollout, the browser omits the field only after an older
+backend explicitly returns `400` with `unknown field: expectedUpdatedAt`.
+That compatibility decision lasts until reload, including page-exit saves;
+`409` conflicts never trigger an unguarded retry. Reload after updating the
+backend to restore the version check.
+
+Each tab snapshot also carries the server's global workspace `sessionRevision`.
+Native renames, global pin/unpin changes, session transfers, and forgetting a
+recovery record advance that separate fence. Stale identities cause a reload
+of authoritative state rather than restoring obsolete names or membership.
+Quick-link and note replacements retain their own last-write-wins behavior.
 
 The stable `workspace=` query parameter identifies a saved workspace without
 putting its editable name in the route. Ordered `tab=` values remain in the URL
@@ -933,6 +953,12 @@ the workspace record or URL. `Ctrl+Shift+S` quickly hides or restores the sessio
 tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
+
+Closing or forgetting a tab leaves the sidebar at its current scroll position,
+including when removing the active tab selects a replacement. Live/unavailable
+session transitions retain the sidebar instead of remounting it. Deliberately
+selecting another tab still scrolls that tab into view, so keyboard navigation
+and explicit session switching remain easy to follow.
 
 In Side tabs, select a session and use the two separator buttons on the same row:
 `Insert separator` puts an amber line immediately before it (including the first tab), while
@@ -1213,14 +1239,32 @@ Those agent fields are identification references only: Muxdeck does not build,
 display, or execute an agent resume command from them.
 
 When a registered, recovery-enabled identity is absent from the live tmux
-inventory, the landing page lists it under `Missing after restart`. Recovery is
+inventory, the landing page lists it under `Missing after restart`. The same
+recovery controls appear when its saved workspace tab is opened. Recovery is
 always manual. `Recreate shell` asks tmux for a new detached shell with exactly
 the saved name and CWD, then opens that new session; it does not start the prior
 agent or replay any terminal input. An existing live name or unavailable CWD is
 reported as a conflict and nothing is renamed, replaced, or killed. `Forget`
-deletes only the selected registry record. Ending a live session through
-Muxdeck disables recovery for that exact identity, while a later independently
-created same-name identity becomes eligible after it is observed.
+deletes the selected registry record and removes that shell from every saved
+workspace's tabs, groups, pane layouts, separators, pins, and callback queues.
+The current browser also removes it from open tabs and its recent-session trail,
+then selects a neighboring tab or returns to the landing page. A floating
+notification offers `Undo` with a 30-second countdown. Undo restores the recovery
+record, workspace placement, groups, pane assignments, separators, pins, and
+callbacks while keeping unrelated subsequent edits. Each forgotten session has
+its own deadline, enforced by the server. Expiration or a Muxdeck restart makes
+Forget final; reloading the page dismisses that page's notifications. Historical
+session records, notes, and quick links remain archived. Ending a live session
+through Muxdeck disables recovery for that exact identity, while a later
+independently created same-name identity becomes eligible after it is observed.
+
+Dashboard cards for live and recoverable sessions also show their current saved
+workspace membership. One workspace name is shown directly; `+N` indicates
+additional memberships, with all names available in the tooltip and accessible
+label. An amber `No workspace` label highlights sessions in none. Membership is
+refreshed after dashboard actions, on focus, and every four seconds while the
+page is visible. An unavailable workspace list is shown as unknown rather than
+incorrectly marking sessions unassigned.
 
 Saved workspaces remain in the existing atomic JSON workspace store; they
 already survive Muxdeck and host restarts and retain unavailable native session
@@ -1356,7 +1400,8 @@ Entries not open as tabs in the current workspace are display-only for
 navigation, so selecting one cannot accidentally add it to the current
 workspace; the review check remains enabled from any workspace. Reviewing a
 session clears its explicit global marker and every workspace-owned marker in
-one operation. Open pages subscribe to the authenticated callback event stream,
+one operation. Open pages receive authenticated callback events through the
+saved-workspace stream or the separate callback stream when outside a saved workspace,
 so a review or add/remove action in another browser tab is reflected without
 waiting for a manual refresh. Explicit global entries are persisted in the shared workspace
 store, while workspace entries remain attached to their saved workspace. Both

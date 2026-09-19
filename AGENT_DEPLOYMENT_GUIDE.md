@@ -515,11 +515,26 @@ quick links, active session, and last-active time. A separate common quick-link 
 workspaces. Session-specific quick-link lists are keyed by native tmux name and
 follow the active session across temporary and saved workspaces. Common,
 workspace, and session notes use the same scopes and last-write-wins replacement;
-deleting a workspace also deletes only its workspace-scoped note. Concurrent
-pages use last-write-wins semantics for ordinary activity, quick-link, and note
-replacement. Each tab snapshot echoes the document-wide native session rename
-revision; native renames, global-pin changes, and atomic copy/move transfers
-advance that fence. Stale snapshots receive `409` and reload instead of
+deleting a workspace also deletes only its workspace-scoped note. Quick-link
+and note replacements retain those semantics. Saved-workspace pages subscribe
+to `/api/workspaces/{workspaceId}/stream` for complete initial/reconnect and
+changed snapshots, with a four-second polling fallback and refocus refresh.
+The proxy must allow unbuffered SSE for this route as well as the session and
+callback streams. Events contain `{ "workspace": <record or null>, "callbacks":
+<global callback snapshot> }`; deletion sets `workspace` to `null`. A loaded
+saved-workspace page uses this single stream for both workspace and callback
+updates, reducing HTTP/1.1 connection usage across open tabs.
+Each browser preserves its selected session when that tab still exists.
+
+Ordinary browser tab/activity writes include `expectedUpdatedAt` with the
+last observed workspace `updatedAt`. The store rejects a stale version with
+`409`, and the browser reconciles pending local tab/group edits with the current
+record before retrying. This includes page-exit activity saves, preventing stale
+snapshots from restoring tabs another page closed. Older API callers may omit
+the field for compatibility and retain their previous replacement behavior.
+Each tab snapshot also echoes the document-wide native session rename
+revision; native renames, global-pin changes, atomic copy/move transfers, and
+forgetting a recovery record advance that fence. Stale snapshots receive `409` and reload instead of
 restoring an obsolete session name or undoing an explicit session transfer.
 Copying to a workspace deduplicates existing membership. Moving writes the
 destination and saved source in one state-file replacement, and rejects a full
@@ -802,6 +817,14 @@ merely to test that the application itself has no login.
    the highlight and keyboard input focus move together, an outside edge does
    not wrap, `Escape` cancels, and the shortcut-window `G` action arms the same
    mode. Do not type validation input into a valuable session.
+   Open the same disposable saved workspace in two pages, close a tab in one,
+   and confirm both sidebars update without reloading. Independently select a
+   remaining tab in each page and confirm workspace updates keep those choices.
+   Make independent additions/removals in both pages, then reload in either
+   order and confirm the changes survive. In a long Side tabs list, close a
+   visible entry and confirm the viewport stays steady; explicitly selecting
+   another entry should still reveal it. Use only disposable workspace records
+   for these mutation checks.
 9. On desktop, open the `Callback` card, add the current and another workspace
    session, and confirm the list deduplicates entries, shows Working/Ready/
    Ended status, opens a live session from its row, and removes an item with the
@@ -1017,6 +1040,17 @@ Most redeployments do not need a restart at all. The frontend is served from dis
 `dist/` ships frontend changes immediately with no restart and no risk to tmux.
 Restart only when Python code or unit environment actually changed.
 
+Workspace streaming and `expectedUpdatedAt` checks keep workspace schema 13;
+they require no state migration. When deploying this change under an authorized
+update, include both the backend and rebuilt frontend. Reload existing browser
+pages so they use the version-aware client; a previously loaded older bundle
+can still send compatibility writes without `expectedUpdatedAt`.
+The new client also permits compatibility writes when an older backend returns
+the explicit `400` error `unknown field: expectedUpdatedAt`; it remembers that
+decision for the current page, including page-exit requests. It never strips
+the check on `409`. Reload after the backend upgrade to clear that compatibility
+decision and restore guarded writes.
+
 ## 14. Troubleshooting
 
 | Symptom | Likely cause | Safe checks/fix |
@@ -1028,6 +1062,7 @@ Restart only when Python code or unit environment actually changed.
 | 502 through Caddy | Service down, wrong port, or wrong loopback target | Check local health, unit environment, journal, and rendered proxy target. |
 | HTML loads but assets/API/WebSocket fail | Build/runtime/proxy base paths differ | Rebuild with `/prefix/`; use runtime `/prefix`; preserve prefix in Caddy. |
 | Dashboard stays `polling` | SSE is blocked/buffered or reconnecting | Curl the stream locally and externally; retain `flush_interval -1` in Caddy. |
+| Saved-workspace pages update only on refocus or after several seconds | Workspace SSE is unavailable, buffered, or an older browser bundle is loaded | Inspect `/api/workspaces/{workspaceId}/stream` in the browser network panel, preserve streaming proxy settings, and reload the page after the frontend/backend update. Four-second polling is the fallback. |
 | Console WebSocket returns 403 | External browser origin is absent from `MUXDECK_TRUSTED_ORIGINS`, or proxy rewrote `Host`/`Origin` | Configure the exact scheme and authority, preserve both headers, then retry without typing into a valuable pane. |
 | Console WebSocket otherwise fails | Proxy path/TLS/upgrade issue or wrong compiled base | Check browser network logs and proxy routing without typing into a live pane. |
 | Login page loops, a Basic prompt repeats, or the service fails during startup | Invalid `MUXDECK_AUTH_MODE`, missing/malformed `MUXDECK_AUTH_FILE`, wrong ownership/mode, wrong credentials, or a Secure server-mode cookie used over intentional direct HTTP | Inspect the selected mode without exposing credentials; keep the auth file outside source, owned by the run user and mode `0600`; use HTTPS, or set `MUXDECK_AUTH_COOKIE_SECURE=false` only for direct loopback HTTP development. Never fall back to an unprotected public route. |

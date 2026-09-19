@@ -18,6 +18,7 @@ import {
   type SavedWorkspace,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
+import { ThemeProvider } from "../theme";
 import type { Pane, QueuedMessage, Session } from "../types";
 import { activePane, classifyPane, SessionDashboard } from "./SessionDashboard";
 
@@ -114,7 +115,7 @@ beforeEach(() => {
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 1, tree: [] });
   vi.mocked(listWorkspaces).mockResolvedValue([]);
   vi.mocked(deleteWorkspace).mockResolvedValue();
-  vi.mocked(forgetRecoverableSession).mockResolvedValue();
+  vi.mocked(forgetRecoverableSession).mockResolvedValue(undefined);
   vi.mocked(recreateSession).mockResolvedValue({ name: "recreated", id: "$recreated" });
 });
 
@@ -124,6 +125,129 @@ afterEach(() => {
 });
 
 describe("session classification", () => {
+  it("shows saved workspace names and highlights sessions without a workspace", async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: "assigned", id: "$1" }),
+      session({ name: "unassigned", id: "$2" }),
+    ]);
+    vi.mocked(listWorkspaces).mockResolvedValue([
+      {
+        id: "release", name: "Release", tabs: ["assigned"], activeSession: "assigned",
+        sessionRevision: 0, createdAt: 1, updatedAt: 1, lastActiveAt: 1,
+      },
+      {
+        id: "review", name: "Review", tabs: ["assigned"], activeSession: "assigned",
+        sessionRevision: 0, createdAt: 2, updatedAt: 2, lastActiveAt: 2,
+      },
+    ]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    const assigned = await screen.findByRole("button", { name: "Open assigned" });
+    expect(await within(assigned).findByLabelText("Workspaces: Release, Review"))
+      .toHaveTextContent("Release +1");
+    const unassigned = screen.getByRole("button", { name: "Open unassigned" });
+    expect(within(unassigned).getByText("No workspace")).toBeVisible();
+    expect(within(unassigned).getByLabelText("No workspace")).toHaveClass("unassigned");
+
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(within(screen.getByRole("button", { name: "Open assigned" }))
+      .getByLabelText("Workspaces: Release, Review")).toBeVisible();
+  });
+
+  it("does not label sessions unassigned before workspace membership is known", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    let rejectWorkspaces!: (error: Error) => void;
+    vi.mocked(listWorkspaces).mockReturnValue(new Promise((_, reject) => {
+      rejectWorkspaces = reject;
+    }));
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+    const item = await screen.findByRole("button", { name: "Open test" });
+    expect(within(item).getByText("Workspace unknown")).toBeVisible();
+    expect(screen.queryByText("No workspace")).not.toBeInTheDocument();
+
+    await act(async () => rejectWorkspaces(new Error("offline")));
+    expect(within(item).getByText("Workspace unknown")).toBeVisible();
+    expect(screen.queryByText("No workspace")).not.toBeInTheDocument();
+  });
+
+  it("updates the badge immediately when its saved workspace is deleted", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(listWorkspaces).mockResolvedValue([{
+      id: "release", name: "Release", tabs: ["test"], activeSession: "test",
+      sessionRevision: 0, createdAt: 1, updatedAt: 1, lastActiveAt: 1,
+    }]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+    expect(await screen.findByLabelText("Workspace: Release")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Delete workspace Release" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete workspace" }));
+    expect(await screen.findByLabelText("No workspace")).toBeVisible();
+    expect(screen.queryByLabelText("Workspace: Release")).not.toBeInTheDocument();
+    expect(listWorkspaces).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes membership after workspace changes in another tab without losing list edits", async () => {
+    const workspace: SavedWorkspace = {
+      id: "release", name: "Release", tabs: ["test"], activeSession: "test",
+      sessionRevision: 0, createdAt: 1, updatedAt: 1, lastActiveAt: 1,
+    };
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(listWorkspaces).mockResolvedValue([workspace]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+    await screen.findByRole("button", { name: "Open test" });
+    expect(await screen.findByLabelText("Workspace: Release")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
+    fireEvent.change(screen.getByLabelText("Workspace name"), { target: { value: "Draft" } });
+
+    vi.mocked(listWorkspaces).mockResolvedValue([{ ...workspace, tabs: [], activeSession: null }]);
+    fireEvent(window, new Event("focus"));
+
+    await screen.findByText("No workspace");
+    expect(screen.getByLabelText("Workspace name")).toHaveValue("Draft");
+  });
+
+  it("shows workspace membership for missing sessions too", async () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(listWorkspaces).mockResolvedValue([{
+      id: "recovery", name: "Recovery room", tabs: ["missing"], activeSession: "missing",
+      sessionRevision: 0, createdAt: 1, updatedAt: 1, lastActiveAt: 1,
+    }]);
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+    await screen.findByRole("button", { name: "Resume workspace Recovery room" });
+    act(() => vi.mocked(subscribeToSessions).mock.calls[0][0].onSessions([], [{
+      id: "missing", name: "missing", directory: "/work", agentType: null,
+      agentSessionId: null, firstSeenAt: 1, lastSeenAt: 2, directoryAvailable: true,
+    }]));
+    const missing = screen.getByText("missing", { selector: ".recovery-card-heading strong" })
+      .closest("article")!;
+    expect(within(missing).getByLabelText("Workspace: Recovery room")).toBeVisible();
+  });
+
+  it("routes Forget through the shared undo handler and refreshes after restoration", async () => {
+    const recovery = {
+      id: "missing", name: "missing", directory: "/work", agentType: null,
+      agentSessionId: null, firstSeenAt: 1, lastSeenAt: 2, directoryAvailable: true,
+    };
+    vi.mocked(listSessions).mockResolvedValue(Object.assign([], { recoverableSessions: [recovery] }));
+    const onForgetSession = vi.fn().mockResolvedValue(undefined);
+    const onOpen = vi.fn();
+    const { rerender } = renderWithTheme(
+      <SessionDashboard onOpen={onOpen} onForgetSession={onForgetSession} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Forget recovery record for missing" }));
+    await waitFor(() => expect(screen.queryByRole("button", {
+      name: "Forget recovery record for missing",
+    })).not.toBeInTheDocument());
+    expect(onForgetSession).toHaveBeenCalledWith(recovery);
+    expect(forgetRecoverableSession).not.toHaveBeenCalled();
+
+    rerender(
+      <ThemeProvider>
+        <SessionDashboard onOpen={onOpen} onForgetSession={onForgetSession} recoveryRefreshKey={1} />
+      </ThemeProvider>,
+    );
+    expect(await screen.findByRole("button", { name: "Forget recovery record for missing" })).toBeVisible();
+  });
+
   it("recognizes Claude, Codex, Copilot, Cursor, and Grok panes", () => {
     expect(classifyPane(pane({ command: "claude" })).tone).toBe("claude");
     expect(classifyPane(pane({ command: "codex" })).tone).toBe("codex");
@@ -676,7 +800,7 @@ describe("session classification", () => {
       renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
       const background = await screen.findByRole("button", { name: "Open background" });
-      expect(background).toHaveAccessibleDescription("Background work");
+      expect(background).toHaveAccessibleDescription(/^Background work\b/);
       expect(screen.queryByRole("button", { name: "Open foreground" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: /Background work 1/ })).toHaveAttribute(
         "aria-pressed",
@@ -1320,12 +1444,18 @@ describe("session classification", () => {
 
   it("can forget only a recovery record and disables unavailable directories", async () => {
     let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
+    const onRecoveryForgotten = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([]);
     vi.mocked(subscribeToSessions).mockImplementation((options) => {
       streamOptions = options;
       return vi.fn();
     });
-    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+    renderWithTheme(
+      <SessionDashboard
+        onOpen={vi.fn()}
+        onRecoveryForgotten={onRecoveryForgotten}
+      />,
+    );
 
     await waitFor(() => expect(streamOptions).toBeDefined());
     act(() => streamOptions?.onSessions([], [{
@@ -1341,12 +1471,16 @@ describe("session classification", () => {
 
     expect(screen.getByRole("button", { name: "Recreate shell" })).toBeDisabled();
     expect(screen.getByText(/Restore it before recreating/i)).toBeVisible();
+    const workspaceLoadsBeforeForget = vi.mocked(listWorkspaces).mock.calls.length;
     fireEvent.click(screen.getByRole("button", {
       name: "Forget recovery record for old-shell",
     }));
 
     await waitFor(() => expect(forgetRecoverableSession)
       .toHaveBeenCalledWith("missing-directory"));
+    expect(onRecoveryForgotten).toHaveBeenCalledWith("old-shell");
+    await waitFor(() => expect(vi.mocked(listWorkspaces).mock.calls.length)
+      .toBeGreaterThan(workspaceLoadsBeforeForget));
     expect(screen.queryByRole("heading", { name: /Missing after restart/i }))
       .not.toBeInTheDocument();
   });
@@ -1689,6 +1823,7 @@ describe("session classification", () => {
     const signal = vi.mocked(listSessions).mock.calls[0][0];
     unmount();
     expect(signal?.aborted).toBe(true);
+    setIntervalSpy.mockClear();
 
     await act(async () => {
       resolveRequest([session()]);

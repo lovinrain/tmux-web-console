@@ -1,0 +1,77 @@
+.session-workspace-membership {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 23px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  color: #b7c1b3;
+  background: rgba(183, 193, 179, 0.06);
+  border: 1px solid rgba(183, 193, 179, 0.16);
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.session-workspace-membership > svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.session-workspace-membership > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-workspace-membership.unassigned {
+  color: #ffd08a;
+  background: rgba(255, 182, 72, 0.12);
+  border-color: rgba(255, 182, 72, 0.4);
+  font-weight: 600;
+}
+
+.session-workspace-membership.unknown {
+  color: #929a8f;
+  border-style: dashed;
+}
+
+.session-card .session-workspace-membership {
+  margin: 10px 0 34px;
+}
+
+.session-card.session-row .session-workspace-membership {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  margin: 8px 0 0;
+}
+
+.recovery-card .session-workspace-membership {
+  margin: 10px 0;
+}
+
+html[data-theme="light"] .session-workspace-membership {
+  color: #53604c;
+  background: #f2f4ee;
+  border-color: #cbd2c3;
+}
+
+html[data-theme="light"] .session-workspace-membership.unassigned {
+  color: #815000;
+  background: #fff1d9;
+  border-color: #d6b177;
+}
+
+@media (max-width: 735px) {
+  .session-card.session-row .session-workspace-membership {
+    grid-row: 5;
+  }
+}
+
+@media (max-width: 420px) {
+  .session-card.has-terminate:not(.session-row) .session-workspace-membership {
+    margin-bottom: 70px;
+  }
+}

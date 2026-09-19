@@ -1126,6 +1126,61 @@ describe("SessionWorkspaceNavigation", () => {
     expect(betaScrollIntoView).not.toHaveBeenCalled();
   });
 
+  it("keeps a long sidebar steady while removing tabs and refreshing workspace data", () => {
+    const tabs = ["alpha", "beta", ...Array.from({ length: 28 }, (_, index) => `ended-${index}`)];
+    const props = navigationProps({ openSessions: tabs, orientation: "vertical" });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const viewport = document.querySelector<HTMLElement>(".workspace-tab-viewport")!;
+    const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    viewport.scrollTop = 850;
+    mockElementBounds(viewport, { top: 100, height: 300 });
+    mockElementBounds(alpha, { top: -700, height: 42 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close ended-18 quick tab" }));
+    const remaining = tabs.filter((name) => name !== "ended-18");
+    view.rerender(<SessionWorkspaceNavigation {...props} openSessions={remaining} />);
+
+    expect(viewport.scrollTop).toBe(850);
+    expect(alpha).toHaveFocus();
+
+    // Polling and cross-tab synchronization can supply fresh array instances.
+    view.rerender(
+      <SessionWorkspaceNavigation {...props} openSessions={[...remaining]} groups={[]} />,
+    );
+    expect(viewport.scrollTop).toBe(850);
+  });
+
+  it("preserves the sidebar after forgetting the active tab, then reveals explicit selections", () => {
+    const props = navigationProps({
+      activeSession: "ended",
+      openSessions: ["alpha", "beta", "ended", "zulu"],
+      orientation: "vertical",
+    });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const viewport = document.querySelector<HTMLElement>(".workspace-tab-viewport")!;
+    const beta = screen.getByRole("tab", { name: "beta, Working" });
+    const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    viewport.scrollTop = 850;
+    mockElementBounds(viewport, { top: 100, height: 300 });
+    mockElementBounds(beta, { top: -500, height: 42 });
+    mockElementBounds(alpha, { top: -600, height: 42 });
+
+    // Forgetting can update the list before the route chooses a surviving tab.
+    const remaining = ["alpha", "beta", "zulu"];
+    view.rerender(<SessionWorkspaceNavigation {...props} openSessions={remaining} />);
+    view.rerender(
+      <SessionWorkspaceNavigation {...props} openSessions={remaining} activeSession="beta" />,
+    );
+    expect(viewport.scrollTop).toBe(850);
+
+    fireEvent.click(alpha);
+    expect(props.onSelect).toHaveBeenCalledWith("alpha");
+    view.rerender(
+      <SessionWorkspaceNavigation {...props} openSessions={remaining} activeSession="alpha" />,
+    );
+    expect(viewport.scrollTop).toBe(21);
+  });
+
   it("hides direct actions for every top or side tab while Overview keeps them", () => {
     const props = navigationProps({
       openSessions: ["alpha", "beta", "zulu"],

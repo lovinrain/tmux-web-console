@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from itertools import permutations
 
 import pytest
 
@@ -160,6 +161,216 @@ def test_workspace_pane_layouts_persist_rename_and_clear_closed_sessions(tmp_pat
         session_revision=renamed["sessionRevision"],
     )
     assert pruned["paneLayouts"][0]["root"]["second"]["first"]["session"] is None
+
+
+def test_forget_session_removes_navigation_references_from_every_workspace(tmp_path):
+    store = WorkspaceStore(
+        tmp_path / "workspaces.json",
+        clock=lambda: 20,
+        id_factory=sequence(["primary", "secondary"]),
+    )
+    store.create_workspace(
+        name="Primary",
+        tabs=["agent-a", "agent-b", "agent-c"],
+        groups=[workspace_group("agents", ["agent-a", "agent-b"])],
+        separators=["agent-b"],
+        separators_before=["agent-b"],
+        pane_layouts=[three_pane_layout()],
+        active_session="agent-b",
+        callback_sessions=["agent-b", "ended"],
+    )
+    store.create_workspace(
+        name="Secondary",
+        tabs=["agent-b", "review"],
+        active_session="review",
+    )
+    store.set_session_workspace_pinned("agent-b", True)
+    store.add_global_callback_sessions(sessions=["agent-b"], session_revision=1)
+
+    assert store.forget_session("agent-b") == 2
+
+    primary = store.get_workspace("primary")
+    assert primary["tabs"] == ["agent-a", "agent-c"]
+    assert primary["groups"][0]["tabs"] == ["agent-a"]
+    assert primary["separators"] == []
+    assert primary["separatorsBefore"] == []
+    assert primary["paneLayouts"][0]["root"]["second"]["first"]["session"] is None
+    assert primary["callbackSessions"] == ["ended"]
+    assert primary["activeSession"] == "agent-a"
+    assert primary["sessionRevision"] == 2
+    assert store.get_workspace("secondary")["tabs"] == ["review"]
+    assert store.list_pinned_sessions() == ()
+    assert store.get_global_callback_sessions()["callbackSessions"] == ["ended"]
+
+    with pytest.raises(WorkspaceSessionRevisionConflict, match="reload the workspace"):
+        store.record_activity(
+            "primary",
+            tabs=["agent-a", "agent-b", "agent-c"],
+            active_session="agent-b",
+            session_revision=1,
+        )
+
+
+def test_undo_forget_restores_all_navigation_metadata_and_fences_stale_writes(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, clock=lambda: 20, id_factory=sequence(["primary", "secondary"]))
+    store.create_workspace(
+        name="Primary", tabs=["agent-a", "agent-b", "agent-c"],
+        groups=[workspace_group("agents", ["agent-a", "agent-b"])],
+        separators=["agent-b"], separators_before=["agent-b"],
+        pane_layouts=[three_pane_layout()], active_session="agent-b",
+        callback_sessions=["agent-b", "ended"],
+    )
+    store.set_session_workspace_pinned("agent-b", True)
+    store.create_workspace(name="Secondary", tabs=["review"], active_session="review")
+    store.add_global_callback_sessions(sessions=["agent-b", "other"], session_revision=1)
+    before = {item["id"]: item for item in store.list_workspaces()}
+    snapshot = store.capture_forget_session("agent-b")
+    store.forget_session("agent-b")
+
+    restored = store.restore_forgotten_session(snapshot)
+
+    assert {item["id"] for item in restored} == {"primary", "secondary"}
+    for workspace in restored:
+        original = before[workspace["id"]]
+        assert workspace["updatedAt"] > original["updatedAt"]
+        assert workspace["sessionRevision"] == 3
+        assert {key: value for key, value in workspace.items() if key not in {"updatedAt", "sessionRevision"}} == {
+            key: value for key, value in original.items() if key not in {"updatedAt", "sessionRevision"}
+        }
+    assert store.list_pinned_sessions() == ("agent-b",)
+    assert store.get_global_callback_sessions()["globalCallbackSessions"] == ["agent-b", "other"]
+    assert WorkspaceStore(path).list_workspaces() == store.list_workspaces()
+    # The secondary workspace inherited this pin; unpin must remove it there,
+    # while retaining the explicit primary workspace membership.
+    with pytest.raises(WorkspaceSessionRevisionConflict):
+        store.record_activity("primary", tabs=["agent-a"], active_session="agent-a", session_revision=2)
+    store.set_session_workspace_pinned("agent-b", False)
+    assert store.get_workspace("secondary")["tabs"] == ["review"]
+    assert "agent-b" in store.get_workspace("primary")["tabs"]
+
+
+def test_undo_forget_preserves_subsequent_workspace_edits(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "primary")
+    store.create_workspace(
+        name="Primary", tabs=["agent-a", "agent-b", "agent-c"], active_session="agent-b",
+        groups=[workspace_group("agents", ["agent-a", "agent-b"])],
+        pane_layouts=[three_pane_layout()], separators=["agent-b"],
+        callback_sessions=["agent-b", "old-callback"],
+    )
+    snapshot = store.capture_forget_session("agent-b")
+    store.forget_session("agent-b")
+    layout = three_pane_layout()
+    layout["name"] = "Renamed layout"
+    layout["root"]["ratio"] = 0.7
+    layout["root"]["second"]["first"]["session"] = None
+    layout["root"]["second"]["second"]["session"] = "new-tab"
+    store.update_workspace(
+        "primary", name="Renamed", update_name=True,
+        tabs=["agent-c", "agent-a", "new-tab"], update_tabs=True,
+        active_session="agent-c", update_active_session=True,
+        groups=[workspace_group("agents", ["agent-a"], name="Changed", color="green", collapsed=True)],
+        update_groups=True, pane_layouts=[layout], update_pane_layouts=True,
+        callback_sessions=["new-callback"], update_callback_sessions=True,
+        separators=["agent-c"], update_separators=True, session_revision=1,
+    )
+
+    restored = store.restore_forgotten_session(snapshot)[0]
+
+    assert restored["name"] == "Renamed"
+    assert restored["tabs"] == ["agent-c", "agent-a", "agent-b", "new-tab"]
+    assert restored["activeSession"] == "agent-c"
+    assert restored["groups"] == [workspace_group("agents", ["agent-a", "agent-b"], name="Changed", color="green", collapsed=True)]
+    assert restored["separators"] == ["agent-c", "agent-b"]
+    assert restored["callbackSessions"] == ["agent-b", "new-callback"]
+    layout["root"]["second"]["first"]["session"] = "agent-b"
+    assert restored["paneLayouts"] == [layout]
+
+
+@pytest.mark.parametrize("forgotten", list(permutations(["a", "b", "c"])))
+@pytest.mark.parametrize("undo_order", list(permutations(["a", "b", "c"])))
+def test_multiple_undo_forgets_restore_tab_group_callback_order(tmp_path, forgotten, undo_order):
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "primary")
+    original = store.create_workspace(
+        name="Primary", tabs=["a", "b", "c"], active_session="a",
+        groups=[workspace_group("group", ["a", "b", "c"])],
+        callback_sessions=["a", "b", "c"],
+    )
+    store.add_global_callback_sessions(sessions=["a", "b", "c"], session_revision=0)
+    snapshots = {}
+    for session_name in forgotten:
+        snapshots[session_name] = store.capture_forget_session(
+            session_name, previous_snapshots=tuple(snapshots.values()),
+        )
+        store.forget_session(session_name)
+    for session_name in undo_order:
+        store.restore_forgotten_session(snapshots[session_name])
+
+    restored = store.get_workspace("primary")
+    assert restored["tabs"] == original["tabs"]
+    assert restored["groups"] == original["groups"]
+    assert restored["callbackSessions"] == original["callbackSessions"]
+    assert restored["activeSession"] == "a"
+    assert store.get_global_callback_sessions()["globalCallbackSessions"] == ["a", "b", "c"]
+    assert WorkspaceStore(store.path).get_workspace("primary") == restored
+
+
+def test_undo_forget_preserves_deleted_workspaces_groups_and_changed_panes(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=sequence(["primary", "deleted"]))
+    store.create_workspace(
+        name="Primary", tabs=["agent-a", "agent-b", "agent-c"], active_session="agent-b",
+        groups=[workspace_group("agents", ["agent-a", "agent-b"])],
+        pane_layouts=[three_pane_layout()],
+    )
+    store.create_workspace(name="Delete me", tabs=["agent-b"], active_session="agent-b")
+    snapshot = store.capture_forget_session("agent-b")
+    store.forget_session("agent-b")
+    store.delete_workspace("deleted")
+    layout = three_pane_layout()
+    layout["root"]["second"]["first"]["session"] = "agent-c"
+    store.update_workspace(
+        "primary", groups=[], update_groups=True,
+        pane_layouts=[layout], update_pane_layouts=True, session_revision=1,
+    )
+
+    restored = store.restore_forgotten_session(snapshot)
+
+    assert len(restored) == 1
+    assert restored[0]["groups"] == []
+    assert restored[0]["paneLayouts"] == [layout]
+    with pytest.raises(WorkspaceNotFoundError):
+        store.get_workspace("deleted")
+
+
+def test_undo_forget_restores_global_pin_to_new_workspace(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "new")
+    store.set_session_workspace_pinned("pinned", True)
+    snapshot = store.capture_forget_session("pinned")
+    store.forget_session("pinned")
+    store.create_workspace(name="New", tabs=["own"], active_session="own")
+
+    assert store.restore_forgotten_session(snapshot)[0]["tabs"] == ["own", "pinned"]
+    store.set_session_workspace_pinned("pinned", False)
+    assert store.get_workspace("new")["tabs"] == ["own"]
+
+
+def test_undo_forget_capacity_failure_does_not_partially_restore_metadata(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "primary")
+    store.create_workspace(name="Primary", tabs=["forgotten"], active_session="forgotten")
+    store.add_global_callback_sessions(sessions=["forgotten"], session_revision=0)
+    snapshot = store.capture_forget_session("forgotten")
+    store.forget_session("forgotten")
+    store.record_activity(
+        "primary", tabs=[f"new-{index}" for index in range(MAX_WORKSPACE_TABS)],
+        active_session="new-0", session_revision=1,
+    )
+    before = store.get_workspace("primary")
+
+    with pytest.raises(WorkspacePinCapacityError, match="no free tabs"):
+        store.restore_forgotten_session(snapshot)
+
+    assert store.get_workspace("primary") == before
+    assert store.get_global_callback_sessions()["globalCallbackSessions"] == []
 
 
 @pytest.mark.parametrize(

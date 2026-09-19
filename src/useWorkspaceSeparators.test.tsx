@@ -19,7 +19,7 @@ it("saves both anchor arrays atomically with a rename revision fence", async () 
   vi.mocked(updateWorkspace).mockResolvedValue({ ...snapshot, separators: ["b"], updatedAt: 2 });
   const { result } = renderHook(() => useWorkspaceSeparators("w", ["a", "b"], snapshot));
   await act(() => result.current.cross(crossing));
-  expect(updateWorkspace).toHaveBeenCalledWith("w", { separators: ["b"], separatorsBefore: [], sessionRevision: 7 });
+  expect(updateWorkspace).toHaveBeenCalledWith("w", { separators: ["b"], separatorsBefore: [], sessionRevision: 7, expectedUpdatedAt: 1 });
   await waitFor(() => expect(result.current.anchors).toEqual(["b"]));
 });
 it("preserves separators and shows an error when tab order is not synced", async () => {

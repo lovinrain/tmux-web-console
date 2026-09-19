@@ -8,8 +8,10 @@ import json
 import logging
 import math
 import os
+import secrets
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, quote, urlsplit
@@ -73,8 +75,8 @@ from .file_browser import (
     resolve_file_download,
     resolve_file_html_preview,
     resolve_file_image_preview,
-    resolve_file_svg_preview,
     resolve_file_pdf_preview,
+    resolve_file_svg_preview,
     search_files,
     upload_file,
     write_text_file,
@@ -95,6 +97,7 @@ from .messages import (
 from .metadata import SessionTitleStore, normalize_tags, normalize_title
 from .pty_bridge import PtyBridge, clamp_size
 from .session_registry import (
+    RecoveryRecord,
     RecoveryRecordNotFoundError,
     SessionRegistry,
     SessionRegistryUnavailable,
@@ -129,6 +132,7 @@ from .uploads import (
     AttachmentStore,
 )
 from .workspaces import (
+    WorkspaceForgetSnapshot,
     WorkspaceNotFoundError,
     WorkspacePinCapacityError,
     WorkspaceResourceConflictError,
@@ -137,6 +141,7 @@ from .workspaces import (
     WorkspaceStore,
     WorkspaceStoreUnavailable,
     WorkspaceTransferConflictError,
+    WorkspaceUpdateConflict,
     normalize_scoped_note,
     validate_scoped_note_notebook,
     validate_workspace_quick_links,
@@ -147,6 +152,7 @@ LOGGER = logging.getLogger("muxdeck")
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 MAX_INPUT_BYTES = 1024 * 1024
+FORGET_UNDO_SECONDS = 30.0
 TMUX_KEY = web.AppKey("tmux", TmuxClient)
 SNAPSHOTS_KEY = web.AppKey("snapshots", SnapshotStore)
 TITLES_KEY = web.AppKey("titles", SessionTitleStore)
@@ -177,6 +183,7 @@ AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 CALLBACK_STREAM_HEARTBEAT_SECONDS = 15.0
+WORKSPACE_STREAM_HEARTBEAT_SECONDS = 15.0
 SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 DEFAULT_ORIGIN_PORTS = {"http": 80, "https": 443}
 AUTH_COOKIE_NAME = "muxdeck_device"
@@ -185,6 +192,14 @@ FILE_ARCHIVE_STREAM_CHUNK_BYTES = 512 * 1024
 BASIC_AUTH_CHALLENGE = 'Basic realm="Muxdeck", charset="UTF-8"'
 NormalizedOrigin = tuple[str, str, int | None]
 NormalizedHost = tuple[str, int | None]
+
+
+@dataclass(frozen=True)
+class ForgottenSession:
+    record: RecoveryRecord
+    workspace_snapshot: WorkspaceForgetSnapshot
+    expires_at: int
+    deadline: float
 
 
 def _file_content_disposition(
@@ -484,6 +499,62 @@ class CallbackStreamBroker:
 
 CALLBACK_STREAM_BROKER_KEY = web.AppKey(
     "callback_stream_broker", CallbackStreamBroker
+)
+
+
+class WorkspaceStreamBroker:
+    """Share workspace and callback snapshots on one bounded browser stream."""
+
+    def __init__(self) -> None:
+        self._channels: dict[str, CallbackStreamBroker] = {}
+        self._closed = False
+
+    @property
+    def subscriber_count(self) -> int:
+        return sum(channel.subscriber_count for channel in self._channels.values())
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def subscribe(
+        self,
+        workspace_id: str,
+        workspace: dict[str, Any] | None,
+        callbacks: dict[str, Any],
+    ) -> CallbackStreamQueue:
+        if self._closed:
+            raise RuntimeError("workspace stream broker is closed")
+        channel = self._channels.setdefault(workspace_id, CallbackStreamBroker())
+        channel.publish({"workspace": workspace, "callbacks": callbacks})
+        return await channel.subscribe()
+
+    def publish(
+        self, workspaces: list[dict[str, Any]], callbacks: dict[str, Any]
+    ) -> None:
+        by_id = {workspace["id"]: workspace for workspace in workspaces}
+        for workspace_id, channel in self._channels.items():
+            channel.publish({
+                "workspace": by_id.get(workspace_id), "callbacks": callbacks
+            })
+
+    async def unsubscribe(self, workspace_id: str, queue: CallbackStreamQueue) -> None:
+        channel = self._channels.get(workspace_id)
+        if channel is not None:
+            await channel.unsubscribe(queue)
+            if channel.subscriber_count == 0:
+                self._channels.pop(workspace_id, None)
+
+    async def close(self) -> None:
+        self._closed = True
+        channels = tuple(self._channels.values())
+        self._channels.clear()
+        for channel in channels:
+            await channel.close()
+
+
+WORKSPACE_STREAM_BROKER_KEY = web.AppKey(
+    "workspace_stream_broker", WorkspaceStreamBroker
 )
 
 
@@ -954,6 +1025,15 @@ def create_app(
     app[SESSION_REGISTRY_KEY] = session_registry or SessionRegistry()
     app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
+    forgotten_sessions: dict[str, ForgottenSession] = {}
+    forgotten_session_timers: dict[str, asyncio.TimerHandle] = {}
+
+    def discard_forgotten_session(token: str) -> None:
+        forgotten_sessions.pop(token, None)
+        timer = forgotten_session_timers.pop(token, None)
+        if timer is not None:
+            timer.cancel()
+
     app[SESSION_SNAPSHOTS_KEY] = SessionSnapshotBuilder(
         app[TMUX_KEY],
         app[TITLES_KEY],
@@ -964,10 +1044,38 @@ def create_app(
         registry=app[SESSION_REGISTRY_KEY],
         agent_references=app[AGENT_REFERENCES_KEY],
     )
+    app[WORKSPACE_STREAM_BROKER_KEY] = WorkspaceStreamBroker()
+
+    @web.middleware
+    async def workspace_stream_middleware(
+        request: web.Request, handler: Any
+    ) -> web.StreamResponse:
+        try:
+            return await handler(request)
+        finally:
+            broker = app[WORKSPACE_STREAM_BROKER_KEY]
+            if request.method not in SAFE_HTTP_METHODS and broker.subscriber_count:
+                try:
+                    # Other routes also change saved workspaces (forget, pin,
+                    # rename, transfer). Compare canonical snapshots even on
+                    # errors: a multi-store operation can commit the workspace
+                    # and then fail. Unchanged failed writes emit nothing.
+                    broker.publish(
+                        app[WORKSPACES_KEY].list_workspaces(),
+                        app[WORKSPACES_KEY].get_global_callback_sessions(),
+                    )
+                except WorkspaceStoreUnavailable:
+                    LOGGER.exception("Unable to publish the workspace stream snapshot")
+
+    app.middlewares.append(workspace_stream_middleware)
+
     @web.middleware
     async def history_workspace_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
         workspace_write = request.method not in SAFE_HTTP_METHODS and any(
-            part in request.path for part in ("/api/workspaces", "/api/session-workspace", "/api/session-name")
+            part in request.path for part in (
+                "/api/workspaces", "/api/session-workspace", "/api/session-name",
+                "/api/recoverable-sessions",
+            )
         )
         callback_write = request.method not in SAFE_HTTP_METHODS and (
             workspace_write or "/api/callback-sessions" in request.path
@@ -981,8 +1089,9 @@ def create_app(
                 )
             except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
                 return json_error(str(error), 503)
-        response = await handler(request)
-        if response.status < 400:
+        try:
+            return await handler(request)
+        finally:
             if workspace_write:
                 try:
                     app[SESSION_REGISTRY_KEY].sync_history_workspaces(
@@ -997,10 +1106,8 @@ def create_app(
                     app[WORKSPACES_KEY].get_global_callback_sessions()
                 )
             except WorkspaceStoreUnavailable:
-                # The write response is already committed; a transient stream
-                # refresh failure must not turn it into a client error.
+                # Publishing must not replace the mutation's response/error.
                 LOGGER.exception("Unable to publish the callback stream snapshot")
-        return response
 
     app.middlewares.append(history_workspace_middleware)
     app[SESSION_STREAM_BROKER_KEY] = SessionStreamBroker(
@@ -1028,11 +1135,17 @@ def create_app(
     async def close_callback_stream_broker(application: web.Application) -> None:
         await application[CALLBACK_STREAM_BROKER_KEY].close()
 
+    async def close_workspace_stream_broker(application: web.Application) -> None:
+        await application[WORKSPACE_STREAM_BROKER_KEY].close()
+
     async def close_session_registry(application: web.Application) -> None:
+        for token in tuple(forgotten_sessions):
+            discard_forgotten_session(token)
         application[SESSION_REGISTRY_KEY].close()
 
     app.on_cleanup.append(close_session_stream_broker)
     app.on_cleanup.append(close_callback_stream_broker)
+    app.on_cleanup.append(close_workspace_stream_broker)
     app.on_cleanup.append(close_session_registry)
     app.on_response_prepare.append(add_browser_security_headers)
 
@@ -1742,24 +1855,96 @@ def create_app(
     async def forget_recoverable_session(request: web.Request) -> web.Response:
         registry_id = request.match_info["recovery_id"]
         try:
-            record = app[SESSION_REGISTRY_KEY].get_recoverable(registry_id)
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                record = app[SESSION_REGISTRY_KEY].get_recoverable(registry_id)
+                live_sessions = await app[TMUX_KEY].list_sessions()
+                if any(session.name == record.name for session in live_sessions):
+                    return json_error("a live tmux session cannot be forgotten", 409)
+                loop = asyncio.get_running_loop()
+                snapshot = app[WORKSPACES_KEY].capture_forget_session(
+                    record.name,
+                    previous_snapshots=tuple(
+                        pending.workspace_snapshot
+                        for pending in forgotten_sessions.values()
+                        if pending.deadline > loop.time()
+                    ),
+                )
+                if not app[SESSION_REGISTRY_KEY].forget(registry_id):
+                    return json_error("recoverable session not found", 404)
+                try:
+                    app[WORKSPACES_KEY].forget_session(record.name)
+                except OSError:
+                    # Both writes are synchronous while holding the identity
+                    # lock. Restore the recovery row if workspace removal fails.
+                    app[SESSION_REGISTRY_KEY].restore_forgotten(record)
+                    raise
+                expires_at = int(time.time() * 1000 + FORGET_UNDO_SECONDS * 1000)
+                token = f"{expires_at}.{secrets.token_urlsafe(32)}"
+                forgotten_sessions[token] = ForgottenSession(
+                    record, snapshot, expires_at, loop.time() + FORGET_UNDO_SECONDS
+                )
+                forgotten_session_timers[token] = loop.call_later(
+                    FORGET_UNDO_SECONDS, discard_forgotten_session, token
+                )
         except RecoveryRecordNotFoundError:
             return json_error("recoverable session not found", 404)
-        except SessionRegistryUnavailable as error:
+        except (TmuxError, OSError) as error:
             return json_error(str(error), 503)
+        return web.json_response({"undoToken": token, "expiresAt": expires_at})
+
+    async def undo_forget_recoverable_session(request: web.Request) -> web.Response:
+        registry_id = request.match_info["recovery_id"]
         try:
-            live_sessions = await app[TMUX_KEY].list_sessions()
-        except TmuxError as error:
-            return json_error(str(error), 503)
-        if any(session.name == record.name for session in live_sessions):
-            return json_error("a live tmux session cannot be forgotten", 409)
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        unknown_fields = sorted(set(payload) - {"undoToken"})
+        if unknown_fields:
+            return json_error(f"unknown field: {unknown_fields[0]}", 400)
+        token = payload.get("undoToken")
+        if not isinstance(token, str) or not token or len(token) > 128:
+            return json_error("undoToken must be a non-empty string", 400)
         try:
-            forgotten = app[SESSION_REGISTRY_KEY].forget(registry_id)
-        except SessionRegistryUnavailable as error:
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                pending = forgotten_sessions.get(token)
+                if pending is None:
+                    # Expiry is encoded only to report a useful error after the
+                    # timer has discarded all recoverable metadata. Possession
+                    # of a token without its server entry never permits undo.
+                    expiry = token.partition(".")[0]
+                    if expiry.isdigit() and int(expiry) <= int(time.time() * 1000):
+                        return json_error("the 30-second undo period has expired", 410)
+                    return json_error("forget undo token not found", 404)
+                if pending.record.id != registry_id:
+                    return json_error("forget undo token not found", 404)
+                loop = asyncio.get_running_loop()
+                if loop.time() >= pending.deadline:
+                    discard_forgotten_session(token)
+                    return json_error("the 30-second undo period has expired", 410)
+                live_sessions = await app[TMUX_KEY].list_sessions()
+                if loop.time() >= pending.deadline:
+                    discard_forgotten_session(token)
+                    return json_error("the 30-second undo period has expired", 410)
+                if any(session.name == pending.record.name for session in live_sessions):
+                    return json_error("a live tmux session already uses this name", 409)
+                app[SESSION_REGISTRY_KEY].restore_forgotten(pending.record)
+                try:
+                    restored = app[WORKSPACES_KEY].restore_forgotten_session(
+                        pending.workspace_snapshot
+                    )
+                except (OSError, ValueError, TypeError):
+                    app[SESSION_REGISTRY_KEY].forget(pending.record.id)
+                    raise
+                discard_forgotten_session(token)
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 409)
+        except (TmuxError, OSError) as error:
             return json_error(str(error), 503)
-        if not forgotten:
-            return json_error("recoverable session not found", 404)
-        return web.Response(status=204)
+        return web.json_response({
+            "recovery": pending.record.to_dict(), "workspaces": restored,
+        })
 
     async def upload_session_attachment(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -4668,6 +4853,76 @@ def create_app(
             )
         return web.json_response(result)
 
+    async def workspace_stream(request: web.Request) -> web.StreamResponse:
+        workspace_id = request.match_info["workspace_id"]
+        try:
+            workspace = app[WORKSPACES_KEY].get_workspace(workspace_id)
+        except WorkspaceNotFoundError:
+            workspace = None
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        except ValueError as error:
+            return json_error(str(error), 400)
+
+        try:
+            callbacks = app[WORKSPACES_KEY].get_global_callback_sessions()
+        except WorkspaceStoreUnavailable as error:
+            return json_error(str(error), 503)
+        broker = app[WORKSPACE_STREAM_BROKER_KEY]
+        # No I/O occurs between reading the snapshot and subscribing, so a
+        # concurrent API write cannot disappear in a connect/subscribe gap.
+        queue = await broker.subscribe(workspace_id, workspace, callbacks)
+        response = web.StreamResponse(
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "Content-Type": "text/event-stream; charset=utf-8",
+                "X-Accel-Buffering": "no",
+            }
+        )
+        loop = asyncio.get_running_loop()
+        try:
+            await response.prepare(request)
+            next_heartbeat = loop.time() + WORKSPACE_STREAM_HEARTBEAT_SECONDS
+            while True:
+                transport = request.transport
+                if transport is None or transport.is_closing():
+                    break
+                try:
+                    serialized = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=max(0.001, next_heartbeat - loop.time()),
+                    )
+                except TimeoutError:
+                    serialized = ""
+                if serialized is None:
+                    break
+                # A device may be revoked while this stream waits for a write.
+                # Revalidate after the wait, before sending the next snapshot.
+                if not await request_auth_still_valid(request):
+                    with contextlib.suppress(ConnectionError, RuntimeError):
+                        await response.write(
+                            b'event: auth\ndata: {"authenticated":false}\n\n'
+                        )
+                    break
+                if serialized:
+                    await response.write(
+                        f"event: workspace\ndata: {serialized}\n\n".encode()
+                    )
+                now = loop.time()
+                if now >= next_heartbeat:
+                    await response.write(b": heartbeat\n\n")
+                    next_heartbeat = now + WORKSPACE_STREAM_HEARTBEAT_SECONDS
+        except asyncio.CancelledError:
+            raise
+        except ConnectionError:
+            LOGGER.debug("Workspace stream client disconnected")
+        finally:
+            await broker.unsubscribe(workspace_id, queue)
+            with contextlib.suppress(ConnectionError, RuntimeError):
+                await response.write_eof()
+        return response
+
     async def get_workspace(request: web.Request) -> web.Response:
         try:
             workspace = app[WORKSPACES_KEY].get_workspace(
@@ -4790,6 +5045,7 @@ def create_app(
             "callbackSessions",
             "activeSession",
             "sessionRevision",
+            "expectedUpdatedAt",
         }
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
@@ -4845,12 +5101,16 @@ def create_app(
                 update_callback_sessions="callbackSessions" in payload,
                 update_active_session="activeSession" in payload,
                 session_revision=payload.get("sessionRevision"),
+                **(
+                    {"expected_updated_at": payload["expectedUpdatedAt"]}
+                    if "expectedUpdatedAt" in payload else {}
+                ),
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
         except WorkspaceNotFoundError as error:
             return json_error(str(error), 404)
-        except WorkspaceSessionRevisionConflict as error:
+        except (WorkspaceSessionRevisionConflict, WorkspaceUpdateConflict) as error:
             return json_error(str(error), 409)
         except (TypeError, ValueError) as error:
             return json_error(str(error), 400)
@@ -4874,7 +5134,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"groups"}
+        allowed = required | {"groups", "expectedUpdatedAt"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -4887,12 +5147,16 @@ def create_app(
                 session_revision=payload["sessionRevision"],
                 groups=payload.get("groups"),
                 update_groups="groups" in payload,
+                **(
+                    {"expected_updated_at": payload["expectedUpdatedAt"]}
+                    if "expectedUpdatedAt" in payload else {}
+                ),
             )
         except WorkspaceStoreUnavailable as error:
             return json_error(str(error), 503)
         except WorkspaceNotFoundError as error:
             return json_error(str(error), 404)
-        except WorkspaceSessionRevisionConflict as error:
+        except (WorkspaceSessionRevisionConflict, WorkspaceUpdateConflict) as error:
             return json_error(str(error), 409)
         except (TypeError, ValueError) as error:
             return json_error(str(error), 400)
@@ -5163,6 +5427,10 @@ def create_app(
         f"{prefix}/api/recoverable-sessions/{{recovery_id:[^/]+}}",
         forget_recoverable_session,
     )
+    app.router.add_post(
+        f"{prefix}/api/recoverable-sessions/{{recovery_id:[^/]+}}/undo-forget",
+        undo_forget_recoverable_session,
+    )
     app.router.add_post(f"{prefix}/api/sessions/{session_segment}/copy", copy_session)
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/attachments",
@@ -5402,6 +5670,7 @@ def create_app(
         f"{prefix}/api/workspaces/{{workspace_id}}/note",
         replace_workspace_note,
     )
+    app.router.add_get(f"{prefix}/api/workspaces/{{workspace_id}}/stream", workspace_stream)
     app.router.add_get(f"{prefix}/api/workspaces/{{workspace_id}}", get_workspace)
     app.router.add_patch(f"{prefix}/api/workspaces/{{workspace_id}}", update_workspace)
     app.router.add_post(

@@ -119,9 +119,31 @@ blindly retry a destructive request with old identity values.
 Every workspace response includes `sessionRevision`. Supply that exact integer
 for any mutation containing session-name references: tabs, groups, separators,
 pane layouts, callback sessions, or the active session. The revision is a
-global rename/transfer fence, not a per-workspace version. A `409` means a
-native session was renamed, globally pinned, or transferred since the client
-read state. Reload the workspace, resolve names, and retry.
+global rename/transfer fence, not a per-workspace version. A revision mismatch
+returns `409` when session identity or membership changed through a rename,
+global-pin change, transfer, or recovery-record removal. Reload the workspace,
+resolve names, and retry.
+
+### Workspace update version
+
+For `PATCH /api/workspaces/{workspaceId}` and
+`POST /api/workspaces/{workspaceId}/activity`, also send `expectedUpdatedAt`
+with the exact `updatedAt` value from the workspace snapshot being edited.
+The server checks it under the workspace lock and returns `409` without
+writing if the workspace has changed. This protects ordinary concurrent
+tab/activity edits in addition to the global `sessionRevision` fence. Reload
+and reconcile the intended change with the current snapshot before retrying;
+do not simply replace the version token on an obsolete full tab list.
+
+`expectedUpdatedAt` is optional for older API callers. Omitting it retains
+the previous replacement behavior without this workspace-version protection.
+The current web client sends it for autosaves and page-exit activity requests.
+For an older backend, only the explicit `400` error
+`unknown field: expectedUpdatedAt` enables a compatibility retry without the
+field. The browser remembers that lack of support for the current page and
+also omits the field from subsequent page-exit requests. A `409` never removes
+the version check. Reload the page after upgrading the backend to restore
+version-aware writes.
 
 The granular collection routes described below mutate state atomically under
 the workspace lock. This avoids the read-modify-replace race of editing a whole
@@ -176,9 +198,10 @@ navigation/history record survives process exit.
 | `GET /api/workspaces` | None | `{workspaces:[...]}`, most recently active first. |
 | `POST /api/workspaces` | `name`, `tabs`, `activeSession`; optional `groups`, `separators`, `separatorsBefore`, `paneLayouts`, `callbackSessions` | Creates a workspace and returns `{workspace}` with `201`. |
 | `GET /api/workspaces/{workspaceId}` | None | `{workspace}`. |
-| `PATCH /api/workspaces/{workspaceId}` | One or more workspace fields; `sessionRevision` when any session-bearing field is present | Replaces the supplied fields and returns `{workspace}`. |
+| `GET /api/workspaces/{workspaceId}/stream` | None | SSE `workspace` events containing `{workspace,callbacks}`; `workspace` is `null` when deleted or absent. |
+| `PATCH /api/workspaces/{workspaceId}` | One or more workspace fields; `sessionRevision` when any session-bearing field is present; optional `expectedUpdatedAt` | Replaces the supplied fields and returns `{workspace}`; rejects a stale version with `409`. |
 | `DELETE /api/workspaces/{workspaceId}` | None | Deletes saved navigation state and its workspace note; does not terminate tmux sessions. |
-| `POST /api/workspaces/{workspaceId}/activity` | `tabs`, `activeSession`, `sessionRevision`; optional `groups` | Saves tab activity and advances `lastActiveAt`. |
+| `POST /api/workspaces/{workspaceId}/activity` | `tabs`, `activeSession`, `sessionRevision`; optional `groups`, `expectedUpdatedAt` | Saves tab activity and advances `lastActiveAt`; rejects a stale version with `409`. |
 
 Create a workspace:
 
@@ -194,6 +217,28 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
 Renaming with only `name` does not need `sessionRevision`. Whole-array updates
 are useful for import/export; prefer granular routes for interactive or
 concurrent automation.
+
+### Workspace event stream
+
+`GET /api/workspaces/{workspaceId}/stream` sends a complete current workspace
+on connection and reconnection, followed by changed snapshots in `workspace`
+events. Each event's JSON body is
+`{ "workspace": <workspace object or null>, "callbacks": <global callback snapshot> }`.
+`callbacks` has the same snapshot shape as `GET /api/callback-sessions`.
+Deletion or an absent workspace sets `workspace` to `null`. Clients
+can reconnect without replaying an event log because the initial snapshot is
+authoritative. Heartbeat comments keep intermediaries alive; an `auth` event
+with `{ "authenticated": false }` precedes closure when remembered-device
+authentication expires or is revoked. The route uses the same authentication
+and origin checks as the other APIs.
+
+The web client applies these snapshots while retaining its current session
+selection if that session is still a workspace tab. Pending local tab/group
+edits are reconciled against the new state so independent additions and closes
+survive. If streaming is unavailable, it fetches the workspace every four
+seconds and when the page regains focus. A loaded saved-workspace page receives
+callback updates on this same connection instead of opening a second callback
+stream, avoiding unnecessary HTTP/1.1 connection slots across open tabs.
 
 ### Workspace sessions
 
@@ -436,7 +481,15 @@ These routes require a live session and return the saved value:
 | `POST /api/session-history/close-tab` | `session`, `sessionId` | Records that a live session tab was closed without ending tmux. |
 | `POST /api/session-history/{historyId}/restore` | `create` boolean | Finds the original live identity or explicitly recreates a shell from saved name/PWD. |
 | `POST /api/recoverable-sessions/{recoveryId}/recreate` | Optional `theme` | Recreates a saved recoverable shell. |
-| `DELETE /api/recoverable-sessions/{recoveryId}` | None | Forgets an ended recovery record; refuses a live session. |
+| `DELETE /api/recoverable-sessions/{recoveryId}` | None | Immediately forgets an ended recovery record and removes its saved-workspace references; returns `{undoToken, expiresAt}` with a 30-second undo deadline in Unix milliseconds. Refuses a live session. |
+| `POST /api/recoverable-sessions/{recoveryId}/undo-forget` | `undoToken` | Restores the forgotten record and its saved-workspace references, preserving later edits; returns `{recovery, workspaces}` with canonical workspace snapshots. |
+
+Undo tokens are single-use and the server enforces the deadline. An expired
+token returns `410`; an unknown, used, or mismatched token returns `404`.
+A live or reused session name returns `409`. Pending undo snapshots are held
+in memory, so restarting Muxdeck finalizes outstanding forgets. Undo never
+creates a tmux session. The updated browser also accepts an older server's
+`204` DELETE response, but cannot offer Undo for that response.
 
 Recovery stores reference metadata (including detected agent type/session ID
 when available), but recreation starts a shell. It does not resume an agent's
@@ -592,7 +645,9 @@ Do not hard-code these where discovery is possible. Read
 
 1. Discover `/api/capabilities` and fetch the current resource before writing.
 2. Carry tmux identity fields into destructive or pane-scoped operations.
-3. Carry `sessionRevision` into every workspace session-bearing mutation.
+3. Carry `sessionRevision` into every workspace session-bearing mutation, and
+   send the last observed `updatedAt` as `expectedUpdatedAt` for workspace
+   `PATCH` and activity requests.
 4. Treat `409` as a request to reload and reconcile, not as permission to
    force an old snapshot over new state.
 5. Prefer granular workspace endpoints for adds/removes; use whole-array

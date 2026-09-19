@@ -22,7 +22,7 @@ it("uses hydrated workspace data and merges changes with the latest saved separa
   vi.mocked(getWorkspace).mockResolvedValue({ ...workspace, separators: ["a", "b"] });
   vi.mocked(updateWorkspace).mockResolvedValue({ ...workspace, separators: ["b"], updatedAt: 3 });
   await act(() => result.current.change("a", false));
-  expect(updateWorkspace).toHaveBeenCalledWith("one", { separators: ["b"], sessionRevision: 1 });
+  expect(updateWorkspace).toHaveBeenCalledWith("one", { separators: ["b"], sessionRevision: 1, expectedUpdatedAt: 2 });
   expect(result.current.anchors).toEqual(["b"]);
   rerender({ snapshot: { ...workspace, updatedAt: 4, separators: [] } });
   expect(result.current.anchors).toEqual([]);
@@ -62,7 +62,7 @@ it("persists before-session placement without rewriting after-session lines", as
   });
   await act(() => result.current.change("a", true, "before"));
   expect(updateWorkspace).toHaveBeenCalledWith("one", {
-    separatorsBefore: ["a"], sessionRevision: 1,
+    separatorsBefore: ["a"], sessionRevision: 1, expectedUpdatedAt: 2,
   });
   expect(result.current.beforeAnchors).toEqual(["a"]);
   expect(result.current.anchors).toEqual(["a"]);

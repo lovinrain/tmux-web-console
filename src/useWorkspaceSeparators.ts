@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getWorkspace, updateWorkspace } from "./api";
 import type { SeparatorCrossing } from "./workspaceSeparatorMovement";
 
@@ -78,6 +78,7 @@ export function useWorkspaceSeparators(
           ? { separatorsBefore: transform(latest.separatorsBefore ?? []) }
           : { separators: transform(latest.separators ?? []) }),
         sessionRevision: latest.sessionRevision,
+        expectedUpdatedAt: latest.updatedAt,
       });
       if (generation.current !== request || currentId.current !== id) return;
       setSaved(updated);
@@ -118,6 +119,7 @@ export function useWorkspaceSeparators(
         const updated = await updateWorkspace(id, {
           separatorsBefore: values.before, separators: values.after,
           sessionRevision: latest.sessionRevision,
+          expectedUpdatedAt: latest.updatedAt,
         });
         if (generation.current === request && currentId.current === id) setSaved(updated);
       }
@@ -129,5 +131,11 @@ export function useWorkspaceSeparators(
     }
   };
 
-  return { anchors, beforeAnchors, busy, error, change, cross };
+  const restoreTemporary = useCallback((name: string, before: boolean, after: boolean) => {
+    if (currentId.current) return;
+    if (before) setTemporaryBefore((values) => [...new Set([...values, name])]);
+    if (after) setTemporary((values) => [...new Set([...values, name])]);
+  }, []);
+
+  return { anchors, beforeAnchors, busy, error, change, cross, restoreTemporary };
 }

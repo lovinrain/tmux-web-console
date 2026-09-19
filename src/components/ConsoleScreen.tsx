@@ -187,6 +187,7 @@ interface ConsoleScreenProps {
   onDismissRenameWarning?: (sessionId: string) => void;
   sessionRecovery?: RecoverableSession | null;
   onRecreateSession?: () => void | Promise<void>;
+  onForgetSession?: () => void | Promise<void>;
   recreateSessionBusy?: boolean;
   missingSessionCount?: number;
   onRecreateAllMissing?: () => void;
@@ -569,6 +570,7 @@ export function ConsoleScreen({
   onDismissRenameWarning,
   sessionRecovery = null,
   onRecreateSession,
+  onForgetSession,
   recreateSessionBusy = false,
   missingSessionCount = 0,
   onRecreateAllMissing,
@@ -587,6 +589,12 @@ export function ConsoleScreen({
   const floatingTerminalRef = useRef<FloatingTerminalHandle>(null);
   const sessionTerminalRef = useRef<FloatingTerminalHandle>(null);
   const [sessionTerminalOpen, setSessionTerminalOpen] = useState(false);
+  const [forgetRecoveryBusy, setForgetRecoveryBusy] = useState(false);
+  const [forgetRecoveryError, setForgetRecoveryError] = useState<string | null>(null);
+  useEffect(() => {
+    setForgetRecoveryBusy(false);
+    setForgetRecoveryError(null);
+  }, [sessionName, sessionRecovery?.id]);
   const toggleSessionTerminal = useCallback(() => sessionTerminalRef.current?.toggle(), []);
   const [fallbackTemporaryTerminalKey] = useState(newTemporaryTerminalKey);
   const temporaryTerminalKey = providedTemporaryTerminalKey || fallbackTemporaryTerminalKey;
@@ -1804,6 +1812,20 @@ export function ConsoleScreen({
       terminateTarget.serverPid,
     );
   }, [onSessionTerminated, terminateTarget]);
+  const forgetMissingSession = useCallback(async () => {
+    if (!onForgetSession || !sessionRecovery || forgetRecoveryBusy) return;
+    setForgetRecoveryBusy(true);
+    setForgetRecoveryError(null);
+    try {
+      await onForgetSession();
+    } catch (error) {
+      setForgetRecoveryError(
+        error instanceof Error ? error.message : "Unable to forget the recovery record",
+      );
+    } finally {
+      setForgetRecoveryBusy(false);
+    }
+  }, [forgetRecoveryBusy, onForgetSession, sessionRecovery]);
 
   if (currentLookupError && !session) {
     return (
@@ -1838,7 +1860,7 @@ export function ConsoleScreen({
           terminalControlId={activeConsoleId}
         />
         {sessionNavigation && (
-          <div className="console-session-navigation">{sessionNavigation}</div>
+          <div key="session-navigation" className="console-session-navigation">{sessionNavigation}</div>
         )}
         <section
           id={activeConsoleId}
@@ -1877,6 +1899,7 @@ export function ConsoleScreen({
                   type="button"
                   className="primary-button"
                   disabled={recreateSessionBusy
+                    || forgetRecoveryBusy
                     || !sessionRecovery
                     || !sessionRecovery.directoryAvailable}
                   onClick={() => void onRecreateSession()}
@@ -1884,16 +1907,33 @@ export function ConsoleScreen({
                   <TerminalIcon />
                   {recreateSessionBusy ? "Recreating..." : "Recreate shell"}
                 </button>
+                {onForgetSession && sessionRecovery && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={recreateSessionBusy || forgetRecoveryBusy}
+                    onClick={() => void forgetMissingSession()}
+                    aria-label={`Forget recovery record for ${sessionName}`}
+                  >
+                    <TrashIcon /> {forgetRecoveryBusy ? "Forgetting..." : "Forget"}
+                  </button>
+                )}
                 {onRecreateAllMissing && missingSessionCount > 1 && (
                   <button
                     type="button"
                     className="secondary-button"
+                    disabled={forgetRecoveryBusy}
                     onClick={onRecreateAllMissing}
                   >
                     Recreate all missing ({missingSessionCount})
                   </button>
                 )}
               </div>
+              {forgetRecoveryError && (
+                <p className="recovery-directory-warning" role="alert">
+                  {forgetRecoveryError}
+                </p>
+              )}
             </div>
           )}
           {!embedded && (
@@ -2325,7 +2365,7 @@ export function ConsoleScreen({
       )}
 
       {sessionNavigation && (
-        <div className="console-session-navigation">{sessionNavigation}</div>
+        <div key="session-navigation" className="console-session-navigation">{sessionNavigation}</div>
       )}
 
       <div className="terminal-coordinate top-left">{pane ? `${pane.width}x${pane.height}` : "--x--"}</div>

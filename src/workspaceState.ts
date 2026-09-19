@@ -357,6 +357,18 @@ export function closeWorkspaceSession(
   };
 }
 
+export function removeWorkspaceSession(
+  workspace: SessionWorkspaceState,
+  sessionName: string,
+): SessionWorkspaceState {
+  const closed = closeWorkspaceSession(workspace, sessionName);
+  const recentSessions = closed.recentSessions.filter((name) => name !== sessionName);
+  if (closed === workspace && recentSessions.length === workspace.recentSessions.length) {
+    return workspace;
+  }
+  return { ...closed, recentSessions };
+}
+
 export function moveWorkspaceSession(
   workspace: SessionWorkspaceState,
   sessionName: string,

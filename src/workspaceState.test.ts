@@ -8,6 +8,7 @@ import {
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
   moveWorkspaceSessions,
+  removeWorkspaceSession,
   removeWorkspaceTabGroup,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
@@ -356,6 +357,32 @@ describe("session workspace state", () => {
       openSessions: ["beta", "alpha"],
       recentSessions: ["alpha", "beta", "ended"],
       groups: [],
+    });
+  });
+
+  it("removes a forgotten session from open tabs, groups, and recents", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "forgotten", "beta"],
+      recentSessions: ["forgotten", "closed", "alpha"],
+      groups: [{
+        id: "work",
+        name: "Work",
+        color: "red",
+        collapsed: false,
+        tabs: ["alpha", "forgotten"],
+      }],
+    };
+
+    expect(removeWorkspaceSession(workspace, "forgotten")).toEqual({
+      openSessions: ["alpha", "beta"],
+      recentSessions: ["closed", "alpha"],
+      groups: [{
+        id: "work",
+        name: "Work",
+        color: "red",
+        collapsed: false,
+        tabs: ["alpha"],
+      }],
     });
   });
 
