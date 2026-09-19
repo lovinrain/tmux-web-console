@@ -804,6 +804,13 @@ html[data-theme="light"] .console-shell {
   background: #fbfaf5;
 }
 
+html[data-theme="light"] .ephemeral-tab-marker {
+  color: #076d63;
+  background: #e0f3ed;
+  border-color: #4b9f91;
+  box-shadow: 0 3px 12px rgba(65, 55, 38, 0.14);
+}
+
 html[data-theme="light"] .console-rename-warning {
   color: #6f430b;
   background: rgba(255, 249, 234, 0.98);

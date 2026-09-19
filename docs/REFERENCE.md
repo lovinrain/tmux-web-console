@@ -80,7 +80,9 @@ current session in a lighter session-only page. It always uses the active
 session, regardless of other selected tabs. The page has no tab sidebar,
 workspace Overview, save controls, pins, transfers, or workspace widgets.
 Terminal input, scrollback, files, theme, and explicit session actions remain
-available. The URL is `/session/{encoded-name}?ephemeral=1`; workspace and tab
+available. A floating `Single tab` badge identifies this page, including in
+desktop Focus and mobile distraction-free modes; hover explains the tab's scope.
+The URL is `/session/{encoded-name}?ephemeral=1`; workspace and tab
 parameters are removed on entry and remain absent after renaming or reloading.
 This page does not initialize a temporary workspace or read, subscribe to, or
 save workspace state. It attaches to the same tmux session rather than creating

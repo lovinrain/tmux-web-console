@@ -524,6 +524,20 @@ function ConsoleBarToolbar({
   );
 }
 
+function EphemeralTabMarker() {
+  return (
+    <div
+      className="ephemeral-tab-marker"
+      role="note"
+      aria-label="Ephemeral session tab"
+      title="Ephemeral tab: one session without workspace controls. Closing this tab leaves the session running."
+    >
+      <ExternalLinkIcon />
+      <span>Single tab</span>
+    </div>
+  );
+}
+
 export function ConsoleScreen({
   sessionName,
   embedded = false,
@@ -1886,6 +1900,7 @@ export function ConsoleScreen({
         data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
         data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
       >
+        {ephemeral && <EphemeralTabMarker />}
         {!ephemeral && <ConsoleBarToolbar
           visibility={visibleBars}
           availability={{
@@ -2021,6 +2036,7 @@ export function ConsoleScreen({
       data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
       data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
     >
+      {ephemeral && <EphemeralTabMarker />}
       <ConsoleBarToolbar
         visibility={visibleBars}
         hideSessionTabs={ephemeral}

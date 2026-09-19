@@ -2308,6 +2308,48 @@ a:focus-visible {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
 }
 
+[data-ephemeral="true"] {
+  --ephemeral-marker-width: 108px;
+  --ephemeral-marker-inset: calc(var(--ephemeral-marker-width) + 18px + env(safe-area-inset-right, 0px));
+}
+
+.ephemeral-tab-marker {
+  position: absolute;
+  z-index: 33;
+  top: calc(6px + env(safe-area-inset-top, 0px));
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  display: inline-flex;
+  width: var(--ephemeral-marker-width);
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--cyan);
+  background: #142925;
+  border: 1px solid rgba(104, 223, 208, 0.65);
+  border-radius: 14px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.ephemeral-tab-marker svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.console-shell[data-ephemeral="true"] > .console-bar-toolbar {
+  padding-right: var(--ephemeral-marker-inset);
+}
+
+.workspace-missing-session[data-ephemeral="true"] .missing-session-theme {
+  right: var(--ephemeral-marker-inset);
+}
+
 .console-shell[data-composer-visible="false"][data-shortcuts-visible="false"] {
   padding-bottom: var(--safe-bottom);
 }
@@ -12477,6 +12519,14 @@ html.scoped-note-resizing-bottom-left * {
     gap: 8px;
   }
 
+  .console-shell[data-ephemeral="true"][data-desktop-focus="true"] .desktop-terminal-focus-actions {
+    right: var(--ephemeral-marker-inset);
+  }
+
+  .console-shell[data-desktop-focus="true"] > .ephemeral-tab-marker {
+    top: calc(15px + env(safe-area-inset-top, 0px));
+  }
+
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts,
@@ -14766,6 +14816,19 @@ html.history-resizing * {
 
   .console-shell[data-ephemeral="true"] .mobile-console-focus {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-right: var(--ephemeral-marker-inset);
+  }
+
+  .console-shell[data-ephemeral="true"] > .ephemeral-tab-marker {
+    top: calc(13px + env(safe-area-inset-top, 0px));
+  }
+
+  .console-shell[data-ephemeral="true"][data-mobile-focus="terminal"][data-mobile-distraction-free="true"] > .terminal-view {
+    padding-top: calc(48px + env(safe-area-inset-top, 0px));
+  }
+
+  .console-shell[data-ephemeral="true"][data-mobile-focus="input"][data-mobile-distraction-free="true"] .composer-heading {
+    padding-right: var(--ephemeral-marker-inset);
   }
 
   .mobile-console-focus-button {
