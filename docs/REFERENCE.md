@@ -313,6 +313,10 @@ reusing a terminated parent's name does not inherit it. Its open state and layou
 are browser-local per session; returning to that session restores its panel.
 It has no cross-session pin. Both terminal windows may be open together.
 
+The small external-link button beside `Session Terminal` opens the current
+workspace in another browser tab using the exact current URL. It also appears
+beside that control in desktop Focus mode.
+
 New utility shells carry explicit ownership metadata. Every five seconds the
 backend checks for ended parents or deleted saved workspaces and ends only their
 owned utility shells. Closing a session tab does not end its session shell.

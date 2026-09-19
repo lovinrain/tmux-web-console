@@ -7712,6 +7712,25 @@ span.workspace-tab-group-toggle {
   box-shadow: none;
 }
 
+.workspace-new-tab-link {
+  text-decoration: none;
+}
+
+.console-bar-toggle.workspace-new-tab-link {
+  width: 30px;
+  flex: 0 0 30px;
+  padding: 0;
+}
+
+.workspace-new-tab-link::before {
+  content: none;
+}
+
+.workspace-new-tab-link svg {
+  width: 15px;
+  height: 15px;
+}
+
 .mobile-console-focus {
   display: none;
 }
@@ -12550,6 +12569,13 @@ html.scoped-note-resizing-bottom-left * {
     text-transform: uppercase;
   }
 
+  .console-shell[data-desktop-focus="true"] .workspace-new-tab-link {
+    width: 38px;
+    flex: 0 0 38px;
+    justify-content: center;
+    padding: 0;
+  }
+
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:hover,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:focus-visible,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input:hover,
@@ -13390,6 +13416,11 @@ html.history-resizing * {
 
   .console-bar-toggle {
     height: 44px;
+  }
+
+  .console-bar-toggle.workspace-new-tab-link {
+    width: 44px;
+    flex-basis: 44px;
   }
 
   .workspace-navigation {

@@ -5,6 +5,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -344,6 +345,28 @@ const CONSOLE_BARS: Array<{
   },
 ];
 
+function WorkspaceNewTabLink({ focus = false }: { focus?: boolean }) {
+  // URL-only updates can happen after rendering, so refresh before navigation.
+  const refreshHref = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    event.currentTarget.href = window.location.href;
+  };
+  return (
+    <a
+      className={`${focus ? "desktop-terminal-focus-input" : "console-bar-toggle"} workspace-new-tab-link`}
+      href={window.location.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Open this workspace in a new tab"
+      title="Open this workspace in a new tab using the same URL"
+      onClick={refreshHref}
+      onAuxClick={refreshHref}
+      onContextMenu={refreshHref}
+    >
+      <ExternalLinkIcon />
+    </a>
+  );
+}
+
 function ConsoleBarToolbar({
   visibility,
   hideSessionTabs = false,
@@ -454,6 +477,7 @@ function ConsoleBarToolbar({
         aria-expanded={sessionTerminalOpen} aria-controls="muxdeck-session-terminal"
         title="Independent shell belonging to this session; ends with its parent session"
         onClick={onToggleSessionTerminal}><TerminalIcon /><span>Session Terminal</span></button>}
+      {onToggleSessionTerminal && <WorkspaceNewTabLink />}
       {onDesktopTabOrientationChange && (availability?.sessionTabs ?? true) && (
         <button
           type="button"
@@ -2688,6 +2712,7 @@ export function ConsoleScreen({
               aria-expanded={sessionTerminalOpen} aria-controls="muxdeck-session-terminal"
               title="Independent shell belonging to this session; ends with its parent session"
               onClick={toggleSessionTerminal}><TerminalIcon /><span>Session Terminal</span></button>}
+            {!embedded && !ephemeral && <WorkspaceNewTabLink focus />}
             {fileBrowserTarget && !filesOpen && (
               <button type="button" className="desktop-terminal-focus-input"
                 aria-controls={filesControlId}
