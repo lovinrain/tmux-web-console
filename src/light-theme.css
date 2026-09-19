@@ -805,9 +805,9 @@ html[data-theme="light"] .console-shell {
 }
 
 html[data-theme="light"] .ephemeral-tab-marker {
-  color: #076d63;
-  background: #e0f3ed;
-  border-color: #4b9f91;
+  color: #542b00;
+  background: #ffc45c;
+  border-color: #a15c00;
   box-shadow: 0 3px 12px rgba(65, 55, 38, 0.14);
 }
 

@@ -2324,9 +2324,9 @@ a:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: var(--cyan);
-  background: #142925;
-  border: 1px solid rgba(104, 223, 208, 0.65);
+  color: #392100;
+  background: #ffb648;
+  border: 1px solid #ffd38a;
   border-radius: 14px;
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
   font-family: "JetBrains Mono Variable", monospace;
