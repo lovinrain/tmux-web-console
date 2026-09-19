@@ -29,6 +29,15 @@ mode, supported resource families, and workspace limits.
 All terminal and automation routes use the configured server authentication
 mode. There is no separate unauthenticated automation API.
 
+Callback automation can also use a dedicated `Authorization: Bearer <token>`
+credential configured by `MUXDECK_CALLBACK_TOKEN_FILE`. It permits only listing,
+posting, and reviewing callback messages, plus reading `/api/callback-sessions`.
+It grants no access to terminals, files, workspaces, login devices, or streams.
+An invalid supplied bearer token returns `401`, even with a valid browser cookie;
+using a valid callback token outside its scope returns `403`. Use
+`scripts/muxdeck_callback.py` to read the private token file without putting the
+credential in shell arguments. See [Agent callback instructions](AGENT_CALLBACKS.md).
+
 | Mode | Automation method |
 | --- | --- |
 | `server` | Log in once with `POST /api/auth/login`, then send the returned HttpOnly device cookie. |
@@ -371,25 +380,73 @@ exposed as server resources at this time.
 ### Callback sessions
 
 Callback entries may refer to live or ended sessions. The global queue is the
-deduplicated union of explicitly global entries and every workspace callback
-entry. A workspace registration therefore always appears in the global view.
+deduplicated union of explicitly global entries, every workspace callback
+entry, and sessions with pending posted callback messages. A workspace
+registration therefore always appears in the global view.
 Entries that are not open in the current workspace are shown as inherited and
 are read-only for navigation (opening one would otherwise add it to the current
 workspace), while their review action remains available from any workspace.
-Reviewing an entry atomically removes that session from the explicit global
-queue and every workspace callback queue.
+Reviewing an entry removes that session from the explicit global queue and
+every workspace callback queue, and marks its pending messages reviewed.
+The session-queue update and message archive use separate durable stores;
+retry after a partial storage failure is safe.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
-| `GET /api/callback-sessions` | None | Effective `callbackSessions`, explicit `globalCallbackSessions`, contributing `workspaceCallbacks`, and `sessionRevision`. |
+| `GET /api/callback-sessions` | None | Effective `callbackSessions`, explicit `globalCallbackSessions`, contributing `workspaceCallbacks`, `sessionRevision`, pending `callbackMessages`, and `callbackMessageRevision`. |
 | `GET /api/callback-sessions/stream` | None | Authenticated `text/event-stream`; emits `callbacks` records whenever the callback snapshot changes. |
 | `PUT /api/callback-sessions` | `sessions`, `sessionRevision` | Replaces explicitly global entries and returns the refreshed snapshot. |
 | `POST /api/callback-sessions` | `sessions`, `sessionRevision` | Idempotently appends explicitly global entries and returns `added` plus the refreshed snapshot. |
-| `DELETE /api/callback-sessions` | `sessions`, `sessionRevision` | Removes explicitly global entries and returns `removed` plus the refreshed snapshot. |
-| `POST /api/callback-sessions/review` | `session`, `sessionRevision` | Marks one session reviewed and removes it from the explicit global queue and every workspace callback queue atomically. |
+| `DELETE /api/callback-sessions` | `sessions`, `sessionRevision` | Removes explicitly global entries, reviews pending messages for those names, and returns `removed` plus the refreshed snapshot. |
+| `POST /api/callback-sessions/review` | `session`, `sessionRevision` | Marks one session reviewed across the global/workspace queues and posted messages. |
 | `GET /api/workspaces/{workspaceId}/callback-sessions` | None | `callbackSessions` and `sessionRevision`. |
 | `POST /api/workspaces/{workspaceId}/callback-sessions` | `sessions`, `sessionRevision` | Idempotently appends missing entries and returns `added`. |
 | `DELETE /api/workspaces/{workspaceId}/callback-sessions` | `sessions`, `sessionRevision` | Removes present entries and returns `removed`. |
+
+### Posted callback messages
+
+Agents can post completion reports independently of the manual session queues.
+Records live in `callbacks.sqlite3` (override with `MUXDECK_CALLBACKS_FILE`) and
+survive service restarts. Reviewing a message preserves its content and metadata
+in history. It never ends the session or executes the message text.
+
+| Method and route | Request | Result |
+| --- | --- | --- |
+| `POST /api/callback-messages` | JSON described below | `{callback, duplicate}`; `201` for a new record, `200` for an identical retry. |
+| `GET /api/callback-messages` | Optional `status=pending\|reviewed\|all`, `after`, `limit` | `{messages, nextAfter, revision}` in ascending sequence order. |
+| `POST /api/callback-messages/{id}/review` | No body required | `{callback, callbacks}` with the reviewed record and refreshed global callback snapshot. Already reviewed records are unchanged. |
+
+Required POST fields are `message` (nonblank text, up to 16,384 characters),
+`sessionName` (native tmux name), `agentType` (up to 64 characters), and `cwd`
+(absolute path, up to 4,096 characters). Optional fields are `requestId`
+(up to 128 characters), `tmuxSessionId`, `tmuxPaneId`, and `host` (up to 255
+characters). Unknown fields and invalid/control-character metadata return `400`.
+Message text may contain newlines and tabs and is rendered as text.
+Metadata describes what the agent reported; posting does not require a live
+session and does not prove that a session with a reused name is the same process.
+
+Each returned record includes those fields (omitted optional fields become
+`null`) and a server-assigned `id`, increasing integer `sequence`, Unix-second
+`createdAt`, and nullable `reviewedAt`. Reuse the same `requestId` and identical
+body when retrying delivery; a different body under that ID returns `409`.
+Idempotency survives review and server restart. At most 256 messages may be
+pending; further new messages return `409` until some are reviewed. Reviewed
+history is retained.
+
+Listing defaults to `status=pending`, `after=0`, and `limit=100` (maximum 200).
+Pass the returned `nextAfter` as `after` to fetch the next page; `null` means
+there are no more records in that result. `status=all` is useful for incremental
+readers tracking the largest sequence. To observe later review-state changes,
+refresh pending/reviewed records rather than relying only on a sequence cursor.
+Pages are live reads, not a frozen snapshot; `revision` changes with new posts
+and review updates. Reading never acknowledges a message.
+
+Pending messages appear in global callback snapshots and existing callback and
+workspace streams. `callbackMessageRevision` advances independently of workspace
+`sessionRevision`; clients reconcile both independently. Posting only derives a
+callback entry from the message and does not add a manual queue marker or change
+workspace tabs. Replacing a manual queue with `PUT /api/callback-sessions` leaves
+posted messages intact; use explicit review operations to acknowledge them.
 
 ### Move, copy, and global pin
 

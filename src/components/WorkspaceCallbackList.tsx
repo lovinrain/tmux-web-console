@@ -18,7 +18,8 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "../icons";
-import type { GlobalCallbackSnapshot } from "../api";
+import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
+import "./WorkspaceCallbackMessages.css";
 import type { AgentState, Session } from "../types";
 import {
   directShortcutAria,
@@ -71,6 +72,7 @@ interface WorkspaceCallbackListProps {
   onGlobalRefresh?: () => void;
   /** Mark a callback reviewed across all global/workspace queues. */
   onReviewSession?: (sessionName: string) => Promise<void>;
+  onReviewMessage?: (id: string) => Promise<void>;
   onSelectSession: (sessionName: string) => void;
 }
 
@@ -270,6 +272,7 @@ export function WorkspaceCallbackList({
   globalCallbackBusy = false,
   onGlobalRefresh,
   onReviewSession,
+  onReviewMessage,
   onSelectSession,
 }: WorkspaceCallbackListProps) {
   const { bindings: shortcutBindings } = useShortcutSettings();
@@ -336,6 +339,18 @@ export function WorkspaceCallbackList({
   const workspaceSessionSet = workspaceSessionNames === undefined
     ? null
     : new Set(workspaceSessionNames);
+  const pendingMessages = (globalCallbackSnapshot?.callbackMessages ?? [])
+    .filter((message) => message.reviewedAt === null);
+  const visibleMessages = activeScope === "global" ? pendingMessages : pendingMessages.filter(
+    (message) => workspaceSessionSet?.has(message.sessionName)
+      || workspaceSessionList.includes(message.sessionName),
+  );
+  const messagesBySession = new Map<string, CallbackMessage[]>();
+  for (const message of visibleMessages) {
+    const messages = messagesBySession.get(message.sessionName) ?? [];
+    messages.push(message);
+    messagesBySession.set(message.sessionName, messages);
+  }
   const explicitGlobalSessions = normalizeCallbackSessions(
     globalCallbackSnapshot?.globalCallbackSessions
       ?? (globalEnabled ? undefined : callbackSessions),
@@ -357,10 +372,13 @@ export function WorkspaceCallbackList({
     ...explicitGlobalSessions,
     ...(globalCallbackSnapshot?.callbackSessions ?? []),
     ...sourceRecords.flatMap((source) => source.sessions),
+    ...pendingMessages.map((message) => message.sessionName),
   ]);
   const visibleCallbackSessions = activeScope === "global"
     ? globalSessionList
-    : workspaceSessionList;
+    : normalizeCallbackSessions([
+      ...workspaceSessionList, ...visibleMessages.map((message) => message.sessionName),
+    ]);
   const globalWorkspaceSources = new Map<string, typeof sourceRecords>();
   sourceRecords.forEach((source) => {
     source.sessions.forEach((name) => {
@@ -512,14 +530,44 @@ export function WorkspaceCallbackList({
     }
   }, [onReviewSession, removeSession]);
 
-  const clearUnavailable = useCallback(() => {
-    const liveNames = new Set(sessions.map((item) => item.name));
-    if (activeScope === "global") {
-      void changeCallbacks(explicitGlobalSessions.filter((name) => liveNames.has(name)));
-    } else {
-      void changeCallbacks(workspaceSessionList.filter((name) => liveNames.has(name)));
+  const reviewMessage = async (id: string) => {
+    if (!onReviewMessage) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onReviewMessage(id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to review message");
+    } finally {
+      setBusy(false);
     }
-  }, [activeScope, changeCallbacks, explicitGlobalSessions, sessions, workspaceSessionList]);
+  };
+
+  const clearCallbacks = async (names: readonly string[]) => {
+    const selected = new Set(names);
+    setBusy(true);
+    setError("");
+    try {
+      // Capture the manual-list mutation before any message request can yield
+      // to another tab's update. Later message reviews never replace that list.
+      const manual = activeScope === "global" ? explicitGlobalSessions : workspaceSessionList;
+      const nextManual = manual.filter((name) => !selected.has(name));
+      if (activeScope === "global") {
+        if (!onGlobalChange) throw new Error("Global callback list is unavailable.");
+        await onGlobalChange(nextManual);
+      } else {
+        await onChange(nextManual);
+      }
+      // Reviewing messages preserves their history and other workspace markers.
+      for (const message of visibleMessages) {
+        if (selected.has(message.sessionName)) await onReviewMessage?.(message.id);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to clear callbacks");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const startDragging = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
@@ -603,14 +651,31 @@ export function WorkspaceCallbackList({
   if (!desktop) return null;
 
   const sessionMap = new Map(sessions.map((item) => [item.name, item]));
+  for (const [name, messages] of messagesBySession) {
+    const manuallyWatched = activeScope === "global"
+      ? explicitGlobalSessions.includes(name) || globalWorkspaceSources.has(name)
+      : workspaceSessionList.includes(name);
+    const reportedIds = messages.flatMap((message) => (
+      message.tmuxSessionId === null ? [] : [message.tmuxSessionId]
+    ));
+    if (!manuallyWatched && reportedIds.length > 0
+      && !reportedIds.includes(sessionMap.get(name)?.id ?? "")) {
+      // A reused name must not open a replacement shell for an older callback.
+      sessionMap.delete(name);
+    }
+  }
   const availableSessions = sessions.filter((item) => !visibleCallbackSessions.includes(item.name));
   const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
   const unavailableCount = visibleCallbackSessions.filter((name) => !sessionMap.has(name)).length;
   const removableUnavailableCount = activeScope === "global"
-    ? explicitGlobalSessions.filter((name) => !sessionMap.has(name)).length
+    ? new Set([
+      ...explicitGlobalSessions,
+      ...visibleMessages.map((message) => message.sessionName),
+    ].filter((name) => !sessionMap.has(name))).size
     : unavailableCount;
   const inheritedCount = activeScope === "global"
-    ? visibleCallbackSessions.filter((name) => !explicitGlobalSessions.includes(name)).length
+    ? visibleCallbackSessions.filter((name) => !explicitGlobalSessions.includes(name)
+      && globalWorkspaceSources.has(name)).length
     : 0;
   const scopeLabel = activeScope === "global"
     ? "Global"
@@ -689,6 +754,9 @@ export function WorkspaceCallbackList({
       <div className="workspace-callback-body">
         <div className="workspace-callback-summary">
           <strong>{visibleCallbackSessions.length} watching</strong>
+          {visibleMessages.length > 0 && <span className="workspace-callback-message-count">
+            {visibleMessages.length} {visibleMessages.length === 1 ? "message" : "messages"}
+          </span>}
           <span>{workingCount} working</span>
           {unavailableCount > 0 && <span className="ended">{unavailableCount} ended</span>}
           {activeScope === "global" && inheritedCount > 0 && (
@@ -736,7 +804,7 @@ export function WorkspaceCallbackList({
           </button>
           <button
             type="button"
-            disabled={isBusy || visibleCallbackSessions.includes(sessionName)}
+            disabled={isBusy || !sessionName || visibleCallbackSessions.includes(sessionName)}
             onClick={() => addSession(sessionName)}
             title={visibleCallbackSessions.includes(sessionName)
               ? "The current session is already being watched"
@@ -764,6 +832,7 @@ export function WorkspaceCallbackList({
           <ol className="workspace-callback-list" aria-label="Sessions to call back">
             {visibleCallbackSessions.map((name, index) => {
               const session = sessionMap.get(name);
+              const messages = messagesBySession.get(name) ?? [];
               const status = callbackStatus(session);
               const globalOnly = activeScope === "global" && explicitGlobalSessions.includes(name);
               const sources = globalWorkspaceSources.get(name) ?? [];
@@ -839,7 +908,7 @@ export function WorkspaceCallbackList({
                     className="workspace-callback-remove"
                     disabled={isBusy || !canRemove}
                     onClick={() => {
-                      if (activeScope === "global" && onReviewSession) {
+                      if ((activeScope === "global" || messages.length > 0) && onReviewSession) {
                         void reviewSession(name);
                       } else {
                         removeSession(name);
@@ -860,6 +929,47 @@ export function WorkspaceCallbackList({
                   >
                     <CheckIcon />
                   </button>
+                  {messages.length > 0 && (
+                    <div className="workspace-callback-messages" aria-label={`Messages for ${name}`}>
+                      {messages.map((message) => (
+                        <article className="workspace-callback-message" key={message.id}>
+                          <div className="workspace-callback-message-meta">
+                            <strong>{message.agentType}</strong>
+                            <time dateTime={new Date(message.createdAt * 1000).toISOString()}>
+                              {new Date(message.createdAt * 1000).toLocaleString()}
+                            </time>
+                            <button
+                              type="button"
+                              className="workspace-callback-message-review"
+                              disabled={isBusy || !onReviewMessage}
+                              onClick={() => void reviewMessage(message.id)}
+                              aria-label={`Mark message from ${message.agentType} in ${name} reviewed`}
+                              title="Mark this message reviewed; keep its history"
+                            >
+                              <CheckIcon />
+                            </button>
+                          </div>
+                          <div className="workspace-callback-message-cwd" title={message.cwd}>
+                            {message.cwd}
+                          </div>
+                          {message.message.length > 600 ? (
+                            <details className="workspace-callback-message-details">
+                              <summary>
+                                <span className="workspace-callback-message-preview">{message.message.slice(0, 240)}…</span>
+                                <span className="workspace-callback-message-expand">Show full message</span>
+                              </summary>
+                              <p>{message.message}</p>
+                            </details>
+                          ) : <p>{message.message}</p>}
+                          {(message.tmuxSessionId || message.tmuxPaneId || message.host) && (
+                            <small className="workspace-callback-message-origin">
+                              {[message.host, message.tmuxSessionId, message.tmuxPaneId].filter(Boolean).join(" · ")}
+                            </small>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  )}
                 </li>
               );
             })}
@@ -869,21 +979,23 @@ export function WorkspaceCallbackList({
           <span>{scopeDescription}</span>
           <div>
             {removableUnavailableCount > 0 && (
-              <button type="button" disabled={isBusy} onClick={clearUnavailable}>
+              <button type="button" disabled={isBusy} onClick={() => void clearCallbacks(
+                visibleCallbackSessions.filter((name) => !sessionMap.has(name)),
+              )}>
                 <TrashIcon />
                 <span>Clear ended</span>
               </button>
             )}
             {(activeScope === "global"
-              ? explicitGlobalSessions.length > 0
+              ? explicitGlobalSessions.length > 0 || visibleMessages.length > 0
               : visibleCallbackSessions.length > 0) && (
               <button
                 type="button"
                 disabled={isBusy}
-                onClick={() => void changeCallbacks([])}
+                onClick={() => void clearCallbacks(visibleCallbackSessions)}
                 title={activeScope === "global"
-                  ? "Remove every explicitly global session; workspace-owned entries remain"
-                  : "Remove every session from this workspace callback list"}
+                  ? "Review pending messages and remove global markers; workspace markers remain"
+                  : "Review these messages and remove this workspace's callback markers"}
               >
                 {activeScope === "global" ? "Clear global" : "Clear all"}
               </button>
@@ -896,7 +1008,7 @@ export function WorkspaceCallbackList({
 
   const summaryLabel = visibleCallbackSessions.length === 0
     ? "No sessions"
-    : `${visibleCallbackSessions.length} ${visibleCallbackSessions.length === 1 ? "session" : "sessions"}`;
+    : `${visibleCallbackSessions.length} ${visibleCallbackSessions.length === 1 ? "session" : "sessions"}${visibleMessages.length > 0 ? ` · ${visibleMessages.length} msg` : ""}`;
   return (
     <>
       <button

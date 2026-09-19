@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig } from "@playwright/test";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./e2e/authFixture";
@@ -11,6 +12,8 @@ const snippetsFile = `/tmp/muxdeck-playwright-${runId}-snippets.json`;
 const workspacesFile = `/tmp/muxdeck-playwright-${runId}-workspaces.json`;
 const shortcutsFile = `/tmp/muxdeck-playwright-${runId}-shortcuts.json`;
 const sessionRegistryFile = `/tmp/muxdeck-playwright-${runId}-sessions.sqlite3`;
+const callbacksFile = `/tmp/muxdeck-playwright-${runId}-callbacks.sqlite3`;
+const callbackTokenFile = `/tmp/muxdeck-playwright-${runId}-callback-token`;
 const authFile = `/tmp/muxdeck-playwright-${runId}-auth.json`;
 const uploadsDirectory = `/tmp/muxdeck-playwright-${runId}-uploads`;
 const socketName = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET || `muxdeck-playwright-${runId}`;
@@ -39,6 +42,13 @@ if (!existsSync(authFile)) {
   }
 }
 
+if (!existsSync(callbackTokenFile)) {
+  writeFileSync(callbackTokenFile, `${randomBytes(32).toString("base64url")}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
+}
+
 // Config is evaluated in multiple processes; inheriting the ID keeps cleanup exact.
 process.env.MUXDECK_PLAYWRIGHT_RUN_ID = runId;
 process.env.MUXDECK_PLAYWRIGHT_TITLES_FILE = titlesFile;
@@ -47,6 +57,8 @@ process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE = snippetsFile;
 process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE = workspacesFile;
 process.env.MUXDECK_PLAYWRIGHT_SHORTCUTS_FILE = shortcutsFile;
 process.env.MUXDECK_PLAYWRIGHT_SESSION_REGISTRY_FILE = sessionRegistryFile;
+process.env.MUXDECK_PLAYWRIGHT_CALLBACKS_FILE = callbacksFile;
+process.env.MUXDECK_PLAYWRIGHT_CALLBACK_TOKEN_FILE = callbackTokenFile;
 process.env.MUXDECK_PLAYWRIGHT_AUTH_FILE = authFile;
 process.env.MUXDECK_PLAYWRIGHT_UPLOADS_DIR = uploadsDirectory;
 process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET = socketName;
@@ -64,7 +76,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} MUXDECK_WORKSPACES_FILE=${workspacesFile} MUXDECK_SHORTCUTS_FILE=${shortcutsFile} MUXDECK_SESSION_REGISTRY_FILE=${sessionRegistryFile} MUXDECK_AUTH_MODE=server MUXDECK_AUTH_FILE=${authFile} MUXDECK_AUTH_COOKIE_SECURE=false MUXDECK_UPLOADS_DIR=${uploadsDirectory} ${pythonBin} -m tmux_console.app`,
+    command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} MUXDECK_WORKSPACES_FILE=${workspacesFile} MUXDECK_SHORTCUTS_FILE=${shortcutsFile} MUXDECK_SESSION_REGISTRY_FILE=${sessionRegistryFile} MUXDECK_CALLBACKS_FILE=${callbacksFile} MUXDECK_CALLBACK_TOKEN_FILE=${callbackTokenFile} MUXDECK_AUTH_MODE=server MUXDECK_AUTH_FILE=${authFile} MUXDECK_AUTH_COOKIE_SECURE=false MUXDECK_UPLOADS_DIR=${uploadsDirectory} ${pythonBin} -m tmux_console.app`,
     url: "http://127.0.0.1:7684/mux/login",
     reuseExistingServer: false,
     timeout: 10_000,

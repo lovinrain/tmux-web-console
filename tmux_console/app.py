@@ -35,6 +35,16 @@ from .auth_views import (
     render_auth_mode_page,
     render_login_page,
 )
+from .callback_auth import CallbackTokenVerifier, callback_token_allows
+from .callback_messages import (
+    MAX_CALLBACK_MESSAGE_LENGTH,
+    MAX_PENDING_CALLBACK_MESSAGES,
+    CallbackMessageConflict,
+    CallbackMessageNotFound,
+    CallbackMessageStore,
+    CallbackMessageStoreUnavailable,
+    default_callback_messages_path,
+)
 from .file_browser import (
     ENTRY_KINDS,
     MAX_FILE_UPLOAD_BYTES,
@@ -160,6 +170,7 @@ MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
 SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
 SHORTCUTS_KEY = web.AppKey("shortcuts", ShortcutStore)
 WORKSPACES_KEY = web.AppKey("workspaces", WorkspaceStore)
+CALLBACK_MESSAGES_KEY = web.AppKey("callback_messages", CallbackMessageStore)
 ATTACHMENTS_KEY = web.AppKey("attachments", AttachmentStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
 BASE_PATH_KEY = web.AppKey("base_path", str)
@@ -167,6 +178,7 @@ TRUSTED_ORIGINS_KEY = web.AppKey("trusted_origins", frozenset)
 AUTH_KEY = web.AppKey("auth", AuthStore)
 AUTH_MODE_KEY = web.AppKey("auth_mode", AuthMode)
 BASIC_AUTH_KEY = web.AppKey("basic_auth", BasicAuthVerifier)
+CALLBACK_TOKEN_KEY = web.AppKey("callback_token", CallbackTokenVerifier)
 AUTH_COOKIE_SECURE_KEY = web.AppKey("auth_cookie_secure", bool)
 LOGIN_SEMAPHORE_KEY = web.AppKey("login_semaphore", asyncio.Semaphore)
 FILE_ARCHIVE_SEMAPHORE_KEY = web.AppKey(
@@ -841,6 +853,29 @@ async def authentication_middleware(
     request: web.Request,
     handler: Callable[[web.Request], Any],
 ) -> web.StreamResponse:
+    authorization_values = request.headers.getall("Authorization", [])
+    if any(value.partition(" ")[0].casefold() == "bearer" for value in authorization_values):
+        verifier = request.app.get(CALLBACK_TOKEN_KEY)
+        authenticated = (
+            len(authorization_values) == 1
+            and verifier is not None
+            and await asyncio.to_thread(verifier.verify, authorization_values[0])
+        )
+        if not authenticated:
+            if request.app[AUTH_MODE_KEY] is AuthMode.BASIC:
+                response = json_error("authentication required", 401)
+                response.headers["WWW-Authenticate"] = BASIC_AUTH_CHALLENGE
+            else:
+                response = json_error("invalid callback credential", 401)
+                response.headers["WWW-Authenticate"] = 'Bearer realm="Muxdeck callbacks"'
+        elif not callback_token_allows(
+            request.path, request.app[BASE_PATH_KEY], request.method
+        ):
+            response = json_error("callback credential does not allow this operation", 403)
+        else:
+            response = await handler(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
     mode = request.app[AUTH_MODE_KEY]
     if mode is AuthMode.NONE:
         return await handler(request)
@@ -954,12 +989,14 @@ def create_app(
     snippets: SnippetStore | None = None,
     shortcuts: ShortcutStore | None = None,
     workspaces: WorkspaceStore | None = None,
+    callback_messages: CallbackMessageStore | None = None,
     attachments: AttachmentStore | None = None,
     uploads: AttachmentStore | None = None,
     trusted_origins: Iterable[str] | str | None = None,
     auth: AuthStore | None = None,
     auth_mode: str | AuthMode | None = None,
     auth_cookie_secure: bool | None = None,
+    callback_token_file: str | Path | None = None,
     file_browser_root: str | None = None,
     host_metrics: HostMetricsSampler | None = None,
     session_registry: SessionRegistry | None = None,
@@ -997,6 +1034,9 @@ def create_app(
     ):
         resolved_auth = AuthStore(configured_auth_path)
     app[AUTH_MODE_KEY] = resolved_auth_mode
+    configured_callback_token = callback_token_file or os.environ.get("MUXDECK_CALLBACK_TOKEN_FILE")
+    if configured_callback_token:
+        app[CALLBACK_TOKEN_KEY] = CallbackTokenVerifier(Path(configured_callback_token))
     if resolved_auth is not None:
         app[AUTH_KEY] = resolved_auth
     if resolved_auth_mode is AuthMode.BASIC:
@@ -1017,6 +1057,9 @@ def create_app(
     app[SNIPPETS_KEY] = snippets or SnippetStore()
     app[SHORTCUTS_KEY] = shortcuts or ShortcutStore()
     app[WORKSPACES_KEY] = workspaces or WorkspaceStore()
+    app[CALLBACK_MESSAGES_KEY] = callback_messages or CallbackMessageStore(
+        default_callback_messages_path(app[WORKSPACES_KEY].path)
+    )
     if attachments is not None and uploads is not None:
         raise ValueError("provide attachments or uploads, not both")
     app[ATTACHMENTS_KEY] = attachments or uploads or AttachmentStore()
@@ -1046,6 +1089,15 @@ def create_app(
     )
     app[WORKSPACE_STREAM_BROKER_KEY] = WorkspaceStreamBroker()
 
+    def callback_snapshot(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        result = dict(snapshot if snapshot is not None else app[WORKSPACES_KEY].get_global_callback_sessions())
+        result.update(app[CALLBACK_MESSAGES_KEY].pending_snapshot())
+        result["callbackSessions"] = list(dict.fromkeys([
+            *result["callbackSessions"],
+            *(message["sessionName"] for message in result["callbackMessages"]),
+        ]))
+        return result
+
     @web.middleware
     async def workspace_stream_middleware(
         request: web.Request, handler: Any
@@ -1062,9 +1114,9 @@ def create_app(
                     # and then fail. Unchanged failed writes emit nothing.
                     broker.publish(
                         app[WORKSPACES_KEY].list_workspaces(),
-                        app[WORKSPACES_KEY].get_global_callback_sessions(),
+                        callback_snapshot(),
                     )
-                except WorkspaceStoreUnavailable:
+                except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable):
                     LOGGER.exception("Unable to publish the workspace stream snapshot")
 
     app.middlewares.append(workspace_stream_middleware)
@@ -1079,6 +1131,7 @@ def create_app(
         )
         callback_write = request.method not in SAFE_HTTP_METHODS and (
             workspace_write or "/api/callback-sessions" in request.path
+            or "/api/callback-messages" in request.path
         )
         if not callback_write:
             return await handler(request)
@@ -1103,9 +1156,9 @@ def create_app(
                     )
             try:
                 app[CALLBACK_STREAM_BROKER_KEY].publish(
-                    app[WORKSPACES_KEY].get_global_callback_sessions()
+                    callback_snapshot()
                 )
-            except WorkspaceStoreUnavailable:
+            except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable):
                 # Publishing must not replace the mutation's response/error.
                 LOGGER.exception("Unable to publish the callback stream snapshot")
 
@@ -1118,9 +1171,9 @@ def create_app(
     app[CALLBACK_STREAM_BROKER_KEY] = callback_stream_broker
     try:
         callback_stream_broker.publish(
-            app[WORKSPACES_KEY].get_global_callback_sessions()
+            callback_snapshot()
         )
-    except WorkspaceStoreUnavailable:
+    except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable):
         LOGGER.warning("Unable to prime the callback stream snapshot")
     app[BASE_PATH_KEY] = normalize_base_path(
         base_path
@@ -1138,6 +1191,9 @@ def create_app(
     async def close_workspace_stream_broker(application: web.Application) -> None:
         await application[WORKSPACE_STREAM_BROKER_KEY].close()
 
+    async def close_callback_messages(application: web.Application) -> None:
+        application[CALLBACK_MESSAGES_KEY].close()
+
     async def close_session_registry(application: web.Application) -> None:
         for token in tuple(forgotten_sessions):
             discard_forgotten_session(token)
@@ -1146,6 +1202,7 @@ def create_app(
     app.on_cleanup.append(close_session_stream_broker)
     app.on_cleanup.append(close_callback_stream_broker)
     app.on_cleanup.append(close_workspace_stream_broker)
+    app.on_cleanup.append(close_callback_messages)
     app.on_cleanup.append(close_session_registry)
     app.on_response_prepare.append(add_browser_security_headers)
 
@@ -1458,6 +1515,15 @@ def create_app(
                 "basePath": prefix,
                 "authentication": {"mode": app[AUTH_MODE_KEY].value},
                 "workspace": workspace_api_capabilities(),
+                "callbackMessages": {
+                    "persistent": True,
+                    "historyRetained": True,
+                    "limits": {
+                        "messageCharacters": MAX_CALLBACK_MESSAGE_LENGTH,
+                        "pendingMessages": MAX_PENDING_CALLBACK_MESSAGES,
+                        "pageSize": 200,
+                    },
+                },
                 "resources": {
                     "sessions": [
                         "create",
@@ -1481,7 +1547,8 @@ def create_app(
                         "quickLinks",
                         "notes",
                     ],
-                    "callback": ["global", "workspace"],
+                    "callback": ["global", "workspace", "messages"],
+                    "callbackMessages": ["post", "list", "review", "history", "idempotency"],
                     "configuration": ["shortcuts", "snippets"],
                     "observability": ["sessionStream", "hostMetrics"],
                 },
@@ -3210,8 +3277,8 @@ def create_app(
         try:
             # Prime lazily as well as during app construction. This covers a
             # store that was unavailable briefly while the application started.
-            broker.publish(app[WORKSPACES_KEY].get_global_callback_sessions())
-        except WorkspaceStoreUnavailable as error:
+            broker.publish(callback_snapshot())
+        except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
 
         queue = await broker.subscribe()
@@ -4176,7 +4243,7 @@ def create_app(
         *,
         action: str,
     ) -> web.Response:
-        if isinstance(error, WorkspaceStoreUnavailable):
+        if isinstance(error, (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable)):
             return json_error(str(error), 503)
         if isinstance(
             error,
@@ -4331,10 +4398,55 @@ def create_app(
 
     async def list_global_callback_sessions(_: web.Request) -> web.Response:
         try:
-            snapshot = app[WORKSPACES_KEY].get_global_callback_sessions()
-        except WorkspaceStoreUnavailable as error:
+            snapshot = callback_snapshot()
+        except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
         return web.json_response(snapshot)
+
+    def callback_message_error(error: Exception) -> web.Response:
+        if isinstance(error, (CallbackMessageStoreUnavailable, WorkspaceStoreUnavailable)):
+            return json_error(str(error), 503)
+        if isinstance(error, CallbackMessageNotFound):
+            return json_error("callback message was not found", 404)
+        if isinstance(error, CallbackMessageConflict):
+            return json_error(str(error), 409)
+        return json_error(str(error), 400)
+
+    async def post_callback_message(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        try:
+            callback, duplicate = app[CALLBACK_MESSAGES_KEY].add(payload)
+        except (CallbackMessageStoreUnavailable, CallbackMessageConflict, TypeError, ValueError) as error:
+            return callback_message_error(error)
+        return web.json_response({"callback": callback, "duplicate": duplicate}, status=200 if duplicate else 201)
+
+    async def list_callback_messages(request: web.Request) -> web.Response:
+        try:
+            unknown = set(request.query) - {"status", "after", "limit"}
+            if unknown:
+                raise ValueError(f"unknown query parameter: {min(unknown)}")
+            for field in request.query:
+                if len(request.query.getall(field)) != 1:
+                    raise ValueError(f"{field} must be supplied once")
+            result = app[CALLBACK_MESSAGES_KEY].list_messages(
+                status=request.query.get("status", "pending"),
+                after=int(request.query.get("after", "0")),
+                limit=int(request.query.get("limit", "100")),
+            )
+        except (CallbackMessageStoreUnavailable, TypeError, ValueError) as error:
+            return callback_message_error(error)
+        return web.json_response(result)
+
+    async def review_callback_message(request: web.Request) -> web.Response:
+        try:
+            callback = app[CALLBACK_MESSAGES_KEY].review(request.match_info["message_id"])
+            snapshot = callback_snapshot()
+        except (CallbackMessageStoreUnavailable, WorkspaceStoreUnavailable, CallbackMessageNotFound) as error:
+            return callback_message_error(error)
+        return web.json_response({"callback": callback, "callbacks": snapshot})
 
     async def replace_global_callback_sessions(request: web.Request) -> web.Response:
         payload, error_response = await workspace_resource_payload(
@@ -4349,8 +4461,10 @@ def create_app(
                 payload["sessions"],
                 session_revision=payload["sessionRevision"],
             )
+            snapshot = callback_snapshot(snapshot)
         except (
             WorkspaceStoreUnavailable,
+            CallbackMessageStoreUnavailable,
             WorkspaceSessionRevisionConflict,
             WorkspaceResourceConflictError,
             TypeError,
@@ -4375,8 +4489,10 @@ def create_app(
                 sessions=payload["sessions"],
                 session_revision=payload["sessionRevision"],
             )
+            result = callback_snapshot(result)
         except (
             WorkspaceStoreUnavailable,
+            CallbackMessageStoreUnavailable,
             WorkspaceSessionRevisionConflict,
             WorkspaceResourceConflictError,
             TypeError,
@@ -4401,8 +4517,12 @@ def create_app(
                 sessions=payload["sessions"],
                 session_revision=payload["sessionRevision"],
             )
+            reviewed = app[CALLBACK_MESSAGES_KEY].review_sessions(payload["sessions"])
+            result["removed"] = list(dict.fromkeys([*result["removed"], *reviewed]))
+            result = callback_snapshot(result)
         except (
             WorkspaceStoreUnavailable,
+            CallbackMessageStoreUnavailable,
             WorkspaceSessionRevisionConflict,
             WorkspaceResourceConflictError,
             TypeError,
@@ -4427,8 +4547,12 @@ def create_app(
                 payload["session"],
                 session_revision=payload["sessionRevision"],
             )
+            reviewed = app[CALLBACK_MESSAGES_KEY].review_sessions([payload["session"]])
+            result["removed"] = list(dict.fromkeys([*result["removed"], *reviewed]))
+            result = callback_snapshot(result)
         except (
             WorkspaceStoreUnavailable,
+            CallbackMessageStoreUnavailable,
             WorkspaceSessionRevisionConflict,
             WorkspaceResourceConflictError,
             TypeError,
@@ -4865,8 +4989,8 @@ def create_app(
             return json_error(str(error), 400)
 
         try:
-            callbacks = app[WORKSPACES_KEY].get_global_callback_sessions()
-        except WorkspaceStoreUnavailable as error:
+            callbacks = callback_snapshot()
+        except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
         broker = app[WORKSPACE_STREAM_BROKER_KEY]
         # No I/O occurs between reading the snapshot and subscribing, so a
@@ -5508,6 +5632,9 @@ def create_app(
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
     app.router.add_get(f"{prefix}/api/callback-sessions/stream", callback_sessions_stream)
+    app.router.add_get(f"{prefix}/api/callback-messages", list_callback_messages)
+    app.router.add_post(f"{prefix}/api/callback-messages", post_callback_message)
+    app.router.add_post(f"{prefix}/api/callback-messages/{{message_id}}/review", review_callback_message)
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/messages", list_session_messages
     )

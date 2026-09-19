@@ -1,0 +1,70 @@
+.workspace-callback-messages {
+  grid-column: 1 / -1;
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding-top: 5px;
+}
+
+.workspace-callback-message {
+  min-width: 0;
+  padding: 9px;
+  color: #e1e9dc;
+  background: #161e16;
+  border: 1px solid #3d4b35;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.workspace-callback-message-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+
+.workspace-callback-message-meta strong {
+  color: #c5e395;
+  font-size: 10px;
+}
+
+.workspace-callback-message-meta time {
+  flex: 1;
+  color: #a4b39b;
+  font-size: 9px;
+}
+
+.workspace-callback-message .workspace-callback-message-review {
+  display: grid;
+  flex: 0 0 26px;
+  width: 26px;
+  min-height: 26px;
+  padding: 4px;
+  place-items: center;
+}
+
+.workspace-callback-message-review svg { width: 14px; height: 14px; }
+.workspace-callback-message-cwd { color: #b5c7ab; font-size: 10px; }
+.workspace-callback-message p { margin: 8px 0 0; white-space: pre-wrap; }
+.workspace-callback-message-origin { display: block; margin-top: 6px; color: #9aab90; font-size: 9px; }
+.workspace-callback-message-details { margin-top: 8px; }
+.workspace-callback-message-details summary { cursor: pointer; }
+.workspace-callback-message-preview { white-space: pre-wrap; }
+.workspace-callback-message-expand { display: block; color: #c5e395; font-size: 10px; text-decoration: underline; }
+.workspace-callback-message-details[open] .workspace-callback-message-preview { display: none; }
+.workspace-callback-message-details summary:focus-visible { outline: 2px solid var(--callback-accent); outline-offset: 3px; }
+
+html[data-theme="light"] .workspace-callback-message {
+  color: #273326;
+  background: #fffdf6;
+  border-color: #c4ceb8;
+}
+
+html[data-theme="light"] .workspace-callback-message-meta strong,
+html[data-theme="light"] .workspace-callback-message-expand { color: #426022; }
+html[data-theme="light"] .workspace-callback-message-meta time,
+html[data-theme="light"] .workspace-callback-message-origin { color: #5a6853; }
+html[data-theme="light"] .workspace-callback-message-cwd { color: #4b5a41; }

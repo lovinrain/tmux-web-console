@@ -28,6 +28,7 @@ import {
   listSessionFiles,
   listSessions,
   listQueuedMessages,
+  listCallbackMessages,
   previewSessionFile,
   resolveSessionFilePath,
   renameSession,
@@ -38,6 +39,7 @@ import {
   replaceCommonWorkspaceQuickLinks,
   replaceGlobalCallbackSessions,
   reviewGlobalCallbackSession,
+  reviewCallbackMessage,
   replaceSessionNotebook,
   replaceSessionNote,
   replaceSessionQuickLinks,
@@ -1182,6 +1184,22 @@ describe("saved workspace API", () => {
     );
   });
 
+  it("fetches message history by cursor and reviews an encoded message id", async () => {
+    const page = { messages: [], nextAfter: 12, revision: 4 };
+    const reviewed = { callback: { id: "message/id", reviewedAt: 1_800_000_100 }, callbacks: {} };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(page), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(reviewed), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(listCallbackMessages({ status: "all", after: 7, limit: 5 })).resolves.toEqual(page);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_PATH}/api/callback-messages?status=all&after=7&limit=5`);
+    await expect(reviewCallbackMessage("message/id")).resolves.toEqual(reviewed);
+    expect(fetchMock.mock.calls[1]).toEqual([
+      `${BASE_PATH}/api/callback-messages/message%2Fid/review`,
+      expect.objectContaining({ method: "POST" }),
+    ]);
+  });
+
   it("loads and replaces common, workspace, and session-specific quick links", async () => {
     const common = [{ id: "docs", label: "Docs", url: "https://docs.test/" }];
     const workspaceLinks = [
@@ -1835,6 +1853,36 @@ describe("subscribeToWorkspace", () => {
 });
 
 describe("subscribeToCallbackSessions", () => {
+  it("validates message metadata and its independent revision before publishing a snapshot", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onSnapshot = vi.fn();
+    const onError = vi.fn();
+    subscribeToCallbackSessions({ onSnapshot, onError });
+    const source = MockEventSource.instances[0];
+    const message = {
+      id: "done-1", sequence: 1, message: "Done", sessionName: "agent", agentType: "codex",
+      cwd: "/work", requestId: null, tmuxSessionId: "$7", tmuxPaneId: "%8", host: "host",
+      createdAt: 1_800_000_000, reviewedAt: null,
+    };
+    const snapshot = {
+      callbackSessions: ["agent"], globalCallbackSessions: [], workspaceCallbacks: [],
+      sessionRevision: 2, callbackMessageRevision: 1, callbackMessages: [message],
+    };
+    for (const invalid of [
+      { ...snapshot, callbackMessageRevision: -1 },
+      { ...snapshot, callbackMessageRevision: undefined },
+      { ...snapshot, callbackMessages: [{ ...message, cwd: 3 }] },
+      { ...snapshot, callbackMessages: [{ ...message, reviewedAt: "today" }] },
+      { ...snapshot, callbackMessages: [{ ...message, sequence: 1.5 }] },
+    ]) {
+      source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(invalid) }));
+    }
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(5);
+    source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(snapshot) }));
+    expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+  });
+
   it("subscribes at the configured base path and delivers callback snapshots", () => {
     vi.stubGlobal("EventSource", MockEventSource);
     const onSnapshot = vi.fn();

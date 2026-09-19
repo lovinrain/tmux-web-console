@@ -811,7 +811,25 @@ function isGlobalCallbackSnapshot(value: unknown): value is GlobalCallbackSnapsh
       && typeof source.workspaceName === "string"
       && isStringArray(source.sessions)
     ))
-    && isNonnegativeSafeInteger(value.sessionRevision);
+    && isNonnegativeSafeInteger(value.sessionRevision)
+    && (value.callbackMessages === undefined && value.callbackMessageRevision === undefined
+      || Array.isArray(value.callbackMessages)
+        && value.callbackMessages.every(isCallbackMessage)
+        && isNonnegativeSafeInteger(value.callbackMessageRevision));
+}
+
+function isCallbackMessage(value: unknown): value is CallbackMessage {
+  return isRecord(value)
+    && ["id", "message", "sessionName", "agentType", "cwd"].every((key) => (
+      typeof value[key] === "string"
+    ))
+    && ["requestId", "tmuxSessionId", "tmuxPaneId", "host"].every((key) => (
+      value[key] === null || typeof value[key] === "string"
+    ))
+    && isNonnegativeSafeInteger(value.sequence)
+    && typeof value.createdAt === "number" && Number.isFinite(value.createdAt)
+    && (value.reviewedAt === null
+      || typeof value.reviewedAt === "number" && Number.isFinite(value.reviewedAt));
 }
 
 export function subscribeToCallbackSessions({
@@ -990,6 +1008,21 @@ export interface WorkspaceCallbackSource {
   sessions: string[];
 }
 
+export interface CallbackMessage {
+  id: string;
+  sequence: number;
+  message: string;
+  sessionName: string;
+  agentType: string;
+  cwd: string;
+  requestId: string | null;
+  tmuxSessionId: string | null;
+  tmuxPaneId: string | null;
+  host: string | null;
+  createdAt: number;
+  reviewedAt: number | null;
+}
+
 /** Global callback state plus the workspace-owned entries it inherits. */
 export interface GlobalCallbackSnapshot {
   /** Effective, deduplicated queue (global entries first, then workspace entries). */
@@ -999,6 +1032,10 @@ export interface GlobalCallbackSnapshot {
   /** Workspace queues contributing entries to the effective global queue. */
   workspaceCallbacks: WorkspaceCallbackSource[];
   sessionRevision: number;
+  /** Pending agent messages; absent on older servers. */
+  callbackMessages?: CallbackMessage[];
+  /** Independent fence: posting a message does not change workspace sessions. */
+  callbackMessageRevision?: number;
 }
 
 export interface WorkspaceSessionPane {
@@ -1606,6 +1643,25 @@ export async function reviewGlobalCallbackSession(
       body: JSON.stringify({ session, sessionRevision }),
     },
   );
+}
+
+export async function listCallbackMessages(
+  options: { status?: "pending" | "reviewed" | "all"; after?: number; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<{ messages: CallbackMessage[]; nextAfter: number | null; revision: number }> {
+  const query = new URLSearchParams();
+  if (options.status !== undefined) query.set("status", options.status);
+  if (options.after !== undefined) query.set("after", String(options.after));
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  return jsonRequest(`/api/callback-messages${query.size ? `?${query}` : ""}`, { signal });
+}
+
+export async function reviewCallbackMessage(
+  id: string,
+): Promise<{ callback: CallbackMessage; callbacks: GlobalCallbackSnapshot }> {
+  return jsonRequest(`/api/callback-messages/${encodeURIComponent(id)}/review`, {
+    method: "POST",
+  });
 }
 
 export async function transferSessionToWorkspace(

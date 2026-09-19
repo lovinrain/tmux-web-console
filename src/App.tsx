@@ -20,6 +20,7 @@ import {
   recreateSession,
   replaceGlobalCallbackSessions,
   reviewGlobalCallbackSession,
+  reviewCallbackMessage,
   releaseUtilityTerminal,
   subscribeToCallbackSessions,
   subscribeToWorkspace,
@@ -62,6 +63,7 @@ import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
 import { WorkspaceTimer } from "./components/WorkspaceTimer";
 import { HostPulse } from "./components/HostPulse";
 import { WorkspaceCallbackList } from "./components/WorkspaceCallbackList";
+import { mergeCallbackSnapshot } from "./callbackSnapshots";
 import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import { WorkspacePaneBoard } from "./components/WorkspacePaneBoard";
 import {
@@ -1061,14 +1063,11 @@ function AppRoutes() {
   }, []);
 
   const applyGlobalCallbackSnapshot = useCallback((snapshot: GlobalCallbackSnapshot) => {
-    // EventSource and the initial fetch can complete in either order. The
-    // workspace revision is a monotonic fence, so never let an older response
-    // roll a newer callback state back.
-    if (
-      snapshot.sessionRevision < globalCallbackSnapshotRef.current.sessionRevision
-    ) return;
-    globalCallbackSnapshotRef.current = snapshot;
-    setGlobalCallbackSnapshot(snapshot);
+    // HTTP responses and both streams can arrive out of order. Agent messages
+    // have their own revision and must not be rejected by the session fence.
+    const merged = mergeCallbackSnapshot(globalCallbackSnapshotRef.current, snapshot);
+    globalCallbackSnapshotRef.current = merged;
+    setGlobalCallbackSnapshot(merged);
 
     // A callback event also carries the saved workspace queues. Keep the local
     // workspace scope aligned when another browser tab changes this workspace.
@@ -1077,9 +1076,9 @@ function AppRoutes() {
     const currentRevision = workspaceSessionRevision.current;
     if (
       currentRevision?.workspaceId === workspaceId
-      && snapshot.sessionRevision < currentRevision.value
+      && merged.sessionRevision < currentRevision.value
     ) return;
-    const source = snapshot.workspaceCallbacks.find((item) => item.workspaceId === workspaceId);
+    const source = merged.workspaceCallbacks.find((item) => item.workspaceId === workspaceId);
     const nextSessions = normalizeCallbackSessions(source?.sessions);
     const currentSessions = workspaceCallbackSessionsRef.current;
     if (
@@ -1096,7 +1095,7 @@ function AppRoutes() {
     if (workspaceSessionRevision.current?.workspaceId === workspaceId) {
       workspaceSessionRevision.current = {
         workspaceId,
-        value: snapshot.sessionRevision,
+        value: merged.sessionRevision,
       };
     }
   }, [setWorkspaceIdentity]);
@@ -1627,8 +1626,7 @@ function AppRoutes() {
         previous.sessionRevision,
       );
       if (!appMounted.current) return;
-      globalCallbackSnapshotRef.current = updated;
-      setGlobalCallbackSnapshot(updated);
+      applyGlobalCallbackSnapshot(updated);
       setWorkspaceSyncProblem((current) => (
         current?.kind === "save" ? null : current
       ));
@@ -1646,7 +1644,7 @@ function AppRoutes() {
     } finally {
       if (appMounted.current) setGlobalCallbackBusy(false);
     }
-  }, [refreshGlobalCallbackSnapshot]);
+  }, [applyGlobalCallbackSnapshot, refreshGlobalCallbackSnapshot]);
 
   const reviewCallbackSession = useCallback(async (sessionName: string) => {
     const current = currentLocation();
@@ -1655,6 +1653,9 @@ function AppRoutes() {
     const localAfter = localBefore.filter((name) => name !== sessionName);
     const snapshot = globalCallbackSnapshotRef.current;
     const serverOwnsEntry = snapshot.globalCallbackSessions.includes(sessionName)
+      || snapshot.callbackMessages?.some((message) => (
+        message.sessionName === sessionName && message.reviewedAt === null
+      ))
       || snapshot.workspaceCallbacks.some((source) => (
         source.sessions.includes(sessionName)
       ));
@@ -1685,26 +1686,12 @@ function AppRoutes() {
         snapshot.sessionRevision,
       );
       if (!appMounted.current) return;
-      globalCallbackSnapshotRef.current = updated;
-      setGlobalCallbackSnapshot(updated);
+      applyGlobalCallbackSnapshot(updated);
 
-      if (localAfter.length !== localBefore.length) {
+      if (!workspaceId && localAfter.length !== localBefore.length) {
         workspaceCallbackSessionsRef.current = localAfter;
         setWorkspaceCallbackSessions(localAfter);
-        if (workspaceId) {
-          if (workspaceSessionRevision.current?.workspaceId === workspaceId) {
-            workspaceSessionRevision.current = {
-              workspaceId,
-              value: updated.sessionRevision,
-            };
-          }
-          const identity = activeWorkspaceIdentityRef.current;
-          if (identity?.id === workspaceId) {
-            setWorkspaceIdentity({ ...identity, callbackSessions: localAfter });
-          }
-        } else {
-          writeTemporaryCallbackSessions(temporaryTerminalKeyRef.current, localAfter);
-        }
+        writeTemporaryCallbackSessions(temporaryTerminalKeyRef.current, localAfter);
       }
       setWorkspaceSyncProblem((currentProblem) => (
         currentProblem?.kind === "save" ? null : currentProblem
@@ -1721,7 +1708,17 @@ function AppRoutes() {
     } finally {
       if (appMounted.current) setGlobalCallbackBusy(false);
     }
-  }, [refreshGlobalCallbackSnapshot, setWorkspaceIdentity, updateWorkspaceCallbackSessions]);
+  }, [applyGlobalCallbackSnapshot, refreshGlobalCallbackSnapshot, updateWorkspaceCallbackSessions]);
+
+  const reviewAgentCallbackMessage = useCallback(async (id: string) => {
+    setGlobalCallbackBusy(true);
+    try {
+      const result = await reviewCallbackMessage(id);
+      if (appMounted.current) applyGlobalCallbackSnapshot(result.callbacks);
+    } finally {
+      if (appMounted.current) setGlobalCallbackBusy(false);
+    }
+  }, [applyGlobalCallbackSnapshot]);
 
   const syncLocation = useCallback(() => {
     const restoredLocation = currentLocation();
@@ -4297,6 +4294,26 @@ function AppRoutes() {
     ),
   );
 
+  const renderCallbackList = (currentSession: string, dashboard = false) => (
+    <WorkspaceCallbackList
+      sessionName={currentSession}
+      workspaceId={hydratedWorkspaceId === locationWorkspaceId ? locationWorkspaceId : null}
+      workspaceName={workspaceName}
+      temporaryKey={temporaryTerminalKey}
+      sessions={knownSessions}
+      workspaceSessionNames={dashboard && !locationWorkspaceId ? undefined : workspace.openSessions}
+      callbackSessions={workspaceCallbackSessions}
+      onChange={updateWorkspaceCallbackSessions}
+      globalCallbackSnapshot={globalCallbackSnapshot}
+      onGlobalChange={updateGlobalCallbackSessions}
+      globalCallbackBusy={globalCallbackBusy}
+      onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
+      onReviewSession={reviewCallbackSession}
+      onReviewMessage={reviewAgentCallbackMessage}
+      onSelectSession={dashboard ? openSession : switchSession}
+    />
+  );
+
   if (paneLayoutRoute) {
     const paneLayout = workspacePaneLayouts.find(
       (layout) => layout.id === paneLayoutRoute.layoutId,
@@ -4360,10 +4377,11 @@ function AppRoutes() {
           globalCallbackBusy={globalCallbackBusy}
           onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
           onReviewSession={reviewCallbackSession}
+          onReviewMessage={reviewAgentCallbackMessage}
           onSelectSession={switchSession}
         />
       </div>
-    ) : undefined;
+    ) : <div className="workspace-header-widgets">{renderCallbackList("")}</div>;
     const paneLinks = widgetSessionName ? (
       <WorkspaceQuickLinks
         sessionName={widgetSessionName}
@@ -4578,6 +4596,7 @@ function AppRoutes() {
               globalCallbackBusy={globalCallbackBusy}
               onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
               onReviewSession={reviewCallbackSession}
+              onReviewMessage={reviewAgentCallbackMessage}
               onSelectSession={switchSession}
             />
           </div>
@@ -4808,6 +4827,7 @@ function AppRoutes() {
 
   return withWorkspaceSyncNotice(
     <SessionDashboard
+      headerWidgets={renderCallbackList(workspaceReturnSession ?? "", true)}
       onOpen={openSession}
       onOpenInput={openSessionInput}
       onResumeWorkspace={workspaceReturnSession ? resumeWorkspace : undefined}

@@ -58,6 +58,7 @@ README.md
 deploy/
 e2e/
 src/
+scripts/
 tests/
 tmux_console/
 index.html
@@ -96,7 +97,7 @@ must rebuild it on the target. An archive of this folder does not include:
   keymap, authentication state, and uploaded attachments stored outside the
   source folder;
 - the SQLite session-recovery registry, including saved CWDs and reference-only
-  coding-agent IDs;
+  coding-agent IDs, and the separate persistent callback-message database;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -132,7 +133,7 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 | tmux | 3.x | 3.2+ enables Grok startup appearance hints; `xterm-256color` terminfo must exist. |
 | Base path | `/mux` | No trailing slash at runtime; build value is `/mux/`. |
 | Loopback port | `7683` | Must not conflict with an unrelated service. |
-| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains six JSON files, one SQLite recovery registry, and private uploaded attachments. |
+| State directory | `/var/lib/muxdeck` | Explicit, persistent, mode `0700`, owned by the run user; contains six JSON files, SQLite recovery and callback databases, and private uploaded attachments. |
 | Authentication mode | `server` | Use `basic` only when browser-managed credentials are intended; use `none` only behind another explicit trust boundary. |
 | Application login | required for `server` or `basic` | Provision interactively; never put a plaintext password in source, a unit, an environment file, or command-line arguments. |
 | tmux socket | default or `-L NAME` | `MUXDECK_TMUX_SOCKET` is a name, never a filesystem path. |
@@ -381,6 +382,7 @@ The default source paths are under the old service user's state directory:
 ~/.local/state/muxdeck/shortcuts.json
 ~/.local/state/muxdeck/auth.json
 ~/.local/state/muxdeck/sessions.sqlite3
+~/.local/state/muxdeck/callbacks.sqlite3
 ~/.local/state/muxdeck/uploads/
 ```
 
@@ -409,6 +411,16 @@ does not resume an agent. Treat the whole database as sensitive and keep it mode
 `0600`.
 An existing unit may override any path; inspect its environment rather than
 assuming defaults.
+
+The separate `callbacks.sqlite3` file stores agent-posted callback messages,
+reported session/agent/CWD metadata, receipt times, idempotency keys, and review
+history. It uses schema version 1 and does not alter workspace or recovery
+schemas. `MUXDECK_CALLBACKS_FILE` overrides its path; otherwise it lives beside
+the configured workspace file. Back it up using SQLite's backup API alongside
+the recovery registry, migrate it as a private `0600` file, and retain it during
+rollback even when the older release does not display messages. The callback
+token file described in section 13 is a separate secret: migrate it privately
+only when agent callback access should carry over.
 
 The SQLite registry uses `PRAGMA user_version = 2`. Version 1 upgrades in a
 transaction by adding `session_history` and `history_workspaces` and importing
@@ -1050,6 +1062,52 @@ the explicit `400` error `unknown field: expectedUpdatedAt`; it remembers that
 decision for the current page, including page-exit requests. It never strips
 the check on `409`. Reload after the backend upgrade to clear that compatibility
 decision and restore guarded writes.
+
+### Agent callback endpoint setup
+
+Agent posting and reading use `/api/callback-messages`; browser users continue
+using their ordinary login. Scripts can instead use one callback-only bearer
+token configured by `MUXDECK_CALLBACK_TOKEN_FILE`. The token also permits a
+read-only global callback snapshot, and cannot access terminal, file, workspace,
+or account operations. Host and browser-origin checks still apply. No proxy
+change or unauthenticated route is needed.
+
+Provision a token as the service user without printing it. For this host's root
+service and agents, the shared private path is
+`/root/.config/muxdeck/callback-token`, which is also the helper's default:
+
+```bash
+python3 - <<'PY'
+import os
+import secrets
+from pathlib import Path
+directory = Path.home() / '.config/muxdeck'
+directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+path = directory / 'callback-token'
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'w') as stream:
+    stream.write(secrets.token_urlsafe(32) + '\n')
+PY
+```
+
+This refuses to overwrite an existing credential. Set the service's
+`MUXDECK_CALLBACK_TOKEN_FILE` to that absolute file path and
+`MUXDECK_CALLBACKS_FILE` to its persistent callback database path. Keep the token
+outside the source tree and archives. A configured missing, malformed, symlinked,
+or group/world-accessible token file prevents startup. Rotation or removal is
+checked on each bearer request and takes effect immediately. All token holders
+can post, read, and review callback messages; treat the file as access to the
+whole callback inbox.
+
+Deploy both backend and frontend, following the tmux cgroup/KillMode preflight
+above before restarting only Muxdeck. Copy `scripts/muxdeck_callback.py` to
+`~/s/g/cb.py` (mode `0700`) and `docs/AGENT_CALLBACKS.md` to `~/s/g/cb.md` (mode
+`0600`) for the intended agent user. The helper reads its token from the private
+file and supports posting, paginated JSON reads, review, and metadata-only dry
+runs. Use a disposable report for smoke validation: confirm a repeated request
+ID returns the original report, open browser callback panels update, review
+removes it from pending, and `status=all` still returns it. Never put the token
+itself in commands, logs, screenshots, documentation, or source control.
 
 ## 14. Troubleshooting
 

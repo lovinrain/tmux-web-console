@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithTheme } from "../test-utils";
+import type { CallbackMessage } from "../api";
 import type { Session } from "../types";
 import { WorkspaceCallbackList } from "./WorkspaceCallbackList";
 
@@ -37,6 +38,23 @@ function session(name: string, state: Session["agentState"] = "waiting_human"): 
     ignored: false,
     queuedMessageCount: 0,
     panes: [],
+  };
+}
+
+function callbackMessage(id: string, sessionName: string, message: string): CallbackMessage {
+  return {
+    id,
+    sequence: 1,
+    sessionName,
+    message,
+    agentType: "codex",
+    cwd: "/root/tmux-web-console",
+    requestId: null,
+    tmuxSessionId: null,
+    tmuxPaneId: null,
+    host: null,
+    createdAt: 1_789_776_000,
+    reviewedAt: null,
   };
 }
 
@@ -381,5 +399,301 @@ describe("WorkspaceCallbackList", () => {
     expect(review).toBeEnabled();
     fireEvent.click(review);
     await waitFor(() => expect(onReviewSession).toHaveBeenCalledWith("agent-two"));
+  });
+
+  it("includes pending messages from ended, unwatched sessions and displays their content as text", () => {
+    const message = callbackMessage("message-one", "ended-agent", "Completed <img src=x onerror=alert(1)> safely.");
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[session("agent-one")]}
+        callbackSessions={[]}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: [],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: 2,
+          callbackMessages: [message, {
+            ...callbackMessage("message-reviewed", "reviewed-agent", "Previously reviewed report"),
+            reviewedAt: message.createdAt + 1,
+          }],
+        }}
+        onReviewMessage={vi.fn(async () => undefined)}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(within(panel).getByText("ended-agent")).toBeInTheDocument();
+    expect(within(panel).getByText(message.message)).toBeInTheDocument();
+    expect(within(panel).getByText(message.agentType)).toBeInTheDocument();
+    expect(within(panel).getByText(message.cwd)).toBeInTheDocument();
+    expect(panel.querySelector("time")).toHaveAttribute(
+      "datetime", new Date(message.createdAt * 1000).toISOString(),
+    );
+    expect(within(panel).getByRole("button", { name: "Open ended-agent" })).toBeDisabled();
+    expect(within(panel).queryByText("reviewed-agent")).not.toBeInTheDocument();
+    expect(within(panel).queryByText("Previously reviewed report")).not.toBeInTheDocument();
+    expect(panel.querySelector("img")).toBeNull();
+  });
+
+  it("lets the reader expand a long message without losing the full text or line breaks", () => {
+    const message = callbackMessage("message-long", "agent-one", `${"Detailed outcome. ".repeat(50)}\nFinal result: all checks passed.`);
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        sessions={[session("agent-one")]}
+        callbackSessions={[]}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: [],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: 1,
+          callbackMessages: [message],
+        }}
+        onReviewMessage={vi.fn(async () => undefined)}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    const expand = within(panel).getByText("Show full message");
+    const disclosure = expand.closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(expand);
+    expect(disclosure).toHaveAttribute("open");
+    expect(within(panel).getByText(message.message, { normalizer: (text) => text }))
+      .toBeVisible();
+  });
+
+  it("filters workspace messages to open or explicitly watched sessions, including ended sessions", () => {
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[session("agent-one")]}
+        callbackSessions={["ended-agent"]}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: [],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: 3,
+          callbackMessages: [
+            callbackMessage("message-open", "agent-one", "Current workspace report"),
+            callbackMessage("message-ended", "ended-agent", "Watched ended session report"),
+            callbackMessage("message-outside", "outside-agent", "Other workspace report"),
+          ],
+        }}
+        onReviewMessage={vi.fn(async () => undefined)}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(panel).toHaveAttribute("data-scope", "workspace");
+    expect(within(panel).getByText("Current workspace report")).toBeInTheDocument();
+    expect(within(panel).getByText("Watched ended session report")).toBeInTheDocument();
+    expect(within(panel).queryByText("Other workspace report")).not.toBeInTheDocument();
+    expect(within(panel).queryByText("outside-agent")).not.toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Global callback scope" }));
+    expect(within(screen.getByRole("dialog", { name: "Callback list" }))
+      .getByText("Other workspace report")).toBeInTheDocument();
+  });
+
+  it("reviews an individual message without reviewing the session or its other messages", async () => {
+    const onReviewMessage = vi.fn(async () => undefined);
+    const onReviewSession = vi.fn(async () => undefined);
+    const onChange = vi.fn(async () => undefined);
+    const first = callbackMessage("message-one", "agent-one", "First completed task");
+    const second = {
+      ...callbackMessage("message-two", "agent-one", "Second completed task"),
+      agentType: "claude",
+    };
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[session("agent-one")]}
+        callbackSessions={[]}
+        onChange={onChange}
+        globalCallbackSnapshot={{
+          callbackSessions: [],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: 2,
+          callbackMessages: [first, second],
+        }}
+        onReviewMessage={onReviewMessage}
+        onReviewSession={onReviewSession}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    fireEvent.click(within(panel).getByRole("button", {
+      name: "Mark message from codex in agent-one reviewed",
+    }));
+    await waitFor(() => expect(onReviewMessage).toHaveBeenCalledWith(first.id));
+    expect(onReviewMessage).toHaveBeenCalledTimes(1);
+    expect(onReviewSession).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(within(panel).getByText(second.message)).toBeInTheDocument();
+  });
+
+  it.each([
+    { description: "a message for a previous session with the same name", ids: ["$7"], watched: "none", canOpen: false },
+    { description: "old and unreported session IDs", ids: ["$7", null], watched: "none", canOpen: false },
+    { description: "a matching session ID", ids: ["$8"], watched: "none", canOpen: true },
+    { description: "both old and matching session IDs", ids: ["$7", "$8"], watched: "none", canOpen: true },
+    { description: "a message without a session ID", ids: [null], watched: "none", canOpen: true },
+    { description: "a manually watched global entry", ids: ["$7"], watched: "global", canOpen: true },
+    { description: "a manually watched workspace entry", ids: ["$7"], watched: "workspace", canOpen: true },
+  ])("guards opening the live session for $description", ({ ids, watched, canOpen }) => {
+    const onSelectSession = vi.fn();
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="build"
+        workspaceId="workspace-one"
+        workspaceSessionNames={["build"]}
+        sessions={[{ ...session("build"), id: "$8" }]}
+        callbackSessions={watched === "workspace" ? ["build"] : []}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: [],
+          globalCallbackSessions: watched === "global" ? ["build"] : [],
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: ids.length,
+          callbackMessages: ids.map((tmuxSessionId, index) => ({
+            ...callbackMessage(`message-${index}`, "build", `Completed task ${index}`),
+            tmuxSessionId,
+          })),
+        }}
+        onReviewMessage={vi.fn(async () => undefined)}
+        onSelectSession={onSelectSession}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    const open = within(panel).getByRole("button", { name: "Open build" });
+    if (canOpen) {
+      expect(open).toBeEnabled();
+      fireEvent.click(open);
+      expect(onSelectSession).toHaveBeenCalledWith("build");
+    } else {
+      expect(open).toBeDisabled();
+      fireEvent.click(open);
+      fireEvent.click(within(panel).getByText("build"));
+      expect(onSelectSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps a manual callback added by another tab while clearing messages is still pending", async () => {
+    let finishReview!: () => void;
+    const reviewPending = new Promise<void>((resolve) => { finishReview = resolve; });
+    const onReviewMessage = vi.fn(() => reviewPending);
+    let manualSessions = ["build"];
+    let view: ReturnType<typeof renderWithTheme>;
+    const onGlobalChange = vi.fn(async (next: string[]) => {
+      manualSessions = next;
+      view.rerender(renderSnapshot());
+    });
+    const renderSnapshot = () => (
+      <WorkspaceCallbackList
+        sessionName="build"
+        workspaceId="workspace-one"
+        workspaceSessionNames={["build", "new-agent"]}
+        sessions={[session("build"), session("new-agent")]}
+        callbackSessions={[]}
+        onChange={vi.fn(async () => undefined)}
+        globalCallbackSnapshot={{
+          callbackSessions: manualSessions,
+          globalCallbackSessions: manualSessions,
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: 1,
+          callbackMessages: [callbackMessage("message-build", "build", "Build complete")],
+        }}
+        onGlobalChange={onGlobalChange}
+        onReviewMessage={onReviewMessage}
+        onSelectSession={vi.fn()}
+      />
+    );
+    view = renderWithTheme(renderSnapshot());
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear global" }));
+    await waitFor(() => expect(onReviewMessage).toHaveBeenCalledWith("message-build"));
+
+    // A refreshed server snapshot arrives while the message review request is pending.
+    manualSessions = [...manualSessions, "new-agent"];
+    view.rerender(renderSnapshot());
+    expect(within(screen.getByRole("dialog", { name: "Callback list" }))
+      .getByText("new-agent")).toBeInTheDocument();
+    await act(async () => {
+      finishReview();
+      await reviewPending;
+    });
+
+    expect(onGlobalChange).toHaveBeenCalledTimes(1);
+    expect(onGlobalChange).toHaveBeenCalledWith([]);
+    expect(manualSessions).toContain("new-agent");
+    expect(within(screen.getByRole("dialog", { name: "Callback list" }))
+      .getByText("new-agent")).toBeInTheDocument();
+  });
+
+  it.each(["global", "workspace"] as const)("reviews all messages for a session from the %s scope", async (scope) => {
+    const onReviewSession = vi.fn(async () => undefined);
+    const onReviewMessage = vi.fn(async () => undefined);
+    const onChange = vi.fn(async () => undefined);
+    renderWithTheme(
+      <WorkspaceCallbackList
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceSessionNames={["agent-one"]}
+        sessions={[session("agent-one")]}
+        callbackSessions={[]}
+        onChange={onChange}
+        globalCallbackSnapshot={{
+          callbackSessions: [],
+          globalCallbackSessions: [],
+          workspaceCallbacks: [],
+          sessionRevision: 0,
+          callbackMessageRevision: 1,
+          callbackMessages: [callbackMessage("message-one", "agent-one", "Ready for review")],
+        }}
+        onReviewMessage={onReviewMessage}
+        onReviewSession={onReviewSession}
+        onSelectSession={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    if (scope === "workspace") {
+      fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    }
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    fireEvent.click(within(panel).getByRole("button", { name: /^Mark agent-one reviewed/ }));
+    await waitFor(() => expect(onReviewSession).toHaveBeenCalledWith("agent-one"));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onReviewMessage).not.toHaveBeenCalled();
   });
 });

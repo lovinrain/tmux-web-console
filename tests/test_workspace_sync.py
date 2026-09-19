@@ -42,6 +42,14 @@ async def read_workspace_event(response):
     return (await read_workspace_snapshot(response))["workspace"]
 
 
+def callback_snapshot(store):
+    return {
+        **store.get_global_callback_sessions(),
+        "callbackMessages": [],
+        "callbackMessageRevision": 0,
+    }
+
+
 @pytest.mark.parametrize("method", ["patch", "activity"])
 def test_simultaneous_snapshot_saves_have_exactly_one_winner(tmp_path, method):
     store = WorkspaceStore(tmp_path / "workspaces.json", clock=lambda: 10)
@@ -141,7 +149,7 @@ async def test_workspace_stream_fanout_reconnect_deletion_and_cleanup(tmp_path):
         assert first.headers["X-Accel-Buffering"] == "no"
         assert await read_workspace_snapshot(first) == {
             "workspace": original,
-            "callbacks": store.get_global_callback_sessions(),
+            "callbacks": callback_snapshot(store),
         }
         assert await read_workspace_event(second) == original
         assert broker.subscriber_count == 2
@@ -181,7 +189,7 @@ async def test_workspace_stream_scopes_resource_writes_and_ignores_failures(tmp_
     other = store.create_workspace(name="Other", tabs=["c"], active_session="c")
     application = create_app(workspaces=store, base_path="")
     broker = application[WORKSPACE_STREAM_BROKER_KEY]
-    queue = await broker.subscribe(original["id"], original, store.get_global_callback_sessions())
+    queue = await broker.subscribe(original["id"], original, callback_snapshot(store))
     await queue.get()
     async with TestClient(TestServer(application)) as client:
         response = await client.patch(f"/api/workspaces/{other['id']}", json={"name": "Other 2"})
@@ -219,7 +227,7 @@ async def test_workspace_stream_multiplexes_callback_only_updates_and_deduplicat
     other = store.create_workspace(name="Other", tabs=["b"], active_session="b")
     application = create_app(workspaces=store, base_path="")
     broker = application[WORKSPACE_STREAM_BROKER_KEY]
-    queue = await broker.subscribe(original["id"], original, store.get_global_callback_sessions())
+    queue = await broker.subscribe(original["id"], original, callback_snapshot(store))
     await queue.get()
     async with TestClient(TestServer(application)) as client:
         stream = await client.get(f"/api/workspaces/{original['id']}/stream")
@@ -230,7 +238,7 @@ async def test_workspace_stream_multiplexes_callback_only_updates_and_deduplicat
         assert added.status == 200
         first = await read_workspace_snapshot(stream)
         assert first["workspace"] == original
-        assert first["callbacks"] == store.get_global_callback_sessions()
+        assert first["callbacks"] == callback_snapshot(store)
         assert first["callbacks"]["callbackSessions"] == ["global"]
         assert json.loads(queue.get_nowait()) == first
 
@@ -247,7 +255,7 @@ async def test_workspace_stream_multiplexes_callback_only_updates_and_deduplicat
         second = await read_workspace_snapshot(stream)
         assert second["workspace"] == original
         assert second["callbacks"]["callbackSessions"] == ["global", "b"]
-        assert second["callbacks"] == store.get_global_callback_sessions()
+        assert second["callbacks"] == callback_snapshot(store)
         assert json.loads(queue.get_nowait()) == second
         stream.close()
         await broker.unsubscribe(original["id"], queue)
@@ -296,7 +304,7 @@ async def test_forget_registry_failure_preserves_workspace_and_emits_no_change(t
     monkeypatch.setattr(registry, "forget", fail_forget)
     application = create_app(workspaces=store, tmux=tmux, session_registry=registry, base_path="")
     broker = application[WORKSPACE_STREAM_BROKER_KEY]
-    queue = await broker.subscribe(original["id"], original, store.get_global_callback_sessions())
+    queue = await broker.subscribe(original["id"], original, callback_snapshot(store))
     callback_queue = await application[CALLBACK_STREAM_BROKER_KEY].subscribe()
     await queue.get()
     await callback_queue.get()

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import {
   BASE_PATH,
@@ -87,6 +88,7 @@ import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import "./SessionWorkspaceMembership.css";
 
 interface SessionDashboardProps {
+  headerWidgets?: ReactNode;
   onOpen: (session: string) => void;
   onOpenInput?: (session: string) => void;
   onResumeWorkspace?: () => void;
@@ -546,6 +548,7 @@ function SessionItem({
 }
 
 export function SessionDashboard({
+  headerWidgets,
   onOpen,
   onOpenInput,
   onResumeWorkspace,
@@ -1116,6 +1119,7 @@ export function SessionDashboard({
           </div>
         </div>
         <div className="dashboard-header-tools">
+          {headerWidgets}
           <div className="server-pulse">
             <span className={error ? "pulse-dot error" : "pulse-dot"} />
             {error ? "offline" : `${sessions.length} sessions / ${updateMode}`}

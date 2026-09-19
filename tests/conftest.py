@@ -16,6 +16,7 @@ def isolate_default_state_files(
     )
     monkeypatch.setenv("MUXDECK_SNIPPETS_FILE", str(state_dir / "snippets.json"))
     monkeypatch.setenv("MUXDECK_WORKSPACES_FILE", str(state_dir / "workspaces.json"))
+    monkeypatch.setenv("MUXDECK_CALLBACKS_FILE", str(state_dir / "callbacks.sqlite3"))
     monkeypatch.setenv(
         "MUXDECK_SESSION_REGISTRY_FILE", str(state_dir / "sessions.sqlite3")
     )
@@ -23,3 +24,4 @@ def isolate_default_state_files(
     monkeypatch.delenv("MUXDECK_AUTH_FILE", raising=False)
     monkeypatch.delenv("MUXDECK_AUTH_MODE", raising=False)
     monkeypatch.delenv("MUXDECK_AUTH_COOKIE_SECURE", raising=False)
+    monkeypatch.delenv("MUXDECK_CALLBACK_TOKEN_FILE", raising=False)
