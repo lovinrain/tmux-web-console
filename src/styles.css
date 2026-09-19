@@ -10112,8 +10112,30 @@ html.scoped-note-resizing-bottom-left * {
 
 .split-workspace-button {
   display: none;
+  gap: 5px;
+  padding: 0 8px;
+  white-space: nowrap;
   color: var(--acid);
   border-color: rgba(187, 244, 81, 0.34);
+}
+
+@media (max-width: 1440px) {
+  .split-workspace-button {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .split-workspace-button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
 }
 
 .workspace-pin-button {

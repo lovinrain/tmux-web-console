@@ -64,7 +64,7 @@ server tries `<source>_1`, then increments the suffix until it can atomically
 claim an available tmux session name. `Ctrl+Shift+M` invokes the same action.
 The button and shortcut are unavailable in compact mobile layouts.
 
-`Split workspace` is the non-mutating browser-workspace counterpart beside that
+`Space` (`Split workspace` in its tooltip) is the non-mutating browser-workspace counterpart beside that
 control. With multiple tabs selected using Shift-click or Ctrl/Cmd-click, it
 opens that selection in its existing tab order; the button shows the selected
 count. Otherwise it opens the current native session alone. The active session
@@ -75,7 +75,7 @@ until its own `Save workspace` action is used; splitting never creates, copies,
 renames, resizes, or sends input to a tmux session. A blocked pop-up leaves the
 source unchanged and produces a dismissible error.
 
-`Split to ephemeral tab`, immediately beside `Split workspace`, opens the
+`Tab` (`Split to ephemeral tab` in its tooltip), immediately beside `Space`, opens the
 current session in a lighter session-only page. It always uses the active
 session, regardless of other selected tabs. The page has no tab sidebar,
 workspace Overview, save controls, pins, transfers, or workspace widgets.
@@ -87,6 +87,9 @@ save workspace state. It attaches to the same tmux session rather than creating
 another shell. `Close tab` only detaches this browser; explicit `End` still
 requires confirmation to terminate the session. Blocked pop-ups show an error
 in the source page.
+
+Both buttons use distinct icons when the header is narrow; hover reveals the
+full action and explanation. Their complete accessible labels remain available.
 
 The desktop tab-selection bar also provides `Close tabs` and `End sessions`.
 Both show a confirmation listing the captured selection, native names, and

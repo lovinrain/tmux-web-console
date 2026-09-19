@@ -2221,7 +2221,7 @@ describe("ConsoleScreen session identity", () => {
     });
     expect(split).toHaveAttribute(
       "title",
-      "Open this session alone in a new temporary workspace window",
+      "Split workspace: open this session alone in a new temporary workspace window",
     );
     const copyNew = screen.getByRole("button", { name: "Copy New" });
     expect(copyNew.nextElementSibling).toBe(split);
@@ -2245,7 +2245,7 @@ describe("ConsoleScreen session identity", () => {
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
       onSplitWorkspace={vi.fn()} splitWorkspaceSelectionCount={3} />);
     const split = await screen.findByRole("button", { name: "Split 3 selected sessions into a new temporary workspace" });
-    expect(split).toHaveTextContent("Split workspace (3)");
+    expect(split).toHaveTextContent("Space (3)");
     expect(split).toHaveAttribute("title", expect.stringContaining("keep their tab order"));
   });
 

@@ -2253,12 +2253,12 @@ export function ConsoleScreen({
                   ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
                   : `Split ${sessionName} into a new temporary workspace`}
                 title={splitWorkspaceSelectionCount > 1
-                  ? `Open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
-                  : "Open this session alone in a new temporary workspace window"}
+                  ? `Split workspace: open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
+                  : "Split workspace: open this session alone in a new temporary workspace window"}
                 onClick={splitIntoNewWorkspace}
               >
-                <ExternalLinkIcon />
-                <span>Split workspace{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
+                <GridIcon />
+                <span>Space{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
               </button>
             )}
             {!ephemeral && !mobileLayout && onSplitEphemeralTab && (
@@ -2267,11 +2267,11 @@ export function ConsoleScreen({
                 className="split-workspace-button split-ephemeral-tab-button"
                 aria-label="Split to ephemeral tab"
                 disabled={!session}
-                title="Open this session in its own browser tab without a workspace"
+                title="Split to ephemeral tab: open only this session, without workspace controls"
                 onClick={splitIntoEphemeralTab}
               >
                 <ExternalLinkIcon />
-                <span>Split to ephemeral tab</span>
+                <span>Tab</span>
               </button>
             )}
             {!ephemeral && <button
