@@ -114,6 +114,7 @@ import { ThemeToggle } from "./ThemeToggle";
 interface ConsoleScreenProps {
   sessionName: string;
   embedded?: boolean;
+  ephemeral?: boolean;
   instanceId?: string;
   keyboardShortcutsEnabled?: boolean;
   onActivate?: () => void;
@@ -181,6 +182,7 @@ interface ConsoleScreenProps {
     sessionId: string,
   ) => void;
   onSplitWorkspace?: (sessionName: string) => OpenTabInNewWindowResult;
+  onSplitEphemeralTab?: (sessionName: string) => OpenTabInNewWindowResult;
   splitWorkspaceSelectionCount?: number;
   copySessionDisabled?: boolean;
   renameWarning?: SessionRenameWarning | null;
@@ -293,6 +295,7 @@ function clampDelta(value: number, minimum: number, maximum: number): number {
 
 interface ConsoleBarToolbarProps {
   visibility: ConsoleBarVisibility;
+  hideSessionTabs?: boolean;
   availability?: Partial<Record<ConsoleBar, boolean>>;
   onChange: (bar: ConsoleBar, visible: boolean) => void;
   workspaceLinks?: ReactNode;
@@ -343,6 +346,7 @@ const CONSOLE_BARS: Array<{
 
 function ConsoleBarToolbar({
   visibility,
+  hideSessionTabs = false,
   availability,
   onChange,
   workspaceLinks,
@@ -386,6 +390,7 @@ function ConsoleBarToolbar({
       )}
       <div className="console-bar-toggle-group">
         {CONSOLE_BARS.map(({ bar, label, shortLabel, controls }) => {
+          if (hideSessionTabs && bar === "sessionTabs") return null;
           const visible = visibility[bar];
           const available = availability?.[bar] ?? true;
           const controlId = bar === "stagedInput"
@@ -522,6 +527,7 @@ function ConsoleBarToolbar({
 export function ConsoleScreen({
   sessionName,
   embedded = false,
+  ephemeral = false,
   instanceId,
   keyboardShortcutsEnabled = true,
   onActivate,
@@ -533,10 +539,10 @@ export function ConsoleScreen({
   workspaceName = null,
   onBack,
   dashboardWindowHref,
-  headerNotes,
-  workspaceLinks,
-  sessionNavigation,
-  workspaceOverlayOpen = false,
+  headerNotes: providedHeaderNotes,
+  workspaceLinks: providedWorkspaceLinks,
+  sessionNavigation: providedSessionNavigation,
+  workspaceOverlayOpen: providedWorkspaceOverlayOpen = false,
   mobileMode,
   onMobileModeChange,
   onOpenWorkspaceOverview,
@@ -564,6 +570,7 @@ export function ConsoleScreen({
   onSessionTerminated,
   onSessionCopied,
   onSplitWorkspace,
+  onSplitEphemeralTab,
   splitWorkspaceSelectionCount = 0,
   copySessionDisabled = false,
   renameWarning,
@@ -577,6 +584,10 @@ export function ConsoleScreen({
 }: ConsoleScreenProps) {
   const { theme } = useTheme();
   const { bindings: shortcutBindings } = useShortcutSettings();
+  const headerNotes = ephemeral ? undefined : providedHeaderNotes;
+  const workspaceLinks = ephemeral ? undefined : providedWorkspaceLinks;
+  const sessionNavigation = ephemeral ? undefined : providedSessionNavigation;
+  const workspaceOverlayOpen = !ephemeral && providedWorkspaceOverlayOpen;
   const resolvedDashboardWindowHref = dashboardWindowHref
     ?? `${BASE_PATH}/${window.location.search}`;
   const consoleShellRef = useRef<HTMLElement>(null);
@@ -655,6 +666,10 @@ export function ConsoleScreen({
     message: string;
   } | null>(null);
   const [splitWorkspaceError, setSplitWorkspaceError] = useState<{
+    sessionName: string;
+    message: string;
+  } | null>(null);
+  const [splitEphemeralError, setSplitEphemeralError] = useState<{
     sessionName: string;
     message: string;
   } | null>(null);
@@ -826,7 +841,7 @@ export function ConsoleScreen({
   }, [copySessionDisabled, onSessionCopied, session, theme]);
 
   const splitIntoNewWorkspace = useCallback(() => {
-    if (!session || mobileLayout || !onSplitWorkspace) return;
+    if (ephemeral || !session || mobileLayout || !onSplitWorkspace) return;
     const sourceName = session.name;
     setSplitWorkspaceError(null);
     let result: OpenTabInNewWindowResult;
@@ -842,7 +857,24 @@ export function ConsoleScreen({
         ? "Wait for the current workspace to finish syncing, then try again."
         : "Muxdeck could not open the temporary workspace. The current workspace is unchanged.";
     setSplitWorkspaceError({ sessionName: sourceName, message });
-  }, [mobileLayout, onSplitWorkspace, session]);
+  }, [ephemeral, mobileLayout, onSplitWorkspace, session]);
+
+  const splitIntoEphemeralTab = useCallback(() => {
+    if (ephemeral || !session || mobileLayout || !onSplitEphemeralTab) return;
+    const sourceName = session.name;
+    setSplitEphemeralError(null);
+    let result: OpenTabInNewWindowResult;
+    try {
+      result = onSplitEphemeralTab(sourceName);
+    } catch {
+      result = "failed";
+    }
+    if (result === "opened") return;
+    const message = result === "blocked"
+      ? "The browser blocked the ephemeral tab. Allow pop-ups and try again."
+      : "Muxdeck could not open the ephemeral tab. Try again.";
+    setSplitEphemeralError({ sessionName: sourceName, message });
+  }, [ephemeral, mobileLayout, onSplitEphemeralTab, session]);
 
   const toggleWorkspacePin = useCallback(async () => {
     if (workspacePinSource !== null || !session) return;
@@ -1093,6 +1125,7 @@ export function ConsoleScreen({
   }, [setMobileMode, showComposer]);
 
   const selectMobileFocus = useCallback((focus: "overview" | MobileConsoleMode) => {
+    if (ephemeral && focus === "overview") return;
     setMobileDistractionFreeMode(null);
     if (focus === "overview") {
       inputBarRef.current?.blur();
@@ -1112,6 +1145,7 @@ export function ConsoleScreen({
       inputBarRef.current?.blur();
     }
   }, [
+    ephemeral,
     onBack,
     onCloseWorkspaceOverview,
     onOpenWorkspaceOverview,
@@ -1440,11 +1474,11 @@ export function ConsoleScreen({
     const sessionTitle = session?.name === sessionName
       ? session.customTitle || sessionName
       : sessionName;
-    const savedWorkspaceName = workspaceName?.trim();
+    const savedWorkspaceName = ephemeral ? undefined : workspaceName?.trim();
     document.title = savedWorkspaceName
       ? `${savedWorkspaceName} - ${sessionTitle}`
       : `${sessionTitle} - Muxdeck`;
-  }, [embedded, session, sessionName, workspaceName]);
+  }, [embedded, ephemeral, session, sessionName, workspaceName]);
 
   const grokThemeName = theme === "light" ? "grokday" : "groknight";
   const grokThemeCommand = `/theme ${grokThemeName}`;
@@ -1589,6 +1623,12 @@ export function ConsoleScreen({
       repeated = false,
       rememberKeyDown = false,
     ) => {
+      if (ephemeral && (
+        action === "view-session-tabs"
+        || action === "view-floating-input"
+        || action === "view-floating-terminal"
+        || action === "session-copy-new"
+      )) return;
       if (action === "view-session-tabs") {
         if (sessionNavigation) setBarVisible("sessionTabs", !visibleBars.sessionTabs);
         return;
@@ -1639,6 +1679,12 @@ export function ConsoleScreen({
       if ((event.isComposing || event.keyCode === 229) && !sessionShortcut) return;
       const action = actionForKeyboardEvent(event);
       if (!action) return;
+      if (ephemeral && (
+        action === "view-session-tabs"
+        || action === "view-floating-input"
+        || action === "view-floating-terminal"
+        || action === "session-copy-new"
+      )) return;
       if (action === "view-session-tabs" && !sessionNavigation) return;
       if (action === "session-rename" && (!session || !onSessionRenamed)) return;
       if (action === "session-copy-new" && !onSessionCopied) return;
@@ -1709,6 +1755,7 @@ export function ConsoleScreen({
       window.removeEventListener(SHORTCUT_ACTION_EVENT, handleShortcutAction);
     };
   }, [
+    ephemeral,
     desktopTerminalFocus,
     enterDesktopTerminalFocus,
     exitDesktopTerminalFocus,
@@ -1832,13 +1879,14 @@ export function ConsoleScreen({
       <RootElement className={sessionNavigation
         ? `workspace-missing-session has-session-navigation${embedded ? " embedded-console" : ""}`
         : `workspace-missing-session${embedded ? " embedded-console" : ""}`}
+        data-ephemeral={ephemeral ? "true" : undefined}
         style={consoleShellStyle}
         onPointerDownCapture={onActivate}
         data-desktop-tabs={desktopTabOrientation}
         data-desktop-tab-rail-width={clampedDesktopTabRailWidth}
         data-session-tabs-visible={sessionNavigation && visibleBars.sessionTabs ? "true" : "false"}
       >
-        <ConsoleBarToolbar
+        {!ephemeral && <ConsoleBarToolbar
           visibility={visibleBars}
           availability={{
             sessionTabs: Boolean(sessionNavigation),
@@ -1858,7 +1906,7 @@ export function ConsoleScreen({
           stagedInputControlId={stagedInputControlId}
           shortcutsControlId={shortcutsControlId}
           terminalControlId={activeConsoleId}
-        />
+        />}
         {sessionNavigation && (
           <div key="session-navigation" className="console-session-navigation">{sessionNavigation}</div>
         )}
@@ -1937,7 +1985,9 @@ export function ConsoleScreen({
             </div>
           )}
           {!embedded && (
-            <button type="button" className="primary-button" onClick={onBack}>Back to sessions</button>
+            <button type="button" className="primary-button" onClick={onBack}>
+              {ephemeral ? "Close tab" : "Back to sessions"}
+            </button>
           )}
         </section>
       </RootElement>
@@ -1954,6 +2004,7 @@ export function ConsoleScreen({
     <RootElement
       ref={consoleShellRef}
       className={`${sessionNavigation ? "console-shell has-session-navigation" : "console-shell"}${embedded ? " embedded-console" : ""}`}
+      data-ephemeral={ephemeral ? "true" : undefined}
       style={consoleShellStyle}
       onPointerDownCapture={onActivate}
       data-composer-visible={visibleBars.stagedInput || visibleMobileMode === "input"}
@@ -1972,6 +2023,7 @@ export function ConsoleScreen({
     >
       <ConsoleBarToolbar
         visibility={visibleBars}
+        hideSessionTabs={ephemeral}
         availability={{ sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
         workspaceLinks={workspaceLinks}
@@ -1988,17 +2040,17 @@ export function ConsoleScreen({
         onEnterDesktopFocus={enterDesktopTerminalFocus}
         floatingInputOpen={floatingInputPanelState.open}
         floatingInputPinned={floatingInputPanelState.pinned}
-        onToggleFloatingInput={embedded ? undefined : toggleFloatingInput}
+        onToggleFloatingInput={embedded || ephemeral ? undefined : toggleFloatingInput}
         floatingTerminalOpen={floatingTerminalOpen}
-        onToggleFloatingTerminal={embedded ? undefined : toggleFloatingTerminal}
+        onToggleFloatingTerminal={embedded || ephemeral ? undefined : toggleFloatingTerminal}
         sessionTerminalOpen={sessionTerminalOpen}
-        onToggleSessionTerminal={embedded ? undefined : toggleSessionTerminal}
+        onToggleSessionTerminal={embedded || ephemeral ? undefined : toggleSessionTerminal}
         stagedInputControlId={stagedInputControlId}
         shortcutsControlId={shortcutsControlId}
         terminalControlId={activeConsoleId}
       />
       {!embedded && <nav className="mobile-console-focus" aria-label="Mobile console focus">
-        <button
+        {!ephemeral && <button
           id={MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID}
           type="button"
           className="mobile-console-focus-button overview"
@@ -2009,7 +2061,7 @@ export function ConsoleScreen({
         >
           <GridIcon />
           <span>Overview</span>
-        </button>
+        </button>}
         <button
           type="button"
           className="mobile-console-focus-button terminal"
@@ -2050,7 +2102,7 @@ export function ConsoleScreen({
         </button>
       </nav>}
       <header className="console-header" ref={consoleHeaderRef}>
-        {!embedded && <div
+        {!embedded && !ephemeral && <div
           className="console-dashboard-navigation"
           role="group"
           aria-label="Sessions and workspaces navigation"
@@ -2075,6 +2127,17 @@ export function ConsoleScreen({
             <ExternalLinkIcon />
           </a>
         </div>}
+        {ephemeral && (
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onBack}
+            aria-label="Close tab"
+            title="Close this ephemeral tab"
+          >
+            <CloseIcon />
+          </button>
+        )}
         <div className="console-identity">
           <div className="console-title-line">
             <h1>{session?.customTitle || sessionName}</h1>
@@ -2165,7 +2228,7 @@ export function ConsoleScreen({
             >
               <ClockIcon /><span>Agents</span>
             </button>
-            {onSessionCopied && (
+            {!ephemeral && onSessionCopied && (
               <button
                 type="button"
                 className="copy-new-button"
@@ -2181,7 +2244,7 @@ export function ConsoleScreen({
                 <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
               </button>
             )}
-            {!mobileLayout && onSplitWorkspace && (
+            {!ephemeral && !mobileLayout && onSplitWorkspace && (
               <button
                 type="button"
                 className="split-workspace-button"
@@ -2198,7 +2261,20 @@ export function ConsoleScreen({
                 <span>Split workspace{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
               </button>
             )}
-            <button
+            {!ephemeral && !mobileLayout && onSplitEphemeralTab && (
+              <button
+                type="button"
+                className="split-workspace-button split-ephemeral-tab-button"
+                aria-label="Split to ephemeral tab"
+                disabled={!session}
+                title="Open this session in its own browser tab without a workspace"
+                onClick={splitIntoEphemeralTab}
+              >
+                <ExternalLinkIcon />
+                <span>Split to ephemeral tab</span>
+              </button>
+            )}
+            {!ephemeral && <button
               type="button"
               className={session?.workspacePinned
                 ? "workspace-pin-button active"
@@ -2216,8 +2292,8 @@ export function ConsoleScreen({
             >
               <PinIcon filled={Boolean(session?.workspacePinned)} />
               <span>{session?.workspacePinned ? "Pinned all" : "Pin all"}</span>
-            </button>
-            {onToggleCallbackSession && (
+            </button>}
+            {!ephemeral && onToggleCallbackSession && (
               <button
                 type="button"
                 className={callbackSessionActive
@@ -2245,7 +2321,7 @@ export function ConsoleScreen({
                 <span>{callbackSessionActive ? "Watching" : "Callback"}</span>
               </button>
             )}
-            {onSessionWorkspaceTransfer && (
+            {!ephemeral && onSessionWorkspaceTransfer && (
               <button
                 type="button"
                 className="workspace-transfer-button"
@@ -2328,6 +2404,13 @@ export function ConsoleScreen({
         <aside className="copy-new-error split-workspace-error" role="alert">
           <span>{splitWorkspaceError.message}</span>
           <button type="button" onClick={() => setSplitWorkspaceError(null)}>Dismiss</button>
+        </aside>
+      )}
+
+      {splitEphemeralError?.sessionName === sessionName && (
+        <aside className="copy-new-error split-ephemeral-error" role="alert">
+          <span>{splitEphemeralError.message}</span>
+          <button type="button" onClick={() => setSplitEphemeralError(null)}>Dismiss</button>
         </aside>
       )}
 
@@ -2551,7 +2634,7 @@ export function ConsoleScreen({
               <RefreshIcon />
               <span>Redraw</span>
             </button>
-            <button
+            {!ephemeral && <button
               type="button"
               className="desktop-terminal-focus-input"
               aria-label={floatingInputPanelState.open
@@ -2570,18 +2653,18 @@ export function ConsoleScreen({
             >
               <KeyboardIcon />
               <span>{floatingInputPanelState.open ? "Hide input" : "Float input"}</span>
-            </button>
-            <button type="button" className="desktop-terminal-focus-input"
+            </button>}
+            {!ephemeral && <button type="button" className="desktop-terminal-focus-input"
               aria-label={floatingTerminalOpen ? "Hide utility terminal" : "Show utility terminal"}
               aria-expanded={floatingTerminalOpen} aria-controls="muxdeck-floating-terminal"
               aria-keyshortcuts={directShortcutAria(shortcutBindings["view-floating-terminal"])}
               title={directShortcutLabel(shortcutBindings["view-floating-terminal"]) || "Independent workspace shell"}
-              onClick={toggleFloatingTerminal}><TerminalIcon /><span>Workspace Terminal</span></button>
-            <button type="button" className="desktop-terminal-focus-input"
+              onClick={toggleFloatingTerminal}><TerminalIcon /><span>Workspace Terminal</span></button>}
+            {!ephemeral && <button type="button" className="desktop-terminal-focus-input"
               aria-label={sessionTerminalOpen ? "Hide session terminal" : "Show session terminal"}
               aria-expanded={sessionTerminalOpen} aria-controls="muxdeck-session-terminal"
               title="Independent shell belonging to this session; ends with its parent session"
-              onClick={toggleSessionTerminal}><TerminalIcon /><span>Session Terminal</span></button>
+              onClick={toggleSessionTerminal}><TerminalIcon /><span>Session Terminal</span></button>}
             {fileBrowserTarget && !filesOpen && (
               <button type="button" className="desktop-terminal-focus-input"
                 aria-controls={filesControlId}
@@ -2692,7 +2775,7 @@ export function ConsoleScreen({
         messageCount={memorandumCount}
         queuedMessageCount={queuedMemorandumCount}
       />
-      {!embedded && <FloatingTerminal
+      {!embedded && !ephemeral && <FloatingTerminal
         key={workspaceId || temporaryTerminalKey}
         ref={floatingTerminalRef}
         workspaceKey={workspaceId ? `workspace:${workspaceId}` : temporaryTerminalKey}
@@ -2703,7 +2786,7 @@ export function ConsoleScreen({
         theme={theme}
         onOpenChange={onWorkspaceTerminalOpen}
       />}
-      {!embedded && <FloatingTerminal
+      {!embedded && !ephemeral && <FloatingTerminal
         key={`session:${session?.id}:${session?.created}:${session?.serverStarted}:${session?.serverPid}`}
         ref={sessionTerminalRef}
         workspaceKey={`session:${session?.id}:${session?.created}:${session?.serverStarted}:${session?.serverPid}`}
@@ -2713,7 +2796,7 @@ export function ConsoleScreen({
         theme={theme}
         onOpenChange={setSessionTerminalOpen}
       />}
-      {!embedded && <FloatingStagedInput
+      {!embedded && !ephemeral && <FloatingStagedInput
         ref={floatingInputRef}
         sessionName={sessionName}
         workspaceId={workspaceId}
@@ -2748,9 +2831,10 @@ export function ConsoleScreen({
       {!workspaceOverlayOpen && agentHistoryOpen && (
         <SessionHistoryDialog
           sessionName={sessionName}
+          showWorkspaceMembership={!ephemeral}
           onClose={() => setAgentHistoryOpen(false)}
           onOpenSession={(name) => {
-            window.location.href = `${BASE_PATH}/session/${encodeURIComponent(name)}`;
+            window.location.href = `${BASE_PATH}/session/${encodeURIComponent(name)}${ephemeral ? "?ephemeral=1" : ""}`;
           }}
         />
       )}
@@ -2769,6 +2853,7 @@ export function ConsoleScreen({
         />
       )}
       {!workspaceOverlayOpen
+        && !ephemeral
         && workspaceTransferOpen
         && session
         && onSessionWorkspaceTransfer && (
@@ -2792,6 +2877,24 @@ export function ConsoleScreen({
         <SessionTerminateDialog
           sessionName={terminateTarget.name}
           sessionTitle={terminateTarget.title}
+          description={ephemeral ? (
+            <>
+              <p className="session-terminate-target">
+                <TrashIcon />
+                <span>
+                  End <strong>{terminateTarget.title || terminateTarget.name}</strong>
+                  {terminateTarget.title && terminateTarget.title !== terminateTarget.name && (
+                    <code>{terminateTarget.name}</code>
+                  )}
+                </span>
+              </p>
+              <p>
+                This immediately ends the entire tmux session, including every pane and the
+                programs running in them. Unsaved terminal work can be lost.
+              </p>
+              <p>Closing this browser tab instead leaves the session running.</p>
+            </>
+          ) : undefined}
           onClose={() => setTerminateTarget(null)}
           onTerminate={terminateCurrentSession}
         />

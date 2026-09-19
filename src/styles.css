@@ -14693,6 +14693,10 @@ html.history-resizing * {
     box-shadow: 0 7px 24px rgba(0, 0, 0, 0.2);
   }
 
+  .console-shell[data-ephemeral="true"] .mobile-console-focus {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .mobile-console-focus-button {
     position: relative;
     display: inline-flex;

@@ -11,6 +11,7 @@ interface Props {
   workspaceName?: string | null;
   /** Scope to a single tmux session, across every time it was recreated. */
   sessionName?: string | null;
+  showWorkspaceMembership?: boolean;
   onClose: () => void;
   onOpenSession: (name: string) => void;
 }
@@ -19,7 +20,7 @@ function date(value: number | null): string {
   return value ? new Date(value * 1000).toLocaleString() : "Not recorded";
 }
 
-export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessionName = null, onClose, onOpenSession }: Props) {
+export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessionName = null, showWorkspaceMembership = true, onClose, onOpenSession }: Props) {
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   const [recycled, setRecycled] = useState(!sessionName);
@@ -138,13 +139,15 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
         <button ref={cancel} type="button" disabled={Boolean(busy)} onClick={() => setConfirm(null)}>Cancel</button>
       </div>}
       <div className="session-history-list" aria-busy={loading}>
-        {!loading && !entries.length && <p className="session-history-empty">No matching history yet. Closed sessions and workspace tab history will appear here as Muxdeck records them.</p>}
+        {!loading && !entries.length && <p className="session-history-empty">{showWorkspaceMembership
+          ? "No matching history yet. Closed sessions and workspace tab history will appear here as Muxdeck records them."
+          : "No matching history yet. Session history will appear here as Muxdeck records it."}</p>}
         {entries.map((entry) => <article key={entry.id} className="session-history-entry" aria-label={`History for ${entry.name}`}>
           <div className="session-history-entry-heading"><strong>{entry.name}</strong><span data-state={entry.state}>{entry.state === "live" ? "Still running" : entry.state === "ended" ? "Ended" : "Missing"}</span></div>
           {entry.title && <p>{entry.title}</p>}
           <code>{entry.directory}</code>
           {entry.names.length > 1 && <p>Previous names: {entry.names.filter((name) => name !== entry.name).join(", ")}</p>}
-          <div className="session-history-memberships">{entry.workspaces.length ? entry.workspaces.map((workspace) => <span key={workspace.id} title={`Last associated: ${date(workspace.lastSeenAt)}${workspace.closedAt ? ` / Tab removed: ${date(workspace.closedAt)}` : ""}`}>{workspace.name}{workspace.present ? "" : " (previous)"}</span>) : <span>No saved workspace recorded</span>}</div>
+          {showWorkspaceMembership && <div className="session-history-memberships">{entry.workspaces.length ? entry.workspaces.map((workspace) => <span key={workspace.id} title={`Last associated: ${date(workspace.lastSeenAt)}${workspace.closedAt ? ` / Tab removed: ${date(workspace.closedAt)}` : ""}`}>{workspace.name}{workspace.present ? "" : " (previous)"}</span>) : <span>No saved workspace recorded</span>}</div>}
           {entry.agents?.length
             ? <div className="session-history-agents" aria-label={`Agents that ran in ${entry.name}`}>
                 {entry.agents.map((agent) => <span key={`${agent.agentType}:${agent.agentSessionId ?? ""}`}

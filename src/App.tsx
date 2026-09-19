@@ -45,6 +45,8 @@ import {
   type SessionRenameWarning,
 } from "./components/ConsoleScreen";
 import { SessionDashboard } from "./components/SessionDashboard";
+import { EphemeralSessionScreen } from "./components/EphemeralSessionScreen";
+import { ephemeralSessionHref, openEphemeralSessionTab } from "./ephemeralSession";
 import { ForgetUndoNotifications, type ForgetUndoNotification } from "./components/ForgetUndoNotifications";
 import { restoreForgottenWorkspaceSession, restoreForgottenPaneLayouts } from "./forgottenWorkspace";
 import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
@@ -4491,6 +4493,7 @@ function AppRoutes() {
             onSessionTerminated={terminateOpenSession}
             onSessionCopied={completeCopiedSession}
             onSplitWorkspace={splitSessionIntoNewWorkspace}
+            onSplitEphemeralTab={openEphemeralSessionTab}
             splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
             copySessionDisabled={workspacePersistenceState === "loading"}
             renameWarning={knownSessions.find((item) => item.name === sessionName)
@@ -4622,6 +4625,7 @@ function AppRoutes() {
         onSessionTerminated={terminateOpenSession}
         onSessionCopied={completeCopiedSession}
         onSplitWorkspace={splitSessionIntoNewWorkspace}
+        onSplitEphemeralTab={openEphemeralSessionTab}
         splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
         copySessionDisabled={workspacePersistenceState === "loading"}
         renameWarning={renameWarning}
@@ -4828,11 +4832,39 @@ function AppRoutes() {
   );
 }
 
+function AppView() {
+  const [location, setLocation] = useState(currentLocation);
+  const route = parseSessionRoute(location.path);
+  const ephemeralSession = route && new URLSearchParams(location.search).get("ephemeral") === "1"
+    ? route.sessionName : null;
+
+  useEffect(() => {
+    const update = () => setLocation(currentLocation());
+    window.addEventListener("popstate", update);
+    return () => window.removeEventListener("popstate", update);
+  }, []);
+
+  useEffect(() => {
+    if (ephemeralSession === null) return;
+    // Even a pasted URL containing old workspace parameters must stay isolated.
+    window.history.replaceState(null, "", ephemeralSessionHref(ephemeralSession));
+  }, [ephemeralSession, location.path, location.search]);
+
+  const renameEphemeralSession = useCallback((name: string) => {
+    window.history.replaceState(null, "", ephemeralSessionHref(name));
+    setLocation(currentLocation());
+  }, []);
+
+  return ephemeralSession === null ? <AppRoutes /> : (
+    <EphemeralSessionScreen sessionName={ephemeralSession} onSessionRenamed={renameEphemeralSession} />
+  );
+}
+
 export function App() {
   return (
     <ThemeProvider>
       <ShortcutSettingsProvider>
-        <AppRoutes />
+        <AppView />
       </ShortcutSettingsProvider>
     </ThemeProvider>
   );

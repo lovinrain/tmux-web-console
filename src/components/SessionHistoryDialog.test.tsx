@@ -45,6 +45,24 @@ describe("SessionHistoryDialog", () => {
     expect(onOpenSession).toHaveBeenCalledWith(entry.name);
   });
 
+  it("keeps session history usable without showing workspace membership on ephemeral pages", async () => {
+    vi.mocked(listSessionHistory).mockResolvedValue({ entries: [entry, {
+      ...entry, id: "history-2", name: "another-name", workspaces: [],
+    }], nextOffset: null });
+    render(<SessionHistoryDialog sessionName="named-agent" showWorkspaceMembership={false}
+      onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Agents in named-agent" });
+    await within(dialog).findByText("named-agent");
+    expect(listSessionHistory).toHaveBeenCalledWith(null, "", false, 0, expect.any(AbortSignal), "named-agent");
+    expect(dialog).toHaveTextContent("reference-id");
+    expect(dialog).not.toHaveTextContent("Project (previous)");
+    expect(dialog).not.toHaveTextContent(/workspace/i);
+
+    vi.mocked(listSessionHistory).mockResolvedValue({ entries: [], nextOffset: null });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session history" }));
+    expect(await screen.findByText(/No matching history yet/)).not.toHaveTextContent(/workspace/i);
+  });
+
   it("reopens a running session without requesting creation", async () => {
     vi.mocked(listSessionHistory).mockResolvedValue({ entries: [{ ...entry, state: "live" }], nextOffset: null });
     const onOpenSession = vi.fn();

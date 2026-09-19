@@ -124,6 +124,10 @@ For frontend development, run `npm run dev`. Vite serves
   session alone in a new no-opener window. The destination starts as an unsaved
   temporary workspace: `Save workspace` gives it a persistent server identity,
   and saved workspaces can be renamed directly from the same tab strip.
+- `Split to ephemeral tab`, beside `Split workspace`, opens only the current
+  session in a new browser tab with no sidebar, workspace controls, or workspace
+  persistence. It attaches to the same running tmux session; closing the tab
+  leaves that session running and the source workspace unchanged.
 - Desktop workspaces can add a named `Pane view` beside their session tabs.
   Every leaf embeds a complete session console, can select any open workspace
   session, and can split left/right or top/bottom again for arbitrary nested

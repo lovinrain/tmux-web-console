@@ -75,6 +75,19 @@ until its own `Save workspace` action is used; splitting never creates, copies,
 renames, resizes, or sends input to a tmux session. A blocked pop-up leaves the
 source unchanged and produces a dismissible error.
 
+`Split to ephemeral tab`, immediately beside `Split workspace`, opens the
+current session in a lighter session-only page. It always uses the active
+session, regardless of other selected tabs. The page has no tab sidebar,
+workspace Overview, save controls, pins, transfers, or workspace widgets.
+Terminal input, scrollback, files, theme, and explicit session actions remain
+available. The URL is `/session/{encoded-name}?ephemeral=1`; workspace and tab
+parameters are removed on entry and remain absent after renaming or reloading.
+This page does not initialize a temporary workspace or read, subscribe to, or
+save workspace state. It attaches to the same tmux session rather than creating
+another shell. `Close tab` only detaches this browser; explicit `End` still
+requires confirmation to terminate the session. Blocked pop-ups show an error
+in the source page.
+
 The desktop tab-selection bar also provides `Close tabs` and `End sessions`.
 Both show a confirmation listing the captured selection, native names, and
 display titles. `Close tabs` removes tabs only from the current workspace and

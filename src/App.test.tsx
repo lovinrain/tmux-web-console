@@ -303,6 +303,8 @@ vi.mock("./components/ConsoleScreen", () => ({
     onSessionTerminated,
     onSessionCopied,
     onSplitWorkspace,
+    onSplitEphemeralTab,
+    ephemeral = false,
     renameWarning,
     onDismissRenameWarning,
     sessionRecovery,
@@ -365,6 +367,8 @@ vi.mock("./components/ConsoleScreen", () => ({
       sessionId: string,
     ) => void;
     onSplitWorkspace?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
+    onSplitEphemeralTab?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
+    ephemeral?: boolean;
     renameWarning?: {
       sessionId: string;
       sessionName: string;
@@ -509,6 +513,12 @@ vi.mock("./components/ConsoleScreen", () => ({
             Split workspace
           </button>
         )}
+        {onSplitEphemeralTab && (
+          <button type="button" onClick={() => onSplitEphemeralTab(sessionName)}>
+            Split to ephemeral tab
+          </button>
+        )}
+        {ephemeral && <span>Ephemeral session page</span>}
       </main>
     );
   },
@@ -2467,6 +2477,75 @@ describe("App routing", () => {
     expect(terminateSessionMock).not.toHaveBeenCalled();
 
     open.mockRestore();
+  });
+
+  it("opens only the active session in an ephemeral tab without changing the source workspace", () => {
+    replaceUrl(sessionUrl("work%2Fname%20%231", "?flag&tab=work%2Fname%20%231&tab=beta&tab=gamma"));
+    const sourceUrl = window.location.href;
+    const replace = vi.fn();
+    const child = { opener: window, location: { replace }, close: vi.fn() } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(child);
+    render(<App />);
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("tab", { name: /^gamma,/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Split to ephemeral tab" }));
+
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(child.opener).toBeNull();
+    const destination = new URL(String(replace.mock.calls[0]?.[0]));
+    expect(destination.pathname).toBe(`${BASE_PATH}/session/work%2Fname%20%231`);
+    expect(destination.search).toBe("?ephemeral=1");
+    expect(window.location.href).toBe(sourceUrl);
+    expect(renderedTabs()).toEqual(["work/name #1", "beta", "gamma"]);
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it("never initializes workspace state on an ephemeral page, including a polluted URL", async () => {
+    replaceUrl(sessionUrl("alpha", "?ephemeral=1&workspace=workspace-one&tab=alpha&tab=beta&flag"));
+    render(<App />);
+    expect(screen.getByText("Ephemeral session page")).toBeInTheDocument();
+    expect(window.location.search).toBe("?ephemeral=1");
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+    expect(window.history.state).toBeNull();
+    act(() => window.dispatchEvent(new Event("pagehide")));
+    await act(async () => { await Promise.resolve(); });
+    expect(getWorkspaceMock).not.toHaveBeenCalled();
+    expect(listWorkspacesMock).not.toHaveBeenCalled();
+    expect(subscribeToWorkspaceMock).not.toHaveBeenCalled();
+    expect(subscribeToCallbackSessionsMock).not.toHaveBeenCalled();
+    expect(getGlobalCallbackSessionsMock).not.toHaveBeenCalled();
+    expect(getCommonWorkspaceQuickLinksMock).not.toHaveBeenCalled();
+    expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(sendBeaconMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps renamed ephemeral sessions isolated from workspace routing", async () => {
+    replaceUrl(sessionUrl("alpha", "?ephemeral=1"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("alpha", "$alpha")]));
+    act(() => reportSessionRename?.("alpha", "renamed/name", "$alpha"));
+    await waitFor(() => expect(window.location.pathname).toBe(`${BASE_PATH}/session/renamed%2Fname`));
+    expect(window.location.search).toBe("?ephemeral=1");
+    expect(screen.getByText("Ephemeral session page")).toBeInTheDocument();
+    expect(getWorkspaceMock).not.toHaveBeenCalled();
+    expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves ephemeral mode when browser history navigates to the dashboard", () => {
+    replaceUrl(sessionUrl("alpha", "?ephemeral=1"));
+    render(<App />);
+    expect(screen.getByText("Ephemeral session page")).toBeInTheDocument();
+    act(() => {
+      replaceUrl(dashboardUrl());
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(screen.getByRole("main", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.queryByText("Ephemeral session page")).not.toBeInTheDocument();
   });
 
   it.each(["alpha", "beta"])("splits selected tabs in source order with %s active", (active) => {

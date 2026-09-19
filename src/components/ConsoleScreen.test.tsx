@@ -2249,6 +2249,137 @@ describe("ConsoleScreen session identity", () => {
     expect(split).toHaveAttribute("title", expect.stringContaining("keep their tab order"));
   });
 
+  it("opens an ephemeral session tab beside Split workspace and handles its own popup errors", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onSplitWorkspace = vi.fn().mockReturnValue("blocked");
+    const onSplitEphemeralTab = vi.fn()
+      .mockReturnValueOnce("blocked")
+      .mockImplementationOnce(() => { throw new Error("browser failure"); })
+      .mockReturnValueOnce("opened");
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        onBack={vi.fn()}
+        onSplitWorkspace={onSplitWorkspace}
+        onSplitEphemeralTab={onSplitEphemeralTab}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole("button", {
+      name: "Split to ephemeral tab",
+    })).toBeEnabled());
+    const splitWorkspace = screen.getByRole("button", {
+      name: "Split test into a new temporary workspace",
+    });
+    const splitEphemeral = screen.getByRole("button", {
+      name: "Split to ephemeral tab",
+    });
+    expect(splitWorkspace.nextElementSibling).toBe(splitEphemeral);
+
+    fireEvent.click(splitWorkspace);
+    fireEvent.click(splitEphemeral);
+    expect(onSplitEphemeralTab).toHaveBeenCalledWith("test");
+    expect(screen.getAllByRole("alert")).toHaveLength(2);
+    expect(screen.getByText(
+      "The browser blocked the ephemeral tab. Allow pop-ups and try again.",
+    )).toBeVisible();
+
+    fireEvent.click(splitEphemeral);
+    const ephemeralError = screen.getByText("Muxdeck could not open the ephemeral tab. Try again.");
+    fireEvent.click(within(ephemeralError.closest("aside")!).getByRole("button", {
+      name: "Dismiss",
+    }));
+    expect(screen.getByRole("alert")).toHaveTextContent("new workspace window");
+    fireEvent.click(splitEphemeral);
+    expect(onSplitEphemeralTab).toHaveBeenCalledTimes(3);
+    expect(onSplitWorkspace).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("new workspace window");
+  });
+
+  it("keeps ephemeral sessions usable without workspace controls or hidden workspace shortcuts", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onBack = vi.fn();
+    const onBarVisibilityChange = vi.fn();
+    const onSessionCopied = vi.fn();
+    const onOpenWorkspaceOverview = vi.fn();
+    const { container } = renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        ephemeral
+        workspaceName="Should stay absent"
+        sessionNavigation={<div>Workspace sidebar</div>}
+        workspaceLinks={<div>Workspace links</div>}
+        headerNotes={<div>Workspace notes</div>}
+        onBack={onBack}
+        onBarVisibilityChange={onBarVisibilityChange}
+        onOpenWorkspaceOverview={onOpenWorkspaceOverview}
+        onSessionCopied={onSessionCopied}
+        onSessionRenamed={vi.fn()}
+        onSessionTerminated={vi.fn()}
+        onSplitWorkspace={vi.fn()}
+        onSplitEphemeralTab={vi.fn()}
+        onToggleCallbackSession={vi.fn()}
+        onSessionWorkspaceTransfer={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Pane scrollback" })).toBeEnabled());
+    expect(document.title).toBe("test - Muxdeck");
+    expect(screen.getByTestId("live-terminal")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Browse files in /work" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Coding agents recorded in test" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Raw terminal Page Up" })).toBeVisible();
+    expect(screen.queryByText(/Workspace sidebar|Workspace links|Workspace notes/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy New|Split to ephemeral tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Sessions and workspaces navigation" })).not.toBeInTheDocument();
+    expect(container.querySelector(".console-session-navigation")).toBeNull();
+
+    for (const action of ["view-session-tabs", "view-floating-input", "view-floating-terminal", "session-copy-new"] as const) {
+      act(() => { dispatchShortcutAction(action); });
+    }
+    fireEvent.keyDown(window, { code: "KeyS", key: "S", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(window, { code: "KeyM", key: "M", ctrlKey: true, shiftKey: true });
+    expect(onBarVisibilityChange).not.toHaveBeenCalled();
+    expect(onSessionCopied).not.toHaveBeenCalled();
+    expect(copySession).not.toHaveBeenCalled();
+    expect(onOpenWorkspaceOverview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Floating staged input" })).not.toBeInTheDocument();
+    expect(container.querySelector("#muxdeck-floating-terminal")).toBeNull();
+    expect(container.querySelector("#muxdeck-session-terminal")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Enter desktop terminal focus" }));
+    expect(screen.queryByRole("button", { name: /floating staged input|utility terminal|session terminal/i })).not.toBeInTheDocument();
+    act(() => { dispatchShortcutAction("session-rename"); });
+    expect(await screen.findByRole("dialog", { name: /rename/i })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    act(() => { dispatchShortcutAction("session-end"); });
+    const terminateDialog = await screen.findByRole("alertdialog", { name: "Terminate tmux session?" });
+    expect(terminateDialog).toBeVisible();
+    expect(terminateDialog).toHaveTextContent("Closing this browser tab instead leaves the session running.");
+    expect(terminateDialog).not.toHaveTextContent(/workspace|quick tab/i);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close tab" }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it("offers closing an unavailable ephemeral session without workspace navigation", async () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const onBack = vi.fn();
+    renderWithTheme(
+      <ConsoleScreen
+        sessionName="test"
+        ephemeral
+        onBack={onBack}
+        sessionNavigation={<div>Workspace sidebar</div>}
+      />,
+    );
+    expect(await screen.findByText("SESSION UNAVAILABLE")).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Console bars" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Workspace sidebar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to sessions" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close tab" }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
   it("creates a focused session copy from the desktop header and exact shortcut", async () => {
     const firstCreation = deferred<{ name: string; id: string }>();
     const onSessionCopied = vi.fn();
