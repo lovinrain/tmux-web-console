@@ -7840,12 +7840,16 @@ span.workspace-tab-group-toggle {
 
 /* The wrapper exists only so the tray can lift both control groups at once; it
    stays out of the header's own layout until then. */
-.console-header-tray-group {
+.console-header-tray-group,
+.console-tray-tools,
+.console-tray-action-section,
+.console-tray-section-heading {
   display: contents;
 }
 
 .console-header-tray-toggle,
-.console-header-tray-chrome {
+.console-header-tray-chrome,
+.console-tray-section-title {
   display: none;
 }
 
@@ -11204,24 +11208,28 @@ html.scoped-note-resizing-bottom-left * {
   }
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-group {
+    --tray-surface: #151c16;
+    --tray-section: #1b241d;
+    --tray-line: #344437;
+    --tray-muted: #9aa99c;
     position: absolute;
     z-index: 9;
-    top: calc(100% + 6px);
+    top: calc(100% + 10px);
     right: max(14px, env(safe-area-inset-right, 0px));
     display: flex;
-    width: min(1080px, calc(100% - 28px));
-    max-height: min(52vh, 420px);
-    flex-wrap: wrap;
-    align-content: flex-start;
-    align-items: center;
-    gap: 8px;
-    padding: 10px;
+    width: min(680px, calc(100% - 28px));
+    max-height: min(680px, calc(100dvh - 180px));
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 16px;
+    overflow-x: hidden;
     overflow-y: auto;
-    background: rgba(17, 22, 16, 0.97);
-    border: 1px solid rgba(134, 151, 128, 0.62);
-    border-radius: 8px;
-    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.52);
-    backdrop-filter: blur(14px);
+    overscroll-behavior: contain;
+    background: var(--tray-surface);
+    border: 1px solid var(--tray-line);
+    border-radius: 14px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.24);
     scrollbar-color: #56614f transparent;
     animation: fade-in 130ms ease-out both;
   }
@@ -11229,31 +11237,71 @@ html.scoped-note-resizing-bottom-left * {
   .console-shell[data-console-header-tray="true"] .console-header-tray-chrome {
     display: flex;
     width: 100%;
-    flex: 0 0 100%;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: space-between;
-    padding-bottom: 8px;
-    color: #9eaa9a;
-    border-bottom: 1px solid rgba(134, 151, 128, 0.32);
-    font-family: "JetBrains Mono Variable", monospace;
-    font-size: 8px;
-    font-weight: 800;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
+    gap: 12px;
+    padding: 0 0 4px;
+    color: var(--paper);
   }
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-close {
     display: inline-flex;
-    width: 22px;
-    height: 22px;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
     align-items: center;
     justify-content: center;
     padding: 0;
     color: #9eaa9a;
     background: #20271e;
     border: 1px solid #3b4638;
-    border-radius: 3px;
+    border-radius: 8px;
     cursor: pointer;
+  }
+
+  .console-header-tray-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 11px;
+  }
+
+  .console-header-tray-heading > div {
+    min-width: 0;
+  }
+
+  .console-header-tray-heading strong {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .console-header-tray-symbol {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    place-items: center;
+    color: var(--acid);
+    background: color-mix(in srgb, var(--acid) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--acid) 22%, transparent);
+    border-radius: 10px;
+  }
+
+  .console-header-tray-symbol svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .console-header-tray-context {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--tray-muted);
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-close:hover,
@@ -11264,22 +11312,21 @@ html.scoped-note-resizing-bottom-left * {
   }
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-close svg {
-    width: 12px;
-    height: 12px;
+    width: 15px;
+    height: 15px;
   }
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-group
     .console-actions {
-    flex: 0 1 auto;
-    flex-wrap: wrap;
-    padding-block: 0;
-    margin-block: 0;
-    overflow: visible;
+    display: contents;
   }
 
   /* The row is a clipped scroller in the header; in the panel it has room. */
   .console-shell[data-console-header-tray="true"] .console-header-tray-group
     .workspace-header-widgets {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
     max-width: none;
     flex: 0 1 auto;
     flex-wrap: wrap;
@@ -11290,8 +11337,13 @@ html.scoped-note-resizing-bottom-left * {
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-group
     .scoped-sticky-notes {
-    max-width: 372px;
-    flex: 0 1 372px;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    gap: 8px;
   }
 
   /* The widget cards shed their readings to fit a squeezed row; in the panel
@@ -11302,9 +11354,12 @@ html.scoped-note-resizing-bottom-left * {
     .host-pulse-card,
   .console-shell[data-console-header-tray="true"] .console-header-tray-group
     .workspace-callback-card {
-    width: auto;
+    width: 100%;
     min-width: 0;
+    height: 56px;
+    padding: 8px;
     flex-basis: auto;
+    border-radius: 6px;
   }
 
   .console-shell[data-console-header-tray="true"] .console-header-tray-group
@@ -11353,6 +11408,101 @@ html.scoped-note-resizing-bottom-left * {
     margin: 0;
     overflow: visible;
     clip: auto;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-tools,
+  .console-shell[data-console-header-tray="true"] .console-tray-action-section {
+    display: grid;
+    min-width: 0;
+    flex: 0 0 auto;
+    gap: 9px;
+    padding: 12px;
+    background: var(--tray-section);
+    border: 1px solid var(--tray-line);
+    border-radius: 10px;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-tools:empty {
+    display: none;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-action-section {
+    grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-section-heading {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-section-title {
+    display: block;
+    grid-column: 1 / -1;
+    color: var(--tray-muted);
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-action-section > button,
+  .console-shell[data-console-header-tray="true"] .console-tray-action-section > a {
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    justify-content: flex-start;
+    padding-inline: 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    text-decoration: none;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-action-section > button > svg,
+  .console-shell[data-console-header-tray="true"] .console-tray-action-section > a > svg {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 auto;
+  }
+
+  .console-shell[data-console-header-tray="true"] .split-action-group {
+    border-radius: 6px;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group .split-action-options > button {
+    min-width: 0;
+    flex: 1 1 auto;
+    padding-inline: 8px;
+    justify-content: center;
+  }
+
+  .console-shell[data-console-header-tray="true"] .split-action-options svg {
+    flex: 0 0 17px;
+  }
+
+  .console-shell[data-console-header-tray="true"] .console-tray-section-heading .connection-badge {
+    height: auto;
+    padding: 0;
+    border: 0;
+    font-size: 9px;
+  }
+
+  .console-shell[data-console-header-tray="true"] .scoped-sticky-notes-label {
+    display: none;
+  }
+
+  .console-shell[data-console-header-tray="true"] .scoped-sticky-note {
+    width: 100%;
+    min-width: 0;
+    height: 56px;
+    grid-template-columns: 18px minmax(0, 1fr);
+    justify-items: stretch;
+    padding: 8px;
+    transform: none;
+    border-radius: 6px;
   }
 
   .workspace-header-widgets {

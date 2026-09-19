@@ -51,6 +51,12 @@ On wider screens, the header exposes two sizing modes:
 
 Tmux cannot render the same pane at two independent responsive sizes.
 
+When the desktop header runs out of room, `All console controls` opens a compact
+panel with Workspace tools, Session actions, and Preferences sections. Notes and
+widgets stay aligned, full action labels are shown, and short windows scroll
+within the panel. The controls retain their state when the panel opens or closes;
+`Escape` closes it and returns focus to its toggle.
+
 The `Theme` control switches the full browser UI and xterm ANSI palette together.
 Dark remains the default, and the selected appearance is stored only in that
 browser. In a desktop workspace it is also available through fuzzy command search

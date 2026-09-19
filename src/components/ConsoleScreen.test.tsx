@@ -219,7 +219,7 @@ function layOutHeader(container: HTMLElement, offscreen: HTMLElement[]) {
   vi.spyOn(actions, "getBoundingClientRect").mockReturnValue(layoutRect(0, 1_000));
   let left = 0;
   container
-    .querySelectorAll<HTMLElement>(".console-actions > button, .console-actions > a")
+    .querySelectorAll<HTMLElement>(".console-actions button, .console-actions a")
     .forEach((control) => {
       const parked = offscreen.includes(control);
       vi.spyOn(control, "getBoundingClientRect")
@@ -422,9 +422,9 @@ describe("ConsoleScreen session identity", () => {
     // The notes and the action cluster share a wrapper so the overflow tray can
     // lift both at once; the wrapper is display: contents, so the header's own
     // layout is unchanged.
-    expect(notes.parentElement).toHaveClass("console-header-tray-group");
-    expect(notes.parentElement?.parentElement).toHaveClass("console-header");
-    expect(notes.nextElementSibling).toBe(view.container.querySelector(".console-actions"));
+    expect(notes.parentElement).toHaveClass("console-tray-tools");
+    expect(notes.parentElement?.parentElement).toHaveClass("console-header-tray-group");
+    expect(notes.parentElement?.nextElementSibling).toBe(view.container.querySelector(".console-actions"));
   });
 
   it("offers header controls the window cannot show in a tray", async () => {
