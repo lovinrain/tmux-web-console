@@ -88,8 +88,9 @@ another shell. `Close tab` only detaches this browser; explicit `End` still
 requires confirmation to terminate the session. Blocked pop-ups show an error
 in the source page.
 
-Both buttons use distinct icons when the header is narrow; hover reveals the
-full action and explanation. Their complete accessible labels remain available.
+Both buttons share one bordered control with an always-visible `Split` caption.
+They use distinct icons when the header is narrow; hover reveals the full action
+and explanation. Their complete accessible labels remain available.
 
 The desktop tab-selection bar also provides `Close tabs` and `End sessions`.
 Both show a confirmation listing the captured selection, native names, and

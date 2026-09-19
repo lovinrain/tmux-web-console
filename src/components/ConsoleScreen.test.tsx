@@ -2224,7 +2224,7 @@ describe("ConsoleScreen session identity", () => {
       "Split workspace: open this session alone in a new temporary workspace window",
     );
     const copyNew = screen.getByRole("button", { name: "Copy New" });
-    expect(copyNew.nextElementSibling).toBe(split);
+    expect(copyNew.nextElementSibling).toBe(screen.getByRole("group", { name: "Split" }));
 
     fireEvent.click(split);
     expect(onSplitWorkspace).toHaveBeenCalledWith("test");
@@ -2273,6 +2273,9 @@ describe("ConsoleScreen session identity", () => {
     const splitEphemeral = screen.getByRole("button", {
       name: "Split to ephemeral tab",
     });
+    const splitGroup = screen.getByRole("group", { name: "Split" });
+    expect(splitGroup).toHaveTextContent("Split");
+    expect(within(splitGroup).getAllByRole("button")).toEqual([splitWorkspace, splitEphemeral]);
     expect(splitWorkspace.nextElementSibling).toBe(splitEphemeral);
 
     fireEvent.click(splitWorkspace);

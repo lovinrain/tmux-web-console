@@ -10119,6 +10119,55 @@ html.scoped-note-resizing-bottom-left * {
   border-color: rgba(187, 244, 81, 0.34);
 }
 
+.split-action-group {
+  display: flex;
+  height: 42px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: #222821;
+  border: 1px solid rgba(187, 244, 81, 0.34);
+  border-radius: 4px;
+}
+
+.split-action-label {
+  height: 10px;
+  flex: 0 0 10px;
+  color: var(--acid);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 10px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.split-action-options {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.split-action-group .split-workspace-button {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+.split-action-group .split-workspace-button + .split-workspace-button {
+  border-left: 1px solid rgba(187, 244, 81, 0.24);
+}
+
+.split-action-group .split-workspace-button:hover:not(:disabled),
+.split-action-group .split-workspace-button:focus-visible {
+  background: rgba(187, 244, 81, 0.1);
+}
+
+.split-action-group .split-workspace-button:focus-visible {
+  outline-offset: -2px;
+}
+
 @media (max-width: 1440px) {
   .split-workspace-button {
     width: 36px;

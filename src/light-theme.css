@@ -3386,6 +3386,24 @@ html[data-theme="light"] .split-workspace-button {
   border-color: #a9c185;
 }
 
+html[data-theme="light"] .split-action-group {
+  background: #eeeae2;
+  border-color: #a9c185;
+}
+
+html[data-theme="light"] .split-action-label {
+  color: #557c1d;
+}
+
+html[data-theme="light"] .split-action-group .split-workspace-button + .split-workspace-button {
+  border-left-color: #a9c185;
+}
+
+html[data-theme="light"] .split-action-group .split-workspace-button:hover:not(:disabled),
+html[data-theme="light"] .split-action-group .split-workspace-button:focus-visible {
+  background: #e0e8d1;
+}
+
 html[data-theme="light"] .workspace-transfer-button {
   color: #8a5a13;
   border-color: #c9ad7d;

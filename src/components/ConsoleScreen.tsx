@@ -1210,7 +1210,7 @@ export function ConsoleScreen({
       // The row scrolls once the header runs short, so it - not the header -
       // is what cuts its buttons off.
       const clip = boxOf(actions);
-      actions.querySelectorAll(":scope > button, :scope > a")
+      actions.querySelectorAll(":scope > button, :scope > a, :scope > .split-action-group button")
         .forEach((control) => collect(control, clip));
     }
     const widgets = header.querySelector(".workspace-header-widgets");
@@ -2244,35 +2244,42 @@ export function ConsoleScreen({
                 <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
               </button>
             )}
-            {!ephemeral && !mobileLayout && onSplitWorkspace && (
-              <button
-                type="button"
-                className="split-workspace-button"
-                disabled={!session}
-                aria-label={splitWorkspaceSelectionCount > 1
-                  ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
-                  : `Split ${sessionName} into a new temporary workspace`}
-                title={splitWorkspaceSelectionCount > 1
-                  ? `Split workspace: open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
-                  : "Split workspace: open this session alone in a new temporary workspace window"}
-                onClick={splitIntoNewWorkspace}
-              >
-                <GridIcon />
-                <span>Space{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
-              </button>
-            )}
-            {!ephemeral && !mobileLayout && onSplitEphemeralTab && (
-              <button
-                type="button"
-                className="split-workspace-button split-ephemeral-tab-button"
-                aria-label="Split to ephemeral tab"
-                disabled={!session}
-                title="Split to ephemeral tab: open only this session, without workspace controls"
-                onClick={splitIntoEphemeralTab}
-              >
-                <ExternalLinkIcon />
-                <span>Tab</span>
-              </button>
+            {!ephemeral && !mobileLayout && (onSplitWorkspace || onSplitEphemeralTab) && (
+              <div className="split-action-group" role="group" aria-label="Split">
+                <span className="split-action-label" aria-hidden="true">Split</span>
+                <div className="split-action-options">
+                  {onSplitWorkspace && (
+                    <button
+                      type="button"
+                      className="split-workspace-button"
+                      disabled={!session}
+                      aria-label={splitWorkspaceSelectionCount > 1
+                        ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
+                        : `Split ${sessionName} into a new temporary workspace`}
+                      title={splitWorkspaceSelectionCount > 1
+                        ? `Split workspace: open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
+                        : "Split workspace: open this session alone in a new temporary workspace window"}
+                      onClick={splitIntoNewWorkspace}
+                    >
+                      <GridIcon />
+                      <span>Space{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
+                    </button>
+                  )}
+                  {onSplitEphemeralTab && (
+                    <button
+                      type="button"
+                      className="split-workspace-button split-ephemeral-tab-button"
+                      aria-label="Split to ephemeral tab"
+                      disabled={!session}
+                      title="Split to ephemeral tab: open only this session, without workspace controls"
+                      onClick={splitIntoEphemeralTab}
+                    >
+                      <ExternalLinkIcon />
+                      <span>Tab</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
             {!ephemeral && <button
               type="button"
