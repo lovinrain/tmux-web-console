@@ -57,6 +57,8 @@ interface CallbackPanelPreference {
 
 interface WorkspaceCallbackListProps {
   sessionName: string;
+  /** The session being viewed; null for views without a single active session. */
+  activeSessionName?: string | null;
   workspaceId?: string | null;
   workspaceName?: string | null;
   temporaryKey?: string;
@@ -260,6 +262,7 @@ function writePreferredCallbackScope(scope: CallbackScope): void {
 
 export function WorkspaceCallbackList({
   sessionName,
+  activeSessionName = sessionName,
   workspaceId = null,
   workspaceName = null,
   temporaryKey = "default",
@@ -885,12 +888,18 @@ export function WorkspaceCallbackList({
                   <button
                     type="button"
                     className="workspace-callback-session"
+                    aria-current={name === activeSessionName ? "true" : undefined}
                     onClick={() => onSelectSession(name)}
                     disabled={!canOpen}
                     title={sessionTitle}
                   >
                     <strong>{sessionDisplayName(session, name)}</strong>
-                    <small>{locationLabel}</small>
+                    <span className="workspace-callback-session-details">
+                      <small>{locationLabel}</small>
+                      {name === activeSessionName && (
+                        <span className="workspace-callback-current-session">Current session</span>
+                      )}
+                    </span>
                   </button>
                   <span className={`workspace-callback-status ${status.tone}`}>{status.label}</span>
                   <button

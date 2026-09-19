@@ -16981,6 +16981,24 @@ html.history-resizing * {
 
   .workspace-callback-session strong { font-size: 10px; font-weight: 680; }
   .workspace-callback-session small { color: #778777; font-size: 7px; }
+  .workspace-callback-session-details {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px 5px;
+  }
+  .workspace-callback-current-session {
+    padding: 2px 4px;
+    color: var(--acid);
+    background: color-mix(in srgb, var(--acid) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--acid) 35%, transparent);
+    border-radius: 3px;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
   .workspace-callback-item[data-workspace-presence="current"] .workspace-callback-session small {
     color: var(--cyan);
   }

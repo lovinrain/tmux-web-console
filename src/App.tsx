@@ -4297,6 +4297,7 @@ function AppRoutes() {
   const renderCallbackList = (currentSession: string, dashboard = false) => (
     <WorkspaceCallbackList
       sessionName={currentSession}
+      activeSessionName={dashboard ? null : currentSession}
       workspaceId={hydratedWorkspaceId === locationWorkspaceId ? locationWorkspaceId : null}
       workspaceName={workspaceName}
       temporaryKey={temporaryTerminalKey}
@@ -4363,6 +4364,7 @@ function AppRoutes() {
         />
         <WorkspaceCallbackList
           sessionName={widgetSessionName}
+          activeSessionName={null}
           workspaceId={hydratedWorkspaceId === locationWorkspaceId
             ? locationWorkspaceId
             : null}
