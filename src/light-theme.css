@@ -851,6 +851,10 @@ html[data-theme="light"] .scoped-sticky-note strong {
   color: color-mix(in srgb, var(--note-accent) 70%, #31372d);
 }
 
+html[data-theme="light"] .scoped-sticky-note-character-count {
+  color: color-mix(in srgb, var(--note-accent) 36%, #31372d);
+}
+
 html[data-theme="light"] .scoped-sticky-note small,
 html[data-theme="light"] .scoped-sticky-note.has-note small {
   color: #5f6456;

@@ -11636,6 +11636,21 @@ html.scoped-note-resizing-bottom-left * {
     line-height: 1;
   }
 
+  .scoped-sticky-note-character-count {
+    position: absolute;
+    right: 9px;
+    bottom: 3px;
+    max-width: calc(100% - 12px);
+    color: var(--note-accent);
+    font-family: "JetBrains Mono Variable", monospace;
+    font-size: 7px;
+    font-style: normal;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
   /* The rail's query size is the room the header leaves for three cards and
      their two 5px gaps, so each step drops the detail that stopped fitting
      rather than letting a card spill over the session identity. */

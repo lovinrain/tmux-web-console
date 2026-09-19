@@ -441,6 +441,12 @@ function StickyNoteCard({
       ? "Unavailable"
       : disabledReason || notebookPreview(snapshot.notebook);
   const disabled = snapshot.loading || Boolean(snapshot.error) || Boolean(disabledReason);
+  const savedCharacters = disabled ? null : snapshot.notebook.pages.reduce(
+    (total, page) => total + page.content.length, 0,
+  );
+  const savedCharactersDescription = savedCharacters === null
+    ? undefined
+    : `${savedCharacters.toLocaleString()} saved ${savedCharacters === 1 ? "character" : "characters"} across all pages`;
   const hasContent = notebookHasContent(snapshot.notebook);
   const hasNotebook = hasContent || snapshot.notebook.pages.length > 1;
   const windowState = pinned ? "PIN" : open ? "OPEN" : null;
@@ -462,6 +468,7 @@ function StickyNoteCard({
       onClick={onToggle}
       disabled={disabled}
       aria-label={actionLabel}
+      aria-description={savedCharactersDescription}
       aria-expanded={open}
       title={disabledReason || snapshot.error || (open
         ? `Hide ${label.toLowerCase()} note`
@@ -477,6 +484,15 @@ function StickyNoteCard({
           {windowState}
         </em>
       )}
+      <em
+        className="scoped-sticky-note-character-count"
+        aria-hidden="true"
+        title={savedCharactersDescription}
+      >
+        {savedCharacters === null ? "—" : savedCharacters.toLocaleString("en", {
+          notation: "compact", maximumFractionDigits: 1,
+        })}
+      </em>
     </button>
   );
 }
