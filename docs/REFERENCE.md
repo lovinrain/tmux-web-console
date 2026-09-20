@@ -390,9 +390,15 @@ and optional snippet `Shortcuts` (short words such as `review` or `deploy`) rank
 ahead of title matches. Exact shortcut matches rank first, followed by prefix
 and fuzzy shortcut matches; text and folder-path search remain available.
 Arrow keys preview results and Enter inserts the selected snippet into the draft.
-Choose `Edit snippet` in the preview to change its name, text, or shortcuts in
-place. Save updates the shared library without inserting anything. A conflicting
-save keeps the draft edits and offers a library reload before retrying.
+The picker includes full library management: `New snippet` creates a snippet
+with a name, text, shortcut words, and folder location. `Edit snippet` changes
+all of those fields, including moving it to another folder. `Delete snippet`
+asks for confirmation before removing it. `New folder` and the current folder's
+`Edit folder` / `Delete folder` controls organize the same shared tree without
+leaving the session. Folder deletion explicitly includes its contents.
+Save updates the shared library without inserting anything or changing the
+staged draft. A conflicting save keeps the form edits and offers a library
+reload before retrying; a conflicting deletion requires another confirmation.
 
 `Attach files` is the adjacent desktop-only attachment flow. The file picker, a
 file pasted into the staged textarea, and files dropped over the composer all

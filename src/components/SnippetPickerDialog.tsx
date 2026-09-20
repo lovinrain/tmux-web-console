@@ -10,9 +10,15 @@ import { ApiRequestError, getSnippetTree, saveSnippetTree } from "../api";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
   childrenForFolder,
+  descendantFolderIds,
   findSnippetNode,
   flattenSnippets,
+  folderOptions,
+  insertSnippetNode,
+  moveSnippetNode,
+  newSnippetId,
   parseSnippetAliases,
+  removeSnippetNode,
   searchSnippets,
   snippetFolderPath,
   updateSnippetNode,
@@ -36,6 +42,29 @@ function snippetPath(entry: SnippetSearchEntry): string {
   return ["Library", ...entry.path].join(" / ");
 }
 
+interface SnippetEditorState {
+  mode: "create" | "edit";
+  type: "snippet" | "folder";
+  id: string;
+}
+
+function parentFolderId(tree: SnippetNode[], id: string): string | null {
+  for (const folder of folderOptions(tree)) {
+    if (childrenForFolder(tree, folder.id).some((node) => node.id === id)) return folder.id;
+  }
+  return null;
+}
+
+function nodeHeight(node: SnippetNode | null): number {
+  return node?.type === "folder" && node.children.length
+    ? 1 + Math.max(...node.children.map(nodeHeight)) : 1;
+}
+
+function descendantCount(node: SnippetNode): number {
+  return node.type === "folder"
+    ? node.children.reduce((count, child) => count + 1 + descendantCount(child), 0) : 0;
+}
+
 export function SnippetPickerDialog({
   onClose,
   onChoose,
@@ -51,16 +80,21 @@ export function SnippetPickerDialog({
   const [folderId, setFolderId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [choosing, setChoosing] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [editor, setEditor] = useState<SnippetEditorState | null>(null);
+  const editing = editor !== null;
   const [editName, setEditName] = useState("");
   const [editText, setEditText] = useState("");
   const [editAliases, setEditAliases] = useState("");
+  const [editFolderId, setEditFolderId] = useState<string | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleting = deleteId !== null;
   const [saving, setSaving] = useState(false);
   const [reloadRequired, setReloadRequired] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const editNameRef = useRef<HTMLInputElement>(null);
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null);
   const initialFocusSetRef = useRef(false);
   const restoreFocusRef = useRef(true);
   const requestNumberRef = useRef(0);
@@ -124,8 +158,13 @@ export function SnippetPickerDialog({
     if (editing) editNameRef.current?.focus();
   }, [editing]);
 
+  useEffect(() => {
+    if (deleting) cancelDeleteRef.current?.focus();
+  }, [deleting]);
+
   const cancelEditing = useCallback(() => {
-    setEditing(false);
+    setEditor(null);
+    setDeleteId(null);
     setActionError(null);
     setReloadRequired(false);
     window.requestAnimationFrame(() => searchRef.current?.focus());
@@ -137,7 +176,7 @@ export function SnippetPickerDialog({
         event.preventDefault();
         event.stopPropagation();
         if (!choosing && !saving) {
-          if (editing) cancelEditing();
+          if (editing || deleting) cancelEditing();
           else onClose();
         }
         return;
@@ -170,7 +209,7 @@ export function SnippetPickerDialog({
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [cancelEditing, choosing, editing, onClose, saving]);
+  }, [cancelEditing, choosing, deleting, editing, onClose, saving]);
 
   const allSnippets = useMemo(() => flattenSnippets(tree), [tree]);
   const normalizedQuery = query.trim();
@@ -192,6 +231,13 @@ export function SnippetPickerDialog({
   const selectedEntry = selected
     ? allSnippets.find((entry) => entry.snippet.id === selected.id) ?? null
     : null;
+  const currentFolder = folderId ? findSnippetNode(tree, folderId) : null;
+  const editorNode = editor?.mode === "edit" ? findSnippetNode(tree, editor.id) : null;
+  const destinations = folderOptions(tree, editorNode ? descendantFolderIds(editorNode) : undefined)
+    .filter((option) => option.depth + nodeHeight(editorNode) <= 12);
+  const validDestination = destinations.some((option) => option.id === editFolderId);
+  const deleteTarget = deleteId ? findSnippetNode(tree, deleteId) : null;
+  const controlsLocked = editing || deleting || saving || choosing;
 
   useEffect(() => {
     dialogRef.current?.querySelector<HTMLElement>(".sp-snippet-row.active")
@@ -212,7 +258,7 @@ export function SnippetPickerDialog({
   };
 
   const chooseSnippet = async () => {
-    if (!selected || choosing || editing || saving) return;
+    if (!selected || controlsLocked) return;
     setChoosing(true);
     setActionError(null);
     try {
@@ -235,80 +281,145 @@ export function SnippetPickerDialog({
   };
 
   const manageSnippets = () => {
-    if (!onManage || choosing || editing || saving) return;
+    if (!onManage || controlsLocked) return;
     onManage();
     restoreFocusRef.current = false;
     onClose();
   };
 
   const closeFromBackdrop = () => {
-    if (!choosing && !editing && !saving) onClose();
+    if (!controlsLocked) onClose();
   };
 
-  const beginEditing = () => {
-    if (!selected) return;
-    setSelectedId(selected.id);
-    setEditName(selected.name);
-    setEditText(selected.text);
-    setEditAliases((selected.aliases ?? []).join(", "));
+  const beginEditing = (node: SnippetNode) => {
+    if (controlsLocked) return;
+    if (node.type === "snippet") setSelectedId(node.id);
+    setEditName(node.name);
+    setEditText(node.type === "snippet" ? node.text : "");
+    setEditAliases(node.type === "snippet" ? (node.aliases ?? []).join(", ") : "");
+    setEditFolderId(parentFolderId(tree, node.id));
     setActionError(null);
     setNotice(null);
     setReloadRequired(false);
-    setEditing(true);
+    setEditor({ mode: "edit", type: node.type, id: node.id });
   };
 
-  const saveEdit = async () => {
-    if (!selected || saving || reloadRequired) return;
+  const beginCreating = (type: "snippet" | "folder") => {
+    if (controlsLocked || breadcrumbs.length >= 12) return;
+    setEditName("");
+    setEditText("");
+    setEditAliases("");
+    setEditFolderId(folderId);
     setActionError(null);
-    let aliases: string[];
-    try {
-      aliases = parseSnippetAliases(editAliases);
-    } catch (error) {
-      setActionError(errorMessage(error, "Check the snippet shortcuts."));
-      return;
-    }
-    const name = editName.trim();
-    if (!name || !editText.trim()) return;
+    setNotice(null);
+    setReloadRequired(false);
+    setEditor({ mode: "create", type, id: newSnippetId(type) });
+  };
+
+  const beginDeleting = (node: SnippetNode) => {
+    if (controlsLocked) return;
+    setDeleteId(node.id);
+    setActionError(null);
+    setNotice(null);
+    setReloadRequired(false);
+  };
+
+  const persist = async (next: SnippetNode[], onSaved: () => void) => {
     setSaving(true);
+    setActionError(null);
     try {
-      const saved = await saveSnippetTree(updateSnippetNode(tree, selected.id, (node) => (
-        node.type === "snippet" ? { ...node, name, text: editText, aliases } : node
-      )), revision);
+      const saved = await saveSnippetTree(next, revision);
       if (!mountedRef.current) return;
       setTree(saved.tree);
       setRevision(saved.revision);
-      setEditing(false);
-      setNotice("Snippet saved to the shared library.");
+      onSaved();
       window.requestAnimationFrame(() => searchRef.current?.focus());
     } catch (error) {
       if (!mountedRef.current) return;
       if (error instanceof ApiRequestError && error.status === 409) {
         setReloadRequired(true);
-        setActionError("The library changed in another tab. Reload the latest library before saving again. Your edits will be kept.");
+        setActionError(editing
+          ? "The library changed in another tab. Reload the latest library before saving again. Your edits will be kept."
+          : "The library changed in another tab. Reload it and review the item before confirming deletion again.");
       } else {
-        setActionError(errorMessage(error, "Unable to save this snippet."));
+        setActionError(errorMessage(error, "Unable to update the snippet library."));
       }
     } finally {
       if (mountedRef.current) setSaving(false);
     }
   };
 
+  const saveEdit = async () => {
+    if (!editor || saving || reloadRequired || !validDestination) return;
+    setActionError(null);
+    const name = editName.trim();
+    if (!name || (editor.type === "snippet" && !editText.trim())) return;
+    let next: SnippetNode[];
+    try {
+      const aliases = editor.type === "snippet" ? parseSnippetAliases(editAliases) : [];
+      if (editor.mode === "create") {
+        const node: SnippetNode = editor.type === "folder"
+          ? { id: editor.id, type: "folder", name, children: [] }
+          : { id: editor.id, type: "snippet", name, text: editText, aliases };
+        next = insertSnippetNode(tree, editFolderId, node);
+      } else {
+        if (!editorNode || editorNode.type !== editor.type) throw new Error("This item no longer exists. Copy your edits before canceling.");
+        next = updateSnippetNode(tree, editor.id, (node) => (
+          node.type === "snippet" ? { ...node, name, text: editText, aliases } : { ...node, name }
+        ));
+        if (parentFolderId(tree, editor.id) !== editFolderId) {
+          next = moveSnippetNode(next, editor.id, editFolderId);
+        }
+      }
+    } catch (error) {
+      setActionError(errorMessage(error, "Check the snippet fields."));
+      return;
+    }
+    await persist(next, () => {
+      setQuery("");
+      setFolderId(editor.type === "folder" ? editor.id : editFolderId);
+      setSelectedId(editor.type === "snippet" ? editor.id : null);
+      setEditor(null);
+      setNotice(`${editor.type === "snippet" ? "Snippet" : "Folder"} saved to the shared library.`);
+    });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || saving || reloadRequired) return;
+    const removedFolders = descendantFolderIds(deleteTarget);
+    await persist(removeSnippetNode(tree, deleteTarget.id).tree, () => {
+      if (folderId && removedFolders.has(folderId)) setFolderId(parentFolderId(tree, deleteTarget.id));
+      setSelectedId(null);
+      setDeleteId(null);
+      setNotice(`${deleteTarget.type === "snippet" ? "Snippet" : "Folder"} deleted from the shared library.`);
+    });
+  };
+
   const reloadForEdit = async () => {
-    if (saving || !selected) return;
+    if (saving || (!editor && !deleteId)) return;
     setSaving(true);
     try {
       const snapshot = await getSnippetTree();
       if (!mountedRef.current) return;
-      const latest = findSnippetNode(snapshot.tree, selected.id);
-      if (latest?.type !== "snippet") {
-        setActionError("This snippet was deleted elsewhere. Copy your edits before canceling.");
-        return;
-      }
       setTree(snapshot.tree);
       setRevision(snapshot.revision);
+      if (folderId && findSnippetNode(snapshot.tree, folderId)?.type !== "folder") setFolderId(null);
+      if (selectedId && findSnippetNode(snapshot.tree, selectedId)?.type !== "snippet") setSelectedId(null);
+      if (editor?.mode === "edit" && findSnippetNode(snapshot.tree, editor.id)?.type !== editor.type) {
+        setActionError("This item was deleted elsewhere. Copy your edits before canceling.");
+        return;
+      }
       setReloadRequired(false);
       setActionError(null);
-      setNotice("Latest library loaded. Saving will replace this snippet with your edits.");
+      if (deleteId && !findSnippetNode(snapshot.tree, deleteId)) {
+        setDeleteId(null);
+        setSelectedId(null);
+        setNotice("This item was already deleted elsewhere.");
+      } else {
+        setNotice(editor
+          ? "Latest library loaded. Review the location and save your edits when ready."
+          : "Latest library loaded. Review the item before confirming deletion.");
+      }
     } catch (error) {
       if (mountedRef.current) setActionError(errorMessage(error, "Unable to reload snippets."));
     } finally {
@@ -317,7 +428,7 @@ export function SnippetPickerDialog({
   };
 
   const searchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing || editing || saving || loading || choosing) return;
+    if (event.nativeEvent.isComposing || controlsLocked || loading) return;
     const entries = normalizedQuery ? searchResults : currentChildren.flatMap((node) => (
       node.type === "snippet" ? [{ snippet: node, path: [] }] : []
     ));
@@ -351,7 +462,7 @@ export function SnippetPickerDialog({
         onClick={() => selectSnippet(snippet)}
         aria-label={`Preview snippet ${snippet.name}`}
         aria-pressed={active}
-        disabled={editing || saving || choosing}
+        disabled={controlsLocked}
       >
         <span className="sp-node-mark" aria-hidden="true">$</span>
         <span className="sp-node-copy">
@@ -383,15 +494,15 @@ export function SnippetPickerDialog({
           <div>
             <p className="sp-eyebrow">SNIPPET LIBRARY</p>
             <h2 id="snippet-picker-heading">{title}</h2>
-            <p id="snippet-picker-description">Preview first, then insert into the current draft.</p>
+            <p id="snippet-picker-description">Create, edit, and organize snippets, then insert into your draft.</p>
           </div>
           <div className="sp-header-actions">
             {onManage && (
-              <button type="button" className="sp-button" onClick={manageSnippets} disabled={choosing || editing || saving}>
+              <button type="button" className="sp-button" onClick={manageSnippets} disabled={controlsLocked}>
                 Manage
               </button>
             )}
-            <button type="button" className="sp-close" onClick={onClose} disabled={choosing || editing || saving} aria-label="Close snippets">
+            <button type="button" className="sp-close" onClick={onClose} disabled={controlsLocked} aria-label="Close snippets">
               Close
             </button>
           </div>
@@ -415,7 +526,7 @@ export function SnippetPickerDialog({
               onKeyDown={searchKeyDown}
               placeholder="Fuzzy title or shortcut; text or folder"
               autoComplete="off"
-              disabled={loading || editing || saving || choosing}
+              disabled={loading || controlsLocked}
             />
             {query && (
               <button
@@ -426,7 +537,7 @@ export function SnippetPickerDialog({
                   searchRef.current?.focus();
                 }}
                 aria-label="Clear snippet search"
-                disabled={editing || saving || choosing}
+                disabled={controlsLocked}
               >
                 Clear
               </button>
@@ -434,6 +545,17 @@ export function SnippetPickerDialog({
           </div>
           <p className="sp-search-help">Shortcut matches come first. ↑ ↓ to preview · Enter to insert.</p>
         </div>
+
+        {!loading && !loadError && <div className="sp-library-tools" role="toolbar" aria-label="Snippet library actions">
+          <button type="button" className="sp-button sp-button-primary" onClick={() => beginCreating("snippet")} disabled={controlsLocked || breadcrumbs.length >= 12}>New snippet</button>
+          <button type="button" className="sp-button" onClick={() => beginCreating("folder")} disabled={controlsLocked || breadcrumbs.length >= 12}>New folder</button>
+          {currentFolder?.type === "folder" && !normalizedQuery && <>
+            <button type="button" className="sp-button" onClick={() => beginEditing(currentFolder)} disabled={controlsLocked}>Edit folder</button>
+            <button type="button" className="sp-button sp-button-danger" onClick={() => beginDeleting(currentFolder)} disabled={controlsLocked}>Delete folder</button>
+          </>}
+          {breadcrumbs.length >= 12 && <span>Folder nesting limit reached. Choose a parent folder to add items.</span>}
+        </div>}
+        {notice && <p className="sp-notice sp-library-notice" role="status">{notice}</p>}
 
         {loading ? (
           <div className="sp-state" role="status">
@@ -450,12 +572,12 @@ export function SnippetPickerDialog({
             </button>
           </div>
         ) : (
-          <div className={editing ? "sp-content sp-content-editing" : "sp-content"}>
+          <div className={editing || deleting ? "sp-content sp-content-editing" : "sp-content"}>
             <section className="sp-browser" aria-label="Snippet browser">
               <nav className="sp-breadcrumbs" aria-label="Snippet folder">
                 <button
                   type="button"
-                  disabled={editing || saving || choosing}
+                  disabled={controlsLocked}
                   onClick={() => {
                     setQuery("");
                     openFolder(null);
@@ -469,7 +591,7 @@ export function SnippetPickerDialog({
                     <span aria-hidden="true">/</span>
                     <button
                       type="button"
-                      disabled={editing || saving || choosing}
+                      disabled={controlsLocked}
                       onClick={() => openFolder(folder.id)}
                       aria-current={folder.id === folderId ? "location" : undefined}
                     >
@@ -501,7 +623,7 @@ export function SnippetPickerDialog({
                             type="button"
                             className="sp-folder-row"
                             key={node.id}
-                            disabled={editing || saving || choosing}
+                            disabled={controlsLocked}
                             onClick={() => openFolder(node.id)}
                             aria-label={`Open folder ${node.name}`}
                           >
@@ -521,33 +643,33 @@ export function SnippetPickerDialog({
                 ) : (
                   <div className="sp-inline-empty">
                     <strong>{tree.length === 0 ? "No snippets yet." : "This folder is empty."}</strong>
-                    <span>{onManage ? "Open Manage to build your snippet tree." : "Add snippets from the library manager."}</span>
-                    {onManage && (
-                      <button type="button" className="sp-button" onClick={manageSnippets}>Manage snippets</button>
-                    )}
+                    <span>Use New snippet or New folder above to build your library here.</span>
                   </div>
                 )}
               </div>
             </section>
 
-            <aside className={selected ? "sp-preview selected" : "sp-preview"} aria-label="Snippet preview">
-              {selected && selectedEntry ? (
-                editing ? (
-                  <form className="sp-editor" onSubmit={(event) => {
-                    event.preventDefault();
-                    void saveEdit();
-                  }}>
-                    <div className="sp-preview-heading"><div><p>EDIT SNIPPET</p><h3>Edit in place</h3></div></div>
-                    <label htmlFor="snippet-edit-name">Name</label>
-                    <input
-                      ref={editNameRef}
-                      id="snippet-edit-name"
-                      value={editName}
-                      onChange={(event) => setEditName(event.target.value)}
-                      maxLength={120}
-                      required
-                      disabled={saving}
-                    />
+            <aside className={selected || editor || deleteTarget ? "sp-preview selected" : "sp-preview"} aria-label="Snippet preview">
+              {editor ? (
+                <form className="sp-editor" onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveEdit();
+                }}>
+                  <div className="sp-preview-heading"><div>
+                    <p>SHARED LIBRARY</p>
+                    <h3>{editor.mode === "create" ? "New" : "Edit"} {editor.type}</h3>
+                  </div></div>
+                  <label htmlFor="snippet-edit-name">Name</label>
+                  <input
+                    ref={editNameRef}
+                    id="snippet-edit-name"
+                    value={editName}
+                    onChange={(event) => setEditName(event.target.value)}
+                    maxLength={120}
+                    required
+                    disabled={saving}
+                  />
+                  {editor.type === "snippet" && <>
                     <label htmlFor="snippet-edit-shortcuts">Shortcuts</label>
                     <input
                       id="snippet-edit-shortcuts"
@@ -572,20 +694,49 @@ export function SnippetPickerDialog({
                       disabled={saving}
                       spellCheck={false}
                     />
-                    {actionError && <div className="sp-action-error" role="alert">
-                      <p>{actionError}</p>
-                      {reloadRequired && <button type="button" className="sp-button" disabled={saving} onClick={() => void reloadForEdit()}>Reload library</button>}
-                    </div>}
-                    {notice && <p className="sp-notice" role="status">{notice}</p>}
-                    <div className="sp-editor-actions">
-                      <button type="button" className="sp-button" onClick={cancelEditing} disabled={saving}>Cancel</button>
-                      <button type="submit" className="sp-button sp-button-primary" disabled={saving || reloadRequired || !editName.trim() || !editText.trim()}>
-                        {saving ? "Saving..." : "Save snippet"}
-                      </button>
-                    </div>
-                    <p className="sp-editor-help">Saved to the shared library for every session.</p>
-                  </form>
-                ) : <>
+                  </>}
+                  <label htmlFor="snippet-edit-location">Location</label>
+                  <select
+                    id="snippet-edit-location"
+                    value={editFolderId ?? ""}
+                    onChange={(event) => setEditFolderId(event.target.value || null)}
+                    disabled={saving}
+                  >
+                    {!validDestination && <option value={editFolderId ?? ""} disabled>Choose an available folder</option>}
+                    {destinations.map((option) => <option key={option.id ?? "root"} value={option.id ?? ""}>{option.label}</option>)}
+                  </select>
+                  {actionError && <div className="sp-action-error" role="alert">
+                    <p>{actionError}</p>
+                    {reloadRequired && <button type="button" className="sp-button" disabled={saving} onClick={() => void reloadForEdit()}>Reload library</button>}
+                  </div>}
+                  <div className="sp-editor-actions">
+                    <button type="button" className="sp-button" onClick={cancelEditing} disabled={saving}>Cancel</button>
+                    <button type="submit" className="sp-button sp-button-primary" disabled={saving || reloadRequired || !validDestination || !editName.trim() || (editor.type === "snippet" && !editText.trim())}>
+                      {saving ? "Saving..." : `Save ${editor.type}`}
+                    </button>
+                  </div>
+                  <p className="sp-editor-help">Saved to the shared library for every session.</p>
+                </form>
+              ) : deleteTarget ? (
+                <section className="sp-delete-confirmation" role="alertdialog" aria-labelledby="snippet-delete-heading" aria-describedby="snippet-delete-description">
+                  <h3 id="snippet-delete-heading">Delete {deleteTarget.type}</h3>
+                  <p id="snippet-delete-description">
+                    Delete <strong>{deleteTarget.name}</strong>{deleteTarget.type === "folder" ? ` and all ${descendantCount(deleteTarget)} items inside it` : ""} from the shared library? This cannot be undone.
+                  </p>
+                  {deleteTarget.type === "snippet" && <pre>{deleteTarget.text}</pre>}
+                  {actionError && <div className="sp-action-error" role="alert">
+                    <p>{actionError}</p>
+                    {reloadRequired && <button type="button" className="sp-button" disabled={saving} onClick={() => void reloadForEdit()}>Reload library</button>}
+                  </div>}
+                  <div className="sp-editor-actions">
+                    <button ref={cancelDeleteRef} type="button" className="sp-button" onClick={cancelEditing} disabled={saving}>Cancel</button>
+                    <button type="button" className="sp-button sp-button-danger" onClick={() => void confirmDelete()} disabled={saving || reloadRequired}>
+                      {saving ? "Deleting..." : `Delete ${deleteTarget.type}`}
+                    </button>
+                  </div>
+                </section>
+              ) : selected && selectedEntry ? (
+                <>
                   <div className="sp-preview-heading">
                     <div>
                       <p>PREVIEW</p>
@@ -597,15 +748,10 @@ export function SnippetPickerDialog({
                   {Boolean(selected.aliases?.length) && <p className="sp-aliases">Shortcuts: {selected.aliases?.join(" · ")}</p>}
                   <pre>{selected.text}</pre>
                   {actionError && <p className="sp-action-error" role="alert">{actionError}</p>}
-                  {notice && <p className="sp-notice" role="status">{notice}</p>}
                   <div className="sp-preview-actions">
-                    <button type="button" className="sp-button" onClick={beginEditing} disabled={choosing}>Edit snippet</button>
-                    <button
-                      type="button"
-                      className="sp-button sp-button-primary"
-                      onClick={() => void chooseSnippet()}
-                      disabled={choosing}
-                    >
+                    <button type="button" className="sp-button" onClick={() => beginEditing(selected)} disabled={choosing}>Edit snippet</button>
+                    <button type="button" className="sp-button sp-button-danger" onClick={() => beginDeleting(selected)} disabled={choosing}>Delete snippet</button>
+                    <button type="button" className="sp-button sp-button-primary" onClick={() => void chooseSnippet()} disabled={choosing}>
                       {choosing ? "Inserting..." : "Insert"}
                     </button>
                   </div>
@@ -615,7 +761,7 @@ export function SnippetPickerDialog({
                 <div className="sp-preview-empty">
                   <span aria-hidden="true">_</span>
                   <strong>Select a snippet to preview it.</strong>
-                  <p>Folders organize the library; only snippet leaves can be inserted.</p>
+                  <p>Create a snippet here, or choose an existing one to edit, delete, or insert.</p>
                 </div>
               )}
             </aside>

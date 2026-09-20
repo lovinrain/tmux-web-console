@@ -206,6 +206,7 @@
 }
 
 .sp-editor input,
+.sp-editor select,
 .sp-editor textarea {
   width: 100%;
   min-height: 40px;
@@ -225,6 +226,7 @@
 }
 
 .sp-editor input:focus-visible,
+.sp-editor select:focus-visible,
 .sp-editor textarea:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 1px;
@@ -254,6 +256,7 @@
 .sp-snippet-row:disabled { opacity: 0.5; cursor: default; }
 
 html[data-theme="light"] .sp-editor input,
+html[data-theme="light"] .sp-editor select,
 html[data-theme="light"] .sp-editor textarea {
   color: #30392e;
   background: #fffdf6;
@@ -263,6 +266,41 @@ html[data-theme="light"] .sp-editor textarea {
 html[data-theme="light"] .sp-editor label { color: #4f5d4a; }
 html[data-theme="light"] .sp-search-help,
 html[data-theme="light"] .sp-editor-help { color: #61705b; }
+
+.sp-library-tools {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #30392e;
+}
+
+.sp-library-tools .sp-button { min-height: 34px; padding-inline: 10px; }
+.sp-library-tools > span { color: var(--amber); font-size: 10px; }
+.sp-library-notice { margin: 0; padding: 8px 16px; border-bottom: 1px solid #30392e; }
+.sp-button-danger { color: #ffb3a9; border-color: #71453e; }
+.sp-button-danger:hover:not(:disabled),
+.sp-button-danger:focus-visible { color: #ffd6d0; background: #3e2521; border-color: #c78073; }
+
+.sp-delete-confirmation {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+.sp-delete-confirmation h3 { margin: 0; font-size: 20px; }
+.sp-delete-confirmation > p { margin: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.sp-delete-confirmation > pre { min-height: 60px; }
+.sp-delete-confirmation .sp-editor-actions { flex-wrap: wrap; }
+
+html[data-theme="light"] .sp-library-tools,
+html[data-theme="light"] .sp-library-notice { border-color: #c4c0b2; }
+html[data-theme="light"] .sp-button-danger { color: #a63a2b; border-color: #d8a095; }
+html[data-theme="light"] .sp-button-danger:hover:not(:disabled),
+html[data-theme="light"] .sp-button-danger:focus-visible { color: #802c20; background: #fbe7e1; border-color: #b4695b; }
 
 .sp-content {
   display: grid;
@@ -448,6 +486,7 @@ html[data-theme="light"] .sp-editor-help { color: #61705b; }
   display: flex;
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
   flex-direction: column;
   padding: 16px;
   background:
@@ -509,11 +548,14 @@ html[data-theme="light"] .sp-editor-help { color: #61705b; }
   -webkit-overflow-scrolling: touch;
 }
 
+.sp-preview > pre { min-height: 80px; }
+
 .sp-preview-actions {
   flex: 0 0 auto;
   justify-content: space-between;
   gap: 14px;
   padding-top: 12px;
+  flex-wrap: wrap;
 }
 
 .sp-preview-actions p {
@@ -525,7 +567,8 @@ html[data-theme="light"] .sp-editor-help { color: #61705b; }
 }
 
 .sp-preview-actions .sp-button {
-  min-width: 112px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sp-preview-empty,
@@ -679,12 +722,19 @@ html[data-theme="light"] .sp-editor-help { color: #61705b; }
   .sp-content {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(190px, 1fr) minmax(210px, 0.9fr);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .sp-content.sp-content-editing { grid-template-rows: minmax(0, 1fr); }
   .sp-content-editing .sp-browser { display: none; }
   .sp-editor input,
+  .sp-editor select,
   .sp-editor textarea { font-size: 16px; }
+
+  .sp-library-tools { padding: 8px 13px; }
+  .sp-library-tools .sp-button { min-height: 40px; }
+  .sp-editor-actions { flex-wrap: wrap; }
 
   .sp-browser {
     border-right: 0;
@@ -713,7 +763,7 @@ html[data-theme="light"] .sp-editor-help { color: #61705b; }
   }
 
   .sp-preview-actions .sp-button {
-    min-width: 104px;
+    min-width: 0;
     min-height: 44px;
   }
 }

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError, getSnippetTree, saveSnippetTree } from "../api";
-import type { SnippetLeaf, SnippetTree } from "../types";
+import type { SnippetFolder, SnippetLeaf, SnippetTree } from "../types";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 
 vi.mock("../api", async (importOriginal) => ({
@@ -120,9 +120,11 @@ describe("SnippetPickerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(await screen.findByText("No snippets yet.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Manage snippets" }));
-    expect(onManage).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "New snippet" }));
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "Shortcuts" })).toBeVisible();
+    expect(onManage).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("retains the picker and reports a rejected insertion", async () => {
@@ -216,6 +218,263 @@ describe("SnippetPickerDialog", () => {
       .toHaveTextContent(reviewSnippet.text);
     expect(onClose).not.toHaveBeenCalled();
     expect(saveSnippetTree).not.toHaveBeenCalled();
+  });
+
+  it("creates a snippet and its shortcuts in an empty library, then inserts the saved content", async () => {
+    vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
+    vi.mocked(saveSnippetTree).mockImplementation(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    const onChoose = vi.fn();
+    const onClose = vi.fn();
+    const onManage = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={onChoose} onManage={onManage} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New snippet" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Check deployment" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "ship, SHIP go" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), {
+      target: { value: "kubectl get pods\n" },
+    });
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveDisplayValue("Library root");
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+
+    await screen.findByRole("button", { name: "Preview snippet Check deployment" });
+    expect(saveSnippetTree).toHaveBeenCalledOnce();
+    expect(saveSnippetTree).toHaveBeenCalledWith([{
+      id: expect.any(String),
+      type: "snippet",
+      name: "Check deployment",
+      text: "kubectl get pods\n",
+      aliases: ["ship", "go"],
+    }], 0);
+    expect(onChoose).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onManage).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search all snippets" }), { target: { value: "ship" } });
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    await waitFor(() => expect(onChoose).toHaveBeenCalledWith(vi.mocked(saveSnippetTree).mock.calls[0][0][0]));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("creates a folder and a snippet within it from the picker", async () => {
+    vi.mocked(saveSnippetTree).mockImplementation(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    render(<SnippetPickerDialog onClose={vi.fn()} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder Operations" }));
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveDisplayValue("Operations");
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Checks" } });
+    expect(screen.queryByRole("textbox", { name: "Shortcuts" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+
+    await waitFor(() => expect(saveSnippetTree).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save folder" })).not.toBeInTheDocument());
+    const savedFolder = (vi.mocked(saveSnippetTree).mock.calls[0][0][0] as SnippetFolder).children[1] as SnippetFolder;
+    expect(savedFolder).toEqual({ id: expect.any(String), type: "folder", name: "Checks", children: [] });
+    // Folder creation may leave the parent open or open the new folder; both allow immediate creation.
+    const openFolder = screen.queryByRole("button", { name: "Open folder Checks" });
+    if (openFolder) fireEvent.click(openFolder);
+    fireEvent.click(screen.getByRole("button", { name: "New snippet" }));
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveDisplayValue("Operations / Checks");
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Status" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), { target: { value: "git status" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+
+    await screen.findByRole("button", { name: "Preview snippet Status" });
+    const savedTree = vi.mocked(saveSnippetTree).mock.calls[1][0];
+    expect(savedTree[1]).toEqual(reviewSnippet);
+    const operations = savedTree[0] as SnippetFolder;
+    expect(operations.children[0]).toEqual((library.tree[0] as SnippetFolder).children[0]);
+    expect(operations.children[1]).toEqual({
+      ...savedFolder,
+      children: [{ id: expect.any(String), type: "snippet", name: "Status", text: "git status", aliases: [] }],
+    });
+    expect(vi.mocked(saveSnippetTree).mock.calls[1][1]).toBe(5);
+  });
+
+  it("moves a nested snippet and clears its shortcuts while preserving the other entries", async () => {
+    const aliased = { ...deploySnippet, aliases: ["ship"] };
+    const operations = library.tree[0] as SnippetFolder;
+    const deploy = operations.children[0] as SnippetFolder;
+    vi.mocked(getSnippetTree).mockResolvedValue({ revision: 4, tree: [
+      { ...operations, children: [{ ...deploy, children: [aliased] }] }, reviewSnippet,
+    ] });
+    vi.mocked(saveSnippetTree).mockImplementation(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    render(<SnippetPickerDialog onClose={vi.fn()} onChoose={vi.fn()} />);
+    const search = await screen.findByRole("searchbox", { name: "Search all snippets" });
+    await waitFor(() => expect(search).toBeEnabled());
+    fireEvent.change(search, { target: { value: "ship" } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit snippet" }));
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveDisplayValue("Operations / Deploy");
+    fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+
+    await screen.findByText("Snippet saved to the shared library.");
+    expect(saveSnippetTree).toHaveBeenCalledWith([
+      { ...operations, children: [{ ...deploy, children: [] }] },
+      reviewSnippet,
+      { ...deploySnippet, aliases: [] },
+    ], 4);
+  });
+
+  it("edits folder names and locations without losing their snippets or allowing cyclic moves", async () => {
+    vi.mocked(saveSnippetTree).mockImplementation(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    render(<SnippetPickerDialog onClose={vi.fn()} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder Operations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit folder" }));
+    const location = screen.getByRole("combobox", { name: "Location" });
+    expect(within(location).queryByRole("option", { name: "Operations" })).not.toBeInTheDocument();
+    expect(within(location).queryByRole("option", { name: "Operations / Deploy" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open folder Deploy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit folder" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Release" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save folder" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save folder" })).not.toBeInTheDocument());
+    const operations = library.tree[0] as SnippetFolder;
+    const deploy = operations.children[0] as SnippetFolder;
+    expect(saveSnippetTree).toHaveBeenCalledWith([
+      { ...operations, children: [] }, reviewSnippet, { ...deploy, name: "Release" },
+    ], 4);
+  });
+
+  it("cancels or confirms snippet deletion without inserting or closing the picker", async () => {
+    vi.mocked(saveSnippetTree).mockImplementation(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    const onChoose = vi.fn();
+    const onClose = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={onChoose} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete snippet" }));
+    let confirmation = screen.getByRole("alertdialog", { name: "Delete snippet" });
+    expect(confirmation).toHaveTextContent(reviewSnippet.name);
+    expect(saveSnippetTree).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview snippet Review diff" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Delete snippet" }));
+    confirmation = screen.getByRole("alertdialog", { name: "Delete snippet" });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Delete snippet" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Preview snippet Review diff" })).not.toBeInTheDocument());
+    expect(saveSnippetTree).toHaveBeenCalledWith([library.tree[0]], 4);
+    expect(onChoose).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("requires a fresh confirmation after a folder deletion conflict and preserves concurrent additions", async () => {
+    const concurrentSnippet = { ...reviewSnippet, id: "concurrent", name: "Added elsewhere" };
+    const operations = library.tree[0] as SnippetFolder;
+    vi.mocked(getSnippetTree).mockResolvedValueOnce(library).mockResolvedValueOnce({
+      revision: 9,
+      tree: [{ ...operations, children: [...operations.children, { ...concurrentSnippet, id: "nested-concurrent" }] }, reviewSnippet, concurrentSnippet],
+    });
+    vi.mocked(saveSnippetTree)
+      .mockRejectedValueOnce(new ApiRequestError("Conflict", 409))
+      .mockImplementationOnce(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    const onClose = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder Operations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete folder" }));
+    let confirmation = screen.getByRole("alertdialog", { name: "Delete folder" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(saveSnippetTree).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete folder" }));
+    confirmation = screen.getByRole("alertdialog", { name: "Delete folder" });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Delete folder" }));
+    await waitFor(() => expect(within(screen.getByRole("alertdialog", { name: "Delete folder" }))
+      .getByRole("button", { name: "Delete folder" })).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Reload library" }));
+    await waitFor(() => expect(within(screen.getByRole("alertdialog", { name: "Delete folder" }))
+      .getByRole("button", { name: "Delete folder" })).toBeEnabled());
+    expect(saveSnippetTree).toHaveBeenCalledOnce();
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Delete folder" }))
+      .getByRole("button", { name: "Delete folder" }));
+    await screen.findByRole("button", { name: "Preview snippet Added elsewhere" });
+    expect(saveSnippetTree).toHaveBeenLastCalledWith([reviewSnippet, concurrentSnippet], 9);
+    expect(screen.queryByRole("button", { name: "Open folder Operations" })).not.toBeInTheDocument();
+  });
+
+  it("keeps all new-snippet fields through a conflict and saves against the reloaded revision", async () => {
+    vi.mocked(getSnippetTree).mockResolvedValueOnce(library).mockResolvedValueOnce({
+      revision: 7, tree: [...library.tree, { ...reviewSnippet, id: "extra", name: "From another tab" }],
+    });
+    vi.mocked(saveSnippetTree)
+      .mockRejectedValueOnce(new ApiRequestError("Conflict", 409))
+      .mockImplementationOnce(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    render(<SnippetPickerDialog onClose={vi.fn()} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New snippet" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "New check" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "check ck" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), { target: { value: "run checks" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Location" }), { target: { value: "deploy" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save snippet" })).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Reload library" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save snippet" })).toBeEnabled());
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("New check");
+    expect(screen.getByRole("textbox", { name: "Shortcuts" })).toHaveValue("check ck");
+    expect(screen.getByRole("textbox", { name: "Snippet text" })).toHaveValue("run checks");
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveDisplayValue("Operations / Deploy");
+    expect(saveSnippetTree).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+    await screen.findByRole("button", { name: "Preview snippet New check" });
+    const savedTree = vi.mocked(saveSnippetTree).mock.calls[1][0];
+    expect(savedTree.slice(1)).toEqual([reviewSnippet, { ...reviewSnippet, id: "extra", name: "From another tab" }]);
+    const folder = (savedTree[0] as SnippetFolder).children[0] as SnippetFolder;
+    expect(folder.children[0]).toEqual(deploySnippet);
+    expect(folder.children[1]).toMatchObject({ name: "New check", text: "run checks", aliases: ["check", "ck"] });
+    expect(vi.mocked(saveSnippetTree).mock.calls[1][1]).toBe(7);
+  });
+
+  it("returns to the library root when a deletion reload removes the browsed folder", async () => {
+    vi.mocked(getSnippetTree).mockResolvedValueOnce(library).mockResolvedValueOnce({
+      revision: 8, tree: [deploySnippet, reviewSnippet],
+    });
+    vi.mocked(saveSnippetTree).mockRejectedValueOnce(new ApiRequestError("Conflict", 409));
+    const onChoose = vi.fn();
+    const onClose = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={onChoose} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder Operations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open folder Deploy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview snippet Deploy production" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete snippet" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Delete snippet" }))
+      .getByRole("button", { name: "Delete snippet" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reload library" }));
+    await waitFor(() => expect(within(screen.getByRole("alertdialog", { name: "Delete snippet" }))
+      .getByRole("button", { name: "Delete snippet" })).toBeEnabled());
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Delete snippet" }))
+      .getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("navigation", { name: "Snippet folder" })).toHaveTextContent(/^Library$/);
+    expect(screen.getByRole("button", { name: "Preview snippet Deploy production" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Preview snippet Review diff" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "New snippet" }));
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveDisplayValue("Library root");
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveValue("");
+    expect(saveSnippetTree).toHaveBeenCalledOnce();
+    expect(onChoose).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("cancels creation without saving or closing, and keeps invalid shortcuts editable", async () => {
+    const onClose = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "New snippet" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Draft" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), { target: { value: "Draft text" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "x".repeat(33) } });
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Each shortcut can contain up to 32 characters.");
+    expect(screen.getByRole("textbox", { name: "Snippet text" })).toHaveValue("Draft text");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Name" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview snippet Review diff" })).toBeVisible();
+    expect(saveSnippetTree).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("locks page scroll, contains focus, handles Escape, and isolates typed keys", async () => {
