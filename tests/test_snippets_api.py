@@ -38,7 +38,9 @@ async def test_snippets_api_load_replace_persist_and_detect_stale_writes(tmp_pat
             "id": "folder",
             "type": "folder",
             "name": " Commands ",
-            "children": [snippet("test", "pytest\n")],
+            "children": [snippet("test", "pytest\n") | {
+                "aliases": [" check ", "CHECK", "测试"],
+            }],
         }
     ]
 
@@ -56,6 +58,7 @@ async def test_snippets_api_load_replace_persist_and_detect_stale_writes(tmp_pat
         assert saved["revision"] == 1
         assert saved["tree"][0]["name"] == "Commands"
         assert saved["tree"][0]["children"][0]["text"] == "pytest\n"
+        assert saved["tree"][0]["children"][0]["aliases"] == ["check", "测试"]
         assert await (await client.get("/api/snippets")).json() == saved
 
         response = await client.put(
@@ -136,6 +139,20 @@ async def test_snippets_api_rejects_malformed_requests(tmp_path):
                     "tree": [snippet("leaf") | {"children": []}],
                 },
                 "tree[0] has unknown field: children",
+            ),
+            (
+                {
+                    "revision": 0,
+                    "tree": [snippet("leaf") | {"aliases": "shortcut"}],
+                },
+                "tree[0].aliases must be an array",
+            ),
+            (
+                {
+                    "revision": 0,
+                    "tree": [snippet("leaf") | {"aliases": ["two words"]}],
+                },
+                "tree[0].aliases[0] cannot contain whitespace or control characters",
             ),
         ]
         for payload, error in cases:

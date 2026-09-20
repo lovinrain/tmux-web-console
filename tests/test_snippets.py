@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tmux_console.snippets import (
+    MAX_SNIPPET_ALIAS_LENGTH,
+    MAX_SNIPPET_ALIASES,
     MAX_SNIPPET_ID_LENGTH,
     MAX_SNIPPET_NAME_LENGTH,
     MAX_SNIPPET_REVISION,
@@ -73,13 +75,100 @@ def test_snippet_tree_persists_hierarchy_order_text_and_revision(tmp_path):
     assert SnippetStore(path).get_snapshot() == saved
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload == {"version": 1, **saved}
+    assert payload == {"version": 2, **saved}
     assert list(tmp_path.glob(".snippets.json.*.tmp")) == []
 
     reordered = [saved["tree"][1], saved["tree"][0]]
     updated = store.replace_tree(reordered, expected_revision=1)
     assert updated["revision"] == 2
     assert [node["id"] for node in updated["tree"]] == ["standalone", "deploy"]
+
+
+def test_legacy_tree_loads_without_rewrite_and_aliases_persist_on_save(tmp_path):
+    path = tmp_path / "snippets.json"
+    original = json.dumps(
+        {"version": 1, "revision": 7, "tree": [snippet("deploy")]}
+    )
+    path.write_text(original, encoding="utf-8")
+    store = SnippetStore(path)
+
+    legacy = store.get_snapshot()
+    assert legacy == {"revision": 7, "tree": [snippet("deploy")]}
+    assert path.read_text(encoding="utf-8") == original
+
+    saved = store.replace_tree(
+        [folder("commands", [
+            snippet("deploy") | {
+                "aliases": [" ship ", "SHIP", "发布", "Straße", "STRASSE"],
+            }
+        ])],
+        expected_revision=7,
+    )
+    assert saved["tree"][0]["children"][0]["aliases"] == ["ship", "发布", "Straße"]
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 2, **saved}
+    assert SnippetStore(path).get_snapshot() == saved
+
+
+def test_empty_aliases_keep_legacy_shape_and_can_clear_saved_aliases(tmp_path):
+    path = tmp_path / "snippets.json"
+    store = SnippetStore(path)
+    store.replace_tree(
+        [snippet("deploy") | {"aliases": ["ship"]}], expected_revision=0
+    )
+    cleared = store.replace_tree(
+        [snippet("deploy") | {"aliases": []}], expected_revision=1
+    )
+    assert cleared == {"revision": 2, "tree": [snippet("deploy")]}
+    assert SnippetStore(path).get_snapshot() == cleared
+
+
+def test_alias_limits_allow_unicode_code_points_and_eight_shortcuts(tmp_path):
+    aliases = ["🛠" * MAX_SNIPPET_ALIAS_LENGTH] + [
+        f"shortcut{index}" for index in range(MAX_SNIPPET_ALIASES - 1)
+    ]
+    saved = SnippetStore(tmp_path / "snippets.json").replace_tree(
+        [snippet("commands") | {"aliases": aliases}], expected_revision=0
+    )
+    assert saved["tree"][0]["aliases"] == aliases
+
+
+@pytest.mark.parametrize(
+    ("aliases", "error"),
+    [
+        (None, "aliases must be an array"),
+        ("ship", "aliases must be an array"),
+        ({"ship": True}, "aliases must be an array"),
+        ([1], "aliases[0] must be a string"),
+        ([None], "aliases[0] must be a string"),
+        ([False], "aliases[0] must be a string"),
+        ([""], "aliases[0] cannot be blank"),
+        ([" \t\n "], "aliases[0] cannot be blank"),
+        (["two words"], "cannot contain whitespace or control characters"),
+        (["two\twords"], "cannot contain whitespace or control characters"),
+        (["two\nwords"], "cannot contain whitespace or control characters"),
+        (["two\u00a0words"], "cannot contain whitespace or control characters"),
+        (["bad\0"], "cannot contain whitespace or control characters"),
+        (["bad\x7f"], "cannot contain whitespace or control characters"),
+        (["bad\x80"], "cannot contain whitespace or control characters"),
+        (["bad\u200b"], "cannot contain whitespace or control characters"),
+        (["bad\u202e"], "cannot contain whitespace or control characters"),
+        (["bad\ud800"], "must contain valid Unicode"),
+        (["🛠" * (MAX_SNIPPET_ALIAS_LENGTH + 1)], "must be 32 characters or fewer"),
+        (["same"] * (MAX_SNIPPET_ALIASES + 1), "cannot contain more than 8 items"),
+    ],
+)
+def test_invalid_aliases_cannot_mutate_saved_tree(aliases, error, tmp_path):
+    path = tmp_path / "snippets.json"
+    store = SnippetStore(path)
+    saved = store.replace_tree([snippet("original")], expected_revision=0)
+    original_bytes = path.read_bytes()
+    with pytest.raises(ValueError) as caught:
+        store.replace_tree(
+            [snippet("invalid") | {"aliases": aliases}], expected_revision=1
+        )
+    assert error in str(caught.value)
+    assert store.get_snapshot() == saved
+    assert path.read_bytes() == original_bytes
 
 
 def test_stale_revision_cannot_overwrite_a_newer_tree(tmp_path):
@@ -200,6 +289,7 @@ def test_directory_fsync_failure_keeps_memory_consistent_with_replaced_file(
         ([snippet("x") | {"extra": True}], "unknown field: extra"),
         ([{"id": "x", "type": "folder", "name": "X"}], "missing field"),
         ([snippet("x") | {"children": []}], "unknown field: children"),
+        ([folder("x", []) | {"aliases": ["x"]}], "unknown field: aliases"),
         ([folder("x", [], name=" \n ")], "name cannot be blank"),
         ([snippet("x", text=" \n\t")], "text cannot be blank"),
         ([snippet("bad\nid")], "id cannot contain control"),
@@ -297,6 +387,12 @@ def test_invalid_persisted_tree_fails_closed_without_rewriting_file(tmp_path):
         b"not JSON",
         b"\xff\xfe",
         json.dumps({"version": True, "revision": 0, "tree": []}).encode(),
+        json.dumps({"version": 3, "revision": 0, "tree": []}).encode(),
+        json.dumps({
+            "version": 2,
+            "revision": 1,
+            "tree": [snippet("invalid") | {"aliases": ["two words"]}],
+        }).encode(),
         json.dumps(
             {
                 "version": 1,

@@ -1000,7 +1000,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               className="composer-snippet-trigger"
               aria-label="Insert snippet into staged input"
               aria-haspopup="dialog"
-              title="Search your snippet library and insert at the current cursor without sending"
+              aria-keyshortcuts={directShortcutAria(shortcutBindings["input-insert-snippet"])}
+              title={`Search or edit your snippets and insert at the current cursor without sending${directShortcutLabel(shortcutBindings["input-insert-snippet"])
+                ? ` (${directShortcutLabel(shortcutBindings["input-insert-snippet"])})`
+                : ""}`}
               disabled={!onOpenSnippets}
               onMouseDown={(event) => event.preventDefault()}
               onClick={onOpenSnippets}
@@ -1402,6 +1405,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onClick={onOpenSnippets}
           disabled={!onOpenSnippets}
           aria-label="Open snippets"
+          aria-keyshortcuts={directShortcutAria(shortcutBindings["input-insert-snippet"])}
+          title={`Insert snippet${directShortcutLabel(shortcutBindings["input-insert-snippet"])
+            ? ` (${directShortcutLabel(shortcutBindings["input-insert-snippet"])})`
+            : ""}`}
         >
           <SnippetIcon /> <span>Snippets</span>
         </button>

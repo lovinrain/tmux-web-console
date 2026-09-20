@@ -9,8 +9,10 @@ import {
   folderOptions,
   insertSnippetNode,
   moveSnippetNode,
+  parseSnippetAliases,
   removeSnippetNode,
   reorderSnippetNode,
+  searchSnippets,
   snippetFolderPath,
   updateSnippetNode,
 } from "./snippets";
@@ -38,6 +40,61 @@ function fixture(): SnippetNode[] {
     snippet("root-command", "Root command", "pwd"),
   ];
 }
+
+describe("snippet shortcuts", () => {
+  it("splits shortcuts on commas or whitespace and preserves the first spelling", () => {
+    expect(parseSnippetAliases("  RD, review\nrd\tREVIEW , déploy  ")).toEqual(["RD", "review", "déploy"]);
+    expect(parseSnippetAliases(" , \n ")).toEqual([]);
+  });
+
+  it("validates shortcut counts, Unicode character lengths, and control characters", () => {
+    expect(parseSnippetAliases("😀".repeat(32))).toEqual(["😀".repeat(32)]);
+    expect(() => parseSnippetAliases("😀".repeat(33))).toThrow("32 characters");
+    expect(() => parseSnippetAliases("one two three four five six seven eight nine")).toThrow("8 shortcuts");
+    expect(() => parseSnippetAliases("bad\u0000value")).toThrow("control characters");
+    expect(() => parseSnippetAliases("hidden\u200bshortcut")).toThrow("control characters");
+  });
+});
+
+describe("snippet search", () => {
+  it("ranks exact shortcuts, shortcut prefixes, and fuzzy shortcuts ahead of matching titles", () => {
+    const entries = flattenSnippets([
+      snippet("title", "rd"),
+      { ...snippet("fuzzy-alias", "Review changes"), aliases: ["reviewdiff"] },
+      snippet("body", "Unrelated", "use rd here"),
+      { ...snippet("prefix-alias", "Review the diff"), aliases: ["rdiff"] },
+      { ...snippet("exact-alias", "Another review"), aliases: ["RD"] },
+    ]);
+    expect(searchSnippets(entries, "rD").map(({ snippet: item }) => item.id)).toEqual([
+      "exact-alias", "prefix-alias", "fuzzy-alias", "title", "body",
+    ]);
+    expect(entries[0].snippet.id).toBe("title");
+  });
+
+  it("finds ordered title abbreviations and keeps equally relevant results in library order", () => {
+    const entries = flattenSnippets([
+      snippet("review-a", "Review the current diff"),
+      snippet("review-b", "Review the current diff"),
+      snippet("other", "Run checks"),
+    ]);
+    expect(searchSnippets(entries, "rcd").map(({ snippet: item }) => item.id)).toEqual(["review-a", "review-b"]);
+    expect(searchSnippets(entries, "dcr")).toEqual([]);
+    expect(searchSnippets(entries, " ")).toBe(entries);
+  });
+
+  it("retains Unicode and punctuation shortcuts while supporting path and text substring search", () => {
+    const entries = flattenSnippets([
+      { ...snippet("unicode", "Deploy changes"), aliases: ["部署", "g++"] },
+      snippet("accented", "Résumé review"),
+      folder("operations", "Production recovery", [snippet("recover", "Restore backup", "from yesterday's archive")]),
+    ]);
+    expect(searchSnippets(entries, "部署").map(({ snippet: item }) => item.id)).toEqual(["unicode"]);
+    expect(searchSnippets(entries, "g++").map(({ snippet: item }) => item.id)).toEqual(["unicode"]);
+    expect(searchSnippets(entries, "resume").map(({ snippet: item }) => item.id)).toEqual(["accented"]);
+    expect(searchSnippets(entries, "production recovery").map(({ snippet: item }) => item.id)).toEqual(["recover"]);
+    expect(searchSnippets(entries, "yesterday's archive").map(({ snippet: item }) => item.id)).toEqual(["recover"]);
+  });
+});
 
 describe("snippet tree lookup and projection", () => {
   it("finds nested nodes and folders, resolves paths, and lists folder children", () => {

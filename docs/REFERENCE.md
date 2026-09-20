@@ -383,6 +383,17 @@ automatically. The same picker is available on every dashboard card/list row
 and inside memorandum editors. From a dashboard row, choosing a snippet saves
 it as that session's local draft and opens the console for review.
 
+`Ctrl+Shift+I` opens the picker from a desktop console, including terminal Focus.
+`Insert snippet` is also listed in the shortcut window and fuzzy command palette.
+Search receives focus automatically: fuzzy title matches work across folders,
+and optional snippet `Shortcuts` (short words such as `review` or `deploy`) rank
+ahead of title matches. Exact shortcut matches rank first, followed by prefix
+and fuzzy shortcut matches; text and folder-path search remain available.
+Arrow keys preview results and Enter inserts the selected snippet into the draft.
+Choose `Edit snippet` in the preview to change its name, text, or shortcuts in
+place. Save updates the shared library without inserting anything. A conflicting
+save keeps the draft edits and offers a library reload before retrying.
+
 `Attach files` is the adjacent desktop-only attachment flow. The file picker, a
 file pasted into the staged textarea, and files dropped over the composer all
 use the same behavior. Muxdeck accepts any non-empty file, limits each file to
@@ -590,6 +601,10 @@ library root can contain snippets or folders, folders can nest, and snippets are
 always leaves. Items can be renamed, moved between folders, reordered, or
 deleted. Saves use a revision check so an older browser cannot silently
 overwrite changes made by a newer one.
+Each snippet can have up to eight shortcut words, each up to 32 characters,
+configured in either the library editor or the insert picker. Separate them
+with spaces or commas; matching is case-insensitive. Reusing a shortcut is
+allowed, with library order breaking equally ranked matches.
 
 ## Agent state detection
 
@@ -1199,7 +1214,8 @@ snapshot for Back/Forward navigation.
 The live console defaults to exact `Ctrl+Shift` chords for session and terminal actions:
 `E` opens the existing End-session confirmation, `R` opens the native tmux
 session rename dialog, `L` returns to live output, `C` toggles browser Copy mode,
-and `U` / `D` invoke the paging controls highlighted for the current agent. `M`
+and `U` / `D` invoke the paging controls highlighted for the current agent. `I`
+opens Insert snippet with its search field focused. `M`
 creates a numbered session in the active pane's directory, `B` opens New session,
 `K` adds or removes the active session from the workspace callback list (and that
 entry is automatically visible in the global callback list),
@@ -1214,7 +1230,7 @@ workspace layout is active.
 shortcut layer containing the known tab, view, floating-input, paging, Copy, Live, Rename, and
 End actions. After releasing the opening chord, a single displayed key runs the
 action: notably `E` opens End confirmation, `R` opens Rename, and `H` switches to
-fuzzy command search. `T` toggles the theme. Escape or clicking outside closes
+fuzzy command search. `I` opens Insert snippet. `T` toggles the theme. Escape or clicking outside closes
 the layer. The paging entries intentionally say `Preferred page up/down` because
 their raw-application or tmux implementation follows the remembered agent choice.
 `Customize` opens the global keymap editor. Each action has an independently
@@ -1322,13 +1338,17 @@ instead of being replaced; repair the configured file and restart Muxdeck.
 
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
+Snippet documents load versions 1 and 2; the next save writes version 2 with
+optional shortcut aliases. Keep the pre-upgrade file for rollback to a release
+that only reads version 1.
 
 `MUXDECK_SHORTCUTS_FILE` stores the global desktop keymap. It is shared across
 browsers, uses revision-checked whole-document writes, and defaults to the
 built-in bindings until the first save. An unreadable, malformed, conflicting,
 or unsupported document makes shortcut persistence unavailable rather than
 overwriting the file; the browser continues with built-in defaults and exposes a
-retry state in the editor. Shortcut documents are version 6. Version 5 loads by
+retry state in the editor. Shortcut documents are version 7. Version 6 loads by
+adding Insert snippet with `I` in each unoccupied layer. Version 5 loads by
 adding the workspace callback action with `K`; if the legacy quick temporary
 session still owns `K` directly, that direct binding is moved out of the way while
 its shortcut-window binding remains available. Version 4 loads by adding pane
@@ -1337,7 +1357,7 @@ floating utility terminal with `J`; version 2 adds floating input with `Y`, and
 version 1 first adds the quick temporary session with `K`. Upgrades add each
 later action in order, and a conflict leaves only that layer unbound instead of
 replacing a custom key. The first keymap save atomically rewrites a version 1
-through 5 document as version 6. Keep a pre-upgrade backup when rollback to an
+through 6 document as version 7. Keep a pre-upgrade backup when rollback to an
 older release is possible.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.

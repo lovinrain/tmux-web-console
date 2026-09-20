@@ -110,6 +110,7 @@ export interface SnippetLeaf {
   type: "snippet";
   name: string;
   text: string;
+  aliases?: string[];
 }
 
 export type SnippetNode = SnippetFolder | SnippetLeaf;

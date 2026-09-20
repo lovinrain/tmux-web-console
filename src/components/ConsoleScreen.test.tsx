@@ -2470,6 +2470,61 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("opens snippet search with the exact shortcut in focus mode %s without terminal input", async (focusMode) => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "test" });
+    if (focusMode) act(() => dispatchShortcutAction("view-terminal-focus"));
+
+    const terminal = screen.getByTestId("live-terminal");
+    const leakedKeyDown = vi.fn();
+    terminal.addEventListener("keydown", leakedKeyDown);
+    const chord = { code: "KeyI", key: "I", ctrlKey: true, shiftKey: true };
+    fireEvent.keyDown(terminal, { ...chord, shiftKey: false });
+    expect(screen.queryByRole("dialog", { name: "Insert into staged input" })).not.toBeInTheDocument();
+    leakedKeyDown.mockClear();
+
+    expect(fireEvent.keyDown(terminal, chord)).toBe(false);
+    expect(await screen.findByRole("dialog", { name: "Insert into staged input" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search all snippets" })).toHaveFocus());
+    expect(leakedKeyDown).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Insert into staged input" })).not.toBeInTheDocument();
+    act(() => dispatchShortcutAction("input-insert-snippet"));
+    expect(await screen.findByRole("dialog", { name: "Insert into staged input" })).toBeVisible();
+    terminal.removeEventListener("keydown", leakedKeyDown);
+  });
+
+  it("dispatches snippet insertion only to the active embedded console", async () => {
+    const first = session(null, "first");
+    const second = session(null, "second");
+    vi.mocked(listSessions).mockResolvedValue([first, second]);
+    renderWithTheme(<>
+      <ConsoleScreen
+        sessionName="first"
+        sessionSnapshot={first}
+        embedded
+        instanceId="first"
+        keyboardShortcutsEnabled={false}
+        onBack={vi.fn()}
+      />
+      <ConsoleScreen
+        sessionName="second"
+        sessionSnapshot={second}
+        embedded
+        instanceId="second"
+        onBack={vi.fn()}
+      />
+    </>);
+    act(() => dispatchShortcutAction("input-insert-snippet"));
+    await screen.findByRole("searchbox", { name: "Search all snippets" });
+    expect(screen.getAllByRole("dialog", { name: "Insert into staged input" })).toHaveLength(1);
+    expect(getSnippetTree).toHaveBeenCalledOnce();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+  });
+
   it("inserts snippets from the staged composer at the current selection without sending", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(getSnippetTree).mockResolvedValue({

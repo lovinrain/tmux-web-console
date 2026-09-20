@@ -12,6 +12,7 @@ import type { Pane, Session } from "../types";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import {
   COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH,
+  ActivePaneSessionContext,
   DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
   MAX_DESKTOP_TAB_RAIL_WIDTH,
   MIN_DESKTOP_TAB_RAIL_WIDTH,
@@ -265,6 +266,26 @@ describe("SessionWorkspaceNavigation", () => {
     fireEvent.keyDown(window, { code: "KeyG", key: "g" });
     expect(shortcutActions).toContain(PANE_NAVIGATION_ACTION);
     window.removeEventListener(SHORTCUT_ACTION_EVENT, captureShortcut);
+  });
+
+  it("offers Insert snippet only for a live active pane when no session tab is selected", () => {
+    const props = navigationProps({ activeSession: null, activePaneLayoutId: "pair" });
+    const view = render(
+      <ActivePaneSessionContext.Provider value="alpha">
+        <SessionWorkspaceNavigation {...props} />
+      </ActivePaneSessionContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open shortcut window" }));
+    expect(screen.getByRole("button", { name: /Insert snippet/ })).toBeEnabled();
+
+    for (const unavailableSession of [null, "missing-session"]) {
+      view.rerender(
+        <ActivePaneSessionContext.Provider value={unavailableSession}>
+          <SessionWorkspaceNavigation {...props} />
+        </ActivePaneSessionContext.Provider>,
+      );
+      expect(screen.getByRole("button", { name: /Insert snippet/ })).toBeDisabled();
+    }
   });
 
   it("finds tabs by group name and exposes their group name and color", () => {
@@ -566,7 +587,7 @@ describe("SessionWorkspaceNavigation", () => {
     await waitFor(() => expect(search).toHaveFocus());
     expect(document.body.style.overflow).toBe("hidden");
 
-    fireEvent.change(search, { target: { value: "rn ssn" } });
+    fireEvent.change(search, { target: { value: "rnm ssn" } });
     expect(within(palette).getByRole("option", { name: /Rename tmux session/ }))
       .toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(search, { key: "Enter" });
@@ -574,6 +595,15 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.queryByRole("dialog", { name: "Run a command" })).not.toBeInTheDocument();
     expect(shortcutActions).toContain("session-rename");
     expect(document.body.style.overflow).toBe("");
+
+    fireEvent.click(trigger);
+    const snippetPalette = screen.getByRole("dialog", { name: "Run a command" });
+    const snippetSearch = within(snippetPalette).getByRole("combobox", { name: "Search commands" });
+    fireEvent.change(snippetSearch, { target: { value: "insert snippet" } });
+    expect(within(snippetPalette).getByRole("option", { name: /Insert snippet/ }))
+      .toHaveTextContent("Ctrl+Shift+I");
+    fireEvent.keyDown(snippetSearch, { key: "Enter" });
+    expect(shortcutActions).toContain("input-insert-snippet");
 
     fireEvent.click(trigger);
     const reopened = screen.getByRole("dialog", { name: "Run a command" });
@@ -640,6 +670,13 @@ describe("SessionWorkspaceNavigation", () => {
     });
     fireEvent.keyDown(window, { code: "KeyR", key: "r" });
     expect(shortcutActions).toContain("session-rename");
+
+    fireEvent.click(trigger);
+    shortcuts = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(within(shortcuts).getByRole("button", { name: /Insert snippet/ }))
+      .toHaveTextContent("I");
+    fireEvent.keyDown(window, { code: "KeyI", key: "i" });
+    expect(shortcutActions).toContain("input-insert-snippet");
 
     fireEvent.keyDown(window, {
       code: "KeyZ",

@@ -268,6 +268,7 @@ interface DesktopFocusShortcutsDrag {
 
 type DesktopSessionShortcut = "end" | "rename";
 type DesktopConsoleShortcutAction =
+  | "input-insert-snippet"
   | "view-terminal-focus"
   | "view-floating-input"
   | "view-floating-terminal"
@@ -1640,6 +1641,7 @@ export function ConsoleScreen({
       event: KeyboardEvent,
     ): DesktopConsoleShortcutAction | null => {
       const candidates: DesktopConsoleShortcutAction[] = [
+        "input-insert-snippet",
         "view-terminal-focus",
         "view-floating-input",
         "view-floating-terminal",
@@ -1661,6 +1663,10 @@ export function ConsoleScreen({
       repeated = false,
       rememberKeyDown = false,
     ) => {
+      if (action === "input-insert-snippet") {
+        if (!repeated) setSnippetsOpen(true);
+        return;
+      }
       if (ephemeral && (
         action === "view-session-tabs"
         || action === "view-floating-input"
@@ -1766,6 +1772,7 @@ export function ConsoleScreen({
     const handleShortcutAction = (event: Event) => {
       const action = (event as CustomEvent<ShortcutActionId>).detail;
       const supportedActions: DesktopConsoleShortcutAction[] = [
+        "input-insert-snippet",
         "view-terminal-focus",
         "view-floating-input",
         "view-floating-terminal",

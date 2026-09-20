@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useContext } from "react";
 import type { WorkspacePaneLayout } from "../api";
 import type { Session } from "../types";
 import { WorkspacePaneBoard } from "./WorkspacePaneBoard";
+import { ActivePaneSessionContext } from "./SessionWorkspaceNavigation";
 
 const layout: WorkspacePaneLayout = {
   id: "pair",
@@ -68,6 +70,9 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("WorkspacePaneBoard", () => {
   it("arms pane navigation and moves active terminal focus geometrically", () => {
+    function ActiveSessionProbe() {
+      return <span data-testid="active-command-session">{useContext(ActivePaneSessionContext)}</span>;
+    }
     const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(function mockPaneBounds(this: HTMLElement) {
         if (this.dataset.paneId === "left") return paneRect(0, 400);
@@ -79,7 +84,7 @@ describe("WorkspacePaneBoard", () => {
         layout={pairLayout}
         openSessions={["alpha", "beta"]}
         sessions={[session("alpha"), session("beta")]}
-        sessionNavigation={<nav />}
+        sessionNavigation={<ActiveSessionProbe />}
         desktopTabOrientation="horizontal"
         desktopTabRailWidth={288}
         workspacePersistenceState="saved"
@@ -112,6 +117,7 @@ describe("WorkspacePaneBoard", () => {
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(screen.getByTestId("terminal-right")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("active-command-session")).toHaveTextContent("beta");
     expect(screen.getByTestId("terminal-right")).toHaveAttribute(
       "data-focus-request",
       expect.stringMatching(/^\d+$/),
@@ -120,6 +126,7 @@ describe("WorkspacePaneBoard", () => {
 
     fireEvent.keyDown(window, { key: "ArrowLeft" });
     expect(screen.getByTestId("terminal-left")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("active-command-session")).toHaveTextContent("alpha");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     bounds.mockRestore();

@@ -42,6 +42,7 @@ describe("SnippetLibrary", () => {
     fireEvent.input(screen.getByLabelText("Snippet text"), {
       target: { value: "  review the diff\ncarefully  " },
     });
+    fireEvent.change(screen.getByLabelText("Shortcuts"), { target: { value: "rd, review, RD" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -53,8 +54,52 @@ describe("SnippetLibrary", () => {
     expect(request.tree[0].children[0]).toMatchObject({
       name: "Review diff",
       text: "  review the diff\ncarefully  ",
+      aliases: ["rd", "review"],
     });
     expect(await screen.findByRole("button", { name: "Edit snippet Review diff" })).toBeVisible();
+  });
+
+  it("edits and clears existing shortcuts, rejecting invalid values before saving", async () => {
+    let tree: SnippetNode[] = [{ id: "review", type: "snippet", name: "Review", text: "Review the diff", aliases: ["rd"] }];
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (!init?.method) return jsonResponse({ revision: 1, tree });
+      const body = JSON.parse(String(init.body)) as { revision: number; tree: SnippetNode[] };
+      tree = body.tree;
+      return jsonResponse({ revision: body.revision + 1, tree });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit snippet Review" }));
+    expect(screen.getByRole("textbox", { name: "Shortcuts" })).toHaveValue("rd");
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "a".repeat(33) } });
+    expect(screen.getByRole("alert")).toHaveTextContent("32 characters");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(tree[0]).not.toHaveProperty("aliases");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("uses fuzzy titles and prioritizes shortcuts in library search", async () => {
+    const tree: SnippetNode[] = [
+      { id: "literal", type: "snippet", name: "rd", text: "literal title" },
+      { id: "review", type: "snippet", name: "Review the current diff", text: "Review", aliases: ["rd"] },
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ revision: 1, tree })));
+    renderWithTheme(<SnippetLibrary onOpenSessions={vi.fn()} />);
+    await screen.findByRole("button", { name: "Edit snippet Review the current diff" });
+
+    fireEvent.input(screen.getByRole("searchbox", { name: "Search snippets" }), { target: { value: "rd" } });
+    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      "Review the current diff", "rd",
+    ]);
+    fireEvent.input(screen.getByRole("searchbox", { name: "Search snippets" }), { target: { value: "rcd" } });
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("Review the current diff");
   });
 
   it("reorders and recursively deletes nodes through explicit controls", async () => {

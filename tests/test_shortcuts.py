@@ -11,6 +11,7 @@ from tmux_console.shortcuts import (
     DEFAULT_SHORTCUT_BINDINGS,
     FLOATING_INPUT_ACTION,
     FLOATING_TERMINAL_ACTION,
+    INSERT_SNIPPET_ACTION,
     PANE_NAVIGATION_ACTION,
     PREVIOUS_SHORTCUT_DOCUMENT_VERSION,
     QUICK_SESSION_ACTION,
@@ -56,6 +57,7 @@ def test_shortcut_store_upgrades_version_one_with_new_action_bindings(tmp_path):
     legacy.pop(FLOATING_TERMINAL_ACTION)
     legacy.pop(PANE_NAVIGATION_ACTION)
     legacy.pop(CALLBACK_ACTION)
+    legacy.pop(INSERT_SNIPPET_ACTION)
     legacy["command-palette"]["direct"] = "KeyG"
     path.write_text(
         json.dumps({"version": 1, "revision": 7, "bindings": legacy}),
@@ -96,6 +98,7 @@ def test_shortcut_store_reserves_ctrl_shift_k_for_callback_when_upgrading(tmp_pa
     path = tmp_path / "shortcuts.json"
     legacy = bindings()
     legacy.pop(CALLBACK_ACTION)
+    legacy.pop(INSERT_SNIPPET_ACTION)
     # This is the pre-callback default: K belonged to quick session creation.
     legacy[QUICK_SESSION_ACTION] = {"direct": "KeyK", "launcher": "KeyK"}
     path.write_text(
@@ -122,6 +125,7 @@ def test_shortcut_store_does_not_override_legacy_default_key_conflicts(tmp_path)
     legacy.pop(FLOATING_TERMINAL_ACTION)
     legacy.pop(PANE_NAVIGATION_ACTION)
     legacy.pop(CALLBACK_ACTION)
+    legacy.pop(INSERT_SNIPPET_ACTION)
     legacy["command-palette"]["direct"] = "KeyK"
     legacy["terminal-copy-mode"]["direct"] = "KeyH"
     legacy["command-palette"]["launcher"] = "KeyK"
@@ -152,6 +156,7 @@ def test_shortcut_store_upgrades_version_two_without_overriding_key_y(tmp_path):
     previous.pop(FLOATING_TERMINAL_ACTION)
     previous.pop(PANE_NAVIGATION_ACTION)
     previous.pop(CALLBACK_ACTION)
+    previous.pop(INSERT_SNIPPET_ACTION)
     previous["command-palette"]["direct"] = "KeyY"
     path.write_text(
         json.dumps({
@@ -183,6 +188,7 @@ def test_version_three_adds_terminal_without_overwriting_custom_bindings(tmp_pat
     previous.pop(FLOATING_TERMINAL_ACTION)
     previous.pop(PANE_NAVIGATION_ACTION)
     previous.pop(CALLBACK_ACTION)
+    previous.pop(INSERT_SNIPPET_ACTION)
     previous["command-palette"]["direct"] = "KeyJ"
     path.write_text(json.dumps({"version": 3, "revision": 9, "bindings": previous}))
     snapshot = ShortcutStore(path).get_snapshot()
@@ -196,6 +202,7 @@ def test_version_four_adds_pane_navigation_without_overwriting_key_g(tmp_path):
     previous = bindings()
     previous.pop(PANE_NAVIGATION_ACTION)
     previous.pop(CALLBACK_ACTION)
+    previous.pop(INSERT_SNIPPET_ACTION)
     previous["command-palette"]["direct"] = "KeyG"
     path.write_text(json.dumps({"version": 4, "revision": 11, "bindings": previous}))
 
@@ -226,6 +233,35 @@ def test_shortcut_store_rejects_stale_and_conflicting_bindings(tmp_path):
     duplicate["session-end"]["launcher"] = duplicate["session-rename"]["launcher"]
     with pytest.raises(ValueError, match="launcher key KeyR is assigned to both"):
         validate_bindings(duplicate)
+
+
+@pytest.mark.parametrize("occupied_layers", [(), ("direct",), ("launcher",), ("direct", "launcher")])
+def test_version_six_adds_insert_snippet_without_overwriting_custom_keys(tmp_path, occupied_layers):
+    path = tmp_path / "shortcuts.json"
+    previous = bindings()
+    previous.pop(INSERT_SNIPPET_ACTION)
+    previous["shortcut-launcher"]["direct"] = "KeyX"
+    for layer in occupied_layers:
+        previous["command-palette"][layer] = "KeyI"
+    original = json.dumps({"version": 6, "revision": 12, "bindings": previous})
+    path.write_text(original)
+
+    store = ShortcutStore(path)
+    snapshot = store.get_snapshot()
+
+    assert snapshot["revision"] == 12
+    assert snapshot["bindings"][INSERT_SNIPPET_ACTION] == {
+        layer: None if layer in occupied_layers else "KeyI"
+        for layer in ("direct", "launcher")
+    }
+    for action, binding in previous.items():
+        assert snapshot["bindings"][action] == binding
+    assert path.read_text() == original
+
+    saved = store.replace_bindings(snapshot["bindings"], expected_revision=12)
+    assert saved["revision"] == 13
+    assert json.loads(path.read_text())["version"] == SHORTCUT_DOCUMENT_VERSION
+    assert ShortcutStore(path).get_snapshot() == saved
 
 
 @pytest.mark.parametrize(

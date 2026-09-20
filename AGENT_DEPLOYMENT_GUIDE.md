@@ -472,7 +472,16 @@ An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
 
-The shortcut file uses schema version 6. Version 5 loads by adding the workspace
+The snippet file loads schemas 1 and 2. Schema 2 supports optional shortcut
+aliases on snippet leaves (up to eight non-whitespace words, each at most 32
+characters). Loading a version-1 file does not rewrite it; the next snippet
+save atomically writes version 2. Preserve the pre-upgrade `snippets.json` for
+rollback because older releases reject version 2.
+
+The shortcut file uses schema version 7. Version 6 loads by adding Insert snippet
+with `KeyI` only in unoccupied direct/shortcut-window layers. Existing custom
+bindings, including the shortcut-window opening chord, remain unchanged.
+Version 5 loads by adding the workspace
 callback binding with `KeyK`; when the older quick temporary-session default also
 owns `KeyK`, its direct binding is moved out of the way while its shortcut-window
 binding remains available. Versions 1 through 4 add the pane navigation binding
@@ -481,8 +490,8 @@ floating utility-terminal binding with `KeyJ`; version 2 adds the floating
 staged-input binding with `KeyY`, and version 1 first adds the quick
 temporary-session binding with `KeyK`. Each legacy upgrade adds the later bindings
 in that order; occupied keys leave only that layer unbound. The next keymap save
-atomically writes version 6. Keep a pre-upgrade copy for rollback: releases that
-only understand versions 1 through 5 reject version 6. An unreadable, malformed,
+atomically writes version 7. Keep a pre-upgrade copy for rollback: releases that
+only understand versions 1 through 6 reject version 7. An unreadable, malformed,
 conflicting, or unsupported shortcut file makes that store unavailable instead
 of overwriting it.
 
@@ -994,8 +1003,13 @@ For a failed replacement:
    `session-titles.json`; tags are unavailable to that older release and would be
    discarded by its next metadata write. Version-1-or-2 releases can also lose
    ignored statuses.
+   When rolling back to a release that only reads snippet-file version 1,
+   preserve the version-2 document and restore the pre-upgrade `snippets.json`.
+   When rolling back to a release that only understands shortcut-file version 6
+   or earlier, preserve the version-7 document and restore the pre-upgrade
+   `shortcuts.json`; the Insert snippet binding is unavailable there.
    When rolling back to a release that only understands shortcut-file version 5
-   or earlier, preserve the version-6 document and restore the pre-upgrade
+   or earlier, also restore the pre-upgrade
    `shortcuts.json`; the workspace-callback action is unavailable there. A
    release that only understands version 4 or earlier additionally lacks the
    pane-navigation action. Version-3 releases also lack the utility-terminal

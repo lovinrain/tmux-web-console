@@ -181,6 +181,89 @@
   font-size: 10px;
 }
 
+.sp-search-help,
+.sp-editor-help {
+  margin: 7px 0 0;
+  color: #899486;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.sp-editor {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  overflow: auto;
+}
+
+.sp-editor label {
+  margin-top: 5px;
+  color: #adb8aa;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sp-editor input,
+.sp-editor textarea {
+  width: 100%;
+  min-height: 40px;
+  flex-shrink: 0;
+  padding: 10px;
+  color: #edf2ea;
+  background: #0c100d;
+  border: 1px solid #3a4437;
+  border-radius: 4px;
+  font: 12px/1.5 "JetBrains Mono Variable", monospace;
+}
+
+.sp-editor textarea {
+  min-height: 140px;
+  flex: 1 0 140px;
+  resize: vertical;
+}
+
+.sp-editor input:focus-visible,
+.sp-editor textarea:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+.sp-editor-actions {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 5px;
+}
+
+.sp-aliases,
+.sp-node-copy .sp-aliases,
+.sp-notice {
+  margin: 5px 0;
+  color: var(--cyan);
+  font: 10px/1.5 "JetBrains Mono Variable", monospace;
+  overflow-wrap: anywhere;
+}
+
+.sp-notice { flex-shrink: 0; }
+.sp-action-error p { margin: 0 0 6px; }
+
+.sp-folder-row:disabled,
+.sp-snippet-row:disabled { opacity: 0.5; cursor: default; }
+
+html[data-theme="light"] .sp-editor input,
+html[data-theme="light"] .sp-editor textarea {
+  color: #30392e;
+  background: #fffdf6;
+  border-color: #c4c0b2;
+}
+
+html[data-theme="light"] .sp-editor label { color: #4f5d4a; }
+html[data-theme="light"] .sp-search-help,
+html[data-theme="light"] .sp-editor-help { color: #61705b; }
+
 .sp-content {
   display: grid;
   min-height: 0;
@@ -597,6 +680,11 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(190px, 1fr) minmax(210px, 0.9fr);
   }
+
+  .sp-content.sp-content-editing { grid-template-rows: minmax(0, 1fr); }
+  .sp-content-editing .sp-browser { display: none; }
+  .sp-editor input,
+  .sp-editor textarea { font-size: 16px; }
 
   .sp-browser {
     border-right: 0;

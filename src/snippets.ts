@@ -11,6 +11,89 @@ export interface FolderOption {
   depth: number;
 }
 
+export function parseSnippetAliases(value: string): string[] {
+  const aliases: string[] = [];
+  const seen = new Set<string>();
+  for (const alias of value.split(/[\s,]+/u).filter(Boolean)) {
+    if (/\p{Cc}|\p{Cf}/u.test(alias)) {
+      throw new Error("Shortcuts cannot contain control characters.");
+    }
+    if ([...alias].length > 32) {
+      throw new Error("Each shortcut can contain up to 32 characters.");
+    }
+    const key = alias.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(alias);
+  }
+  if (aliases.length > 8) throw new Error("Use up to 8 shortcuts per snippet.");
+  return aliases;
+}
+
+function normalizeSnippetSearch(value: string): string {
+  return value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().trim();
+}
+
+function snippetFuzzyScore(query: string, value: string): number | null {
+  if (value === query) return 5_000;
+  if (value.startsWith(query)) return 4_000 - [...value].length;
+  const substringIndex = value.indexOf(query);
+  if (substringIndex >= 0) return 3_000 - substringIndex - [...value].length;
+
+  const wanted = [...query];
+  const candidate = [...value];
+  let queryIndex = 0;
+  let previousMatch = -1;
+  let score = 0;
+  for (let index = 0; index < candidate.length; index += 1) {
+    if (candidate[index] !== wanted[queryIndex]) continue;
+    score += index === previousMatch + 1 ? 20 : 1;
+    if (index === 0 || /[\s_-]/u.test(candidate[index - 1])) score += 10;
+    score -= index - previousMatch - 1;
+    previousMatch = index;
+    queryIndex += 1;
+    if (queryIndex === wanted.length) return score - candidate.length;
+  }
+  return null;
+}
+
+/** Rank shortcuts ahead of title matches, with stable ordering for equally good matches. */
+export function searchSnippets(entries: SnippetSearchEntry[], query: string): SnippetSearchEntry[] {
+  const normalizedQuery = normalizeSnippetSearch(query);
+  if (!normalizedQuery) return entries;
+  return entries.flatMap((entry, index) => {
+    const aliases = (entry.snippet.aliases ?? []).map(normalizeSnippetSearch);
+    let rank: number;
+    let score = 0;
+    if (aliases.some((alias) => alias === normalizedQuery)) {
+      rank = 0;
+    } else {
+      const prefixes = aliases.filter((alias) => alias.startsWith(normalizedQuery));
+      const aliasScores = aliases.flatMap((alias) => {
+        const matched = snippetFuzzyScore(normalizedQuery, alias);
+        return matched === null ? [] : [matched];
+      });
+      const titleScore = snippetFuzzyScore(normalizedQuery, normalizeSnippetSearch(entry.snippet.name));
+      if (prefixes.length) {
+        rank = 1;
+        score = -Math.min(...prefixes.map((alias) => [...alias].length));
+      } else if (aliasScores.length) {
+        rank = 2;
+        score = Math.max(...aliasScores);
+      } else if (titleScore !== null) {
+        rank = 3;
+        score = titleScore;
+      } else if (normalizeSnippetSearch(`${entry.path.join(" ")} ${entry.snippet.text}`).includes(normalizedQuery)) {
+        rank = 4;
+      } else {
+        return [];
+      }
+    }
+    return [{ entry, rank, score, index }];
+  }).sort((left, right) => left.rank - right.rank || right.score - left.score || left.index - right.index)
+    .map(({ entry }) => entry);
+}
+
 export function newSnippetId(prefix: "folder" | "snippet"): string {
   const randomId = typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()

@@ -29,8 +29,10 @@ import {
   insertSnippetNode,
   moveSnippetNode,
   newSnippetId,
+  parseSnippetAliases,
   removeSnippetNode,
   reorderSnippetNode,
+  searchSnippets,
   snippetFolderPath,
   updateSnippetNode,
 } from "../snippets";
@@ -58,6 +60,7 @@ interface EditorState {
 interface EditorResult {
   name: string;
   text: string;
+  aliases: string[];
   destinationId: string | null;
 }
 
@@ -149,6 +152,16 @@ function SnippetEditorDialog({
   const [textHasContent, setTextHasContent] = useState(
     node?.type === "snippet" ? Boolean(node.text.trim()) : false,
   );
+  const [aliasesValue, setAliasesValue] = useState(
+    node?.type === "snippet" ? (node.aliases ?? []).join(", ") : "",
+  );
+  let aliases: string[] = [];
+  let aliasesError: string | null = null;
+  try {
+    aliases = parseSnippetAliases(aliasesValue);
+  } catch (error) {
+    aliasesError = errorText(error, "Check the snippet shortcuts.");
+  }
   const excluded = node ? descendantFolderIds(node) : new Set<string>();
   const movingHeight = node ? nodeTreeHeight(node) : 1;
   const destinations = folderOptions(tree, excluded).filter(
@@ -203,13 +216,14 @@ function SnippetEditorDialog({
     const name = nameRef.current?.value.trim() ?? "";
     const text = textRef.current?.value ?? "";
     if (!name || name.length > MAX_NAME_LENGTH) return;
-    if (state.type === "snippet" && (!text || text.length > MAX_TEXT_LENGTH)) return;
+    if (state.type === "snippet" && (!text.trim() || text.length > MAX_TEXT_LENGTH || aliasesError)) return;
     const rawDestination = destinationRef.current?.value ?? "";
     const destinationId = rawDestination || null;
     if (!destinations.some((destination) => destination.id === destinationId)) return;
     void onSave({
       name,
       text,
+      aliases,
       destinationId,
     });
   };
@@ -218,7 +232,7 @@ function SnippetEditorDialog({
   const valid = nameLength > 0
     && nameLength <= MAX_NAME_LENGTH
     && (state.type === "folder" || (
-      textHasContent && textLength > 0 && textLength <= MAX_TEXT_LENGTH
+      textHasContent && textLength > 0 && textLength <= MAX_TEXT_LENGTH && !aliasesError
     ));
 
   return (
@@ -257,6 +271,19 @@ function SnippetEditorDialog({
 
           {state.type === "snippet" && (
             <>
+              <label htmlFor="snippet-node-aliases">Shortcuts</label>
+              <input
+                id="snippet-node-aliases"
+                value={aliasesValue}
+                onChange={(event) => setAliasesValue(event.currentTarget.value)}
+                placeholder="review, rd"
+                aria-describedby="snippet-node-aliases-help"
+                aria-invalid={Boolean(aliasesError)}
+              />
+              <span id="snippet-node-aliases-help" className="snippet-field-help">
+                Short words that rank first in search. Separate with spaces or commas.
+              </span>
+              {aliasesError && <span className="snippet-alias-error" role="alert">{aliasesError}</span>}
               <label htmlFor="snippet-node-text">Snippet text</label>
               <textarea
                 ref={textRef}
@@ -497,26 +524,24 @@ export function SnippetLibrary({ onOpenSessions }: SnippetLibraryProps) {
   const canCreateInCurrentFolder = breadcrumbs.length < MAX_TREE_DEPTH;
   const allSnippets = useMemo(() => flattenSnippets(library.tree), [library.tree]);
   const folderCount = useMemo(() => folderOptions(library.tree).length - 1, [library.tree]);
-  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const normalizedQuery = query.trim();
   const searchResults = normalizedQuery
-    ? allSnippets.filter(({ snippet, path }) => (
-      `${path.join(" ")} ${snippet.name} ${snippet.text}`.toLocaleLowerCase().includes(normalizedQuery)
-    ))
+    ? searchSnippets(allSnippets, normalizedQuery)
     : [];
 
-  const saveEditor = async ({ name, text, destinationId }: EditorResult) => {
+  const saveEditor = async ({ name, text, aliases, destinationId }: EditorResult) => {
     if (!editor) return;
     let nextTree = library.tree;
     if (editor.mode === "add") {
       const node: SnippetNode = editor.type === "folder"
         ? { id: newSnippetId("folder"), type: "folder", name, children: [] }
-        : { id: newSnippetId("snippet"), type: "snippet", name, text };
+        : { id: newSnippetId("snippet"), type: "snippet", name, text, ...(aliases.length ? { aliases } : {}) };
       nextTree = insertSnippetNode(nextTree, destinationId, node);
     } else if (editor.nodeId) {
       nextTree = updateSnippetNode(nextTree, editor.nodeId, (node): SnippetNode => (
         node.type === "folder"
           ? { ...node, name }
-          : { ...node, name, text }
+          : { ...node, name, text, aliases: aliases.length ? aliases : undefined }
       ));
       const currentParent = folderParentId(nextTree, editor.nodeId);
       if (currentParent !== destinationId) {
@@ -594,7 +619,7 @@ export function SnippetLibrary({ onOpenSessions }: SnippetLibraryProps) {
           <input
             ref={searchRef}
             type="search"
-            placeholder="Search names, paths, or snippet text"
+            placeholder="Search titles, shortcuts, paths, or text"
             aria-label="Search snippets"
             onInput={(event) => setQuery(event.currentTarget.value)}
           />
@@ -684,7 +709,7 @@ export function SnippetLibrary({ onOpenSessions }: SnippetLibraryProps) {
           ) : normalizedQuery ? (
             searchResults.length === 0 ? (
               <div className="snippet-browser-state">
-                <SearchIcon /><strong>No snippets found</strong><span>Try a name, folder, or phrase from the snippet text.</span>
+                <SearchIcon /><strong>No snippets found</strong><span>Try a title abbreviation, shortcut, folder, or phrase from the snippet text.</span>
               </div>
             ) : (
               <ol className="snippet-search-results">
@@ -693,6 +718,11 @@ export function SnippetLibrary({ onOpenSessions }: SnippetLibraryProps) {
                     <div>
                       <p>{path.length ? `Root / ${path.join(" / ")}` : "Root"}</p>
                       <h3><SnippetIcon />{snippet.name}</h3>
+                      {!!snippet.aliases?.length && (
+                        <span className="snippet-aliases" aria-label="Shortcuts">
+                          {snippet.aliases.map((alias) => <code key={alias}>{alias}</code>)}
+                        </span>
+                      )}
                       <pre>{snippet.text}</pre>
                     </div>
                     <button type="button" onClick={() => openEditor("snippet", snippet.id)}><EditIcon /> Edit</button>
@@ -727,6 +757,11 @@ export function SnippetLibrary({ onOpenSessions }: SnippetLibraryProps) {
                     <span className="snippet-node-copy">
                       <small>{node.type === "folder" ? `NODE / ${node.children.length} CHILDREN` : "LEAF / REUSABLE INPUT"}</small>
                       <strong>{node.name}</strong>
+                      {node.type === "snippet" && !!node.aliases?.length && (
+                        <span className="snippet-aliases" aria-label="Shortcuts">
+                          {node.aliases.map((alias) => <code key={alias}>{alias}</code>)}
+                        </span>
+                      )}
                       {node.type === "snippet" && <span>{node.text}</span>}
                     </span>
                   </button>

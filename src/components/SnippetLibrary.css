@@ -521,6 +521,37 @@
   border-left: 1px solid #30382e;
 }
 
+.snippet-aliases,
+.snippet-node-copy > .snippet-aliases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+  overflow: visible;
+  color: var(--cyan);
+  font-size: 10px;
+}
+
+.snippet-aliases code {
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--cyan) 7%, transparent);
+}
+
+.snippet-field-help {
+  margin: 6px 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.snippet-alias-error {
+  margin: -6px 0 14px;
+  color: var(--red);
+  font-size: 11px;
+}
+
 .snippet-node-actions button,
 .snippet-icon-button {
   display: grid;

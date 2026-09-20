@@ -12,6 +12,7 @@ import {
   cloneShortcutBindings,
   directShortcutLabel,
   shortcutConflictMessages,
+  useShortcutSettings,
 } from "./shortcutSettings";
 import {
   WorkspaceCommandPalette,
@@ -74,6 +75,35 @@ describe("shortcut helpers", () => {
 });
 
 describe("ShortcutSettingsProvider", () => {
+  it.each(["none", "direct", "launcher", "both"] as const)(
+    "adds the snippet binding to older responses while preserving occupied layers: %s",
+    async (occupied) => {
+      const occupiedLayers = (["direct", "launcher"] as const).filter((layer) => (
+        occupied === "both" || occupied === layer
+      ));
+      const previous = snapshot();
+      delete previous.bindings["input-insert-snippet"];
+      previous.bindings["shortcut-launcher"].direct = "KeyX";
+      for (const layer of occupiedLayers) previous.bindings["command-palette"][layer] = "KeyI";
+      getShortcutSettingsMock.mockResolvedValue(previous);
+      function KeymapProbe() {
+        const { status, bindings } = useShortcutSettings();
+        return <output data-testid="keymap">{JSON.stringify({ status, bindings })}</output>;
+      }
+      render(<ShortcutSettingsProvider><KeymapProbe /></ShortcutSettingsProvider>);
+
+      await waitFor(() => expect(screen.getByTestId("keymap")).toHaveTextContent('"status":"ready"'));
+      const result = JSON.parse(screen.getByTestId("keymap").textContent || "{}");
+      expect(result.bindings["input-insert-snippet"]).toEqual({
+        direct: occupiedLayers.includes("direct") ? null : "KeyI",
+        launcher: occupiedLayers.includes("launcher") ? null : "KeyI",
+      });
+      for (const [action, binding] of Object.entries(previous.bindings)) {
+        expect(result.bindings[action]).toEqual(binding);
+      }
+    },
+  );
+
   it("edits, persists, and immediately applies direct and shortcut-window keys", async () => {
     const runEnd = vi.fn();
     const commands: WorkspaceCommand[] = [{

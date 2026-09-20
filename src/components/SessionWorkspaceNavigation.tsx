@@ -1,6 +1,8 @@
 import {
   Fragment,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -190,6 +192,7 @@ export const DESKTOP_CONSOLE_SHORTCUTS = {
   commandPalette: DESKTOP_COMMAND_PALETTE_SHORTCUT,
   shortcutLauncher: DESKTOP_SHORTCUT_LAUNCHER_SHORTCUT,
   newSession: "Ctrl+Shift+B",
+  insertSnippet: "Ctrl+Shift+I",
   endSession: "Ctrl+Shift+E",
   renameSession: "Ctrl+Shift+R",
   returnLive: "Ctrl+Shift+L",
@@ -205,6 +208,7 @@ export const DESKTOP_CONSOLE_SHORTCUTS = {
 } as const;
 
 export const MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID = "muxdeck-mobile-workspace-overview";
+export const ActivePaneSessionContext = createContext<string | null>(null);
 
 export function isCompactWorkspaceViewport(): boolean {
   const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
@@ -396,6 +400,7 @@ function tabTitle(sessionName: string, sessionsByName: Map<string, Session>): st
 
 interface WorkspaceCommandContext {
   activeSession: string | null;
+  snippetSessionAvailable: boolean;
   newSessionActive: boolean;
   openSessions: readonly string[];
   sessionsByName: Map<string, Session>;
@@ -433,6 +438,7 @@ function shortcutCommand(
 
 function buildWorkspaceCommands({
   activeSession,
+  snippetSessionAvailable,
   newSessionActive,
   openSessions,
   sessionsByName,
@@ -513,6 +519,16 @@ function buildWorkspaceCommands({
       disabled: !activeSessionLoaded || workspacePersistenceState === "loading",
       disabledReason: "Open a live session and wait for the workspace to finish loading.",
     }, "session-copy-new"),
+    shortcutCommand({
+      id: "input-insert-snippet",
+      label: "Insert snippet",
+      description: "Search or edit a saved snippet and insert it into staged input.",
+      category: "Session",
+      shortcut: DESKTOP_CONSOLE_SHORTCUTS.insertSnippet,
+      keywords: ["snippet", "prompt", "template", "draft", "staged input"],
+      disabled: !snippetSessionAvailable,
+      disabledReason: "Open a live session first.",
+    }, "input-insert-snippet"),
     {
       id: "workspace-find-tab",
       label: "Find an open tab",
@@ -1978,6 +1994,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     preferredOrientation,
   );
   const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
+  const activePaneSession = useContext(ActivePaneSessionContext);
   const [sessionAddOpen, setSessionAddOpen] = useState(false);
   const { bindings: shortcutBindings } = useShortcutSettings();
   const quickSessionShortcutHint = (() => {
@@ -3283,6 +3300,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
 
   const commandPaletteCommands = buildWorkspaceCommands({
     activeSession,
+    snippetSessionAvailable: !newSessionActive && sessionsByName.has(
+      activeSession ?? activePaneSession ?? "",
+    ),
     newSessionActive,
     openSessions,
     sessionsByName,

@@ -49,6 +49,7 @@ import {
   type WorkspacePaneDirection,
 } from "../workspacePaneLayouts";
 import {
+  ActivePaneSessionContext,
   isCompactWorkspaceViewport,
   type WorkspacePersistenceState,
   type WorkspaceTabOrientation,
@@ -691,7 +692,11 @@ export function WorkspacePaneBoard({
           </button>
         </div>
       </header>
-      <div className="workspace-pane-navigation">{sessionNavigation}</div>
+      <ActivePaneSessionContext.Provider value={
+        workspacePaneLeaves(draft.root).find((pane) => pane.id === activePaneId)?.session ?? null
+      }>
+        <div className="workspace-pane-navigation">{sessionNavigation}</div>
+      </ActivePaneSessionContext.Provider>
       {error && (
         <aside className="workspace-pane-error" role="alert">
           <span>{error}</span>

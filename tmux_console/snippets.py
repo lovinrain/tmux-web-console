@@ -6,15 +6,17 @@ import logging
 import os
 import tempfile
 import threading
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 LOGGER = logging.getLogger("muxdeck.snippets")
 MAX_SNIPPET_ID_LENGTH = 128
 MAX_SNIPPET_NAME_LENGTH = 120
 MAX_SNIPPET_TEXT_LENGTH = 65_536
+MAX_SNIPPET_ALIASES = 8
+MAX_SNIPPET_ALIAS_LENGTH = 32
 MAX_SNIPPET_TREE_DEPTH = 12
 MAX_SNIPPET_TREE_NODES = 2_000
 MAX_SNIPPET_TREE_BYTES = 900_000
@@ -94,19 +96,59 @@ def _validate_revision(value: object) -> int:
     return value
 
 
+def _normalize_aliases(value: object, path: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path}.aliases must be an array")  # noqa: TRY004
+    if len(value) > MAX_SNIPPET_ALIASES:
+        raise ValueError(
+            f"{path}.aliases cannot contain more than {MAX_SNIPPET_ALIASES} items"
+        )
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        field = f"{path}.aliases[{index}]"
+        if not isinstance(item, str):
+            raise ValueError(f"{field} must be a string")  # noqa: TRY004
+        _validate_unicode(item, field)
+        alias = item.strip()
+        if not alias:
+            raise ValueError(f"{field} cannot be blank")
+        if len(alias) > MAX_SNIPPET_ALIAS_LENGTH:
+            raise ValueError(
+                f"{field} must be {MAX_SNIPPET_ALIAS_LENGTH} characters or fewer"
+            )
+        if any(
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf"}
+            for character in alias
+        ):
+            raise ValueError(
+                f"{field} cannot contain whitespace or control characters"
+            )
+        folded = alias.casefold()
+        if folded not in seen:
+            seen.add(folded)
+            aliases.append(alias)
+    return tuple(aliases)
+
+
 @dataclass(frozen=True)
 class Snippet:
     id: str
     name: str
     text: str
+    aliases: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "id": self.id,
             "type": "snippet",
             "name": self.name,
             "text": self.text,
         }
+        if self.aliases:
+            result["aliases"] = list(self.aliases)
+        return result
 
 
 @dataclass(frozen=True)
@@ -186,7 +228,12 @@ class _TreeValidator:
             expected_fields = {"id", "type", "name", "text"}
         else:
             raise ValueError(f"{path}.type must be 'folder' or 'snippet'")
-        self._validate_fields(value, expected_fields, path)
+        self._validate_fields(
+            value,
+            expected_fields,
+            path,
+            optional={"aliases"} if node_type == "snippet" else set(),
+        )
 
         self._node_count += 1
         if self._node_count > MAX_SNIPPET_TREE_NODES:
@@ -205,6 +252,7 @@ class _TreeValidator:
                 id=node_id,
                 name=name,
                 text=_validate_text(value["text"], path),
+                aliases=_normalize_aliases(value.get("aliases", []), path),
             )
 
         children = value["children"]
@@ -225,14 +273,18 @@ class _TreeValidator:
 
     @staticmethod
     def _validate_fields(
-        value: dict[object, object], expected: set[str], path: str
+        value: dict[object, object],
+        expected: set[str],
+        path: str,
+        *,
+        optional: set[str],
     ) -> None:
         actual = set(value)
         actual_strings = {field for field in actual if isinstance(field, str)}
         missing = sorted(expected - actual_strings)
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
-        unknown = sorted(str(field) for field in actual - expected)
+        unknown = sorted(str(field) for field in actual - expected - optional)
         if unknown:
             raise ValueError(f"{path} has unknown field: {unknown[0]}")
 
@@ -282,7 +334,7 @@ class SnippetStore:
             if not isinstance(payload, dict):
                 raise ValueError("document must be an object")
             version = payload.get("version")
-            if isinstance(version, bool) or version != 1:
+            if isinstance(version, bool) or version not in (1, 2):
                 raise ValueError("unsupported document version")
             revision = _validate_revision(payload.get("revision"))
             tree = _TreeValidator().validate(payload.get("tree"))
@@ -338,7 +390,7 @@ class SnippetStore:
                 temporary = Path(handle.name)
                 json.dump(
                     {
-                        "version": 1,
+                        "version": 2,
                         **self._serialize(revision, tree),
                     },
                     handle,

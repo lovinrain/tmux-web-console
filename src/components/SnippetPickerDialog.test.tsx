@@ -1,11 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getSnippetTree } from "../api";
+import { ApiRequestError, getSnippetTree, saveSnippetTree } from "../api";
 import type { SnippetLeaf, SnippetTree } from "../types";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 
-vi.mock("../api", () => ({
+vi.mock("../api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api")>(),
   getSnippetTree: vi.fn(),
+  saveSnippetTree: vi.fn(),
 }));
 
 const deploySnippet: SnippetLeaf = {
@@ -134,6 +136,86 @@ describe("SnippetPickerDialog", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The draft is too long");
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Insert" })).toBeEnabled();
+  });
+
+  it("saves edits inside the picker and inserts the saved text without navigating away", async () => {
+    const updated = { ...reviewSnippet, name: "Review code", text: "Check only the changed code.\n", aliases: ["rv"] };
+    vi.mocked(saveSnippetTree).mockResolvedValue({ revision: 5, tree: [library.tree[0], updated] });
+    const onChoose = vi.fn();
+    const onClose = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={onChoose} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit snippet" }));
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveFocus();
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: updated.name } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), { target: { value: updated.text } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Shortcuts" }), { target: { value: "rv, RV" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+    await screen.findByText("Snippet saved to the shared library.");
+    expect(saveSnippetTree).toHaveBeenCalledWith([library.tree[0], updated], 4);
+    expect(onChoose).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    await waitFor(() => expect(onChoose).toHaveBeenCalledWith(updated));
+  });
+
+  it("keeps edits after a conflict and reloads the latest library before a deliberate retry", async () => {
+    const newerFolder = { ...library.tree[0], name: "Renamed elsewhere" };
+    vi.mocked(getSnippetTree).mockResolvedValueOnce(library).mockResolvedValueOnce({
+      revision: 8, tree: [newerFolder, reviewSnippet],
+    });
+    vi.mocked(saveSnippetTree)
+      .mockRejectedValueOnce(new ApiRequestError("Conflict", 409))
+      .mockImplementationOnce(async (tree, revision) => ({ tree, revision: revision + 1 }));
+    render(<SnippetPickerDialog onClose={vi.fn()} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit snippet" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), { target: { value: "My unsaved edits" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your edits will be kept");
+    expect(screen.getByRole("button", { name: "Save snippet" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Reload library" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save snippet" })).toBeEnabled());
+    expect(screen.getByRole("textbox", { name: "Snippet text" })).toHaveValue("My unsaved edits");
+    expect(saveSnippetTree).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Save snippet" }));
+    await screen.findByText("Snippet saved to the shared library.");
+    expect(saveSnippetTree).toHaveBeenLastCalledWith([
+      newerFolder, { ...reviewSnippet, text: "My unsaved edits", aliases: [] },
+    ], 8);
+  });
+
+  it("previews the best shortcut match and supports keyboard insertion from search", async () => {
+    const aliased = { ...deploySnippet, aliases: ["rd"] };
+    vi.mocked(getSnippetTree).mockResolvedValue({ revision: 1, tree: [
+      { ...reviewSnippet, name: "rd" }, aliased,
+    ] });
+    const onChoose = vi.fn();
+    render(<SnippetPickerDialog onClose={vi.fn()} onChoose={onChoose} />);
+    const search = screen.getByRole("searchbox", { name: "Search all snippets" });
+    await waitFor(() => expect(search).toHaveFocus());
+    fireEvent.change(search, { target: { value: "rd" } });
+    const results = screen.getByLabelText("Matching snippets");
+    expect(within(results).getAllByRole("button")[0]).toHaveAccessibleName("Preview snippet Deploy production");
+    expect(onChoose).not.toHaveBeenCalled();
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(screen.getByRole("button", { name: "Preview snippet rd" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(search, { key: "ArrowUp" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(onChoose).toHaveBeenCalledWith(aliased));
+  });
+
+  it("cancels edits with Escape without closing the picker or changing the snippet", async () => {
+    const onClose = vi.fn();
+    render(<SnippetPickerDialog onClose={onClose} onChoose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview snippet Review diff" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit snippet" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Snippet text" }), { target: { value: "Discard me" } });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("complementary", { name: "Snippet preview" }).querySelector("pre"))
+      .toHaveTextContent(reviewSnippet.text);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(saveSnippetTree).not.toHaveBeenCalled();
   });
 
   it("locks page scroll, contains focus, handles Escape, and isolates typed keys", async () => {
