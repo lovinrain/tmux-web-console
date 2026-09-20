@@ -1441,6 +1441,8 @@ can be opened or marked reviewed with its check button. Live agent state is
 shown as `Working`, `Ready`, `Waiting`, or `Ended / unavailable`, so a completed
 session remains easy to find after the operator returns. `Clear ended` removes
 stale entries and `Clear all` empties the active queue.
+The card shows `ready/total` (for example, `3/8 ready`), counting entries labeled
+`Ready` or `Ready for review`. Hover for working-session and message counts.
 
 The global queue is the higher-level union of explicitly global entries and all
 workspace callback entries. A session registered in any workspace therefore

@@ -669,6 +669,7 @@ export function WorkspaceCallbackList({
   }
   const availableSessions = sessions.filter((item) => !visibleCallbackSessions.includes(item.name));
   const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
+  const readyCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).tone === "ready").length;
   const unavailableCount = visibleCallbackSessions.filter((name) => !sessionMap.has(name)).length;
   const removableUnavailableCount = activeScope === "global"
     ? new Set([
@@ -1015,20 +1016,20 @@ export function WorkspaceCallbackList({
     </section>
   ) : null;
 
-  const summaryLabel = visibleCallbackSessions.length === 0
-    ? "No sessions"
-    : `${visibleCallbackSessions.length} ${visibleCallbackSessions.length === 1 ? "session" : "sessions"}${visibleMessages.length > 0 ? ` · ${visibleMessages.length} msg` : ""}`;
+  const summaryLabel = `${readyCount}/${visibleCallbackSessions.length} ready`;
+  const summaryDescription = `${readyCount} ready out of ${visibleCallbackSessions.length} sessions; ${workingCount} working${visibleMessages.length > 0 ? `; ${visibleMessages.length} messages` : ""}`;
   return (
     <>
       <button
         type="button"
         className={`workspace-callback-card${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}${workingCount > 0 ? " has-working" : ""}`}
         aria-label={panel.open ? "Hide callback list" : "Show callback list"}
+        aria-description={summaryDescription}
         aria-expanded={panel.open}
         aria-controls={panelId}
         data-scope={activeScope}
         aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-callback"])}
-        title={`Keep sessions here for a later callback${directShortcutLabel(
+        title={`${summaryDescription}. Keep sessions here for a later callback${directShortcutLabel(
           shortcutBindings["workspace-callback"],
         ) ? ` (${directShortcutLabel(shortcutBindings["workspace-callback"])})` : ""}`}
         onClick={() => {
@@ -1043,7 +1044,7 @@ export function WorkspaceCallbackList({
         <HistoryIcon />
         <span>
           <strong>{activeScope === "global" ? "Global callback" : "Callback"}</strong>
-          <small>{summaryLabel}{workingCount > 0 ? ` / ${workingCount} working` : ""}</small>
+          <small>{summaryLabel}</small>
         </span>
         {(panel.open || panel.pinned) && <em aria-hidden="true">{panel.pinned ? "PIN" : "OPEN"}</em>}
       </button>
