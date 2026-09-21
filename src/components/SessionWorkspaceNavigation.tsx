@@ -3209,8 +3209,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             data-index={index + 1}
             aria-hidden="true"
           />
-          <SessionAgentIcon session={session} />
           <span className="workspace-tab-title">{title}</span>
+          <SessionAgentIcon session={session} />
         </button>
         {tabActionsVisible && onMoveTab && (openSessions.length > 1 || canMovePrevious || canMoveNext) && (
           <span

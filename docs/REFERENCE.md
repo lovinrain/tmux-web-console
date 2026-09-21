@@ -1004,8 +1004,10 @@ tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
 
-Session tabs show a small icon for the active pane's coding agent or shell beside
-the title, including in the compact side rail. Hover for the agent name; the
+Session tabs show the coding agent's brand icon at the end of the title: OpenAI
+for Codex, Anthropic for Claude, and the Grok, Cursor, or GitHub Copilot mark.
+Shells use a terminal icon. Icons remain visible in the compact side rail.
+Hover for the agent name; the
 separate status dot continues to indicate activity. Icons update with live pane
 changes rather than using historical recovery metadata.
 
