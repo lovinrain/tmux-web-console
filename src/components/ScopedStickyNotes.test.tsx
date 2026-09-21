@@ -21,6 +21,7 @@ import {
   DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
   MIN_SCOPED_NOTE_WINDOW_HEIGHT,
   MIN_SCOPED_NOTE_WINDOW_WIDTH,
+  SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY,
   SCOPED_NOTE_WINDOW_STORAGE_PREFIX,
   ScopedStickyNotes,
 } from "./ScopedStickyNotes";
@@ -741,6 +742,143 @@ describe("ScopedStickyNotes", () => {
     expect(restored).toHaveStyle({
       width: `${DEFAULT_SCOPED_NOTE_WINDOW_WIDTH}px`,
       height: `${DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT}px`,
+    });
+  });
+
+  it("expands a preset away from viewport edges and remembers the note layout", async () => {
+    vi.stubGlobal("innerWidth", 1200);
+    vi.stubGlobal("innerHeight", 900);
+    vi.mocked(getCommonNotebook).mockResolvedValue({
+      pages: [
+        { id: "main", name: "Page 1", content: "Shared checklist" },
+        { id: "handoff", name: "Handoff", content: "Keep this selected page" },
+      ],
+    });
+    const storageKey = workspaceWindowStorageKey("workspace-one", "common:common");
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      position: { x: 750, y: 450 },
+      size: { width: 430, height: 430 },
+    }));
+    await renderLoadedNotes();
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    fireEvent.click(within(editor).getByRole("button", { name: "Next note page" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Show page sidebar" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Pin common note" }));
+    fireEvent.click(within(editor).getByRole("button", { name: "Resize note to Large" }));
+
+    expect(editor).toHaveStyle({ width: "860px", height: "720px" });
+    expect(Number.parseFloat(editor.style.left) + 860).toBeLessThanOrEqual(1188);
+    expect(Number.parseFloat(editor.style.top) + 720).toBeLessThanOrEqual(888);
+    expect(within(editor).getByRole("textbox", { name: "Note" }))
+      .toHaveValue("Keep this selected page");
+    expect(within(editor).getByRole("combobox", { name: "Default note opening size" }))
+      .toHaveValue("remember");
+    expect(JSON.parse(window.localStorage.getItem(storageKey) || "null"))
+      .toMatchObject({
+        pinned: true,
+        selectedPageId: "handoff",
+        sidebarOpen: true,
+        size: { width: 860, height: 720 },
+      });
+    expect(replaceCommonNotebook).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide common note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    expect(screen.getByRole("dialog", { name: "Common" }))
+      .toHaveStyle({ width: "860px", height: "720px" });
+  });
+
+  it("shares the chosen default across scopes and uses it when reopening saved notes", async () => {
+    const commonStorageKey = workspaceWindowStorageKey("workspace-one", "common:common");
+    window.localStorage.setItem(commonStorageKey, JSON.stringify({
+      size: { width: 300, height: 250 },
+    }));
+    await renderLoadedNotes();
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const commonEditor = screen.getByRole("dialog", { name: "Common" });
+    expect(commonEditor).toHaveStyle({ width: "300px", height: "250px" });
+    fireEvent.change(within(commonEditor).getByRole("combobox", {
+      name: "Default note opening size",
+    }), { target: { value: "medium" } });
+
+    expect(window.localStorage.getItem(SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY)).toBe("medium");
+    expect(commonEditor).toHaveStyle({ width: "300px", height: "250px" });
+    for (const [scope, title] of [["workspace", "Launch room"], ["session", "agent-one"]]) {
+      fireEvent.click(screen.getByRole("button", { name: `Edit ${scope} note` }));
+      const editor = screen.getByRole("dialog", { name: title });
+      expect(editor).toHaveStyle({ width: "640px", height: "560px" });
+      expect(within(editor).getByRole("combobox", { name: "Default note opening size" }))
+        .toHaveValue("medium");
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide common note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const reopened = screen.getByRole("dialog", { name: "Common" });
+    expect(reopened).toHaveStyle({ width: "640px", height: "560px" });
+    fireEvent.click(within(reopened).getByRole("button", { name: "Resize note to Small" }));
+    expect(reopened).toHaveStyle({ width: "430px", height: "430px" });
+    fireEvent.keyDown(within(reopened).getByRole("button", {
+      name: "Resize common note window from bottom right corner",
+    }), { key: "Enter" });
+    expect(reopened).toHaveStyle({ width: "640px", height: "560px" });
+  });
+
+  it("restores an already-open layout before applying the configured default on a new open", async () => {
+    window.localStorage.setItem(SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY, "medium");
+    window.localStorage.setItem(
+      workspaceWindowStorageKey("workspace-one", "common:common"),
+      JSON.stringify({
+        open: true,
+        pinned: true,
+        position: { x: 90, y: 110 },
+        size: { width: 300, height: 250 },
+      }),
+    );
+    renderWithTheme(
+      <ScopedStickyNotes
+        sessionName="agent-one"
+        workspaceId="workspace-one"
+        workspaceName="Launch room"
+      />,
+    );
+    const restored = await screen.findByRole("dialog", { name: "Common" });
+    expect(restored).toHaveClass("pinned");
+    expect(restored).toHaveStyle({
+      left: "90px", top: "110px", width: "300px", height: "250px",
+    });
+    expect(within(restored).getByRole("combobox", { name: "Default note opening size" }))
+      .toHaveValue("medium");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide common note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    expect(screen.getByRole("dialog", { name: "Common" }))
+      .toHaveStyle({ width: "640px", height: "560px" });
+  });
+
+  it("syncs defaults from another tab and fits large notes into a smaller viewport", async () => {
+    vi.stubGlobal("innerWidth", 700);
+    vi.stubGlobal("innerHeight", 550);
+    await renderLoadedNotes();
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const commonEditor = screen.getByRole("dialog", { name: "Common" });
+    window.localStorage.setItem(SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY, "large");
+    fireEvent(window, new StorageEvent("storage", {
+      key: SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY,
+      newValue: "large",
+    }));
+    expect(within(commonEditor).getByRole("combobox", { name: "Default note opening size" }))
+      .toHaveValue("large");
+    expect(commonEditor).toHaveStyle({ width: "430px", height: "430px" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit session note" }));
+    const sessionEditor = screen.getByRole("dialog", { name: "agent-one" });
+    expect(sessionEditor).toHaveStyle({
+      left: "12px", top: "12px", width: "676px", height: "526px",
+    });
+    fireEvent.click(within(commonEditor).getByRole("button", { name: "Resize note to Large" }));
+    expect(commonEditor).toHaveStyle({
+      left: "12px", top: "12px", width: "676px", height: "526px",
     });
   });
 

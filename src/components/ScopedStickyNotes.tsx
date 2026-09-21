@@ -36,7 +36,14 @@ export const MAX_SCOPED_NOTE_PAGE_NAME_LENGTH = 80;
 export const DEFAULT_SCOPED_NOTE_WINDOW_WIDTH = 430;
 export const DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT = 430;
 export const MIN_SCOPED_NOTE_WINDOW_WIDTH = 220;
-export const MIN_SCOPED_NOTE_WINDOW_HEIGHT = 168;
+export const MIN_SCOPED_NOTE_WINDOW_HEIGHT = 210;
+export const SCOPED_NOTE_SIZE_PRESETS = {
+  small: { width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH, height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT },
+  medium: { width: 640, height: 560 },
+  large: { width: 860, height: 720 },
+} as const;
+export const SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY = "muxdeck.scoped-note-default-size.v1";
+const NOTE_DEFAULT_SIZE_EVENT = "muxdeck:note-default-size";
 const NOTE_AUTOSAVE_DELAY_MS = 650;
 const NOTE_WINDOW_MARGIN = 12;
 const NOTE_WINDOW_KEYBOARD_STEP = 12;
@@ -47,6 +54,57 @@ export const SCOPED_NOTE_WINDOW_STORAGE_PREFIX = "muxdeck.scoped-note-window.v2:
 
 type NoteScope = "common" | "workspace" | "session";
 type SaveState = "saved" | "pending" | "saving" | "error";
+type NoteSizePreset = keyof typeof SCOPED_NOTE_SIZE_PRESETS;
+type NoteDefaultSize = NoteSizePreset | "remember";
+const NOTE_SIZE_LABELS: Record<NoteSizePreset, string> = {
+  small: "Small",
+  medium: "Medium",
+  large: "Large",
+};
+
+function validNoteDefaultSize(value: unknown): value is NoteDefaultSize {
+  return value === "remember" || value === "small" || value === "medium" || value === "large";
+}
+
+function readNoteDefaultSize(): NoteDefaultSize {
+  try {
+    const value = window.localStorage.getItem(SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY);
+    return validNoteDefaultSize(value) ? value : "remember";
+  } catch {
+    return "remember";
+  }
+}
+
+function useNoteDefaultSize() {
+  const [defaultSize, setDefaultSize] = useState<NoteDefaultSize>(readNoteDefaultSize);
+  useEffect(() => {
+    const fromStorage = (event: StorageEvent) => {
+      if (event.key === SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY || event.key === null) {
+        setDefaultSize(readNoteDefaultSize());
+      }
+    };
+    const fromWindow = (event: Event) => {
+      const value: unknown = (event as CustomEvent).detail;
+      if (validNoteDefaultSize(value)) setDefaultSize(value);
+    };
+    window.addEventListener("storage", fromStorage);
+    window.addEventListener(NOTE_DEFAULT_SIZE_EVENT, fromWindow);
+    return () => {
+      window.removeEventListener("storage", fromStorage);
+      window.removeEventListener(NOTE_DEFAULT_SIZE_EVENT, fromWindow);
+    };
+  }, []);
+  const update = useCallback((value: NoteDefaultSize) => {
+    setDefaultSize(value);
+    try {
+      window.localStorage.setItem(SCOPED_NOTE_DEFAULT_SIZE_STORAGE_KEY, value);
+    } catch {
+      // Keep the preference for this page when browser storage is unavailable.
+    }
+    window.dispatchEvent(new CustomEvent(NOTE_DEFAULT_SIZE_EVENT, { detail: value }));
+  }, []);
+  return [defaultSize, update] as const;
+}
 
 interface FloatingNotePosition {
   x: number;
@@ -118,6 +176,8 @@ interface StickyNoteEditorProps {
   active: boolean;
   selectedPageId: string;
   sidebarOpen: boolean;
+  defaultSize: NoteDefaultSize;
+  onDefaultSizeChange: (value: NoteDefaultSize) => void;
   onSave: (notebook: ScopedNoteNotebook) => Promise<void>;
   onClose: () => void;
   onPinnedChange: (pinned: boolean) => void;
@@ -299,11 +359,13 @@ function resizeFloatingNoteFromCorner(
   };
 }
 
-function preferredFloatingNoteSize(preference: NoteWindowPreference): FloatingNoteSize {
-  return clampFloatingNoteSize(preference.size ?? {
-    width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
-    height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
-  });
+function preferredFloatingNoteSize(
+  preference: NoteWindowPreference,
+  defaultSize: NoteDefaultSize,
+): FloatingNoteSize {
+  return clampFloatingNoteSize(defaultSize === "remember"
+    ? preference.size ?? SCOPED_NOTE_SIZE_PRESETS.small
+    : SCOPED_NOTE_SIZE_PRESETS[defaultSize]);
 }
 
 function defaultFloatingNotePosition(
@@ -509,6 +571,8 @@ function StickyNoteEditor({
   active,
   selectedPageId,
   sidebarOpen,
+  defaultSize,
+  onDefaultSizeChange,
   onSave,
   onClose,
   onPinnedChange,
@@ -545,6 +609,17 @@ function StickyNoteEditor({
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  const [lastSizePreset, setLastSizePreset] = useState<NoteSizePreset>(
+    defaultSize === "remember" ? "small" : defaultSize,
+  );
+  const matchingSizePresets = (Object.keys(SCOPED_NOTE_SIZE_PRESETS) as NoteSizePreset[])
+    .filter((preset) => {
+      const fitted = clampFloatingNoteSize(SCOPED_NOTE_SIZE_PRESETS[preset]);
+      return size.width === fitted.width && size.height === fitted.height;
+    });
+  const activeSizePreset = matchingSizePresets.includes(lastSizePreset)
+    ? lastSizePreset
+    : matchingSizePresets[0];
   const label = scope === "common" ? "Common" : scopeName;
   const selectedIndex = Math.max(
     0,
@@ -812,6 +887,17 @@ function StickyNoteEditor({
     size,
   ]);
 
+  const applySizePreset = useCallback((preset: NoteSizePreset) => {
+    // Size against the whole viewport before moving away from an edge.
+    const nextSize = clampFloatingNoteSize(SCOPED_NOTE_SIZE_PRESETS[preset]);
+    const nextPosition = clampFloatingNotePosition(position, nextSize);
+    setLastSizePreset(preset);
+    onActivate();
+    onPositionChange(nextPosition);
+    onSizeChange(nextSize);
+    onGeometryCommit({ position: nextPosition, size: nextSize });
+  }, [onActivate, onPositionChange, onSizeChange, onGeometryCommit, position]);
+
   const startResizing = useCallback((
     event: ReactPointerEvent<HTMLButtonElement>,
     corner: FloatingNoteResizeCorner,
@@ -923,16 +1009,16 @@ function StickyNoteEditor({
       next = { width: Number.MAX_SAFE_INTEGER, height: Number.MAX_SAFE_INTEGER };
     }
     if (event.key === "Enter") {
-      next = {
-        width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
-        height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
-      };
+      event.preventDefault();
+      event.stopPropagation();
+      applySizePreset(defaultSize === "remember" ? "small" : defaultSize);
+      return;
     }
     if (!next) return;
     event.preventDefault();
     event.stopPropagation();
     commitResize(next, corner);
-  }, [commitResize, size]);
+  }, [applySizePreset, commitResize, defaultSize, size]);
 
   const selectPage = useCallback((pageId: string) => {
     const current = commitPageName();
@@ -1085,6 +1171,43 @@ function StickyNoteEditor({
           </button>
         </div>
       </header>
+
+      <div className="scoped-note-size-toolbar" role="group" aria-label="Note window size">
+        <div className="scoped-note-size-presets">
+          {(Object.keys(SCOPED_NOTE_SIZE_PRESETS) as NoteSizePreset[]).map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className="scoped-note-page-control scoped-note-size-preset"
+              aria-label={`Resize note to ${NOTE_SIZE_LABELS[preset]}`}
+              aria-pressed={activeSizePreset === preset}
+              title={`${NOTE_SIZE_LABELS[preset]} (${SCOPED_NOTE_SIZE_PRESETS[preset].width} × ${SCOPED_NOTE_SIZE_PRESETS[preset].height}), fitted to your screen`}
+              disabled={closing}
+              onClick={() => applySizePreset(preset)}
+            >
+              <span className="scoped-note-size-full">{NOTE_SIZE_LABELS[preset]}</span>
+              <span className="scoped-note-size-short" aria-hidden="true">{NOTE_SIZE_LABELS[preset][0]}</span>
+            </button>
+          ))}
+        </div>
+        <label className="scoped-note-size-default" title="Opening size for all three note scopes in this browser. Last size remembers each note; new notes start Small. Already-open windows keep their layout on reload.">
+          Default
+          <select
+            className="scoped-note-page-name scoped-note-default-size"
+            aria-label="Default note opening size"
+            value={defaultSize}
+            disabled={closing}
+            onChange={(event) => {
+              if (validNoteDefaultSize(event.target.value)) onDefaultSizeChange(event.target.value);
+            }}
+          >
+            <option value="remember">Last size</option>
+            <option value="small">Small</option>
+            <option value="medium">Medium</option>
+            <option value="large">Large</option>
+          </select>
+        </label>
+      </div>
 
       <p id={descriptionId} className="scoped-note-description">
         {scopeDescription(scope, scopeName)} Changes save automatically.
@@ -1267,13 +1390,10 @@ function StickyNoteEditor({
           type="button"
           className={`scoped-note-resize-handle ${corner}`}
           aria-label={`Resize ${scope} note window from ${corner.replace("-", " ")} corner`}
-          aria-description="Drag this corner while the opposite corner stays fixed. Arrow keys resize one dimension; Home minimizes, End maximizes, and Enter resets."
-          title={`Drag the ${corner.replace("-", " ")} corner to resize. Arrow keys resize; Enter resets.`}
+          aria-description="Drag this corner while the opposite corner stays fixed. Arrow keys resize one dimension; Home minimizes, End maximizes, and Enter restores the default size (Small when remembering the last size)."
+          title={`Drag the ${corner.replace("-", " ")} corner to resize. Arrow keys resize; Enter or double-click restores the default size.`}
           onPointerDown={(event) => startResizing(event, corner)}
-          onDoubleClick={() => commitResize({
-            width: DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
-            height: DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
-          }, corner)}
+          onDoubleClick={() => applySizePreset(defaultSize === "remember" ? "small" : defaultSize)}
           onKeyDown={(event) => resizeWithKeyboard(event, corner)}
         >
           <span aria-hidden="true" />
@@ -1291,6 +1411,7 @@ export function ScopedStickyNotes({
   workspaceName = null,
 }: ScopedStickyNotesProps) {
   const desktop = useDesktopScopedNotes();
+  const [defaultSize, setDefaultSize] = useNoteDefaultSize();
   const windowWorkspaceIdentity = noteWorkspaceIdentity(workspaceId, sessionName);
   const [common, setCommon] = useState<NoteSnapshot>({
     identity: "common",
@@ -1496,7 +1617,7 @@ export function ScopedStickyNotes({
     const key = noteWindowKey(windowWorkspaceIdentity, scope, identity);
     const preference = readNoteWindowPreference(key, legacyKey);
     if (restoreOnly && !preference.open) return;
-    const size = preferredFloatingNoteSize(preference);
+    const size = preferredFloatingNoteSize(preference, restoreOnly ? "remember" : defaultSize);
     const position = preferredFloatingNotePosition(scope, preference, size);
     const selectedPageId = snapshot.notebook.pages.some(
       (page) => page.id === preference.selectedPageId,
@@ -1539,6 +1660,7 @@ export function ScopedStickyNotes({
     common,
     currentSession,
     currentWorkspace,
+    defaultSize,
     desktop,
     sessionName,
     windowWorkspaceIdentity,
@@ -1658,6 +1780,8 @@ export function ScopedStickyNotes({
           active={activeEditorKey === editor.key}
           selectedPageId={editor.selectedPageId}
           sidebarOpen={editor.sidebarOpen}
+          defaultSize={defaultSize}
+          onDefaultSizeChange={setDefaultSize}
           onSave={(notebook) => saveNote(editor.scope, editor.identity, notebook)}
           onClose={() => closeEditor(editor)}
           onPinnedChange={(pinned) => {

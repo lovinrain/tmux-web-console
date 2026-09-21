@@ -9521,10 +9521,11 @@ html.host-pulse-resizing * {
 
 .title-sheet.scoped-note-sheet.floating {
   position: fixed;
+  container: scoped-note / inline-size;
   display: none;
   width: min(430px, calc(100vw - 24px));
   min-width: 220px;
-  min-height: 168px;
+  min-height: 210px;
   max-width: calc(100vw - 24px);
   max-height: calc(100dvh - 24px);
   overflow: hidden;
@@ -9602,7 +9603,8 @@ html.host-pulse-resizing * {
   letter-spacing: 0.08em;
 }
 
-.scoped-note-page-toolbar {
+.scoped-note-page-toolbar,
+.scoped-note-size-toolbar {
   display: flex;
   min-width: 0;
   flex: 0 0 auto;
@@ -9614,6 +9616,53 @@ html.host-pulse-resizing * {
   border-bottom: 1px solid color-mix(in srgb, var(--note-accent) 19%, transparent);
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--note-accent) 35%, transparent) transparent;
+}
+
+.scoped-note-size-toolbar {
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+}
+
+.scoped-note-size-presets,
+.scoped-note-size-default {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scoped-note-size-default {
+  color: var(--note-accent);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.scoped-note-size-toolbar .scoped-note-size-preset {
+  width: auto;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 8px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.scoped-note-size-toolbar .scoped-note-default-size {
+  width: 86px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 3px;
+  cursor: pointer;
+}
+
+.scoped-note-size-short { display: none; }
+
+@container scoped-note (max-width: 339px) {
+  .scoped-note-size-full { display: none; }
+  .scoped-note-size-short { display: inline; }
+  .scoped-note-size-toolbar { gap: 4px; padding-inline: 4px; }
+  .scoped-note-size-toolbar .scoped-note-size-preset { padding-inline: 4px; }
+  .scoped-note-size-toolbar .scoped-note-default-size { width: 76px; }
 }
 
 .scoped-note-page-control,

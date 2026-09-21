@@ -971,6 +971,7 @@ html[data-theme="light"] .scoped-note-pinned-badge {
 }
 
 html[data-theme="light"] .scoped-note-page-toolbar,
+html[data-theme="light"] .scoped-note-size-toolbar,
 html[data-theme="light"] .scoped-note-page-sidebar {
   background: color-mix(in srgb, var(--note-paper) 91%, #e8e1d5);
   border-color: color-mix(in srgb, var(--note-accent) 22%, #c9c2b5);
@@ -981,6 +982,11 @@ html[data-theme="light"] .scoped-note-page-sidebar-heading button {
   color: color-mix(in srgb, var(--note-accent) 76%, #3f463d);
   background: color-mix(in srgb, var(--note-accent) 6%, #fffdf7);
   border-color: color-mix(in srgb, var(--note-accent) 32%, #bbb4a8);
+}
+
+html[data-theme="light"] .scoped-note-size-default,
+html[data-theme="light"] .scoped-note-size-toolbar .scoped-note-size-preset {
+  color: color-mix(in srgb, var(--note-accent) 28%, #343b2d);
 }
 
 html[data-theme="light"] .scoped-note-page-control:hover:not(:disabled),

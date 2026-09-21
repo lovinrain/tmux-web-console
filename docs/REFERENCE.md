@@ -1088,6 +1088,15 @@ is migrated into `Page 1`; page content has no separate character validator
 (the HTTP request boundary still protects the service). Page selection and the
 optional page sidebar are remembered in each browser window. The cards and
 editor are desktop-only, and concurrent editors use last-write-wins replacement.
+Each editor has quick `Small` (430 × 430), `Medium` (640 × 560), and `Large`
+(860 × 720) size buttons. Windows move as needed to fit the chosen size on screen.
+The `Default` selector sets the opening size for all three note scopes in that
+browser and synchronizes across its tabs. `Last size` preserves each note's last
+size and starts new notes at Small; choosing a fixed size applies it each time
+you deliberately open a note. Reloading or returning to a workspace restores
+already-open windows at their saved size. Quick resizing does not change the
+default. Enter or double-click on a resize corner restores the configured size
+(Small under `Last size`).
 The cards keep whatever room the session identity and the action buttons leave:
 as that narrows they drop their preview line, then their labels, and finally the
 whole widget row scrolls horizontally instead of covering its neighbours.
