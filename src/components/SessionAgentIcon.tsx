@@ -40,8 +40,9 @@ export function sessionAgentInfo(session?: Session) {
 export function SessionAgentIcon({ session }: { session?: Session }) {
   const { kind, label } = sessionAgentInfo(session);
   const brandMark = BRAND_MARKS[kind];
+  const tone = kind === "shells" ? "shell" : kind === "other" ? "process" : kind;
   return (
-    <span className="session-agent-icon" data-agent-kind={kind} title={label} aria-hidden="true">
+    <span className={`session-agent-icon agent-badge ${tone}`} data-agent-kind={kind} title={label} aria-hidden="true">
       {brandMark ? (
         <span className="session-agent-brand" style={{
           maskImage: `url("${brandMark}")`,

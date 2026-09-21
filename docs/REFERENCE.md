@@ -1006,7 +1006,9 @@ desktop preference.
 
 Session tabs show the coding agent's brand icon at the end of the title: OpenAI
 for Codex, Anthropic for Claude, and the Grok, Cursor, or GitHub Copilot mark.
-Shells use a terminal icon. Icons remain visible in the compact side rail.
+Shells use a terminal icon. Each icon sits in a small square using the same
+agent colors as the session header badge, including dark/light theme variants.
+Icons remain visible in the compact side rail.
 Hover for the agent name; the
 separate status dot continues to indicate activity. Icons update with live pane
 changes rather than using historical recovery metadata.

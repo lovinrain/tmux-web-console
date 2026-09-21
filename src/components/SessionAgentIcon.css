@@ -1,12 +1,14 @@
-.session-agent-icon {
+.session-agent-icon.agent-badge {
   display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  flex: 0 0 20px;
   align-items: center;
   justify-content: center;
   margin-left: auto;
-  color: currentColor;
+  padding: 2px;
+  border-radius: 3px;
 }
 
 .session-agent-icon > svg { width: 100%; height: 100%; }
@@ -25,11 +27,19 @@
 }
 
 @container workspace-tab-rail (max-width: 103px) {
-  .workspace-navigation-vertical .session-agent-icon {
-    width: 12px;
-    height: 12px;
-    flex-basis: 12px;
+  .workspace-navigation-vertical .session-agent-icon.agent-badge {
+    width: 18px;
+    height: 18px;
+    min-height: 18px;
+    flex-basis: 18px;
+    padding: 2px;
     margin-left: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical[data-orientation="vertical"]
+    .workspace-tab > button[role="tab"] {
+    gap: 2px;
+    padding-inline: 2px;
   }
 
   .workspace-navigation-vertical .workspace-tab-selection-mark {
