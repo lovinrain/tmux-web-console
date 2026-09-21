@@ -1004,6 +1004,11 @@ tabs, including the left rail, without changing that orientation preference.
 Compact mobile layouts keep their horizontal/Overview navigation regardless of the
 desktop preference.
 
+Session tabs show a small icon for the active pane's coding agent or shell beside
+the title, including in the compact side rail. Hover for the agent name; the
+separate status dot continues to indicate activity. Icons update with live pane
+changes rather than using historical recovery metadata.
+
 Closing or forgetting a tab leaves the sidebar at its current scroll position,
 including when removing the active tab selects a replacement. Live/unavailable
 session transitions retain the sidebar instead of remounting it. Deliberately

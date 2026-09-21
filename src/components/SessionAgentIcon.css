@@ -1,0 +1,34 @@
+.session-agent-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.session-agent-icon > svg { width: 100%; height: 100%; }
+.session-agent-icon[data-agent-kind="claude"] { color: var(--amber); }
+.session-agent-icon[data-agent-kind="codex"] { color: var(--cyan); }
+
+@container workspace-tab-rail (max-width: 103px) {
+  .workspace-navigation-vertical .session-agent-icon {
+    width: 12px;
+    height: 12px;
+    flex-basis: 12px;
+  }
+
+  .workspace-navigation-vertical .workspace-tab-selection-mark {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 9px;
+    height: 9px;
+  }
+
+  .workspace-navigation-vertical .workspace-tab-selection-mark svg {
+    width: 7px;
+    height: 7px;
+  }
+}

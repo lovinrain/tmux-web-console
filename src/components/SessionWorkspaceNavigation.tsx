@@ -74,6 +74,7 @@ import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 import { WorkspaceSessionAddDialog } from "./WorkspaceSessionAddDialog";
+import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
@@ -3126,6 +3127,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const index = openSessions.indexOf(sessionName);
     const session = sessionsByName.get(sessionName);
     const title = tabTitle(sessionName, sessionsByName);
+    const agentLabel = sessionAgentInfo(session).label;
     const active = !newSessionActive && sessionName === activeSession;
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
     const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
@@ -3179,16 +3181,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           aria-controls={active ? "muxdeck-active-console" : undefined}
           aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${selectedForMove ? ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
-          title={`${tabShortcut ? `${title} (${tabShortcut})` : title}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
+          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
-          aria-description={canDragTab
+          aria-description={`${agentLabel}. ${canDragTab
             ? selectedDrag
               ? `${selectedWorkspaceTabs.length} tabs selected. Drag to move them together; their relative order is preserved.`
               : desktopTabMultiSelectEnabled
                 ? "Drag to reorder this tab. Shift-click selects a range; Control or Command-click toggles individual tabs."
                 : "Drag to reorder this tab. Reorder buttons are also available in Actions."
-            : undefined}
+            : ""}`}
           onKeyDown={(event) => workspaceTabKeyDown(event, sessionName)}
           onClick={(event) => selectWorkspaceTab(event, sessionName)}
           onDragStart={canDragTab
@@ -3207,6 +3209,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             data-index={index + 1}
             aria-hidden="true"
           />
+          <SessionAgentIcon session={session} />
           <span className="workspace-tab-title">{title}</span>
         </button>
         {tabActionsVisible && onMoveTab && (openSessions.length > 1 || canMovePrevious || canMoveNext) && (
