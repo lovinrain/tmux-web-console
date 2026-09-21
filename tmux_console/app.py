@@ -97,6 +97,12 @@ from .host_metrics import (
     HostMetricsSampler,
     HostMetricsUnavailableError,
 )
+from .html_preview import (
+    HtmlPreviewAsset,
+    HtmlPreviewGrant,
+    HtmlPreviewGrantStore,
+    resolve_html_preview_asset,
+)
 from .messages import (
     MessageNotFoundError,
     SessionMessageStore,
@@ -189,6 +195,9 @@ AUTH_DEVICE_REQUEST_KEY = web.RequestKey("muxdeck_auth_device", RememberedDevice
 AUTH_COOKIE_VALUE_REQUEST_KEY = web.RequestKey("muxdeck_auth_cookie_value", str)
 SESSION_RENAME_LOCK_KEY = web.AppKey("session_rename_lock", asyncio.Lock)
 FILE_BROWSER_ROOT_KEY = web.AppKey("file_browser_root", Path)
+HTML_PREVIEW_GRANTS_KEY = web.AppKey("html_preview_grants", HtmlPreviewGrantStore)
+HTML_PREVIEW_GRANT_REQUEST_KEY = web.RequestKey("html_preview_grant", HtmlPreviewGrant)
+HTML_PREVIEW_ROUTE_NAME = "html-preview-asset"
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
@@ -231,6 +240,36 @@ def _file_content_disposition(
         f'{disposition}; filename="{fallback_name}"; '
         f"filename*=UTF-8''{quote(name, safe='')}"
     )
+
+
+def _html_preview_headers(request: web.Request, grant: HtmlPreviewGrant) -> dict[str, str]:
+    # A scheme-less host source inherits HTTPS at the reverse proxy. The host
+    # has already passed request_security_middleware; no forwarded header is trusted.
+    source = (
+        f"{request.host}{quote(request.app[BASE_PATH_KEY], safe='/')}"
+        f"/preview/{grant.token}/"
+    )
+    cdns = (
+        "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com "
+        "https://unpkg.com https://esm.sh https://cdn.plot.ly https://d3js.org"
+    )
+    return {
+        "Cache-Control": "private, no-store",
+        "Referrer-Policy": "no-referrer",
+        "Access-Control-Allow-Origin": "*",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "X-Frame-Options": "DENY",
+        "Content-Security-Policy": (
+            "sandbox allow-scripts; default-src 'none'; base-uri 'none'; "
+            "form-action 'none'; frame-ancestors 'none'; frame-src 'none'; "
+            "object-src 'none'; worker-src 'none'; "
+            f"script-src 'unsafe-inline' 'unsafe-eval' data: blob: {source} {cdns}; "
+            f"style-src 'unsafe-inline' {source} {cdns} https://fonts.googleapis.com; "
+            f"img-src {source} data: blob:; "
+            f"font-src {source} data: https://fonts.gstatic.com {cdns}; "
+            f"media-src {source} data: blob:; connect-src {source}"
+        ),
+    }
 
 
 class SessionSnapshotBuilder:
@@ -876,6 +915,27 @@ async def authentication_middleware(
             response = await handler(request)
         response.headers["Cache-Control"] = "no-store"
         return response
+    if (
+        request.match_info.route.name == HTML_PREVIEW_ROUTE_NAME
+        and request.method in {"GET", "HEAD"}
+    ):
+        grant = request.app[HTML_PREVIEW_GRANTS_KEY].get(request.match_info["token"])
+        if grant is None:
+            response = web.Response(
+                text="This webpage preview has expired. Open it again from the file browser or terminal link.",
+                content_type="text/plain",
+                status=410,
+            )
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+        # Only the limited preview capability is accepted here. In particular,
+        # never authenticate or renew a console cookie on an opaque-origin asset request.
+        request[HTML_PREVIEW_GRANT_REQUEST_KEY] = grant
+        response = await handler(request)
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
     mode = request.app[AUTH_MODE_KEY]
     if mode is AuthMode.NONE:
         return await handler(request)
@@ -1018,6 +1078,7 @@ def create_app(
     # Resolved here so a misconfigured boundary stops startup instead of
     # quietly changing how far the file browser reaches.
     app[FILE_BROWSER_ROOT_KEY] = resolve_browse_boundary(file_browser_root)
+    app[HTML_PREVIEW_GRANTS_KEY] = HtmlPreviewGrantStore()
     configured_auth_path = default_auth_path()
     configured_auth_mode = (
         os.environ.get("MUXDECK_AUTH_MODE") if auth_mode is None else auth_mode
@@ -2498,32 +2559,79 @@ def create_app(
         if not isinstance(result, FileBrowserHtmlPreview):
             raise TypeError("HTML preview operation returned an invalid result")
 
-        # The sandbox gives the document an opaque origin (no access to the
-        # authenticated Muxdeck origin). Network-capable directives are kept
-        # deliberately narrow so an untrusted report cannot call the console's
-        # APIs or submit a form while it is open in a new tab.
-        return web.FileResponse(
-            result.path,
-            headers={
-                "Cache-Control": "private, no-store",
-                "Content-Disposition": _file_content_disposition(
-                    result.name,
-                    "inline",
-                    fallback="document",
-                ),
-                "Content-Type": "text/html; charset=utf-8",
-                "Content-Security-Policy": (
-                    "sandbox; default-src 'self'; base-uri 'none'; "
-                    "connect-src 'none'; form-action 'none'; "
-                    "frame-ancestors 'none'; object-src 'none'; "
-                    "script-src 'none'; style-src 'self' 'unsafe-inline'; "
-                    "img-src 'self' data: blob:; font-src 'self' data:; "
-                    "media-src 'self' data:"
-                ),
-                "Cross-Origin-Resource-Policy": "same-origin",
-                "X-Frame-Options": "DENY",
-            },
+        try:
+            session = await app[TMUX_KEY].get_session(request.match_info["session"])
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        if session.id != request.query["sessionId"] or not any(
+            pane.id == pane_id for pane in session.panes
+        ):
+            return json_error("tmux identity changed; reopen the webpage", 409)
+
+        def issue_preview(_root: str, _path: str) -> HtmlPreviewGrant:
+            return app[HTML_PREVIEW_GRANTS_KEY].issue(
+                result,
+                session_name=session.name,
+                session_id=session.id,
+                session_created=session.created,
+                server_started=session.server_started,
+                server_pid=session.server_pid,
+                pane_id=pane_id,
+            )
+
+        grant = await execute_session_file_operation(
+            root_path, relative_path, pane_id, issue_preview,
         )
+        if isinstance(grant, web.Response):
+            return grant
+        if not isinstance(grant, HtmlPreviewGrant):
+            raise TypeError("HTML preview grant operation returned an invalid result")
+        response = _see_other(
+            f"{prefix}/preview/{grant.token}/{quote(grant.document_name, safe='')}"
+        )
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    async def serve_html_preview_asset(request: web.Request) -> web.StreamResponse:
+        grant = request[HTML_PREVIEW_GRANT_REQUEST_KEY]
+        try:
+            session = await app[TMUX_KEY].get_session(grant.session_name)
+        except TmuxSessionNotFoundError:
+            app[HTML_PREVIEW_GRANTS_KEY].revoke(grant.token)
+            return json_error("preview session no longer exists; reopen the webpage", 410)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+        if (
+            (session.id, session.created, session.server_started, session.server_pid)
+            != (grant.session_id, grant.session_created, grant.server_started, grant.server_pid)
+            or not any(pane.id == grant.pane_id for pane in session.panes)
+        ):
+            app[HTML_PREVIEW_GRANTS_KEY].revoke(grant.token)
+            return json_error("preview session identity changed; reopen the webpage", 410)
+        result = await execute_session_file_operation(
+            str(grant.root),
+            request.match_info["asset_path"],
+            grant.pane_id,
+            lambda _root, path: resolve_html_preview_asset(grant, path),
+        )
+        if isinstance(result, web.Response):
+            return result
+        if not isinstance(result, HtmlPreviewAsset):
+            raise TypeError("HTML preview asset operation returned an invalid result")
+        headers = _html_preview_headers(request, grant)
+        content_type = result.media_type
+        if content_type.startswith("text/") or content_type in {"application/json", "image/svg+xml"}:
+            content_type += "; charset=utf-8"
+        headers.update({
+            "Content-Type": content_type,
+            "Content-Disposition": _file_content_disposition(
+                result.name, "inline", fallback="asset",
+            ),
+        })
+        return web.FileResponse(result.path, headers=headers)
 
     async def upload_session_file(request: web.Request) -> web.Response:
         allowed_fields = frozenset(
@@ -5595,6 +5703,11 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/html",
         preview_session_file_html,
+    )
+    app.router.add_get(
+        f"{prefix}/preview/{{token:[A-Za-z0-9_-]{{43}}}}/{{asset_path:.*}}",
+        serve_html_preview_asset,
+        name=HTML_PREVIEW_ROUTE_NAME,
     )
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/download",

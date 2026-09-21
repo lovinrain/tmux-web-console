@@ -3702,7 +3702,7 @@ export function SessionFilesPanel({
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label={`Open ${selected.name} as webpage`}
-                title="Open this HTML document in a sandboxed browser tab"
+                title="Open this interactive HTML document in an isolated browser tab"
                 onClick={() => setActionStatus(`Opened ${selected.name} as a webpage`)}
               >
                 <ExternalLinkIcon />

@@ -623,8 +623,17 @@ boundary, including symlink escapes. Use URL encoding for every query value.
 | `GET /api/sessions/{session}/files/preview` | Required `path`; optional `root` | Safe text preview metadata/content. |
 | `GET /api/sessions/{session}/files/image` | Required `path`; optional `root` | Inline raster image response. |
 | `GET /api/sessions/{session}/files/pdf` | Required `path`; optional `root` | Inline PDF response. |
-| `GET /api/sessions/{session}/files/html` | Required `path`; optional `root` | Sandboxed, script-disabled HTML response. |
+| `GET /api/sessions/{session}/files/html` | Required `path`; optional `root` | Authenticated redirect to a temporary interactive HTML preview. |
 | `GET /api/sessions/{session}/files/download` | Required `path`; optional `root` | Attachment download. |
+
+The HTML redirect targets `GET /preview/{token}/{path}` (also supports `HEAD`),
+under the configured base path. This URL permits cookie-free reads of supported
+assets inside the HTML file's directory tree for up to one hour, while the
+original session and pane remain live. A service restart also expires it.
+The document runs scripts in an opaque-origin sandbox without console API,
+cookie, or browser-storage access. Reopen the original HTML endpoint to refresh
+an expired preview. See the [reference](REFERENCE.md) for supported preview
+assets and limits.
 
 ### File mutations
 

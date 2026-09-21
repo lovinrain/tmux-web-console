@@ -715,11 +715,14 @@ async def test_file_browser_api_uploads_without_overwrite_and_streams_downloads(
         assert html.headers["Content-Type"] == "text/html; charset=utf-8"
         assert html.headers["Cache-Control"] == "private, no-store"
         assert html.headers["Content-Disposition"].startswith("inline;")
-        assert "sandbox" in html.headers["Content-Security-Policy"]
-        assert "script-src 'none'" in html.headers["Content-Security-Policy"]
-        assert "connect-src 'none'" in html.headers["Content-Security-Policy"]
+        assert "sandbox allow-scripts;" in html.headers["Content-Security-Policy"]
+        assert "allow-same-origin" not in html.headers["Content-Security-Policy"]
+        assert "script-src 'unsafe-inline'" in html.headers["Content-Security-Policy"]
+        assert "/preview/" in html.headers["Content-Security-Policy"]
         assert html.headers["X-Frame-Options"] == "DENY"
-        assert html.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert html.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
+        assert html.headers["Access-Control-Allow-Origin"] == "*"
+        assert html.headers["Referrer-Policy"] == "no-referrer"
         assert html.headers["X-Content-Type-Options"] == "nosniff"
 
         unsupported_html = await client.get(

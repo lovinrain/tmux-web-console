@@ -904,7 +904,14 @@ merely to test that the application itself has no login.
     preview and opens through the protected full-size link; an SVG must remain a
     non-embedded text or binary preview. Add a small disposable PDF and confirm
     its signature-checked inline viewer, new-tab link, and download fallback; a
-    renamed non-PDF must not render through the PDF route. Enter one disposable file's absolute path
+    renamed non-PDF must not render through the PDF route.
+    Open a disposable HTML report with `Open webpage` and its terminal link;
+    verify a scripted button, relative JavaScript/CSS/module files, and a local
+    JSON request work. Its temporary preview URL must retain an opaque-origin
+    sandbox, reject console API calls, and refuse hidden/out-of-directory assets.
+    Reopen from the original file after the one-hour URL lifetime or a service
+    restart. Preview grants are bounded, process-local state and need no migration
+    or reverse-proxy changes. Enter one disposable file's absolute path
     in the address row and confirm its parent opens with that file previewed
     immediately. Open `Find`, fuzzy-locate a nested disposable file, and confirm
     selecting it opens the same parent and preview; a deliberately broad search

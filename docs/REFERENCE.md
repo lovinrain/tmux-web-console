@@ -450,10 +450,27 @@ outside it remain inaccessible. Text preview remains capped at 1 MiB. Signature-
 JPEG, GIF, WebP, AVIF, BMP, and ICO images render in a fitted viewer up to 25 MiB
 and link to the same protected inline stream for full-size viewing. SVG and
 other active or unsupported formats are never embedded. HTML/HTM files expose
-an `Open webpage` action and a hosted new-tab view. That response is bounded
-to 10 MiB and carries an opaque-origin CSP sandbox with scripts, forms, and
-network connections disabled, so untrusted markup cannot access the authenticated
-Muxdeck page or APIs. A signature-verified
+an `Open webpage` action and an interactive hosted new-tab view, also available
+from absolute HTML paths in the terminal. Inline scripts, event handlers,
+neighboring JavaScript/CSS files, ES module imports, images, fonts, and local
+JSON requests work. Relative paths resolve inside the HTML file's directory
+tree. Common library CDNs (jsDelivr, cdnjs, unpkg, esm.sh, Plotly, and D3) and
+Google Fonts are allowed; other external network requests remain blocked.
+
+Opening the protected HTML endpoint creates a folder-limited preview URL that
+expires after one hour or a service restart. Reopen the original file to obtain
+a fresh URL. The preview stays in an opaque-origin sandbox: it cannot access
+console cookies, browser storage, the Muxdeck APIs, frames, popups, or form
+submissions. Only the preview URL permits reads without the console cookie;
+it never grants access to other directories or console operations. Treat that
+temporary URL as private. Every asset request rechecks the live session/pane
+identity and directory boundary. Hidden files, directory listings, unsupported
+file types, and symlinks escaping the directory are refused. HTML/code/JSON
+are capped at 10 MiB, images/fonts/Wasm at 25 MiB, and media at 50 MiB. Absolute
+site-root asset paths, backend applications, and general external API calls
+are not supported by this preview.
+
+A signature-verified
 PDF up to 50 MiB uses the browser's built-in PDF viewer inside the preview pane;
 `Open PDF` gives it a full browser tab, while Download remains available for
 browsers that disable inline PDF viewing and for larger documents. The server
