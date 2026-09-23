@@ -639,7 +639,12 @@ commands, background agents, or dynamic workflows: no human action is required,
 but the terminal remains available for steering input. Claude's latest
 column-zero activity headline is decisive across the visible pane, so an older
 wait banner does not hide resumed work and a dense task panel does not hide the
-current wait. Static titles indicate that the agent needs human input.
+current wait. Claude can keep a static title during a live turn, so Muxdeck
+also reads its input controls and nearby running status. Its expandable agent
+list is excluded from those controls: long or wrapped task lists do not hide
+the interrupt hint, and a task description quoting that hint does not make an
+idle turn appear active. Other recognized static titles indicate that the
+agent needs human input.
 Dead, stale, or unfamiliar signals are marked Unclear instead of being guessed.
 Grok Build is recognized when the active pane command is `grok`, which is also
 the command used to launch it normally. Its working title begins with an animated

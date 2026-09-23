@@ -80,6 +80,12 @@ CLAUDE_INPUT_FOOTER_PATTERN = re.compile(
 )
 CLAUDE_STATUS_LOOKBACK = 5
 CLAUDE_FOOTER_LINES = 12
+# The expandable agent switcher is rendered below the input controls, including
+# when Claude keeps a settled title during an active turn.
+CLAUDE_AGENT_PANEL_HEADER_PATTERN = re.compile(r"^\s*[●○◯]\s+main\s*$")
+CLAUDE_AGENT_PANEL_ROW_PATTERN = re.compile(
+    r"^\s+(?:[●○◯]\s+\S.*|[↓↑]\s+\d+\s+more)\s*$"
+)
 # Cursor's interrupt hint sits in the footer during a live turn, but it is drawn
 # as a placeholder, so typing a follow-up mid-turn hides it again.
 CURSOR_RUNNING_PATTERN = re.compile(
@@ -159,17 +165,53 @@ def _claude_background_work_state(screen: str) -> AgentState | None:
     return None
 
 
+def _claude_footer(screen: str) -> list[str]:
+    lines = _rendered_lines(screen)
+    prompt = next(
+        (
+            index
+            for index in reversed(range(len(lines)))
+            if lines[index].lstrip().startswith(CLAUDE_PROMPT_MARKER)
+        ),
+        -1,
+    )
+    if prompt >= 0:
+        for index in range(prompt + 1, len(lines)):
+            if not CLAUDE_AGENT_PANEL_HEADER_PATTERN.fullmatch(lines[index]):
+                continue
+            # Only remove a roster attached to this prompt's mode controls.
+            # Its rows (and indented wraps) may fill most of the visible pane;
+            # they are not input controls even when a task quotes an interrupt hint.
+            if not any(
+                CLAUDE_INPUT_FOOTER_PATTERN.search(line)
+                for line in lines[prompt + 1 : index]
+            ):
+                continue
+            if not all(
+                not line.strip()
+                or CLAUDE_AGENT_PANEL_ROW_PATTERN.fullmatch(line)
+                or line.startswith("  ")
+                for line in lines[index + 1 :]
+            ):
+                continue
+            lines = lines[:index]
+            while lines and not lines[-1].strip():
+                lines.pop()
+            break
+    return lines[-CLAUDE_FOOTER_LINES:]
+
+
 def _claude_turn_is_live(screen: str) -> bool:
-    # capture_visible joins wrapped terminal rows, leaving Claude's status bar
-    # as the final rendered line. Do not match the same words in the transcript.
-    if CLAUDE_ACTIVE_TURN_PATTERN.search(_tail(screen, 1)):
+    footer = _claude_footer(screen)
+    # capture_visible joins wrapped terminal rows. Exclude the expandable agent
+    # roster so the last rendered input control remains the footer's final line.
+    if footer and CLAUDE_ACTIVE_TURN_PATTERN.search(footer[-1]):
         return True
 
     # Typing a follow-up while Claude is still running replaces the interrupt
     # hint. The animated status row remains immediately above the current input
     # prompt and includes Claude's token counter, which keeps this check from
     # mistaking old transcript prose for live activity.
-    footer = _rendered_lines(screen)[-CLAUDE_FOOTER_LINES:]
     prompt = next(
         (
             index
@@ -191,7 +233,7 @@ def _claude_prompt_is_ready(screen: str) -> bool:
     prompt marker and Claude's mode footer keeps arbitrary terminal output from
     being mistaken for an idle agent.
     """
-    footer = _rendered_lines(screen)[-CLAUDE_FOOTER_LINES:]
+    footer = _claude_footer(screen)
     prompt = next(
         (
             index
