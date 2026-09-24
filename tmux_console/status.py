@@ -145,22 +145,25 @@ def _claude_background_work_state(screen: str) -> AgentState | None:
         if not CLAUDE_ACTIVITY_HEADLINE_PATTERN.match(visible_lines[index]):
             continue
 
-        parts = [visible_lines[index].strip()]
-        for continuation in visible_lines[
-            index + 1 : index + CLAUDE_HEADLINE_WRAP_LINES
-        ]:
-            if not continuation.strip() or CLAUDE_ACTIVITY_HEADLINE_PATTERN.match(
-                continuation
+        parts: list[str] = []
+        for line in visible_lines[index : index + CLAUDE_HEADLINE_WRAP_LINES]:
+            if not line.strip() or (
+                parts and CLAUDE_ACTIVITY_HEADLINE_PATTERN.match(line)
             ):
                 break
-            parts.append(continuation.strip())
-        headline = " ".join(parts)
-        if CLAUDE_BACKGROUND_WAIT_PATTERN.fullmatch(headline):
-            # Numbered agents and workflows are still executing even when the
-            # foreground Claude process is waiting for their result.
-            return AgentState("working", "Claude has active background work")
-        if CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline):
-            return AgentState("waiting_command", "Agent is waiting for background work")
+            parts.append(line.strip())
+            headline = " ".join(parts)
+            # Stop as soon as a complete headline is recognized. Update notices,
+            # separators, and input controls may follow without a blank row;
+            # they must not be mistaken for wrapped headline text.
+            if CLAUDE_BACKGROUND_WAIT_PATTERN.fullmatch(headline):
+                # Numbered agents and workflows are still executing even when
+                # the foreground Claude process is waiting for their result.
+                return AgentState("working", "Claude has active background work")
+            if CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline):
+                return AgentState(
+                    "waiting_command", "Agent is waiting for background work"
+                )
         return None
     return None
 

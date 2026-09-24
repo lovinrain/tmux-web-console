@@ -222,3 +222,80 @@ def test_old_agent_roster_does_not_hide_a_newer_finished_transcript():
     state = classify_agent_state(claude_pane(), visible_screen=screen, now=1000)
 
     assert state.name == "waiting_human"
+
+
+def background_screen(headline: str) -> str:
+    # Claude can draw its update notice and named input separator directly below
+    # a background-wait headline, without a blank row between them.
+    return (
+        f"{headline}\n"
+        f"{' ' * 80}✔ Update installed · Restart to update\n"
+        f"{'─' * 70} sample-session ─\n"
+        "❯ \n"
+        f"{'─' * 88}\n"
+        "⏸ plan mode on (shift+tab to cycle) · ← 4 agents · ↓ to manage\n"
+        "\n"
+        "  ● main\n"
+        "  ◯ Plan Reviewing sample sources          11m 8s · 12.5k tokens"
+    )
+
+
+@pytest.mark.parametrize("title", ["✳ Review changes", "build-host", "◐ Claude Code"])
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "✻ Waiting for 1 background agent to finish",
+        "✻ Waiting for 2 background agents and 3 dynamic\n  workflows to finish",
+    ],
+)
+def test_idle_main_with_running_agents_survives_adjacent_footer_notices(
+    title: str, headline: str
+):
+    state = classify_agent_state(
+        replace(claude_pane(title), activity=900),
+        visible_screen=background_screen(headline),
+        now=1000,
+    )
+
+    assert state.name == "working"
+    assert state.reason == "Claude has active background work"
+
+
+def test_legacy_background_wait_survives_adjacent_footer_notices():
+    state = classify_agent_state(
+        claude_pane(),
+        visible_screen=background_screen("✻ Waiting for agents"),
+        now=1000,
+    )
+
+    assert state.name == "waiting_command"
+    assert state.reason == "Agent is waiting for background work"
+
+
+def test_finished_agents_override_an_older_wait_above_footer_notices():
+    screen = background_screen(
+        "✻ Waiting for 1 background agent to finish\n"
+        "● All agents finished. The changes are ready."
+    )
+
+    state = classify_agent_state(claude_pane(), visible_screen=screen, now=1000)
+
+    assert state.name == "waiting_human"
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "✻ Waiting for 0 background agents to finish",
+        "✻ Waiting for 1 background agent",
+        "  ✻ Waiting for 1 background agent to finish",
+        "✻ Waiting for 1 background agent to finish is an example",
+        'The docs quote "✻ Waiting for 1 background agent to finish"',
+    ],
+)
+def test_footer_notices_do_not_turn_noncurrent_wait_text_into_activity(headline: str):
+    state = classify_agent_state(
+        claude_pane(), visible_screen=background_screen(headline), now=1000
+    )
+
+    assert state.name == "waiting_human"
