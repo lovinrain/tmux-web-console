@@ -3006,7 +3006,9 @@ function AppRoutes() {
   const sortSessionTabsByWorkingState = useCallback(() => {
     const workingSessionNames = new Set(
       knownSessionsRef.current
-        .filter((session) => session.agentState === "working")
+        .filter((session) => (
+          session.agentState === "working" || session.agentState === "running_command"
+        ))
         .map((session) => session.name),
     );
     commitWorkspaceStructure(stableSortWorkspaceSessionsByWorkingState(

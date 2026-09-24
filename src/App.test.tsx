@@ -2433,7 +2433,7 @@ describe("App routing", () => {
     expectWorkspaceSearch(search, ["beta", "alpha", "gamma"]);
   });
 
-  it("stable-sorts side tabs with non-working sessions before working sessions", () => {
+  it("stable-sorts side tabs with idle sessions before working agents and running commands", () => {
     window.localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
     replaceUrl(sessionUrl(
       "working-a",
@@ -2443,7 +2443,7 @@ describe("App routing", () => {
     act(() => reportKnownSessions?.([
       { ...session("working-a", "$working-a"), agentState: "working" },
       { ...session("idle-a", "$idle-a"), agentState: "waiting_human" },
-      { ...session("working-b", "$working-b"), agentState: "working" },
+      { ...session("working-b", "$working-b"), agentState: "running_command" },
       session("idle-b", "$idle-b"),
     ]));
 

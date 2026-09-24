@@ -25,6 +25,25 @@ describe("BulkSessionActionsDialog", () => {
     expect(onApply).not.toHaveBeenCalled();
   });
 
+  it.each(["close", "end"] as const)("labels running commands explicitly before a bulk %s", (action) => {
+    render(
+      <BulkSessionActionsDialog
+        action={action}
+        targets={[
+          { ...targets[0], session: { ...targets[0].session, agentState: "running_command" } },
+          { ...targets[1], session: { ...targets[1].session, agentState: "waiting_command" } },
+        ]}
+        onApply={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const rows = within(screen.getByRole("list", { name: "Selected sessions" })).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("Command running");
+    expect(rows[0]).not.toHaveTextContent("Ready");
+    expect(rows[1]).toHaveTextContent("Ready");
+  });
+
   it("reports partial failure and retries only failed identities", async () => {
     const onApply = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("Identity changed")).mockResolvedValue(undefined);
     const onClose = vi.fn();

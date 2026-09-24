@@ -9,11 +9,14 @@ from typing import Literal
 from .tmux import Pane, Session, TmuxClient, TmuxError
 
 AgentStateName = Literal[
-    "working", "waiting_human", "waiting_command", "unknown", "other"
+    "working", "running_command", "waiting_human", "waiting_command", "unknown", "other"
 ]
 AgentType = Literal["claude", "codex", "copilot", "cursor", "grok"]
 COMMAND_WAIT_PATTERN = re.compile(
-    r"\bwaiting for (?:background terminals?|agents?)\b", re.IGNORECASE
+    r"^\s*(?:[•●✻✽✶✳✢\u2801-\u28ff]\s+)?waiting for "
+    r"(?P<kind>background terminals?|agents?)"
+    r"(?:\s+\([^\n]*\))?\s*$",
+    re.IGNORECASE,
 )
 # Claude prints settled/active transcript headlines with these symbols. Looking
 # only at the latest headline avoids treating an older wait banner as current.
@@ -30,7 +33,25 @@ CLAUDE_BACKGROUND_WAIT_PATTERN = re.compile(
 )
 CLAUDE_LEGACY_WAIT_PATTERN = re.compile(
     rf"^[{CLAUDE_HEADLINE_SYMBOLS}]\s+waiting for\s+"
-    r"(?:background terminals?|agents?)(?:\s+\([^\n]*\))?$",
+    r"(?P<kind>background terminals?|agents?)(?:\s+\([^\n]*\))?$",
+    re.IGNORECASE,
+)
+CLAUDE_SHELL_FOOTER_PATTERN = re.compile(
+    r"(?:^|·)\s*[1-9]\d*\s+shells?"
+    r"(?:,\s*[1-9]\d*\s+monitors?)?\s*(?=·|$)",
+    re.IGNORECASE,
+)
+CLAUDE_COMMAND_SUMMARY_PATTERN = re.compile(
+    r"^●\s+Running\s+[1-9]\d*\s+shell\s+commands?(?:…|\.\.\.)\s*$",
+    re.IGNORECASE,
+)
+CLAUDE_COMMAND_TOOL_PATTERN = re.compile(r"^●\s+(?:Bash|PowerShell)\(")
+CLAUDE_COMMAND_PROGRESS_PATTERN = re.compile(
+    r"^\s+⎿\s+Running(?:…|\.\.\.)(?:\s+\([^\n]*\))?\s*$"
+)
+CLAUDE_COMMAND_BACKGROUND_HINT_PATTERN = re.compile(
+    r"^\s+(?:⎿\s+)?\(ctrl\+[a-z](?:\s+ctrl\+[a-z])*"
+    r"(?:\s+\(twice\))?\s+to run in background\)\s*$",
     re.IGNORECASE,
 )
 CLAUDE_HEADLINE_WRAP_LINES = 4
@@ -128,10 +149,6 @@ def _rendered_lines(screen: str) -> list[str]:
     return lines
 
 
-def _tail(screen: str, lines: int) -> str:
-    return "\n".join(_rendered_lines(screen)[-lines:])
-
-
 def _activity_is_stale(pane: Pane, now: float | None) -> bool:
     age = max(0.0, (now if now is not None else time.time()) - pane.activity)
     return age > ACTIVITY_STALE_SECONDS
@@ -160,7 +177,12 @@ def _claude_background_work_state(screen: str) -> AgentState | None:
                 # Numbered agents and workflows are still executing even when
                 # the foreground Claude process is waiting for their result.
                 return AgentState("working", "Claude has active background work")
-            if CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline):
+            legacy_wait = CLAUDE_LEGACY_WAIT_PATTERN.fullmatch(headline)
+            if legacy_wait:
+                if legacy_wait.group("kind").casefold().startswith("background terminal"):
+                    return AgentState(
+                        "running_command", "Claude is waiting for a running terminal command"
+                    )
                 return AgentState(
                     "waiting_command", "Agent is waiting for background work"
                 )
@@ -253,6 +275,75 @@ def _claude_prompt_is_ready(screen: str) -> bool:
     )
 
 
+def _claude_has_background_shell(screen: str) -> bool:
+    # Claude's current input footer counts only pending/running background
+    # shells. A completed tool's "Running in the background" transcript text
+    # can remain visible long after exit and must not be used as this signal.
+    footer = _claude_footer(screen)
+    prompt = next(
+        (index for index in reversed(range(len(footer)))
+         if footer[index].lstrip().startswith(CLAUDE_PROMPT_MARKER)),
+        -1,
+    )
+    if prompt < 0:
+        return False
+    mode = next(
+        (index for index in reversed(range(prompt + 1, len(footer)))
+         if CLAUDE_INPUT_FOOTER_PATTERN.search(footer[index])),
+        -1,
+    )
+    if mode < 0:
+        return False
+    # Restrict matching to complete footer segments after the mode controls,
+    # excluding the typed prompt, transcript, and expandable agent roster.
+    controls = " ".join(line.strip() for line in footer[mode:])
+    return bool(CLAUDE_SHELL_FOOTER_PATTERN.search(controls))
+
+
+def _claude_has_foreground_command(screen: str) -> bool:
+    # The current turn must also be live: historical Running tool summaries can
+    # remain on screen at an idle prompt. Search only the newest tool/transcript
+    # block before that prompt, crossing neither another response nor a turn.
+    lines = _rendered_lines(screen)
+    prompt = next(
+        (index for index in reversed(range(len(lines)))
+         if lines[index].lstrip().startswith(CLAUDE_PROMPT_MARKER)),
+        -1,
+    )
+    if prompt < 0:
+        return False
+    for index in reversed(range(prompt)):
+        line = lines[index]
+        if line.lstrip().startswith(CLAUDE_PROMPT_MARKER):
+            return False
+        if CLAUDE_ACTIVE_STATUS_PATTERN.fullmatch(line):
+            continue
+        if not CLAUDE_ACTIVITY_HEADLINE_PATTERN.match(line):
+            continue
+        if CLAUDE_COMMAND_SUMMARY_PATTERN.fullmatch(line):
+            return True
+        if not CLAUDE_COMMAND_TOOL_PATTERN.match(line):
+            return False
+        return any(
+            CLAUDE_COMMAND_PROGRESS_PATTERN.fullmatch(row)
+            or CLAUDE_COMMAND_BACKGROUND_HINT_PATTERN.fullmatch(row)
+            for row in lines[index + 1 : prompt]
+        )
+    return False
+
+
+def _command_wait_state(screen: str) -> AgentState | None:
+    for line in reversed(_rendered_lines(screen)[-SCREEN_TAIL_LINES:]):
+        match = COMMAND_WAIT_PATTERN.fullmatch(line)
+        if match:
+            if match.group("kind").casefold().startswith("background terminal"):
+                return AgentState(
+                    "running_command", "Agent is waiting for a running terminal command"
+                )
+            return AgentState("waiting_command", "Agent is waiting for background work")
+    return None
+
+
 def _title_has_live_activity(command: str, title: str) -> bool:
     first = title.strip()[:1]
     return bool(
@@ -342,8 +433,9 @@ def _classify_cursor_state(
         return AgentState("waiting_human", "Cursor is idle at its input prompt")
     if _activity_is_stale(pane, now):
         return AgentState("unknown", "Agent activity indicator is stale")
-    if COMMAND_WAIT_PATTERN.search(_tail(visible_screen, SCREEN_TAIL_LINES)):
-        return AgentState("waiting_command", "Agent is waiting for background work")
+    command_wait = _command_wait_state(visible_screen)
+    if command_wait:
+        return command_wait
     return AgentState("working", "Cursor is running a turn")
 
 
@@ -368,6 +460,17 @@ def classify_agent_state(
     if copilot_pane:
         return _classify_copilot_state(pane, visible_screen, now)
 
+    if command == "claude" and visible_screen:
+        if _claude_has_background_shell(visible_screen):
+            return AgentState("running_command", "Claude has a running background shell")
+        if (
+            _claude_turn_is_live(visible_screen)
+            and _claude_has_foreground_command(visible_screen)
+        ):
+            if _activity_is_stale(pane, now):
+                return AgentState("unknown", "Agent activity indicator is stale")
+            return AgentState("running_command", "Claude is running a terminal command")
+
     title = pane.title.strip()
     if _title_has_live_activity(command, title):
         if command == "claude" and visible_screen:
@@ -377,14 +480,10 @@ def classify_agent_state(
                 return background_state
         if _activity_is_stale(pane, now):
             return AgentState("unknown", "Agent activity indicator is stale")
-        if visible_screen:
-            waiting_for_background_work = command != "claude" and bool(
-                COMMAND_WAIT_PATTERN.search(_tail(visible_screen, SCREEN_TAIL_LINES))
-            )
-            if waiting_for_background_work:
-                return AgentState(
-                    "waiting_command", "Agent is waiting for background work"
-                )
+        if visible_screen and command != "claude":
+            command_wait = _command_wait_state(visible_screen)
+            if command_wait:
+                return command_wait
         return AgentState("working", "Live agent activity indicator")
 
     if command == "claude" and title.startswith(CLAUDE_AMBIGUOUS_TITLE_FRAME):
@@ -424,7 +523,7 @@ def _needs_screen_capture(pane: Pane, state: AgentState) -> bool:
         return False
     command = pane.command.lower()
     return (
-        state.name == "working"
+        state.name in {"working", "running_command"}
         or _is_copilot_pane(command, pane.title)
         or command in CURSOR_COMMANDS
         or (command == "claude" and _title_has_live_activity(command, pane.title))

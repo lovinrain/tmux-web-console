@@ -870,6 +870,27 @@ describe("session classification", () => {
     },
   );
 
+  it("filters running commands separately from agents and background work", async () => {
+    window.history.replaceState({}, "", "/mux/?state=command-running");
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: "command", agentState: "running_command", agentStateReason: "Terminal command is running" }),
+      session({ name: "agent", id: "$2", agentState: "working" }),
+      session({ name: "background", id: "$3", agentState: "waiting_command" }),
+    ]);
+
+    const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "Open command" }))
+      .toHaveAccessibleDescription(/^Command running\b/);
+    expect(screen.queryByRole("button", { name: "Open agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open background" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Command running 1/ }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector(".state-badge.running_command"))
+      .toHaveTextContent("Command running");
+    expect(window.location.search).toBe("?state=running_command");
+  });
+
   it("saves an optional human title from the card editor", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(updateSessionTitle).mockResolvedValue("Muxdeck work");
@@ -1330,6 +1351,7 @@ describe("session classification", () => {
       session({ name: "working", id: "$3", agentState: "working", agentStateChangedAt: now - 5 }),
       session({ name: "needs-new", id: "$4", agentState: "waiting_human", agentStateChangedAt: now - 10 }),
       session({ name: "shell", id: "$5", agentState: "other", agentStateChangedAt: now - 1 }),
+      session({ name: "running-command", id: "$6", agentState: "running_command", agentStateChangedAt: now - 2 }),
     ]);
     const { container } = renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
@@ -1337,7 +1359,7 @@ describe("session classification", () => {
 
     const groupLabels = [...container.querySelectorAll(".state-group-header h3")]
       .map((heading) => heading.textContent);
-    expect(groupLabels).toEqual(["Needs input", "Working", "Background work", "Other"]);
+    expect(groupLabels).toEqual(["Needs input", "Working", "Command running", "Background work", "Other"]);
     expect(screen.getByRole("button", { name: /Background work 1/ })).toBeVisible();
     const needsInputOrder = [...container.querySelectorAll(".state-session-group.waiting_human .session-card-main")]
       .map((button) => button.getAttribute("aria-label"));
@@ -1347,12 +1369,13 @@ describe("session classification", () => {
     expect(container.querySelectorAll(".state-session-group")).toHaveLength(0);
     expect(openOrder()).toEqual([
       "Open shell",
+      "Open running-command",
       "Open working",
       "Open needs-new",
       "Open command",
       "Open needs-old",
     ]);
-    expect(screen.getAllByText(/^state /)).toHaveLength(5);
+    expect(screen.getAllByText(/^state /)).toHaveLength(6);
   });
 
   it("keeps visible state-change ages current without a new server event", async () => {

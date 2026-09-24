@@ -41,6 +41,7 @@ export interface RankedAddableSession {
 
 const STATE_LABELS: Record<AgentState, string> = {
   working: "Working",
+  running_command: "Command running",
   waiting_human: "Needs input",
   waiting_command: "Background work",
   unknown: "Unclear",
@@ -50,9 +51,10 @@ const STATE_LABELS: Record<AgentState, string> = {
 const STATE_PRIORITY: Record<AgentState, number> = {
   waiting_human: 0,
   working: 1,
-  waiting_command: 2,
-  other: 3,
-  unknown: 4,
+  running_command: 2,
+  waiting_command: 3,
+  other: 4,
+  unknown: 5,
 };
 
 function activePane(session: Session): Pane | undefined {

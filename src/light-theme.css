@@ -470,6 +470,14 @@ html[data-theme="light"] .state-group-header h3 {
   color: #535d51;
 }
 
+html[data-theme="light"] .state-session-group.running_command {
+  border-left-color: var(--blue);
+}
+
+html[data-theme="light"] .state-session-group.running_command .state-group-header h3 {
+  color: var(--blue);
+}
+
 html[data-theme="light"] .tag-session-group {
   border-left-color: var(--tag-color, #788077);
 }
@@ -657,6 +665,12 @@ html[data-theme="light"] .state-badge.waiting_command {
   color: #006d64;
   background: #def0ec;
   border-color: #abd2ca;
+}
+
+html[data-theme="light"] .state-badge.running_command {
+  color: var(--blue);
+  background: #e4eef8;
+  border-color: #a9c7e1;
 }
 
 html[data-theme="light"] .state-badge.unknown {
@@ -2303,6 +2317,7 @@ html[data-theme="light"] .workspace-tab-search-result-state {
 html[data-theme="light"] .workspace-tab-search-result-state.working { color: #426d0b; }
 html[data-theme="light"] .workspace-tab-search-result-state.waiting_human { color: #a35b08; }
 html[data-theme="light"] .workspace-tab-search-result-state.waiting_command { color: #087a70; }
+html[data-theme="light"] .workspace-tab-search-result-state.running_command { color: var(--blue); }
 html[data-theme="light"] .workspace-tab-search-result-state.other { color: #6556a3; }
 html[data-theme="light"] .workspace-tab-search-result-state.unavailable { color: #a3372f; }
 
@@ -2429,6 +2444,7 @@ html[data-theme="light"] .workspace-session-add-badges > span {
 html[data-theme="light"] .workspace-session-add-badges > span[data-agent-state="working"] { color: #426d0b; }
 html[data-theme="light"] .workspace-session-add-badges > span[data-agent-state="waiting_human"] { color: #a35b08; }
 html[data-theme="light"] .workspace-session-add-badges > span[data-agent-state="waiting_command"] { color: #087a70; }
+html[data-theme="light"] .workspace-session-add-badges > span[data-agent-state="running_command"] { color: var(--blue); }
 html[data-theme="light"] .workspace-session-add-badges > span[data-agent-state="other"] { color: #6556a3; }
 
 html[data-theme="light"] .workspace-session-add-actions button {
@@ -2829,6 +2845,10 @@ html[data-theme="light"] .workspace-session-status {
   color: #596356;
   background: #eeebe4;
   border-color: #cac3b7;
+}
+
+html[data-theme="light"] .workspace-session-status.running_command {
+  color: var(--blue);
 }
 
 html[data-theme="light"] .workspace-session-memo-queue {
@@ -5251,6 +5271,10 @@ html[data-theme="light"] .sp-action-error {
     border-color: #d5d1c4;
   }
 
+  html[data-theme="light"] .workspace-callback-item.running_command {
+    border-left-color: var(--blue);
+  }
+
   html[data-theme="light"] .workspace-callback-item.inherited {
     background: rgba(103, 126, 99, 0.07);
   }
@@ -5259,6 +5283,7 @@ html[data-theme="light"] .sp-action-error {
   html[data-theme="light"] .workspace-callback-session { color: #30392e; }
   html[data-theme="light"] .workspace-callback-session small { color: #71806d; }
   html[data-theme="light"] .workspace-callback-status { color: #71806d; }
+  html[data-theme="light"] .workspace-callback-status.running_command { color: var(--blue); }
   html[data-theme="light"] .workspace-callback-open,
   html[data-theme="light"] .workspace-callback-remove {
     color: #63705d;

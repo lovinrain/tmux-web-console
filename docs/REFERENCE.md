@@ -643,11 +643,15 @@ allowed, with library order breaking equally ranked matches.
 
 Muxdeck recognizes the live title signals emitted by current Claude Code, Codex,
 and Grok Build versions. An animated title means the agent has an active turn;
-for those panes, Muxdeck inspects the visible screen to distinguish foreground
-work from `Background work`. That state means the parent agent is parked on
-commands, background agents, or dynamic workflows: no human action is required,
-but the terminal remains available for steering input. Claude's latest
-column-zero activity headline is decisive across the visible pane, so an older
+for those panes, Muxdeck inspects the visible screen to distinguish agent work,
+`Command running`, and generic `Background work`. `Command running` uses blue
+for detected terminal commands launched by coding agents. Claude's current
+shell-count footer identifies active background commands even when the main
+agent accepts input; current shell-tool progress identifies foreground commands.
+Completed tool output and quoted command text do not count as active commands.
+Generic background waits remain a separate status. The terminal remains
+available for steering input. Claude's latest column-zero activity headline
+is decisive across the visible pane, so an older
 wait banner does not hide resumed work and a dense task panel does not hide the
 current wait. A numbered Claude wait for background agents or workflows remains
 `Working` even when the main agent accepts input. Update notices immediately
@@ -713,7 +717,8 @@ priority.
 
 Sort directions are fixed and visible in the badges: activity and state-change
 time use newest first; titles and tmux names use natural A-Z order (`cx2` before
-`cx10`); state uses Needs input, Working, Background work, Unclear, then Other.
+`cx10`); state uses Needs input, Working, Command running, Background work,
+Unclear, then Other.
 Grouping is independent of sorting. Enabling Group / State splits regular
 results into that attention-first state order, then applies the badge criteria
 inside each group. Group / Tags uses the fixed tag order followed by `Untagged`.
@@ -750,6 +755,9 @@ The canonical background-work filter is `state=waiting_command`. Muxdeck also
 accepts the more readable `state=background-work` and the older
 `state=command-wait`, then canonicalizes either alias without breaking saved
 links.
+
+The command-running filter is `state=running_command`; the readable alias
+`state=command-running` canonicalizes to the same value.
 
 Supported sort keys are `activity`, `state`, `state-change`, `title`, and
 `tmux-name`, listed from highest to lowest priority after `sort=`. Opening a
@@ -1088,9 +1096,9 @@ itself is intentionally temporary, while a completed move updates the URL and
 synchronizes the new order to a saved workspace.
 
 The side rail includes a `Non-working first` sort action. Each click performs a
-one-time stable partition of the real workspace order: every state other than
-`Working` stays first, `Working` sessions move after them, and tabs retain their
-relative positions inside those two partitions. Explicit tab groups remain
+one-time stable partition of the real workspace order: sessions other than
+`Working` and `Command running` stay first, active sessions move after them, and
+tabs retain their relative positions inside those two partitions. Explicit tab groups remain
 atomic, sort as blocks, and receive the same stable ordering among their own
 members. The resulting order updates the URL and synchronizes to a saved
 workspace; later status changes do not silently reshuffle tabs until clicked
@@ -1497,11 +1505,13 @@ need a human check later. It has two scopes: `Global` (the default) and
 `Workspace`. `Current` marks the active session, or the chooser can add another
 known session; each entry is deduplicated, ordered by the user's additions, and
 can be opened or marked reviewed with its check button. Live agent state is
-shown as `Working`, `Ready`, `Waiting`, or `Ended / unavailable`, so a completed
-session remains easy to find after the operator returns. `Clear ended` removes
+shown as `Working`, `Command running`, `Ready`, `Waiting`, or
+`Ended / unavailable`, so a completed session remains easy to find after the
+operator returns. `Clear ended` removes
 stale entries and `Clear all` empties the active queue.
 The card shows `ready/total` (for example, `3/8 ready`), counting entries labeled
-`Ready` or `Ready for review`. Hover for working-session and message counts.
+`Ready` or `Ready for review`. Running commands count as working, never ready.
+Hover for working-session and message counts.
 
 The global queue is the higher-level union of explicitly global entries and all
 workspace callback entries. A session registered in any workspace therefore

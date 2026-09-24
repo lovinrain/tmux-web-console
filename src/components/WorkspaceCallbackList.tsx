@@ -218,6 +218,7 @@ function callbackStatus(session: Session | undefined): {
   if (!session) return { label: "Ended / unavailable", tone: "ended", working: false };
   const state: AgentState = session.agentState;
   if (state === "working") return { label: "Working", tone: "working", working: true };
+  if (state === "running_command") return { label: "Command running", tone: "running_command", working: true };
   if (state === "waiting_human") return { label: "Ready for review", tone: "ready", working: false };
   if (state === "waiting_command") return { label: "Waiting", tone: "waiting", working: false };
   if (state === "unknown") return { label: "Status unknown", tone: "unknown", working: false };

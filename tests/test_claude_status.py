@@ -299,3 +299,136 @@ def test_footer_notices_do_not_turn_noncurrent_wait_text_into_activity(headline:
     )
 
     assert state.name == "waiting_human"
+
+
+@pytest.mark.parametrize("title", ["✳ Review changes", "build-host", "◐ Claude Code"])
+@pytest.mark.parametrize("activity", [900, 990])
+@pytest.mark.parametrize("count", ["1 shell", "12 shells", "2 shells, 1 monitor"])
+def test_running_background_shell_uses_current_footer(
+    title: str, activity: int, count: str
+):
+    # Claude 2.1.273–281 renders this count from pending/running background
+    # shell tasks, even after the foreground agent has returned to its prompt.
+    screen = input_screen(
+        transcript="● The command is running in the background.",
+        footer=f"{CLAUDE_MODE_FOOTER} · {count}",
+        panel=agent_panel(24, wrapped=True),
+    )
+
+    state = classify_agent_state(
+        replace(claude_pane(title), activity=activity), visible_screen=screen, now=1000
+    )
+
+    assert state.name == "running_command"
+    assert state.reason == "Claude has a running background shell"
+
+
+def test_background_shell_count_can_wrap_with_the_mode_footer():
+    screen = input_screen(
+        footer=f"{CLAUDE_MODE_FOOTER} ·\n  2\n  shells · ↓ to manage",
+        panel=agent_panel(6),
+    )
+
+    assert classify_agent_state(
+        replace(claude_pane(), activity=900), visible_screen=screen, now=1000
+    ).name == "running_command"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ["0 shells", "1 shell command", "1 shell completed", "2 background tasks",
+     "1 monitor", "2 local agents", "example: 1 shell", '"1 shell"'],
+)
+def test_other_footer_counts_are_not_running_shells(extra: str):
+    screen = input_screen(footer=f"{CLAUDE_MODE_FOOTER} · {extra}")
+
+    assert classify_agent_state(
+        claude_pane(), visible_screen=screen, now=1000
+    ).name == "waiting_human"
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        input_screen(transcript="● Bash(sleep 1)\n  ⎿ Running in the background (↓ to manage)"),
+        input_screen(prompt="❯ document 1 shell\n  · 2 shells"),
+        input_screen(panel="\n  ● main\n  ◯ helper › Explain · 1 shell"),
+        input_screen(transcript=input_screen(footer=f"{CLAUDE_MODE_FOOTER} · 1 shell")),
+    ],
+)
+def test_historical_or_quoted_shell_counts_do_not_override_idle_prompt(screen: str):
+    assert classify_agent_state(
+        claude_pane(), visible_screen=screen, now=1000
+    ).name == "waiting_human"
+
+
+@pytest.mark.parametrize("title", ["✳ Review changes", "build-host", "◐ Claude Code"])
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "● Running 1 shell command…",
+        "● Running 3 shell commands...",
+        "● Bash(sleep 10)\n  ⎿ Running… (5s)",
+        "● PowerShell(Start-Sleep 10)\n  ⎿ Running...",
+        "● Bash(make test)\n  ⎿ Test output\n  (ctrl+b ctrl+b (twice) to run in background)",
+    ],
+)
+def test_current_foreground_shell_is_distinct_from_agent_work(
+    title: str, transcript: str
+):
+    screen = input_screen(
+        transcript=transcript,
+        status=CLAUDE_RUNNING_STATUS,
+        prompt="❯ and summarize the test results",
+        panel=agent_panel(24),
+    )
+
+    state = classify_agent_state(claude_pane(title), visible_screen=screen, now=1000)
+
+    assert state.name == "running_command"
+    assert state.reason == "Claude is running a terminal command"
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "● Ran 1 shell command",
+        "● Running 0 shell commands…",
+        "● Explain Running 1 shell command…",
+        "● Example\n  ● Running 1 shell command…",
+        "● Bash(sleep 1)\n  ⎿ Running in the background (↓ to manage)",
+        "● Bash(echo done)\n  ⎿ Done",
+        "● Read(document.txt)\n  ⎿ Running…",
+        "● Running 1 shell command…\n● The command finished.",
+        "● Bash(sleep 1)\n  ⎿ Running…\n● Read(document.txt)",
+        "● Bash(sleep 1)\n  ⎿ Running…\n✻ Cooked for 1m",
+        "● Running 1 shell command…\n❯ previous turn",
+    ],
+)
+def test_foreground_command_requires_latest_active_tool_block(transcript: str):
+    screen = input_screen(transcript=transcript, status=CLAUDE_RUNNING_STATUS)
+
+    assert classify_agent_state(
+        claude_pane(), visible_screen=screen, now=1000
+    ).name == "working"
+
+
+@pytest.mark.parametrize(
+    "transcript", ["● Running 1 shell command…", "● Bash(sleep 1)\n  ⎿ Running…"]
+)
+def test_old_foreground_tool_is_not_running_at_an_idle_prompt(transcript: str):
+    screen = input_screen(transcript=transcript)
+
+    assert classify_agent_state(
+        claude_pane(), visible_screen=screen, now=1000
+    ).name == "waiting_human"
+
+
+def test_foreground_command_requires_fresh_turn_activity():
+    screen = input_screen(
+        transcript="● Running 1 shell command…", status=CLAUDE_RUNNING_STATUS
+    )
+
+    assert classify_agent_state(
+        replace(claude_pane(), activity=900), visible_screen=screen, now=1000
+    ).name == "unknown"

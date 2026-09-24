@@ -3634,8 +3634,16 @@ async def test_application_cleanup_cancels_active_session_sampler(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_state", "changed_state"),
+    [
+        (AgentState("working", "active"), AgentState("waiting_human", "needs input")),
+        (AgentState("working", "active"), AgentState("running_command", "command active")),
+        (AgentState("running_command", "command active"), AgentState("waiting_human", "command finished")),
+    ],
+)
 async def test_sessions_stream_sends_initial_and_changed_snapshots(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, initial_state, changed_state
 ):
     monkeypatch.setattr(app_module, "SESSION_STREAM_SAMPLE_SECONDS", 0.01)
     monkeypatch.setattr(app_module, "SESSION_STREAM_HEARTBEAT_SECONDS", 1)
@@ -3643,8 +3651,8 @@ async def test_sessions_stream_sends_initial_and_changed_snapshots(
     tmux = FakeTmux([[session]])
     detector = FakeAgentStateDetector(
         [
-            {session.name: AgentState("working", "active")},
-            {session.name: AgentState("waiting_human", "needs input")},
+            {session.name: initial_state},
+            {session.name: changed_state},
         ]
     )
     titles = SessionTitleStore(tmp_path / "titles.json")
@@ -3671,9 +3679,9 @@ async def test_sessions_stream_sends_initial_and_changed_snapshots(
 
         initial = event_payload(await read_sse_record(response))
         changed = event_payload(await read_sse_record(response))
-        assert initial["sessions"][0]["agentState"] == "working"
+        assert initial["sessions"][0]["agentState"] == initial_state.name
         assert initial["sessions"][0]["tags"] == ["review", "urgent"]
-        assert changed["sessions"][0]["agentState"] == "waiting_human"
+        assert changed["sessions"][0]["agentState"] == changed_state.name
         assert changed["sessions"][0]["tags"] == ["review", "urgent"]
         assert (
             changed["sessions"][0]["agentStateChangedAt"]

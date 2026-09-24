@@ -541,6 +541,14 @@ Responses contain both `note` and `notebook`.
 Creation launches the configured default shell; it does not automatically
 start a coding agent. `directory` must be an absolute accessible server path.
 
+Session snapshots include `agentState`, `agentStateReason`, and
+`agentStateChangedAt`. State values are `working`, `running_command`,
+`waiting_human`, `waiting_command`, `unknown`, and `other`. `running_command`
+identifies a coding agent's detected terminal command, including an active
+background shell while its main prompt accepts input. It is an active state,
+not a ready-for-review state. Session streams publish transitions into and out
+of it with the same snapshot fields.
+
 ### Metadata
 
 These routes require a live session and return the saved value:

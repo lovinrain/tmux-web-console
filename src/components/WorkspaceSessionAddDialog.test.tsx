@@ -108,6 +108,23 @@ describe("rankAddableSessions", () => {
     expect(rankAddableSessions(sessions, [], "needs input")[0]?.session.name)
       .toBe("release-review");
   });
+
+  it("ranks running commands before idle shells and can search their status label", () => {
+    const candidates = [
+      session("idle", { agentState: "other", activity: 100 }),
+      session("background", { agentState: "waiting_command", activity: 100 }),
+      session("terminal-task", { agentState: "running_command", activity: 1 }),
+      session("agent-task", { agentState: "working", activity: 1 }),
+      session("review", { agentState: "waiting_human", activity: 1 }),
+    ];
+
+    expect(rankAddableSessions(candidates, [], "").map(({ session: item }) => item.name))
+      .toEqual(["review", "agent-task", "terminal-task", "background", "idle"]);
+    expect(rankAddableSessions(candidates, [], "command running").map(({ session: item }) => item.name))
+      .toEqual(["terminal-task"]);
+    expect(rankAddableSessions(candidates, [], "background work").map(({ session: item }) => item.name))
+      .toEqual(["background"]);
+  });
 });
 
 function recovery(
@@ -165,6 +182,36 @@ describe("rankAddableEntries", () => {
 });
 
 describe("WorkspaceSessionAddDialog", () => {
+  it("shows a command-running badge and finds the session by that status", () => {
+    render(
+      <WorkspaceSessionAddDialog
+        sessions={[
+          session("terminal-task", { agentState: "running_command" }),
+          session("background-task", { agentState: "waiting_command" }),
+          session("idle", { agentState: "other" }),
+        ]}
+        openSessions={[]}
+        onAdd={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Add running sessions" });
+    expect(within(dialog).getByText("Command running"))
+      .toHaveAttribute("data-agent-state", "running_command");
+    expect(within(dialog).getByText("Background work"))
+      .toHaveAttribute("data-agent-state", "waiting_command");
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Find a session to add" }), {
+      target: { value: "command running" },
+    });
+
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: "Add terminal-task to workspace" }))
+      .toBeVisible();
+    expect(within(dialog).queryByText("background-task")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("idle")).not.toBeInTheDocument();
+  });
+
   it("lists missing shells alongside live ones and recreates them", async () => {
     const onRecreate = vi.fn();
     render(

@@ -100,6 +100,11 @@ describe("session dashboard URL state", () => {
     );
     expect(canonicalizeSessionDashboardSearch("?kind=GROK")).toBe("?kind=grok");
     expect(canonicalizeSessionDashboardSearch("?kind=COPILOT")).toBe("?kind=copilot");
+    for (const state of ["running_command", "command-running"]) {
+      expect(canonicalizeSessionDashboardSearch(`?state=${state}`)).toBe(
+        "?state=running_command",
+      );
+    }
     for (const state of ["waiting_command", "command-wait", "background-work"]) {
       expect(canonicalizeSessionDashboardSearch(`?state=${state}`)).toBe(
         "?state=waiting_command",
@@ -158,10 +163,11 @@ describe("ordered session sorting", () => {
       session({ name: "n-z", id: "$2", agentState: "waiting_human", customTitle: "Zulu" }),
       session({ name: "n-a", id: "$3", agentState: "waiting_human", customTitle: "Alpha" }),
       session({ name: "c-a", id: "$4", agentState: "waiting_command", customTitle: "Alpha" }),
+      session({ name: "r-a", id: "$5", agentState: "running_command", customTitle: "Alpha" }),
     ];
 
     expect(sortSessions(sessions, ["state", "title"])
-      .map((item) => item.name)).toEqual(["n-a", "n-z", "w-z", "c-a"]);
+      .map((item) => item.name)).toEqual(["n-a", "n-z", "w-z", "r-a", "c-a"]);
   });
 
   it("sorts title by human title with tmux-name fallback", () => {

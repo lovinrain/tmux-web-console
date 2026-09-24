@@ -53,7 +53,12 @@ export function BulkSessionActionsDialog({ action, targets, onApply, onClose }: 
         {targets.map((target) => <li key={target.name}>
           <strong>{target.session?.customTitle || target.name}</strong>
           {target.session?.customTitle && <code>{target.name}</code>}
-          <span>{results[target.name] || (ending && !target.session ? "Unavailable" : target.session?.agentState === "working" ? "Working" : "Ready")}</span>
+          <span>{results[target.name] || (
+            ending && !target.session ? "Unavailable"
+              : target.session?.agentState === "working" ? "Working"
+                : target.session?.agentState === "running_command" ? "Command running"
+                  : "Ready"
+          )}</span>
         </li>)}
       </ul>
     </>}

@@ -156,6 +156,7 @@ const DASHBOARD_QUERY_KEYS = [
 
 const STATE_LABELS: Record<AgentState, string> = {
   working: "Working",
+  running_command: "Command running",
   waiting_human: "Needs input",
   waiting_command: "Background work",
   unknown: "Unclear",
@@ -167,6 +168,7 @@ const STATE_FILTERS: SessionStateFilter[] = [
   "waiting_human",
   "waiting_command",
   "working",
+  "running_command",
   "unknown",
   "other",
 ];
@@ -809,7 +811,7 @@ export function SessionDashboard({
 
   const stateCounts = useMemo(() => activeSessions.reduce<Record<AgentState, number>>(
     (counts, session) => ({ ...counts, [session.agentState]: counts[session.agentState] + 1 }),
-    { working: 0, waiting_human: 0, waiting_command: 0, unknown: 0, other: 0 },
+    { working: 0, running_command: 0, waiting_human: 0, waiting_command: 0, unknown: 0, other: 0 },
   ), [activeSessions]);
 
   const sortVisibleSessions = useCallback(

@@ -143,6 +143,59 @@ describe("WorkspaceCallbackList", () => {
     expect(onChange).toHaveBeenLastCalledWith(["agent-one", "agent-two"]);
   });
 
+  it("counts a running terminal command as working and gives it a distinct status", () => {
+    const props = {
+      sessionName: "terminal-task",
+      workspaceId: "workspace-one",
+      callbackSessions: ["terminal-task", "agent-one", "agent-two", "agent-three"],
+      onChange: vi.fn(async () => undefined),
+      onSelectSession: vi.fn(),
+    };
+    const otherSessions = [
+      session("agent-one", "working"),
+      session("agent-two", "waiting_human"),
+      session("agent-three", "waiting_command"),
+    ];
+    const view = renderWithTheme(
+      <WorkspaceCallbackList
+        {...props}
+        sessions={[session("terminal-task", "running_command"), ...otherSessions]}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Show callback list" });
+    expect(toggle).toHaveAccessibleDescription("1 ready out of 4 sessions; 2 working");
+    expect(toggle).toHaveTextContent("1/4 ready");
+    fireEvent.click(toggle);
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(within(panel).getByText("2 working")).toBeVisible();
+    const commandRow = within(panel).getByRole("button", { name: "Open terminal-task" })
+      .closest("li")!;
+    expect(commandRow).toHaveClass("running_command");
+    expect(commandRow).not.toHaveClass("ready");
+    expect(within(commandRow).getByText("Command running", { selector: ".workspace-callback-status" }))
+      .toHaveClass("running_command");
+    expect(commandRow.querySelector(".workspace-callback-status-dot"))
+      .toHaveClass("running_command");
+    const waitingRow = within(panel).getByRole("button", { name: "Open agent-three" })
+      .closest("li")!;
+    expect(waitingRow).toHaveClass("waiting");
+    expect(within(waitingRow).getByText("Waiting", { selector: ".workspace-callback-status" }))
+      .toBeVisible();
+
+    view.rerender(
+      <WorkspaceCallbackList
+        {...props}
+        sessions={[session("terminal-task", "other"), ...otherSessions]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Hide callback list" }))
+      .toHaveAccessibleDescription("2 ready out of 4 sessions; 1 working");
+    expect(within(screen.getByRole("dialog", { name: "Callback list" }))
+      .getByRole("button", { name: "Open terminal-task" }).closest("li"))
+      .toHaveClass("ready");
+  });
+
   it("persists pin state and keeps the panel open across session changes", () => {
     const view = renderList(["agent-one"]);
     fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));

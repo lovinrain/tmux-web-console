@@ -43,6 +43,7 @@ export interface SessionDashboardRouteState {
 export const SESSION_STATE_ORDER: readonly AgentState[] = [
   "waiting_human",
   "working",
+  "running_command",
   "waiting_command",
   "unknown",
   "other",
@@ -156,6 +157,7 @@ function parseState(value: string | null): SessionStateFilter {
   const normalized = value.toLowerCase();
   const aliases: Record<string, SessionStateFilter> = {
     "needs-input": "waiting_human",
+    "command-running": "running_command",
     "command-wait": "waiting_command",
     "background-work": "waiting_command",
     unclear: "unknown",

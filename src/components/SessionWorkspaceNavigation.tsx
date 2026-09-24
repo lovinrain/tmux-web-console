@@ -288,6 +288,7 @@ function clampDesktopTabRailWidthForViewport(width: number, maxWidth: number): n
 
 const STATE_LABELS: Record<AgentState, string> = {
   working: "Working",
+  running_command: "Command running",
   waiting_human: "Needs input",
   waiting_command: "Background work",
   unknown: "Unclear",

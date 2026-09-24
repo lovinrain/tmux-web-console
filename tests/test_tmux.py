@@ -950,7 +950,7 @@ def test_agent_state_distinguishes_work_input_and_command_waits():
             visible_screen="Waiting for background terminal (2m; esc to interrupt)",
             now=1000,
         ).name
-        == "waiting_command"
+        == "running_command"
     )
     assert (
         classify_agent_state(
@@ -961,6 +961,53 @@ def test_agent_state_distinguishes_work_input_and_command_waits():
     assert (
         classify_agent_state(agent_pane(title="repo"), now=1000).name == "waiting_human"
     )
+
+
+@pytest.mark.parametrize("command", ["codex", "grok", "agent", "cursor-agent"])
+def test_explicit_terminal_wait_is_separate_from_agent_wait(command: str):
+    pane = agent_pane(command=command, title="⠸ repository")
+
+    def screen(message: str) -> str:
+        if command in {"agent", "cursor-agent"}:
+            return f"{message}\n→ Add a follow-up · ctrl+c to stop"
+        return message
+
+    assert classify_agent_state(
+        pane,
+        visible_screen=screen("• Waiting for background terminal (2m · esc to interrupt)"),
+        now=1000,
+    ).name == "running_command"
+    assert classify_agent_state(
+        pane, visible_screen=screen("Waiting for agents"), now=1000
+    ).name == "waiting_command"
+    assert classify_agent_state(
+        replace(pane, activity=900),
+        visible_screen=screen("Waiting for background terminal"),
+        now=1000,
+    ).name == "unknown"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        'The docs say "Waiting for background terminal".',
+        "Waiting for background terminal is an example",
+        "• Waited for background terminal",
+        "• Ran sleep 10",
+    ],
+)
+def test_terminal_wait_ignores_completed_or_quoted_output(message: str):
+    assert classify_agent_state(
+        agent_pane(title="⠸ repository"), visible_screen=message, now=1000
+    ).name == "working"
+
+
+def test_terminal_wait_does_not_classify_a_plain_shell_as_agent_activity():
+    assert classify_agent_state(
+        agent_pane(command="bash"),
+        visible_screen="Waiting for background terminal",
+        now=1000,
+    ).name == "other"
 
 
 def test_claude_circle_spinner_titles_are_working_signals():
@@ -984,7 +1031,7 @@ def test_claude_circle_spinner_titles_are_working_signals():
             visible_screen="\u273b Waiting for background terminal",
             now=1000,
         ).name
-        == "waiting_command"
+        == "running_command"
     )
     assert (
         classify_agent_state(replace(working, activity=900), now=1000).name == "unknown"
@@ -1074,8 +1121,8 @@ def test_claude_turn_survives_a_follow_up_typed_mid_turn():
         now=1000,
     )
 
-    assert state.name == "working"
-    assert state.reason == "Claude is running a turn"
+    assert state.name == "running_command"
+    assert state.reason == "Claude is running a terminal command"
 
 
 def test_claude_ambiguous_title_without_an_active_footer_is_waiting_for_input():
@@ -1306,7 +1353,7 @@ def test_grok_agent_state_follows_its_tmux_title_signals():
             visible_screen="Waiting for background terminal",
             now=1000,
         ).name
-        == "waiting_command"
+        == "running_command"
     )
     assert (
         classify_agent_state(replace(working, activity=900), now=1000).name == "unknown"
@@ -1479,26 +1526,22 @@ def test_dead_copilot_pane_keeps_the_existing_exited_state():
     assert state.reason == "The active pane has exited"
 
 
-CURSOR_RUNNING_SCREEN = "\n".join(
-    [
-        '    Grepped "sample_module" in .',
-        " \u2818\u2823 Running  30.77k tokens",
-        "",
-        "  \u2192 Add a follow-up                                 ctrl+c to stop",
-        "",
-        "  Opus 5 1M Max Fast \u00b7 MAX \u00b7 13.5%                  Run Everything",
-        "  ~/work \u00b7 main",
-    ]
+CURSOR_RUNNING_SCREEN = (
+    '    Grepped "sample_module" in .\n'
+    " \u2818\u2823 Running  30.77k tokens\n"
+    "\n"
+    "  \u2192 Add a follow-up                                 ctrl+c to stop\n"
+    "\n"
+    "  Opus 5 1M Max Fast \u00b7 MAX \u00b7 13.5%                  Run Everything\n"
+    "  ~/work \u00b7 main"
 )
-CURSOR_IDLE_SCREEN = "\n".join(
-    [
-        "    reply with only the word pong",
-        "    pong",
-        "",
-        "  \u2192 Add a follow-up",
-        "  Opus 5 1M Max Fast \u00b7 MAX \u00b7 6.5%",
-        "  ~/work \u00b7 main",
-    ]
+CURSOR_IDLE_SCREEN = (
+    "    reply with only the word pong\n"
+    "    pong\n"
+    "\n"
+    "  \u2192 Add a follow-up\n"
+    "  Opus 5 1M Max Fast \u00b7 MAX \u00b7 6.5%\n"
+    "  ~/work \u00b7 main"
 )
 
 
@@ -1542,7 +1585,7 @@ def test_cursor_agent_state_comes_from_the_footer_interrupt_hint():
         classify_agent_state(
             cursor_pane(), visible_screen=waiting_screen, now=1000
         ).name
-        == "waiting_command"
+        == "running_command"
     )
 
 
@@ -1758,7 +1801,7 @@ async def test_detect_sessions_captures_only_working_grok_panes():
         cast(TmuxClient, tmux), sessions
     )
 
-    assert states["grok-working"].name == "waiting_command"
+    assert states["grok-working"].name == "running_command"
     assert states["grok-idle"].name == "waiting_human"
     assert tmux.captured == [working.id]
 

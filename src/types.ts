@@ -65,6 +65,7 @@ export interface Session {
 
 export type AgentState =
   | "working"
+  | "running_command"
   | "waiting_human"
   | "waiting_command"
   | "unknown"
