@@ -2816,14 +2816,17 @@ describe("ConsoleScreen session identity", () => {
 
   it("runs session commands dispatched from the configurable shortcut window", async () => {
     vi.mocked(listSessions).mockResolvedValue([session("Display alias")]);
-    renderWithTheme(
-      <ConsoleScreen
-        sessionName="test"
-        onBack={vi.fn()}
-        onSessionRenamed={vi.fn()}
-        onSessionTerminated={vi.fn(async () => {})}
-      />,
-    );
+    // Settle the async session lookup and its shortcut listener before dispatch.
+    await act(async () => {
+      renderWithTheme(
+        <ConsoleScreen
+          sessionName="test"
+          onBack={vi.fn()}
+          onSessionRenamed={vi.fn()}
+          onSessionTerminated={vi.fn(async () => {})}
+        />,
+      );
+    });
 
     await screen.findByRole("heading", { name: "Display alias" });
     act(() => dispatchShortcutAction("session-rename"));
