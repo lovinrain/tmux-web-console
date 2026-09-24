@@ -460,9 +460,10 @@ outside it remain inaccessible. Text preview remains capped at 1 MiB. Signature-
 JPEG, GIF, WebP, AVIF, BMP, and ICO images render in a fitted viewer up to 25 MiB
 and link to the same protected inline stream for full-size viewing. SVG and
 other active or unsupported formats are never embedded. HTML/HTM files expose
-an `Open webpage` action and an interactive hosted new-tab view, also available
-from absolute HTML paths in the terminal. Inline scripts, event handlers,
-neighboring JavaScript/CSS files, ES module imports, images, fonts, and local
+an `Open webpage` action and an interactive hosted new-tab view. Terminal HTML
+paths first open in the regular file browser, where this action is available.
+Inline scripts, event handlers, neighboring JavaScript/CSS files, ES module
+imports, images, fonts, and local
 JSON requests work. Relative paths resolve inside the HTML file's directory
 tree. Common library CDNs (jsDelivr, cdnjs, unpkg, esm.sh, Plotly, and D3) and
 Google Fonts are allowed; other external network requests remain blocked.
@@ -549,8 +550,9 @@ reloading the panel, and is neither uploaded to the backend nor shared with a
 different browser profile.
 
 On desktop, xterm also detects terminal-output candidates ending in `.md`,
-`.pdf`, `.png`, `.txt`, `.json`, or `.csv`. It understands absolute paths, `~/` paths,
-CWD-relative paths, quoted paths with spaces, and shell-escaped spaces; common
+`.pdf`, `.png`, `.txt`, `.json`, `.csv`, `.svg`, `.html`, or `.htm`.
+It understands absolute paths, `~/` paths, CWD-relative paths, quoted paths with
+spaces, and shell-escaped spaces; common
 trailing punctuation and
 `:line` suffixes are excluded from the target. A plain click remains available
 to the terminal application. `Ctrl`+click on Windows/Linux or `Cmd`+click on

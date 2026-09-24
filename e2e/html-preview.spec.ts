@@ -14,6 +14,7 @@ const reviewDirectory = "/tmp/muxdeck-interactive-html-review";
 const cdnScript = "https://cdn.jsdelivr.net/npm/muxdeck-preview-fixture/report.js";
 let fixtureDirectory = "";
 let previewEndpoint = "";
+let previewPaneId = "";
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
@@ -74,6 +75,7 @@ button { padding: 10px 16px; margin-right: 8px; }
   const [sessionId, paneId] = execFileSync("tmux", [
     ...tmux, "list-panes", "-t", `=${sessionName}`, "-F", "#{session_id}:#{pane_id}",
   ], { encoding: "utf8" }).trim().split(":");
+  previewPaneId = paneId;
   previewEndpoint = `/mux/api/sessions/${sessionName}/files/html?${new URLSearchParams({
     sessionId, paneId, path: "report/report.html",
   })}`;
@@ -168,16 +170,74 @@ async function expectConsoleIsolation(page: Page, context: BrowserContext): Prom
   expect(escapedRequests).toEqual([]);
 }
 
-test("Open webpage runs inline, local, module, and CDN scripts in an isolated tab", async ({ page, context }) => {
+test("absolute HTML terminal paths open in Files before the explicit Open webpage action", async ({ page, context }) => {
   await page.goto(`/mux/session/${sessionName}?tab=${sessionName}`);
   await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
-  await page.getByRole("button", { name: `Browse files in ${fixtureDirectory}`, exact: true }).click();
+  await page.evaluate(() => {
+    const terminalFrames: number[][] = [];
+    const nativeSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function send(data) {
+      if (this.url.includes("/ws/terminal")) {
+        if (data instanceof ArrayBuffer) {
+          terminalFrames.push([...new Uint8Array(data)]);
+        } else if (ArrayBuffer.isView(data)) {
+          terminalFrames.push([...new Uint8Array(data.buffer, data.byteOffset, data.byteLength)]);
+        }
+      }
+      return nativeSend.call(this, data);
+    };
+    Object.defineProperty(window, "__muxdeckHtmlLinkTerminalFrames", { value: terminalFrames });
+  });
+
+  const absolutePath = join(fixtureDirectory, "report", "report.html");
+  execFileSync("tmux", [
+    ...tmux, "send-keys", "-t", previewPaneId, "-l",
+    `printf '\\033[2J\\033[H\\033[?1000h%s\\n' '${absolutePath}'`,
+  ]);
+  execFileSync("tmux", [...tmux, "send-keys", "-t", previewPaneId, "Enter"]);
+  await expect.poll(() => execFileSync("tmux", [
+    ...tmux, "capture-pane", "-p", "-t", previewPaneId,
+  ], { encoding: "utf8" })).toContain(absolutePath);
+
+  const [columns, rows] = execFileSync("tmux", [
+    ...tmux, "display-message", "-p", "-t", previewPaneId, "#{pane_width}:#{pane_height}",
+  ], { encoding: "utf8" }).trim().split(":").map(Number);
+  const screenBox = await page.locator(".terminal-host .xterm-screen").boundingBox();
+  expect(screenBox).not.toBeNull();
+  const linkX = screenBox!.x + (screenBox!.width / columns * 5);
+  const linkY = screenBox!.y + (screenBox!.height / rows / 2);
+  await page.mouse.move(linkX, linkY);
+  await expect(page.locator(".terminal-host .xterm")).toHaveAttribute(
+    "title", `Ctrl+click to preview ${absolutePath}`,
+  );
+
+  await page.mouse.click(linkX, linkY);
   const browser = page.getByRole("dialog", { name: "Files", exact: true });
-  await browser.getByRole("button", { name: "Folder report", exact: true }).click();
-  await browser.getByRole("button", { name: "File report.html", exact: true }).click();
+  await expect(browser).toBeHidden();
+  expect(context.pages()).toHaveLength(1);
+  const terminalFrames = () => page.evaluate(() => (
+    window as Window & { __muxdeckHtmlLinkTerminalFrames: number[][] }
+  ).__muxdeckHtmlLinkTerminalFrames);
+  expect((await terminalFrames()).length).toBeGreaterThan(0);
+
+  // The plain click reaches the disposable shell with mouse reporting enabled.
+  // Clear that input while preserving the path painted in the first row.
+  execFileSync("tmux", [...tmux, "send-keys", "-t", previewPaneId, "C-c"]);
+  await page.mouse.move(screenBox!.x + screenBox!.width - 8, linkY);
+  await page.mouse.move(linkX, linkY);
+  await page.keyboard.down("Control");
+  const framesBeforeClick = (await terminalFrames()).length;
+  await page.mouse.click(linkX, linkY);
+  await page.keyboard.up("Control");
+  await expect(browser).toBeVisible();
+  await expect(browser.getByLabel("File or directory path"))
+    .toHaveValue(join(fixtureDirectory, "report"));
+  expect((await terminalFrames()).slice(framesBeforeClick)).toEqual([]);
+  expect(context.pages()).toHaveLength(1);
   const open = browser.getByRole("link", { name: "Open report.html as webpage", exact: true });
   await expect(open).toHaveAttribute("target", "_blank");
   await expect(open).toHaveAttribute("rel", "noopener noreferrer");
+  await page.screenshot({ path: join(reviewDirectory, "terminal-html-file-panel.png") });
   const opened = context.waitForEvent("page");
   await open.click();
   const preview = await opened;
@@ -190,7 +250,7 @@ test("direct HTML links require authentication and issue a cookie-free, director
   const anonymous = await playwright.request.newContext({ baseURL });
   try {
     expect((await anonymous.get(previewEndpoint)).status()).toBe(401);
-    // This is the endpoint also used when opening an absolute HTML terminal link.
+    // The file panel's explicit Open webpage action uses this endpoint.
     await page.goto(previewEndpoint);
     await expectInteractivePreview(page);
     await page.screenshot({ path: join(reviewDirectory, "direct-link-interactive-preview.png") });

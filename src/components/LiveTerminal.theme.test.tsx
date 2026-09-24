@@ -574,17 +574,19 @@ describe("LiveTerminal web links", () => {
     expect(onOpenFilePath).toHaveBeenLastCalledWith("/work/report.CSV");
   });
 
-  it("opens absolute HTML paths on a plain click while keeping relative files conservative", () => {
-    vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
+  it.each([
+    { platform: "Linux x86_64", modifier: "ctrlKey", label: "Ctrl" },
+    { platform: "MacIntel", modifier: "metaKey", label: "Cmd" },
+  ])("previews absolute and relative HTML files with $label-click on $platform", ({ platform, modifier, label }) => {
+    vi.spyOn(window.navigator, "platform", "get").mockReturnValue(platform);
     const onOpenFilePath = vi.fn();
-    const onOpenHtmlPath = vi.fn();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
     render(
       <LiveTerminal
         session="agent"
         ignoreSize={false}
         theme="dark"
         onOpenFilePath={onOpenFilePath}
-        onOpenHtmlPath={onOpenHtmlPath}
         {...callbacks}
       />,
     );
@@ -601,15 +603,17 @@ describe("LiveTerminal web links", () => {
     absolute?.hover?.(new MouseEvent("mousemove"), absolute.text);
     expect(terminal.element).toHaveAttribute(
       "title",
-      "Click to open /work/report.html as a webpage",
+      `${label}+click to preview /work/report.html`,
     );
     absolute?.activate(new MouseEvent("mouseup", { button: 0 }), absolute.text);
-    expect(onOpenHtmlPath).toHaveBeenCalledWith("/work/report.html");
     expect(onOpenFilePath).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
 
     const socket = socketMocks.instances[0];
     socket.emit("open");
     socket.send.mockClear();
+    terminal.element?.addEventListener("mousedown", () => terminal.emitData("mouse-down"));
+    terminal.element?.addEventListener("mouseup", () => terminal.emitData("mouse-up"));
     absolute?.hover?.(new MouseEvent("mousemove"), absolute.text);
     terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.dispatchEvent(
       new MouseEvent("mousedown", {
@@ -617,6 +621,7 @@ describe("LiveTerminal web links", () => {
         cancelable: true,
         button: 0,
         buttons: 1,
+        [modifier]: true,
       }),
     );
     terminal.element?.querySelector<HTMLElement>(".xterm-screen")?.dispatchEvent(
@@ -624,16 +629,19 @@ describe("LiveTerminal web links", () => {
         bubbles: true,
         cancelable: true,
         button: 0,
+        [modifier]: true,
       }),
     );
-    expect(onOpenHtmlPath).toHaveBeenCalledWith("/work/report.html");
+    expect(onOpenFilePath).toHaveBeenCalledExactlyOnceWith("/work/report.html");
+    expect(open).not.toHaveBeenCalled();
     expect(socket.send).not.toHaveBeenCalled();
 
     const relative = links?.[1];
+    onOpenFilePath.mockClear();
     relative?.activate(new MouseEvent("mouseup", { button: 0 }), relative.text);
     expect(onOpenFilePath).not.toHaveBeenCalled();
     relative?.activate(
-      new MouseEvent("mouseup", { button: 0, ctrlKey: true }),
+      new MouseEvent("mouseup", { button: 0, [modifier]: true }),
       relative.text,
     );
     expect(onOpenFilePath).toHaveBeenCalledWith("docs/index.htm");

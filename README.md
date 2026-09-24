@@ -236,14 +236,13 @@ For frontend development, run `npm run dev`. Vite serves
   the mode is local to the open browser panel and resets when it is closed or
   pointed at another session.
 - On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.json`,
-  `.csv`, `.html`, or `.htm` is also linkified.
+  `.csv`, `.svg`, `.html`, or `.htm` is also linkified.
   `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
   in the floating file browser; a relative path is resolved from the live pane
   CWD, while absolute and `~/` paths keep their server meaning. Plain clicks
-  remain terminal input for ordinary files. A plain click on an absolute HTML
-  path opens the sandboxed hosted document in a new tab; HTTP(S) links keep
-  opening as web links, and no filesystem request is made until the link is
-  activated.
+  remain terminal input. For HTML files, use `Open webpage` in the file browser
+  to open the sandboxed hosted document in a new tab. HTTP(S) links keep opening
+  as web links, and no filesystem request is made until the link is activated.
 - Agent activity is inferred conservatively from tmux-visible signals.
   Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
 - Muxdeck records live tmux reconstruction metadata in a private SQLite registry.

@@ -100,11 +100,6 @@ function validPathCandidate(path: string): boolean {
   return name.length > extension.length;
 }
 
-/** True when a detected path can be opened as a hosted HTML document. */
-export function isHtmlFilePath(path: string): boolean {
-  return validPathCandidate(path) && /\.html?$/i.test(path);
-}
-
 export function findTerminalFilePaths(text: string): TerminalFilePathMatch[] {
   const matches: TerminalFilePathMatch[] = [];
   FILE_EXTENSION.lastIndex = 0;

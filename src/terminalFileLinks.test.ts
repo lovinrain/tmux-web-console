@@ -2,7 +2,6 @@ import type { IBufferCell, IBufferLine, ILink, Terminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vitest";
 import {
   findTerminalFilePaths,
-  isHtmlFilePath,
   resolveTerminalFileLinkPath,
   TerminalFileLinkProvider,
 } from "./terminalFileLinks";
@@ -90,14 +89,6 @@ describe("terminal file path resolution", () => {
     expect(resolveTerminalFileLinkPath("https://example.test/a.png", "/work")).toBeNull();
     expect(resolveTerminalFileLinkPath("~other/notes.txt", "/work")).toBeNull();
     expect(resolveTerminalFileLinkPath("notes.txt", "relative/work")).toBeNull();
-  });
-
-  it("identifies only valid HTML file paths for hosted previews", () => {
-    expect(isHtmlFilePath("/tmp/report.html")).toBe(true);
-    expect(isHtmlFilePath("docs/index.HTM")).toBe(true);
-    expect(isHtmlFilePath("https://example.test/index.html")).toBe(false);
-    expect(isHtmlFilePath(".html")).toBe(false);
-    expect(isHtmlFilePath("report.txt")).toBe(false);
   });
 });
 

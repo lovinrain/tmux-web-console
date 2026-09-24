@@ -16,7 +16,6 @@ import {
   deleteQueuedMessage,
   listSessions,
   renameSession,
-  sessionFileHtmlUrl,
   uploadSessionAttachment,
   updateSessionDetails,
   updateSessionWorkspacePin,
@@ -62,7 +61,7 @@ import {
   type OverflowCandidate,
 } from "../headerOverflow";
 import { paneCommandKind } from "../sessionDashboardModel";
-import { isHtmlFilePath, resolveTerminalFileLinkPath } from "../terminalFileLinks";
+import { resolveTerminalFileLinkPath } from "../terminalFileLinks";
 import {
   SHORTCUT_ACTION_EVENT,
   directShortcutAria,
@@ -821,31 +820,6 @@ export function ConsoleScreen({
     fileOpenRequestIdRef.current += 1;
     setFileOpenRequest({ id: fileOpenRequestIdRef.current, path });
     setFilesOpen(true);
-  }, [mobileLayout, pane, session, workspaceOverlayOpen]);
-
-  const openTerminalHtmlPath = useCallback((candidate: string) => {
-    if (
-      mobileLayout
-      || workspaceOverlayOpen
-      || !pane?.path
-      || !session
-      || !candidate.startsWith("/")
-    ) return;
-    const path = resolveTerminalFileLinkPath(candidate, pane.path);
-    if (!path || !path.startsWith("/") || !isHtmlFilePath(path)) return;
-    const separator = path.lastIndexOf("/");
-    const root = separator > 0 ? path.slice(0, separator) : "/";
-    const relativePath = path.slice(separator + 1);
-    const url = sessionFileHtmlUrl(
-      {
-        session: session.name,
-        sessionId: session.id,
-        paneId: pane.id,
-        root,
-      },
-      relativePath,
-    );
-    window.open(url, "_blank", "noopener,noreferrer");
   }, [mobileLayout, pane, session, workspaceOverlayOpen]);
 
   const copyNewSession = useCallback(async (placement: CopySessionPlacement = "sibling") => {
@@ -2542,7 +2516,6 @@ export function ConsoleScreen({
           theme={theme}
           onUploadAttachment={uploadAttachment}
           onOpenFilePath={mobileLayout ? undefined : openTerminalFilePath}
-          onOpenHtmlPath={mobileLayout ? undefined : openTerminalHtmlPath}
           onStateChange={stateChange}
           onPaneChange={paneChange}
         />
