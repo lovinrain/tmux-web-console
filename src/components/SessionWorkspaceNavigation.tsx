@@ -58,7 +58,10 @@ import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
 import {
   expandWorkspaceTabSelection,
   MAX_WORKSPACE_TAB_GROUPS,
+  moveWorkspaceSession,
   moveWorkspaceSessions,
+  workspaceSessionDepth,
+  type WorkspaceSessionParents,
   type WorkspaceTabGroup,
 } from "../workspaceState";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
@@ -81,6 +84,7 @@ export interface SessionWorkspaceNavigationProps {
   openSessions: string[];
   recentSessions: string[];
   groups?: WorkspaceTabGroup[];
+  sessionParents?: WorkspaceSessionParents;
   separators?: string[];
   separatorsBefore?: string[];
   separatorsBusy?: boolean;
@@ -166,6 +170,7 @@ export const COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH = 176;
 const DESKTOP_TAB_RAIL_MAIN_CONTENT_MIN_WIDTH = 360;
 const DESKTOP_TAB_RAIL_KEYBOARD_STEP = 8;
 const DESKTOP_TAB_RAIL_KEYBOARD_LARGE_STEP = 32;
+const EMPTY_SESSION_PARENTS: WorkspaceSessionParents = {};
 
 export function clampDesktopTabRailWidth(width: number): number {
   if (!Number.isFinite(width)) return DEFAULT_DESKTOP_TAB_RAIL_WIDTH;
@@ -397,6 +402,35 @@ function paneLabel(pane?: Pane): string {
 function tabTitle(sessionName: string, sessionsByName: Map<string, Session>): string {
   const session = sessionsByName.get(sessionName);
   return session ? sessionDisplayTitle(session) : sessionName;
+}
+
+interface SessionTreeContext {
+  depth: number;
+  parentName: string;
+  parentTitle: string;
+  description: string;
+}
+
+function sessionTreeContext(
+  sessionName: string,
+  parents: WorkspaceSessionParents,
+  sessionsByName: Map<string, Session>,
+): SessionTreeContext | undefined {
+  const depth = workspaceSessionDepth(sessionName, parents);
+  const parentName = Object.hasOwn(parents, sessionName) ? parents[sessionName] : undefined;
+  if (!depth || !parentName) return undefined;
+  const parentTitle = tabTitle(parentName, sessionsByName);
+  const parentLabel = parentTitle === parentName ? parentTitle : `${parentTitle} (${parentName})`;
+  return {
+    depth,
+    parentName,
+    parentTitle,
+    description: `Child of ${parentLabel}. Nesting level ${depth}.`,
+  };
+}
+
+function sessionTreeStyle(tree?: SessionTreeContext): CSSProperties | undefined {
+  return tree ? { "--workspace-session-depth": tree.depth } as CSSProperties : undefined;
 }
 
 interface WorkspaceCommandContext {
@@ -811,16 +845,35 @@ function tabMoveResultIndex(
   groups: readonly WorkspaceTabGroup[],
   sessionName: string,
   targetIndex: number,
+  parents?: WorkspaceSessionParents,
 ): number {
-  const currentIndex = openSessions.indexOf(sessionName);
-  const targetSession = openSessions[targetIndex];
-  if (currentIndex < 0 || !targetSession) return targetIndex;
-  const sourceGroup = groups.find((group) => group.tabs.includes(sessionName));
-  const targetGroup = groups.find((group) => group.tabs.includes(targetSession));
-  if (sourceGroup || !targetGroup) return targetIndex;
-  return currentIndex < targetIndex
-    ? openSessions.indexOf(targetGroup.tabs.at(-1)!)
-    : openSessions.indexOf(targetGroup.tabs[0]);
+  return moveWorkspaceSession({
+    openSessions: [...openSessions],
+    recentSessions: [],
+    groups: [...groups],
+    parents,
+  }, sessionName, targetIndex).openSessions.indexOf(sessionName);
+}
+
+function tabMoveTargetIndex(
+  openSessions: readonly string[],
+  group: WorkspaceTabGroup | undefined,
+  parents: WorkspaceSessionParents,
+  sessionName: string,
+  direction: -1 | 1,
+): number {
+  const parentOf = (name: string) => Object.hasOwn(parents, name) ? parents[name] : undefined;
+  const parent = parentOf(sessionName);
+  for (
+    let index = openSessions.indexOf(sessionName) + direction;
+    index >= 0 && index < openSessions.length;
+    index += direction
+  ) {
+    const candidate = openSessions[index];
+    if (group && !group.tabs.includes(candidate)) return -1;
+    if (parentOf(candidate) === parent) return index;
+  }
+  return -1;
 }
 
 type WorkspaceTabDropEdge = "before" | "after";
@@ -869,6 +922,7 @@ interface WorkspaceTabSearchDialogProps {
   activeSession: string | null;
   openSessions: string[];
   groups?: readonly WorkspaceTabGroup[];
+  sessionParents?: WorkspaceSessionParents;
   sessions: Session[];
   onSelect: (sessionName: string) => void;
   onClose: () => void;
@@ -909,6 +963,7 @@ export function WorkspaceTabSearchDialog({
   activeSession,
   openSessions,
   groups = [],
+  sessionParents = EMPTY_SESSION_PARENTS,
   sessions,
   onSelect,
   onClose,
@@ -1121,6 +1176,7 @@ export function WorkspaceTabSearchDialog({
             const highlighted = result.sessionName === highlightedSession;
             const active = result.sessionName === activeSession;
             const state = result.session?.agentState || "unavailable";
+            const tree = sessionTreeContext(result.sessionName, sessionParents, sessionsByName);
             return (
               <button
                 type="button"
@@ -1129,6 +1185,11 @@ export function WorkspaceTabSearchDialog({
                 className={highlighted ? "workspace-tab-search-result highlighted" : "workspace-tab-search-result"}
                 role="option"
                 aria-selected={highlighted}
+                aria-description={tree?.description}
+                title={tree?.description}
+                data-session-parent={tree?.parentName}
+                data-session-depth={tree?.depth}
+                style={sessionTreeStyle(tree)}
                 tabIndex={-1}
                 onMouseEnter={() => setHighlightedSession(result.sessionName)}
                 onClick={() => chooseSession(result.sessionName)}
@@ -1137,6 +1198,12 @@ export function WorkspaceTabSearchDialog({
                 <span className="workspace-tab-search-result-copy">
                   <strong>{result.title}</strong>
                   <span>{result.title === result.sessionName ? "tmux session" : result.sessionName}</span>
+                  {tree && (
+                    <span className="workspace-session-parent-label">
+                      <span className="workspace-tab-child-marker" aria-hidden="true" />
+                      Child of {tree.parentTitle}
+                    </span>
+                  )}
                   {result.group && (
                     <span
                       className="workspace-tab-search-result-group"
@@ -1220,13 +1287,14 @@ interface WorkspaceSessionRowProps {
   sessionName: string;
   session?: Session;
   group?: WorkspaceTabGroup;
+  tree?: SessionTreeContext;
   active: boolean;
   open: boolean;
   onSelect: () => void;
   openIndex?: number;
   openCount?: number;
-  reorderStartIndex?: number;
-  reorderEndIndex?: number;
+  previousMoveIndex?: number;
+  nextMoveIndex?: number;
   onMoveTab?: (targetIndex: number) => void;
   onCopyToNewWindow?: () => void;
   onMoveToNewWindow?: () => void;
@@ -1239,13 +1307,14 @@ function WorkspaceSessionRow({
   sessionName,
   session,
   group,
+  tree,
   active,
   open,
   onSelect,
   openIndex,
   openCount,
-  reorderStartIndex = 0,
-  reorderEndIndex,
+  previousMoveIndex = -1,
+  nextMoveIndex = -1,
   onMoveTab,
   onCopyToNewWindow,
   onMoveToNewWindow,
@@ -1263,19 +1332,23 @@ function WorkspaceSessionRow({
     && openCount !== undefined
     && openCount > 1
   );
-  const lastReorderIndex = reorderEndIndex ?? ((openCount ?? 1) - 1);
   const hasWindowActions = Boolean(onCopyToNewWindow && onMoveToNewWindow);
 
   return (
     <div
       className={`workspace-session-row${active ? " active" : ""}${open && (onTerminate || hasWindowActions) ? " stacked-actions" : ""}`}
       data-workspace-session-name={sessionName}
+      data-session-parent={tree?.parentName}
+      data-session-depth={tree?.depth}
+      style={sessionTreeStyle(tree)}
     >
       <button
         type="button"
         className="workspace-session-select"
         onClick={onSelect}
         aria-current={active ? "page" : undefined}
+        aria-description={tree?.description}
+        title={tree?.description}
       >
         <span
           className={`workspace-state-dot ${session?.agentState || "unavailable"}`}
@@ -1287,6 +1360,12 @@ function WorkspaceSessionRow({
             {displayTitle !== sessionName ? `${sessionName} / ` : ""}
             {session ? paneLabel(pane) : "tmux session ended"}
           </span>
+          {tree && (
+            <span className="workspace-session-parent-label">
+              <span className="workspace-tab-child-marker" aria-hidden="true" />
+              Child of {tree.parentTitle}
+            </span>
+          )}
           {group && (
             <span
               className="workspace-session-group-label"
@@ -1322,8 +1401,8 @@ function WorkspaceSessionRow({
               <button
                 type="button"
                 className="workspace-session-move workspace-session-move-up"
-                onClick={() => onMoveTab(openIndex - 1)}
-                disabled={openIndex === reorderStartIndex}
+                onClick={() => onMoveTab(previousMoveIndex)}
+                disabled={previousMoveIndex < 0}
                 aria-label={`Move ${displayTitle} tab up`}
                 title="Move tab up"
               >
@@ -1332,8 +1411,8 @@ function WorkspaceSessionRow({
               <button
                 type="button"
                 className="workspace-session-move workspace-session-move-down"
-                onClick={() => onMoveTab(openIndex + 1)}
-                disabled={openIndex === lastReorderIndex}
+                onClick={() => onMoveTab(nextMoveIndex)}
+                disabled={nextMoveIndex < 0}
                 aria-label={`Move ${displayTitle} tab down`}
                 title="Move tab down"
               >
@@ -1418,6 +1497,7 @@ function WorkspaceRecentsDialog({
   openSessions,
   recentSessions,
   groups = [],
+  sessionParents = EMPTY_SESSION_PARENTS,
   sessions,
   sessionsByName,
   query,
@@ -1511,7 +1591,7 @@ function WorkspaceRecentsDialog({
 
   const moveDialogTab = (sessionName: string, targetIndex: number) => {
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
-    const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex);
+    const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex, sessionParents);
     reorderFocusIntent.current = {
       sessionName,
       direction: targetIndex < openSessions.indexOf(sessionName) ? "up" : "down",
@@ -1775,16 +1855,13 @@ function WorkspaceRecentsDialog({
                       sessionName={sessionName}
                       session={session}
                       group={group}
+                      tree={sessionTreeContext(sessionName, sessionParents, sessionsByName)}
                       active={sessionName === activeSession}
                       open
                       openIndex={openIndex}
                       openCount={openSessions.length}
-                      reorderStartIndex={group
-                        ? openSessions.indexOf(group.tabs[0])
-                        : undefined}
-                      reorderEndIndex={group
-                        ? openSessions.indexOf(group.tabs.at(-1)!)
-                        : undefined}
+                      previousMoveIndex={tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, -1)}
+                      nextMoveIndex={tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, 1)}
                       onSelect={() => onSelect(sessionName)}
                       onMoveTab={onMoveTab
                         ? (targetIndex) => moveDialogTab(sessionName, targetIndex)
@@ -1937,6 +2014,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     openSessions,
     recentSessions,
     groups = [],
+    sessionParents = EMPTY_SESSION_PARENTS,
     separators = [],
     separatorsBefore = [],
     separatorsBusy = false,
@@ -2190,7 +2268,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         : selectedRange;
     } else {
       workspaceTabSelectionAnchorRef.current = sessionName;
-      const unit = expandWorkspaceTabSelection(openSessions, groups, [sessionName]);
+      const unit = expandWorkspaceTabSelection(openSessions, groups, [sessionName], sessionParents);
       const current = new Set(selectedWorkspaceTabs);
       const remove = unit.every((name) => current.has(name));
       candidates = remove
@@ -2198,7 +2276,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         : [...selectedWorkspaceTabs, ...unit];
     }
 
-    const next = expandWorkspaceTabSelection(openSessions, groups, candidates);
+    const next = expandWorkspaceTabSelection(openSessions, groups, candidates, sessionParents);
     setSelectedWorkspaceTabs(next);
     setReorderAnnouncement(next.length === 0
       ? "Tab move selection cleared."
@@ -2209,6 +2287,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     groups,
     openSessions,
     selectedWorkspaceTabs,
+    sessionParents,
   ]);
 
   const selectWorkspaceTab = useCallback((
@@ -2234,10 +2313,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   useEffect(() => {
     setSelectedWorkspaceTabs((current) => {
       if (!desktopTabMultiSelectEnabled) return current.length > 0 ? [] : current;
-      const next = expandWorkspaceTabSelection(openSessions, groups, current);
+      const next = expandWorkspaceTabSelection(openSessions, groups, current, sessionParents);
       return sameSessionNames(current, next) ? current : next;
     });
-  }, [desktopTabMultiSelectEnabled, groups, openSessions]);
+  }, [desktopTabMultiSelectEnabled, groups, openSessions, sessionParents]);
 
   useEffect(() => {
     if (selectedWorkspaceTabs.length > 0) return;
@@ -2468,6 +2547,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         openSessions: [...openSessions],
         recentSessions: [],
         groups: [...groups],
+        parents: sessionParents,
       }, sourceSessionNames, target.targetIndex);
       if (sameSessionNames(preview.openSessions, openSessions)) return;
       onMoveTabs(sourceSessionNames, target.targetIndex);
@@ -2492,6 +2572,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       groups,
       sourceSessionName,
       target.targetIndex,
+      sessionParents,
     );
     setReorderAnnouncement(
       `${tabTitle(sourceSessionName, sessionsByName)} moved to position ${resultIndex + 1} of ${openSessions.length}.`,
@@ -2502,6 +2583,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onMoveTab,
     onMoveTabs,
     openSessions,
+    sessionParents,
     sessionsByName,
   ]);
 
@@ -2938,7 +3020,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     }
     if (crossAdjacentSeparator([sessionName], targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next")) return;
     if (!onMoveTab || targetIndex < 0 || targetIndex >= openSessions.length) return;
-    const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex);
+    const resultIndex = tabMoveResultIndex(openSessions, groups, sessionName, targetIndex, sessionParents);
     reorderFocusIntent.current = {
       sessionName,
       direction: targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next",
@@ -3128,16 +3210,17 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const session = sessionsByName.get(sessionName);
     const title = tabTitle(sessionName, sessionsByName);
     const agentLabel = sessionAgentInfo(session).label;
+    const tree = sessionTreeContext(sessionName, sessionParents, sessionsByName);
     const active = !newSessionActive && sessionName === activeSession;
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
     const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
-    const groupTabIndex = group?.tabs.indexOf(sessionName) ?? -1;
+    const previousMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, -1);
+    const nextMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, 1);
     const crossingNames = selectedDrag ? orderedSelection : [sessionName];
     const canMovePrevious = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "previous")) || (selectedDrag && onMoveTabs
-      ? selectionMoveTargets.previous >= 0 : group ? groupTabIndex > 0 : index > 0));
-    const canMoveNext = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "next")) || (selectedDrag && onMoveTabs ? selectionMoveTargets.next >= 0 : group
-      ? groupTabIndex >= 0 && groupTabIndex < group.tabs.length - 1
-      : index < openSessions.length - 1));
+      ? selectionMoveTargets.previous >= 0 : previousMoveIndex >= 0));
+    const canMoveNext = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "next")) || (selectedDrag && onMoveTabs
+      ? selectionMoveTargets.next >= 0 : nextMoveIndex >= 0));
     const canDragTab = desktopTabDragEnabled && (
       selectedDrag && onMoveTabs
         ? true
@@ -3159,6 +3242,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       <div
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
+        data-session-parent={tree?.parentName}
+        data-session-depth={tree?.depth}
+        style={sessionTreeStyle(tree)}
         data-tab-group-color={group?.color}
         data-tab-move-selected={selectedForMove ? "true" : undefined}
         data-tab-dragging={workspaceTabDrag?.sessionNames.includes(sessionName)
@@ -3181,16 +3267,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           aria-controls={active ? "muxdeck-active-console" : undefined}
           aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${selectedForMove ? ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
-          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
+          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
-          aria-description={`${agentLabel}. ${canDragTab
+          aria-description={`${agentLabel}. ${tree ? `${tree.description} ` : ""}${canDragTab
             ? selectedDrag
               ? `${selectedWorkspaceTabs.length} tabs selected. Drag to move them together; their relative order is preserved.`
               : desktopTabMultiSelectEnabled
                 ? "Drag to reorder this tab. Shift-click selects a range; Control or Command-click toggles individual tabs."
                 : "Drag to reorder this tab. Reorder buttons are also available in Actions."
-            : ""}`}
+            : ""}`.trim()}
           onKeyDown={(event) => workspaceTabKeyDown(event, sessionName)}
           onClick={(event) => selectWorkspaceTab(event, sessionName)}
           onDragStart={canDragTab
@@ -3198,6 +3284,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             : undefined}
           onDragEnd={canDragTab ? finishWorkspaceTabDrag : undefined}
         >
+          {tree && <span className="workspace-tab-child-marker" aria-hidden="true" />}
           {selectedForMove && (
             <span className="workspace-tab-selection-mark" aria-hidden="true">
               <CheckIcon />
@@ -3221,7 +3308,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <button
               type="button"
               className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "up" : "left"}`}
-              onClick={() => moveQuickTab(sessionName, title, index - 1)}
+              onClick={() => moveQuickTab(sessionName, title, previousMoveIndex >= 0 ? previousMoveIndex : index - 1)}
               disabled={!canMovePrevious}
               aria-label={`Move ${title} tab ${orientation === "vertical" ? "up" : "left"}`}
               title={`Move ${selectedDrag ? "selected tabs" : "tab"} ${orientation === "vertical" ? "up" : "left"}`}
@@ -3232,7 +3319,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <button
               type="button"
               className={`workspace-tab-move workspace-tab-move-${orientation === "vertical" ? "down" : "right"}`}
-              onClick={() => moveQuickTab(sessionName, title, index + 1)}
+              onClick={() => moveQuickTab(sessionName, title, nextMoveIndex >= 0 ? nextMoveIndex : index + 1)}
               disabled={!canMoveNext}
               aria-label={`Move ${title} tab ${orientation === "vertical" ? "down" : "right"}`}
               title={`Move ${selectedDrag ? "selected tabs" : "tab"} ${orientation === "vertical" ? "down" : "right"}`}
@@ -3355,6 +3442,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           className={`workspace-navigation workspace-navigation-${orientation}`}
           data-orientation={orientation}
           data-compact={compactDesktopTabRail ? "true" : undefined}
+          data-session-tree={Object.keys(sessionParents).length > 0 ? "true" : undefined}
           data-tab-actions-visible={tabActionsVisible ? "true" : "false"}
           data-tab-drag-active={workspaceTabDrag ? "true" : undefined}
           style={navigationStyle}

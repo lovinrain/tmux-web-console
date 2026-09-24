@@ -72,6 +72,7 @@ import {
   searchWithWorkspaceState,
   searchWithWorkspaceTabs,
   workspaceTabsFromSearch,
+  type WorkspaceSessionParents,
   type WorkspaceTabGroup,
 } from "../workspaceState";
 import { AppTabs } from "./AppTabs";
@@ -101,6 +102,7 @@ interface SessionDashboardProps {
   onSessionsChange?: (sessions: Session[]) => void;
   currentWorkspaceTabs?: readonly string[];
   currentWorkspaceGroups?: readonly WorkspaceTabGroup[];
+  currentWorkspaceParents?: WorkspaceSessionParents;
   activeSession?: string | null;
   activeWorkspaceId?: string | null;
   onOpenSavedWorkspace?: (workspace: SavedWorkspace) => void;
@@ -290,6 +292,7 @@ function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
       window.location.search,
       workspace.tabs,
       workspace.groups ?? [],
+      workspace.parents ?? {},
     ),
     workspace.id,
   );
@@ -561,6 +564,7 @@ export function SessionDashboard({
   onSessionsChange,
   currentWorkspaceTabs = [],
   currentWorkspaceGroups = [],
+  currentWorkspaceParents,
   activeSession = null,
   activeWorkspaceId = null,
   onOpenSavedWorkspace,
@@ -1191,6 +1195,7 @@ export function SessionDashboard({
         onWorkspacesChange={setSavedWorkspaces}
         currentTabs={currentWorkspaceTabs}
         currentWorkspaceGroups={currentWorkspaceGroups}
+        currentWorkspaceParents={currentWorkspaceParents}
         activeSession={activeSession}
         activeWorkspaceId={activeWorkspaceId}
         onOpen={(workspace) => onOpenSavedWorkspace?.(workspace)}

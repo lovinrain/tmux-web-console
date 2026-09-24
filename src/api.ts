@@ -8,7 +8,7 @@ import type {
   SnippetNode,
   SnippetTree,
 } from "./types";
-import { WORKSPACE_TAB_GROUP_COLORS, type WorkspaceTabGroup } from "./workspaceState";
+import { normalizeWorkspaceParents, WORKSPACE_TAB_GROUP_COLORS, type WorkspaceTabGroup, type WorkspaceSessionParents } from "./workspaceState";
 import type { Theme } from "./theme";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -989,6 +989,7 @@ export interface SavedWorkspace {
   name: string;
   tabs: string[];
   groups?: WorkspaceTabGroup[];
+  parents?: WorkspaceSessionParents;
   separators?: string[];
   separatorsBefore?: string[];
   quickLinks?: WorkspaceQuickLink[];
@@ -1105,6 +1106,7 @@ export interface CreateWorkspaceInput {
   name: string;
   tabs: string[];
   groups: WorkspaceTabGroup[];
+  parents?: WorkspaceSessionParents;
   separators?: string[];
   separatorsBefore?: string[];
   paneLayouts?: WorkspacePaneLayout[];
@@ -1114,7 +1116,7 @@ export interface CreateWorkspaceInput {
 
 export type WorkspaceUpdate = Partial<Pick<
   SavedWorkspace,
-  "name" | "tabs" | "groups" | "separators" | "separatorsBefore" | "paneLayouts" | "callbackSessions" | "activeSession" | "sessionRevision"
+  "name" | "tabs" | "groups" | "parents" | "separators" | "separatorsBefore" | "paneLayouts" | "callbackSessions" | "activeSession" | "sessionRevision"
 >> & { expectedUpdatedAt?: number };
 
 let workspaceVersionChecksSupported = true;
@@ -1428,6 +1430,15 @@ function isWorkspaceSnapshot(value: unknown, workspaceId: string): value is Save
   return value.id === workspaceId
     && typeof value.name === "string"
     && isStringArray(value.tabs)
+    && (value.parents === undefined || (
+      isRecord(value.parents)
+      && Object.keys(normalizeWorkspaceParents(value.parents, value.tabs)).length === Object.keys(value.parents).length
+      && Object.entries(value.parents).every(([child, parent]) => (
+        typeof parent === "string" && child !== parent
+        && (value.tabs as string[]).includes(child)
+        && (value.tabs as string[]).includes(parent)
+      ))
+    ))
     && (value.activeSession === null || typeof value.activeSession === "string")
     && isNonnegativeSafeInteger(value.sessionRevision)
     && isNonnegativeSafeInteger(value.updatedAt)
@@ -1540,6 +1551,7 @@ export async function createWorkspace(
         name: workspace.name,
         tabs: workspace.tabs,
         groups: workspace.groups,
+        parents: workspace.parents,
         separators: workspace.separators,
         separatorsBefore: workspace.separatorsBefore,
         paneLayouts: workspace.paneLayouts,
@@ -1551,6 +1563,7 @@ export async function createWorkspace(
     return request({
       name: workspace.name,
       tabs: workspace.tabs,
+      parents: workspace.parents,
       activeSession: workspace.activeSession,
     });
   }
@@ -1670,6 +1683,7 @@ export async function transferSessionToWorkspace(
   destinationWorkspaceId: string,
   operation: WorkspaceSessionTransferOperation,
   sessionRevision: number,
+  sourceParents?: WorkspaceSessionParents,
 ): Promise<WorkspaceSessionTransferResult> {
   return jsonRequest<WorkspaceSessionTransferResult>(
     "/api/session-workspace-transfer",
@@ -1682,6 +1696,7 @@ export async function transferSessionToWorkspace(
         destinationWorkspaceId,
         operation,
         sessionRevision,
+        ...(sourceParents === undefined ? {} : { sourceParents }),
       }),
     },
   );
@@ -1693,6 +1708,7 @@ export async function transferSessionsToWorkspace(
   destinationWorkspaceId: string,
   operation: WorkspaceSessionTransferOperation,
   sessionRevision: number,
+  sourceParents?: WorkspaceSessionParents,
 ): Promise<WorkspaceSessionsTransferResult> {
   return jsonRequest<WorkspaceSessionsTransferResult>(
     "/api/session-workspace-transfer/bulk",
@@ -1705,6 +1721,7 @@ export async function transferSessionsToWorkspace(
         destinationWorkspaceId,
         operation,
         sessionRevision,
+        ...(sourceParents === undefined ? {} : { sourceParents }),
       }),
     },
   );
@@ -1717,6 +1734,7 @@ export async function updateWorkspaceActivity(
   activeSession: string | null,
   sessionRevision: number,
   expectedUpdatedAt?: number,
+  parents?: WorkspaceSessionParents,
 ): Promise<SavedWorkspace> {
   let includeGroups = groups !== undefined;
   let includeVersion = supportsWorkspaceVersionChecks() && expectedUpdatedAt !== undefined;
@@ -1729,6 +1747,7 @@ export async function updateWorkspaceActivity(
         body: JSON.stringify({
           tabs,
           ...(includeGroups ? { groups } : {}),
+          ...(parents === undefined ? {} : { parents }),
           activeSession,
           sessionRevision,
           ...(includeVersion ? { expectedUpdatedAt } : {}),

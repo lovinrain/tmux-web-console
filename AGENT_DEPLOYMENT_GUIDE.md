@@ -284,8 +284,8 @@ timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
 `session-titles.json` through the rollback window because its schema may be
 upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
-the first workspace-state write can upgrade it to schema 13, and a release that
-only understands versions 1 through 12 cannot read the upgraded document.
+the first workspace-state write can upgrade it to schema 14, and a release that
+only understands versions 1 through 13 cannot read the upgraded document.
 
 ## 5. Build a clean release
 
@@ -391,6 +391,7 @@ names. The
 second contains memoranda and may include sensitive commands or prose. The third
 contains the global folder/snippet tree and may also contain sensitive commands
 or prose. The fourth contains saved workspace names, ordered tmux session names,
+workspace-local parent/child tab relationships,
 tab-group names/colors/membership, named pane layouts and their session
 assignments/split ratios, common, workspace-specific, and session-specific quick
 links, Common/Workspace/Session notes, global session pins and their
@@ -433,7 +434,7 @@ rollback requires stopping only Muxdeck, preserving the upgraded database, and
 restoring the pre-upgrade database alongside the previous application code.
 Never downgrade `user_version` in place or discard the upgraded history.
 
-The workspace file uses schema version 13. Version 1 loads at workspace session
+The workspace file uses schema version 14. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
 through 3 load with no common or workspace-specific quick links. Versions 1
 through 4 load with no session-specific quick links, versions 1 through 5 load
@@ -443,6 +444,10 @@ separators. Version 8 preserves after-session separators and loads with no
 before-session separators. Version 9 loads with no named pane layouts. A legacy
 file upgrades atomically on the next workspace, quick-link, note, global-pin, or
 callback-list write. Versions 1 through 10 load with an empty callback list.
+Versions 1 through 13 load with no nested tab relationships. Version 14 permits
+an optional `parents` mapping from child session to parent session; both must be
+workspace tabs and the links must be acyclic. Removing a parent promotes its
+children to the closest surviving ancestor without terminating their sessions.
 Each record permits an 80-character name, at most 256 unique ordered
 tabs, at most 16 disjoint contiguous tab groups whose names are at most 40
 characters, and at most 16 quick links; the global common shelf and each
@@ -455,7 +460,7 @@ validator. Each workspace callback list permits 64 unique session names, and the
 explicit global callback list permits 256 unique session names. Workspace
 callback entries are always included in the deduplicated global queue.
 Keep a pre-upgrade copy for rollback because a release that only understands
-versions 1 through 12 rejects the version 13 document. As with snippets, an
+versions 1 through 13 rejects the version 14 document. As with snippets, an
 unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
@@ -988,6 +993,9 @@ For a failed replacement:
    does not understand it, so a later compatible release can recover the saved
    workspace list.
    When rolling back to a release that only understands workspace-file versions
+   1 through 13, retain the version-14 file separately and restore the pre-upgrade
+   workspace file; older releases cannot read nested tab relationships.
+   When rolling back to a release that only understands workspace-file versions
    1 through 10, retain the version-11 file separately and restore the pre-upgrade
    workspace file; older releases cannot read workspace callback lists. A release
    that only understands versions 1 through 12 additionally cannot read the
@@ -1073,8 +1081,10 @@ Most redeployments do not need a restart at all. The frontend is served from dis
 `dist/` ships frontend changes immediately with no restart and no risk to tmux.
 Restart only when Python code or unit environment actually changed.
 
-Workspace streaming and `expectedUpdatedAt` checks keep workspace schema 13;
-they require no state migration. When deploying this change under an authorized
+Workspace streaming and `expectedUpdatedAt` checks do not themselves require a
+schema change. Nested tab relationships use schema 14, upgraded atomically on
+the next state write; keep the pre-upgrade workspace file for rollback.
+When deploying this change under an authorized
 update, include both the backend and rebuilt frontend. Reload existing browser
 pages so they use the version-aware client; a previously loaded older bundle
 can still send compatibility writes without `expectedUpdatedAt`.

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
 import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
-import { moveWorkspaceSessions } from "../workspaceState";
+import { moveWorkspaceSession, moveWorkspaceSessions } from "../workspaceState";
 import {
   PANE_NAVIGATION_ACTION,
   SHORTCUT_ACTION_EVENT,
@@ -323,6 +323,184 @@ describe("SessionWorkspaceNavigation", () => {
       expect(metadata).toHaveAttribute("data-tab-group-color", "orange");
     }
   });
+
+  it("shows nesting and parent context in tab search even when the parent is filtered out", () => {
+    const onSelect = vi.fn();
+    render(
+      <WorkspaceTabSearchDialog
+        activeSession="alpha"
+        openSessions={["alpha", "beta", "zulu"]}
+        sessionParents={{ beta: "alpha", zulu: "beta" }}
+        sessions={sessions}
+        onSelect={onSelect}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    const [root, child, grandchild] = within(dialog).getAllByRole("option");
+    expect(root).not.toHaveAttribute("data-session-parent");
+    expect(child).toHaveAttribute("data-session-parent", "alpha");
+    expect(child).toHaveAttribute("data-session-depth", "1");
+    expect(child).toHaveTextContent("Child of Alpha control");
+    expect(grandchild).toHaveAttribute("data-session-depth", "2");
+    expect(grandchild).toHaveAccessibleDescription("Child of beta. Nesting level 2.");
+
+    fireEvent.change(within(dialog).getByRole("combobox"), {
+      target: { value: "Zulu" },
+    });
+    const result = within(dialog).getByRole("option");
+    expect(result).toHaveTextContent("Child of beta");
+    expect(result.style.getPropertyValue("--workspace-session-depth")).toBe("2");
+    fireEvent.click(result);
+    expect(onSelect).toHaveBeenCalledWith("zulu");
+  });
+
+  it.each(["horizontal", "vertical"] as const)(
+    "marks nested %s tabs without changing their names, actions, or keyboard order",
+    (orientation) => {
+      const props = navigationProps({
+        openSessions: ["alpha", "beta", "zulu", "archive"],
+        sessionParents: { beta: "alpha", zulu: "beta" },
+        orientation,
+      });
+      render(<SessionWorkspaceNavigation {...props} />);
+
+      const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+      const beta = screen.getByRole("tab", { name: "beta, Working" });
+      const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" });
+      const archive = screen.getByRole("tab", { name: "Archived deploy, Background work" });
+      expect(alpha.closest(".workspace-tab")).not.toHaveAttribute("data-session-parent");
+      expect(archive.closest(".workspace-tab")).not.toHaveAttribute("data-session-depth");
+      expect(alpha.querySelector(".workspace-tab-child-marker")).toBeNull();
+      expect(beta.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "alpha");
+      expect(beta.closest(".workspace-tab")).toHaveAttribute("data-session-depth", "1");
+      expect(zulu.closest(".workspace-tab")).toHaveAttribute("data-session-depth", "2");
+      expect(zulu.closest<HTMLElement>(".workspace-tab")?.style
+        .getPropertyValue("--workspace-session-depth")).toBe("2");
+      expect(beta).toHaveAccessibleDescription("Claude. Child of Alpha control (alpha). Nesting level 1.");
+      expect(zulu.title).toContain("Child of beta. Nesting level 2.");
+      expect(beta.querySelector(".workspace-tab-child-marker"))
+        .toHaveAttribute("aria-hidden", "true");
+
+      alpha.focus();
+      fireEvent.keyDown(alpha, { key: orientation === "vertical" ? "ArrowDown" : "ArrowRight" });
+      expect(beta).toHaveFocus();
+      fireEvent.keyDown(beta, { key: orientation === "vertical" ? "ArrowDown" : "ArrowRight" });
+      expect(zulu).toHaveFocus();
+      fireEvent.click(zulu);
+      expect(props.onSelect).toHaveBeenCalledWith("zulu");
+      fireEvent.click(screen.getByRole("button", { name: "Close beta quick tab" }));
+      expect(props.onCloseTab).toHaveBeenCalledWith("beta");
+    },
+  );
+
+  it("retains nested parent context in the narrow rail and the Overview open list", () => {
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu"],
+          sessionParents: { beta: "alpha", zulu: "beta" },
+          orientation: "vertical",
+          desktopTabRailWidth: MIN_DESKTOP_TAB_RAIL_WIDTH,
+          recentsOpen: true,
+        })}
+      />,
+    );
+
+    const childTab = screen.getByRole("tab", { name: "beta, Working" });
+    expect(childTab.querySelector(".workspace-tab-compact-index"))
+      .toHaveAttribute("data-index", "2");
+    expect(childTab.querySelector(".session-agent-icon")).toBeInTheDocument();
+    expect(childTab.querySelector(".workspace-tab-child-marker")).toBeInTheDocument();
+
+    const openList = screen.getByRole("region", { name: "Open tabs" });
+    const childRow = openList.querySelector<HTMLElement>("[data-workspace-session-name='beta']")!;
+    const grandchildRow = openList.querySelector<HTMLElement>("[data-workspace-session-name='zulu']")!;
+    expect(childRow).toHaveTextContent("Child of Alpha control");
+    expect(grandchildRow).toHaveAttribute("data-session-depth", "2");
+    expect(within(grandchildRow).getByRole("button", { name: /^Zulu shell/ }))
+      .toHaveAccessibleDescription("Child of beta. Nesting level 2.");
+  });
+
+  it("includes descendants when selecting a parent tab for moving", () => {
+    const onTabSelectionChange = vi.fn();
+    render(
+      <SessionWorkspaceNavigation
+        {...navigationProps({
+          openSessions: ["alpha", "beta", "zulu", "archive"],
+          sessionParents: { beta: "alpha", zulu: "beta" },
+          onMoveTab: vi.fn(),
+          onMoveTabs: vi.fn(),
+          onTabSelectionChange,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Alpha control, Needs input" }), {
+      ctrlKey: true,
+    });
+    expect(onTabSelectionChange).toHaveBeenLastCalledWith(["alpha", "beta", "zulu"]);
+    expect(screen.getAllByRole("tab", { name: /selected for moving/ })).toHaveLength(3);
+    expect(screen.getByRole("tab", { name: "Archived deploy, Background work" }))
+      .toHaveAttribute("aria-selected", "false");
+  });
+
+  it.each(["rail", "overview"] as const)(
+    "moves a parent and its descendants between sibling boundaries from the %s",
+    (surface) => {
+      const onMoveTab = vi.fn();
+      const parents = { beta: "alpha", archive: "beta", zulu: "alpha" };
+      function NestedReorderHarness() {
+        const [openSessions, setOpenSessions] = useState(["alpha", "beta", "archive", "zulu", "other"]);
+        return (
+          <SessionWorkspaceNavigation
+            {...navigationProps({
+              openSessions,
+              sessionParents: parents,
+              sessions: [...sessions, session({ name: "other" })],
+              orientation: "vertical",
+              recentsOpen: surface === "overview",
+              onMoveTab: (name, index) => {
+                onMoveTab(name, index);
+                setOpenSessions((current) => moveWorkspaceSession({
+                  openSessions: current,
+                  recentSessions: [],
+                  groups: [],
+                  parents,
+                }, name, index).openSessions);
+              },
+            })}
+          />
+        );
+      }
+      render(<NestedReorderHarness />);
+      const surfaceElement = surface === "rail"
+        ? screen.getByRole("navigation", { name: "Session workspace" })
+        : screen.getByRole("region", { name: "Open tabs" });
+      const controls = within(surfaceElement);
+
+      expect(controls.getByRole("button", { name: "Move Alpha control tab up" })).toBeDisabled();
+      fireEvent.click(controls.getByRole("button", { name: "Move Alpha control tab down" }));
+      expect(onMoveTab).toHaveBeenLastCalledWith("alpha", 4);
+      expect([...surfaceElement.querySelectorAll("[data-workspace-session-name]")]
+        .map((element) => element.getAttribute("data-workspace-session-name")))
+        .toEqual(["other", "alpha", "beta", "archive", "zulu"]);
+      expect(controls.getByRole("button", { name: "Move Alpha control tab down" })).toBeDisabled();
+
+      expect(controls.getByRole("button", { name: "Move beta tab up" })).toBeDisabled();
+      fireEvent.click(controls.getByRole("button", { name: "Move beta tab down" }));
+      expect(onMoveTab).toHaveBeenLastCalledWith("beta", 4);
+      expect([...surfaceElement.querySelectorAll("[data-workspace-session-name]")]
+        .map((element) => element.getAttribute("data-workspace-session-name")))
+        .toEqual(["other", "alpha", "zulu", "beta", "archive"]);
+      expect(controls.getByRole("button", { name: "Move beta tab down" })).toBeDisabled();
+      expect(controls.getByRole("button", { name: "Move Archived deploy tab up" })).toBeDisabled();
+      expect(controls.getByRole("button", { name: "Move Archived deploy tab down" })).toBeDisabled();
+      expect(screen.getAllByText("beta moved to position 4 of 5.", { selector: "[role='status']" }))
+        .toHaveLength(1);
+    },
+  );
 
   it("renders a colored group block with collapse, edit, and atomic move controls", () => {
     const onToggleTabGroup = vi.fn();

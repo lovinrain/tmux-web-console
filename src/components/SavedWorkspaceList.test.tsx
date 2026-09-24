@@ -141,6 +141,7 @@ describe("SavedWorkspaceList", () => {
       <SavedWorkspaceList
         currentTabs={["web", "api"]}
         currentWorkspaceGroups={[group()]}
+        currentWorkspaceParents={{ api: "web" }}
         activeSession="api"
         onOpen={vi.fn()}
       />,
@@ -163,13 +164,14 @@ describe("SavedWorkspaceList", () => {
     }));
   });
 
-  it("can copy and immediately open a workspace with current tabs in order", async () => {
+  it("can copy and immediately open a workspace with current tabs and hierarchy", async () => {
     vi.mocked(listWorkspaces).mockResolvedValue([]);
     const created = workspace({
       id: "created",
       name: "Cross device",
       tabs: ["web", "api"],
       groups: [group()],
+      parents: { api: "web" },
       activeSession: "api",
     });
     vi.mocked(createWorkspace).mockResolvedValue(created);
@@ -179,6 +181,7 @@ describe("SavedWorkspaceList", () => {
       <SavedWorkspaceList
         currentTabs={["web", "api", "web"]}
         currentWorkspaceGroups={[group()]}
+        currentWorkspaceParents={{ api: "web", missing: "api" }}
         activeSession="api"
         onOpen={onOpen}
       />,
@@ -199,6 +202,7 @@ describe("SavedWorkspaceList", () => {
       name: "Cross device",
       tabs: ["web", "api"],
       groups: [group()],
+      parents: { api: "web" },
       activeSession: "api",
     }));
     expect(onOpen).toHaveBeenCalledWith(created);

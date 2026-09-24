@@ -117,7 +117,7 @@ let reportSessionTerminate: (
   ) => Promise<void>)
 ) | null = null;
 let reportSessionCopy: (
-  (sourceName: string, sessionName: string, sessionId: string) => void
+  (sourceName: string, sessionName: string, sessionId: string, placement?: "sibling" | "child") => void
 ) | null = null;
 let reportKnownSessions: ((sessions: Session[]) => void) | null = null;
 let openSessionFromDashboard: ((sessionName: string) => void) | null = null;
@@ -365,6 +365,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       sourceName: string,
       sessionName: string,
       sessionId: string,
+      placement?: "sibling" | "child",
     ) => void;
     onSplitWorkspace?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
     onSplitEphemeralTab?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
@@ -922,6 +923,31 @@ describe("App routing", () => {
       name: "alpha_1",
       sessionId: "$copy",
     });
+  });
+
+  it("keeps child and sibling copy relationships through reload and parent tab closure", () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    const first = render(<App />);
+    act(() => reportSessionCopy?.("alpha", "child", "$child", "child"));
+    act(() => reportSessionCopy?.("child", "grandchild", "$grandchild", "child"));
+    act(() => reportSessionCopy?.("child", "sibling", "$sibling"));
+
+    expect(openTabs()).toEqual(["alpha", "child", "grandchild", "sibling", "beta"]);
+    expect(JSON.parse(new URLSearchParams(window.location.search).get("tab-parent")!)).toEqual({
+      child: "alpha", grandchild: "child", sibling: "alpha",
+    });
+    expect(screen.getByRole("tab", { name: /grandchild/ }).closest(".workspace-tab"))
+      .toHaveAttribute("data-session-depth", "2");
+
+    first.unmount();
+    render(<App />);
+    expect(screen.getByRole("tab", { name: /grandchild/ }).closest(".workspace-tab"))
+      .toHaveAttribute("data-session-parent", "child");
+    fireEvent.click(screen.getByRole("button", { name: "Close alpha quick tab" }));
+    expect(openTabs()).toEqual(["child", "grandchild", "sibling", "beta"]);
+    expect(JSON.parse(new URLSearchParams(window.location.search).get("tab-parent")!))
+      .toEqual({ grandchild: "child" });
+    expect(terminateSessionMock).not.toHaveBeenCalled();
   });
 
   it("keeps a late copied session without stealing focus from another tab", () => {
@@ -3400,9 +3426,9 @@ describe("App routing", () => {
         session("gamma", "$gamma"),
       ]);
       updateWorkspaceActivityMock.mockImplementation(async (
-        workspaceId, tabs, groups, activeSession, sessionRevision, expectedUpdatedAt,
+        workspaceId, tabs, groups, activeSession, sessionRevision, expectedUpdatedAt, parents,
       ) => ({
-        ...initial, id: workspaceId, tabs, groups, activeSession, sessionRevision,
+        ...initial, id: workspaceId, tabs, groups, activeSession, sessionRevision, parents,
         updatedAt: (expectedUpdatedAt ?? initial.updatedAt) + 1,
       }));
       replaceUrl(sessionUrl("alpha", "?workspace=workspace-one"));
@@ -3415,6 +3441,23 @@ describe("App routing", () => {
       expect(subscription.workspaceId).toBe(initial.id);
       return { view, subscription, canonical: { ...initial, updatedAt: 1_001 } };
     }
+
+    it("receives nesting from another tab and persists a new child with its ancestors", async () => {
+      const { subscription, canonical } = await openSynchronizedWorkspace();
+      act(() => subscription.options.onWorkspace({
+        ...canonical, parents: { beta: "alpha" }, updatedAt: 1_002,
+      }));
+      expect(screen.getByRole("tab", { name: /beta/ }).closest(".workspace-tab"))
+        .toHaveAttribute("data-session-parent", "alpha");
+      act(() => reportSessionCopy?.("beta", "leaf", "$leaf", "child"));
+      await act(async () => vi.advanceTimersByTimeAsync(400));
+      expect(updateWorkspaceActivityMock).toHaveBeenLastCalledWith(
+        "workspace-one", ["alpha", "beta", "leaf", "gamma"], [], "alpha", 0, 1_002,
+        { beta: "alpha", leaf: "beta" },
+      );
+      expect(JSON.parse(new URLSearchParams(window.location.search).get("tab-parent")!))
+        .toEqual({ beta: "alpha", leaf: "beta" });
+    });
 
     it("removes remotely closed tabs from the sidebar and URL while preserving local selection", async () => {
       const { subscription, canonical } = await openSynchronizedWorkspace();

@@ -69,6 +69,15 @@ working directory and immediately opens it as the active workspace tab. The
 server tries `<source>_1`, then increments the suffix until it can atomically
 claim an available tmux session name. `Ctrl+Shift+M` invokes the same action.
 The button and shortcut are unavailable in compact mobile layouts.
+The adjacent arrow opens `Copy New options`: `Same-level session` creates a
+sibling, while `Nested child session` creates a child tab under the current
+session. Children can have children. Sidebar tabs indent to show the tree;
+horizontal tabs show a small branch marker, with parent details in the tooltip.
+Both choices start the same kind of independent shell in the same working
+directory. Nesting belongs to the workspace and survives temporary-workspace
+URL reloads, saved-workspace reloads, and updates from another browser tab.
+Moving a parent moves its subtree; closing its tab keeps its children open and
+promotes them one level. Named groups keep whole session trees together.
 
 `Space` (`Split workspace` in its tooltip) is the non-mutating browser-workspace counterpart beside that
 control. With multiple tabs selected using Shift-click or Ctrl/Cmd-click, it
@@ -1512,14 +1521,15 @@ position, and size preferences are namespaced by callback scope in that browser.
 The selected scope is remembered in browser storage and a fresh browser starts
 at `Global`.
 
-The workspace schema is version 13. Version 1 files load at session revision zero;
+The workspace schema is version 14. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
 version 1 through 6 files load with no global session pins or inherited-pin
 provenance. Versions 1 through 7 load with no sidebar separators; version 8 retains
 its after-session separators and loads with no before-session separators, and
-versions 1 through 9 load with no named pane views. A legacy document
+versions 1 through 9 load with no named pane views. Versions 1 through 13 load
+with no parent/child tab relationships. A legacy document
 upgrades atomically on its next workspace,
 quick-link, note, global-pin, or callback-list write. Versions 1 through 10 load
 with an empty callback list, and older files load with an empty explicit global
@@ -1535,8 +1545,8 @@ with 80-character names, workspace callback lists to 64 unique session names,
 and the explicit global callback list to 256 unique session names.
 Page content has no separate character validator. Writes use an
 atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 12
-reject the version 13 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 13
+reject the version 14 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 

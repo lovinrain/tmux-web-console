@@ -29,6 +29,8 @@ import {
 } from "../workspaceValidation";
 import {
   normalizeWorkspaceTabGroups,
+  normalizeWorkspaceParents,
+  type WorkspaceSessionParents,
   type WorkspaceTabGroup,
 } from "../workspaceState";
 import "./SavedWorkspaceList.css";
@@ -36,6 +38,7 @@ import "./SavedWorkspaceList.css";
 export interface SavedWorkspaceListProps {
   currentTabs?: readonly string[];
   currentWorkspaceGroups?: readonly WorkspaceTabGroup[];
+  currentWorkspaceParents?: WorkspaceSessionParents;
   activeSession?: string | null;
   activeWorkspaceId?: string | null;
   onOpen: (workspace: SavedWorkspace) => void;
@@ -83,6 +86,7 @@ function exactActivityTime(timestamp: number): string | undefined {
 export function SavedWorkspaceList({
   currentTabs = [],
   currentWorkspaceGroups = [],
+  currentWorkspaceParents,
   activeSession = null,
   activeWorkspaceId = null,
   onOpen,
@@ -117,6 +121,10 @@ export function SavedWorkspaceList({
   const groupsToSave = useMemo(
     () => normalizeWorkspaceTabGroups(currentWorkspaceGroups, tabsToSave),
     [currentWorkspaceGroups, tabsToSave],
+  );
+  const parentsToSave = useMemo(
+    () => normalizeWorkspaceParents(currentWorkspaceParents, tabsToSave),
+    [currentWorkspaceParents, tabsToSave],
   );
   const validActiveSession = activeSession && tabsToSave.includes(activeSession)
     ? activeSession
@@ -190,6 +198,8 @@ export function SavedWorkspaceList({
         name: createDraft.trim(),
         tabs: createMode === "copy" ? tabsToSave : [],
         groups: createMode === "copy" ? groupsToSave : [],
+        ...(createMode === "copy" && Object.keys(parentsToSave).length > 0
+          ? { parents: parentsToSave } : {}),
         activeSession: createMode === "copy" ? validActiveSession : null,
       });
       mutationVersionRef.current += 1;

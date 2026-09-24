@@ -126,7 +126,7 @@ blindly retry a destructive request with old identity values.
 ### Workspace session revision
 
 Every workspace response includes `sessionRevision`. Supply that exact integer
-for any mutation containing session-name references: tabs, groups, separators,
+for any mutation containing session-name references: tabs, parents, groups, separators,
 pane layouts, callback sessions, or the active session. The revision is a
 global rename/transfer fence, not a per-workspace version. A revision mismatch
 returns `409` when session identity or membership changed through a rename,
@@ -182,6 +182,7 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
   "id": "b58f...",
   "name": "Release work",
   "tabs": ["agent-a", "agent-b"],
+  "parents": {"agent-b": "agent-a"},
   "groups": [],
   "quickLinks": [],
   "separators": [],
@@ -200,17 +201,24 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
 absent value as `[]`. Saved workspace tabs may reference ended sessions so the
 navigation/history record survives process exit.
 
+`parents` maps each nested child session to its parent in this workspace. An
+absent or empty object means all tabs are at the top level. Both endpoints must
+be in `tabs`; self-parenting and cycles are rejected. This is navigation metadata
+only: child sessions have the same capabilities and lifecycle as any other tmux
+session. The ordered `tabs` array remains canonical, with the browser displaying
+the tree in depth-first order.
+
 ### Workspace CRUD
 
 | Method and route | Request | Result |
 | --- | --- | --- |
 | `GET /api/workspaces` | None | `{workspaces:[...]}`, most recently active first. |
-| `POST /api/workspaces` | `name`, `tabs`, `activeSession`; optional `groups`, `separators`, `separatorsBefore`, `paneLayouts`, `callbackSessions` | Creates a workspace and returns `{workspace}` with `201`. |
+| `POST /api/workspaces` | `name`, `tabs`, `activeSession`; optional `parents`, `groups`, `separators`, `separatorsBefore`, `paneLayouts`, `callbackSessions` | Creates a workspace and returns `{workspace}` with `201`. |
 | `GET /api/workspaces/{workspaceId}` | None | `{workspace}`. |
 | `GET /api/workspaces/{workspaceId}/stream` | None | SSE `workspace` events containing `{workspace,callbacks}`; `workspace` is `null` when deleted or absent. |
 | `PATCH /api/workspaces/{workspaceId}` | One or more workspace fields; `sessionRevision` when any session-bearing field is present; optional `expectedUpdatedAt` | Replaces the supplied fields and returns `{workspace}`; rejects a stale version with `409`. |
 | `DELETE /api/workspaces/{workspaceId}` | None | Deletes saved navigation state and its workspace note; does not terminate tmux sessions. |
-| `POST /api/workspaces/{workspaceId}/activity` | `tabs`, `activeSession`, `sessionRevision`; optional `groups`, `expectedUpdatedAt` | Saves tab activity and advances `lastActiveAt`; rejects a stale version with `409`. |
+| `POST /api/workspaces/{workspaceId}/activity` | `tabs`, `activeSession`, `sessionRevision`; optional `parents`, `groups`, `expectedUpdatedAt` | Saves tab activity and advances `lastActiveAt`; rejects a stale version with `409`. |
 
 Create a workspace:
 
@@ -221,11 +229,17 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
   https://mux.example.test/mux/api/workspaces
 ```
 
-`PATCH` supports `name`, `tabs`, `groups`, `separators`,
+`PATCH` supports `name`, `tabs`, `parents`, `groups`, `separators`,
 `separatorsBefore`, `paneLayouts`, `callbackSessions`, and `activeSession`.
 Renaming with only `name` does not need `sessionRevision`. Whole-array updates
 are useful for import/export; prefer granular routes for interactive or
 concurrent automation.
+
+Supplying `parents` replaces the complete mapping. Omitting it preserves existing
+relationships, promoting children through any removed parents to the closest
+surviving ancestor. Native session renames update both sides of these links.
+Forgetting removes the entry from every workspace; Undo restores its prior
+relationships where they remain valid and have not since been changed.
 
 ### Workspace event stream
 
@@ -452,8 +466,8 @@ posted messages intact; use explicit review operations to acknowledge them.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
-| `POST /api/session-workspace-transfer` | `session`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId` | Atomically `copy` or `move` one live session between workspaces. |
-| `POST /api/session-workspace-transfer/bulk` | Ordered, unique `sessions`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId` | Atomically transfers the complete batch, including saved references to ended sessions. |
+| `POST /api/session-workspace-transfer` | `session`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId`, `sourceParents` | Atomically `copy` or `move` one live session between workspaces. |
+| `POST /api/session-workspace-transfer/bulk` | Ordered, unique `sessions`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId`, `sourceParents` | Atomically transfers the complete batch, including saved references to ended sessions. |
 | `PUT /api/session-workspace-pin` | `session`, `pinned` | Adds/removes a live session across every saved workspace with deduplication. |
 
 Moving a globally pinned session returns `409`. A transfer reports whether the
@@ -465,6 +479,15 @@ The bulk response returns ordered arrays in `destinationAlreadyContained`,
 request order and existing tabs are never duplicated. A move that includes any
 globally pinned session, exceeds either workspace capacity, or uses a stale
 revision returns `409` without moving any member of the batch.
+New destination tabs retain their nearest source ancestor when that ancestor is
+also copied or already present. Existing destination relationships take
+precedence. Moving a parent promotes any children left in the source workspace.
+
+When transferring from a temporary workspace (`sourceWorkspaceId: null`),
+`sourceParents` may contain parent/child relationships among the selected
+sessions. Both endpoints must be selected. Saved workspace transfers use the
+stored hierarchy and reject a nonempty `sourceParents` override. Existing
+destination relationships take precedence for tabs already present there.
 
 ### Quick links
 

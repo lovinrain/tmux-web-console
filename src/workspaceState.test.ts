@@ -8,11 +8,14 @@ import {
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
   moveWorkspaceSessions,
+  normalizeWorkspaceHierarchy,
+  normalizeWorkspaceParents,
   removeWorkspaceSession,
   removeWorkspaceTabGroup,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
   savedWorkspaceIdFromSearch,
+  sameWorkspaceParents,
   searchWithSavedWorkspaceId,
   searchWithoutWorkspaceTabs,
   searchWithWorkspaceState,
@@ -23,6 +26,9 @@ import {
   stableSortWorkspaceSessionsByWorkingState,
   visitWorkspaceSession,
   workspaceGroupsFromSearch,
+  workspaceParentsFromSearch,
+  workspaceSessionDepth,
+  workspaceSessionTreeOrder,
   workspaceTabsFromSearch,
   type SessionWorkspaceState,
 } from "./workspaceState";
@@ -865,5 +871,161 @@ describe("session workspace state", () => {
       collapsed: true,
       tabs: ["new", "friend"],
     }]);
+  });
+});
+
+describe("nested workspace sessions", () => {
+  const workspace: SessionWorkspaceState = {
+    openSessions: ["parent", "child", "grandchild", "sibling", "other", "other-child"],
+    recentSessions: ["child", "parent"],
+    groups: [],
+    parents: { child: "parent", grandchild: "child", sibling: "parent", "other-child": "other" },
+  };
+
+  it("round-trips hierarchy in links, preserves it during tab updates, and clears isolated links", () => {
+    const search = searchWithWorkspaceState("?flag&raw=%2f", workspace.openSessions, [], workspace.parents);
+    expect(workspaceParentsFromSearch(search, workspace.openSessions)).toEqual(workspace.parents);
+    expect(workspaceParentsFromSearch(searchWithWorkspaceTabs(search, workspace.openSessions), workspace.openSessions))
+      .toEqual(workspace.parents);
+    expect(searchWithoutWorkspaceTabs(search)).toBe("?flag&raw=%2f");
+    expect(isolatedWorkspaceSearch(search, workspace.openSessions)).not.toContain("tab-parent");
+    expect(workspaceParentsFromSearch("?tab-parent=%7Bbroken", workspace.openSessions)).toEqual({});
+  });
+
+  it("rejects cycles and malformed parents, and promotes through missing ancestors", () => {
+    expect(normalizeWorkspaceParents({
+      child: "missing", missing: "parent", self: "self", cycleA: "cycleB", cycleB: "cycleA",
+      invalid: 42, stranger: "parent", orphan: "absent",
+    }, ["parent", "child", "self", "cycleA", "cycleB", "invalid", "orphan"])).toEqual({ child: "parent" });
+    expect(normalizeWorkspaceParents([], workspace.openSessions)).toEqual({});
+    expect(workspaceSessionDepth("grandchild", workspace.parents)).toBe(2);
+    expect(workspaceSessionDepth("parent", workspace.parents)).toBe(0);
+    expect(sameWorkspaceParents({}, undefined)).toBe(true);
+    expect(sameWorkspaceParents({ child: "parent" }, { child: "other" })).toBe(false);
+  });
+
+  it("supports session names that coincide with object prototype keys", () => {
+    const parents = JSON.parse('{"__proto__":"constructor","toString":"__proto__"}');
+    expect(normalizeWorkspaceParents(parents, ["constructor", "__proto__", "toString"])).toEqual(parents);
+    expect(workspaceSessionTreeOrder(["toString", "constructor", "__proto__"], parents))
+      .toEqual(["constructor", "__proto__", "toString"]);
+    const state: SessionWorkspaceState = { openSessions: ["constructor"], recentSessions: [], groups: [] };
+    expect(insertWorkspaceSessionAfter(state, "constructor", "__proto__").parents).toBeUndefined();
+    expect(insertWorkspaceSessionAfter(state, "constructor", "__proto__", "child").parents).toEqual(
+      JSON.parse('{"__proto__":"constructor"}'),
+    );
+  });
+
+  it("inserts sibling and child copies after the source's complete subtree", () => {
+    const sibling = insertWorkspaceSessionAfter(workspace, "child", "copy");
+    expect(sibling.openSessions).toEqual(["parent", "child", "grandchild", "copy", "sibling", "other", "other-child"]);
+    expect(sibling.parents).toEqual({ ...workspace.parents, copy: "parent" });
+    const child = insertWorkspaceSessionAfter(workspace, "child", "copy", "child");
+    expect(child.openSessions).toEqual(sibling.openSessions);
+    expect(child.parents).toEqual({ ...workspace.parents, copy: "child" });
+    expect(insertWorkspaceSessionAfter(workspace, "parent", "root-copy").openSessions)
+      .toEqual(["parent", "child", "grandchild", "sibling", "root-copy", "other", "other-child"]);
+  });
+
+  it("inherits the named group for a copied child", () => {
+    const group = { id: "work", name: "Work", color: "blue" as const, collapsed: true, tabs: workspace.openSessions.slice(0, 4) };
+    const copied = insertWorkspaceSessionAfter({ ...workspace, groups: [group] }, "child", "new-child", "child");
+    expect(copied.groups[0].tabs).toEqual(["parent", "child", "grandchild", "new-child", "sibling"]);
+    expect(copied.groups[0].collapsed).toBe(true);
+    expect(copied.parents?.["new-child"]).toBe("child");
+  });
+
+  it("restores depth-first tree order and preserves ancestry during visits", () => {
+    const restored = restoreWorkspaceTabs(createSessionWorkspace(), undefined,
+      ["grandchild", "other", "sibling", "child", "parent", "other-child"], [], workspace.parents);
+    expect(restored.openSessions).toEqual(["other", "other-child", "parent", "sibling", "child", "grandchild"]);
+    expect(restored.parents).toEqual(workspace.parents);
+    expect(visitWorkspaceSession(restored, "grandchild").parents).toEqual(workspace.parents);
+    expect(visitWorkspaceSession(restored, "brand-new").parents).toEqual(workspace.parents);
+  });
+
+  it("closes only the chosen session and promotes surviving children one level", () => {
+    const closed = closeWorkspaceSession(workspace, "child");
+    expect(closed.openSessions).toEqual(["parent", "grandchild", "sibling", "other", "other-child"]);
+    expect(closed.parents).toEqual({ grandchild: "parent", sibling: "parent", "other-child": "other" });
+    const forgotten = removeWorkspaceSession(workspace, "parent");
+    expect(forgotten.openSessions).toEqual(["child", "grandchild", "sibling", "other", "other-child"]);
+    expect(forgotten.parents).toEqual({ grandchild: "child", "other-child": "other" });
+    expect(forgotten.recentSessions).toEqual(["child"]);
+  });
+
+  it("renames both sides of relationships", () => {
+    const renamed = renameWorkspaceSession(workspace, "child", "renamed");
+    expect(renamed.parents).toEqual({ renamed: "parent", grandchild: "renamed", sibling: "parent", "other-child": "other" });
+    expect(renamed.openSessions).toEqual(["parent", "renamed", "grandchild", "sibling", "other", "other-child"]);
+  });
+
+  it("promotes a stale rename destination's children before replacing it with the real source", () => {
+    const renamed = renameWorkspaceSession({
+      openSessions: ["p", "old", "q", "new", "child"],
+      recentSessions: ["old", "new"],
+      groups: [],
+      parents: { old: "p", new: "q", child: "new" },
+    }, "old", "new");
+    expect(renamed.openSessions).toEqual(["p", "new", "q", "child"]);
+    expect(renamed.parents).toEqual({ new: "p", child: "q" });
+
+    const ancestorCollision = renameWorkspaceSession({
+      openSessions: ["root", "new", "old", "child", "other"],
+      recentSessions: ["old"],
+      groups: [],
+      parents: { new: "root", old: "new", child: "old", other: "new" },
+    }, "old", "new");
+    expect(ancestorCollision.openSessions).toEqual(["root", "new", "child", "other"]);
+    expect(ancestorCollision.parents).toEqual({ new: "root", child: "new", other: "root" });
+  });
+
+  it("moves a root subtree atomically and reorders children only among siblings", () => {
+    expect(moveWorkspaceSession(workspace, "parent", 5).openSessions)
+      .toEqual(["other", "other-child", "parent", "child", "grandchild", "sibling"]);
+    expect(moveWorkspaceSession(workspace, "child", 3).openSessions)
+      .toEqual(["parent", "sibling", "child", "grandchild", "other", "other-child"]);
+    expect(moveWorkspaceSession(workspace, "sibling", 2).openSessions)
+      .toEqual(["parent", "sibling", "child", "grandchild", "other", "other-child"]);
+    expect(moveWorkspaceSession(workspace, "child", 5)).toBe(workspace);
+    expect(moveWorkspaceSession(workspace, "parent", 2)).toBe(workspace);
+  });
+
+  it("moves selected subtrees together without splitting an unselected tree", () => {
+    const state = { ...workspace, openSessions: [...workspace.openSessions, "last"] };
+    expect(moveWorkspaceSessions(state, ["parent"], 3).openSessions)
+      .toEqual(["other", "other-child", "last", "parent", "child", "grandchild", "sibling"]);
+    expect(moveWorkspaceSessions(state, ["last"], 2).openSessions)
+      .toEqual(["last", "parent", "child", "grandchild", "sibling", "other", "other-child"]);
+    expect(moveWorkspaceSessions(state, ["child"], 2).openSessions)
+      .toEqual(["parent", "sibling", "child", "grandchild", "other", "other-child", "last"]);
+  });
+
+  it("sorts trees by whether any family member is working, preserving tree order", () => {
+    const sorted = stableSortWorkspaceSessionsByWorkingState(workspace, new Set(["grandchild"]));
+    expect(sorted.openSessions).toEqual(["other", "other-child", "parent", "child", "grandchild", "sibling"]);
+    expect(sorted.parents).toEqual(workspace.parents);
+    expect(stableSortWorkspaceSessionsByWorkingState(sorted, new Set(["grandchild"]))).toBe(sorted);
+  });
+
+  it("groups the whole family when selecting a child and moves groups across entire trees", () => {
+    const grouped = setWorkspaceTabGroup(workspace, {
+      id: "family", name: "Family", color: "cyan", collapsed: false, tabs: ["grandchild"],
+    });
+    expect(grouped.groups[0].tabs).toEqual(["parent", "child", "grandchild", "sibling"]);
+    expect(moveWorkspaceTabGroup(grouped, "family", 1).openSessions)
+      .toEqual(["other", "other-child", "parent", "child", "grandchild", "sibling"]);
+    expect(moveWorkspaceTabGroup(grouped, "family", 1).parents).toEqual(workspace.parents);
+  });
+
+  it("keeps named groups contiguous and gives root group membership to children", () => {
+    const group = { id: "work", name: "Work", color: "cyan" as const, collapsed: false, tabs: ["parent", "other"] };
+    const normalized = normalizeWorkspaceHierarchy(["parent", "middle", "child", "other", "other-child"], [group], {
+      child: "parent", "other-child": "other",
+    });
+    expect(normalized.tabs).toEqual(["parent", "child", "other", "other-child", "middle"]);
+    expect(normalized.groups[0].tabs).toEqual(["parent", "child", "other", "other-child"]);
+    expect(normalizeWorkspaceHierarchy(["parent", "child"], [{ ...group, tabs: ["child"] }], { child: "parent" }).groups)
+      .toEqual([]);
   });
 });

@@ -55,6 +55,7 @@ WORKSPACE_GROUP_COLORS = (
 )
 WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
+_PARENTS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
 _SEPARATORS_OMITTED = object()
 _PANE_LAYOUTS_OMITTED = object()
@@ -62,7 +63,7 @@ _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
 _EXPECTED_UPDATED_AT_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 13
+WORKSPACE_SCHEMA_VERSION = 14
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -147,6 +148,107 @@ def validate_workspace_tabs(value: object) -> tuple[str, ...]:
         seen.add(tab)
         tabs.append(tab)
     return tuple(tabs)
+
+
+def validate_workspace_parents(
+    value: object, tabs: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Validate workspace-local child/parent links, independent of tmux."""
+    if not isinstance(value, dict):
+        raise TypeError("parents must be an object")
+    tab_set = set(tabs)
+    parents: dict[str, str] = {}
+    for child, parent in value.items():
+        if not isinstance(child, str) or not isinstance(parent, str):
+            raise TypeError("parents keys and values must be session-name strings")
+        for name in (child, parent):
+            validate_session_name(name)
+            _validate_unicode(name, "parents")
+            if name not in tab_set:
+                raise ValueError(f"parents references session outside workspace tabs: {name}")
+        if child == parent:
+            raise ValueError("parents cannot make a session its own parent")
+        parents[child] = parent
+    for child, parent in parents.items():
+        ancestors = {child}
+        while True:
+            if parent in ancestors:
+                raise ValueError("parents cannot contain a cycle")
+            ancestors.add(parent)
+            if parent not in parents:
+                break
+            parent = parents[parent]
+    return tuple((child, parents[child]) for child in tabs if child in parents)
+
+
+def _reconcile_workspace_parents(
+    parents: tuple[tuple[str, str], ...], tabs: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Promote a surviving child through removed ancestors, preserving its tree."""
+    previous = dict(parents)
+    tab_set = set(tabs)
+    reconciled: list[tuple[str, str]] = []
+    for child in tabs:
+        parent = previous.get(child)
+        while parent is not None and parent not in tab_set:
+            parent = previous.get(parent)
+        if parent is not None:
+            reconciled.append((child, parent))
+    return tuple(reconciled)
+
+
+def _rename_workspace_parents(
+    parents: tuple[tuple[str, str], ...], tabs: tuple[str, ...],
+    current_name: str, new_name: str,
+) -> tuple[tuple[str, str], ...]:
+    # A pre-existing destination name represents stale metadata. Remove that
+    # identity first, promoting its children, before moving the source identity.
+    without_destination = _reconcile_workspace_parents(
+        parents, tuple(tab for tab in tabs if tab != new_name),
+    )
+    return tuple(
+        (
+            new_name if child == current_name else child,
+            new_name if parent == current_name else parent,
+        )
+        for child, parent in without_destination
+    )
+
+
+def _restore_workspace_parents(
+    current: tuple[tuple[str, str], ...],
+    original: tuple[tuple[str, str], ...],
+    before_tabs: tuple[str, ...],
+    after_tabs: tuple[str, ...],
+    session_name: str,
+) -> tuple[tuple[str, str], ...]:
+    """Undo only links changed by forgetting this session, preserving later edits."""
+    parents = dict(current)
+    original_map = dict(original)
+    expected = dict(_reconcile_workspace_parents(original, before_tabs))
+    restored = dict(_reconcile_workspace_parents(original, after_tabs))
+    for child in after_tabs:
+        if child == session_name:
+            affected = child not in before_tabs
+        else:
+            ancestor = original_map.get(child)
+            while ancestor is not None and ancestor != session_name:
+                ancestor = original_map.get(ancestor)
+            affected = ancestor == session_name
+        if not affected or parents.get(child) != expected.get(child):
+            continue
+        proposed = dict(parents)
+        if child in restored:
+            proposed[child] = restored[child]
+        else:
+            proposed.pop(child, None)
+        try:
+            validate_workspace_parents(proposed, after_tabs)
+        except ValueError:
+            # A concurrently edited ancestor may make an old relationship cyclic.
+            continue
+        parents = proposed
+    return validate_workspace_parents(parents, after_tabs)
 
 
 def validate_workspace_callback_sessions(
@@ -1153,9 +1255,10 @@ class SavedWorkspace:
     separators_before: tuple[str, ...] = ()
     pane_layouts: tuple[WorkspacePaneLayout, ...] = ()
     callback_sessions: tuple[str, ...] = ()
+    parents: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "tabs": list(self.tabs),
@@ -1169,10 +1272,12 @@ class SavedWorkspace:
             "updatedAt": self.updated_at,
             "lastActiveAt": self.last_active_at,
         }
-        # Empty lists remain optional in schema 13 and are represented as empty
+        # Empty collections remain optional and are represented as empty
         # by both the API client and loader.
         if self.callback_sessions:
             payload["callbackSessions"] = list(self.callback_sessions)
+        if self.parents:
+            payload["parents"] = dict(self.parents)
         if include_internal:
             payload["inheritedPins"] = list(self.inherited_pins)
         return payload
@@ -1184,6 +1289,7 @@ class ForgottenWorkspaceSession:
     tab_order: tuple[str, ...]
     callback_order: tuple[str, ...]
     restore_active_session: bool
+    parents: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1563,6 +1669,7 @@ class WorkspaceStore:
                     next_workspaces[workspace_id] = replace(
                         current,
                         tabs=tabs,
+                        parents=_reconcile_workspace_parents(current.parents, tabs),
                         groups=_reconcile_workspace_groups(current.groups, tabs),
                         pane_layouts=_reconcile_workspace_pane_layouts(
                             current.pane_layouts, tabs
@@ -1598,6 +1705,7 @@ class WorkspaceStore:
         operation: str,
         session_revision: object,
         source_workspace_id: str | None = None,
+        source_parents: object = _PARENTS_OMITTED,
     ) -> dict[str, Any]:
         result = self.transfer_sessions(
             [session_name],
@@ -1605,6 +1713,7 @@ class WorkspaceStore:
             operation=operation,
             session_revision=session_revision,
             source_workspace_id=source_workspace_id,
+            source_parents=source_parents,
         )
         return {
             "session": session_name,
@@ -1627,6 +1736,7 @@ class WorkspaceStore:
         operation: str,
         session_revision: object,
         source_workspace_id: str | None = None,
+        source_parents: object = _PARENTS_OMITTED,
     ) -> dict[str, Any]:
         validated_session_names = _validate_pinned_session_names(
             session_names,
@@ -1637,6 +1747,15 @@ class WorkspaceStore:
         destination_workspace_id = _validate_workspace_id(destination_workspace_id)
         if source_workspace_id is not None:
             source_workspace_id = _validate_workspace_id(source_workspace_id)
+        try:
+            validated_source_parents = validate_workspace_parents(
+                {} if source_parents is _PARENTS_OMITTED else source_parents,
+                validated_session_names,
+            )
+        except (TypeError, ValueError) as error:
+            raise type(error)(f"sourceParents: {error}") from error
+        if source_workspace_id is not None and validated_source_parents:
+            raise ValueError("sourceParents is only allowed without sourceWorkspaceId")
         if operation not in {"copy", "move"}:
             raise ValueError("operation must be copy or move")
         if source_workspace_id == destination_workspace_id:
@@ -1762,6 +1881,7 @@ class WorkspaceStore:
                 next_workspaces[source.id] = replace(
                     source,
                     tabs=source_tabs,
+                    parents=_reconcile_workspace_parents(source.parents, source_tabs),
                     groups=_reconcile_workspace_groups(source.groups, source_tabs),
                     pane_layouts=_reconcile_workspace_pane_layouts(
                         source.pane_layouts, source_tabs
@@ -1780,12 +1900,22 @@ class WorkspaceStore:
                     *destination.callback_sessions,
                     *transfer_callback_markers,
                 )
+                destination_tabs = (*destination.tabs, *destination_added)
+                destination_parents = dict(destination.parents)
+                # Existing destination organization wins; newly copied tabs
+                # retain their nearest ancestor already present or copied.
+                transferred_parents = dict(_reconcile_workspace_parents(
+                    source.parents if source is not None else validated_source_parents,
+                    destination_tabs,
+                ))
+                for child in destination_added:
+                    if child in transferred_parents:
+                        destination_parents[child] = transferred_parents[child]
                 next_workspaces[destination.id] = replace(
                     destination,
-                    tabs=(
-                        (*destination.tabs, *destination_added)
-                        if destination_added
-                        else destination.tabs
+                    tabs=destination_tabs,
+                    parents=validate_workspace_parents(
+                        destination_parents, destination_tabs,
                     ),
                     callback_sessions=destination_callback_sessions,
                     updated_at=max(timestamp, destination.updated_at + 1),
@@ -2044,6 +2174,7 @@ class WorkspaceStore:
         tabs: object,
         active_session: object,
         groups: object = _GROUPS_OMITTED,
+        parents: object = _PARENTS_OMITTED,
         quick_links: object = _QUICK_LINKS_OMITTED,
         separators: object = _SEPARATORS_OMITTED,
         separators_before: object = _SEPARATORS_OMITTED,
@@ -2052,6 +2183,9 @@ class WorkspaceStore:
     ) -> dict[str, Any]:
         normalized_name = normalize_workspace_name(name)
         validated_tabs = validate_workspace_tabs(tabs)
+        validated_parents = validate_workspace_parents(
+            {} if parents is _PARENTS_OMITTED else parents, validated_tabs,
+        )
         validated_separators = validate_workspace_separators(
             [] if separators is _SEPARATORS_OMITTED else separators, validated_tabs
         )
@@ -2085,6 +2219,7 @@ class WorkspaceStore:
                 id=workspace_id,
                 name=normalized_name,
                 tabs=merged_tabs,
+                parents=validated_parents,
                 groups=validated_groups,
                 quick_links=validated_quick_links,
                 separators=validated_separators,
@@ -2108,10 +2243,12 @@ class WorkspaceStore:
         name: object = None,
         tabs: object = None,
         groups: object = None,
+        parents: object = None,
         active_session: object = None,
         update_name: bool = False,
         update_tabs: bool = False,
         update_groups: bool = False,
+        update_parents: bool = False,
         update_active_session: bool = False,
         separators: object = None,
         update_separators: bool = False,
@@ -2141,6 +2278,7 @@ class WorkspaceStore:
             if (
                 update_tabs
                 or update_groups
+                or update_parents
                 or update_active_session
                 or update_separators
                 or update_separators_before
@@ -2182,6 +2320,11 @@ class WorkspaceStore:
                 if update_tabs
                 else current.groups
             )
+            next_parents = (
+                validate_workspace_parents(parents, next_tabs)
+                if update_parents
+                else _reconcile_workspace_parents(current.parents, next_tabs)
+            )
             next_pane_layouts = (
                 validate_workspace_pane_layouts(pane_layouts, next_tabs)
                 if update_pane_layouts
@@ -2208,6 +2351,7 @@ class WorkspaceStore:
                 current,
                 name=normalized_name if normalized_name is not None else current.name,
                 tabs=next_tabs,
+                parents=next_parents,
                 groups=next_groups,
                 pane_layouts=next_pane_layouts,
                 callback_sessions=next_callback_sessions,
@@ -2730,6 +2874,8 @@ class WorkspaceStore:
         session_revision: object,
         groups: object = None,
         update_groups: bool = False,
+        parents: object = None,
+        update_parents: bool = False,
         expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
@@ -2775,6 +2921,11 @@ class WorkspaceStore:
             workspace = replace(
                 current,
                 tabs=merged_tabs,
+                parents=(
+                    validate_workspace_parents(parents, merged_tabs)
+                    if update_parents
+                    else _reconcile_workspace_parents(current.parents, merged_tabs)
+                ),
                 groups=validated_groups,
                 pane_layouts=_reconcile_workspace_pane_layouts(
                     current.pane_layouts, merged_tabs
@@ -2821,6 +2972,7 @@ class WorkspaceStore:
                 ):
                     continue
                 tab_order = workspace.tabs
+                parents = workspace.parents
                 callback_order = workspace.callback_sessions
                 restore_active = workspace.active_session == session_name
                 # Include pending removals as ordering anchors. This makes
@@ -2839,9 +2991,14 @@ class WorkspaceStore:
                         )
                         if workspace.active_session == (remaining[0] if remaining else None):
                             restore_active = False
-                    tab_order = _restore_ordered_session(
+                    next_tab_order = _restore_ordered_session(
                         tab_order, old.tab_order, previous.session_name,
                     )
+                    parents = _restore_workspace_parents(
+                        parents, old.parents, tab_order, next_tab_order,
+                        previous.session_name,
+                    )
+                    tab_order = next_tab_order
                     callback_order = _restore_ordered_session(
                         callback_order, old.callback_order, previous.session_name,
                     )
@@ -2850,6 +3007,7 @@ class WorkspaceStore:
                     tab_order=tab_order,
                     callback_order=callback_order,
                     restore_active_session=restore_active,
+                    parents=parents,
                 ))
             pinned_sessions = self._pinned_sessions
             callbacks = self._global_callback_sessions
@@ -2975,6 +3133,10 @@ class WorkspaceStore:
                 restored = replace(
                     current,
                     tabs=tabs,
+                    parents=_restore_workspace_parents(
+                        current.parents, record.parents, current.tabs, tabs,
+                        session_name,
+                    ),
                     groups=reconciled_groups,
                     pane_layouts=layouts,
                     callback_sessions=callbacks,
@@ -3059,6 +3221,7 @@ class WorkspaceStore:
                 next_workspaces[workspace_id] = replace(
                     current,
                     tabs=tabs,
+                    parents=_reconcile_workspace_parents(current.parents, tabs),
                     groups=_reconcile_workspace_groups(current.groups, tabs),
                     pane_layouts=_reconcile_workspace_pane_layouts(
                         current.pane_layouts, tabs
@@ -3154,6 +3317,9 @@ class WorkspaceStore:
                 workspace = replace(
                     current,
                     tabs=renamed_tabs,
+                    parents=_rename_workspace_parents(
+                        current.parents, current.tabs, current_name, new_name,
+                    ),
                     groups=groups,
                     pane_layouts=_rename_workspace_pane_layouts(
                         current.pane_layouts, current_name, new_name
@@ -3522,6 +3688,9 @@ class WorkspaceStore:
         if version >= 11:
             expected.add("callbackSessions")
         optional = {"callbackSessions"} if version >= 11 else set()
+        if version >= 14:
+            expected.add("parents")
+            optional.add("parents")
         missing = sorted((expected - optional) - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -3576,6 +3745,10 @@ class WorkspaceStore:
             id=workspace_id,
             name=name,
             tabs=tabs,
+            parents=(
+                validate_workspace_parents(record.get("parents", {}), tabs)
+                if version >= 14 else ()
+            ),
             groups=groups,
             quick_links=quick_links,
             inherited_pins=inherited_pins,

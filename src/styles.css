@@ -3962,6 +3962,20 @@ span.workspace-tab-group-toggle {
   white-space: nowrap;
 }
 
+.workspace-tab-child-marker {
+  display: inline-block;
+  width: 9px;
+  height: 10px;
+  flex: 0 0 9px;
+  align-self: center;
+  color: var(--cyan);
+  border-inline-start: 1px solid currentColor;
+  border-block-end: 1px solid currentColor;
+  border-end-start-radius: 3px;
+  opacity: 0.75;
+  transform: translateY(-2px);
+}
+
 .workspace-tab-selection-mark {
   display: grid;
   width: 15px;
@@ -4455,6 +4469,24 @@ span.workspace-tab-group-toggle {
   border: 1px solid color-mix(in srgb, var(--tab-group-color) 24%, transparent);
   border-radius: 99px;
   font-size: 8px;
+}
+
+.workspace-tab-search-result[data-session-parent] {
+  padding-inline-start: calc(12px + min(var(--workspace-session-depth), 4) * 12px);
+}
+
+.workspace-tab-search-result-copy .workspace-session-parent-label,
+.workspace-session-copy > .workspace-session-parent-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--cyan);
+}
+
+.workspace-session-parent-label .workspace-tab-child-marker {
+  width: 7px;
+  height: 8px;
+  flex-basis: 7px;
 }
 
 .workspace-tab-search-result-group svg {
@@ -5950,6 +5982,10 @@ span.workspace-tab-group-toggle {
   background: #232a21;
   border-color: #56674d;
   box-shadow: inset 3px 0 0 var(--acid);
+}
+
+.workspace-session-row[data-session-parent] {
+  margin-inline-start: calc(min(var(--workspace-session-depth), 4) * 12px);
 }
 
 .workspace-session-select {
@@ -12506,6 +12542,93 @@ html.scoped-note-resizing-bottom-left * {
     flex: 1 1 auto;
   }
 
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab[data-session-parent] {
+    --workspace-tab-tree-indent: min(calc(var(--workspace-session-depth) * 14px), 56px);
+    width: calc(100% - var(--workspace-tab-tree-indent));
+    margin-inline-start: var(--workspace-tab-tree-indent);
+    overflow: visible;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-tab > [role="tab"] > .workspace-tab-child-marker {
+    position: absolute;
+    top: -1px;
+    bottom: 50%;
+    inset-inline-start: -12px;
+    height: auto;
+    pointer-events: none;
+    transform: none;
+  }
+
+  /* Tree indentation must not let action buttons squeeze session titles away. */
+  @container workspace-tab-rail (max-width: 371px) {
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab[data-workspace-session-name] {
+      display: grid;
+      height: auto;
+      min-height: 64px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-rows: 34px 28px;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab[data-workspace-session-name] > [role="tab"] {
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab[data-workspace-session-name] > :not([role="tab"]) {
+      grid-row: 2;
+      border-block-start: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab-reorder {
+      grid-column: 1 / 3;
+      border-inline-start: 0;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab-window-actions {
+      grid-column: 3 / 5;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab-terminate {
+      grid-column: 5;
+      width: auto;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab-close {
+      grid-column: 6;
+      width: auto;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      :is(.workspace-tab-reorder, .workspace-tab-window-actions) > button {
+      width: 50%;
+      min-width: 0;
+      flex: 1 1 50%;
+    }
+
+    [data-desktop-tabs="vertical"]
+      .workspace-navigation-vertical[data-session-tree="true"][data-tab-actions-visible="true"]:not([data-compact="true"])
+      .workspace-tab > [role="tab"] > .workspace-tab-child-marker {
+      bottom: calc(100% - 17px);
+    }
+  }
+
   /* The rail's query size excludes its 12px gutter and 1px border. */
   @container workspace-tab-rail (max-width: 227px) {
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-dashboard-button,
@@ -12604,6 +12727,17 @@ html.scoped-note-resizing-bottom-left * {
   }
 
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical[data-compact="true"]
+    .workspace-tab[data-session-parent] {
+    --workspace-tab-tree-indent: min(calc(var(--workspace-session-depth) * 8px), 24px);
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical[data-compact="true"]
+    .workspace-tab > [role="tab"] > .workspace-tab-child-marker {
+    inset-inline-start: -7px;
+    width: 5px;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical[data-compact="true"]
     .workspace-tab > [role="tab"] {
     min-width: 0;
     padding-inline: 6px;
@@ -12623,6 +12757,20 @@ html.scoped-note-resizing-bottom-left * {
 
   /* With the compact 8px gutter, 103px of query width is a 112px rail. */
   @container workspace-tab-rail (max-width: 103px) {
+    [data-desktop-tabs="vertical"] .workspace-navigation-vertical[data-compact="true"]
+      .workspace-tab[data-session-parent] {
+      --workspace-tab-tree-indent: 0px;
+    }
+
+    [data-desktop-tabs="vertical"] .workspace-navigation-vertical[data-compact="true"]
+      .workspace-tab > [role="tab"] > .workspace-tab-child-marker {
+      top: 3px;
+      bottom: auto;
+      inset-inline-start: 3px;
+      width: 5px;
+      height: 6px;
+    }
+
     .workspace-navigation-vertical[data-orientation="vertical"]
       .workspace-dashboard-actions .workspace-dashboard-button,
     .workspace-navigation-vertical[data-orientation="vertical"]

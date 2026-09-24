@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createWorkspace,
   deleteWorkspace,
   forgetRecoverableSession,
   getSnippetTree,
@@ -448,6 +449,65 @@ describe("session classification", () => {
       name: "Delete workspace",
     }));
     await waitFor(() => expect(onSavedWorkspaceDeleted).toHaveBeenCalledWith("saved-id"));
+  });
+
+  it.each([
+    { title: "nested", parents: { web: "api" } },
+    { title: "flat", parents: undefined },
+  ])("opens a $title saved workspace with its own hierarchy", async ({ parents }) => {
+    const search = new URLSearchParams({ workspace: "other" });
+    search.append("tab", "web");
+    search.append("tab", "api");
+    search.set("tab-parent", JSON.stringify({ api: "web" }));
+    window.history.replaceState({}, "", `/mux/?${search.toString()}`);
+    vi.mocked(listSessions).mockResolvedValue([]);
+    vi.mocked(listWorkspaces).mockResolvedValue([{
+      id: "saved", name: "Saved", tabs: ["api", "web"], parents,
+      activeSession: "api", sessionRevision: 0,
+      createdAt: 1, updatedAt: 1, lastActiveAt: 1,
+    }]);
+
+    renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
+
+    const link = await screen.findByRole("link", {
+      name: "Open workspace Saved in new window",
+    });
+    const url = new URL(link.getAttribute("href")!, "https://muxdeck.test");
+    expect(url.searchParams.getAll("tab")).toEqual(["api", "web"]);
+    expect(JSON.parse(url.searchParams.get("tab-parent") ?? "{}"))
+      .toEqual(parents ?? {});
+  });
+
+  it("preserves the current session tree when copying a workspace from the dashboard", async () => {
+    vi.mocked(listSessions).mockResolvedValue([]);
+    const created: SavedWorkspace = {
+      id: "copied", name: "Copied tree", tabs: ["api", "web"],
+      parents: { web: "api" }, activeSession: "web", sessionRevision: 0,
+      createdAt: 1, updatedAt: 1, lastActiveAt: 1,
+    };
+    vi.mocked(createWorkspace).mockResolvedValue(created);
+    const onOpenSavedWorkspace = vi.fn();
+    renderWithTheme(<SessionDashboard
+      onOpen={vi.fn()}
+      currentWorkspaceTabs={["api", "web"]}
+      currentWorkspaceParents={{ web: "api" }}
+      activeSession="web"
+      onOpenSavedWorkspace={onOpenSavedWorkspace}
+    />);
+    await screen.findByText("No saved workspaces yet.");
+
+    fireEvent.click(screen.getByRole("button", { name: "New workspace" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Workspace name" }), {
+      target: { value: "Copied tree" },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /Copy current tabs/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create & open" }));
+
+    await waitFor(() => expect(createWorkspace).toHaveBeenCalledWith({
+      name: "Copied tree", tabs: ["api", "web"], groups: [],
+      parents: { web: "api" }, activeSession: "web",
+    }));
+    expect(onOpenSavedWorkspace).toHaveBeenCalledWith(created);
   });
 
   it("uses the base-path new-session route for the default window link", () => {

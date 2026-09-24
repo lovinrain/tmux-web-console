@@ -1,10 +1,12 @@
 import type { SavedWorkspace } from "./api";
 import {
-  normalizeWorkspaceTabGroups,
+  normalizeWorkspaceHierarchy,
+  normalizeWorkspaceParents,
+  type WorkspaceSessionParents,
   type WorkspaceTabGroup,
 } from "./workspaceState";
 
-type WorkspaceContents = Pick<SavedWorkspace, "tabs" | "groups">;
+type WorkspaceContents = Pick<SavedWorkspace, "tabs" | "groups" | "parents">;
 
 function sameOrder(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -57,12 +59,41 @@ function rebaseTabs(
   return tabs;
 }
 
+function rebaseParents(
+  base: WorkspaceContents,
+  local: WorkspaceContents,
+  remote: WorkspaceContents,
+): WorkspaceSessionParents {
+  const baseParents = base.parents ?? {};
+  const remoteParents = new Map(Object.entries(normalizeWorkspaceParents(remote.parents, remote.tabs)));
+  // Keep ancestry for removed tabs until the final normalization. A child
+  // created concurrently with closing its parent can then move to the nearest
+  // surviving ancestor without restoring the closed tab.
+  const parents = new Map([...Object.entries(baseParents), ...remoteParents]);
+  for (const tab of remote.tabs) {
+    if (!remoteParents.has(tab)) parents.delete(tab);
+  }
+
+  // Closing a parent automatically promotes its children. Compare against the
+  // base with that same promotion applied, so it does not masquerade as an
+  // intentional reparent and overwrite a concurrent remote edit.
+  const baseWithLocalTabs = new Map(Object.entries(normalizeWorkspaceParents(baseParents, local.tabs)));
+  const localParents = new Map(Object.entries(normalizeWorkspaceParents(local.parents, local.tabs)));
+  for (const tab of local.tabs) {
+    const parent = localParents.get(tab);
+    if (parent === baseWithLocalTabs.get(tab)) continue;
+    if (parent) parents.set(tab, parent);
+    else parents.delete(tab);
+  }
+  return Object.fromEntries(parents);
+}
+
 /** Apply edits since base to the latest server snapshot without reviving closed tabs. */
 export function rebaseWorkspaceEdits(
   base: WorkspaceContents,
   local: WorkspaceContents,
   remote: WorkspaceContents,
-): { tabs: string[]; groups: WorkspaceTabGroup[] } {
+): { tabs: string[]; groups: WorkspaceTabGroup[]; parents?: WorkspaceSessionParents } {
   const tabs = rebaseTabs(base.tabs, local.tabs, remote.tabs);
   const baseGroups = new Map((base.groups ?? []).map((group) => [group.id, group]));
   const localGroups = new Map((local.groups ?? []).map((group) => [group.id, group]));
@@ -114,5 +145,5 @@ export function rebaseWorkspaceEdits(
     ));
   }
 
-  return { tabs, groups: normalizeWorkspaceTabGroups(groups, tabs) };
+  return normalizeWorkspaceHierarchy(tabs, groups, rebaseParents(base, local, remote));
 }

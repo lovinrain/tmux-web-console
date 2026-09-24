@@ -3616,7 +3616,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"sourceWorkspaceId"}
+        allowed = required | {"sourceWorkspaceId", "sourceParents"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -3640,6 +3640,7 @@ def create_app(
                 result = app[WORKSPACES_KEY].transfer_session(
                     session_name,
                     source_workspace_id=source_workspace_id,
+                    source_parents=payload.get("sourceParents", {}),
                     destination_workspace_id=destination_workspace_id,
                     operation=operation,
                     session_revision=payload["sessionRevision"],
@@ -3686,7 +3687,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"sourceWorkspaceId"}
+        allowed = required | {"sourceWorkspaceId", "sourceParents"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -3709,6 +3710,7 @@ def create_app(
                 result = app[WORKSPACES_KEY].transfer_sessions(
                     sessions,
                     source_workspace_id=source_workspace_id,
+                    source_parents=payload.get("sourceParents", {}),
                     destination_workspace_id=destination_workspace_id,
                     operation=operation,
                     session_revision=payload["sessionRevision"],
@@ -5227,6 +5229,7 @@ def create_app(
             return json_error(f"{missing[0]} is required", 400)
         allowed = required | {
             "groups",
+            "parents",
             "separators",
             "separatorsBefore",
             "paneLayouts",
@@ -5242,6 +5245,7 @@ def create_app(
                 tabs=payload["tabs"],
                 active_session=payload["activeSession"],
                 groups=payload.get("groups", []),
+                parents=payload.get("parents", {}),
                 separators=payload.get("separators", []),
                 separators_before=payload.get("separatorsBefore", []),
                 pane_layouts=payload.get("paneLayouts", []),
@@ -5271,6 +5275,7 @@ def create_app(
             "name",
             "tabs",
             "groups",
+            "parents",
             "separators",
             "separatorsBefore",
             "paneLayouts",
@@ -5286,6 +5291,7 @@ def create_app(
             "name",
             "tabs",
             "groups",
+            "parents",
             "separators",
             "separatorsBefore",
             "paneLayouts",
@@ -5294,7 +5300,7 @@ def create_app(
         }
         if not set(payload) & workspace_fields:
             return json_error(
-                "name, tabs, groups, separators, separatorsBefore, paneLayouts, "
+                "name, tabs, groups, parents, separators, separatorsBefore, paneLayouts, "
                 "callbackSessions, or activeSession is required",
                 400,
             )
@@ -5303,6 +5309,7 @@ def create_app(
             & {
                 "tabs",
                 "groups",
+                "parents",
                 "separators",
                 "separatorsBefore",
                 "paneLayouts",
@@ -5323,6 +5330,8 @@ def create_app(
                 update_name="name" in payload,
                 update_tabs="tabs" in payload,
                 update_groups="groups" in payload,
+                parents=payload.get("parents"),
+                update_parents="parents" in payload,
                 separators=payload.get("separators"),
                 update_separators="separators" in payload,
                 separators_before=payload.get("separatorsBefore"),
@@ -5366,7 +5375,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"groups", "expectedUpdatedAt"}
+        allowed = required | {"groups", "parents", "expectedUpdatedAt"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -5379,6 +5388,8 @@ def create_app(
                 session_revision=payload["sessionRevision"],
                 groups=payload.get("groups"),
                 update_groups="groups" in payload,
+                parents=payload.get("parents"),
+                update_parents="parents" in payload,
                 **(
                     {"expected_updated_at": payload["expectedUpdatedAt"]}
                     if "expectedUpdatedAt" in payload else {}

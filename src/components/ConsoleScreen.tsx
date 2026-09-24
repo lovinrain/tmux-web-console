@@ -75,6 +75,7 @@ import {
 import { useTheme } from "../theme";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { AccountLink } from "./AccountLink";
+import { CopySessionControl, type CopySessionPlacement } from "./CopySessionControl";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
 import { FloatingTerminal, type FloatingTerminalHandle } from "./FloatingTerminal";
 import { newTemporaryTerminalKey } from "../floatingTerminalState";
@@ -181,6 +182,7 @@ interface ConsoleScreenProps {
     sourceName: string,
     sessionName: string,
     sessionId: string,
+    placement?: CopySessionPlacement,
   ) => void;
   onSplitWorkspace?: (sessionName: string) => OpenTabInNewWindowResult;
   onSplitEphemeralTab?: (sessionName: string) => OpenTabInNewWindowResult;
@@ -846,7 +848,7 @@ export function ConsoleScreen({
     window.open(url, "_blank", "noopener,noreferrer");
   }, [mobileLayout, pane, session, workspaceOverlayOpen]);
 
-  const copyNewSession = useCallback(async () => {
+  const copyNewSession = useCallback(async (placement: CopySessionPlacement = "sibling") => {
     if (
       copyingSessionRef.current
       || copySessionDisabled
@@ -876,7 +878,8 @@ export function ConsoleScreen({
     }
     copyingSessionRef.current = false;
     setCopyingSource(null);
-    onSessionCopied(sourceName, created.name, created.id);
+    if (placement === "child") onSessionCopied(sourceName, created.name, created.id, "child");
+    else onSessionCopied(sourceName, created.name, created.id);
   }, [copySessionDisabled, onSessionCopied, session, theme]);
 
   const splitIntoNewWorkspace = useCallback(() => {
@@ -1334,12 +1337,13 @@ export function ConsoleScreen({
     const closeFromOutside = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && consoleHeaderRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".copy-session-menu")) return;
       closeHeaderTray();
     };
     const closeFromKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // A dialog opened from a tray control owns Escape until it closes.
-      if (document.querySelector('[aria-modal="true"]')) return;
+      if (document.querySelector('[aria-modal="true"], .copy-session-menu')) return;
       event.preventDefault();
       event.stopPropagation();
       closeHeaderTray(true);
@@ -2291,20 +2295,16 @@ export function ConsoleScreen({
                 <ClockIcon /><span>Agents</span>
               </button>
               {!ephemeral && onSessionCopied && (
-                <button
-                  type="button"
-                  className="copy-new-button"
-                  aria-keyshortcuts={directShortcutAria(shortcutBindings["session-copy-new"])}
-                  aria-busy={copyingSource === sessionName}
+                <CopySessionControl
+                  key={`${sessionName}:${desktopTerminalFocus}:${workspaceOverlayOpen}:${headerTrayOpen}:${mobileLayout}`}
+                  shortcut={directShortcutAria(shortcutBindings["session-copy-new"])}
+                  busy={copyingSource === sessionName}
                   disabled={copySessionDisabled || !session || copyingSource !== null}
                   title={`Create and open a fresh session in this pane's working directory${directShortcutLabel(shortcutBindings["session-copy-new"])
                     ? ` (${directShortcutLabel(shortcutBindings["session-copy-new"])})`
                     : ""}`}
-                  onClick={() => void copyNewSession()}
-                >
-                  <WindowCopyIcon />
-                  <span>{copyingSource === sessionName ? "Creating..." : "Copy New"}</span>
-                </button>
+                  onCopy={(placement) => void copyNewSession(placement)}
+                />
               )}
               {!ephemeral && !mobileLayout && (onSplitWorkspace || onSplitEphemeralTab) && (
                 <div className="split-action-group" role="group" aria-label="Split">

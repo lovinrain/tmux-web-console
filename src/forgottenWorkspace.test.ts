@@ -34,6 +34,15 @@ function layout(): WorkspacePaneLayout {
   };
 }
 
+function nestedWorkspace(): SessionWorkspaceState {
+  return {
+    openSessions: ["parent", "child", "grandchild", "sibling", "other"],
+    recentSessions: ["other", "sibling", "grandchild", "child", "parent"],
+    groups: [],
+    parents: { child: "parent", grandchild: "child", sibling: "parent" },
+  };
+}
+
 describe("restoreForgottenWorkspaceSession", () => {
   it("restores the original tab, recent order and collapsed group membership", () => {
     const before = workspace();
@@ -106,6 +115,110 @@ describe("restoreForgottenWorkspaceSession", () => {
   it("does nothing when the session was never in this workspace", () => {
     const current = workspace();
     expect(restoreForgottenWorkspaceSession("unknown", workspace(), current)).toBe(current);
+  });
+
+  it.each(["parent", "child", "grandchild"])("restores %s and its original hierarchy after forgetting", (name) => {
+    const before = nestedWorkspace();
+    const current = removeWorkspaceSession(before, name);
+    expect(restoreForgottenWorkspaceSession(name, before, current)).toEqual(before);
+  });
+
+  it.each([
+    ["parent", "child"],
+    ["child", "parent"],
+  ])("restores forgotten ancestors in %s, %s order", (first, second) => {
+    const before = nestedWorkspace();
+    const current = removeWorkspaceSession(removeWorkspaceSession(before, "parent"), "child");
+    const partial = restoreForgottenWorkspaceSession(first, before, current);
+    expect(partial.openSessions).not.toContain(second);
+    expect(partial.parents?.grandchild).toBe(first);
+    expect(restoreForgottenWorkspaceSession(second, before, partial)).toEqual(before);
+  });
+
+  it("preserves a surviving child's later parent and its descendants", () => {
+    const before = nestedWorkspace();
+    const current: SessionWorkspaceState = {
+      ...removeWorkspaceSession(before, "parent"),
+      openSessions: ["sibling", "other", "child", "grandchild"],
+      parents: { child: "other", grandchild: "child" },
+    };
+    const restored = restoreForgottenWorkspaceSession("parent", before, current);
+    expect(restored.parents).toEqual({ child: "other", grandchild: "child", sibling: "parent" });
+    expect(restored.openSessions.slice(
+      restored.openSessions.indexOf("other"), restored.openSessions.indexOf("other") + 3,
+    )).toEqual(["other", "child", "grandchild"]);
+  });
+
+  it("keeps a child promoted out of a still-surviving grandparent", () => {
+    const before = nestedWorkspace();
+    const current = removeWorkspaceSession(before, "child");
+    delete current.parents?.grandchild;
+    const restored = restoreForgottenWorkspaceSession("child", before, current);
+    expect(restored.parents).toEqual({ child: "parent", sibling: "parent" });
+  });
+
+  it("does not recreate a descendant forgotten after its parent", () => {
+    const before = nestedWorkspace();
+    const current = removeWorkspaceSession(removeWorkspaceSession(before, "parent"), "grandchild");
+    const restored = restoreForgottenWorkspaceSession("parent", before, current);
+    expect(restored.openSessions).toEqual(["parent", "child", "sibling", "other"]);
+    expect(restored.parents).toEqual({ child: "parent", sibling: "parent" });
+  });
+
+  it("preserves manually reopened hierarchy", () => {
+    const before = nestedWorkspace();
+    const current: SessionWorkspaceState = {
+      ...before,
+      openSessions: ["child", "grandchild", "sibling", "other", "parent"],
+      parents: { grandchild: "child", parent: "other" },
+    };
+    expect(restoreForgottenWorkspaceSession("parent", before, current)).toBe(current);
+  });
+
+  it("preserves later group moves instead of moving the child back with its parent", () => {
+    const before = nestedWorkspace();
+    before.groups = [{ id: "original", name: "Original", color: "blue", collapsed: false,
+      tabs: ["parent", "child", "grandchild", "sibling"] }];
+    const current: SessionWorkspaceState = {
+      ...removeWorkspaceSession(before, "parent"),
+      openSessions: ["sibling", "other", "child", "grandchild"],
+      groups: [
+        { ...before.groups[0], tabs: ["sibling"] },
+        { id: "new", name: "New", color: "red", collapsed: false, tabs: ["child", "grandchild"] },
+      ],
+    };
+    const restored = restoreForgottenWorkspaceSession("parent", before, current);
+    expect(restored.openSessions).toEqual(["parent", "sibling", "other", "child", "grandchild"]);
+    expect(restored.parents).toEqual({ grandchild: "child", sibling: "parent" });
+    expect(restored.groups).toEqual([
+      { ...current.groups[0], tabs: ["parent", "sibling"] },
+      current.groups[1],
+    ]);
+  });
+
+  it("does not attach a restored child across its original parent's later group move", () => {
+    const before = nestedWorkspace();
+    const current: SessionWorkspaceState = {
+      ...removeWorkspaceSession(before, "child"),
+      groups: [{ id: "new", name: "New", color: "blue", collapsed: false,
+        tabs: ["parent", "grandchild", "sibling"] }],
+    };
+    const restored = restoreForgottenWorkspaceSession("child", before, current);
+    expect(restored.openSessions).toEqual(["parent", "grandchild", "sibling", "child", "other"]);
+    expect(restored.parents).toEqual(current.parents);
+    expect(restored.groups).toEqual(current.groups);
+  });
+
+  it("preserves a later ancestor move that would make restored child links cyclic", () => {
+    const before = nestedWorkspace();
+    const current: SessionWorkspaceState = {
+      ...removeWorkspaceSession(before, "child"),
+      openSessions: ["grandchild", "parent", "sibling", "other"],
+      parents: { parent: "grandchild", sibling: "parent" },
+    };
+    const restored = restoreForgottenWorkspaceSession("child", before, current);
+    expect(restored.parents).toEqual({ parent: "grandchild", sibling: "parent", child: "parent" });
+    expect(restored.openSessions).toEqual(["grandchild", "parent", "child", "sibling", "other"]);
   });
 });
 
