@@ -839,6 +839,18 @@ export function WorkspaceCallbackList({
               const session = sessionMap.get(name);
               const messages = messagesBySession.get(name) ?? [];
               const status = callbackStatus(session);
+              const callbackTimes = globalCallbackSnapshot?.latestCallbackAtBySession;
+              const recordedCallbackAt = callbackTimes && Object.hasOwn(callbackTimes, name)
+                ? callbackTimes[name] : undefined;
+              const latestCallbackAt = recordedCallbackAt
+                ?? messages.reduce<number | undefined>((latest, message) => (
+                  latest === undefined ? message.createdAt : Math.max(latest, message.createdAt)
+                ), undefined);
+              const readySince = session?.agentState === "waiting_human"
+                && session.agentStateChangedAt > 0 ? session.agentStateChangedAt : undefined;
+              const timingLabel = latestCallbackAt === undefined ? "Ready since" : "Latest callback";
+              const timingAt = latestCallbackAt ?? readySince;
+              const timingDate = timingAt === undefined ? null : new Date(timingAt * 1000);
               const globalOnly = activeScope === "global" && explicitGlobalSessions.includes(name);
               const sources = globalWorkspaceSources.get(name) ?? [];
               const inCurrentWorkspace = workspaceSessionSet === null
@@ -940,6 +952,22 @@ export function WorkspaceCallbackList({
                   >
                     <CheckIcon />
                   </button>
+                  {timingDate && Number.isFinite(timingDate.getTime()) && (
+                    <div className="workspace-callback-timing">
+                      <span>{timingLabel}</span>
+                      <time
+                        dateTime={timingDate.toISOString()}
+                        title={`${timingLabel === "Ready since" ? "Ready observed" : timingLabel}: ${timingDate.toLocaleString(undefined, {
+                          year: "numeric", month: "long", day: "numeric",
+                          hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+                        })}`}
+                      >
+                        {timingDate.toLocaleString(undefined, {
+                          month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+                        })}
+                      </time>
+                    </div>
+                  )}
                   {messages.length > 0 && (
                     <div className="workspace-callback-messages" aria-label={`Messages for ${name}`}>
                       {messages.map((message) => (

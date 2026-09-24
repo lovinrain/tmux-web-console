@@ -1152,7 +1152,7 @@ def create_app(
 
     def callback_snapshot(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         result = dict(snapshot if snapshot is not None else app[WORKSPACES_KEY].get_global_callback_sessions())
-        result.update(app[CALLBACK_MESSAGES_KEY].pending_snapshot())
+        result.update(app[CALLBACK_MESSAGES_KEY].pending_snapshot(result["callbackSessions"]))
         result["callbackSessions"] = list(dict.fromkeys([
             *result["callbackSessions"],
             *(message["sessionName"] for message in result["callbackMessages"]),

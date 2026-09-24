@@ -456,7 +456,15 @@ Pages are live reads, not a frozen snapshot; `revision` changes with new posts
 and review updates. Reading never acknowledges a message.
 
 Pending messages appear in global callback snapshots and existing callback and
-workspace streams. `callbackMessageRevision` advances independently of workspace
+workspace streams. `latestCallbackAtBySession` maps each currently watched or
+pending-message session with callback history to its latest server-recorded
+`createdAt` in Unix seconds, including reviewed messages. Sessions without
+callback history are omitted. Reviewing the newest message does not move this
+time backwards; history survives server restart. The map uses the same reported
+session names as callback entries, without inferring identity after a rename or
+name reuse. It covers server-persisted global/workspace watches and pending
+messages, not browser-local temporary watches with only reviewed history.
+`callbackMessageRevision` advances independently of workspace
 `sessionRevision`; clients reconcile both independently. Posting only derives a
 callback entry from the message and does not add a manual queue marker or change
 workspace tabs. Replacing a manual queue with `PUT /api/callback-sessions` leaves

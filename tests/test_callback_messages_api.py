@@ -266,10 +266,61 @@ async def test_manual_callback_replacement_preserves_messages_until_session_is_r
 
 
 @pytest.mark.asyncio
+async def test_watched_session_keeps_latest_callback_time_after_review_and_restart(
+    tmp_path, monkeypatch,
+):
+    now = 100
+    app = make_app(tmp_path)
+    monkeypatch.setattr(app[app_module.CALLBACK_MESSAGES_KEY], "_clock", lambda: now)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post("/api/callback-sessions", json={
+            "sessions": ["agent-one", "no-history"], "sessionRevision": 0,
+        })
+        assert response.status == 200
+        assert (await response.json())["latestCallbackAtBySession"] == {}
+        response = await client.post("/api/callback-messages", json=callback_payload())
+        assert response.status == 201
+        first = (await response.json())["callback"]
+        now = 200
+        response = await client.post("/api/callback-messages", json=callback_payload(
+            requestId="latest",
+        ))
+        assert response.status == 201
+        latest = (await response.json())["callback"]
+        now = 300
+        for message in (latest, first):
+            response = await client.post(f"/api/callback-messages/{message['id']}/review")
+            assert response.status == 200
+            snapshot = (await response.json())["callbacks"]
+            assert snapshot["latestCallbackAtBySession"] == {"agent-one": 200}
+        assert snapshot["callbackMessages"] == []
+        assert snapshot["callbackSessions"] == ["agent-one", "no-history"]
+
+    async with TestClient(TestServer(make_app(tmp_path))) as client:
+        response = await client.get("/api/callback-sessions")
+        assert (await response.json())["latestCallbackAtBySession"] == {"agent-one": 200}
+        response = await client.delete("/api/callback-sessions", json={
+            "sessions": ["agent-one"], "sessionRevision": 0,
+        })
+        assert response.status == 200
+        assert (await response.json())["latestCallbackAtBySession"] == {}
+        response = await client.post("/api/workspaces", json={
+            "name": "Project", "tabs": ["agent-one"], "activeSession": "agent-one",
+            "callbackSessions": ["agent-one"],
+        })
+        assert response.status == 201
+        response = await client.get("/api/callback-sessions")
+        assert (await response.json())["latestCallbackAtBySession"] == {"agent-one": 200}
+
+
+@pytest.mark.asyncio
 async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "CALLBACK_STREAM_HEARTBEAT_SECONDS", 0.05)
     monkeypatch.setattr(app_module, "WORKSPACE_STREAM_HEARTBEAT_SECONDS", 0.05)
-    async with TestClient(TestServer(make_app(tmp_path))) as client:
+    now = 100
+    app = make_app(tmp_path)
+    monkeypatch.setattr(app[app_module.CALLBACK_MESSAGES_KEY], "_clock", lambda: now)
+    async with TestClient(TestServer(app)) as client:
         response = await client.post("/api/workspaces", json={
             "name": "Project", "tabs": ["agent-one"], "activeSession": "agent-one",
         })
@@ -281,6 +332,7 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             initial_workspace = await read_event(workspaces, "workspace")
             assert initial_workspace["callbacks"] == initial
             assert initial["callbackMessages"] == []
+            assert initial["latestCallbackAtBySession"] == {}
 
             response = await client.post("/api/callback-messages", json=callback_payload())
             assert response.status == 201
@@ -288,11 +340,31 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             posted = await read_event(callbacks, "callbacks")
             posted_workspace = await read_event(workspaces, "workspace")
             assert posted["callbackMessages"] == [callback]
+            assert posted["latestCallbackAtBySession"] == {"agent-one": 100}
             assert posted["callbackSessions"] == ["agent-one"]
             assert posted["globalCallbackSessions"] == []
             assert posted["callbackMessageRevision"] > initial["callbackMessageRevision"]
             assert posted_workspace["callbacks"] == posted
             assert posted_workspace["workspace"] == workspace
+
+            now = 200
+            response = await client.post("/api/callback-messages", json=callback_payload(
+                requestId="latest",
+            ))
+            latest = (await response.json())["callback"]
+            second_post = await read_event(callbacks, "callbacks")
+            second_workspace_post = await read_event(workspaces, "workspace")
+            assert second_post["latestCallbackAtBySession"] == {"agent-one": 200}
+            assert second_workspace_post["callbacks"] == second_post
+
+            now = 300
+            response = await client.post(f"/api/callback-messages/{latest['id']}/review")
+            assert response.status == 200
+            latest_review = await read_event(callbacks, "callbacks")
+            latest_workspace_review = await read_event(workspaces, "workspace")
+            assert latest_review["callbackMessages"] == [callback]
+            assert latest_review["latestCallbackAtBySession"] == {"agent-one": 200}
+            assert latest_workspace_review["callbacks"] == latest_review
 
             response = await client.post(f"/api/callback-messages/{callback['id']}/review", json={})
             assert response.status == 200
@@ -300,6 +372,7 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             reviewed_workspace = await read_event(workspaces, "workspace")
             assert reviewed["callbackMessages"] == []
             assert reviewed["callbackSessions"] == []
+            assert reviewed["latestCallbackAtBySession"] == {}
             assert reviewed["callbackMessageRevision"] > posted["callbackMessageRevision"]
             assert reviewed_workspace["callbacks"] == reviewed
         finally:

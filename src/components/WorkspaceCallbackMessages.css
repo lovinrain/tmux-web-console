@@ -1,3 +1,23 @@
+.workspace-callback-timing {
+  grid-column: 3 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+  color: #a4b39b;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.workspace-callback-timing time {
+  color: #cfddc8;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme="light"] .workspace-callback-timing { color: #5a6853; }
+html[data-theme="light"] .workspace-callback-timing time { color: #34442c; }
+
 .workspace-callback-messages {
   grid-column: 1 / -1;
   display: grid;

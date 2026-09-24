@@ -1513,6 +1513,15 @@ The card shows `ready/total` (for example, `3/8 ready`), counting entries labele
 `Ready` or `Ready for review`. Running commands count as working, never ready.
 Hover for working-session and message counts.
 
+Each entry with a posted message shows `Latest callback` using the server's most
+recent receipt time, including reviewed messages for sessions still in the
+saved callback queue. Reviewing a newer message does not move that time back to
+an older pending message. A watched agent without a recorded callback instead
+shows `Ready since` while it needs input, using the server's observed state-change
+time (which resets after a server restart). Times use the browser's local zone;
+hover for the full date, seconds, and time zone. Working or unavailable entries
+without a callback message have no time to show.
+
 The global queue is the higher-level union of explicitly global entries and all
 workspace callback entries. A session registered in any workspace therefore
 always appears in the global list, with its owning workspace shown as provenance.

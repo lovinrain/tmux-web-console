@@ -92,11 +92,21 @@ test("agent reports reach both tabs, review independently, and remain readable a
   const retried = await agentRequest.post("/mux/api/callback-messages", { data: report });
   expect(retried.status()).toBe(200);
   expect(await retried.json()).toMatchObject({ callback: { id: first.id }, duplicate: true });
+  for (const current of [page, secondPage]) {
+    const timing = current.locator(".workspace-callback-timing");
+    await expect(timing).toContainText("Latest callback");
+    await expect(timing.locator("time")).toHaveAttribute("datetime", new Date(first.createdAt * 1000).toISOString());
+  }
+  // Receipt timestamps have one-second precision; make this second post a
+  // distinct timestamp so the persistence check can catch a regression.
+  await expect.poll(() => Math.floor(Date.now() / 1000)).toBeGreaterThan(first.createdAt);
   const secondReport = { ...report, message: "Documentation and deployment checks are complete.", agentType: "claude", requestId: randomUUID() };
   const secondCreated = await agentRequest.post("/mux/api/callback-messages", { data: secondReport });
   expect(secondCreated.status()).toBe(201);
   const second = (await secondCreated.json()).callback as CallbackMessage;
   callbackIds.push(second.id);
+  expect(second.createdAt).toBeGreaterThan(first.createdAt);
+  const latestCallbackIso = new Date(second.createdAt * 1000).toISOString();
 
   // No reload or manual refresh: workspace event streams deliver both reports.
   for (const current of [page, secondPage]) {
@@ -104,6 +114,7 @@ test("agent reports reach both tabs, review independently, and remain readable a
     await expect(panel.getByText(report.message, { exact: true })).toBeVisible();
     await expect(panel.getByText(secondReport.message, { exact: true })).toBeVisible();
     await expect(panel.locator(".workspace-callback-message")).toHaveCount(2);
+    await expect(panel.locator(".workspace-callback-timing time")).toHaveAttribute("datetime", latestCallbackIso);
     await expect(panel.locator(".workspace-callback-message-cwd").first()).toHaveText(report.cwd);
     await expect(panel.locator(".workspace-callback-message-origin").first())
       .toHaveText("callback-fixture.local · $314 · %159");
@@ -111,35 +122,57 @@ test("agent reports reach both tabs, review independently, and remain readable a
     await expect(panel.getByRole("button", { name: `Open ${sessionName}`, exact: true })).toBeDisabled();
   }
   const panel = page.getByRole("dialog", { name: "Callback list", exact: true });
-  await panel.screenshot({ path: testInfo.outputPath("callback-messages-dark.png") });
-  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await panel.screenshot({ path: testInfo.outputPath("callback-messages-light.png") });
+  for (const theme of ["dark", "light"] as const) {
+    if (theme === "light") {
+      await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    }
+    for (const width of [390, 300]) {
+      // This changes only the panel's native resizable width, keeping its
+      // desktop viewport and the real responsive row layout intact.
+      await panel.evaluate((element, targetWidth) => {
+        (element as HTMLElement).style.width = `${targetWidth}px`;
+      }, width);
+      await expect.poll(() => panel.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(width);
+      const dimensions = await panel.locator(".workspace-callback-timing").evaluate((element) => {
+        const timing = element.getBoundingClientRect();
+        const row = element.closest(".workspace-callback-item")!.getBoundingClientRect();
+        return { width: element.clientWidth, contentWidth: element.scrollWidth, right: timing.right, rowRight: row.right };
+      });
+      expect(dimensions.contentWidth).toBeLessThanOrEqual(dimensions.width);
+      expect(dimensions.right).toBeLessThanOrEqual(dimensions.rowRight);
+      await panel.screenshot({ path: testInfo.outputPath(`callback-messages-${theme}-${width}.png`) });
+    }
+  }
 
-  await panel.getByRole("button", { name: `Mark message from codex in ${sessionName} reviewed`, exact: true }).click();
+  // Reviewing the latest message must not move the row's receipt time back to
+  // the remaining older message, including in another tab and after a reload.
+  await panel.getByRole("button", { name: `Mark message from claude in ${sessionName} reviewed`, exact: true }).click();
   for (const current of [page, secondPage]) {
     const currentPanel = current.getByRole("dialog", { name: "Callback list", exact: true });
-    await expect(currentPanel.getByText(report.message, { exact: true })).toHaveCount(0);
-    await expect(currentPanel.getByText(secondReport.message, { exact: true })).toBeVisible();
+    await expect(currentPanel.getByText(secondReport.message, { exact: true })).toHaveCount(0);
+    await expect(currentPanel.getByText(report.message, { exact: true })).toBeVisible();
+    await expect(currentPanel.locator(".workspace-callback-timing time")).toHaveAttribute("datetime", latestCallbackIso);
   }
   await page.reload();
   await expect(page.locator(".dashboard-shell")).toBeVisible();
   const showPanel = page.getByRole("button", { name: "Show callback list", exact: true });
   if (await showPanel.count()) await showPanel.click();
-  await expect(page.getByText(secondReport.message, { exact: true })).toBeVisible();
-  await expect(page.getByText(report.message, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(report.message, { exact: true })).toBeVisible();
+  await expect(page.getByText(secondReport.message, { exact: true })).toHaveCount(0);
+  await expect(page.locator(".workspace-callback-timing time")).toHaveAttribute("datetime", latestCallbackIso);
 
   const pending = await agentRequest.get(`/mux/api/callback-messages?status=pending&after=${first.sequence - 1}`);
   expect(pending.ok()).toBe(true);
-  expect((await pending.json()).messages.map((message: CallbackMessage) => message.id)).toEqual([second.id]);
+  expect((await pending.json()).messages.map((message: CallbackMessage) => message.id)).toEqual([first.id]);
   const history = await agentRequest.get(`/mux/api/callback-messages?status=all&after=${first.sequence - 1}&limit=1`);
   expect(history.ok()).toBe(true);
   const historyPage = await history.json();
-  expect(historyPage.messages).toEqual([expect.objectContaining({ ...report, id: first.id, reviewedAt: expect.any(Number) })]);
+  expect(historyPage.messages).toEqual([expect.objectContaining({ ...report, id: first.id, reviewedAt: null })]);
   expect(historyPage.nextAfter).toBe(first.sequence);
   const next = await agentRequest.get(`/mux/api/callback-messages?status=all&after=${historyPage.nextAfter}&limit=1`);
   expect(next.ok()).toBe(true);
-  expect((await next.json()).messages).toEqual([expect.objectContaining({ id: second.id, reviewedAt: null })]);
+  expect((await next.json()).messages).toEqual([expect.objectContaining({ id: second.id, reviewedAt: expect.any(Number) })]);
 
   await secondPage.close();
   await page.goto("/mux/");
@@ -147,7 +180,8 @@ test("agent reports reach both tabs, review independently, and remain readable a
   const dashboardShow = page.getByRole("button", { name: "Show callback list", exact: true });
   if (await dashboardShow.count()) await dashboardShow.click();
   await expect(page.getByRole("dialog", { name: "Callback list", exact: true })
-    .getByText(secondReport.message, { exact: true })).toBeVisible();
+    .getByText(report.message, { exact: true })).toBeVisible();
+  await expect(page.locator(".workspace-callback-timing time")).toHaveAttribute("datetime", latestCallbackIso);
 });
 
 test("a script credential can read callbacks but cannot inspect or control sessions", async ({ playwright, baseURL }) => {

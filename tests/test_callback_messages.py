@@ -36,6 +36,7 @@ def test_store_retains_report_and_review_state_after_reopening(tmp_path):
     store = CallbackMessageStore(path, clock=lambda: 200)
     assert store.pending_snapshot() == {
         "callbackMessages": [record],
+        "latestCallbackAtBySession": {"251": 100},
         "callbackMessageRevision": 1,
     }
     reviewed = store.review(record["id"])
@@ -43,6 +44,7 @@ def test_store_retains_report_and_review_state_after_reopening(tmp_path):
     assert store.review(record["id"]) == reviewed
     assert store.pending_snapshot() == {
         "callbackMessages": [],
+        "latestCallbackAtBySession": {},
         "callbackMessageRevision": 2,
     }
     store.close()
@@ -51,6 +53,49 @@ def test_store_retains_report_and_review_state_after_reopening(tmp_path):
     assert store.list_messages(status="reviewed")["messages"] == [reviewed]
     assert store.add(payload()) == (reviewed, True)
     assert store.list_messages(status="all")["revision"] == 2
+    store.close()
+
+
+def test_latest_callback_time_includes_reviewed_history_for_watched_sessions(tmp_path):
+    path = tmp_path / "callbacks.sqlite3"
+    now = 100
+    store = CallbackMessageStore(path, clock=lambda: now)
+    first, _ = store.add(payload())
+    now = 200
+    second, _ = store.add(payload(requestId="second"))
+    other, _ = store.add(payload(requestId="other", sessionName="other"))
+    store.review(other["id"])
+    assert store.pending_snapshot()["latestCallbackAtBySession"] == {"251": 200}
+
+    now = 300
+    store.review(second["id"])
+    snapshot = store.pending_snapshot()
+    assert snapshot["callbackMessages"] == [first]
+    assert snapshot["latestCallbackAtBySession"] == {"251": 200}
+    store.review(first["id"])
+    assert store.pending_snapshot()["latestCallbackAtBySession"] == {}
+    assert store.pending_snapshot(["251", "never-posted"])["latestCallbackAtBySession"] == {
+        "251": 200,
+    }
+    store.close()
+
+    store = CallbackMessageStore(path, clock=lambda: 400)
+    assert store.pending_snapshot(["251"])["latestCallbackAtBySession"] == {"251": 200}
+    # Re-delivery does not change the recorded callback time or reopen the entry.
+    store.add(payload(requestId="second"))
+    assert store.pending_snapshot(["251"])["latestCallbackAtBySession"] == {"251": 200}
+    assert store.pending_snapshot(["renamed-session"])["latestCallbackAtBySession"] == {}
+    store.close()
+
+
+def test_latest_callback_time_supports_large_combined_workspace_queues(tmp_path):
+    store = CallbackMessageStore(tmp_path / "callbacks.sqlite3", clock=lambda: 100)
+    watched_sessions = [f"session-{index}" for index in range(1_100)]
+    record, _ = store.add(payload(sessionName=watched_sessions[-1]))
+    store.review(record["id"])
+    assert store.pending_snapshot(watched_sessions)["latestCallbackAtBySession"] == {
+        watched_sessions[-1]: 100,
+    }
     store.close()
 
 

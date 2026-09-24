@@ -812,6 +812,11 @@ function isGlobalCallbackSnapshot(value: unknown): value is GlobalCallbackSnapsh
       && isStringArray(source.sessions)
     ))
     && isNonnegativeSafeInteger(value.sessionRevision)
+    && (value.latestCallbackAtBySession === undefined
+      || isRecord(value.latestCallbackAtBySession)
+        && Object.values(value.latestCallbackAtBySession).every((timestamp) => (
+          typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp >= 0
+        )))
     && (value.callbackMessages === undefined && value.callbackMessageRevision === undefined
       || Array.isArray(value.callbackMessages)
         && value.callbackMessages.every(isCallbackMessage)
@@ -1035,6 +1040,8 @@ export interface GlobalCallbackSnapshot {
   sessionRevision: number;
   /** Pending agent messages; absent on older servers. */
   callbackMessages?: CallbackMessage[];
+  /** Latest receipt time per queued session, including reviewed message history. */
+  latestCallbackAtBySession?: Record<string, number>;
   /** Independent fence: posting a message does not change workspace sessions. */
   callbackMessageRevision?: number;
 }

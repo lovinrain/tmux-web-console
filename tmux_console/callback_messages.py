@@ -271,15 +271,37 @@ class CallbackMessageStore:
                 "revision": self._revision(connection),
             }
 
-    def pending_snapshot(self) -> dict[str, Any]:
+    def pending_snapshot(
+        self, watched_sessions: Sequence[str] = ()
+    ) -> dict[str, Any]:
         with self._transaction() as connection:
-            return {
-                "callbackMessages": [
-                    dict(row)
+            messages = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM callback_messages WHERE reviewedAt IS NULL ORDER BY sequence"
+                )
+            ]
+            session_names = list(dict.fromkeys([
+                *watched_sessions, *(message["sessionName"] for message in messages),
+            ]))
+            latest: dict[str, int] = {}
+            # Include reviewed reports without sending unrelated session history.
+            # Batches stay within SQLite's variable limit for large global queues.
+            for offset in range(0, len(session_names), 500):
+                batch = session_names[offset:offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                latest.update(
+                    (row["sessionName"], row["latestCallbackAt"])
                     for row in connection.execute(
-                        "SELECT * FROM callback_messages WHERE reviewedAt IS NULL ORDER BY sequence"
+                        "SELECT sessionName, MAX(createdAt) AS latestCallbackAt "
+                        "FROM callback_messages "
+                        f"WHERE sessionName IN ({placeholders}) GROUP BY sessionName",
+                        batch,
                     )
-                ],
+                )
+            return {
+                "callbackMessages": messages,
+                "latestCallbackAtBySession": latest,
                 "callbackMessageRevision": self._revision(connection),
             }
 

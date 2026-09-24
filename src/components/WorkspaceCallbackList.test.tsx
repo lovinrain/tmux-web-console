@@ -495,6 +495,71 @@ describe("WorkspaceCallbackList", () => {
     expect(panel.querySelector("img")).toBeNull();
   });
 
+  it.each(["global", "workspace"] as const)("shows the latest callback in %s scope after its message is reviewed", (scope) => {
+    const older = callbackMessage("older", "agent-one", "Older callback");
+    const latest = { ...callbackMessage("latest", "agent-one", "Latest callback message"), createdAt: older.createdAt + 90 };
+    const props = {
+      sessionName: "agent-one",
+      workspaceId: "workspace-one",
+      workspaceSessionNames: ["agent-one"],
+      sessions: [session("agent-one")],
+      callbackSessions: ["agent-one"],
+      onChange: vi.fn(async () => undefined),
+      onSelectSession: vi.fn(),
+    };
+    const snapshot = {
+      callbackSessions: ["agent-one"], globalCallbackSessions: ["agent-one"],
+      workspaceCallbacks: [], sessionRevision: 0, callbackMessageRevision: 2,
+      callbackMessages: [older, latest, { ...older, id: "middle", createdAt: older.createdAt + 30 }],
+    };
+    const view = renderWithTheme(<WorkspaceCallbackList {...props} globalCallbackSnapshot={snapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    if (scope === "workspace") fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    const timing = () => screen.getByText("Latest callback").parentElement!.querySelector("time")!;
+    const date = new Date(latest.createdAt * 1000);
+    expect(timing()).toHaveAttribute("datetime", date.toISOString());
+    expect(timing()).toHaveTextContent(date.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    }));
+    expect(timing().title).toContain(date.toLocaleString(undefined, {
+      year: "numeric", month: "long", day: "numeric",
+      hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+    }));
+    for (const remainingMessages of [[older], []]) {
+      view.rerender(<WorkspaceCallbackList {...props} globalCallbackSnapshot={{
+        ...snapshot, callbackMessages: remainingMessages, callbackMessageRevision: 3,
+        latestCallbackAtBySession: { "agent-one": latest.createdAt },
+      }} />);
+      expect(timing()).toHaveAttribute("datetime", date.toISOString());
+      expect(screen.queryByText("Ready since")).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows Ready since only when a watched agent without messages has a known ready transition", () => {
+    const readyAt = 1_800_000_000;
+    const props = {
+      sessionName: "agent-one", callbackSessions: ["agent-one", "shell", "unknown-time"],
+      onChange: vi.fn(async () => undefined), onSelectSession: vi.fn(),
+    };
+    const otherSessions = [session("shell", "other"), { ...session("unknown-time"), agentStateChangedAt: 0 }];
+    const view = renderWithTheme(<WorkspaceCallbackList {...props} sessions={[
+      { ...session("agent-one", "working"), agentStateChangedAt: readyAt }, ...otherSessions,
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    expect(screen.queryByText("Ready since")).not.toBeInTheDocument();
+    expect(screen.queryByText("Latest callback")).not.toBeInTheDocument();
+    view.rerender(<WorkspaceCallbackList {...props} sessions={[
+      { ...session("agent-one"), agentStateChangedAt: readyAt }, ...otherSessions,
+    ]} />);
+    const readyTime = screen.getByText("Ready since").parentElement!.querySelector("time")!;
+    expect(readyTime).toHaveAttribute("datetime", new Date(readyAt * 1000).toISOString());
+    expect(readyTime.title).toMatch(/^Ready observed:/);
+    view.rerender(<WorkspaceCallbackList {...props} sessions={[
+      session("agent-one", "working"), ...otherSessions,
+    ]} />);
+    expect(screen.queryByText("Ready since")).not.toBeInTheDocument();
+  });
+
   it("lets the reader expand a long message without losing the full text or line breaks", () => {
     const message = callbackMessage("message-long", "agent-one", `${"Detailed outcome. ".repeat(50)}\nFinal result: all checks passed.`);
     renderWithTheme(

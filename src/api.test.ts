@@ -1874,13 +1874,19 @@ describe("subscribeToCallbackSessions", () => {
       { ...snapshot, callbackMessages: [{ ...message, cwd: 3 }] },
       { ...snapshot, callbackMessages: [{ ...message, reviewedAt: "today" }] },
       { ...snapshot, callbackMessages: [{ ...message, sequence: 1.5 }] },
+      { ...snapshot, latestCallbackAtBySession: { agent: "today" } },
+      { ...snapshot, latestCallbackAtBySession: { agent: -1 } },
+      { ...snapshot, latestCallbackAtBySession: [] },
     ]) {
       source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(invalid) }));
     }
     expect(onSnapshot).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledTimes(5);
+    expect(onError).toHaveBeenCalledTimes(8);
     source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(snapshot) }));
     expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+    const withHistory = { ...snapshot, latestCallbackAtBySession: { agent: message.createdAt + 10 } };
+    source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(withHistory) }));
+    expect(onSnapshot).toHaveBeenLastCalledWith(withHistory);
   });
 
   it("subscribes at the configured base path and delivers callback snapshots", () => {
