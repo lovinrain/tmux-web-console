@@ -2296,11 +2296,10 @@ export function ConsoleScreen({
               </button>
               {!ephemeral && onSessionCopied && (
                 <CopySessionControl
-                  key={`${sessionName}:${desktopTerminalFocus}:${workspaceOverlayOpen}:${headerTrayOpen}:${mobileLayout}`}
                   shortcut={directShortcutAria(shortcutBindings["session-copy-new"])}
                   busy={copyingSource === sessionName}
                   disabled={copySessionDisabled || !session || copyingSource !== null}
-                  title={`Create and open a fresh session in this pane's working directory${directShortcutLabel(shortcutBindings["session-copy-new"])
+                  title={`Create and open a fresh same-level session in this pane's working directory${directShortcutLabel(shortcutBindings["session-copy-new"])
                     ? ` (${directShortcutLabel(shortcutBindings["session-copy-new"])})`
                     : ""}`}
                   onCopy={(placement) => void copyNewSession(placement)}

@@ -1,98 +1,92 @@
 .copy-session-control {
   display: none;
+  height: 42px;
   flex: 0 0 auto;
-  align-items: stretch;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--cyan);
+  background: var(--ink-soft);
+  border: 1px solid color-mix(in srgb, var(--cyan) 34%, transparent);
+  border-radius: 4px;
 }
 
-.copy-session-control > .copy-new-button:first-child {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+.copy-session-label {
+  height: 10px;
+  flex: 0 0 10px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 10px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
 }
 
-.copy-session-control > .copy-session-options {
-  width: 24px;
-  min-width: 24px;
+.copy-session-actions {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.copy-session-button {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
   justify-content: center;
-  padding: 0;
-  border-left: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
+  gap: 5px;
+  padding: 0 7px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.copy-session-control .copy-session-options svg {
-  width: 11px;
-  transform: rotate(90deg);
+.copy-session-button + .copy-session-button {
+  border-left: 1px solid color-mix(in srgb, var(--cyan) 24%, transparent);
 }
 
-.copy-session-control > button:focus-visible {
-  position: relative;
-  z-index: 1;
+.copy-session-button:hover:not(:disabled),
+.copy-session-button:focus-visible {
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+}
+
+.copy-session-button:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: -2px;
 }
 
-.copy-session-menu {
-  position: fixed;
-  z-index: 100;
-  display: flex;
-  width: min(272px, calc(100vw - 16px));
-  max-height: calc(100dvh - 16px);
-  flex-direction: column;
-  gap: 4px;
-  padding: 5px;
-  overflow-y: auto;
-  color: var(--paper);
-  background: var(--ink-raised);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 10px 30px rgb(0 0 0 / 25%);
+.copy-session-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
-.copy-session-menu > button {
-  display: flex;
-  min-height: 55px;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  color: inherit;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  text-align: left;
-  cursor: pointer;
+.copy-session-button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 
-.copy-session-menu > button:hover,
-.copy-session-menu > button:focus-visible {
-  background: var(--ink-soft);
-  outline: 1px solid var(--cyan);
-  outline-offset: -1px;
+.copy-session-child-icon {
+  position: relative;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  justify-content: flex-end;
 }
 
-.copy-session-menu > button > svg,
-.copy-session-menu .copy-session-child-mark {
-  width: 20px;
-  flex: 0 0 20px;
-  color: var(--cyan);
-  font-size: 23px;
-  line-height: 1;
-  text-align: center;
-}
-
-.copy-session-menu strong,
-.copy-session-menu small {
-  display: block;
-}
-
-.copy-session-menu strong {
+.copy-session-child-icon .copy-session-child-mark {
+  position: absolute;
+  bottom: -1px;
+  left: -2px;
   font-size: 12px;
-  font-weight: 600;
-}
-
-.copy-session-menu small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 11px;
+  line-height: 12px;
 }
 
 @media (min-width: 1025px),
@@ -101,23 +95,18 @@
     display: flex;
   }
 
-  .console-shell[data-console-header-tray="true"] .copy-session-control > .copy-new-button {
-    height: 42px;
+  .console-shell[data-console-header-tray="true"] .copy-session-control {
+    border-radius: 6px;
   }
 
-  .console-shell[data-console-header-tray="true"] .copy-session-control > .copy-new-button:first-child {
+  .console-shell[data-console-header-tray="true"] .copy-session-button {
     flex: 1;
-    border-top-left-radius: 6px;
-    border-bottom-left-radius: 6px;
-    font-size: 11px;
   }
 
-  .console-shell[data-console-header-tray="true"] .console-header-tray-group .copy-session-control > .copy-session-options {
-    width: 30px;
-    min-width: 30px;
-    padding: 0;
-    justify-content: center;
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
+  .console-shell[data-console-header-tray="true"] .console-header-tray-group
+    .copy-session-control .copy-session-button > span.copy-session-child-icon {
+    position: relative;
+    width: 18px;
+    height: 18px;
   }
 }

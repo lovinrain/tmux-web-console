@@ -64,14 +64,15 @@ or `Ctrl+Shift+Z`, then `T`; the visible Theme button remains available on the
 landing page and compact layouts. The Theme toggle never sends terminal input,
 resizes tmux, or reconnects the PTY client.
 
-On desktop, `Copy New` starts a fresh detached shell in the active pane's current
-working directory and immediately opens it as the active workspace tab. The
+On desktop, the `Copy` control starts a fresh detached shell in the active pane's
+current working directory and immediately opens it as the active workspace tab. The
 server tries `<source>_1`, then increments the suffix until it can atomically
-claim an available tmux session name. `Ctrl+Shift+M` invokes the same action.
-The button and shortcut are unavailable in compact mobile layouts.
-The adjacent arrow opens `Copy New options`: `Same-level session` creates a
-sibling, while `Nested child session` creates a child tab under the current
-session. Children can have children. Sidebar tabs indent to show the tree;
+claim an available tmux session name. Its two side-by-side buttons are `Sibling`,
+which creates a session at the same level, and `Child`, which creates a child tab
+under the current session. `Ctrl+Shift+M` creates a sibling. Both buttons share
+an always-visible `Copy` caption and have tooltips explaining their placement.
+The buttons and shortcut are unavailable in compact mobile layouts.
+Children can have children. Sidebar tabs indent to show the tree;
 horizontal tabs show a small branch marker, with parent details in the tooltip.
 Both choices start the same kind of independent shell in the same working
 directory. Nesting belongs to the workspace and survives temporary-workspace

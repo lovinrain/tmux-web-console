@@ -2223,8 +2223,8 @@ describe("ConsoleScreen session identity", () => {
       "title",
       "Split workspace: open this session alone in a new temporary workspace window",
     );
-    const copyNew = screen.getByRole("button", { name: "Copy New" });
-    expect(copyNew.parentElement?.nextElementSibling).toBe(screen.getByRole("group", { name: "Split" }));
+    const copyNew = screen.getByRole("button", { name: "Copy sibling session" });
+    expect(copyNew.closest('[role="group"]')?.nextElementSibling).toBe(screen.getByRole("group", { name: "Split" }));
 
     fireEvent.click(split);
     expect(onSplitWorkspace).toHaveBeenCalledWith("test");
@@ -2332,7 +2332,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("button", { name: "Coding agents recorded in test" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Raw terminal Page Up" })).toBeVisible();
     expect(screen.queryByText(/Workspace sidebar|Workspace links|Workspace notes/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy New|Split to ephemeral tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy sibling session|Copy child session|Split to ephemeral tab/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Sessions and workspaces navigation" })).not.toBeInTheDocument();
     expect(container.querySelector(".console-session-navigation")).toBeNull();
 
@@ -2399,16 +2399,18 @@ describe("ConsoleScreen session identity", () => {
     );
 
     await screen.findByRole("heading", { name: "test" });
-    const copyNew = screen.getByRole("button", { name: "Copy New" });
+    const copyNew = screen.getByRole("button", { name: "Copy sibling session" });
     expect(copyNew).toHaveAttribute("aria-keyshortcuts", "Control+Shift+M");
     expect(copyNew).toHaveAttribute(
       "title",
-      "Create and open a fresh session in this pane's working directory (Ctrl+Shift+M)",
+      "Create and open a fresh same-level session in this pane's working directory (Ctrl+Shift+M)",
     );
 
     fireEvent.click(copyNew);
     expect(copySession).toHaveBeenCalledWith("test", "$1", "dark");
-    expect(screen.getByRole("button", { name: "Creating..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy sibling session" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Copy child session" })).toBeDisabled();
+    expect(screen.getByRole("group", { name: "Copy" })).toHaveTextContent("Creating...");
     expect(fireEvent.keyDown(window, {
       code: "KeyM",
       key: "N",
@@ -2450,7 +2452,7 @@ describe("ConsoleScreen session identity", () => {
     expect(copySession).toHaveBeenCalledTimes(2);
   });
 
-  it("copies a nested child without duplicate creation and keeps later direct copies at the same level", async () => {
+  it("copies a nested child directly without duplicate creation and keeps later sibling copies at the same level", async () => {
     const childCreation = deferred<{ name: string; id: string }>();
     const onSessionCopied = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([session()]);
@@ -2460,71 +2462,36 @@ describe("ConsoleScreen session identity", () => {
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onSessionCopied={onSessionCopied} />);
 
     await screen.findByRole("heading", { name: "test" });
-    const options = screen.getByRole("button", { name: "Copy New options" });
-    fireEvent.click(options);
-    expect(options).toHaveAttribute("aria-expanded", "true");
-    const menu = screen.getByRole("menu", { name: "Copy New options" });
-    expect(within(menu).getByText("Indent under the current session")).toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Nested child session" }));
+    const group = screen.getByRole("group", { name: "Copy" });
+    const sibling = within(group).getByRole("button", { name: "Copy sibling session" });
+    const child = within(group).getByRole("button", { name: "Copy child session" });
+    expect(sibling).toHaveTextContent("Sibling");
+    expect(child).toHaveTextContent("Child");
+    expect(child).toHaveAttribute("title", "Create and open a fresh session in this pane's working directory, indented under this session");
+    expect(child).not.toHaveAttribute("aria-keyshortcuts");
+    expect(sibling.nextElementSibling).toBe(child);
+    fireEvent.click(child);
 
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(copySession).toHaveBeenCalledExactlyOnceWith("test", "$1", "dark");
-    expect(options).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Creating..." })).toBeDisabled();
-    fireEvent.click(options);
+    expect(child).toBeDisabled();
+    expect(sibling).toBeDisabled();
+    expect(group).toHaveTextContent("Creating...");
+    expect(group).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(child);
+    fireEvent.click(sibling);
     fireEvent.keyDown(window, { code: "KeyM", key: "M", ctrlKey: true, shiftKey: true });
     expect(copySession).toHaveBeenCalledTimes(1);
 
     await act(async () => childCreation.resolve({ name: "test_1", id: "$2" }));
     expect(onSessionCopied).toHaveBeenCalledExactlyOnceWith("test", "test_1", "$2", "child");
-    expect(options).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Copy New" }));
+    expect(child).toBeEnabled();
+    expect(sibling).toBeEnabled();
+    expect(group).toHaveAttribute("aria-busy", "false");
+    fireEvent.click(sibling);
     await waitFor(() => expect(onSessionCopied).toHaveBeenLastCalledWith("test", "test_2", "$3"));
   });
 
-  it("offers an explicit same-level copy in the menu", async () => {
-    const onSessionCopied = vi.fn();
-    vi.mocked(listSessions).mockResolvedValue([session()]);
-    vi.mocked(copySession).mockResolvedValue({ name: "test_1", id: "$2" });
-    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onSessionCopied={onSessionCopied} />);
-
-    await screen.findByRole("heading", { name: "test" });
-    fireEvent.click(screen.getByRole("button", { name: "Copy New options" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Same-level session" }));
-    await waitFor(() => expect(onSessionCopied).toHaveBeenCalledExactlyOnceWith("test", "test_1", "$2"));
-  });
-
-  it("supports keyboard menu focus and dismisses Copy New options without creating a session", async () => {
-    vi.mocked(listSessions).mockResolvedValue([session()]);
-    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onSessionCopied={vi.fn()} />);
-
-    await screen.findByRole("heading", { name: "test" });
-    const options = screen.getByRole("button", { name: "Copy New options" });
-    fireEvent.keyDown(options, { key: "ArrowDown" });
-    expect(screen.getByRole("menuitem", { name: "Same-level session" })).toHaveFocus();
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
-    expect(screen.getByRole("menuitem", { name: "Nested child session" })).toHaveFocus();
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
-    expect(screen.getByRole("menuitem", { name: "Same-level session" })).toHaveFocus();
-    fireEvent.keyDown(document.activeElement!, { key: "End" });
-    expect(screen.getByRole("menuitem", { name: "Nested child session" })).toHaveFocus();
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(options).toHaveFocus();
-
-    fireEvent.keyDown(options, { key: "ArrowUp" });
-    expect(screen.getByRole("menuitem", { name: "Nested child session" })).toHaveFocus();
-    fireEvent.keyDown(document.activeElement!, { key: "Tab" });
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-
-    fireEvent.click(options);
-    fireEvent.pointerDown(screen.getByRole("heading", { name: "test" }));
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(options).toHaveAttribute("aria-expanded", "false");
-    expect(copySession).not.toHaveBeenCalled();
-  });
-
-  it("keeps the header tray open for the nested copy menu and gives its Escape priority", async () => {
+  it("offers both copy actions directly in All console controls", async () => {
     const onSessionCopied = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([session()]);
     vi.mocked(copySession).mockResolvedValue({ name: "test_1", id: "$2" });
@@ -2534,31 +2501,16 @@ describe("ConsoleScreen session identity", () => {
     layOutHeader(view.container, [screen.getByRole("button", { name: "Pane scrollback" })]);
     fireEvent.click(await screen.findByRole("button", { name: /Show all console controls/ }), { detail: 1 });
     const tray = screen.getByRole("group", { name: "All console controls" });
-    const options = within(tray).getByRole("button", { name: "Copy New options" });
-    fireEvent.click(options);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(tray).toBeInTheDocument();
-    expect(options).toHaveFocus();
-
-    fireEvent.click(options);
-    const child = screen.getByRole("menuitem", { name: "Nested child session" });
+    const group = within(tray).getByRole("group", { name: "Copy" });
+    const sibling = within(group).getByRole("button", { name: "Copy sibling session" });
+    const child = within(group).getByRole("button", { name: "Copy child session" });
+    expect(sibling).toHaveTextContent("Sibling");
+    expect(child).toHaveTextContent("Child");
+    expect(sibling.nextElementSibling).toBe(child);
     fireEvent.pointerDown(child);
     expect(tray).toBeInTheDocument();
     fireEvent.click(child);
     await waitFor(() => expect(onSessionCopied).toHaveBeenCalledExactlyOnceWith("test", "test_1", "$2", "child"));
-  });
-
-  it("closes Copy New options on entering terminal focus mode", async () => {
-    vi.mocked(listSessions).mockResolvedValue([session()]);
-    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onSessionCopied={vi.fn()} />);
-
-    await screen.findByRole("heading", { name: "test" });
-    fireEvent.click(screen.getByRole("button", { name: "Copy New options" }));
-    expect(screen.getByRole("menu")).toBeInTheDocument();
-    act(() => dispatchShortcutAction("view-terminal-focus"));
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(copySession).not.toHaveBeenCalled();
   });
 
   it.each(["sibling", "child"])("keeps Copy New %s failures on the source session for dismissal", async (placement) => {
@@ -2573,17 +2525,12 @@ describe("ConsoleScreen session identity", () => {
     );
 
     await screen.findByRole("heading", { name: "test" });
-    if (placement === "child") {
-      fireEvent.click(screen.getByRole("button", { name: "Copy New options" }));
-      fireEvent.click(screen.getByRole("menuitem", { name: "Nested child session" }));
-    } else {
-      fireEvent.click(screen.getByRole("button", { name: "Copy New" }));
-    }
+    fireEvent.click(screen.getByRole("button", { name: `Copy ${placement} session` }));
 
     const error = await screen.findByRole("alert");
     expect(error).toHaveTextContent("Copy New failed: source directory is gone");
-    expect(screen.getByRole("button", { name: "Copy New" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Copy New options" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy sibling session" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy child session" })).toBeEnabled();
     fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

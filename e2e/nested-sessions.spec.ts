@@ -96,21 +96,17 @@ async function selectTab(page: Page, name: string): Promise<void> {
 
 async function copySession(page: Page, parent: string, child: boolean): Promise<string> {
   await selectTab(page, parent);
-  if (child) {
-    await page.getByRole("button", { name: "Copy New options", exact: true }).click();
-    await expect(page.getByRole("menuitem", { name: "Same-level session", exact: true })).toBeVisible();
-    if (parent === sourceName) {
-      await page.screenshot({ path: join(reviewDirectory, "copy-new-options.png") });
-    }
+  if (child && parent === sourceName) {
+    await page.screenshot({ path: join(reviewDirectory, "copy-session-buttons.png") });
   }
   const responsePromise = page.waitForResponse((response) => (
     new URL(response.url()).pathname === `/mux/api/sessions/${parent}/copy`
       && response.request().method() === "POST"
   ));
   if (child) {
-    await page.getByRole("menuitem", { name: "Nested child session", exact: true }).click();
+    await page.getByRole("button", { name: "Copy child session", exact: true }).click();
   } else {
-    await page.getByRole("button", { name: "Copy New", exact: true }).click();
+    await page.getByRole("button", { name: "Copy sibling session", exact: true }).click();
   }
   const response = await responsePromise;
   expect(response.status()).toBe(201);
