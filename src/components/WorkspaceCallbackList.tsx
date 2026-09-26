@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -20,7 +21,25 @@ import {
 } from "../icons";
 import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
 import "./WorkspaceCallbackMessages.css";
-import type { AgentState, Session } from "../types";
+import "./WorkspaceCallbackFilters.css";
+import type { Session } from "../types";
+import {
+  CALLBACK_AGENT_OPTIONS,
+  CALLBACK_LOCATION_OPTIONS,
+  CALLBACK_MESSAGE_OPTIONS,
+  CALLBACK_SORT_OPTIONS,
+  CALLBACK_STATUS_OPTIONS,
+  DEFAULT_CALLBACK_LIST_VIEW,
+  callbackEntryLatestCallbackAt,
+  callbackEntryReadySince,
+  callbackStatus,
+  filterAndSortCallbacks,
+  parseCallbackListViewPreferences,
+  sessionDisplayName,
+  validateCallbackListViewPreferences,
+  type CallbackListEntry,
+  type CallbackListViewPreferences,
+} from "../callbackListView";
 import {
   directShortcutAria,
   directShortcutLabel,
@@ -30,6 +49,7 @@ import {
 const DESKTOP_CALLBACK_QUERY = "(min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine)";
 const CALLBACK_STORAGE_PREFIX = "muxdeck.workspace-callback-panel.v1:";
 export const CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY = `${CALLBACK_STORAGE_PREFIX}scope`;
+export const CALLBACK_VIEW_STORAGE_PREFIX = "muxdeck.callback-list-view.v1:";
 const CALLBACK_PANEL_MARGIN = 12;
 const CALLBACK_PANEL_WIDTH = 390;
 const CALLBACK_PANEL_HEIGHT = 520;
@@ -90,6 +110,21 @@ interface CallbackPanelState {
 interface CallbackPanelStore {
   identity: string;
   panel: CallbackPanelState;
+}
+
+interface CallbackViewStore {
+  identity: string;
+  preferences: CallbackListViewPreferences;
+  query: string;
+  moreFiltersOpen: boolean;
+}
+
+function readViewPreference(identity: string): CallbackListViewPreferences {
+  try {
+    return parseCallbackListViewPreferences(window.localStorage.getItem(`${CALLBACK_VIEW_STORAGE_PREFIX}${identity}`));
+  } catch {
+    return { ...DEFAULT_CALLBACK_LIST_VIEW };
+  }
 }
 
 function viewport(): { width: number; height: number } {
@@ -210,25 +245,6 @@ function desktopCallbackViewport(): boolean {
   return window.innerWidth > 640 && window.innerHeight > 500;
 }
 
-function callbackStatus(session: Session | undefined): {
-  label: string;
-  tone: string;
-  working: boolean;
-} {
-  if (!session) return { label: "Ended / unavailable", tone: "ended", working: false };
-  const state: AgentState = session.agentState;
-  if (state === "working") return { label: "Working", tone: "working", working: true };
-  if (state === "running_command") return { label: "Command running", tone: "running_command", working: true };
-  if (state === "waiting_human") return { label: "Ready for review", tone: "ready", working: false };
-  if (state === "waiting_command") return { label: "Waiting", tone: "waiting", working: false };
-  if (state === "unknown") return { label: "Status unknown", tone: "unknown", working: false };
-  return { label: "Ready", tone: "ready", working: false };
-}
-
-function sessionDisplayName(session: Session | undefined, fallback: string): string {
-  return session?.customTitle?.trim() || fallback;
-}
-
 function normalizeCallbackSessions(value: readonly string[] | null | undefined): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -294,6 +310,37 @@ export function WorkspaceCallbackList({
   const activeScope: CallbackScope = globalEnabled ? scope : "workspace";
   const workspaceIdentity = workspaceId ? `workspace:${workspaceId}` : `temporary:${temporaryKey}`;
   const identity = activeScope === "global" ? "global" : workspaceIdentity;
+  const savedViewPreferences = useMemo(() => readViewPreference(identity), [identity]);
+  const [viewStore, setViewStore] = useState<CallbackViewStore>(() => ({
+    identity, preferences: savedViewPreferences, query: "", moreFiltersOpen: false,
+  }));
+  const listView: CallbackViewStore = viewStore.identity === identity ? viewStore : {
+    identity, preferences: savedViewPreferences, query: "", moreFiltersOpen: false,
+  };
+  useEffect(() => {
+    if (viewStore.identity !== identity) {
+      setViewStore({ identity, preferences: savedViewPreferences, query: "", moreFiltersOpen: false });
+    }
+  }, [identity, savedViewPreferences, viewStore.identity]);
+  useEffect(() => {
+    if (viewStore.identity !== identity) return;
+    try {
+      window.localStorage.setItem(`${CALLBACK_VIEW_STORAGE_PREFIX}${identity}`, JSON.stringify(viewStore.preferences));
+    } catch {
+      // Sorting and filtering still work without optional browser persistence.
+    }
+  }, [identity, viewStore.identity, viewStore.preferences]);
+  const changeViewPreference = (key: keyof CallbackListViewPreferences, value: string) => {
+    setViewStore({
+      ...listView,
+      preferences: validateCallbackListViewPreferences({ ...listView.preferences, [key]: value }),
+    });
+  };
+  const resetFilters = () => setViewStore({
+    ...listView,
+    query: "",
+    preferences: { ...DEFAULT_CALLBACK_LIST_VIEW, sort: listView.preferences.sort },
+  });
   const initialStoreRef = useRef<CallbackPanelStore | null>(null);
   if (initialStoreRef.current === null) {
     initialStoreRef.current = { identity, panel: readPreference(identity) };
@@ -672,12 +719,28 @@ export function WorkspaceCallbackList({
   const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
   const readyCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).tone === "ready").length;
   const unavailableCount = visibleCallbackSessions.filter((name) => !sessionMap.has(name)).length;
-  const removableUnavailableCount = activeScope === "global"
-    ? new Set([
-      ...explicitGlobalSessions,
-      ...visibleMessages.map((message) => message.sessionName),
-    ].filter((name) => !sessionMap.has(name))).size
-    : unavailableCount;
+  const entries: CallbackListEntry[] = visibleCallbackSessions.map((name) => {
+    const sources = globalWorkspaceSources.get(name) ?? [];
+    const times = globalCallbackSnapshot?.latestCallbackAtBySession;
+    return {
+      name,
+      session: sessionMap.get(name),
+      messages: messagesBySession.get(name) ?? [],
+      workspaceNames: sources.map((source) => source.workspaceName),
+      inCurrentWorkspace: workspaceSessionSet === null || workspaceSessionSet.has(name),
+      // Match the row's "Global only" location, including message-only callbacks.
+      globalOnly: workspaceSessionSet !== null && !workspaceSessionSet.has(name) && sources.length === 0,
+      latestCallbackAt: times && Object.hasOwn(times, name) ? times[name] : undefined,
+    };
+  });
+  const displayedEntries = filterAndSortCallbacks(entries, listView.preferences, listView.query);
+  const displayedNames = displayedEntries.map((entry) => entry.name);
+  const clearableEntries = displayedEntries.filter((entry) => activeScope !== "global"
+    || explicitGlobalSessions.includes(entry.name) || entry.messages.length > 0);
+  const removableUnavailableCount = clearableEntries.filter((entry) => !entry.session).length;
+  const extraFilterCount = [listView.preferences.agent, listView.preferences.messages, listView.preferences.location]
+    .filter((value) => value !== "all").length;
+  const filtersActive = Boolean(listView.query.trim()) || listView.preferences.status !== "all" || extraFilterCount > 0;
   const inheritedCount = activeScope === "global"
     ? visibleCallbackSessions.filter((name) => !explicitGlobalSessions.includes(name)
       && globalWorkspaceSources.has(name)).length
@@ -825,6 +888,66 @@ export function WorkspaceCallbackList({
             <button type="button" onClick={() => setError("")}>Dismiss</button>
           </div>
         )}
+        <div className="workspace-callback-view-controls" role="group" aria-label="Callback sorting and filters">
+          <input
+            type="search"
+            className="workspace-callback-search"
+            aria-label="Search callbacks"
+            placeholder="Search sessions, messages, workspaces…"
+            value={listView.query}
+            onChange={(event) => setViewStore({ ...listView, query: event.target.value })}
+          />
+          <div className="workspace-callback-view-primary">
+            <label className="workspace-callback-view-field">
+              <span>Status</span>
+              <select aria-label="Filter callbacks by status" value={listView.preferences.status}
+                onChange={(event) => changeViewPreference("status", event.target.value)}>
+                {CALLBACK_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="workspace-callback-view-field">
+              <span>Sort</span>
+              <select aria-label="Sort callbacks" value={listView.preferences.sort}
+                onChange={(event) => changeViewPreference("sort", event.target.value)}>
+                {CALLBACK_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="workspace-callback-view-meta">
+            <span role="status">{displayedEntries.length} of {entries.length} shown</span>
+            <button type="button" aria-label="More callback filters" aria-expanded={listView.moreFiltersOpen}
+              aria-controls={`${panelId}-filters`}
+              onClick={() => setViewStore({ ...listView, moreFiltersOpen: !listView.moreFiltersOpen })}>
+              {listView.moreFiltersOpen ? "Fewer filters" : "More filters"}{extraFilterCount > 0 ? ` (${extraFilterCount})` : ""}
+            </button>
+            {filtersActive && <button type="button" aria-label="Reset callback filters" onClick={resetFilters}>Reset</button>}
+          </div>
+          {listView.moreFiltersOpen && (
+            <div className="workspace-callback-view-extra" id={`${panelId}-filters`}>
+              <label className="workspace-callback-view-field">
+                <span>Agent</span>
+                <select aria-label="Filter callbacks by agent" value={listView.preferences.agent}
+                  onChange={(event) => changeViewPreference("agent", event.target.value)}>
+                  {CALLBACK_AGENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="workspace-callback-view-field">
+                <span>Messages</span>
+                <select aria-label="Filter callbacks by messages" value={listView.preferences.messages}
+                  onChange={(event) => changeViewPreference("messages", event.target.value)}>
+                  {CALLBACK_MESSAGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="workspace-callback-view-field">
+                <span>Location</span>
+                <select aria-label="Filter callbacks by location" value={listView.preferences.location}
+                  onChange={(event) => changeViewPreference("location", event.target.value)}>
+                  {CALLBACK_LOCATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
         {visibleCallbackSessions.length === 0 ? (
           <div className="workspace-callback-empty">
             <HistoryIcon />
@@ -833,21 +956,19 @@ export function WorkspaceCallbackList({
               ? "Add sessions globally, or mark one in any workspace to inherit it here."
               : "Add sessions here before you step away. Their live status stays visible."}</span>
           </div>
+        ) : displayedEntries.length === 0 ? (
+          <div className="workspace-callback-no-matches">
+            <strong>No callbacks match these filters</strong>
+            <span>Try another search or reset the filters to show the full queue.</span>
+            <button type="button" onClick={resetFilters}>Show all callbacks</button>
+          </div>
         ) : (
           <ol className="workspace-callback-list" aria-label="Sessions to call back">
-            {visibleCallbackSessions.map((name, index) => {
-              const session = sessionMap.get(name);
-              const messages = messagesBySession.get(name) ?? [];
+            {displayedEntries.map((entry, index) => {
+              const { name, session, messages } = entry;
               const status = callbackStatus(session);
-              const callbackTimes = globalCallbackSnapshot?.latestCallbackAtBySession;
-              const recordedCallbackAt = callbackTimes && Object.hasOwn(callbackTimes, name)
-                ? callbackTimes[name] : undefined;
-              const latestCallbackAt = recordedCallbackAt
-                ?? messages.reduce<number | undefined>((latest, message) => (
-                  latest === undefined ? message.createdAt : Math.max(latest, message.createdAt)
-                ), undefined);
-              const readySince = session?.agentState === "waiting_human"
-                && session.agentStateChangedAt > 0 ? session.agentStateChangedAt : undefined;
+              const latestCallbackAt = callbackEntryLatestCallbackAt(entry);
+              const readySince = callbackEntryReadySince(entry);
               const timingLabel = latestCallbackAt === undefined ? "Ready since" : "Latest callback";
               const timingAt = latestCallbackAt ?? readySince;
               const timingDate = timingAt === undefined ? null : new Date(timingAt * 1000);
@@ -1019,24 +1140,22 @@ export function WorkspaceCallbackList({
           <div>
             {removableUnavailableCount > 0 && (
               <button type="button" disabled={isBusy} onClick={() => void clearCallbacks(
-                visibleCallbackSessions.filter((name) => !sessionMap.has(name)),
+                displayedNames.filter((name) => !sessionMap.has(name)),
               )}>
                 <TrashIcon />
-                <span>Clear ended</span>
+                <span>{filtersActive ? "Clear ended shown" : "Clear ended"}</span>
               </button>
             )}
-            {(activeScope === "global"
-              ? explicitGlobalSessions.length > 0 || visibleMessages.length > 0
-              : visibleCallbackSessions.length > 0) && (
+            {clearableEntries.length > 0 && (
               <button
                 type="button"
                 disabled={isBusy}
-                onClick={() => void clearCallbacks(visibleCallbackSessions)}
+                onClick={() => void clearCallbacks(displayedNames)}
                 title={activeScope === "global"
-                  ? "Review pending messages and remove global markers; workspace markers remain"
-                  : "Review these messages and remove this workspace's callback markers"}
+                  ? "Review shown messages and remove shown global markers; workspace markers remain"
+                  : "Review shown messages and remove their workspace callback markers"}
               >
-                {activeScope === "global" ? "Clear global" : "Clear all"}
+                {filtersActive ? "Clear shown" : activeScope === "global" ? "Clear global" : "Clear all"}
               </button>
             )}
           </div>

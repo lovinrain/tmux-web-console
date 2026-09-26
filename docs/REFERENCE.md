@@ -1554,7 +1554,7 @@ session.
 The desktop `Callback` card is a deliberate follow-up queue for sessions that
 need a human check later. It has two scopes: `Global` (the default) and
 `Workspace`. `Current` marks the active session, or the chooser can add another
-known session; each entry is deduplicated, ordered by the user's additions, and
+known session; each entry is deduplicated, initially ordered by the user's additions, and
 can be opened or marked reviewed with its check button. Live agent state is
 shown as `Working`, `Command running`, `Ready`, `Waiting`, or
 `Ended / unavailable`, so a completed session remains easy to find after the
@@ -1563,6 +1563,32 @@ stale entries and `Clear all` empties the active queue.
 The card shows `ready/total` (for example, `3/8 ready`), counting entries labeled
 `Ready` or `Ready for review`. Running commands count as working, never ready.
 Hover for working-session and message counts.
+
+Search matches session names, custom titles, message text, agent names, working
+directories, and source workspace names. Multiple search words must all match
+the same session row; its complete pending-message list remains visible.
+`Status` filters Ready, Working (including running commands), Waiting, Ended,
+and Unknown. `More filters` adds agent, pending-message presence, and location
+filters. `This workspace` means the session is open as a tab here; `Global only`
+matches rows outside this workspace with no owning workspace, including entries
+created only by pending messages. Agent
+matching includes both session metadata and pending-message origins, including
+messages from ended sessions.
+
+`Sort` offers Queue order, Ready first, Ready longest, Newest callback, Oldest
+callback, Name A–Z, and Name Z–A. Callback-time sorts use the most recent receipt
+per session, including reviewed history. Ready longest uses the observed
+ready-since time. Missing times sort after known times; equal values keep their
+original queue order. Name sorting uses the custom title when present.
+
+The filter bar shows `X of Y shown`; summary counts still describe the full
+scope. Sort and filter choices are remembered separately for Global and each
+saved or temporary workspace in that browser. Search text is not saved and
+clears on a scope/workspace change. `Reset` clears filters while retaining the
+chosen sort. With filters active, bulk actions become `Clear shown` and
+`Clear ended shown`, affecting only matching session rows. Global clearing
+still preserves workspace-owned markers. Sorting and filtering never reorder
+or rewrite the shared callback queue.
 
 Each entry with a posted message shows `Latest callback` using the server's most
 recent receipt time, including reviewed messages for sessions still in the

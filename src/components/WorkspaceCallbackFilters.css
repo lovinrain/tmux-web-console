@@ -1,0 +1,177 @@
+.workspace-callback-panel .workspace-callback-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.workspace-callback-panel .workspace-callback-body > :not(.workspace-callback-list) {
+  flex-shrink: 0;
+}
+
+.workspace-callback-panel .workspace-callback-list {
+  flex: 1;
+  min-height: 90px;
+  overflow: auto;
+}
+
+.workspace-callback-panel .workspace-callback-empty,
+.workspace-callback-panel .workspace-callback-no-matches {
+  flex-grow: 1;
+}
+
+.workspace-callback-panel .workspace-callback-summary {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.workspace-callback-view-controls,
+.workspace-callback-no-matches {
+  --callback-view-text: #dce5d8;
+  --callback-view-muted: #a4b39b;
+  --callback-view-surface: #141b15;
+  --callback-view-input: #1b241d;
+  --callback-view-border: #3d4b35;
+  color: var(--callback-view-text);
+  background: var(--callback-view-surface);
+  border: 1px solid var(--callback-view-border);
+  border-radius: 4px;
+  color-scheme: dark;
+}
+
+.workspace-callback-view-controls {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 8px;
+  container: callback-filters / inline-size;
+}
+
+.workspace-callback-search,
+.workspace-callback-view-field select,
+.workspace-callback-view-meta button,
+.workspace-callback-no-matches button {
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  color: var(--callback-view-text);
+  background: var(--callback-view-input);
+  border: 1px solid var(--callback-view-border);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.workspace-callback-search,
+.workspace-callback-view-field select {
+  width: 100%;
+}
+
+.workspace-callback-search::placeholder {
+  color: var(--callback-view-muted);
+  opacity: 1;
+}
+
+.workspace-callback-view-primary,
+.workspace-callback-view-extra {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.workspace-callback-view-extra {
+  padding-top: 7px;
+  border-top: 1px solid var(--callback-view-border);
+}
+
+.workspace-callback-view-field {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  color: var(--callback-view-muted);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.workspace-callback-view-field select {
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.workspace-callback-view-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.workspace-callback-view-meta > span {
+  margin-right: auto;
+  color: var(--callback-view-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-callback-view-meta button,
+.workspace-callback-no-matches button {
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.workspace-callback-view-meta button:hover,
+.workspace-callback-view-meta button[aria-expanded="true"],
+.workspace-callback-no-matches button:hover {
+  border-color: var(--callback-accent);
+  background: color-mix(in srgb, var(--callback-accent) 10%, var(--callback-view-input));
+}
+
+.workspace-callback-search:focus-visible,
+.workspace-callback-view-field select:focus-visible,
+.workspace-callback-view-meta button:focus-visible,
+.workspace-callback-no-matches button:focus-visible {
+  outline: 2px solid var(--callback-accent);
+  outline-offset: 1px;
+}
+
+.workspace-callback-no-matches {
+  display: grid;
+  min-width: 0;
+  min-height: 120px;
+  justify-items: center;
+  align-content: center;
+  gap: 7px;
+  padding: 14px;
+  border-style: dashed;
+  text-align: center;
+}
+
+.workspace-callback-no-matches strong {
+  font-size: 11px;
+}
+
+.workspace-callback-no-matches > span {
+  color: var(--callback-view-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+@container callback-filters (min-width: 440px) {
+  .workspace-callback-view-extra {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+html[data-theme="light"] .workspace-callback-view-controls,
+html[data-theme="light"] .workspace-callback-no-matches {
+  --callback-view-text: #273326;
+  --callback-view-muted: #5a6853;
+  --callback-view-surface: #f5f4e9;
+  --callback-view-input: #fffdf6;
+  --callback-view-border: #c4ceb8;
+  color-scheme: light;
+}
