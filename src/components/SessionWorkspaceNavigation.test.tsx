@@ -1940,6 +1940,69 @@ describe("SessionWorkspaceNavigation", () => {
       .toHaveFocus());
   });
 
+  it.each(["horizontal", "vertical"] as const)("nests a branch by its %s tab center and promotes it at the root drop target", (orientation) => {
+    const onReparentSession = vi.fn();
+    const onMoveTab = vi.fn();
+    const props = navigationProps({ orientation, openSessions: ["alpha", "beta", "zulu"],
+      sessionParents: { beta: "alpha" }, onReparentSession, onMoveTab });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    const beta = screen.getByRole("tab", { name: "beta, Working" });
+    const target = screen.getByRole("tab", { name: "Zulu shell, Other" }).closest<HTMLElement>(".workspace-tab")!;
+    const dataTransfer = dragDataTransfer();
+    mockElementBounds(target, { top: 200, left: 200, width: 100, height: 40 });
+    fireEvent.dragStart(alpha, { dataTransfer });
+    fireEvent.dragOver(target, { clientX: 250, clientY: 220, dataTransfer });
+    expect(target).toHaveAttribute("data-tab-drop-nest", "true");
+    fireEvent.drop(target, { clientX: 250, clientY: 220, dataTransfer });
+    expect(onReparentSession).toHaveBeenLastCalledWith("alpha", "zulu");
+    expect(onMoveTab).not.toHaveBeenCalled();
+    expect(props.onSelect).not.toHaveBeenCalled();
+    fireEvent.dragStart(beta, { dataTransfer });
+    fireEvent.drop(screen.getByRole("group", { name: "Top level drop target" }), { dataTransfer });
+    expect(onReparentSession).toHaveBeenLastCalledWith("beta", null);
+    expect(screen.queryByRole("group", { name: "Top level drop target" })).not.toBeInTheDocument();
+  });
+
+  it("rejects dropping on descendants and keeps edge drops as ordinary reorders", () => {
+    const onReparentSession = vi.fn();
+    const onMoveTab = vi.fn();
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      openSessions: ["alpha", "beta", "zulu"], sessionParents: { beta: "alpha" }, onMoveTab, onReparentSession,
+    })} />);
+    const alpha = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    const beta = screen.getByRole("tab", { name: "beta, Working" }).closest<HTMLElement>(".workspace-tab")!;
+    const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" }).closest<HTMLElement>(".workspace-tab")!;
+    mockElementBounds(beta, { left: 100, width: 100 });
+    mockElementBounds(zulu, { left: 200, width: 100 });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(alpha, { dataTransfer });
+    fireEvent.dragOver(zulu, { clientX: 250, clientY: 20, dataTransfer });
+    fireEvent.dragOver(beta, { clientX: 150, clientY: 20, dataTransfer });
+    expect(zulu).not.toHaveAttribute("data-tab-drop-nest");
+    fireEvent.drop(beta, { clientX: 150, clientY: 20, dataTransfer });
+    expect(onReparentSession).not.toHaveBeenCalled();
+    fireEvent.dragStart(alpha, { dataTransfer });
+    fireEvent.drop(zulu, { clientX: 295, clientY: 20, dataTransfer });
+    expect(onMoveTab).toHaveBeenCalledWith("alpha", 2);
+  });
+
+  it("opens placement from a tab and exposes promotion and nesting through its keyboard", () => {
+    const onReparentSession = vi.fn();
+    const onTransferSelectedSessions = vi.fn();
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      openSessions: ["alpha", "beta", "zulu"], sessionParents: { beta: "alpha", zulu: "alpha" },
+      onReparentSession, onTransferSelectedSessions,
+    })} />);
+    const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" });
+    fireEvent.contextMenu(zulu);
+    expect(onTransferSelectedSessions).toHaveBeenCalledWith(["zulu"]);
+    fireEvent.keyDown(zulu, { key: "ArrowLeft", altKey: true, shiftKey: true });
+    expect(onReparentSession).toHaveBeenLastCalledWith("zulu", null);
+    fireEvent.keyDown(zulu, { key: "ArrowRight", altKey: true, shiftKey: true });
+    expect(onReparentSession).toHaveBeenLastCalledWith("zulu", "beta");
+  });
+
   it("drags horizontal desktop tabs to a new position without selecting or closing them", () => {
     const onMoveTab = vi.fn();
     const props = navigationProps({

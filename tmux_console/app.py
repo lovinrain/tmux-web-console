@@ -3616,7 +3616,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"sourceWorkspaceId", "sourceParents"}
+        allowed = required | {"sourceWorkspaceId", "sourceParents", "destinationParent"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -3641,6 +3641,7 @@ def create_app(
                     session_name,
                     source_workspace_id=source_workspace_id,
                     source_parents=payload.get("sourceParents", {}),
+                    **({"destination_parent": payload["destinationParent"]} if "destinationParent" in payload else {}),
                     destination_workspace_id=destination_workspace_id,
                     operation=operation,
                     session_revision=payload["sessionRevision"],
@@ -3687,7 +3688,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"sourceWorkspaceId", "sourceParents"}
+        allowed = required | {"sourceWorkspaceId", "sourceParents", "destinationParent"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -3711,6 +3712,7 @@ def create_app(
                     sessions,
                     source_workspace_id=source_workspace_id,
                     source_parents=payload.get("sourceParents", {}),
+                    **({"destination_parent": payload["destinationParent"]} if "destinationParent" in payload else {}),
                     destination_workspace_id=destination_workspace_id,
                     operation=operation,
                     session_revision=payload["sessionRevision"],

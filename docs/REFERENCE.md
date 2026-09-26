@@ -960,6 +960,24 @@ workspace is loaded, its server record is authoritative. A URL with `tab=` value
 but no `workspace=` remains an unsaved browser workspace; its `Resume workspace`
 action returns to the most recently active open tab without changing their order.
 
+### Moving and nesting existing sessions (desktop)
+
+Open `Move / Nest` in the session controls or right-click any workspace tab.
+Choose the destination workspace, then `Top level` or an existing parent session.
+The chooser searches session names and titles and previews the resulting
+location. `Up one level` moves out of the current parent; `Nest under previous`
+attaches to the preceding sibling. Each action keeps the session's children
+together. Move and Copy work across saved workspaces, with Copy keeping the
+branch in the source too. Globally pinned sessions can be copied but must be
+unpinned before moving to another workspace.
+
+Drag onto a tab's center to nest under it; its edges retain the existing tab
+reorder behavior. A `Top level` drop target appears during the drag. With a tab
+focused, `Alt+Shift+Left` promotes one level and `Alt+Shift+Right` nests under the
+previous sibling; `Shift+F10` opens the chooser. A session cannot become its own
+ancestor. Changes synchronize with other browsers viewing the saved workspace
+and only affect workspace organization, leaving the tmux sessions running.
+
 ### Named multi-pane views (desktop)
 
 `Pane view` in the horizontal workspace strip, or the `Pane views` section in
@@ -1551,7 +1569,7 @@ session.
 
 ### Workspace callback list
 
-The desktop `Callback` card is a deliberate follow-up queue for sessions that
+The desktop `Callback` footer opens a deliberate follow-up queue for sessions that
 need a human check later. It has two scopes: `Global` (the default) and
 `Workspace`. `Current` marks the active session, or the chooser can add another
 known session; each entry is deduplicated, initially ordered by the user's additions, and
@@ -1560,9 +1578,12 @@ shown as `Working`, `Command running`, `Ready`, `Waiting`, or
 `Ended / unavailable`, so a completed session remains easy to find after the
 operator returns. `Clear ended` removes
 stale entries and `Clear all` empties the active queue.
-The card shows `ready/total` (for example, `3/8 ready`), counting entries labeled
-`Ready` or `Ready for review`. Running commands count as working, never ready.
-Hover for working-session and message counts.
+The bottom-right footer shows both scopes together, such as
+`Global 9/9 · Local 1/1 ready`. Each fraction means ready / watched, counting
+entries labeled `Ready` or `Ready for review`; Local refers to this workspace's
+queue. The counts stay visible and independent of the open scope, filters,
+or collapsed groups. Running commands count as working, never ready. Click the
+footer to open the list and hover for the expanded count descriptions.
 
 Search matches session names, custom titles, message text, agent names, working
 directories, and source workspace names. Multiple search words must all match

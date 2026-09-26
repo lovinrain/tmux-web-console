@@ -12,6 +12,9 @@ import {
   type WorkspaceSessionsTransferResult,
 } from "../api";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
+import type { Session } from "../types";
+import type { SessionWorkspaceState } from "../workspaceState";
+import { SessionPlacementDialog } from "./SessionPlacementDialog";
 import {
   CloseIcon,
   RefreshIcon,
@@ -20,17 +23,21 @@ import {
   WindowMoveIcon,
 } from "../icons";
 
-interface SessionWorkspaceTransferDialogProps {
+export interface SessionWorkspaceTransferDialogProps {
   sessionNames: string[];
   sourceWorkspaceId: string | null;
   sourceWorkspaceName: string | null;
   workspacePinnedSessions?: string[];
+  sourceWorkspace?: SessionWorkspaceState;
+  sessions?: readonly Session[];
+  onReparentSession?: (sessionName: string, parentName: string | null) => void | Promise<void>;
   onClose: () => void;
   onTransfer: (
     sessionNames: string[],
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
+    destinationParent?: string | null,
   ) => Promise<WorkspaceSessionsTransferResult>;
 }
 
@@ -48,7 +55,15 @@ function tabCountLabel(count: number): string {
   return `${count} ${count === 1 ? "session" : "sessions"}`;
 }
 
-export function SessionWorkspaceTransferDialog({
+export function SessionWorkspaceTransferDialog(props: SessionWorkspaceTransferDialogProps) {
+  if (props.sessionNames.length === 1 && props.sourceWorkspace && props.onReparentSession) {
+    return <SessionPlacementDialog {...props} key={props.sessionNames[0]}
+      sourceWorkspace={props.sourceWorkspace} onReparentSession={props.onReparentSession} />;
+  }
+  return <WorkspaceTransferDialog {...props} />;
+}
+
+function WorkspaceTransferDialog({
   sessionNames,
   sourceWorkspaceId,
   sourceWorkspaceName,

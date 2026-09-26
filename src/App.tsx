@@ -102,6 +102,8 @@ import {
   normalizeWorkspaceParents,
   moveWorkspaceSession,
   moveWorkspaceSessions,
+  reparentWorkspaceSession,
+  workspaceSubtree,
   removeWorkspaceSession,
   removeWorkspaceTabGroup,
   renameWorkspaceSession,
@@ -976,6 +978,7 @@ function AppRoutes() {
   const lastSavedWorkspaceActivity = useRef<WorkspaceActivitySnapshot | null>(null);
   const workspaceActivityRunning = useRef(false);
   const workspaceActivityInFlight = useRef<WorkspaceActivitySnapshot | null>(null);
+  const workspaceActivityCompletion = useRef<Promise<void> | null>(null);
   const canonicalWorkspace = useRef<SavedWorkspace | null>(null);
   const acknowledgedWorkspaceActivities = useRef(new WeakSet<WorkspaceActivitySnapshot>());
   const receiveWorkspaceSnapshot = useRef<(
@@ -1999,7 +2002,7 @@ function AppRoutes() {
     workspaceActivityRunning.current = true;
     workspaceActivityInFlight.current = snapshot;
 
-    void updateWorkspaceActivity(
+    workspaceActivityCompletion.current = updateWorkspaceActivity(
       snapshot.workspaceId,
       snapshot.tabs,
       snapshot.groups,
@@ -3003,6 +3006,22 @@ function AppRoutes() {
     ));
   }, [commitWorkspaceStructure]);
 
+  const reparentSessionTab = useCallback((sessionName: string, parentName: string | null) => {
+    const savedId = savedWorkspaceIdFromSearch(currentLocation().search);
+    if (savedId && hydratedWorkspaceIdRef.current !== savedId) {
+      throw new Error("Wait for the workspace to finish opening.");
+    }
+    const current = workspaceRef.current;
+    if (!current.openSessions.includes(sessionName)
+      || (parentName !== null && !current.openSessions.includes(parentName))) {
+      throw new Error("The session or parent is no longer in this workspace.");
+    }
+    if (parentName !== null && workspaceSubtree(sessionName, current.openSessions, current.parents).includes(parentName)) {
+      throw new Error("A session cannot be nested under itself or one of its children.");
+    }
+    commitWorkspaceStructure(reparentWorkspaceSession(current, sessionName, parentName));
+  }, [commitWorkspaceStructure]);
+
   const sortSessionTabsByWorkingState = useCallback(() => {
     const workingSessionNames = new Set(
       knownSessionsRef.current
@@ -3788,6 +3807,7 @@ function AppRoutes() {
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
+    destinationParent?: string | null,
   ) => {
     const requestedSessions = new Set(sessionNames);
     const orderedSessionNames = workspaceRef.current.openSessions.filter((name) => (
@@ -3807,6 +3827,30 @@ function AppRoutes() {
     // document revision so any older in-flight browser save cannot undo it.
     if (sourceWorkspaceId) {
       workspaceActivityCommit.current();
+      if (destinationParent !== undefined) {
+        // Placement reads the saved source tree. Drain pending writes before
+        // transferring so a freshly attached child cannot arrive as a sibling.
+        while (workspaceActivityInFlight.current?.workspaceId === sourceWorkspaceId
+          || queuedWorkspaceActivities.current.some((snapshot) => snapshot.workspaceId === sourceWorkspaceId)) {
+          workspaceActivityFlush.current();
+          await workspaceActivityCompletion.current;
+          if (!appMounted.current || hydratedWorkspaceIdRef.current !== sourceWorkspaceId
+            || savedWorkspaceIdFromSearch(currentLocation().search) !== sourceWorkspaceId) {
+            throw new Error("Workspace changed; choose a session in the intended workspace.");
+          }
+          workspaceActivityCommit.current();
+        }
+        const savedSource = canonicalWorkspace.current;
+        if (failedWorkspaceActivity.current?.workspaceId === sourceWorkspaceId
+          || savedSource?.id !== sourceWorkspaceId
+          || orderedSessionNames.some((name) => !savedSource.tabs.includes(name))
+          || !sameWorkspaceParents(
+            normalizeWorkspaceParents(savedSource.parents, orderedSessionNames),
+            normalizeWorkspaceParents(workspaceRef.current.parents, orderedSessionNames),
+          )) {
+          throw new Error("Recent workspace changes have not finished saving. Retry after the workspace syncs.");
+        }
+      }
       workspaceActivitySuppressedFor.current = sourceWorkspaceId;
     }
     const sourceParents = normalizeWorkspaceParents(
@@ -3814,9 +3858,11 @@ function AppRoutes() {
     );
     const sourceParentsArgs: [] | [WorkspaceSessionParents] = sourceWorkspaceId
       || Object.keys(sourceParents).length === 0 ? [] : [sourceParents];
+    const transferArgs: [sourceParents?: WorkspaceSessionParents, destinationParent?: string | null] = destinationParent === undefined
+      ? sourceParentsArgs : [sourceParentsArgs[0], destinationParent];
     try {
       let result: WorkspaceSessionsTransferResult;
-      if (orderedSessionNames.length === 1) {
+      if (orderedSessionNames.length === 1 && destinationParent === undefined) {
         const single = await transferSessionToWorkspace(
           orderedSessionNames[0],
           sourceWorkspaceId,
@@ -3844,7 +3890,7 @@ function AppRoutes() {
           destinationWorkspaceId,
           operation,
           sessionRevision,
-          ...sourceParentsArgs,
+          ...transferArgs,
         );
       }
       if (!appMounted.current) return result;
@@ -4245,13 +4291,18 @@ function AppRoutes() {
           sessionNames={bulkWorkspaceTransfer.sessionNames}
           sourceWorkspaceId={bulkWorkspaceTransfer.sourceWorkspaceId}
           sourceWorkspaceName={bulkWorkspaceTransfer.sourceWorkspaceName}
-          workspacePinnedSessions={bulkWorkspaceTransfer.sessionNames.filter((name) => (
-            knownSessions.some((session) => (
-              session.name === name && session.workspacePinned
-            ))
-          ))}
+          sourceWorkspace={workspace}
+          sessions={knownSessions}
+          workspacePinnedSessions={knownSessions.filter((session) => session.workspacePinned).map((session) => session.name)}
+          onReparentSession={(name, parent) => {
+            const currentKey = savedWorkspaceIdFromSearch(currentLocation().search) || temporaryTerminalKeyRef.current;
+            if (currentKey !== bulkWorkspaceTransfer.workspaceKey) {
+              throw new Error("Workspace changed; choose a session in the intended workspace.");
+            }
+            reparentSessionTab(name, parent);
+          }}
           onClose={() => setBulkWorkspaceTransfer(null)}
-          onTransfer={async (sessionNames, destinationId, operation, revision) => {
+          onTransfer={async (sessionNames, destinationId, operation, revision, parent) => {
             const current = currentLocation();
             const savedWorkspaceId = savedWorkspaceIdFromSearch(current.search);
             const currentSourceId = savedWorkspaceId
@@ -4270,6 +4321,7 @@ function AppRoutes() {
               destinationId,
               operation,
               revision,
+              ...(parent === undefined ? [] : [parent] as const),
             );
           }}
         />
@@ -4487,6 +4539,7 @@ function AppRoutes() {
         onSelect={switchSession}
         onMoveTab={moveSessionTab}
         onMoveTabs={moveSessionTabs}
+        onReparentSession={reparentSessionTab}
         onTabSelectionChange={setSelectedWorkspaceTabs}
         onTransferSelectedSessions={requestBulkWorkspaceTransfer}
         onBulkSessionAction={requestBulkSessionAction}
@@ -4575,6 +4628,7 @@ function AppRoutes() {
             callbackSessionBusy={workspaceCallbackBusy}
             onToggleCallbackSession={() => toggleWorkspaceCallbackSession(sessionName)}
             onSessionWorkspaceTransfer={transferOpenSessionsToWorkspace}
+            onRequestSessionPlacement={requestBulkWorkspaceTransfer}
             workspaceTransferSessionNames={orderedSelectedWorkspaceTabs.length > 1
               ? orderedSelectedWorkspaceTabs
               : undefined}
@@ -4708,6 +4762,7 @@ function AppRoutes() {
         callbackSessionBusy={workspaceCallbackBusy}
         onToggleCallbackSession={() => toggleWorkspaceCallbackSession(sessionName)}
         onSessionWorkspaceTransfer={transferOpenSessionsToWorkspace}
+        onRequestSessionPlacement={requestBulkWorkspaceTransfer}
         workspaceTransferSessionNames={orderedSelectedWorkspaceTabs.length > 1
           ? orderedSelectedWorkspaceTabs
           : undefined}
@@ -4746,6 +4801,7 @@ function AppRoutes() {
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
             onMoveTabs={moveSessionTabs}
+            onReparentSession={reparentSessionTab}
             onTabSelectionChange={setSelectedWorkspaceTabs}
             onTransferSelectedSessions={requestBulkWorkspaceTransfer}
             onBulkSessionAction={requestBulkSessionAction}
@@ -4828,6 +4884,7 @@ function AppRoutes() {
             onSelect={switchSession}
             onMoveTab={moveSessionTab}
             onMoveTabs={moveSessionTabs}
+            onReparentSession={reparentSessionTab}
             onTabSelectionChange={setSelectedWorkspaceTabs}
             onTransferSelectedSessions={requestBulkWorkspaceTransfer}
             onBulkSessionAction={requestBulkSessionAction}

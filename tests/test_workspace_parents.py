@@ -10,6 +10,7 @@ from tmux_console.workspaces import (
     WorkspaceSessionRevisionConflict,
     WorkspaceStore,
     WorkspaceStoreUnavailable,
+    WorkspaceTransferConflictError,
     WorkspaceUpdateConflict,
 )
 
@@ -360,6 +361,86 @@ def test_moving_only_parent_promotes_child_but_does_not_copy_absent_ancestor(tmp
         "grandchild": "root", "sibling": "root",
     }
     assert moved["destinationWorkspace"].get("parents", {}) == {}
+
+
+@pytest.mark.parametrize("operation", ["copy", "move"])
+@pytest.mark.parametrize("saved_source", [False, True])
+def test_explicit_transfer_parent_places_a_branch_inside_the_destination_group(tmp_path, operation, saved_source):
+    path = tmp_path / "workspaces.json"
+    ids = iter(["source", "destination"])
+    store = WorkspaceStore(path, id_factory=lambda: next(ids))
+    create_tree(store)
+    store.create_workspace(
+        name="Destination", tabs=["project", "existing", "unrelated"], active_session="project",
+        parents={"existing": "project"},
+        groups=[{"id": "release", "name": "Release", "color": "cyan", "collapsed": False,
+                 "tabs": ["project", "existing"]}],
+    )
+    result = store.transfer_sessions(
+        ["child", "grandchild"], operation=operation, session_revision=0,
+        source_workspace_id="source" if saved_source else None,
+        source_parents={} if saved_source else {"grandchild": "child"},
+        destination_workspace_id="destination", destination_parent="existing",
+    )
+    destination = result["destinationWorkspace"]
+    assert destination["tabs"] == ["project", "existing", "child", "grandchild", "unrelated"]
+    assert destination["parents"] == {"existing": "project", "child": "existing", "grandchild": "child"}
+    assert destination["groups"][0]["tabs"] == ["project", "existing", "child", "grandchild"]
+    source = store.get_workspace("source")
+    assert ("child" not in source["tabs"]) == (saved_source and operation == "move")
+    assert WorkspaceStore(path).get_workspace("destination") == destination
+
+
+def test_explicit_top_level_repositions_existing_membership_and_fences_stale_transfers(tmp_path):
+    ids = iter(["source", "destination"])
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: next(ids))
+    create_tree(store)
+    store.create_workspace(name="Destination", tabs=["root", "child"], active_session="root", parents={"child": "root"})
+    result = store.transfer_session(
+        "child", source_workspace_id="source", destination_workspace_id="destination",
+        operation="copy", session_revision=0, destination_parent=None,
+    )
+    assert result["destinationAlreadyContained"] is True
+    assert result["destinationAdded"] is False
+    assert result["destinationWorkspace"].get("parents", {}) == {}
+    assert result["sessionRevision"] == 1
+    assert store.get_workspace("source")["parents"]["child"] == "root"
+    with pytest.raises(WorkspaceSessionRevisionConflict):
+        store.transfer_session("child", destination_workspace_id="destination", operation="copy", session_revision=0,
+                               destination_parent="root")
+
+
+@pytest.mark.parametrize("target, error_type", [
+    ("missing", WorkspaceTransferConflictError), ("child", ValueError),
+    ("grandchild", ValueError), (False, TypeError), ([], TypeError),
+])
+def test_bad_transfer_parent_never_removes_source_or_writes_partial_placement(tmp_path, target, error_type):
+    path = tmp_path / "workspaces.json"
+    ids = iter(["source", "destination"])
+    store = WorkspaceStore(path, id_factory=lambda: next(ids))
+    create_tree(store)
+    store.create_workspace(name="Destination", tabs=["child", "grandchild"], active_session="child",
+                           parents={"grandchild": "child"})
+    before = path.read_bytes()
+    with pytest.raises(error_type):
+        store.transfer_session("child", source_workspace_id="source", destination_workspace_id="destination",
+                               operation="move", session_revision=0, destination_parent=target)
+    assert path.read_bytes() == before
+    assert store.get_workspace("source")["sessionRevision"] == 0
+
+
+def test_new_transfer_parent_still_enforces_global_pins(tmp_path):
+    ids = iter(["source", "destination"])
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: next(ids))
+    create_tree(store)
+    store.create_workspace(name="Destination", tabs=["project"], active_session="project")
+    pinned = store.set_session_workspace_pinned("child", True)
+    before = path.read_bytes()
+    with pytest.raises(WorkspaceTransferConflictError, match="pinned"):
+        store.transfer_session("child", source_workspace_id="source", destination_workspace_id="destination",
+                               operation="move", session_revision=pinned["sessionRevision"], destination_parent="project")
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("operation", ["copy", "move"])

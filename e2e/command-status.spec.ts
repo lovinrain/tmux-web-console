@@ -177,7 +177,7 @@ test("a real command status stays blue and busy until its shell finishes, includ
       .toHaveText("Working");
     await expect(callbackRow(workspacePage, sessions.ready).locator(".workspace-callback-status"))
       .toHaveText("Ready for review");
-    await expect(workspacePage.locator(".workspace-callback-card small")).toHaveText("1/3 ready");
+    await expect(workspacePage.locator(".workspace-callback-card small")).toHaveText(["Global 1/3", "Local 1/3"]);
     const colors = await Promise.all(Object.values(sessions).map((name) => color(card(page, name).locator(".state-badge"), "color")));
     expect(new Set(colors).size).toBe(3);
     const tabColors = await Promise.all(Object.values(sessions).map((name) => color(tab(workspacePage, name).locator(".workspace-state-dot"), "backgroundColor")));
@@ -203,5 +203,5 @@ test("a real command status stays blue and busy until its shell finishes, includ
     .toHaveClass(/waiting_human/, { timeout: 10_000 });
   await expect(callbackRow(workspacePage, sessions.command).locator(".workspace-callback-status"))
     .toHaveText("Ready for review");
-  await expect(workspacePage.locator(".workspace-callback-card small")).toHaveText("2/3 ready");
+  await expect(workspacePage.locator(".workspace-callback-card small")).toHaveText(["Global 2/3", "Local 2/3"]);
 });

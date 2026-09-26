@@ -5408,7 +5408,7 @@ test("desktop side-rail status sort keeps stable order inside both partitions", 
   }
 });
 
-test("desktop Move / Copy transfers a session and deduplicates existing destinations", async ({
+test("desktop Move / Nest transfers a session and deduplicates existing destinations", async ({
   page,
   request,
 }) => {
@@ -5469,30 +5469,25 @@ test("desktop Move / Copy transfers a session and deduplicates existing destinat
         + `&tab=${encodeURIComponent(helperSession)}`,
     );
     const transferButton = page.getByRole("button", {
-      name: `Move or copy ${sessionName} to a workspace`,
+      name: `Move or nest ${sessionName}`,
     });
     await expect(transferButton).toBeVisible();
     await transferButton.click();
 
-    const dialog = page.getByRole("dialog", { name: "Move or copy to a workspace" });
+    const dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(sourceName, { exact: true })).toHaveCount(0);
-    await expect(dialog.getByRole("button", {
-      name: `${sessionName} is already in ${existingName}`,
-    })).toBeDisabled();
-
-    await dialog.getByRole("button", {
-      name: `Copy ${sessionName} to ${copyName}`,
-    }).click();
-    await expect(dialog.getByText(`Copied ${sessionName} to ${copyName}.`)).toBeVisible();
-    await expect(dialog.getByRole("button", {
-      name: `${sessionName} is already in ${copyName}`,
-    })).toBeDisabled();
-    await expect.poll(() => workspaceTabs(copyId)).toEqual([sessionName]);
-
-    await dialog.getByRole("button", {
-      name: `Move ${sessionName} to ${existingName}`,
-    }).click();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await transferButton.click();
+      await dialog.getByRole("combobox", { name: "Destination workspace" }).selectOption(copyId);
+      await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+      await dialog.getByRole("button", { name: "Copy here", exact: true }).click();
+      await expect(dialog).toBeHidden();
+      await expect.poll(() => workspaceTabs(copyId)).toEqual([sessionName]);
+      await expect.poll(() => workspaceTabs(sourceId)).toEqual([sessionName, helperSession]);
+    }
+    await transferButton.click();
+    await dialog.getByRole("combobox", { name: "Destination workspace" }).selectOption(existingId);
+    await dialog.getByRole("button", { name: "Move here", exact: true }).click();
     await expect(dialog).toBeHidden();
     await expectRoute(
       page,

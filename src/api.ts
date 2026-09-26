@@ -1691,6 +1691,7 @@ export async function transferSessionToWorkspace(
   operation: WorkspaceSessionTransferOperation,
   sessionRevision: number,
   sourceParents?: WorkspaceSessionParents,
+  destinationParent?: string | null,
 ): Promise<WorkspaceSessionTransferResult> {
   return jsonRequest<WorkspaceSessionTransferResult>(
     "/api/session-workspace-transfer",
@@ -1704,6 +1705,7 @@ export async function transferSessionToWorkspace(
         operation,
         sessionRevision,
         ...(sourceParents === undefined ? {} : { sourceParents }),
+        ...(destinationParent === undefined ? {} : { destinationParent }),
       }),
     },
   );
@@ -1716,6 +1718,7 @@ export async function transferSessionsToWorkspace(
   operation: WorkspaceSessionTransferOperation,
   sessionRevision: number,
   sourceParents?: WorkspaceSessionParents,
+  destinationParent?: string | null,
 ): Promise<WorkspaceSessionsTransferResult> {
   return jsonRequest<WorkspaceSessionsTransferResult>(
     "/api/session-workspace-transfer/bulk",
@@ -1729,6 +1732,7 @@ export async function transferSessionsToWorkspace(
         operation,
         sessionRevision,
         ...(sourceParents === undefined ? {} : { sourceParents }),
+        ...(destinationParent === undefined ? {} : { destinationParent }),
       }),
     },
   );

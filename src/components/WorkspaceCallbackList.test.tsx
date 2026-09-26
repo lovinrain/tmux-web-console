@@ -295,6 +295,30 @@ describe("WorkspaceCallbackList", () => {
     expect(disconnect).not.toHaveBeenCalled();
   });
 
+  it("keeps both footer counts independent of the open scope and updates them with live status", () => {
+    const props = {
+      sessionName: "agent-one", workspaceId: "workspace-one", workspaceName: "Launch room",
+      workspaceSessionNames: ["agent-one"], callbackSessions: ["agent-one"],
+      onChange: vi.fn(async () => undefined), onGlobalChange: vi.fn(async () => undefined), onSelectSession: vi.fn(),
+      globalCallbackSnapshot: { callbackSessions: ["agent-one", "agent-two", "ended"],
+        globalCallbackSessions: ["agent-two", "ended"], workspaceCallbacks: [], sessionRevision: 0 },
+    };
+    const view = renderWithTheme(<WorkspaceCallbackList {...props}
+      sessions={[session("agent-one"), session("agent-two", "working")]} />);
+    const toggle = screen.getByRole("button", { name: "Show callback list" });
+    expect(toggle.closest(".workspace-callback-footnote")).not.toBeNull();
+    expect(toggle).toHaveTextContent("Global 1/3");
+    expect(toggle).toHaveTextContent("Local 1/1");
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    expect(toggle).toHaveTextContent("Global 1/3");
+    expect(toggle).toHaveTextContent("Local 1/1");
+    view.rerender(<WorkspaceCallbackList {...props}
+      sessions={[session("agent-one", "working"), session("agent-two")]} />);
+    expect(screen.getByRole("button", { name: "Hide callback list" })).toHaveTextContent("Global 1/3");
+    expect(screen.getByRole("button", { name: "Hide callback list" })).toHaveTextContent("Local 0/1");
+  });
+
   it("defaults to the global queue and includes workspace-owned entries once", () => {
     const onGlobalChange = vi.fn(async () => undefined);
     const onChange = vi.fn(async () => undefined);

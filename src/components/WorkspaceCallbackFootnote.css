@@ -1,0 +1,48 @@
+@media (min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  .workspace-callback-footnote {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    height: 28px;
+    padding-inline: 10px;
+    border-top: 1px solid var(--line);
+    background: var(--ink);
+  }
+  .workspace-callback-footnote > .workspace-callback-card {
+    position: relative;
+    display: inline-flex;
+    flex: 0 1 auto;
+    gap: 6px;
+    width: auto;
+    min-width: 0;
+    height: 24px;
+    min-height: 24px;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+  .workspace-callback-footnote > .workspace-callback-card:is(:hover, :focus-visible, .window-open) {
+    border-color: var(--line);
+    background: var(--ink-raised);
+  }
+  .workspace-callback-footnote .workspace-callback-card > svg { width: 12px; height: 12px; }
+  .workspace-callback-footnote .workspace-callback-card > span { display: flex; align-items: center; gap: 10px; }
+  .workspace-callback-footnote .workspace-callback-card strong { font-size: 9px; }
+  .workspace-callback-footnote .workspace-callback-card small { font-size: 10px; font-weight: 400; color: var(--muted); }
+  .workspace-callback-footnote .workspace-callback-card small b { color: var(--paper); font-variant-numeric: tabular-nums; }
+  .workspace-callback-footnote .workspace-callback-card > em { position: static; font-size: 7px; }
+  .workspace-callback-counts { display: flex; align-items: baseline; gap: 8px; color: var(--muted); }
+  .workspace-callback-count-hint { font-size: 9px; }
+  /* Reserve the footer's space so it never covers terminal input or keys. */
+  body:has(.workspace-callback-footnote) .console-shell:not(.embedded-console),
+  body:has(.workspace-callback-footnote) .workspace-pane-screen {
+    height: calc(100dvh - 28px);
+    min-height: 0;
+  }
+}

@@ -16813,7 +16813,50 @@ html.history-resizing * {
   from { transform: translateY(30px); opacity: 0; }
 }
 
-/* Workspace callback queue: compact in the header, detailed when floated. */
+.workspace-tab[data-tab-drop-nest="true"] {
+  position: relative;
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--cyan) 14%, var(--ink));
+}
+.workspace-tab-nest-hint {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  z-index: 2;
+  padding: 1px 4px;
+  color: var(--cyan);
+  background: var(--ink);
+  font-size: 9px;
+  pointer-events: none;
+}
+.workspace-tab-root-drop {
+  position: absolute;
+  bottom: 5px;
+  left: 8px;
+  right: 8px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 5px;
+  min-height: 34px;
+  margin: 4px;
+  padding: 6px 10px;
+  color: var(--muted);
+  background: var(--ink);
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.workspace-navigation:has(.workspace-tab-root-drop) { position: relative; }
+.workspace-navigation-horizontal .workspace-tab-root-drop { top: calc(100% + 4px); bottom: auto; right: auto; min-width: 145px; }
+.workspace-tab-root-drop svg { width: 13px; height: 13px; pointer-events: none; }
+.workspace-tab-root-drop span { pointer-events: none; }
+.workspace-tab-root-drop[data-drop-active="true"] { color: var(--cyan); border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 8%, var(--ink)); }
+
+/* Workspace callback queue: compact in the footer, detailed when floated. */
 .workspace-callback-card,
 .workspace-callback-panel {
   display: none;

@@ -2,6 +2,27 @@ import type { CallbackMessage } from "./api";
 import { paneCommandKind, type SessionKind } from "./sessionDashboardModel";
 import type { Session } from "./types";
 
+/** A message about an ended identity must not describe a shell reusing its name. */
+export function callbackSessionsForScope(
+  sessions: readonly Session[],
+  messages: readonly CallbackMessage[],
+  watchedNames: readonly string[],
+): Map<string, Session> {
+  const byName = new Map(sessions.map((session) => [session.name, session]));
+  const watched = new Set(watchedNames);
+  const reported = new Map<string, Set<string>>();
+  for (const message of messages) {
+    if (message.reviewedAt !== null || message.tmuxSessionId === null) continue;
+    const ids = reported.get(message.sessionName) ?? new Set<string>();
+    ids.add(message.tmuxSessionId);
+    reported.set(message.sessionName, ids);
+  }
+  for (const [name, ids] of reported) {
+    if (!watched.has(name) && !ids.has(byName.get(name)?.id ?? "")) byName.delete(name);
+  }
+  return byName;
+}
+
 export const CALLBACK_SORT_OPTIONS = [
   { value: "queue", label: "Queue order" },
   { value: "ready-first", label: "Ready first" },

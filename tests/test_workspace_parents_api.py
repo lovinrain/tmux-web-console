@@ -132,6 +132,25 @@ async def test_explicit_empty_parents_flattens_via_activity(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_transfer_api_atomically_accepts_parent_or_top_level_placement(tmp_path, monkeypatch, bulk):
+    store = WorkspaceStore(tmp_path / "workspaces.json", id_factory=lambda: "destination")
+    store.create_workspace(name="Destination", tabs=["project"], active_session="project")
+    monkeypatch.setattr(TmuxClient, "get_session", AsyncMock(return_value={"name": "child"}))
+    route = "/api/session-workspace-transfer" + ("/bulk" if bulk else "")
+    payload = {"destinationWorkspaceId": "destination", "operation": "copy", "sessionRevision": 0,
+               "destinationParent": "project", **({"sessions": ["child"]} if bulk else {"session": "child"})}
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.post(route, json=payload)
+        assert response.status == 200
+        result = await response.json()
+        assert result["destinationWorkspace"]["parents"] == {"child": "project"}
+        response = await client.post(route, json={**payload, "sessionRevision": result["sessionRevision"], "destinationParent": None})
+        assert response.status == 200
+        assert (await response.json())["destinationWorkspace"].get("parents", {}) == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["copy", "move"])
 async def test_unsaved_bulk_transfer_api_keeps_selected_parent_relationships(tmp_path, operation):
     path = tmp_path / "workspaces.json"

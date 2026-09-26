@@ -245,3 +245,92 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
     await page.screenshot({ path: join(reviewDirectory, `nested-sidebar-${theme}-compact.png`) });
   }
 });
+
+test("existing branches promote, drag to nest, and move under a parent in another workspace", async ({ page, context }) => {
+  test.setTimeout(60_000);
+  const branch = `${sourceName}_ux-branch`;
+  const child = `${sourceName}_ux-child`;
+  const target = `${sourceName}_ux-target`;
+  const destinationRoot = `${sourceName}_ux-destination`;
+  const destinationParent = `${sourceName}_ux-parent`;
+  const names = [sourceName, branch, child, target, destinationRoot, destinationParent];
+  for (const name of names.slice(1)) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const identities = names.map(sessionIdentity);
+  for (const [session, title] of [[sourceName, "Product"], [branch, "API implementation"], [child, "API tests"],
+    [target, "Web application"], [destinationRoot, "Release"], [destinationParent, "Review queue"]]) {
+    expect((await context.request.put("/mux/api/session-title", { data: { session, title } })).ok()).toBe(true);
+  }
+  const create = async (name: string, tabs: string[], parents: Record<string, string>) => {
+    const response = await context.request.post("/mux/api/workspaces", { data: { name, tabs, parents, activeSession: tabs[0] } });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as SavedWorkspace;
+    workspaceIds.push(workspace.id);
+    return workspace;
+  };
+  const source = await create("Product development", names.slice(0, 4), { [branch]: sourceName, [child]: branch });
+  const destination = await create("Release review", names.slice(4), { [destinationParent]: destinationRoot });
+  await page.goto(`/mux/session/${branch}?workspace=${source.id}`);
+  await expectTree(page, source.tabs, source.parents!);
+  const second = await context.newPage();
+  await second.goto(`/mux/session/${sourceName}?workspace=${source.id}`);
+  await expectTree(second, source.tabs, source.parents!);
+
+  await tabRow(page, branch).getByRole("tab").click({ button: "right" });
+  let dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
+  await dialog.getByRole("button", { name: "Up one level", exact: true }).click();
+  await expectTree(page, source.tabs, { [child]: branch });
+  await expectTree(second, source.tabs, { [child]: branch });
+  await tabRow(page, branch).getByRole("tab").dragTo(tabRow(page, target).getByRole("tab"));
+  const nestedTabs = [sourceName, target, branch, child];
+  await expectTree(page, nestedTabs, { [branch]: target, [child]: branch });
+  await expectTree(second, nestedTabs, { [branch]: target, [child]: branch });
+  await expect(tabRow(second, sourceName).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+
+  await page.getByRole("button", { name: "Show callback list", exact: true }).click();
+  await page.getByRole("button", { name: "Pin callback list", exact: true }).click();
+  await tabRow(page, branch).getByRole("tab").click({ button: "right" });
+  dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
+  await expect(dialog.getByRole("radio", { name: "Nest under API tests", exact: true })).toHaveCount(0);
+  await dialog.getByRole("combobox", { name: "Destination workspace" }).selectOption(destination.id);
+  await dialog.getByRole("radio", { name: "Nest under Review queue", exact: true }).check();
+  await page.screenshot({ path: join(reviewDirectory, "move-nest-across-workspaces.png") });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await page.screenshot({ path: join(reviewDirectory, "move-nest-across-workspaces-light.png") });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await dialog.getByRole("button", { name: "Move here", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expectTree(page, [sourceName, target], {});
+  await expectTree(second, [sourceName, target], {});
+  await page.getByRole("button", { name: "Close callback list", exact: true }).click();
+
+  const destinationTabs = [destinationRoot, destinationParent, branch, child];
+  await page.goto(`/mux/session/${branch}?workspace=${destination.id}`);
+  await expectTree(page, destinationTabs, { [destinationParent]: destinationRoot, [branch]: destinationParent, [child]: branch });
+  const branchTab = tabRow(page, branch).getByRole("tab");
+  await branchTab.hover();
+  await page.mouse.down();
+  const box = (await branchTab.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 12, { steps: 5 });
+  const rootDrop = page.getByRole("group", { name: "Top level drop target", exact: true });
+  await expect(rootDrop).toBeVisible();
+  await rootDrop.hover();
+  await page.mouse.up();
+  await expectTree(page, destinationTabs, { [destinationParent]: destinationRoot, [child]: branch });
+  await expect.poll(async () => (await readWorkspace(context.request, destination.id)).parents)
+    .toEqual({ [destinationParent]: destinationRoot, [child]: branch });
+  await page.reload();
+  await expectTree(page, destinationTabs, { [destinationParent]: destinationRoot, [child]: branch });
+  const footer = page.locator(".workspace-callback-footnote");
+  await expect(footer).toBeVisible();
+  await expect(footer).toContainText("Global 0/0");
+  await expect(footer).toContainText("Local 0/0");
+  const footerBox = (await footer.boundingBox())!;
+  const consoleBox = (await page.locator(".console-shell").boundingBox())!;
+  expect(consoleBox.y + consoleBox.height).toBeLessThanOrEqual(footerBox.y + 1);
+  await page.screenshot({ path: join(reviewDirectory, "session-placement-footer-dark.png") });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await page.screenshot({ path: join(reviewDirectory, "session-placement-footer-light.png") });
+  expect(names.map(sessionIdentity)).toEqual(identities);
+});

@@ -143,7 +143,8 @@ describe("WorkspaceCallbackList sorting and filtering", () => {
     if (scope === "workspace") fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
     search("shown");
     expect(screen.getByRole("status")).toHaveTextContent("1 of 2 shown");
-    expect(screen.getByRole("button", { name: "Hide callback list" })).toHaveTextContent("2/2 ready");
+    expect(screen.getByRole("button", { name: "Hide callback list" })).toHaveTextContent("Global 2/2");
+    expect(screen.getByRole("button", { name: "Hide callback list" })).toHaveTextContent("Local 2/2");
     expect(screen.queryByText("Protected report")).not.toBeInTheDocument();
     expect(screen.getByText("Another report in the same session")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clear shown" }));

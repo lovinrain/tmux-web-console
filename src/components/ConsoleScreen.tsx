@@ -166,6 +166,7 @@ interface ConsoleScreenProps {
   workspaceTransferSessionNames?: string[];
   workspaceTransferPinnedSessionNames?: string[];
   workspaceTransferDisabled?: boolean;
+  onRequestSessionPlacement?: (sessionNames: string[]) => void;
   onSessionRenamed?: (
     previousName: string,
     nextName: string,
@@ -608,6 +609,7 @@ export function ConsoleScreen({
   workspaceTransferSessionNames,
   workspaceTransferPinnedSessionNames = [],
   workspaceTransferDisabled = false,
+  onRequestSessionPlacement,
   onSessionRenamed,
   onSessionTerminated,
   onSessionCopied,
@@ -2517,20 +2519,22 @@ export function ConsoleScreen({
                   className="workspace-transfer-button"
                   aria-label={workspaceTransferSessionCount > 1
                     ? `Move or copy ${workspaceTransferSessionCount} selected sessions to a workspace`
-                    : `Move or copy ${sessionName} to a workspace`}
+                    : onRequestSessionPlacement ? `Move or nest ${sessionName}` : `Move or copy ${sessionName} to a workspace`}
                   aria-haspopup="dialog"
-                  aria-expanded={workspaceTransferOpen}
+                  aria-expanded={onRequestSessionPlacement ? undefined : workspaceTransferOpen}
                   disabled={!session || workspaceTransferDisabled}
                   title={workspaceTransferDisabled
                     ? "Wait for the current workspace to finish syncing"
                     : workspaceTransferSessionCount > 1
                       ? `Move or copy the ${workspaceTransferSessionCount} selected sessions to a saved workspace`
-                      : "Move or copy this session to a saved workspace"}
-                  onClick={() => setWorkspaceTransferOpen(true)}
+                      : onRequestSessionPlacement ? "Move up a level, nest under a session, or move across workspaces" : "Move or copy this session to a saved workspace"}
+                  onClick={() => onRequestSessionPlacement
+                    ? onRequestSessionPlacement(selectedWorkspaceTransferSessions)
+                    : setWorkspaceTransferOpen(true)}
                 >
                   <WindowMoveIcon />
                   <span>
-                    Move / Copy{workspaceTransferSessionCount > 1
+                    {onRequestSessionPlacement && workspaceTransferSessionCount === 1 ? "Move / Nest" : "Move / Copy"}{workspaceTransferSessionCount > 1
                       ? ` (${workspaceTransferSessionCount})`
                       : ""}
                   </span>

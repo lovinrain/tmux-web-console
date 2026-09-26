@@ -61,6 +61,9 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   or side tabs with desktop multi-select dragging, common/workspace/session
   quick-link shelves, scoped sticky notes, saved recursive multi-pane views,
   workspace and global callback lists, and cross-device resume
+- Promote or nest existing session branches with drag-and-drop or one Move / Nest
+  chooser, including placement under a session in another workspace; a compact
+  footer keeps global and local callback readiness visible together
 - Session titles, tags, search, filters, grouping, stars, and an ignored-session
   bucket
 - Dictation-friendly staged input, durable per-session memos, queued-input

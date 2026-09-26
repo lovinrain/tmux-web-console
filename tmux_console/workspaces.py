@@ -905,6 +905,42 @@ def _reconcile_workspace_groups(
     return tuple(group for _, group in reconciled)
 
 
+def _organize_workspace_hierarchy(
+    tabs: tuple[str, ...],
+    parents: tuple[tuple[str, str], ...],
+    groups: tuple[WorkspaceGroup, ...],
+) -> tuple[tuple[str, ...], tuple[WorkspaceGroup, ...]]:
+    """Keep each family together, inheriting its root's named tab group."""
+    parent_map = dict(parents)
+    children: dict[str, list[str]] = {}
+    for tab in tabs:
+        if tab in parent_map:
+            children.setdefault(parent_map[tab], []).append(tab)
+    group_by_tab = {tab: group.id for group in groups for tab in group.tabs}
+    trees: list[tuple[str | None, list[str]]] = []
+    for root in (tab for tab in tabs if tab not in parent_map):
+        members: list[str] = []
+        pending = [root]
+        while pending:
+            name = pending.pop()
+            members.append(name)
+            pending.extend(reversed(children.get(name, [])))
+        trees.append((group_by_tab.get(root), members))
+    ordered: list[str] = []
+    ordered_groups: list[WorkspaceGroup] = []
+    emitted: set[str] = set()
+    for group_id, members in trees:
+        if group_id is None:
+            ordered.extend(members)
+        elif group_id not in emitted:
+            emitted.add(group_id)
+            grouped = tuple(tab for candidate, tree in trees if candidate == group_id for tab in tree)
+            ordered.extend(grouped)
+            group = next(group for group in groups if group.id == group_id)
+            ordered_groups.append(replace(group, tabs=grouped))
+    return tuple(ordered), tuple(ordered_groups)
+
+
 def _rename_workspace_groups(
     groups: tuple[WorkspaceGroup, ...],
     workspace_tabs: tuple[str, ...],
@@ -1706,6 +1742,7 @@ class WorkspaceStore:
         session_revision: object,
         source_workspace_id: str | None = None,
         source_parents: object = _PARENTS_OMITTED,
+        destination_parent: object = _PARENTS_OMITTED,
     ) -> dict[str, Any]:
         result = self.transfer_sessions(
             [session_name],
@@ -1714,6 +1751,7 @@ class WorkspaceStore:
             session_revision=session_revision,
             source_workspace_id=source_workspace_id,
             source_parents=source_parents,
+            destination_parent=destination_parent,
         )
         return {
             "session": session_name,
@@ -1737,6 +1775,7 @@ class WorkspaceStore:
         session_revision: object,
         source_workspace_id: str | None = None,
         source_parents: object = _PARENTS_OMITTED,
+        destination_parent: object = _PARENTS_OMITTED,
     ) -> dict[str, Any]:
         validated_session_names = _validate_pinned_session_names(
             session_names,
@@ -1756,6 +1795,10 @@ class WorkspaceStore:
             raise type(error)(f"sourceParents: {error}") from error
         if source_workspace_id is not None and validated_source_parents:
             raise ValueError("sourceParents is only allowed without sourceWorkspaceId")
+        if destination_parent is not _PARENTS_OMITTED and destination_parent is not None:
+            if not isinstance(destination_parent, str):
+                raise TypeError("destinationParent must be a session-name string or null")
+            validate_session_name(destination_parent)
         if operation not in {"copy", "move"}:
             raise ValueError("operation must be copy or move")
         if source_workspace_id == destination_workspace_id:
@@ -1776,6 +1819,11 @@ class WorkspaceStore:
                 if source_workspace_id is not None
                 else None
             )
+            if isinstance(destination_parent, str):
+                if destination_parent not in destination.tabs:
+                    raise WorkspaceTransferConflictError("destination parent is no longer in the workspace")
+                if destination_parent in validated_session_names:
+                    raise ValueError("destinationParent cannot be a transferred session")
             destination_tab_set = set(destination.tabs)
             destination_already_contained = tuple(
                 name
@@ -1847,7 +1895,37 @@ class WorkspaceStore:
                     f'{MAX_WORKSPACE_CALLBACK_SESSIONS} callback sessions'
                 )
 
-            if not source_removed and not destination_added:
+            destination_tabs = (*destination.tabs, *destination_added)
+            destination_parents = dict(destination.parents)
+            source_links = source.parents if source is not None else validated_source_parents
+            # Without an explicit placement, existing destination organization
+            # wins and new tabs retain their nearest available source ancestor.
+            transferred_parents = dict(_reconcile_workspace_parents(source_links, destination_tabs))
+            for child in destination_added:
+                if child in transferred_parents:
+                    destination_parents[child] = transferred_parents[child]
+            destination_groups = destination.groups
+            if destination_parent is not _PARENTS_OMITTED:
+                selected_parents = dict(_reconcile_workspace_parents(source_links, validated_session_names))
+                for name in validated_session_names:
+                    if name in selected_parents:
+                        continue
+                    if isinstance(destination_parent, str):
+                        destination_parents[name] = destination_parent
+                    else:
+                        destination_parents.pop(name, None)
+            # Validate before any source removal or write, including cycles
+            # through pre-existing destination children.
+            validated_destination_parents = validate_workspace_parents(destination_parents, destination_tabs)
+            if destination_parent is not _PARENTS_OMITTED:
+                destination_tabs, destination_groups = _organize_workspace_hierarchy(
+                    destination_tabs, validated_destination_parents, destination_groups,
+                )
+            placement_changed = (destination_parents != dict(destination.parents)
+                                 or destination_tabs != destination.tabs
+                                 or destination_groups != destination.groups)
+
+            if not source_removed and not destination_added and not placement_changed:
                 return {
                     "sessions": list(validated_session_names),
                     "operation": operation,
@@ -1895,28 +1973,16 @@ class WorkspaceStore:
                     active_session=source_active_session,
                     updated_at=max(timestamp, source.updated_at + 1),
                 )
-            if destination_added or transfer_callback_markers:
+            if destination_added or transfer_callback_markers or placement_changed:
                 destination_callback_sessions = (
                     *destination.callback_sessions,
                     *transfer_callback_markers,
                 )
-                destination_tabs = (*destination.tabs, *destination_added)
-                destination_parents = dict(destination.parents)
-                # Existing destination organization wins; newly copied tabs
-                # retain their nearest ancestor already present or copied.
-                transferred_parents = dict(_reconcile_workspace_parents(
-                    source.parents if source is not None else validated_source_parents,
-                    destination_tabs,
-                ))
-                for child in destination_added:
-                    if child in transferred_parents:
-                        destination_parents[child] = transferred_parents[child]
                 next_workspaces[destination.id] = replace(
                     destination,
                     tabs=destination_tabs,
-                    parents=validate_workspace_parents(
-                        destination_parents, destination_tabs,
-                    ),
+                    parents=validated_destination_parents,
+                    groups=destination_groups,
                     callback_sessions=destination_callback_sessions,
                     updated_at=max(timestamp, destination.updated_at + 1),
                 )

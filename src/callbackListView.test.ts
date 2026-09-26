@@ -6,6 +6,7 @@ import {
   callbackEntryLatestCallbackAt,
   callbackEntryReadySince,
   callbackStatus,
+  callbackSessionsForScope,
   filterAndSortCallbacks,
   groupCallbacks,
   parseCallbackListViewPreferences,
@@ -41,6 +42,18 @@ function message(overrides: Partial<CallbackMessage> = {}): CallbackMessage {
     tmuxPaneId: null, host: null, createdAt: 200, reviewedAt: null, ...overrides,
   };
 }
+
+describe("callback session identity by scope", () => {
+  it("counts a reused name only when that scope explicitly watches it or a pending report matches", () => {
+    const live = session("one", { id: "$new" });
+    const old = message({ tmuxSessionId: "$old" });
+    expect(callbackSessionsForScope([live], [old], []).has("one")).toBe(false);
+    expect(callbackSessionsForScope([live], [old], ["one"]).get("one")).toBe(live);
+    expect(callbackSessionsForScope([live], [old, message({ tmuxSessionId: "$new" })], []).get("one")).toBe(live);
+    expect(callbackSessionsForScope([live], [{ ...old, reviewedAt: 123 }], []).get("one")).toBe(live);
+    expect(callbackSessionsForScope([live], [message()], []).get("one")).toBe(live);
+  });
+});
 
 function entry(name: string, overrides: Partial<CallbackListEntry> = {}): CallbackListEntry {
   return {

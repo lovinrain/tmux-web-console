@@ -122,7 +122,7 @@ function workspaceSessionRoot(name: string, parents: WorkspaceSessionParents): s
   return cursor;
 }
 
-function workspaceSessionParent(name: string, parents?: WorkspaceSessionParents): string | undefined {
+export function workspaceSessionParent(name: string, parents?: WorkspaceSessionParents): string | undefined {
   return parents && Object.hasOwn(parents, name) ? parents[name] : undefined;
 }
 
@@ -149,7 +149,7 @@ export function workspaceSessionTreeOrder(
   return result;
 }
 
-function workspaceSubtree(
+export function workspaceSubtree(
   sessionName: string,
   openSessions: readonly string[],
   parents: WorkspaceSessionParents | undefined,
@@ -314,6 +314,57 @@ export function normalizeWorkspaceHierarchy(
     orderedGroups.push({ ...candidates.find((group) => group.id === tree.groupId)!, tabs: members });
   }
   return { tabs: orderedTabs, groups: orderedGroups, parents };
+}
+
+/** Move a whole branch to a new parent, leaving live sessions and recents alone. */
+export function reparentWorkspaceSession(
+  workspace: SessionWorkspaceState,
+  sessionName: string,
+  parentName: string | null,
+): SessionWorkspaceState {
+  const { openSessions } = workspace;
+  const parents = normalizeWorkspaceParents(workspace.parents, openSessions);
+  if (!openSessions.includes(sessionName)
+    || (parentName !== null && !openSessions.includes(parentName))
+    || (workspaceSessionParent(sessionName, parents) ?? null) === parentName) return workspace;
+  const branch = workspaceSubtree(sessionName, openSessions, parents);
+  if (parentName !== null && branch.includes(parentName)) return workspace;
+  const remaining = openSessions.filter((name) => !branch.includes(name));
+  // Promotions land just after the old family; attachments land after the
+  // new parent's children. Existing sibling order stays predictable.
+  const oldParent = workspaceSessionParent(sessionName, parents);
+  const promotingOneLevel = oldParent !== undefined
+    && (workspaceSessionParent(oldParent, parents) ?? null) === parentName;
+  const anchor = promotingOneLevel ? oldParent : parentName ?? workspaceSessionRoot(sessionName, parents);
+  const anchorBranch = workspaceSubtree(anchor, remaining, parents);
+  const insertAt = anchorBranch.length > 0
+    ? remaining.indexOf(anchorBranch.at(-1)!) + 1
+    : Math.min(openSessions.indexOf(sessionName), remaining.length);
+  if (parentName === null) delete parents[sessionName];
+  else Object.defineProperty(parents, sessionName, {
+    value: parentName, enumerable: true, writable: true, configurable: true,
+  });
+  const groups = workspace.groups.map((group) => parentName !== null && group.tabs.includes(parentName)
+    ? { ...group, collapsed: false } : group);
+  const hierarchy = normalizeWorkspaceHierarchy([
+    ...remaining.slice(0, insertAt), ...branch, ...remaining.slice(insertAt),
+  ], groups, parents);
+  return withWorkspaceParents({ ...workspace, openSessions: hierarchy.tabs, groups: hierarchy.groups }, parents);
+}
+
+export function previousWorkspaceSibling(
+  workspace: Pick<SessionWorkspaceState, "openSessions" | "parents" | "groups">,
+  sessionName: string,
+): string | null {
+  const parent = workspaceSessionParent(sessionName, workspace.parents);
+  const groupId = workspace.groups.find((group) => group.tabs.includes(sessionName))?.id;
+  for (let index = workspace.openSessions.indexOf(sessionName) - 1; index >= 0; index--) {
+    const candidate = workspace.openSessions[index];
+    if (workspaceSessionParent(candidate, workspace.parents) !== parent) continue;
+    return workspace.groups.find((group) => group.tabs.includes(candidate))?.id === groupId
+      ? candidate : null;
+  }
+  return null;
 }
 
 function queryParts(search: string): string[] {

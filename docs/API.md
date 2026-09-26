@@ -474,8 +474,8 @@ posted messages intact; use explicit review operations to acknowledge them.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
-| `POST /api/session-workspace-transfer` | `session`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId`, `sourceParents` | Atomically `copy` or `move` one live session between workspaces. |
-| `POST /api/session-workspace-transfer/bulk` | Ordered, unique `sessions`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId`, `sourceParents` | Atomically transfers the complete batch, including saved references to ended sessions. |
+| `POST /api/session-workspace-transfer` | `session`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId`, `sourceParents`, `destinationParent` | Atomically `copy` or `move` one live session between workspaces. |
+| `POST /api/session-workspace-transfer/bulk` | Ordered, unique `sessions`, `destinationWorkspaceId`, `operation`, `sessionRevision`; optional `sourceWorkspaceId`, `sourceParents`, `destinationParent` | Atomically transfers the complete batch, including saved references to ended sessions. |
 | `PUT /api/session-workspace-pin` | `session`, `pinned` | Adds/removes a live session across every saved workspace with deduplication. |
 
 Moving a globally pinned session returns `409`. A transfer reports whether the
@@ -496,6 +496,17 @@ When transferring from a temporary workspace (`sourceWorkspaceId: null`),
 sessions. Both endpoints must be selected. Saved workspace transfers use the
 stored hierarchy and reject a nonempty `sourceParents` override. Existing
 destination relationships take precedence for tabs already present there.
+
+Optional `destinationParent` overrides the placement of the selected branch
+roots: a session name nests them under that existing destination tab, while
+`null` makes them top-level. Omission keeps the original transfer behavior.
+The parent cannot be selected or introduce a cycle. A removed destination parent
+returns `409`; invalid or cyclic placement returns `400`. Validation occurs
+before any source removal. Placement, membership, callback-marker transfers,
+and the revision fence commit together, even when the destination already
+contains the selected sessions. Families stay contiguous and inherit their
+root's destination tab group. Include descendants in `sessions` to transfer a
+complete branch; the single-session endpoint still transfers only its named tab.
 
 ### Quick links
 

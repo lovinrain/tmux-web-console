@@ -133,6 +133,7 @@ let reportSessionWorkspaceTransfer: (
     destinationWorkspaceId: string,
     operation: WorkspaceSessionTransferOperation,
     sessionRevision: number,
+    destinationParent?: string | null,
   ) => Promise<WorkspaceSessionsTransferResult>
 ) | null = null;
 let dashboardActiveWorkspaceId: string | null = null;
@@ -3457,6 +3458,54 @@ describe("App routing", () => {
       );
       expect(JSON.parse(new URLSearchParams(window.location.search).get("tab-parent")!))
         .toEqual({ beta: "alpha", leaf: "beta" });
+    });
+
+    it("waits for recent nesting to save before placing a branch across workspaces", async () => {
+      const { canonical } = await openSynchronizedWorkspace();
+      const pending = deferred<SavedWorkspace>();
+      updateWorkspaceActivityMock.mockImplementationOnce(() => pending.promise);
+      fireEvent.keyDown(screen.getByRole("tab", { name: /beta/ }), {
+        key: "ArrowRight", altKey: true, shiftKey: true,
+      });
+      const savedSource = { ...canonical, parents: { beta: "alpha" }, updatedAt: 1_002 };
+      transferSessionsToWorkspaceMock.mockResolvedValue({
+        sessions: ["alpha", "beta"], operation: "copy", destinationAlreadyContained: [],
+        destinationAdded: ["alpha", "beta"], sourceRemoved: [],
+        sourceWorkspace: { ...savedSource, sessionRevision: 1 },
+        destinationWorkspace: savedWorkspace({ id: "destination", tabs: ["review", "alpha", "beta"],
+          parents: { alpha: "review", beta: "alpha" }, sessionRevision: 1 }),
+        sessionRevision: 1,
+      });
+      let transfer: Promise<WorkspaceSessionsTransferResult> | undefined;
+      await act(async () => {
+        transfer = reportSessionWorkspaceTransfer?.(["alpha", "beta"], "destination", "copy", 0, "review");
+        await Promise.resolve();
+      });
+      expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
+      expect(transferSessionsToWorkspaceMock).not.toHaveBeenCalled();
+      await act(async () => {
+        pending.resolve(savedSource);
+        await transfer;
+      });
+      expect(transferSessionsToWorkspaceMock).toHaveBeenCalledWith(
+        ["alpha", "beta"], "workspace-one", "destination", "copy", 0, undefined, "review",
+      );
+    });
+
+    it("keeps the source branch when its pending nesting change cannot be saved", async () => {
+      await openSynchronizedWorkspace();
+      updateWorkspaceActivityMock.mockRejectedValueOnce(new Error("Workspace storage unavailable"));
+      fireEvent.keyDown(screen.getByRole("tab", { name: /beta/ }), {
+        key: "ArrowRight", altKey: true, shiftKey: true,
+      });
+      await act(async () => {
+        await expect(reportSessionWorkspaceTransfer?.(["alpha", "beta"], "destination", "move", 0, "review"))
+          .rejects.toThrow("Recent workspace changes have not finished saving");
+      });
+      expect(transferSessionsToWorkspaceMock).not.toHaveBeenCalled();
+      expect(openTabs()).toEqual(["alpha", "beta", "gamma"]);
+      expect(screen.getByRole("tab", { name: /beta/ }).closest(".workspace-tab"))
+        .toHaveAttribute("data-session-parent", "alpha");
     });
 
     it("removes remotely closed tabs from the sidebar and URL while preserving local selection", async () => {

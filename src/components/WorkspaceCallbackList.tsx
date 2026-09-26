@@ -23,6 +23,7 @@ import {
 import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
 import "./WorkspaceCallbackMessages.css";
 import "./WorkspaceCallbackFilters.css";
+import "./WorkspaceCallbackFootnote.css";
 import type { Session } from "../types";
 import {
   CALLBACK_AGENT_OPTIONS,
@@ -35,6 +36,7 @@ import {
   callbackEntryLatestCallbackAt,
   callbackEntryReadySince,
   callbackStatus,
+  callbackSessionsForScope,
   filterAndSortCallbacks,
   groupCallbacks,
   parseCallbackListViewPreferences,
@@ -420,10 +422,11 @@ export function WorkspaceCallbackList({
     : new Set(workspaceSessionNames);
   const pendingMessages = (globalCallbackSnapshot?.callbackMessages ?? [])
     .filter((message) => message.reviewedAt === null);
-  const visibleMessages = activeScope === "global" ? pendingMessages : pendingMessages.filter(
+  const workspaceMessages = pendingMessages.filter(
     (message) => workspaceSessionSet?.has(message.sessionName)
       || workspaceSessionList.includes(message.sessionName),
   );
+  const visibleMessages = activeScope === "global" ? pendingMessages : workspaceMessages;
   const messagesBySession = new Map<string, CallbackMessage[]>();
   for (const message of visibleMessages) {
     const messages = messagesBySession.get(message.sessionName) ?? [];
@@ -453,11 +456,10 @@ export function WorkspaceCallbackList({
     ...sourceRecords.flatMap((source) => source.sessions),
     ...pendingMessages.map((message) => message.sessionName),
   ]);
-  const visibleCallbackSessions = activeScope === "global"
-    ? globalSessionList
-    : normalizeCallbackSessions([
-      ...workspaceSessionList, ...visibleMessages.map((message) => message.sessionName),
-    ]);
+  const localSessionList = normalizeCallbackSessions([
+    ...workspaceSessionList, ...workspaceMessages.map((message) => message.sessionName),
+  ]);
+  const visibleCallbackSessions = activeScope === "global" ? globalSessionList : localSessionList;
   const globalWorkspaceSources = new Map<string, typeof sourceRecords>();
   sourceRecords.forEach((source) => {
     source.sessions.forEach((name) => {
@@ -729,20 +731,14 @@ export function WorkspaceCallbackList({
 
   if (!desktop) return null;
 
-  const sessionMap = new Map(sessions.map((item) => [item.name, item]));
-  for (const [name, messages] of messagesBySession) {
-    const manuallyWatched = activeScope === "global"
-      ? explicitGlobalSessions.includes(name) || globalWorkspaceSources.has(name)
-      : workspaceSessionList.includes(name);
-    const reportedIds = messages.flatMap((message) => (
-      message.tmuxSessionId === null ? [] : [message.tmuxSessionId]
-    ));
-    if (!manuallyWatched && reportedIds.length > 0
-      && !reportedIds.includes(sessionMap.get(name)?.id ?? "")) {
-      // A reused name must not open a replacement shell for an older callback.
-      sessionMap.delete(name);
-    }
-  }
+  const globalSessionMap = callbackSessionsForScope(sessions, pendingMessages, [
+    ...explicitGlobalSessions, ...globalWorkspaceSources.keys(),
+  ]);
+  const localSessionMap = callbackSessionsForScope(sessions, workspaceMessages, workspaceSessionList);
+  const sessionMap = activeScope === "global" ? globalSessionMap : localSessionMap;
+  const globalReadyCount = globalSessionList.filter((name) => callbackStatus(globalSessionMap.get(name)).tone === "ready").length;
+  const localReadyCount = localSessionList.filter((name) => callbackStatus(localSessionMap.get(name)).tone === "ready").length;
+  const globalWorkingCount = globalSessionList.filter((name) => callbackStatus(globalSessionMap.get(name)).working).length;
   const availableSessions = sessions.filter((item) => !visibleCallbackSessions.includes(item.name));
   const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
   const readyCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).tone === "ready").length;
@@ -1250,12 +1246,12 @@ export function WorkspaceCallbackList({
   ) : null;
 
   const summaryLabel = `${readyCount}/${visibleCallbackSessions.length} ready`;
-  const summaryDescription = `${readyCount} ready out of ${visibleCallbackSessions.length} sessions; ${workingCount} working${visibleMessages.length > 0 ? `; ${visibleMessages.length} messages` : ""}`;
-  return (
-    <>
-      <button
+  const summaryDescription = globalEnabled
+    ? `Global: ${globalReadyCount} ready out of ${globalSessionList.length} sessions. Local: ${localReadyCount} ready out of ${localSessionList.length} sessions in ${workspaceName?.trim() || "this workspace"}. Counts show ready / watched.`
+    : `${readyCount} ready out of ${visibleCallbackSessions.length} sessions; ${workingCount} working${visibleMessages.length > 0 ? `; ${visibleMessages.length} messages` : ""}`;
+  const summaryButton = <button
         type="button"
-        className={`workspace-callback-card${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}${workingCount > 0 ? " has-working" : ""}`}
+        className={`workspace-callback-card${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}${(globalEnabled ? globalWorkingCount : workingCount) > 0 ? " has-working" : ""}`}
         aria-label={panel.open ? "Hide callback list" : "Show callback list"}
         aria-description={summaryDescription}
         aria-expanded={panel.open}
@@ -1276,11 +1272,19 @@ export function WorkspaceCallbackList({
       >
         <HistoryIcon />
         <span>
-          <strong>{activeScope === "global" ? "Global callback" : "Callback"}</strong>
-          <small>{summaryLabel}</small>
+          <strong>Callback</strong>
+          {globalEnabled ? <span className="workspace-callback-counts" aria-live="polite" aria-atomic="true">
+            <small>Global <b>{globalReadyCount}/{globalSessionList.length}</b></small>
+            <span aria-hidden="true">·</span>
+            <small>Local <b>{localReadyCount}/{localSessionList.length}</b></small>
+            <span className="workspace-callback-count-hint">ready</span>
+          </span> : <small>{summaryLabel}</small>}
         </span>
         {(panel.open || panel.pinned) && <em aria-hidden="true">{panel.pinned ? "PIN" : "OPEN"}</em>}
-      </button>
+      </button>;
+  return (
+    <>
+      {globalEnabled ? createPortal(<div className="workspace-callback-footnote">{summaryButton}</div>, document.body) : summaryButton}
       {floatingPanel && createPortal(floatingPanel, document.body)}
     </>
   );

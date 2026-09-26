@@ -8,6 +8,8 @@ import {
   moveWorkspaceTabGroup,
   moveWorkspaceSession,
   moveWorkspaceSessions,
+  reparentWorkspaceSession,
+  previousWorkspaceSibling,
   normalizeWorkspaceHierarchy,
   normalizeWorkspaceParents,
   removeWorkspaceSession,
@@ -881,6 +883,48 @@ describe("nested workspace sessions", () => {
     groups: [],
     parents: { child: "parent", grandchild: "child", sibling: "parent", "other-child": "other" },
   };
+
+  it("attaches an existing branch and promotes it without changing its children or recents", () => {
+    const nested = reparentWorkspaceSession(workspace, "child", "other");
+    expect(nested.openSessions).toEqual(["parent", "sibling", "other", "other-child", "child", "grandchild"]);
+    expect(nested.parents).toEqual({ ...workspace.parents, child: "other" });
+    expect(nested.recentSessions).toBe(workspace.recentSessions);
+    const promoted = reparentWorkspaceSession(workspace, "child", null);
+    expect(promoted.openSessions).toEqual(["parent", "sibling", "child", "grandchild", "other", "other-child"]);
+    expect(promoted.parents).toEqual({ grandchild: "child", sibling: "parent", "other-child": "other" });
+    const upOne = reparentWorkspaceSession(workspace, "grandchild", "parent");
+    expect(upOne.openSessions).toEqual(workspace.openSessions);
+    expect(upOne.parents?.grandchild).toBe("parent");
+  });
+
+  it("adopts a new parent's tab group and keeps the whole branch visible", () => {
+    const grouped = { ...workspace, groups: [
+      { id: "first", name: "First", color: "cyan" as const, collapsed: false, tabs: workspace.openSessions.slice(0, 4) },
+      { id: "second", name: "Second", color: "blue" as const, collapsed: true, tabs: workspace.openSessions.slice(4) },
+    ] };
+    const nested = reparentWorkspaceSession(grouped, "child", "other-child");
+    expect(nested.groups.map((group) => group.tabs)).toEqual([
+      ["parent", "sibling"], ["other", "other-child", "child", "grandchild"],
+    ]);
+    expect(nested.groups[1].collapsed).toBe(false);
+    expect(previousWorkspaceSibling(grouped, "other")).toBeNull();
+    expect(previousWorkspaceSibling(grouped, "sibling")).toBe("child");
+    expect(previousWorkspaceSibling(grouped, "grandchild")).toBeNull();
+  });
+
+  it.each([
+    ["child", "child"], ["child", "grandchild"], ["parent", "grandchild"],
+    ["unknown", "parent"], ["child", "missing"], ["child", "parent"], ["parent", null],
+  ])("ignores invalid or unchanged placement of %s under %s", (name, parent) => {
+    expect(reparentWorkspaceSession(workspace, name!, parent)).toBe(workspace);
+  });
+
+  it("allows prototype-like session names when attaching and flattening", () => {
+    const state = { openSessions: ["__proto__", "constructor"], recentSessions: [], groups: [] };
+    const nested = reparentWorkspaceSession(state, "__proto__", "constructor");
+    expect(nested.parents).toEqual({ ["__proto__"]: "constructor" });
+    expect(reparentWorkspaceSession(nested, "__proto__", null).parents).toBeUndefined();
+  });
 
   it("round-trips hierarchy in links, preserves it during tab updates, and clears isolated links", () => {
     const search = searchWithWorkspaceState("?flag&raw=%2f", workspace.openSessions, [], workspace.parents);

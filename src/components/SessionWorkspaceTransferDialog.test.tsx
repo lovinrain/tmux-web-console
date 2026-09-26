@@ -41,6 +41,66 @@ describe("SessionWorkspaceTransferDialog", () => {
     ]);
   });
 
+  const sourceTree = {
+    openSessions: ["root", "agent", "child", "shell"], recentSessions: ["agent"], groups: [],
+    parents: { agent: "root", child: "agent" },
+  };
+
+  it("finds a parent locally, excludes its own branch, and keeps failed changes reviewable", async () => {
+    const onReparentSession = vi.fn().mockRejectedValueOnce(new Error("Workspace changed; try again.")).mockResolvedValue(undefined);
+    const onTransfer = vi.fn();
+    const onClose = vi.fn();
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} onReparentSession={onReparentSession} onTransfer={onTransfer} onClose={onClose} />);
+    const dialog = screen.getByRole("dialog", { name: "Move / Nest" });
+    expect(within(dialog).queryByRole("radio", { name: "Nest under child" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("radio", { name: "Nest under agent" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText("1 nested session comes with it.")).toBeVisible();
+    fireEvent.change(within(dialog).getByRole("searchbox"), { target: { value: "shell" } });
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Nest under shell" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Nest session" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Workspace changed; try again.");
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Nest session" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onReparentSession).toHaveBeenLastCalledWith("agent", "shell");
+    expect(onTransfer).not.toHaveBeenCalled();
+  });
+
+  it("promotes one level without waiting for other workspaces to load", async () => {
+    vi.mocked(listWorkspaces).mockReturnValue(new Promise(() => {}));
+    const onReparentSession = vi.fn();
+    render(<SessionWorkspaceTransferDialog sessionNames={["child"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} onReparentSession={onReparentSession} onTransfer={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Up one level" }));
+    expect(onReparentSession).toHaveBeenCalledWith("child", "root");
+  });
+
+  it("transfers a complete branch under a chosen parent with one save", async () => {
+    const onTransfer = vi.fn().mockResolvedValue({});
+    const onClose = vi.fn();
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} onReparentSession={vi.fn()} onTransfer={onTransfer} onClose={onClose} />);
+    await screen.findByRole("option", { name: "Release room" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Destination workspace" }), { target: { value: "destination" } });
+    expect(screen.queryByRole("group", { name: "Quick placement" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Nest under review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Move here" }));
+    await waitFor(() => expect(onTransfer).toHaveBeenCalledWith(["agent", "child"], "destination", "move", 4, "review"));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("allows copying a pinned descendant and prevents moving it out of the source", async () => {
+    const onTransfer = vi.fn().mockResolvedValue({});
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} workspacePinnedSessions={["child"]} onReparentSession={vi.fn()} onTransfer={onTransfer} onClose={vi.fn()} />);
+    await screen.findByRole("option", { name: "Release room" });
+    fireEvent.change(screen.getByRole("combobox", { name: "Destination workspace" }), { target: { value: "destination" } });
+    expect(screen.getByRole("button", { name: "Move" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Copy here" }));
+    await waitFor(() => expect(onTransfer).toHaveBeenCalledWith(["agent", "child"], "destination", "copy", 4, null));
+  });
+
   it("filters out the source, copies once, and marks the destination as added", async () => {
     const destination = workspace("destination", "Release room", ["review", "agent"], 5);
     const result: WorkspaceSessionsTransferResult = {
