@@ -139,7 +139,7 @@ async def test_claude_retries_only_when_transcript_body_does_not_move(
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
 @pytest.mark.parametrize("profile", ["wheel", "alt-wheel", "claude"])
 async def test_real_application_scroll_uses_client_pane_without_leaking_input(
-    tmp_path, profile
+    tmp_path, monkeypatch, profile
 ):
     socket_name = f"muxdeck-native-test-{os.getpid()}-{time.time_ns()}"
     command = ["tmux", "-L", socket_name, "-f", "/dev/null"]
@@ -171,6 +171,18 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
         while not predicate():
             if asyncio.get_running_loop().time() >= deadline:
                 raise AssertionError("timed out waiting for isolated tmux fixture")
+            await asyncio.sleep(0.01)
+
+    async def select_client_pane(key, pane):
+        tmux_run("set-option", "-gu", "@selected")
+        await bridge.write(b"\x01" + key)
+        deadline = asyncio.get_running_loop().time() + 3
+        while tmux_run("show-options", "-gqv", "@selected") != pane:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("timed out selecting isolated tmux client pane")
+            # A key queued in the same read as select-pane can still have the
+            # previous pane's command context. Poll through a separate binding.
+            await bridge.write(b"\x01x")
             await asyncio.sleep(0.01)
 
     bridge = None
@@ -233,12 +245,7 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
                 in tmux_run("list-clients", "-F", "#{client_pid}")
             )
         )
-        await bridge.write(b"\x01o")
-        await asyncio.sleep(0.05)
-        await bridge.write(b"\x01x")
-        await wait_for(
-            lambda: tmux_run("show-options", "-gqv", "@selected") == target_pane
-        )
+        await select_client_pane(b"o", target_pane)
         assert (
             tmux_run(
                 "list-panes",
@@ -318,21 +325,40 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
 
         if profile == "claude":
             before_switch = target_log.read_bytes()
-            in_flight = asyncio.create_task(
-                tmux.navigate_application_scroll(
-                    bridge.client_pid, session_id, "up", "claude"
+            first_dispatch_done = asyncio.Event()
+            pane_switched = asyncio.Event()
+            original_run = tmux.run
+
+            async def pause_before_retry(args):
+                result = await original_run(args)
+                if args[0] == "show-buffer":
+                    # The first dispatch has cleaned up its temporary key table.
+                    # Hold the retry until tmux confirms the pane switch instead
+                    # of racing the production 220ms delay on a busy CI runner.
+                    first_dispatch_done.set()
+                    await pane_switched.wait()
+                return result
+
+            with monkeypatch.context() as patch:
+                patch.setattr(tmux, "run", pause_before_retry)
+                in_flight = asyncio.create_task(
+                    tmux.navigate_application_scroll(
+                        bridge.client_pid, session_id, "up", "claude"
+                    )
                 )
-            )
-            await wait_for(lambda: len(target_log.read_bytes()) > len(before_switch))
-            await bridge.write(b"\x01p")
-            await asyncio.sleep(0.03)
-            with pytest.raises(TmuxError, match="retry cancelled"):
-                await in_flight
+                try:
+                    await asyncio.wait_for(first_dispatch_done.wait(), timeout=3)
+                    await select_client_pane(b"p", global_pane)
+                    pane_switched.set()
+                    with pytest.raises(TmuxError, match="retry cancelled"):
+                        await in_flight
+                finally:
+                    in_flight.cancel()
+                    await asyncio.gather(in_flight, return_exceptions=True)
             one_packet = f"\x1b[<64;{max(1, width - 1)};{max(1, height // 2)}M".encode()
             assert target_log.read_bytes() == before_switch + one_packet
             assert global_log.read_bytes() == b""
-            await bridge.write(b"\x01o")
-            await asyncio.sleep(0.03)
+            await select_client_pane(b"o", target_pane)
 
         before = target_log.read_bytes()
         tmux_run("select-pane", "-d", "-t", target_pane)
