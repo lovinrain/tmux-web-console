@@ -625,6 +625,12 @@ async def test_terminate_session_reraises_the_kill_error_when_target_remains():
             "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}",
         ),
         ("page-down", "send-keys -X page-down", "#{==:#{pane_mode},copy-mode}"),
+        (
+            "line-up",
+            "copy-mode ; send-keys -X scroll-up",
+            "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}",
+        ),
+        ("line-down", "send-keys -X scroll-down", "#{==:#{pane_mode},copy-mode}"),
         ("exit", "send-keys -X cancel", "#{==:#{pane_mode},copy-mode}"),
     ],
 )

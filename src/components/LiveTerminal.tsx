@@ -26,6 +26,15 @@ import {
 import { TerminalFileLinkProvider } from "../terminalFileLinks";
 import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import type { ConnectionState } from "../types";
+import type { ApplicationScrollProfile } from "../agentScrollPreferences";
+
+export type TerminalHistoryAction = "page-up" | "page-down" | "line-up" | "line-down" | "exit";
+export type TerminalHistoryResult = "accepted" | "rejected" | "disconnected";
+export interface ApplicationScrollResult {
+  status: "accepted" | "rejected" | "disconnected";
+  paneId?: string;
+  message?: string;
+}
 
 export interface LiveTerminalHandle {
   send: (data: string) => boolean;
@@ -33,7 +42,8 @@ export interface LiveTerminalHandle {
   submit: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
   focus: () => void;
   redraw: () => boolean;
-  navigateHistory: (action: "page-up" | "page-down" | "exit") => boolean;
+  navigateHistory: (action: TerminalHistoryAction) => boolean;
+  scrollApplication: (direction: "up" | "down", profile: ApplicationScrollProfile) => Promise<ApplicationScrollResult>;
   jumpToLive: () => void;
 }
 
@@ -50,6 +60,7 @@ interface LiveTerminalProps {
   onOpenFilePath?: (path: string) => void;
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
+  onHistoryNavigation?: (action: TerminalHistoryAction, result: TerminalHistoryResult) => void;
 }
 
 interface TerminalAttachmentFeedback {
@@ -123,10 +134,24 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     onOpenFilePath,
     onStateChange,
     onPaneChange,
+    onHistoryNavigation,
   }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
+    const applicationScrollRequestsRef = useRef(new Map<string, {
+      socket: WebSocket;
+      resolve: (result: ApplicationScrollResult) => void;
+      timer: number;
+    }>());
+    const historyNavigationRef = useRef(onHistoryNavigation);
+    const historyRequestsRef = useRef(new Map<WebSocket, Array<{
+      action: TerminalHistoryAction;
+      onResult: LiveTerminalProps["onHistoryNavigation"];
+    }>>());
+    useLayoutEffect(() => {
+      historyNavigationRef.current = onHistoryNavigation;
+    }, [onHistoryNavigation]);
     const browserCopyModeRef = useRef(browserCopyMode);
     const openFilePathRef = useRef(onOpenFilePath);
     const copySelectionActiveRef = useRef(false);
@@ -433,13 +458,42 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         return redrawRef.current?.() ?? false;
       },
       navigateHistory(action) {
-        if (socketRef.current?.readyState !== WebSocket.OPEN) return false;
+        const socket = socketRef.current;
+        if (socket?.readyState !== WebSocket.OPEN) return false;
+        const requests = historyRequestsRef.current.get(socket) ?? [];
+        // The server replies in request order. Capture the callback now so an
+        // ACK cannot update a different session after the view switches.
+        requests.push({ action, onResult: historyNavigationRef.current });
+        historyRequestsRef.current.set(socket, requests);
         try {
-          socketRef.current.send(JSON.stringify({ type: "history", action }));
+          socket.send(JSON.stringify({ type: "history", action }));
           return true;
         } catch {
+          requests.pop();
+          if (requests.length === 0) historyRequestsRef.current.delete(socket);
           return false;
         }
+      },
+      scrollApplication(direction, profile) {
+        const socket = socketRef.current;
+        if (socket?.readyState !== WebSocket.OPEN) {
+          return Promise.resolve({ status: "disconnected", message: "The terminal is disconnected." });
+        }
+        const id = nextSubmissionId();
+        return new Promise<ApplicationScrollResult>((resolve) => {
+          const timer = window.setTimeout(() => {
+            applicationScrollRequestsRef.current.delete(id);
+            resolve({ status: "rejected", message: "Application scrolling was not confirmed. Try again." });
+          }, 8_000);
+          applicationScrollRequestsRef.current.set(id, { socket, resolve, timer });
+          try {
+            socket.send(JSON.stringify({ type: "applicationScroll", id, direction, profile }));
+          } catch {
+            window.clearTimeout(timer);
+            applicationScrollRequestsRef.current.delete(id);
+            resolve({ status: "disconnected", message: "The terminal is disconnected." });
+          }
+        });
       },
       jumpToLive() {
         terminalRef.current?.scrollToBottom();
@@ -468,6 +522,17 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         resolve: (accepted: boolean) => void;
         timer: number;
       }>();
+      const rejectHistoryRequests = (socket: WebSocket) => {
+        const requests = historyRequestsRef.current.get(socket) ?? [];
+        historyRequestsRef.current.delete(socket);
+        for (const request of requests) request.onResult?.(request.action, "disconnected");
+        for (const [id, request] of applicationScrollRequestsRef.current) {
+          if (request.socket !== socket) continue;
+          window.clearTimeout(request.timer);
+          applicationScrollRequestsRef.current.delete(id);
+          request.resolve({ status: "disconnected", message: "The terminal is disconnected." });
+        }
+      };
       const macBrowser = isMacBrowser();
       const linkModifierLabel = macBrowser ? "Cmd" : "Ctrl";
       const activateTerminalLink = (event: MouseEvent, uri: string) => {
@@ -778,11 +843,32 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
               id?: string;
               paneId?: string | null;
               message?: string;
+              action?: string;
             };
             if (message.type === "inputAck" && message.id) {
               settleSubmission(message.id, true);
             } else if (message.type === "inputNack" && message.id) {
               settleSubmission(message.id, false);
+            } else if (
+              (message.type === "applicationScrollAck" || message.type === "applicationScrollNack")
+              && message.id
+            ) {
+              const pending = applicationScrollRequestsRef.current.get(message.id);
+              if (pending?.socket === socket && socketRef.current === socket) {
+                applicationScrollRequestsRef.current.delete(message.id);
+                window.clearTimeout(pending.timer);
+                pending.resolve(message.type === "applicationScrollAck"
+                  ? { status: "accepted", paneId: message.paneId || undefined }
+                  : { status: "rejected", message: message.message || "Application scrolling is unavailable." });
+              }
+            } else if (message.type === "historyAck" || message.type === "historyNack") {
+              const requests = historyRequestsRef.current.get(socket);
+              const request = requests?.[0];
+              if (requests && request && request.action === message.action && socketRef.current === socket) {
+                requests.shift();
+                if (requests.length === 0) historyRequestsRef.current.delete(socket);
+                request.onResult?.(request.action, message.type === "historyAck" ? "accepted" : "rejected");
+              }
             } else if (message.type === "ready") {
               attempts = 0;
               onPaneChange(message.paneId || null);
@@ -802,6 +888,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         socket.addEventListener("close", () => {
           if (socketRef.current === socket) socketRef.current = null;
           rejectPendingSubmissions();
+          rejectHistoryRequests(socket);
           if (cancelled || ended) return;
           attempts += 1;
           onStateChange("reconnecting");
@@ -861,7 +948,10 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         input.dispose();
         scroll.dispose();
         fileLinks.dispose();
-        socketRef.current?.close(1000, "view closed");
+        if (socketRef.current) {
+          rejectHistoryRequests(socketRef.current);
+          socketRef.current.close(1000, "view closed");
+        }
         socketRef.current = null;
         terminal.dispose();
         terminalRef.current = null;

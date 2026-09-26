@@ -18,9 +18,12 @@ from tmux_console.tmux import TmuxClient
 
 
 @pytest.mark.asyncio
-async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_path):
+@pytest.mark.parametrize("mode_keys", ["vi", "emacs"])
+async def test_real_tmux_websocket_input_output_resize_history_and_titles(
+    tmp_path, mode_keys
+):
     session_name = f"muxdeck-pytest-{os.getpid()}-{time.time_ns()}"
-    socket_name = f"muxdeck-pytest-{os.getpid()}"
+    socket_name = f"muxdeck-pytest-{os.getpid()}-{time.time_ns()}"
     tmux = ["tmux", "-L", socket_name]
     subprocess.run(
         [
@@ -162,6 +165,68 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
                 text=True,
             ).strip()
 
+        await asyncio.to_thread(
+            subprocess.run,
+            [*tmux, "set-option", "-w", "-t", pane_id, "mode-keys", mode_keys],
+            check=True,
+        )
+        # Deliberately remap the ordinary arrow bindings to page jumps and
+        # reserve a user key in a custom table. Line actions must bypass both.
+        for table in ("copy-mode", "copy-mode-vi", "muxdeck-test-custom"):
+            for key, command in (("Up", "page-up"), ("Down", "page-down")):
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [*tmux, "bind-key", "-T", table, key, "send-keys", "-X", command],
+                    check=True,
+                )
+        await asyncio.to_thread(
+            subprocess.run,
+            [
+                *tmux,
+                "bind-key",
+                "-T",
+                "muxdeck-test-custom",
+                "User999",
+                "send-keys",
+                "-X",
+                "page-up",
+            ],
+            check=True,
+        )
+        original_bindings = await asyncio.to_thread(
+            subprocess.check_output, [*tmux, "list-keys", "-a"]
+        )
+        original_screen = await asyncio.to_thread(
+            subprocess.check_output, [*tmux, "capture-pane", "-p", "-t", pane_id]
+        )
+        assert await request_history("line-down") == {
+            "type": "historyNack",
+            "action": "line-down",
+        }
+        assert pane_format("#{pane_in_mode}") == "0"
+        for expected_position in (1, 2, 3):
+            assert await request_history("line-up") == {
+                "type": "historyAck",
+                "action": "line-up",
+            }
+            assert int(pane_format("#{scroll_position}")) == expected_position
+        for expected_position in (2, 1, 0, 0):
+            assert await request_history("line-down") == {
+                "type": "historyAck",
+                "action": "line-down",
+            }
+            assert int(pane_format("#{scroll_position}")) == expected_position
+        assert await request_history("exit") == {
+            "type": "historyAck",
+            "action": "exit",
+        }
+        assert await asyncio.to_thread(
+            subprocess.check_output, [*tmux, "capture-pane", "-p", "-t", pane_id]
+        ) == original_screen
+        assert await asyncio.to_thread(
+            subprocess.check_output, [*tmux, "list-keys", "-a"]
+        ) == original_bindings
+
         assert await request_history("page-up") == {
             "type": "historyAck",
             "action": "page-up",
@@ -177,11 +242,28 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         second_scroll_position = int(pane_format("#{scroll_position}"))
         assert second_scroll_position > first_scroll_position
 
+        assert await request_history("line-up") == {
+            "type": "historyAck",
+            "action": "line-up",
+        }
+        assert int(pane_format("#{scroll_position}")) == second_scroll_position + 1
+        assert await request_history("line-down") == {
+            "type": "historyAck",
+            "action": "line-down",
+        }
+        assert int(pane_format("#{scroll_position}")) == second_scroll_position
+
         assert await request_history("page-down") == {
             "type": "historyAck",
             "action": "page-down",
         }
         assert int(pane_format("#{scroll_position}")) < second_scroll_position
+        paged_down_position = int(pane_format("#{scroll_position}"))
+        assert await request_history("line-up") == {
+            "type": "historyAck",
+            "action": "line-up",
+        }
+        assert int(pane_format("#{scroll_position}")) == paged_down_position + 1
 
         assert await request_history("exit") == {
             "type": "historyAck",
@@ -313,6 +395,17 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         ).strip()
         assert globally_active_pane == pane_id
 
+        other_websocket = await client.ws_connect(
+            f"/ws/terminal?session={quote(session_name)}&cols=74&rows=23"
+        )
+        while True:
+            other_message = await asyncio.wait_for(other_websocket.receive(), 2)
+            if other_message.type == WSMsgType.TEXT:
+                other_payload = json.loads(other_message.data)
+                if other_payload.get("type") == "ready":
+                    assert other_payload["paneId"] == pane_id
+                    break
+
         block_channel = f"muxdeck-test-block-{os.getpid()}"
         block_ready_channel = f"{block_channel}-ready"
         await asyncio.to_thread(
@@ -348,7 +441,7 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
                     timeout=5,
                 )
 
-        raced_history = asyncio.create_task(request_history("page-up"))
+        raced_history = asyncio.create_task(request_history("line-up"))
         client_key_table = ""
         deadline = asyncio.get_running_loop().time() + 5
         while asyncio.get_running_loop().time() < deadline:
@@ -376,7 +469,7 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         )
         assert await raced_history == {
             "type": "historyNack",
-            "action": "page-up",
+            "action": "line-up",
         }
         assert pane_format("#{pane_in_mode}") == "0"
         assert (
@@ -399,7 +492,8 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
             text=True,
         )
         assert "muxdeck-history-" not in remaining_bindings
-        assert "User999" not in remaining_bindings
+        assert "User998" not in remaining_bindings
+        assert "User999" in remaining_bindings
         remaining_options = await asyncio.to_thread(
             subprocess.check_output,
             [*tmux, "show-options", "-g"],
@@ -407,9 +501,9 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
         )
         assert "@muxdeck-history-" not in remaining_options
 
-        assert await request_history("page-up") == {
+        assert await request_history("line-up") == {
             "type": "historyAck",
-            "action": "page-up",
+            "action": "line-up",
         }
         assert pane_format("#{pane_in_mode}") == "0"
         assert (
@@ -426,6 +520,25 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
             ).strip()
             == "1"
         )
+        for action, expected_position in (("line-up", 2), ("line-down", 1)):
+            assert await request_history(action) == {
+                "type": "historyAck",
+                "action": action,
+            }
+            second_scroll_position = await asyncio.to_thread(
+                subprocess.check_output,
+                [
+                    *tmux,
+                    "display-message",
+                    "-p",
+                    "-t",
+                    second_pane_id,
+                    "#{scroll_position}",
+                ],
+                text=True,
+            )
+            assert int(second_scroll_position.strip()) == expected_position
+            assert pane_format("#{pane_in_mode}") == "0"
         assert await request_history("exit") == {
             "type": "historyAck",
             "action": "exit",
@@ -445,6 +558,8 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(tmp_pa
             == "0"
         )
         assert not websocket.closed
+        assert not other_websocket.closed
+        await other_websocket.close()
         await websocket.close()
         await asyncio.sleep(0.1)
 

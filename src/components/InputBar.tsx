@@ -23,7 +23,7 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "../icons";
-import type { AgentScrollMode } from "../agentScrollPreferences";
+import type { AgentScrollMode, ApplicationScrollProfile } from "../agentScrollPreferences";
 import type { UploadedSessionAttachment } from "../api";
 import {
   desktopAttachmentsAvailable,
@@ -32,6 +32,7 @@ import {
   type SessionAttachmentUploader,
 } from "../attachments";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
+import { ScrollControlIcon } from "./ScrollControlIcon";
 import {
   directShortcutAria,
   directShortcutLabel,
@@ -52,7 +53,12 @@ interface InputBarProps {
   shortcutPanelHeader?: ReactNode;
   preferredScrollMode?: AgentScrollMode;
   preferredScrollLabel?: string;
-  onScrollModeUsed?: (mode: AgentScrollMode) => void;
+  onScrollUsed?: (mode: AgentScrollMode) => void;
+  onScrollLine?: (direction: "up" | "down") => boolean;
+  applicationScrollProfile?: ApplicationScrollProfile | null;
+  onScrollApplication?: (direction: "up" | "down") => void;
+  applicationScrollPending?: boolean;
+  returnScrollMode?: AgentScrollMode;
   mobileDistractionFree?: boolean;
   onToggleMobileDistractionFree?: () => void;
   onSend: (data: string) => boolean;
@@ -135,7 +141,7 @@ const ESSENTIAL_KEYS: TerminalKey[] = [
   },
 ];
 
-const KEYS: TerminalKey[] = [
+const TMUX_PAGE_KEYS: TerminalKey[] = [
   {
     label: "Tmux PgUp",
     compact: "T Up",
@@ -155,6 +161,9 @@ const KEYS: TerminalKey[] = [
     scrollMode: "tmux",
     scrollDirection: "down",
   },
+];
+
+const INPUT_EDIT_KEYS: TerminalKey[] = [
   {
     label: "^A",
     data: "\x01",
@@ -167,6 +176,9 @@ const KEYS: TerminalKey[] = [
     ariaLabel: "Ctrl+E - move to end of input",
     title: "Move to the end of input in supported shells and agents (Ctrl+E)",
   },
+];
+
+const APP_PAGE_KEYS: TerminalKey[] = [
   {
     label: "PgUp",
     data: PAGE_UP_SEQUENCE,
@@ -208,7 +220,7 @@ interface TerminalKeyButtonProps {
   onSend: (data: string) => boolean;
   preferredScrollMode?: AgentScrollMode;
   preferredScrollLabel?: string;
-  onScrollModeUsed?: (mode: AgentScrollMode) => void;
+  onScrollUsed?: (mode: AgentScrollMode) => void;
 }
 
 function TerminalKeyButton({
@@ -217,7 +229,7 @@ function TerminalKeyButton({
   onSend,
   preferredScrollMode,
   preferredScrollLabel,
-  onScrollModeUsed,
+  onScrollUsed,
 }: TerminalKeyButtonProps) {
   const { bindings: shortcutBindings } = useShortcutSettings();
   const preferred = Boolean(
@@ -233,14 +245,18 @@ function TerminalKeyButton({
     ? directShortcutLabel(scrollBinding)
     : null;
   const title = preferred
-    ? `${terminalKey.title}. Preferred for ${preferredScrollLabel || "this agent"}${
+    ? `${terminalKey.title}. Recommended for ${preferredScrollLabel || "this agent"}${
       shortcutLabel ? ` (${shortcutLabel})` : ""
     }`
     : terminalKey.title;
   return (
     <button
       type="button"
-      className={preferred ? "key-button preferred-scroll-key" : "key-button"}
+      className={[
+        "key-button",
+        preferred ? "preferred-scroll-key" : "",
+        terminalKey.scrollMode ? "scroll-icon-button" : "",
+      ].filter(Boolean).join(" ")}
       disabled={!enabled}
       aria-label={terminalKey.ariaLabel || terminalKey.label}
       aria-keyshortcuts={shortcut}
@@ -249,14 +265,16 @@ function TerminalKeyButton({
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => {
         const sent = onSend(terminalKey.data);
-        if (sent && terminalKey.scrollMode) onScrollModeUsed?.(terminalKey.scrollMode);
+        if (sent && terminalKey.scrollMode) onScrollUsed?.(terminalKey.scrollMode);
       }}
     >
-      <span className={terminalKey.compact ? "wide-key-label" : ""}>
-        {terminalKey.label}
-      </span>
-      {terminalKey.compact && (
-        <span className="compact-key-label">{terminalKey.compact}</span>
+      {terminalKey.scrollMode && terminalKey.scrollDirection ? (
+        <ScrollControlIcon mode={terminalKey.scrollMode} step="page" direction={terminalKey.scrollDirection} />
+      ) : (
+        <>
+          <span className={terminalKey.compact ? "wide-key-label" : ""}>{terminalKey.label}</span>
+          {terminalKey.compact && <span className="compact-key-label">{terminalKey.compact}</span>}
+        </>
       )}
     </button>
   );
@@ -400,7 +418,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   shortcutPanelHeader,
   preferredScrollMode,
   preferredScrollLabel,
-  onScrollModeUsed,
+  onScrollUsed,
+  onScrollLine,
+  applicationScrollProfile,
+  onScrollApplication,
+  applicationScrollPending = false,
+  returnScrollMode = preferredScrollMode,
   mobileDistractionFree = false,
   onToggleMobileDistractionFree,
   onSend,
@@ -422,6 +445,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   queuedMessageCount = 0,
 }, ref) {
   const { bindings: shortcutBindings } = useShortcutSettings();
+  const preferredLineScrollMode = applicationScrollProfile && preferredScrollMode === "application"
+    ? "application"
+    : "tmux";
   const [initialDraftState] = useState(() => {
     const pendingHandoff = renamedSessionDraftHandoffs.get(sessionName);
     const handoff = pendingHandoff?.sessionId === sessionId ? pendingHandoff : undefined;
@@ -1306,7 +1332,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           aria-label="Focus live terminal input"
           aria-controls={terminalControlId}
           aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
-          title={`${preferredScrollMode === "application"
+          title={`${returnScrollMode === "application"
             ? `Return ${preferredScrollLabel || "the foreground application"} to live output`
             : "Exit scrollback and focus raw terminal input"}${directShortcutLabel(shortcutBindings["terminal-return-live"])
             ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
@@ -1364,15 +1390,80 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         >
           <span>More Keys</span>
         </button>
-        {KEYS.map((terminalKey) => (
+        <div className="scroll-key-family" role="group" aria-label="Tmux scrolling">
+          {TMUX_PAGE_KEYS.map((terminalKey) => (
+            <TerminalKeyButton
+              key={terminalKey.label}
+              terminalKey={terminalKey}
+              enabled={enabled}
+              onSend={onSend}
+              preferredScrollMode={preferredScrollMode}
+              preferredScrollLabel={preferredScrollLabel}
+              onScrollUsed={onScrollUsed}
+            />
+          ))}
+          {(["up", "down"] as const).map((direction) => (
+            <button
+              key={`tmux-line-${direction}`}
+              type="button"
+              className={preferredLineScrollMode === "tmux"
+                ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}
+              data-scroll-preferred={preferredLineScrollMode === "tmux" ? "true" : undefined}
+              disabled={!enabled || !onScrollLine}
+              aria-label={`Tmux Line ${direction === "up" ? "Up" : "Down"}`}
+              aria-controls={terminalControlId}
+              title={`Scroll terminal history ${direction} exactly one line in tmux copy mode${
+                preferredLineScrollMode === "tmux"
+                  ? `. Recommended for ${preferredScrollLabel || "this agent"}` : ""
+              }`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onScrollLine?.(direction)}
+            >
+              <ScrollControlIcon mode="tmux" step="line" direction={direction} />
+            </button>
+          ))}
+        </div>
+        <div className="scroll-key-family" role="group" aria-label="Application scrolling">
+          {APP_PAGE_KEYS.map((terminalKey) => (
+            <TerminalKeyButton
+              key={terminalKey.label}
+              terminalKey={terminalKey}
+              enabled={enabled}
+              onSend={onSend}
+              preferredScrollMode={preferredScrollMode}
+              preferredScrollLabel={preferredScrollLabel}
+              onScrollUsed={onScrollUsed}
+            />
+          ))}
+          {(["up", "down"] as const).map((direction) => (
+            <button
+              key={`application-scroll-${direction}`}
+              type="button"
+              className={preferredLineScrollMode === "application"
+                ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}
+              data-scroll-preferred={preferredLineScrollMode === "application" ? "true" : undefined}
+              disabled={!enabled || !applicationScrollProfile || !onScrollApplication || applicationScrollPending}
+              aria-label={`Application Scroll ${direction === "up" ? "Up" : "Down"}`}
+              aria-controls={terminalControlId}
+              title={!applicationScrollProfile
+                ? `Application fine scrolling is not supported for ${preferredScrollLabel || "this session"}. Use the highlighted tmux controls.`
+                : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
+                preferredLineScrollMode === "application"
+                  ? `. Recommended for ${preferredScrollLabel || "this agent"}` : ""
+              }`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onScrollApplication?.(direction)}
+            >
+              <ScrollControlIcon mode="application" step="line" direction={direction} />
+            </button>
+          ))}
+        </div>
+        {INPUT_EDIT_KEYS.map((terminalKey) => (
           <TerminalKeyButton
             key={terminalKey.label}
             terminalKey={terminalKey}
             enabled={enabled}
             onSend={onSend}
-            preferredScrollMode={preferredScrollMode}
-            preferredScrollLabel={preferredScrollLabel}
-            onScrollModeUsed={onScrollModeUsed}
           />
         ))}
         <button

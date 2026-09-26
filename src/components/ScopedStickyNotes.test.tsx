@@ -187,10 +187,13 @@ describe("ScopedStickyNotes", () => {
     fireEvent.click(within(editor).getByRole("button", { name: "Add note page" }));
     expect(within(editor).getByLabelText("Page 2 of 2")).toHaveTextContent("2 / 2");
     const pageName = within(editor).getByRole("textbox", { name: "Page name" });
+    act(() => vi.advanceTimersByTime(0));
+    expect(pageName).toHaveFocus();
+    expect((pageName as HTMLInputElement).selectionStart).toBe(0);
+    expect((pageName as HTMLInputElement).selectionEnd).toBe("Page 2".length);
     fireEvent.change(pageName, { target: { value: "Runbook" } });
     fireEvent.blur(pageName);
     fireEvent.change(textarea, { target: { value: "A".repeat(12_000) } });
-    fireEvent.click(within(editor).getByRole("button", { name: "Show page sidebar" }));
 
     const pageList = within(editor).getByRole("complementary", {
       name: "Notebook pages",
@@ -215,6 +218,48 @@ describe("ScopedStickyNotes", () => {
       selectedPageId: "main",
       sidebarOpen: true,
     });
+  });
+
+  it.each([false, true])("shows the first page and sidebar on opening (restored=%s)", async (restored) => {
+    const pages = [
+      { id: "plan", name: "Project plan", content: "Keep the original pad" },
+      { id: "details", name: "Handoff", content: "Find this separate page" },
+    ];
+    vi.mocked(getCommonNotebook).mockResolvedValue({ pages });
+    window.localStorage.setItem(
+      workspaceWindowStorageKey("workspace-one", "common:common"),
+      JSON.stringify({ open: restored, selectedPageId: "details", sidebarOpen: false }),
+    );
+    const view = render(
+      <ScopedStickyNotes sessionName="agent-one" workspaceId="workspace-one" workspaceName="Launch room" />,
+    );
+    if (!restored) {
+      await waitFor(() => expect(screen.getByRole("button", { name: "Edit common note" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    }
+    const editor = await screen.findByRole("dialog", { name: "Common" });
+    const sidebar = within(editor).getByRole("complementary", { name: "Notebook pages" });
+    expect(within(editor).getByRole("textbox", { name: "Page name" })).toHaveValue("Project plan");
+    expect(within(editor).getByRole("textbox", { name: "Note" })).toHaveValue("Keep the original pad");
+    expect(within(sidebar).getByRole("button", { name: /Project plan/ })).toHaveAttribute("aria-current", "page");
+    expect(within(editor).getByRole("button", { name: "Hide page sidebar" })).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(within(sidebar).getByRole("button", { name: /Handoff/ }));
+    view.rerender(
+      <ScopedStickyNotes sessionName="agent-one" workspaceId="workspace-one" workspaceName="Renamed workspace" />,
+    );
+    expect(within(editor).getByRole("textbox", { name: "Note" })).toHaveValue("Find this separate page");
+    fireEvent.click(within(editor).getByRole("button", { name: "Hide page sidebar" }));
+    expect(within(editor).queryByRole("complementary", { name: "Notebook pages" })).not.toBeInTheDocument();
+    expect(within(editor).getByRole("button", { name: "Show page sidebar" })).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(within(editor).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Common" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const reopened = screen.getByRole("dialog", { name: "Common" });
+    expect(within(reopened).getByRole("complementary", { name: "Notebook pages" })).toBeVisible();
+    expect(within(reopened).getByRole("textbox", { name: "Note" })).toHaveValue("Keep the original pad");
+    expect(replaceCommonNotebook).not.toHaveBeenCalled();
   });
 
   it("keeps common and session notes available in a temporary workspace", async () => {
@@ -763,7 +808,6 @@ describe("ScopedStickyNotes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
     const editor = screen.getByRole("dialog", { name: "Common" });
     fireEvent.click(within(editor).getByRole("button", { name: "Next note page" }));
-    fireEvent.click(within(editor).getByRole("button", { name: "Show page sidebar" }));
     fireEvent.click(within(editor).getByRole("button", { name: "Pin common note" }));
     fireEvent.click(within(editor).getByRole("button", { name: "Resize note to Large" }));
 

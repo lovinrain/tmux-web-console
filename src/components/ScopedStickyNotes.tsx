@@ -589,6 +589,7 @@ function StickyNoteEditor({
   const textareaId = useId();
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const pageNameInputRef = useRef<HTMLInputElement>(null);
   const mountedRef = useRef(true);
   const closingRef = useRef(false);
   const onSaveRef = useRef(onSave);
@@ -1046,7 +1047,10 @@ function StickyNoteEditor({
     pageNameRef.current = page.name;
     setPageName(page.name);
     onSelectedPageChange(page.id);
-    window.setTimeout(() => textareaRef.current?.focus(), 0);
+    window.setTimeout(() => {
+      pageNameInputRef.current?.focus();
+      pageNameInputRef.current?.select();
+    }, 0);
   }, [commitPageName, onSelectedPageChange, scheduleSave]);
 
   const deleteSelectedPage = useCallback(() => {
@@ -1224,6 +1228,7 @@ function StickyNoteEditor({
           <ArrowLeftIcon />
         </button>
         <input
+          ref={pageNameInputRef}
           className="scoped-note-page-name"
           value={pageName}
           maxLength={MAX_SCOPED_NOTE_PAGE_NAME_LENGTH}
@@ -1266,14 +1271,15 @@ function StickyNoteEditor({
         </button>
         <button
           type="button"
-          className="scoped-note-page-control"
+          className="scoped-note-page-control scoped-note-page-list-toggle"
           aria-label={`${sidebarOpen ? "Hide" : "Show"} page sidebar`}
-          aria-pressed={sidebarOpen}
+          aria-expanded={sidebarOpen}
           title={`${sidebarOpen ? "Hide" : "Show"} page list`}
           disabled={closing}
           onClick={() => onSidebarOpenChange(!sidebarOpen)}
         >
           <ListIcon />
+          <span>Pages</span>
         </button>
         <button
           type="button"
@@ -1619,11 +1625,7 @@ export function ScopedStickyNotes({
     if (restoreOnly && !preference.open) return;
     const size = preferredFloatingNoteSize(preference, restoreOnly ? "remember" : defaultSize);
     const position = preferredFloatingNotePosition(scope, preference, size);
-    const selectedPageId = snapshot.notebook.pages.some(
-      (page) => page.id === preference.selectedPageId,
-    )
-      ? preference.selectedPageId!
-      : snapshot.notebook.pages[0].id;
+    const selectedPageId = snapshot.notebook.pages[0].id;
     writeNoteWindowPreference(key, {
       open: true,
       floating: true,
@@ -1631,7 +1633,7 @@ export function ScopedStickyNotes({
       position,
       size,
       selectedPageId,
-      sidebarOpen: preference.sidebarOpen,
+      sidebarOpen: true,
     });
     const editor: OpenNoteEditor = {
       key,
@@ -1648,7 +1650,7 @@ export function ScopedStickyNotes({
       size,
       focusOnMount: !restoreOnly,
       selectedPageId,
-      sidebarOpen: preference.sidebarOpen,
+      sidebarOpen: true,
     };
     setOpenEditors((current) => (
       current.some((candidate) => candidate.key === key)

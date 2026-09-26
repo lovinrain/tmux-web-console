@@ -3062,18 +3062,20 @@ test("desktop workspace shortcuts cycle, fuzzy-run commands, and search tabs", a
     await expect.poll(paneInMode).toBe("0");
 
     await desktopRawPageUp.click();
-    await expect(shell).toHaveAttribute("data-scroll-mode", "application");
-    await expect(desktopRawPageUp).toHaveClass(/preferred-scroll-key/);
-    await expect(desktopRawPageUp).toHaveAttribute(
+    await expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+    await expect(desktopRawPageUp).not.toHaveClass(/preferred-scroll-key/);
+    await expect(desktopTmuxPageUp).toHaveAttribute(
       "aria-keyshortcuts",
       "Control+Shift+U",
     );
-    await expect(desktopTmuxPageUp).not.toHaveClass(/preferred-scroll-key/);
+    await expect(desktopTmuxPageUp).toHaveClass(/preferred-scroll-key/);
     await expect.poll(() => page.evaluate(() => (
       JSON.parse(window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}")
         .shells
-    ))).toBe("application");
+    ))).toBeUndefined();
     await page.keyboard.press("Control+Shift+U");
+    await expect.poll(paneInMode).toBe("1");
+    await page.keyboard.press("Control+Shift+L");
     await expect.poll(paneInMode).toBe("0");
 
     const identityBeforeEndShortcut = workspaceTmuxIdentity(sessionName);
@@ -6660,8 +6662,15 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(rawPageUp).not.toHaveClass(/preferred-scroll-control/);
   await expect(rawPageDown).not.toHaveClass(/preferred-scroll-control/);
   const portraitRailButtons = terminalControls.getByRole("button");
-  await expect(portraitRailButtons).toHaveCount(7);
+  await expect(portraitRailButtons).toHaveCount(11);
+  for (const direction of ["Up", "Down"]) {
+    const appLine = terminalControls.getByRole("button", { name: `Application Scroll ${direction}` });
+    await expect(appLine).toBeVisible();
+    await expect(appLine).toBeDisabled();
+    await expect(appLine).toHaveAttribute("title", /not supported/);
+  }
   for (const button of await portraitRailButtons.all()) {
+    await button.scrollIntoViewIfNeeded();
     const box = await button.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.width).toBeGreaterThanOrEqual(44);
@@ -6670,7 +6679,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
   }
   expect(await terminalControls.evaluate((element) => (
-    element.scrollWidth <= element.clientWidth
+    element.scrollWidth > element.clientWidth
   ))).toBe(true);
   const historyPaneFormat = (format: string) => execFileSync(
     "tmux",
@@ -6685,9 +6694,9 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
 
   await rawPageUp.click();
   await expect(terminalKeyboardTarget).toBeFocused();
-  await expect(shell).toHaveAttribute("data-scroll-mode", "application");
-  await expect(rawPageUp).toHaveClass(/preferred-scroll-control/);
-  await expect(rawPageDown).toHaveClass(/preferred-scroll-control/);
+  await expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
+  await expect(rawPageUp).not.toHaveClass(/preferred-scroll-control/);
+  await expect(rawPageDown).not.toHaveClass(/preferred-scroll-control/);
   await rawPageDown.click();
   await expect(terminalKeyboardTarget).toBeFocused();
 
@@ -6863,10 +6872,15 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   );
   expect(reflowedBoxes.every((box) => box !== null && box.width >= 44 && box.height >= 44))
     .toBe(true);
-  expect(reflowedBoxes.slice(0, 4).every((box) => box!.y === reflowedBoxes[0]!.y)).toBe(true);
-  expect(reflowedBoxes[4]!.y).toBeGreaterThan(reflowedBoxes[0]!.y);
+  expect(reflowedBoxes.every((box) => box!.y === reflowedBoxes[0]!.y)).toBe(true);
+  for (const button of await reflowedRailButtons.all()) {
+    await button.scrollIntoViewIfNeeded();
+    const box = await button.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+  }
   expect(await terminalControls.evaluate((element) => (
-    element.scrollWidth <= element.clientWidth
+    element.scrollWidth > element.clientWidth
   ))).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
@@ -6878,7 +6892,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   }).getByRole("button");
   await expect(landscapePurposeButtons).toHaveCount(3);
   const landscapeRailButtons = terminalControls.getByRole("button");
-  await expect(landscapeRailButtons).toHaveCount(7);
+  await expect(landscapeRailButtons).toHaveCount(11);
   for (const button of await landscapeRailButtons.all()) {
     const box = await button.boundingBox();
     expect(box).not.toBeNull();

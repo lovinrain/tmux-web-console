@@ -144,6 +144,11 @@ saved theme preference instead. tmux 3.0 and 3.1 cannot set a per-session
 environment during creation, so Muxdeck still creates the session, logs a
 warning, and omits both Grok startup hints.
 
+Scrolling controls use compact icons: a terminal-window badge means tmux;
+application controls have no prefix badge. Double chevrons indicate paging;
+single arrows indicate fine scrolling. Tooltips describe each action, and full
+accessible names remain available to assistive technology.
+
 The shortcut strip in `Input` mode sends terminal input. Its `PgUp` and `PgDn`
 controls send real Page Up/Page Down key sequences to the foreground application,
 matching a physical keyboard for tools such as Claude Code. For Codex or other
@@ -153,10 +158,10 @@ returns to the live pane. The tmux controls assume the default `Ctrl+B` prefix.
 
 Muxdeck highlights the paging pair preferred for the detected foreground agent
 in both the phone terminal rail and desktop shortcut strip. Claude, Copilot,
-Cursor, and Grok start with application `PgUp` / `PgDn`; Codex, shells, and
-unrecognized processes start with the tmux pair. Successfully using either pair
-teaches that choice for the agent kind and stores it as a browser-local preference,
-so the highlight follows that agent across sessions, workspaces, and reloads.
+and Grok start with application `PgUp` / `PgDn`; Codex, Cursor, shells, and
+unrecognized processes use the tmux pair. The highlight follows the detected
+agent across sessions, workspaces, and reloads; clicking an alternative control
+does not move it. Older browser preferences learned from clicks are ignored.
 `Ctrl+Shift+U` and `Ctrl+Shift+D` invoke the highlighted Page Up and Page Down
 actions on desktop.
 
@@ -171,6 +176,40 @@ No history action sends key bytes to or interrupts the foreground application.
 The history actions are available while the terminal connection is live; `Focus`
 / `Exit` remains available even during a reconnect. Use Scrollback for a separate
 retained snapshot.
+
+Both layouts also offer `Tmux Line↑` and `Tmux Line↓` directly after the tmux
+paging pair. Up enters copy mode without
+a page jump and scrolls one terminal row; Down scrolls one row toward live output
+while copy mode is active. They bypass custom keybindings and do not send input
+to the running agent. `Live` exits
+copy mode after using them, including for agents that prefer application paging.
+Desktop shortcut rows wrap to fit the available width, keeping each scrolling
+set together. The phone control rail scrolls horizontally when its buttons
+exceed the width. All eight scrolling buttons remain visible in every session.
+Application fine-scroll buttons are enabled for Claude, Copilot, and Grok;
+elsewhere they remain visible but disabled with an explanation. Codex and
+Cursor retain their highlighted tmux controls.
+Tmux paging and line scrolling can be interleaved: use `Tmux PgUp` to move back,
+then `Tmux Line↑` / `Tmux Line↓` to adjust the same position by one row. `Tmux
+PgDn` can then resume paging. Plain `PgUp` / `PgDn` used inside an agent's own
+scroll view navigate that application; switching to the tmux line controls
+does not continue its internal scroll position. This distinction particularly
+affects Claude Code, whose default paging preference is application scrolling.
+For Claude Code, Copilot, and Grok, use the adjacent `App↑` / `App↓` controls
+after plain PgUp/PgDn to continue the application's current view. These send
+native wheel steps through the verified attachment, require application mouse
+reporting, and leave tmux copy mode when switching back to the application.
+Claude lets preceding paging/rendering settle and retries once if its transcript
+did not move, accounting for its wheel direction-change filter. Copilot uses Alt+wheel for one row; Claude and Grok
+move one row at their tested tmux defaults but honor application speed settings.
+The page and fine-scroll controls highlight together for the detected agent.
+They remain recommendations while either scrolling family is used. Codex,
+Cursor, shells, and unknown processes use the tmux fine-scroll pair. A rejected
+native request shows feedback. Live tracks the actual scrolling view separately
+so it can still exit tmux copy mode after an alternative control is used.
+The tmux controls read tmux's retained output; they cannot retrieve an application's
+internal transcript if the application has not written it to terminal history.
+See [the agent compatibility checks](LINE_SCROLL_VERIFICATION.md).
 
 On tablet and desktop layouts, drag the left edge of the Scrollback drawer to
 change its width. The resize handle also supports Left/Right arrows, Home/End,
@@ -1130,8 +1169,11 @@ and Session cards remain available. Selecting a card opens a focused editor;
 changes autosave after a short pause and are flushed before the editor closes.
 Each scope is a notebook with up to 128 named pages. Existing single-note text
 is migrated into `Page 1`; page content has no separate character validator
-(the HTTP request boundary still protects the service). Page selection and the
-optional page sidebar are remembered in each browser window. The cards and
+(the HTTP request boundary still protects the service). Opening or restoring a
+note shows its first page and the named-page sidebar. The `Pages` control can
+hide the sidebar while editing; reopening shows it again. Selecting a sidebar
+entry switches pages, and adding a page focuses its name for editing. Existing
+page names and content are preserved. The cards and
 editor are desktop-only, and concurrent editors use last-write-wins replacement.
 Each editor has quick `Small` (430 × 430), `Medium` (640 × 560), and `Large`
 (860 × 720) size buttons. Windows move as needed to fit the chosen size on screen.

@@ -151,10 +151,24 @@ For frontend development, run `npm run dev`. Vite serves
   switching session tabs. The browser remembers the open, pinned, position, and
   size state separately for each saved workspace and restores that arrangement
   when the workspace is resumed. Each
-  note is a multi-page notebook: use the page bar or optional page sidebar to
-  add, rename, remove, and navigate pages; existing notes become Page 1 and
+  note is a multi-page notebook. Opening it shows the first page and the page
+  sidebar, with named entries for quick switching. Use the sidebar to add pages;
+  the new page's name is selected for editing. The `Pages` button hides or shows
+  the list while editing. Existing notes become Page 1 and
   page text has no application-level character cap (the normal request-size
   safety boundary still applies).
+- All eight scrolling buttons remain visible in every session. A terminal
+  badge marks tmux controls; application controls show only arrows.
+  Double chevrons move by pages; single arrows make fine adjustments.
+  Hover for a description. Tmux fine controls scroll retained output one row at
+  a time. Application fine controls are enabled for Claude, Copilot, and Grok,
+  continuing the application's own
+  transcript in small steps. The appropriate page and fine-scroll controls
+  highlight together according to the detected agent. Using another control
+  does not change that recommendation.
+  Unsupported application fine controls stay visible but disabled with a tooltip.
+  Native step size follows application settings. See
+  [verification details](docs/LINE_SCROLL_VERIFICATION.md).
 - The desktop `Callback` card has Global and Workspace scopes. Add the current
   session or choose another live session, then return to it with `Open` or mark
   it reviewed with the check button. Working, ready, and ended states remain
@@ -288,7 +302,7 @@ active on the landing page or compact mobile layout.
 | `Ctrl+Shift+G`, then Arrow | Move terminal focus between panes in a multi-pane view |
 | `Ctrl+Shift+Y` | Show or hide the movable staged-input window |
 | `Ctrl+Shift+J` | Show or hide the independent floating workspace terminal |
-| `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's remembered controls |
+| `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's recommended controls |
 | `Ctrl+Shift+L` | Leave scrollback and return to live output |
 | `Ctrl+Shift+C` | Toggle browser terminal Copy mode |
 | `Ctrl+Shift+M` | Create and open a numbered session in the active pane's directory |
@@ -310,8 +324,9 @@ all visible hints update after saving. Browsers and operating systems may still
 reserve a direct chord, so keep a shortcut-window binding as a fallback.
 
 Use `Keymap` in the desktop workspace strip to see these chords in the app.
-Muxdeck highlights whether raw Page Up/Page Down or tmux history is preferred for
-the active agent, and successful paging-button use remembers that choice locally.
+Muxdeck highlights the recommended page and fine-scroll controls for the active
+agent. Clicking another control does not move the highlight or change the
+paging shortcuts; previously learned browser choices are ignored.
 
 ## Deployment and security
 

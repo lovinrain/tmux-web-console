@@ -27,8 +27,6 @@ import {
 } from "../api";
 import {
   ArrowLeftIcon,
-  ArrowDownIcon,
-  ArrowUpIcon,
   CheckIcon,
   ContractIcon,
   ExpandIcon,
@@ -49,10 +47,8 @@ import {
   WindowMoveIcon,
 } from "../icons";
 import {
-  AGENT_SCROLL_PREFERENCES_STORAGE_KEY,
-  loadAgentScrollPreferences,
+  applicationScrollProfile,
   preferredAgentScrollMode,
-  rememberAgentScrollMode,
   type AgentScrollMode,
 } from "../agentScrollPreferences";
 import {
@@ -89,9 +85,15 @@ import {
   type InputBarHandle,
   type MemoDraftSource,
 } from "./InputBar";
-import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
+import {
+  LiveTerminal,
+  type LiveTerminalHandle,
+  type TerminalHistoryAction,
+  type TerminalHistoryResult,
+} from "./LiveTerminal";
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
+import { ScrollControlIcon } from "./ScrollControlIcon";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
@@ -732,9 +734,25 @@ export function ConsoleScreen({
     MobileConsoleMode | null
   >(null);
   const [desktopCopyMode, setDesktopCopyMode] = useState(false);
-  const [agentScrollPreferences, setAgentScrollPreferences] = useState(
-    loadAgentScrollPreferences,
+  const [applicationScrollTargets, setApplicationScrollTargets] = useState<Set<string>>(() => new Set());
+  const [tmuxScrollTargets, setTmuxScrollTargets] = useState<Set<string>>(() => new Set());
+  const [pendingTmuxScrollTargets, setPendingTmuxScrollTargets] = useState<Map<string, number>>(
+    () => new Map(),
   );
+  const scrollActionVersionRef = useRef(0);
+  const tmuxScrollResetVersionRef = useRef(0);
+  const lineScrollRequestsRef = useRef(new Map<string, Array<{
+    action: TerminalHistoryAction;
+    version: number;
+  }>>());
+  const applicationScrollRequestsRef = useRef(new Map<string, number>());
+  const [applicationScrollPendingTargets, setApplicationScrollPendingTargets] = useState(
+    () => new Set<string>(),
+  );
+  const [applicationScrollMessage, setApplicationScrollMessage] = useState<{
+    target: string;
+    text: string;
+  } | null>(null);
   const [desktopTerminalFocus, setDesktopTerminalFocus] = useState(false);
   const [floatingDraftSnapshot, setFloatingDraftSnapshot] = useState({
     sessionName,
@@ -784,10 +802,21 @@ export function ConsoleScreen({
     || (session ? activePane(session) : undefined);
   const classification = classifyPane(pane);
   const scrollAgentKind = paneCommandKind(pane?.command || "", pane?.title || "");
-  const preferredScrollMode = preferredAgentScrollMode(
-    scrollAgentKind,
-    agentScrollPreferences,
-  );
+  const preferredScrollMode = preferredAgentScrollMode(scrollAgentKind);
+  const nativeScrollProfile = applicationScrollProfile(scrollAgentKind);
+  const preferredLineScrollMode = nativeScrollProfile && preferredScrollMode === "application"
+    ? "application"
+    : "tmux";
+  // Track actual scrolling separately from the agent recommendation so Live
+  // can leave an outstanding tmux request before returning to the application.
+  const scrollTargetKey = JSON.stringify([sessionName, session?.id, pane?.id]);
+  const applicationReturnMode = applicationScrollTargets.has(scrollTargetKey)
+    ? "application"
+    : preferredScrollMode;
+  const returnScrollMode = tmuxScrollTargets.has(scrollTargetKey)
+    || pendingTmuxScrollTargets.has(scrollTargetKey)
+    ? "tmux"
+    : applicationReturnMode;
   const visibleRenameWarning = renameWarning?.sessionName === sessionName
     && renameWarning.sessionId === session?.id
     ? renameWarning
@@ -795,6 +824,13 @@ export function ConsoleScreen({
   const connection = connectionSnapshot.sessionName === sessionName
     ? connectionSnapshot.state
     : "connecting";
+  const activeScrollTargetRef = useRef({ scrollTargetKey, connection, applicationReturnMode });
+  activeScrollTargetRef.current = { scrollTargetKey, connection, applicationReturnMode };
+  useEffect(() => {
+    // Ignore stale replies after leaving and returning to the same pane,
+    // reconnecting, or detecting a different foreground agent.
+    tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
+  }, [scrollTargetKey, connection, scrollAgentKind]);
   const currentLookupError = lookupError?.sessionName === sessionName
     ? lookupError.message
     : null;
@@ -1349,16 +1385,6 @@ export function ConsoleScreen({
     };
   }, [currentLookupError, embedded, sessionName]);
 
-  useEffect(() => {
-    const syncAgentScrollPreferences = (event: StorageEvent) => {
-      if (
-        event.storageArea === window.localStorage
-        && event.key === AGENT_SCROLL_PREFERENCES_STORAGE_KEY
-      ) setAgentScrollPreferences(loadAgentScrollPreferences());
-    };
-    window.addEventListener("storage", syncAgentScrollPreferences);
-    return () => window.removeEventListener("storage", syncAgentScrollPreferences);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1507,34 +1533,156 @@ export function ConsoleScreen({
     setConnectionSnapshot({ sessionName, state });
   }, [sessionName]);
   const paneChange = useCallback((nextPaneId: string | null) => setPaneId(nextPaneId), []);
+  const rememberTmuxScrollTarget = useCallback(() => {
+    setTmuxScrollTargets((current) => current.has(scrollTargetKey)
+      ? current
+      : new Set([...current, scrollTargetKey]));
+  }, [scrollTargetKey]);
+  const forgetTmuxScrollTarget = useCallback(() => {
+    setTmuxScrollTargets((current) => {
+      if (!current.has(scrollTargetKey)) return current;
+      const next = new Set(current);
+      next.delete(scrollTargetKey);
+      return next;
+    });
+  }, [scrollTargetKey]);
+  const updatePendingTmuxScroll = useCallback((delta: number) => {
+    setPendingTmuxScrollTargets((current) => {
+      const count = (current.get(scrollTargetKey) ?? 0) + delta;
+      const next = new Map(current);
+      if (count > 0) next.set(scrollTargetKey, count);
+      else next.delete(scrollTargetKey);
+      return next;
+    });
+  }, [scrollTargetKey]);
+  const historyNavigation = useCallback((action: TerminalHistoryAction, result: TerminalHistoryResult) => {
+    if (action === "line-up") updatePendingTmuxScroll(-1);
+    const lineRequests = lineScrollRequestsRef.current.get(scrollTargetKey);
+    const requestIndex = lineRequests?.findIndex((request) => request.action === action) ?? -1;
+    const lineRequest = requestIndex >= 0 ? lineRequests?.splice(requestIndex, 1)[0] : undefined;
+    if (lineRequests?.length === 0) lineScrollRequestsRef.current.delete(scrollTargetKey);
+    if (result === "accepted") {
+      if (action === "exit") forgetTmuxScrollTarget();
+      // Other paging/line clicks do not prove copy mode was exited. Discard
+      // earlier line acknowledgments only after Live, native success, or a
+      // different attachment; keep their real tmux state for the Live action.
+      else if (!lineRequest || lineRequest.version > tmuxScrollResetVersionRef.current) {
+        rememberTmuxScrollTarget();
+      }
+    } else if (action === "exit" && result === "rejected") {
+      // Copy mode may have already been left with Escape. A server NACK is
+      // safe to follow with the application Live key only in this same view.
+      forgetTmuxScrollTarget();
+      const active = activeScrollTargetRef.current;
+      if (
+        active.scrollTargetKey === scrollTargetKey
+        && active.connection === "live"
+        && active.applicationReturnMode === "application"
+      ) terminalRef.current?.send(RAW_APPLICATION_BOTTOM_SEQUENCE);
+    }
+  }, [forgetTmuxScrollTarget, rememberTmuxScrollTarget, scrollTargetKey, updatePendingTmuxScroll]);
   const returnToLiveTerminal = useCallback(() => {
-    if (preferredScrollMode === "application") {
+    tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
+    setApplicationScrollMessage(null);
+    if (returnScrollMode === "application") {
       terminalRef.current?.send(RAW_APPLICATION_BOTTOM_SEQUENCE);
     } else {
       terminalRef.current?.navigateHistory("exit");
     }
     terminalRef.current?.jumpToLive();
     terminalRef.current?.focus();
-  }, [preferredScrollMode]);
-  const rememberScrollMode = useCallback((mode: AgentScrollMode) => {
-    setAgentScrollPreferences((current) => (
-      rememberAgentScrollMode(current, scrollAgentKind, mode)
-    ));
-  }, [scrollAgentKind]);
+  }, [returnScrollMode]);
+  const trackScrollUsed = useCallback((mode: AgentScrollMode) => {
+    scrollActionVersionRef.current += 1;
+    setApplicationScrollMessage(null);
+    if (mode === "tmux") rememberTmuxScrollTarget();
+    else setApplicationScrollTargets((current) => current.has(scrollTargetKey)
+      ? current
+      : new Set([...current, scrollTargetKey]));
+  }, [rememberTmuxScrollTarget, scrollTargetKey]);
   const scrollTerminal = useCallback((
     direction: "up" | "down",
     mode: AgentScrollMode,
-    remember = false,
   ) => {
     const accepted = mode === "tmux"
       ? terminalRef.current?.navigateHistory(direction === "up" ? "page-up" : "page-down")
       : terminalRef.current?.send(
         direction === "up" ? RAW_PAGE_UP_SEQUENCE : RAW_PAGE_DOWN_SEQUENCE,
       );
-    if (accepted && remember) rememberScrollMode(mode);
+    if (accepted) trackScrollUsed(mode);
     return accepted ?? false;
-  }, [rememberScrollMode]);
-  const scrollTerminalWithPreference = useCallback((direction: "up" | "down") => {
+  }, [trackScrollUsed]);
+  const scrollTerminalLine = useCallback((direction: "up" | "down") => {
+    const action = direction === "up" ? "line-up" : "line-down";
+    const version = ++scrollActionVersionRef.current;
+    setApplicationScrollMessage(null);
+    const requests = lineScrollRequestsRef.current.get(scrollTargetKey) ?? [];
+    requests.push({ action, version });
+    lineScrollRequestsRef.current.set(scrollTargetKey, requests);
+    // Until an upward request is acknowledged, Live must still cancel it in
+    // order. A downward request cannot enter copy mode and needs no such wait.
+    if (direction === "up") updatePendingTmuxScroll(1);
+    const accepted = terminalRef.current?.navigateHistory(action) ?? false;
+    if (!accepted) {
+      const index = requests.findIndex((request) => request.version === version);
+      if (index >= 0) requests.splice(index, 1);
+      if (!requests.length) lineScrollRequestsRef.current.delete(scrollTargetKey);
+      if (direction === "up") updatePendingTmuxScroll(-1);
+    }
+    return accepted;
+  }, [scrollTargetKey, updatePendingTmuxScroll]);
+  const scrollApplication = useCallback(async (direction: "up" | "down") => {
+    if (
+      !nativeScrollProfile || connection !== "live"
+      || applicationScrollRequestsRef.current.has(scrollTargetKey)
+    ) return;
+    const version = ++scrollActionVersionRef.current;
+    applicationScrollRequestsRef.current.set(scrollTargetKey, version);
+    setApplicationScrollPendingTargets((current) => new Set([...current, scrollTargetKey]));
+    setApplicationScrollMessage(null);
+    try {
+      const result = await terminalRef.current?.scrollApplication(direction, nativeScrollProfile);
+      const active = activeScrollTargetRef.current;
+      if (
+        active.scrollTargetKey !== scrollTargetKey
+        || active.connection !== "live"
+        || scrollActionVersionRef.current !== version
+      ) return;
+      if (result?.status === "accepted" && (!result.paneId || result.paneId === pane?.id)) {
+        tmuxScrollResetVersionRef.current = version;
+        forgetTmuxScrollTarget();
+        setPendingTmuxScrollTargets((current) => {
+          const next = new Map(current);
+          next.delete(scrollTargetKey);
+          return next;
+        });
+        trackScrollUsed("application");
+      } else {
+        setApplicationScrollMessage({
+          target: scrollTargetKey,
+          text: result?.message || "Application scrolling is unavailable in this view. Try Tmux Line or reconnect.",
+        });
+      }
+    } catch {
+      if (
+        activeScrollTargetRef.current.scrollTargetKey === scrollTargetKey
+        && scrollActionVersionRef.current === version
+      ) setApplicationScrollMessage({
+        target: scrollTargetKey,
+        text: "Application scrolling failed. Try again after reconnecting.",
+      });
+    } finally {
+      if (applicationScrollRequestsRef.current.get(scrollTargetKey) === version) {
+        applicationScrollRequestsRef.current.delete(scrollTargetKey);
+        setApplicationScrollPendingTargets((current) => {
+          const next = new Set(current);
+          next.delete(scrollTargetKey);
+          return next;
+        });
+      }
+    }
+  }, [connection, forgetTmuxScrollTarget, nativeScrollProfile, pane?.id, trackScrollUsed, scrollTargetKey]);
+  const scrollRecommendedTerminal = useCallback((direction: "up" | "down") => {
     scrollTerminal(direction, preferredScrollMode);
   }, [preferredScrollMode, scrollTerminal]);
   const redrawTerminal = useCallback(() => {
@@ -1688,7 +1836,7 @@ export function ConsoleScreen({
         return;
       }
       if (action === "terminal-page-up" || action === "terminal-page-down") {
-        scrollTerminalWithPreference(
+        scrollRecommendedTerminal(
           action === "terminal-page-up" ? "up" : "down",
         );
         return;
@@ -1787,7 +1935,7 @@ export function ConsoleScreen({
     copyNewSession,
     onSessionCopied,
     returnToLiveTerminal,
-    scrollTerminalWithPreference,
+    scrollRecommendedTerminal,
     sessionNavigation,
     setBarVisible,
     shortcutBindings,
@@ -2493,6 +2641,12 @@ export function ConsoleScreen({
         </aside>
       )}
 
+      {applicationScrollMessage?.target === scrollTargetKey && (
+        <aside className="copy-new-error" role="status">
+          {applicationScrollMessage.text}
+        </aside>
+      )}
+
       {sessionNavigation && (
         <div key="session-navigation" className="console-session-navigation">{sessionNavigation}</div>
       )}
@@ -2518,6 +2672,7 @@ export function ConsoleScreen({
           onOpenFilePath={mobileLayout ? undefined : openTerminalFilePath}
           onStateChange={stateChange}
           onPaneChange={paneChange}
+          onHistoryNavigation={historyNavigation}
         />
         <nav className="terminal-view-controls" aria-label="Terminal view controls">
           <button
@@ -2532,16 +2687,15 @@ export function ConsoleScreen({
               : undefined}
             data-scroll-preferred={preferredScrollMode === "application" ? "true" : undefined}
             title={preferredScrollMode === "application"
-              ? `Send Page Up to the foreground terminal application; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-up"])
+              ? `Send Page Up to the foreground terminal application; recommended for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-up"])
                 ? ` (${directShortcutLabel(shortcutBindings["terminal-page-up"])})`
                 : ""}`
               : "Send Page Up to the foreground terminal application"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("up", "application", true)}
+            onClick={() => scrollTerminal("up", "application")}
           >
-            <ArrowUpIcon />
-            <span>PgUp</span>
+            <ScrollControlIcon mode="application" step="page" direction="up" />
           </button>
           <button
             type="button"
@@ -2555,17 +2709,37 @@ export function ConsoleScreen({
               : undefined}
             data-scroll-preferred={preferredScrollMode === "application" ? "true" : undefined}
             title={preferredScrollMode === "application"
-              ? `Send Page Down to the foreground terminal application; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-down"])
+              ? `Send Page Down to the foreground terminal application; recommended for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-down"])
                 ? ` (${directShortcutLabel(shortcutBindings["terminal-page-down"])})`
                 : ""}`
               : "Send Page Down to the foreground terminal application"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("down", "application", true)}
+            onClick={() => scrollTerminal("down", "application")}
           >
-            <ArrowDownIcon />
-            <span>PgDn</span>
+            <ScrollControlIcon mode="application" step="page" direction="down" />
           </button>
+          {(["up", "down"] as const).map((direction) => (
+            <button
+              key={`application-scroll-${direction}`}
+              type="button"
+              className={preferredLineScrollMode === "application"
+                ? "terminal-view-control preferred-scroll-control" : "terminal-view-control"}
+              data-scroll-preferred={preferredLineScrollMode === "application" ? "true" : undefined}
+              aria-label={`Application Scroll ${direction === "up" ? "Up" : "Down"}`}
+              aria-controls={activeConsoleId}
+              title={!nativeScrollProfile
+                ? `Application fine scrolling is not supported for ${classification.label}. Use the highlighted tmux controls.`
+                : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
+                preferredLineScrollMode === "application" ? `; recommended for ${classification.label}` : ""
+              }`}
+              disabled={!nativeScrollProfile || connection !== "live" || applicationScrollPendingTargets.has(scrollTargetKey)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => void scrollApplication(direction)}
+            >
+              <ScrollControlIcon mode="application" step="line" direction={direction} />
+            </button>
+          ))}
           <button
             type="button"
             className={preferredScrollMode === "tmux"
@@ -2578,16 +2752,15 @@ export function ConsoleScreen({
               : undefined}
             data-scroll-preferred={preferredScrollMode === "tmux" ? "true" : undefined}
             title={preferredScrollMode === "tmux"
-              ? `Enter tmux copy mode one page up; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-up"])
+              ? `Enter tmux copy mode one page up; recommended for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-up"])
                 ? ` (${directShortcutLabel(shortcutBindings["terminal-page-up"])})`
                 : ""}`
               : "Enter tmux copy mode one page up"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("up", "tmux", true)}
+            onClick={() => scrollTerminal("up", "tmux")}
           >
-            <HistoryIcon />
-            <span>T Up</span>
+            <ScrollControlIcon mode="tmux" step="page" direction="up" />
           </button>
           <button
             type="button"
@@ -2601,24 +2774,43 @@ export function ConsoleScreen({
               : undefined}
             data-scroll-preferred={preferredScrollMode === "tmux" ? "true" : undefined}
             title={preferredScrollMode === "tmux"
-              ? `Page down while tmux copy mode is active; preferred for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-down"])
+              ? `Page down while tmux copy mode is active; recommended for ${classification.label}${directShortcutLabel(shortcutBindings["terminal-page-down"])
                 ? ` (${directShortcutLabel(shortcutBindings["terminal-page-down"])})`
                 : ""}`
               : "Page down while tmux copy mode is active"}
             disabled={connection !== "live"}
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("down", "tmux", true)}
+            onClick={() => scrollTerminal("down", "tmux")}
           >
-            <HistoryIcon />
-            <span>T Dn</span>
+            <ScrollControlIcon mode="tmux" step="page" direction="down" />
           </button>
+          {(["up", "down"] as const).map((direction) => (
+            <button
+              key={`tmux-line-${direction}`}
+              type="button"
+              className={preferredLineScrollMode === "tmux"
+                ? "terminal-view-control tmux-history preferred-scroll-control"
+                : "terminal-view-control tmux-history"}
+              data-scroll-preferred={preferredLineScrollMode === "tmux" ? "true" : undefined}
+              aria-label={`Tmux Line ${direction === "up" ? "Up" : "Down"}`}
+              aria-controls={activeConsoleId}
+              title={`Scroll terminal history ${direction} exactly one line in tmux copy mode${
+                preferredLineScrollMode === "tmux" ? `; recommended for ${classification.label}` : ""
+              }`}
+              disabled={connection !== "live"}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => scrollTerminalLine(direction)}
+            >
+              <ScrollControlIcon mode="tmux" step="line" direction={direction} />
+            </button>
+          ))}
           <button
             type="button"
             className="terminal-view-control live-toggle"
             aria-label="Return to live terminal"
             aria-controls={activeConsoleId}
             aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-return-live"])}
-            title={`${preferredScrollMode === "application"
+            title={`${returnScrollMode === "application"
               ? `Return ${classification.label} to live output`
               : "Leave tmux copy mode and return to live output"}${directShortcutLabel(shortcutBindings["terminal-return-live"])
               ? ` (${directShortcutLabel(shortcutBindings["terminal-return-live"])})`
@@ -2794,7 +2986,12 @@ export function ConsoleScreen({
         ) : undefined}
         preferredScrollMode={preferredScrollMode}
         preferredScrollLabel={classification.label}
-        onScrollModeUsed={rememberScrollMode}
+        onScrollUsed={trackScrollUsed}
+        onScrollLine={scrollTerminalLine}
+        applicationScrollProfile={nativeScrollProfile}
+        onScrollApplication={(direction) => void scrollApplication(direction)}
+        applicationScrollPending={applicationScrollPendingTargets.has(scrollTargetKey)}
+        returnScrollMode={returnScrollMode}
         onSend={(data) => terminalRef.current?.send(data) ?? false}
         onSubmit={(data, terminator) => (
           terminalRef.current?.submit(data, terminator) ?? Promise.resolve(false)

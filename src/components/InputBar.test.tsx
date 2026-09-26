@@ -183,8 +183,8 @@ describe("InputBar", () => {
     ]);
   });
 
-  it("marks the remembered paging family and teaches only after a successful send", () => {
-    const onScrollModeUsed = vi.fn();
+  it("marks the recommended paging family and reports only successful sends", () => {
+    const onScrollUsed = vi.fn();
     const onSend = vi.fn(() => true);
     const view = render(
       <InputBar
@@ -192,7 +192,7 @@ describe("InputBar", () => {
         onSend={onSend}
         preferredScrollMode="application"
         preferredScrollLabel="Claude"
-        onScrollModeUsed={onScrollModeUsed}
+        onScrollUsed={onScrollUsed}
       />,
     );
     const rawPageUp = screen.getByRole("button", { name: "PgUp" });
@@ -204,20 +204,23 @@ describe("InputBar", () => {
     expect(rawPageUp).toHaveAttribute("data-scroll-preferred", "true");
     expect(rawPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
     expect(rawPageDown).toHaveAttribute("aria-keyshortcuts", "Control+Shift+D");
-    expect(rawPageUp).toHaveAttribute("title", expect.stringContaining("Preferred for Claude"));
+    expect(rawPageUp).toHaveAttribute("title", expect.stringContaining("Recommended for Claude"));
     expect(tmuxPageUp).not.toHaveClass("preferred-scroll-key");
     expect(tmuxPageUp).not.toHaveAttribute("aria-keyshortcuts");
 
     fireEvent.click(tmuxPageUp);
-    expect(onScrollModeUsed).toHaveBeenCalledWith("tmux");
+    expect(onScrollUsed).toHaveBeenCalledWith("tmux");
+    expect(rawPageUp).toHaveAttribute("data-scroll-preferred", "true");
+    expect(tmuxPageUp).not.toHaveAttribute("data-scroll-preferred");
+    expect(rawPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
 
     view.rerender(
       <InputBar
         {...props}
         onSend={() => false}
         preferredScrollMode="tmux"
-        preferredScrollLabel="Claude"
-        onScrollModeUsed={onScrollModeUsed}
+        preferredScrollLabel="Codex"
+        onScrollUsed={onScrollUsed}
       />,
     );
     expect(tmuxPageUp).toHaveClass("preferred-scroll-key");
@@ -227,7 +230,104 @@ describe("InputBar", () => {
     expect(rawPageUp).not.toHaveAttribute("aria-keyshortcuts");
 
     fireEvent.click(rawPageUp);
-    expect(onScrollModeUsed).toHaveBeenCalledTimes(1);
+    expect(onScrollUsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses dedicated line scrolling without sending arrows or changing page shortcuts", () => {
+    const onScrollLine = vi.fn(() => true);
+    const onScrollUsed = vi.fn();
+    const view = render(
+      <InputBar
+        {...props}
+        onScrollLine={onScrollLine}
+        onScrollUsed={onScrollUsed}
+        preferredScrollMode="application"
+        applicationScrollProfile="claude"
+      />,
+    );
+    const up = screen.getByRole("button", { name: "Tmux Line Up" });
+    const down = screen.getByRole("button", { name: "Tmux Line Down" });
+    const pageUp = screen.getByRole("button", { name: "Tmux Page Up" });
+    const pageDown = screen.getByRole("button", { name: "Tmux Page Down" });
+    expect(pageUp.nextElementSibling).toBe(pageDown);
+    expect(pageDown.nextElementSibling).toBe(up);
+    expect(up.nextElementSibling).toBe(down);
+    const applicationGroup = screen.getByRole("group", { name: "Application scrolling" });
+    expect(screen.getByRole("group", { name: "Tmux scrolling" }).nextElementSibling)
+      .toBe(applicationGroup);
+    expect(applicationGroup.firstElementChild).toBe(screen.getByRole("button", { name: "PgUp" }));
+    for (const button of [up, down]) {
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute("aria-keyshortcuts");
+      expect(button).not.toHaveAttribute("data-scroll-preferred");
+      expect(fireEvent.mouseDown(button)).toBe(false);
+      fireEvent.click(button);
+    }
+    expect(onScrollLine.mock.calls).toEqual([["up"], ["down"]]);
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(onScrollUsed).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "PgUp" }))
+      .toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
+
+    view.rerender(<InputBar {...props} enabled={false} onScrollLine={onScrollLine} />);
+    expect(up).toBeDisabled();
+    expect(down).toBeDisabled();
+    fireEvent.click(up);
+    expect(onScrollLine).toHaveBeenCalledTimes(2);
+  });
+
+  it("groups native fine controls with raw pages and highlights the recommended family", () => {
+    const onScrollApplication = vi.fn();
+    const view = render(
+      <InputBar {...props} preferredScrollMode="application" applicationScrollProfile="claude"
+        onScrollApplication={onScrollApplication} />,
+    );
+    const up = screen.getByRole("button", { name: "Application Scroll Up" });
+    const down = screen.getByRole("button", { name: "Application Scroll Down" });
+    expect(screen.getByRole("button", { name: "PgDn" }).nextElementSibling).toBe(up);
+    expect(up.nextElementSibling).toBe(down);
+    expect(screen.getByRole("group", { name: "Application scrolling" }).nextElementSibling).toBe(screen.getByRole("button", {
+      name: "Ctrl+A - move to start of input",
+    }));
+    expect(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }).nextElementSibling)
+      .toBe(screen.getByRole("button", { name: "Ctrl+E - move to end of input" }));
+    for (const button of [up, down]) {
+      expect(button).toHaveAttribute("data-scroll-preferred", "true");
+      expect(button).not.toHaveAttribute("aria-keyshortcuts");
+      expect(fireEvent.mouseDown(button)).toBe(false);
+      fireEvent.click(button);
+    }
+    expect(onScrollApplication.mock.calls).toEqual([["up"], ["down"]]);
+    expect(props.onSend).not.toHaveBeenCalled();
+    view.rerender(
+      <InputBar {...props} preferredScrollMode="tmux" applicationScrollProfile="claude"
+        onScrollApplication={onScrollApplication} applicationScrollPending />,
+    );
+    expect(up).toBeDisabled();
+    expect(down).toBeDisabled();
+    expect(up).not.toHaveAttribute("data-scroll-preferred");
+    expect(screen.getByRole("button", { name: "Tmux Line Up" }))
+      .toHaveAttribute("data-scroll-preferred", "true");
+    fireEvent.click(up);
+    expect(onScrollApplication).toHaveBeenCalledTimes(2);
+    view.rerender(
+      <InputBar {...props} preferredScrollMode="application" preferredScrollLabel="Codex"
+        onScrollApplication={onScrollApplication} />,
+    );
+    for (const button of [up, down]) {
+      expect(button).toBeVisible();
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", expect.stringContaining("not supported for Codex"));
+      fireEvent.click(button);
+    }
+    expect(onScrollApplication).toHaveBeenCalledTimes(2);
+    for (const name of ["Tmux scrolling", "Application scrolling"]) {
+      expect(within(screen.getByRole("group", { name })).getAllByRole("button")).toHaveLength(4);
+    }
+    expect(screen.getByRole("group", { name: "Application scrolling" }).nextElementSibling)
+      .toBe(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }));
+    expect(screen.getByRole("button", { name: "Tmux Line Up" }))
+      .toHaveAttribute("data-scroll-preferred", "true");
   });
 
   it("keeps session termination separate from terminal key delivery", () => {

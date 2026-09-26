@@ -27,6 +27,7 @@ import { ThemeProvider, type Theme } from "../theme";
 import type { Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
 import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
+import type { ApplicationScrollResult, TerminalHistoryAction, TerminalHistoryResult } from "./LiveTerminal";
 
 const liveTerminalHandle = vi.hoisted(() => ({
   send: vi.fn((_data: string) => true),
@@ -34,12 +35,14 @@ const liveTerminalHandle = vi.hoisted(() => ({
   submit: vi.fn(async (_data: string, _terminator: TerminalSubmissionTerminator) => true),
   focus: vi.fn(),
   redraw: vi.fn(() => true),
-  navigateHistory: vi.fn((_action: "page-up" | "page-down" | "exit") => true),
+  navigateHistory: vi.fn((_action: "page-up" | "page-down" | "line-up" | "line-down" | "exit") => true),
+  scrollApplication: vi.fn(async (_direction: "up" | "down", _profile: "claude" | "copilot" | "grok"): Promise<ApplicationScrollResult> => ({ status: "accepted", paneId: "%1" })),
   jumpToLive: vi.fn(),
 }));
 const liveTerminalState = vi.hoisted(() => ({
   onStateChange: null as null | ((state: "live") => void),
   onOpenFilePath: null as null | ((path: string) => void),
+  onHistoryNavigation: null as null | ((action: TerminalHistoryAction, result: TerminalHistoryResult) => void),
 }));
 
 vi.mock("../api", () => ({
@@ -83,6 +86,7 @@ vi.mock("./LiveTerminal", async () => {
         theme,
         onStateChange,
         onOpenFilePath,
+        onHistoryNavigation,
       }: {
         browserCopyMode?: boolean;
         layoutSuspended?: boolean;
@@ -90,11 +94,13 @@ vi.mock("./LiveTerminal", async () => {
         theme: Theme;
         onStateChange: (state: "live") => void;
         onOpenFilePath?: (path: string) => void;
+        onHistoryNavigation?: (action: TerminalHistoryAction, result: TerminalHistoryResult) => void;
       },
       ref,
     ) {
       liveTerminalState.onStateChange = onStateChange;
       liveTerminalState.onOpenFilePath = onOpenFilePath ?? null;
+      liveTerminalState.onHistoryNavigation = onHistoryNavigation ?? null;
       useImperativeHandle(ref, () => liveTerminalHandle, []);
       return (
         <div
@@ -168,6 +174,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   liveTerminalState.onStateChange = null;
   liveTerminalState.onOpenFilePath = null;
+  liveTerminalState.onHistoryNavigation = null;
   window.localStorage.clear();
   vi.mocked(getSnippetTree).mockResolvedValue({ revision: 0, tree: [] });
   vi.mocked(listSessionFiles).mockResolvedValue({
@@ -858,6 +865,482 @@ describe("ConsoleScreen session identity", () => {
     }
   });
 
+  it.each([
+    ["claude", "Claude Code", "claude"],
+    ["codex", "Codex", "codex"],
+    ["copilot", "Copilot CLI", "copilot"],
+    ["cursor-agent", "Cursor Agent", "cursor"],
+    ["grok", "Grok", "grok"],
+    ["bash", "shell", "shells"],
+    ["unknown-program", "custom app", "other"],
+  ])("scrolls tmux one line for %s without moving its recommended controls after acknowledgment", async (
+    command,
+    title,
+    kind,
+  ) => {
+    const currentSession = {
+      ...session(),
+      panes: [{ ...pane(), command, title }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([currentSession]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    expect(shell).toHaveAttribute("data-scroll-agent", kind);
+    const groups = [
+      screen.getByRole("group", { name: "Terminal input shortcuts" }),
+      screen.getByRole("navigation", { name: "Terminal view controls" }),
+    ];
+    const recommendedMode = ["claude", "copilot", "grok"].includes(kind) ? "application" : "tmux";
+    const controls = groups.flatMap((group) => [
+      within(group).getByRole("button", { name: "Tmux Line Up" }),
+      within(group).getByRole("button", { name: "Tmux Line Down" }),
+    ]);
+    for (const group of groups) {
+      const pageDown = within(group).getByRole("button", { name: "Tmux Page Down" });
+      const lineUp = within(group).getByRole("button", { name: "Tmux Line Up" });
+      const lineDown = within(group).getByRole("button", { name: "Tmux Line Down" });
+      expect(pageDown.nextElementSibling).toBe(lineUp);
+      expect(lineUp.nextElementSibling).toBe(lineDown);
+    }
+    for (const control of controls) {
+      expect(control).toBeDisabled();
+      fireEvent.click(control);
+    }
+    expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
+    act(() => liveTerminalState.onStateChange?.("live"));
+    for (const control of controls) {
+      expect(control).toBeEnabled();
+      expect(control).not.toHaveAttribute("aria-keyshortcuts");
+      const preferred = recommendedMode === "tmux";
+      if (preferred) expect(control).toHaveAttribute("data-scroll-preferred", "true");
+      else expect(control).not.toHaveAttribute("data-scroll-preferred");
+      expect(fireEvent.mouseDown(control)).toBe(false);
+      fireEvent.click(control);
+      act(() => liveTerminalState.onHistoryNavigation?.(
+        control.getAttribute("aria-label") === "Tmux Line Up" ? "line-up" : "line-down",
+        "accepted",
+      ));
+      expect(shell).toHaveAttribute("data-scroll-mode", recommendedMode);
+    }
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([
+      ["line-up"], ["line-down"], ["line-up"], ["line-down"],
+    ]);
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("muxdeck-agent-scroll-preferences")).toBeNull();
+    expect(shell).toHaveAttribute("data-scroll-mode", recommendedMode);
+
+    const mobileLive = within(groups[1]).getByRole("button", { name: "Return to live terminal" });
+    expect(mobileLive).toHaveAttribute("title", expect.stringContaining("Leave tmux copy mode"));
+    fireEvent.click(mobileLive);
+    act(() => liveTerminalState.onHistoryNavigation?.("exit", "accepted"));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["claude", "claude", "application"],
+    ["codex", "codex", "tmux"],
+    ["copilot", "copilot", "application"],
+    ["cursor-agent", "cursor", "tmux"],
+    ["grok", "grok", "application"],
+    ["bash", "shells", "tmux"],
+    ["custom-agent", "other", "tmux"],
+  ] as const)("shows all eight controls for %s and keeps recommendations fixed after using either paging family", (command, kind, recommended) => {
+    const storageKey = "muxdeck-agent-scroll-preferences";
+    const legacyValue = JSON.stringify({ [kind]: recommended === "tmux" ? "application" : "tmux" });
+    window.localStorage.setItem(storageKey, legacyValue);
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockClear();
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockClear();
+    const agentSession = { ...session(), panes: [{ ...pane(), command, title: command }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const shell = screen.getByRole("main");
+    const groups = [
+      screen.getByRole("group", { name: "Terminal input shortcuts" }),
+      screen.getByRole("navigation", { name: "Terminal view controls" }),
+    ];
+    const expectRecommendation = () => {
+      expect(shell).toHaveAttribute("data-scroll-agent", kind);
+      expect(shell).toHaveAttribute("data-scroll-mode", recommended);
+      for (const [index, group] of groups.entries()) {
+        const scrollingButtons = within(group).getAllByRole("button", {
+          name: /^(Tmux (Page|Line) (Up|Down)|PgUp|PgDn|Raw terminal Page (Up|Down)|Application Scroll (Up|Down))$/,
+        });
+        expect(scrollingButtons).toHaveLength(8);
+        for (const button of scrollingButtons) expect(button).toBeVisible();
+        for (const [direction, key] of [["Up", "U"], ["Down", "D"]] as const) {
+          const tmuxPage = within(group).getByRole("button", { name: `Tmux Page ${direction}` });
+          const rawPage = within(group).getByRole("button", {
+            name: index === 0 ? (direction === "Up" ? "PgUp" : "PgDn") : `Raw terminal Page ${direction}`,
+          });
+          const preferredPage = recommended === "tmux" ? tmuxPage : rawPage;
+          const otherPage = recommended === "tmux" ? rawPage : tmuxPage;
+          expect(preferredPage).toHaveAttribute("data-scroll-preferred", "true");
+          expect(preferredPage).toHaveAttribute("aria-keyshortcuts", `Control+Shift+${key}`);
+          expect(otherPage).not.toHaveAttribute("data-scroll-preferred");
+          expect(otherPage).not.toHaveAttribute("aria-keyshortcuts");
+          const appLine = within(group).getByRole("button", { name: `Application Scroll ${direction}` });
+          const tmuxLine = within(group).getByRole("button", { name: `Tmux Line ${direction}` });
+          expect(tmuxLine).toBeEnabled();
+          if (recommended === "application") {
+            expect(appLine).toBeEnabled();
+            expect(appLine).toHaveAttribute("data-scroll-preferred", "true");
+            expect(tmuxLine).not.toHaveAttribute("data-scroll-preferred");
+          } else {
+            expect(appLine).toBeDisabled();
+            expect(appLine).toHaveAttribute("title", expect.stringContaining("not supported"));
+            expect(appLine).not.toHaveAttribute("data-scroll-preferred");
+            expect(tmuxLine).toHaveAttribute("data-scroll-preferred", "true");
+          }
+        }
+      }
+    };
+    expectRecommendation();
+    act(() => window.dispatchEvent(new StorageEvent("storage", {
+      key: storageKey,
+      storageArea: window.localStorage,
+      newValue: legacyValue,
+    })));
+    expectRecommendation();
+    if (recommended === "tmux") {
+      for (const group of groups) {
+        for (const direction of ["Up", "Down"]) {
+          fireEvent.click(within(group).getByRole("button", { name: `Application Scroll ${direction}` }));
+        }
+      }
+      expect(liveTerminalHandle.scrollApplication).not.toHaveBeenCalled();
+      expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+      expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
+      expectRecommendation();
+    }
+    for (const [index, group] of groups.entries()) {
+      for (const name of ["Tmux Page Up", "Tmux Page Down", index === 0 ? "PgUp" : "Raw terminal Page Up", index === 0 ? "PgDn" : "Raw terminal Page Down"]) {
+        fireEvent.click(within(group).getByRole("button", { name }));
+        expectRecommendation();
+      }
+    }
+    expect(getItem).not.toHaveBeenCalledWith(storageKey);
+    expect(setItem.mock.calls.some(([key]) => key === storageKey)).toBe(false);
+    getItem.mockRestore();
+    setItem.mockRestore();
+    liveTerminalHandle.send.mockClear();
+    liveTerminalHandle.navigateHistory.mockClear();
+    for (const key of ["U", "D"]) {
+      fireEvent.keyDown(window, { code: `Key${key}`, key, ctrlKey: true, shiftKey: true });
+    }
+    if (recommended === "application") {
+      expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[5~"], ["\x1b[6~"]]);
+      expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
+    } else {
+      expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([["page-up"], ["page-down"]]);
+      expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    }
+    // Raw pages do not prove tmux copy mode was exited.
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+  });
+
+  it("updates recommendations when the foreground agent or selected session changes", () => {
+    const first = { ...session(), panes: [{ ...pane(), command: "claude", title: "Claude Code" }] };
+    const view = renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={first} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Page Up" })[0]);
+    const replacements = [
+      { snapshot: { ...first, panes: [{ ...pane(), command: "codex", title: "Codex" }] }, kind: "codex", mode: "tmux" },
+      { snapshot: { ...first, name: "next", id: "$2", panes: [{ ...pane(), command: "copilot", title: "Copilot" }] }, kind: "copilot", mode: "application" },
+      { snapshot: first, kind: "claude", mode: "application" },
+    ];
+    for (const { snapshot, kind, mode } of replacements) {
+      view.rerender(<ThemeProvider><ConsoleScreen sessionName={snapshot.name} sessionSnapshot={snapshot} onBack={vi.fn()} /></ThemeProvider>);
+      act(() => liveTerminalState.onStateChange?.("live"));
+      expect(screen.getByRole("main")).toHaveAttribute("data-scroll-agent", kind);
+      expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", mode);
+      for (const button of screen.getAllByRole("button", { name: "Tmux Page Up" })) {
+        if (mode === "tmux") expect(button).toHaveAttribute("data-scroll-preferred", "true");
+        else expect(button).not.toHaveAttribute("data-scroll-preferred");
+      }
+    }
+    // Returning to the first pane preserves its real tmux Live target.
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+  });
+
+  it("tracks a manually used raw page for Live without changing Codex recommendations", () => {
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "codex", title: "Codex" }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
+    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "tmux");
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[5~"], ["\x1b[8^"]]);
+    expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
+  });
+
+  it("keeps the application Live action when a line-scroll send fails", async () => {
+    const claudeSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([claudeSession]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "test" });
+    act(() => liveTerminalState.onStateChange?.("live"));
+    liveTerminalHandle.navigateHistory.mockReturnValueOnce(false);
+    const controls = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    fireEvent.click(within(controls).getByRole("button", { name: "Tmux Line Up" }));
+    fireEvent.click(within(controls).getByRole("button", { name: "Focus live terminal input" }));
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([["line-up"]]);
+    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[8^");
+  });
+
+  it.each(["line-up", "line-down"] as const)("keeps application Live after a rejected %s", async (action) => {
+    const claudeSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
+    };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={claudeSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", {
+      name: action === "line-up" ? "Tmux Line Up" : "Tmux Line Down",
+    })[0]);
+    act(() => liveTerminalState.onHistoryNavigation?.(action, "rejected"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([[action]]);
+    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[8^"]]);
+  });
+
+  it("cancels a pending line-up before Live and recovers from a copy-mode exit rejection", async () => {
+    const claudeSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
+    };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={claudeSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([["line-up"], ["exit"]]);
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+    act(() => liveTerminalState.onHistoryNavigation?.("exit", "rejected"));
+    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[8^"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledTimes(2);
+    expect(liveTerminalHandle.send).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["PgUp", "PgDn", "Tmux Line Down"])("keeps a pending tmux line Live target after a later %s click", (name) => {
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "claude", title: "Claude Code" }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const desktop = within(screen.getByRole("group", { name: "Terminal input shortcuts" }));
+    fireEvent.click(desktop.getByRole("button", { name: "Tmux Line Up" }));
+    fireEvent.click(desktop.getByRole("button", { name }));
+    act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+  });
+
+  it("does not send an application fallback after disconnect or an exit reply for an old session", () => {
+    const firstSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
+    };
+    const view = renderWithTheme(
+      <ConsoleScreen sessionName="test" sessionSnapshot={firstSession} onBack={vi.fn()} />,
+    );
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
+    act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    const previousNavigation = liveTerminalState.onHistoryNavigation;
+    act(() => previousNavigation?.("exit", "disconnected"));
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen sessionName="next" sessionSnapshot={{ ...firstSession, name: "next", id: "$2" }} onBack={vi.fn()} />
+      </ThemeProvider>,
+    );
+    act(() => liveTerminalState.onStateChange?.("live"));
+    act(() => previousNavigation?.("exit", "rejected"));
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps line-scroll return targets separate across agent and session switches", async () => {
+    const firstSession = {
+      ...session(),
+      panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
+    };
+    const nextSession = {
+      ...session(null, "next"),
+      id: "$2",
+      activePaneId: "%2",
+      panes: [{ ...pane(), id: "%2", command: "grok", title: "Grok" }],
+    };
+    vi.mocked(listSessions).mockResolvedValue([firstSession, nextSession]);
+    const view = renderWithTheme(
+      <ConsoleScreen sessionName="test" sessionSnapshot={firstSession} onBack={vi.fn()} />,
+    );
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
+    act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen sessionName="next" sessionSnapshot={nextSession} onBack={vi.fn()} />
+      </ThemeProvider>,
+    );
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([["line-up"]]);
+    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[8^");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
+    act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen sessionName="test" sessionSnapshot={firstSession} onBack={vi.fn()} />
+      </ThemeProvider>,
+    );
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([
+      ["line-up"], ["line-up"], ["exit"],
+    ]);
+    expect(liveTerminalHandle.send).toHaveBeenCalledOnce();
+  });
+
+  it.each(["claude", "copilot", "grok"] as const)(
+    "continues %s application paging without changing its recommendation or old saved preferences",
+    async (kind) => {
+      window.localStorage.setItem("muxdeck-agent-scroll-preferences", JSON.stringify({ [kind]: "tmux" }));
+      const agentSession = { ...session(), panes: [{ ...pane(), command: kind, title: kind }] };
+      renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+      for (const control of screen.getAllByRole("button", { name: "Application Scroll Up" })) {
+        expect(control).toBeDisabled();
+        fireEvent.click(control);
+      }
+      expect(liveTerminalHandle.scrollApplication).not.toHaveBeenCalled();
+      act(() => liveTerminalState.onStateChange?.("live"));
+      const groups = [
+        screen.getByRole("group", { name: "Terminal input shortcuts" }),
+        screen.getByRole("navigation", { name: "Terminal view controls" }),
+      ];
+      const mobile = within(groups[1]);
+      fireEvent.click(mobile.getByRole("button", { name: "Tmux Line Up" }));
+      act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+      expect(screen.getByRole("button", { name: "Return to live terminal" })).toHaveAttribute("title", expect.stringContaining("Leave tmux"));
+      const request = deferred<ApplicationScrollResult>();
+      liveTerminalHandle.scrollApplication.mockReturnValueOnce(request.promise);
+      fireEvent.click(mobile.getByRole("button", { name: "Application Scroll Up" }));
+      for (const group of groups) {
+        expect(within(group).getByRole("button", { name: "Application Scroll Up" })).toBeDisabled();
+        expect(within(group).getByRole("button", { name: "Application Scroll Down" })).toBeDisabled();
+      }
+      expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
+      await act(async () => request.resolve({ status: "accepted", paneId: "%1" }));
+      expect(liveTerminalHandle.scrollApplication).toHaveBeenCalledWith("up", kind);
+      expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
+      for (const group of groups) {
+        const native = within(group).getByRole("button", { name: "Application Scroll Up" });
+        expect(native).toHaveAttribute("data-scroll-preferred", "true");
+        expect(native).not.toHaveAttribute("aria-keyshortcuts");
+        expect(within(group).getByRole("button", { name: "Tmux Line Up" })).not.toHaveAttribute("data-scroll-preferred");
+      }
+      expect(mobile.getByRole("button", { name: "Raw terminal Page Down" }).nextElementSibling)
+        .toBe(mobile.getByRole("button", { name: "Application Scroll Up" }));
+      fireEvent.click(mobile.getByRole("button", { name: "Raw terminal Page Up" }));
+      await act(async () => fireEvent.click(within(groups[0]).getByRole("button", { name: "Application Scroll Down" })));
+      expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[5~");
+      expect(liveTerminalHandle.scrollApplication).toHaveBeenLastCalledWith("down", kind);
+      fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+      expect(liveTerminalHandle.send).toHaveBeenLastCalledWith("\x1b[8^");
+      expect(JSON.parse(window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}")).toEqual({ [kind]: "tmux" });
+    },
+  );
+
+  it("reports rejected native scrolling without changing the recommendation or saved preferences", async () => {
+    window.localStorage.setItem("muxdeck-agent-scroll-preferences", JSON.stringify({ claude: "tmux" }));
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "claude", title: "Claude Code" }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
+    act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
+    liveTerminalHandle.scrollApplication.mockResolvedValueOnce({ status: "rejected", message: "The application has not enabled mouse reporting." });
+    await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]));
+    expect(screen.getByText("The application has not enabled mouse reporting.")).toHaveAttribute("role", "status");
+    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
+    expect(JSON.parse(window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}")).toEqual({ claude: "tmux" });
+    expect(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+  });
+
+  it("does not let a native acknowledgment clear a later tmux paging Live target", async () => {
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "claude", title: "Claude Code" }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const request = deferred<ApplicationScrollResult>();
+    liveTerminalHandle.scrollApplication.mockReturnValueOnce(request.promise);
+    fireEvent.click(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Page Up" })[0]);
+    await act(async () => request.resolve({ status: "accepted", paneId: "%1" }));
+    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
+    expect(screen.getByRole("button", { name: "Return to live terminal" })).toHaveAttribute("title", expect.stringContaining("Leave tmux"));
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
+  });
+
+  it("does not let a tmux line acknowledgment override a later native choice", async () => {
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "claude", title: "Claude Code" }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
+    const previousNavigation = liveTerminalState.onHistoryNavigation;
+    await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]));
+    act(() => previousNavigation?.("line-up", "accepted"));
+    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
+    fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
+    expect(liveTerminalHandle.send).toHaveBeenLastCalledWith("\x1b[8^");
+  });
+
+  it("ignores native acknowledgments after switching sessions", async () => {
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "claude", title: "Claude Code" }] };
+    const view = renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const request = deferred<ApplicationScrollResult>();
+    liveTerminalHandle.scrollApplication.mockReturnValueOnce(request.promise);
+    fireEvent.click(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]);
+    view.rerender(<ThemeProvider><ConsoleScreen sessionName="next" sessionSnapshot={{ ...agentSession, name: "next", id: "$2" }} onBack={vi.fn()} /></ThemeProvider>);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    view.rerender(<ThemeProvider><ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} /></ThemeProvider>);
+    act(() => liveTerminalState.onStateChange?.("live"));
+    await act(async () => request.resolve({ status: "accepted", paneId: "%1" }));
+    expect(window.localStorage.getItem("muxdeck-agent-scroll-preferences")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]).toBeEnabled();
+  });
+
+  it("ignores an old application preference when recommending Codex page and line controls", () => {
+    window.localStorage.setItem("muxdeck-agent-scroll-preferences", JSON.stringify({ codex: "application" }));
+    const agentSession = { ...session(), panes: [{ ...pane(), command: "codex", title: "Codex" }] };
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
+    for (const direction of ["Up", "Down"]) {
+      const nativeControls = screen.getAllByRole("button", { name: `Application Scroll ${direction}` });
+      expect(nativeControls).toHaveLength(2);
+      for (const button of nativeControls) {
+        expect(button).toBeVisible();
+        expect(button).toBeDisabled();
+        expect(button).not.toHaveAttribute("data-scroll-preferred");
+      }
+    }
+    for (const button of screen.getAllByRole("button", { name: "Tmux Line Up" })) {
+      expect(button).toHaveAttribute("data-scroll-preferred", "true");
+      expect(button).not.toHaveAttribute("aria-keyshortcuts");
+    }
+  });
+
   it("returns Claude's application scroll view to live with Ctrl+End", async () => {
     const claudeSession = {
       ...session(),
@@ -883,7 +1366,7 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
   });
 
-  it("learns agent paging controls and captures the exact desktop terminal shortcuts", async () => {
+  it("keeps Claude page controls recommended after alternate clicks and preserves desktop terminal shortcuts", async () => {
     const claudeSession = {
       ...session(),
       panes: [{ ...pane(), command: "claude", title: "Claude Code" }],
@@ -942,14 +1425,12 @@ describe("ConsoleScreen session identity", () => {
     ]);
 
     fireEvent.click(tmuxPageUp);
-    expect(shell).toHaveAttribute("data-scroll-mode", "tmux");
-    expect(tmuxPageUp).toHaveClass("preferred-scroll-key");
-    expect(tmuxPageUp).toHaveAttribute("aria-keyshortcuts", "Control+Shift+U");
-    expect(mobileTmuxPageUp).toHaveClass("preferred-scroll-control");
-    expect(rawPageUp).not.toHaveClass("preferred-scroll-key");
-    expect(JSON.parse(
-      window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}",
-    )).toEqual({ claude: "tmux" });
+    expect(shell).toHaveAttribute("data-scroll-mode", "application");
+    expect(tmuxPageUp).not.toHaveClass("preferred-scroll-key");
+    expect(tmuxPageUp).not.toHaveAttribute("aria-keyshortcuts");
+    expect(mobileTmuxPageUp).not.toHaveClass("preferred-scroll-control");
+    expect(rawPageUp).toHaveClass("preferred-scroll-key");
+    expect(window.localStorage.getItem("muxdeck-agent-scroll-preferences")).toBeNull();
 
     fireEvent.keyDown(window, {
       code: "KeyU",
@@ -963,9 +1444,9 @@ describe("ConsoleScreen session identity", () => {
       ctrlKey: true,
       shiftKey: true,
     });
-    expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([
-      ["page-up"],
-      ["page-down"],
+    expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.send.mock.calls).toEqual([
+      ["\x1b[5~"], ["\x1b[6~"], ["\x02\x1b[5~"], ["\x1b[5~"], ["\x1b[6~"],
     ]);
 
     expect(fireEvent.keyDown(window, {

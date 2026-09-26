@@ -728,6 +728,22 @@ should follow the behavior of the web client in `src/api.ts` and
 `src/components/LiveTerminal.tsx`. A terminal WebSocket is a live tmux
 attachment: arbitrary input can execute commands.
 
+History actions are `page-up`, `page-down`, `line-up`, `line-down`, and `exit`.
+`line-up` enters tmux copy mode without paging and scrolls up one row;
+`line-down` scrolls down one row only while copy mode is active. Replies are
+`{type:"historyAck",action}` or `{type:"historyNack",action}`. These actions use
+the verified attachment's active pane and do not inject application input.
+
+Native fine scrolling uses `{type:"applicationScroll",id,direction,profile}`,
+with a nonempty ID of at most 128 characters, direction `up`/`down`, and profile
+`claude`, `copilot`, or `grok`. The reply is
+`{type:"applicationScrollAck",id,paneId}` or
+`{type:"applicationScrollNack",id,message}`. This explicitly sends application
+mouse input, requires SGR mouse reporting and enabled input in the verified
+attachment's active pane, and exits tmux copy mode before scrolling. It bypasses
+custom tmux mouse bindings and synchronized input to other panes. Native step
+size remains subject to the application's settings.
+
 ## Current limits
 
 Do not hard-code these where discovery is possible. Read

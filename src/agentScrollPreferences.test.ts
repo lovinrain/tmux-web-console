@@ -1,56 +1,28 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  AGENT_SCROLL_PREFERENCES_STORAGE_KEY,
-  loadAgentScrollPreferences,
+  applicationScrollProfile,
   preferredAgentScrollMode,
-  rememberAgentScrollMode,
 } from "./agentScrollPreferences";
 
-beforeEach(() => {
-  window.localStorage.clear();
-  vi.restoreAllMocks();
-});
-
-describe("agent scroll preferences", () => {
-  it("uses agent-aware defaults", () => {
-    expect(preferredAgentScrollMode("claude", {})).toBe("application");
-    expect(preferredAgentScrollMode("codex", {})).toBe("tmux");
-    expect(preferredAgentScrollMode("copilot", {})).toBe("application");
-    expect(preferredAgentScrollMode("cursor", {})).toBe("tmux");
-    expect(preferredAgentScrollMode("grok", {})).toBe("application");
-    expect(preferredAgentScrollMode("shells", {})).toBe("tmux");
-    expect(preferredAgentScrollMode("other", {})).toBe("tmux");
+describe("agent scroll recommendations", () => {
+  it.each([
+    ["claude", "application"],
+    ["codex", "tmux"],
+    ["copilot", "application"],
+    ["cursor", "tmux"],
+    ["grok", "application"],
+    ["shells", "tmux"],
+    ["other", "tmux"],
+  ] as const)("recommends %s scrolling using %s", (kind, expected) => {
+    expect(preferredAgentScrollMode(kind)).toBe(expected);
   });
 
-  it("stores successful overrides per agent kind", () => {
-    const preferences = rememberAgentScrollMode({}, "claude", "tmux");
-    const next = rememberAgentScrollMode(preferences, "codex", "application");
-
-    expect(loadAgentScrollPreferences()).toEqual({
-      claude: "tmux",
-      codex: "application",
-    });
-    expect(preferredAgentScrollMode("claude", next)).toBe("tmux");
-    expect(preferredAgentScrollMode("codex", next)).toBe("application");
-  });
-
-  it("ignores malformed storage and unknown values", () => {
-    window.localStorage.setItem(AGENT_SCROLL_PREFERENCES_STORAGE_KEY, "not-json");
-    expect(loadAgentScrollPreferences()).toEqual({});
-
-    window.localStorage.setItem(AGENT_SCROLL_PREFERENCES_STORAGE_KEY, JSON.stringify({
-      claude: "sideways",
-      codex: "application",
-      future: "tmux",
-    }));
-    expect(loadAgentScrollPreferences()).toEqual({ codex: "application" });
-  });
-
-  it("keeps an in-memory override when browser storage is unavailable", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("storage disabled");
-    });
-
-    expect(rememberAgentScrollMode({}, "claude", "tmux")).toEqual({ claude: "tmux" });
+  it("only enables application wheel scrolling for verified agent profiles", () => {
+    expect(applicationScrollProfile("claude")).toBe("claude");
+    expect(applicationScrollProfile("copilot")).toBe("copilot");
+    expect(applicationScrollProfile("grok")).toBe("grok");
+    for (const kind of ["codex", "cursor", "shells", "other"] as const) {
+      expect(applicationScrollProfile(kind)).toBeNull();
+    }
   });
 });

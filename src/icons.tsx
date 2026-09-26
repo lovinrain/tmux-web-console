@@ -19,6 +19,22 @@ export function TerminalIcon(props: IconProps) {
   );
 }
 
+export function PageUpIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 11 6-6 6 6M6 19l6-6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function PageDownIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 5 6 6 6-6M6 13l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function ArrowLeftIcon(props: IconProps) {
   return (
     <IconBase {...props}>

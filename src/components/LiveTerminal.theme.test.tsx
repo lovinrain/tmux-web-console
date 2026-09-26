@@ -909,6 +909,8 @@ describe("LiveTerminal themes", () => {
     );
     const socket = socketMocks.instances[0];
     expect(ref.current?.navigateHistory("page-up")).toBe(false);
+    expect(ref.current?.navigateHistory("line-up")).toBe(false);
+    expect(ref.current?.navigateHistory("line-down")).toBe(false);
     expect(socket.send).not.toHaveBeenCalled();
     socket.emit("open");
     socket.send.mockClear();
@@ -917,15 +919,49 @@ describe("LiveTerminal themes", () => {
     act(() => {
       accepted.push(ref.current?.navigateHistory("page-up") ?? false);
       accepted.push(ref.current?.navigateHistory("page-down") ?? false);
+      accepted.push(ref.current?.navigateHistory("line-up") ?? false);
+      accepted.push(ref.current?.navigateHistory("line-down") ?? false);
       accepted.push(ref.current?.navigateHistory("exit") ?? false);
     });
 
-    expect(accepted).toEqual([true, true, true]);
+    expect(accepted).toEqual([true, true, true, true, true]);
     expect(socket.send.mock.calls).toEqual([
       [JSON.stringify({ type: "history", action: "page-up" })],
       [JSON.stringify({ type: "history", action: "page-down" })],
+      [JSON.stringify({ type: "history", action: "line-up" })],
+      [JSON.stringify({ type: "history", action: "line-down" })],
       [JSON.stringify({ type: "history", action: "exit" })],
     ]);
+  });
+
+  it("matches history acknowledgements to their original view and rejects pending work on disconnect", () => {
+    const ref = createRef<LiveTerminalHandle>();
+    const firstView = vi.fn();
+    const nextView = vi.fn();
+    const view = render(
+      <LiveTerminal ref={ref} session="agent" ignoreSize={false} theme="dark" {...callbacks}
+        onHistoryNavigation={firstView} />,
+    );
+    const socket = socketMocks.instances[0];
+    act(() => socket.emit("open"));
+    expect(ref.current?.navigateHistory("line-up")).toBe(true);
+    view.rerender(
+      <LiveTerminal ref={ref} session="agent" ignoreSize={false} theme="dark" {...callbacks}
+        onHistoryNavigation={nextView} />,
+    );
+    expect(socketMocks.instances).toHaveLength(1);
+    expect(ref.current?.navigateHistory("line-down")).toBe(true);
+    act(() => socket.emitMessage(JSON.stringify({ type: "historyAck", action: "exit" })));
+    expect(firstView).not.toHaveBeenCalled();
+    expect(nextView).not.toHaveBeenCalled();
+    act(() => socket.emitMessage(JSON.stringify({ type: "historyAck", action: "line-up" })));
+    act(() => socket.emitMessage(JSON.stringify({ type: "historyNack", action: "line-down" })));
+    expect(firstView.mock.calls).toEqual([["line-up", "accepted"]]);
+    expect(nextView.mock.calls).toEqual([["line-down", "rejected"]]);
+    expect(ref.current?.navigateHistory("exit")).toBe(true);
+    act(() => socket.emit("close"));
+    expect(nextView.mock.calls).toEqual([["line-down", "rejected"], ["exit", "disconnected"]]);
+    expect(ref.current?.navigateHistory("line-up")).toBe(false);
   });
 
   it("constructs xterm with the requested initial palette", () => {
@@ -940,6 +976,48 @@ describe("LiveTerminal themes", () => {
 
     expect(terminalMocks.instances).toHaveLength(1);
     expect(terminalMocks.instances[0].options.theme).toBe(LIGHT_TERMINAL_THEME);
+  });
+
+  it("correlates native application scroll acknowledgements without sending raw input", async () => {
+    const ref = createRef<LiveTerminalHandle>();
+    render(<LiveTerminal ref={ref} session="agent" ignoreSize={false} theme="dark" {...callbacks} />);
+    const socket = socketMocks.instances[0];
+    expect((await ref.current!.scrollApplication("up", "copilot")).status).toBe("disconnected");
+    expect(socket.send).not.toHaveBeenCalled();
+    act(() => socket.emit("open"));
+    socket.send.mockClear();
+    const pending = ref.current!.scrollApplication("up", "copilot");
+    const request = JSON.parse(socket.send.mock.calls[0][0]);
+    expect(request).toEqual({ type: "applicationScroll", id: expect.any(String), direction: "up", profile: "copilot" });
+    const settled = vi.fn();
+    void pending.then(settled);
+    act(() => socket.emitMessage(JSON.stringify({ type: "applicationScrollAck", id: "unrelated", paneId: "%2" })));
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    act(() => socket.emitMessage(JSON.stringify({ type: "applicationScrollAck", id: request.id, paneId: "%9" })));
+    expect(await pending).toEqual({ status: "accepted", paneId: "%9" });
+    const rejected = ref.current!.scrollApplication("down", "claude");
+    const second = JSON.parse(socket.send.mock.calls[1][0]);
+    act(() => socket.emitMessage(JSON.stringify({ type: "applicationScrollNack", id: second.id, message: "Mouse scrolling is off." })));
+    expect(await rejected).toEqual({ status: "rejected", message: "Mouse scrolling is off." });
+    expect(socket.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles native scroll requests on timeout and session replacement", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const ref = createRef<LiveTerminalHandle>();
+    const view = render(<LiveTerminal ref={ref} session="first" ignoreSize={false} theme="dark" {...callbacks} />);
+    const socket = socketMocks.instances[0];
+    act(() => socket.emit("open"));
+    const timedOut = ref.current!.scrollApplication("up", "grok");
+    act(() => vi.advanceTimersByTime(8_000));
+    expect((await timedOut).status).toBe("rejected");
+    const disconnected = ref.current!.scrollApplication("down", "grok");
+    const oldRequest = JSON.parse(socket.send.mock.calls.at(-1)![0]);
+    view.rerender(<LiveTerminal ref={ref} session="second" ignoreSize={false} theme="dark" {...callbacks} />);
+    expect((await disconnected).status).toBe("disconnected");
+    act(() => socket.emitMessage(JSON.stringify({ type: "applicationScrollAck", id: oldRequest.id, paneId: "%old" })));
+    expect(socketMocks.instances[1].send).not.toHaveBeenCalled();
   });
 
   it("switches the palette in place without reconnecting, fitting, or sending", () => {

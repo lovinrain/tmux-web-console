@@ -51,7 +51,12 @@ MAX_SESSION_NAME_LENGTH = 256
 TMUX_SESSION_ID_PATTERN = re.compile(r"^\$\d+$")
 TMUX_PANE_ID_PATTERN = re.compile(r"^%\d+$")
 TERMINATE_IDENTITY_MISMATCH = "MUXDECK_SESSION_IDENTITY_CHANGED"
-TERMINAL_HISTORY_ACTIONS = frozenset({"page-up", "page-down", "exit"})
+TERMINAL_HISTORY_ACTIONS = frozenset(
+    {"page-up", "page-down", "line-up", "line-down", "exit"}
+)
+APPLICATION_SCROLL_DIRECTIONS = frozenset({"up", "down"})
+APPLICATION_SCROLL_PROFILES = frozenset({"wheel", "alt-wheel", "claude"})
+CLAUDE_SCROLL_SETTLE_SECONDS = 0.22
 HISTORY_USER_KEY_PATTERN = re.compile(r"\bUser(\d{1,3})\b")
 HISTORY_USER_OPTION_PATTERN = re.compile(r"^user-keys\[(\d{1,3})\]")
 CLIENT_ATTACH_RETRY_ATTEMPTS = 20
@@ -64,6 +69,14 @@ TMUX_CONNECTION_ERROR_MARKERS = (
 )
 
 LOGGER = logging.getLogger("muxdeck")
+
+
+def _application_scroll_signature(screen: str) -> tuple[str, ...]:
+    lines = screen.splitlines()
+    # Ignore Claude's header and composer/status area. Narrow/short panes have
+    # less chrome, so retain their body instead of discarding all visible rows.
+    end = len(lines) - 8 if len(lines) > 10 else max(2, len(lines) - 1)
+    return tuple(lines[1:end] or lines)
 
 
 class TmuxError(RuntimeError):
@@ -808,6 +821,143 @@ class TmuxClient:
         session_id: str,
         action: str,
     ) -> str:
+        commands = {
+            "page-up": "copy-mode -u",
+            "page-down": "send-keys -X page-down",
+            # Entering without -u preserves the position when already in copy
+            # mode and avoids an initial page jump. Mode commands bypass user
+            # bindings and never send arrows to the running application.
+            "line-up": "copy-mode ; send-keys -X scroll-up",
+            "line-down": "send-keys -X scroll-down",
+            "exit": "send-keys -X cancel",
+        }
+        if action in {"page-up", "line-up"}:
+            mode_condition = "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}"
+        else:
+            mode_condition = "#{==:#{pane_mode},copy-mode}"
+        return await self._dispatch_client_command(
+            client_pid,
+            session_id,
+            commands[action],
+            mode_condition,
+            rejection_message="tmux client rejected the terminal history action",
+        )
+
+    async def navigate_application_scroll(
+        self,
+        client_pid: int,
+        session_id: str,
+        direction: str,
+        profile: str = "wheel",
+    ) -> str:
+        if (
+            isinstance(client_pid, bool)
+            or not isinstance(client_pid, int)
+            or client_pid <= 0
+        ):
+            raise ValueError("invalid tmux client pid")
+        session_id = validate_tmux_session_id(session_id)
+        if (
+            not isinstance(direction, str)
+            or direction not in APPLICATION_SCROLL_DIRECTIONS
+        ):
+            raise ValueError("invalid application scroll direction")
+        if not isinstance(profile, str) or profile not in APPLICATION_SCROLL_PROFILES:
+            raise ValueError("invalid application scroll profile")
+
+        button = (64 if direction == "up" else 65) + (
+            8 if profile == "alt-wheel" else 0
+        )
+        buffer_name = f"muxdeck-scroll-{secrets.token_hex(12)}"
+        # Copilot reserves its left columns for a sidebar. Aim inside the main
+        # body, using this client's actual pane geometry at dispatch time.
+        column = "#{?#{>:#{pane_width},1},#{e|-:#{pane_width},1},1}"
+        row = "#{?#{>:#{pane_height},1},#{e|/:#{pane_height},2},1}"
+        set_buffer_command = (
+            f'set-buffer -b {buffer_name} "\\033[<{button};{column};{row}M"'
+        )
+        cancel_copy_mode = (
+            'if-shell -F "#{==:#{pane_mode},copy-mode}" "send-keys -X cancel"'
+        )
+        wheel_commands = (
+            # -C runs tmux commands, without a shell. It expands the numeric
+            # coordinates in the guarded client's command context.
+            f"run-shell -C {shlex.quote(set_buffer_command)} ; "
+            # Raw paste bypasses synchronize-panes and custom mouse bindings.
+            # No -p: these are terminal input bytes, not bracketed-paste text.
+            # Named buffers leave existing buffers and the clipboard intact.
+            f"paste-buffer -r -d -b {buffer_name}"
+        )
+        allowed_mode = "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}"
+        mouse_enabled = "#{&&:#{mouse_any_flag},#{mouse_sgr_flag}}"
+        input_enabled = "#{&&:#{==:#{pane_dead},0},#{==:#{pane_input_off},0}}"
+        condition = f"#{{&&:{allowed_mode},#{{&&:{mouse_enabled},{input_enabled}}}}}"
+        rejection_message = (
+            "Application scrolling is unavailable: the active pane must "
+            "have SGR mouse reporting enabled and accept input."
+        )
+        capture_buffer = f"{buffer_name}-before" if profile == "claude" else None
+        commands = f"{cancel_copy_mode} ; "
+        if capture_buffer is not None:
+            commands += f"capture-pane -b {capture_buffer} ; "
+        commands += wheel_commands
+        async with self._history_dispatch_lock:
+            try:
+                if profile == "claude":
+                    # Let an immediately preceding PageUp/PageDown or resize
+                    # finish painting before measuring this wheel event. Its
+                    # delayed repaint must not hide a dropped direction change.
+                    await asyncio.sleep(CLAUDE_SCROLL_SETTLE_SECONDS)
+                pane_id = await self._dispatch_client_command(
+                    client_pid,
+                    session_id,
+                    commands,
+                    condition,
+                    rejection_message=rejection_message,
+                    cleanup_buffer=buffer_name,
+                )
+                if capture_buffer is None:
+                    return pane_id
+
+                # Claude ignores the first wheel packet after some direction
+                # changes. Wait beyond its acceleration window, and retry once
+                # only when the transcript body has not changed. Captures stay
+                # in memory and this private buffer; they are never persisted.
+                before = await self.run(["show-buffer", "-b", capture_buffer])
+                await asyncio.sleep(CLAUDE_SCROLL_SETTLE_SECONDS)
+                after = await self.run(["capture-pane", "-p", "-t", pane_id])
+                if _application_scroll_signature(
+                    before
+                ) == _application_scroll_signature(after):
+                    same_pane = f"#{{==:#{{pane_id}},{pane_id}}}"
+                    await self._dispatch_client_command(
+                        client_pid,
+                        session_id,
+                        f"{cancel_copy_mode} ; {wheel_commands}",
+                        f"#{{&&:{condition},{same_pane}}}",
+                        rejection_message=(
+                            "Application scroll retry cancelled: the active pane "
+                            "or its input mode changed."
+                        ),
+                        cleanup_buffer=buffer_name,
+                    )
+                    await asyncio.sleep(CLAUDE_SCROLL_SETTLE_SECONDS)
+                return pane_id
+            finally:
+                if capture_buffer is not None:
+                    with contextlib.suppress(TmuxError):
+                        await self.run(["delete-buffer", "-b", capture_buffer])
+
+    async def _dispatch_client_command(
+        self,
+        client_pid: int,
+        session_id: str,
+        command: str,
+        mode_condition: str,
+        *,
+        rejection_message: str,
+        cleanup_buffer: str | None = None,
+    ) -> str:
         matching_rows: list[list[str]] = []
         for attempt in range(CLIENT_ATTACH_RETRY_ATTEMPTS):
             output = await self.run(["list-clients", "-F", CLIENT_IDENTITY_FORMAT])
@@ -865,18 +1015,9 @@ class TmuxClient:
             f"#{{==:#{{session_id}},{session_id}}}"
             "}"
         )
-        commands = {
-            "page-up": "copy-mode -u",
-            "page-down": "send-keys -X page-down",
-            "exit": "send-keys -X cancel",
-        }
-        if action == "page-up":
-            mode_condition = "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}"
-        else:
-            mode_condition = "#{==:#{pane_mode},copy-mode}"
         dispatch_condition = f"#{{&&:{identity_condition},{mode_condition}}}"
         success_commands = (
-            f"{commands[action]} ; "
+            f"{command} ; "
             f"set-option -gF {result_option} "
             "'ok:#{client_pid}:#{session_id}:#{pane_id}' ; "
             f"wait-for -S {wait_channel}"
@@ -952,6 +1093,9 @@ class TmuxClient:
                     await self.run(["unbind-key", "-T", guarded_table, dispatch_key])
             with contextlib.suppress(TmuxError):
                 await self.run(["set-option", "-gu", result_option])
+            if cleanup_buffer is not None:
+                with contextlib.suppress(TmuxError):
+                    await self.run(["delete-buffer", "-b", cleanup_buffer])
 
         rows = result.splitlines()
         fields = rows[0].split(":") if len(rows) == 1 else []
@@ -961,7 +1105,7 @@ class TmuxClient:
             or fields[1] != str(client_pid)
             or fields[2] != session_id
         ):
-            raise TmuxError("tmux client rejected the terminal history action")
+            raise TmuxError(rejection_message)
         pane_id = fields[3]
         if not pane_id.startswith("%") or not pane_id[1:].isdigit():
             raise TmuxError("tmux did not return the attached client pane")

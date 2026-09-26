@@ -9773,6 +9773,21 @@ html.host-pulse-resizing * {
   height: 14px;
 }
 
+.scoped-note-page-control.scoped-note-page-list-toggle {
+  display: flex;
+  width: auto;
+  gap: 4px;
+  padding-inline: 6px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+}
+
+.scoped-note-page-list-toggle[aria-expanded="true"] {
+  color: #fffde9;
+  background: color-mix(in srgb, var(--note-accent) 17%, #101410);
+  border-color: color-mix(in srgb, var(--note-accent) 65%, #fff);
+}
+
 .scoped-note-page-name {
   width: 128px;
   min-width: 82px;
@@ -11093,6 +11108,44 @@ html.scoped-note-resizing-bottom-left * {
   display: none;
 }
 
+.scroll-key-family {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.key-button.scroll-icon-button {
+  display: inline-flex;
+  width: 48px;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 4px;
+}
+
+.scroll-control-icons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  vertical-align: middle;
+}
+
+.scroll-control-icons .scroll-context-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  opacity: .8;
+}
+
+.scroll-control-icons .scroll-movement-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
 .key-button {
   min-width: 44px;
   height: 38px;
@@ -11206,6 +11259,11 @@ html.scoped-note-resizing-bottom-left * {
 
 @media (min-width: 1025px),
   (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  .input-bar {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
   .copy-new-button,
   .split-workspace-button,
   .workspace-pin-button,
@@ -15362,7 +15420,11 @@ html.history-resizing * {
     display: grid;
     min-width: 0;
     min-height: calc(54px + var(--safe-bottom));
-    grid-template-columns: repeat(7, minmax(44px, 1fr));
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(max-content, 1fr);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
     gap: 2px;
     padding: 5px max(4px, env(safe-area-inset-right, 0px)) calc(5px + var(--safe-bottom)) max(4px, env(safe-area-inset-left, 0px));
     background:
@@ -15694,9 +15756,6 @@ html.history-resizing * {
     font-size: 7px;
   }
 
-  .console-shell[data-mobile-focus="terminal"] .terminal-view-controls {
-    grid-template-columns: repeat(4, minmax(44px, 1fr));
-  }
 }
 
 @media (max-height: 430px) and (max-width: 1024px) {

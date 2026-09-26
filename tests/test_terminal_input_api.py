@@ -25,6 +25,7 @@ class FakeTerminalTmux(TmuxClient):
         self.history_calls: list[tuple[int, str, str]] = []
         self.failing_history_actions: set[str] = set()
         self.get_session_calls = 0
+        self.application_scroll_calls: list[tuple[int, str, str, str]] = []
 
     async def get_session(self, name: str) -> Session:
         self.get_session_calls += 1
@@ -37,6 +38,14 @@ class FakeTerminalTmux(TmuxClient):
         self.history_calls.append((client_pid, session_id, action))
         if action in self.failing_history_actions:
             raise TmuxError("history navigation failed")
+        return "%9"
+
+    async def navigate_application_scroll(
+        self, client_pid: int, session_id: str, direction: str, profile: str = "wheel"
+    ) -> str:
+        self.application_scroll_calls.append((client_pid, session_id, direction, profile))
+        if direction == "down":
+            raise TmuxError("mouse reporting disabled")
         return "%9"
 
 
@@ -126,7 +135,7 @@ async def test_terminal_history_validates_actions_uses_stable_id_and_nacks_witho
 ):
     bridge = FakePtyBridge([True])
     tmux = FakeTerminalTmux()
-    tmux.failing_history_actions.add("page-down")
+    tmux.failing_history_actions.update({"page-down", "line-down"})
 
     async def fake_attach(cls, *_args, **_kwargs):
         del cls
@@ -148,6 +157,8 @@ async def test_terminal_history_validates_actions_uses_stable_id_and_nacks_witho
             {"type": "history", "action": 1},
             {"type": "history", "action": ["page-up"]},
             {"type": "history", "action": "page-down"},
+            {"type": "history", "action": "line-up"},
+            {"type": "history", "action": "line-down"},
             {"type": "history", "action": "exit"},
         ]
         for request in requests:
@@ -166,13 +177,18 @@ async def test_terminal_history_validates_actions_uses_stable_id_and_nacks_witho
             {"type": "historyNack", "action": 1},
             {"type": "historyNack", "action": ["page-up"]},
             {"type": "historyNack", "action": "page-down"},
+            {"type": "historyAck", "action": "line-up"},
+            {"type": "historyNack", "action": "line-down"},
             {"type": "historyAck", "action": "exit"},
         ]
         assert tmux.history_calls == [
             (4321, "$1", "page-up"),
             (4321, "$1", "page-down"),
+            (4321, "$1", "line-up"),
+            (4321, "$1", "line-down"),
             (4321, "$1", "exit"),
         ]
+        assert bridge.writes == []
 
         await websocket.send_json(
             {"type": "input", "id": "still-connected", "data": "accepted"}
@@ -188,6 +204,56 @@ async def test_terminal_history_validates_actions_uses_stable_id_and_nacks_witho
         await client.close()
 
     assert bridge.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_application_scroll_validates_profiles_and_reports_guard_rejection(monkeypatch):
+    bridge = FakePtyBridge([True])
+    tmux = FakeTerminalTmux()
+
+    async def fake_attach(cls, *_args, **_kwargs):
+        del cls
+        return bridge
+
+    monkeypatch.setattr(PtyBridge, "attach", classmethod(fake_attach))
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+    try:
+        await client.start_server()
+        ws = await client.ws_connect("/ws/terminal?session=agent")
+        assert (await ws.receive_json())["type"] == "ready"
+        cases = [
+            ("copilot", "up", "applicationScrollAck"),
+            ("claude", "up", "applicationScrollAck"),
+            ("grok", "up", "applicationScrollAck"),
+            ("grok", "down", "applicationScrollNack"),
+            ("shell", "up", "applicationScrollNack"),
+            (["claude"], "up", "applicationScrollNack"),
+            ("claude", ["up"], "applicationScrollNack"),
+        ]
+        for index, (profile, direction, expected) in enumerate(cases):
+            await ws.send_json({
+                "type": "applicationScroll", "id": str(index),
+                "profile": profile, "direction": direction,
+            })
+            response = await asyncio.wait_for(ws.receive_json(), 1)
+            assert response["type"] == expected
+            assert response["id"] == str(index)
+            if expected == "applicationScrollAck":
+                assert response["paneId"] == "%9"
+            else:
+                assert response["message"]
+        assert tmux.application_scroll_calls == [
+            (4321, "$1", "up", "alt-wheel"),
+            (4321, "$1", "up", "claude"),
+            (4321, "$1", "up", "wheel"),
+            (4321, "$1", "down", "wheel"),
+        ]
+        assert bridge.writes == []
+        await ws.send_json({"type": "input", "id": "still-live", "data": "kept"})
+        assert await ws.receive_json() == {"type": "inputAck", "id": "still-live"}
+        await ws.close()
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio

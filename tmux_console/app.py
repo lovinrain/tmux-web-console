@@ -5578,6 +5578,44 @@ def create_app(
                                 )
                             except (ConnectionError, RuntimeError):
                                 break
+                    elif payload.get("type") == "applicationScroll":
+                        scroll_id = payload.get("id")
+                        if not isinstance(scroll_id, str) or not scroll_id or len(scroll_id) > 128:
+                            continue
+                        direction = payload.get("direction")
+                        profile = payload.get("profile")
+                        profiles = {"claude": "claude", "copilot": "alt-wheel", "grok": "wheel"}
+                        result: dict[str, object] = {
+                            "type": "applicationScrollNack",
+                            "id": scroll_id,
+                            "message": "Invalid application scrolling request.",
+                        }
+                        if (
+                            isinstance(direction, str)
+                            and direction in {"up", "down"}
+                            and isinstance(profile, str)
+                            and profile in profiles
+                        ):
+                            try:
+                                scroll_pane = await app[TMUX_KEY].navigate_application_scroll(
+                                    bridge.client_pid, session.id, direction, profiles[profile]
+                                )
+                            except (TmuxError, ValueError) as error:
+                                LOGGER.debug("Application scrolling failed for client %s: %s", bridge.client_pid, error)
+                                result["message"] = (
+                                    "The application could not scroll. Its mouse scrolling may be disabled, "
+                                    "or the active pane changed."
+                                )
+                            else:
+                                result = {
+                                    "type": "applicationScrollAck", "id": scroll_id,
+                                    "paneId": scroll_pane,
+                                }
+                        if not websocket.closed:
+                            try:
+                                await websocket.send_json(result)
+                            except (ConnectionError, RuntimeError):
+                                break
                     elif payload.get("type") == "history":
                         action = payload.get("action")
                         accepted = False
