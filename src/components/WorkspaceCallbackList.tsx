@@ -24,6 +24,7 @@ import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
 import "./WorkspaceCallbackMessages.css";
 import "./WorkspaceCallbackFilters.css";
 import "./WorkspaceCallbackFootnote.css";
+import "./WorkspaceCallbackAppearance.css";
 import type { Session } from "../types";
 import {
   CALLBACK_AGENT_OPTIONS,
@@ -50,6 +51,14 @@ import {
   directShortcutLabel,
   useShortcutSettings,
 } from "../shortcutSettings";
+import {
+  CALLBACK_SIZE_LABELS,
+  CALLBACK_SIZE_PRESETS,
+  MAX_CALLBACK_FONT_SIZE,
+  MIN_CALLBACK_FONT_SIZE,
+  useCallbackFontSize,
+  type CallbackSizePreset,
+} from "../callbackAppearance";
 
 const DESKTOP_CALLBACK_QUERY = "(min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine)";
 const CALLBACK_STORAGE_PREFIX = "muxdeck.workspace-callback-panel.v1:";
@@ -380,6 +389,11 @@ export function WorkspaceCallbackList({
   const isBusy = busy || globalCallbackBusy;
   const [error, setError] = useState("");
   const [selectedSession, setSelectedSession] = useState("");
+  const [fontSize, setFontSize] = useCallbackFontSize();
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const appearanceButtonRef = useRef<HTMLButtonElement>(null);
+  const appearanceId = useId();
+  const [lastSizePreset, setLastSizePreset] = useState<CallbackSizePreset>("small");
   const previousSessionRef = useRef({ identity, sessionName });
 
   useEffect(() => {
@@ -415,6 +429,10 @@ export function WorkspaceCallbackList({
     position: defaultPosition(),
     size: defaultSize(),
   };
+
+  useEffect(() => {
+    if (!panel.open) setAppearanceOpen(false);
+  }, [panel.open]);
 
   const workspaceSessionList = normalizeCallbackSessions(callbackSessions);
   const workspaceSessionSet = workspaceSessionNames === undefined
@@ -715,6 +733,20 @@ export function WorkspaceCallbackList({
     }));
   }, [updatePanel]);
 
+  const applySizePreset = (preset: CallbackSizePreset) => {
+    // Fit to the whole screen first so a window near an edge can still grow.
+    const size = clampSize(CALLBACK_SIZE_PRESETS[preset]);
+    setLastSizePreset(preset);
+    updatePanel((current) => ({ ...current, size, position: clampPosition(current.position, size) }));
+  };
+  const matchingSizePresets = (Object.keys(CALLBACK_SIZE_PRESETS) as CallbackSizePreset[])
+    .filter((preset) => {
+      const size = clampSize(CALLBACK_SIZE_PRESETS[preset]);
+      return size.width === panel.size.width && size.height === panel.size.height;
+    });
+  const activeSizePreset = matchingSizePresets.includes(lastSizePreset)
+    ? lastSizePreset : matchingSizePresets.at(0) ?? "custom";
+
   const selectScope = useCallback((nextScope: CallbackScope) => {
     if (nextScope === activeScope || (nextScope === "global" && !globalEnabled)) return;
     writePreferredCallbackScope(nextScope);
@@ -785,12 +817,13 @@ export function WorkspaceCallbackList({
     : workspaceId
       ? "Workspace queue · saved with this workspace"
       : "Workspace queue · temporary workspace in this browser";
-  const panelStyle: CSSProperties = {
+  const panelStyle = {
     left: panel.position.x,
     top: panel.position.y,
     width: panel.size.width,
     height: panel.size.height,
-  };
+    "--callback-font-size": `${fontSize}px`,
+  } as CSSProperties;
 
   const renderEntry = (entry: CallbackListEntry, index: number) => {
     const { name, session, messages } = entry;
@@ -975,7 +1008,12 @@ export function WorkspaceCallbackList({
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
-          updatePanel((current) => ({ ...current, open: false, pinned: false }));
+          if (appearanceOpen) {
+            setAppearanceOpen(false);
+            appearanceButtonRef.current?.focus();
+          } else {
+            updatePanel((current) => ({ ...current, open: false, pinned: false }));
+          }
         }
         event.stopPropagation();
       }}
@@ -996,6 +1034,16 @@ export function WorkspaceCallbackList({
           <h2 id={headingId}>Callback list</h2>
         </div>
         {panel.pinned && <em aria-hidden="true">PINNED</em>}
+        <button
+          ref={appearanceButtonRef}
+          type="button"
+          className="workspace-callback-appearance-toggle"
+          aria-label="Callback appearance"
+          aria-expanded={appearanceOpen}
+          aria-controls={appearanceId}
+          title="Text and window size"
+          onClick={() => setAppearanceOpen((open) => !open)}
+        >Aa</button>
         <button
           type="button"
           aria-label={panel.pinned ? "Unpin callback list" : "Pin callback list"}
@@ -1020,6 +1068,25 @@ export function WorkspaceCallbackList({
           <CloseIcon />
         </button>
       </header>
+
+      {appearanceOpen && <div id={appearanceId} className="workspace-callback-appearance" role="group" aria-label="Callback appearance settings">
+        <label>
+          Window size
+          <select aria-label="Callback window size" value={activeSizePreset}
+            onChange={(event) => applySizePreset(event.target.value as CallbackSizePreset)}>
+            {activeSizePreset === "custom" && <option value="custom" disabled>Custom</option>}
+            {(Object.keys(CALLBACK_SIZE_PRESETS) as CallbackSizePreset[]).map((preset) => (
+              <option key={preset} value={preset}>{CALLBACK_SIZE_LABELS[preset]}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="workspace-callback-text-size-label">Text size <output>{fontSize}px</output></span>
+          <input type="range" aria-label="Callback text size" min={MIN_CALLBACK_FONT_SIZE} max={MAX_CALLBACK_FONT_SIZE}
+            step={1} value={fontSize} aria-valuetext={`${fontSize} pixels`}
+            onChange={(event) => setFontSize(Number(event.target.value))} />
+        </label>
+      </div>}
 
       <div className="workspace-callback-body">
         <div className="workspace-callback-summary">

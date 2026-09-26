@@ -1,0 +1,130 @@
+.workspace-callback-panel {
+  --callback-font-size: 14px;
+  --callback-detail-font-size: max(11px, calc(var(--callback-font-size) - 2px));
+  container: callback-panel / inline-size;
+}
+
+.workspace-callback-panel .workspace-callback-panel-header { flex-shrink: 0; }
+.workspace-callback-panel-header .workspace-callback-appearance-toggle {
+  font: 600 14px "Space Grotesk Variable", sans-serif;
+}
+.workspace-callback-panel-header .workspace-callback-appearance-toggle[aria-expanded="true"] {
+  border-color: var(--callback-accent);
+  background: color-mix(in srgb, var(--callback-accent) 17%, #101615);
+}
+
+.workspace-callback-appearance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  flex-shrink: 0;
+  gap: 12px;
+  padding: 10px;
+  color: #dce5d8;
+  background: #1b241d;
+  border-bottom: 1px solid #344237;
+  font-size: 12px;
+  color-scheme: dark;
+}
+.workspace-callback-appearance label { display: grid; min-width: 0; gap: 5px; }
+.workspace-callback-appearance select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  color: inherit;
+  background: #141b15;
+  border: 1px solid #526448;
+  border-radius: 3px;
+  padding: 3px 6px;
+  font: inherit;
+}
+.workspace-callback-text-size-label { display: flex; justify-content: space-between; gap: 6px; }
+.workspace-callback-text-size-label output { font-variant-numeric: tabular-nums; }
+.workspace-callback-appearance input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  margin: 0;
+  accent-color: var(--callback-accent);
+  cursor: pointer;
+}
+.workspace-callback-appearance :is(select, input):focus-visible {
+  outline: 2px solid var(--callback-accent);
+  outline-offset: 2px;
+}
+
+/* Keep the message hierarchy readable at every chosen size. */
+.workspace-callback-panel :is(
+  .workspace-callback-session strong,
+  .workspace-callback-message,
+  .workspace-callback-summary strong,
+  .workspace-callback-group-toggle,
+  .workspace-callback-group-members strong,
+  .workspace-callback-empty strong,
+  .workspace-callback-no-matches strong
+) { font-size: var(--callback-font-size); }
+
+.workspace-callback-panel :is(
+  .workspace-callback-summary,
+  .workspace-callback-scope button,
+  .workspace-callback-scope-description,
+  .workspace-callback-add select,
+  .workspace-callback-add button,
+  .workspace-callback-footer,
+  .workspace-callback-footer button,
+  .workspace-callback-error,
+  .workspace-callback-index,
+  .workspace-callback-session small,
+  .workspace-callback-current-session,
+  .workspace-callback-status,
+  .workspace-callback-timing,
+  .workspace-callback-message-meta strong,
+  .workspace-callback-message-meta time,
+  .workspace-callback-message-cwd,
+  .workspace-callback-message-origin,
+  .workspace-callback-message-expand,
+  .workspace-callback-search,
+  .workspace-callback-view-field,
+  .workspace-callback-view-field select,
+  .workspace-callback-view-meta > span,
+  .workspace-callback-view-meta button,
+  .workspace-callback-group-toolbar,
+  .workspace-callback-group-actions button,
+  .workspace-callback-group-count,
+  .workspace-callback-groups-collapsed,
+  .workspace-callback-custom-tools button,
+  .workspace-callback-custom-hint,
+  .workspace-callback-group-editor header,
+  .workspace-callback-group-editor button,
+  .workspace-callback-group-editor input:not([type="checkbox"]),
+  .workspace-callback-group-editor p,
+  .workspace-callback-group-selection,
+  .workspace-callback-group-notice,
+  .workspace-callback-group-members small,
+  .workspace-callback-empty span,
+  .workspace-callback-no-matches > span,
+  .workspace-callback-no-matches button
+) { font-size: var(--callback-detail-font-size); }
+
+.workspace-callback-panel .workspace-callback-view-extra .workspace-callback-view-field {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.workspace-callback-panel .workspace-callback-footer { flex-wrap: wrap; }
+.workspace-callback-panel .workspace-callback-footer > div { flex-wrap: wrap; }
+.workspace-callback-panel .workspace-callback-status { white-space: normal; max-width: 8em; }
+.workspace-callback-panel .workspace-callback-item { grid-template-columns: 1.5em 8px minmax(0, 1fr) auto 28px 28px; font-size: var(--callback-detail-font-size); }
+
+@container callback-panel (max-width: 420px) {
+  .workspace-callback-panel .workspace-callback-view-primary .workspace-callback-view-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .workspace-callback-panel .workspace-callback-item { grid-template-columns: 1.5em 8px minmax(0, 1fr) 28px 28px; }
+  .workspace-callback-panel .workspace-callback-status { grid-column: 3; grid-row: 2; text-align: left; max-width: none; }
+  .workspace-callback-panel :is(.workspace-callback-open, .workspace-callback-remove) { grid-row: 1; }
+  .workspace-callback-panel .workspace-callback-open { grid-column: 4; }
+  .workspace-callback-panel .workspace-callback-remove { grid-column: 5; }
+}
+
+html[data-theme="light"] .workspace-callback-appearance { color: #273326; background: #f4f5e9; border-color: #c4ceb8; color-scheme: light; }
+html[data-theme="light"] .workspace-callback-appearance select { background: #fffdf6; border-color: #abbc9b; }
+html[data-theme="light"] .workspace-callback-panel-header .workspace-callback-appearance-toggle[aria-expanded="true"] { background: color-mix(in srgb, var(--callback-accent) 17%, #fffdf6); }

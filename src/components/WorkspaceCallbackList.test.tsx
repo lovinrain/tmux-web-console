@@ -87,6 +87,49 @@ beforeEach(() => {
 });
 
 describe("WorkspaceCallbackList", () => {
+  it("adjusts text and window presets from one control and remembers them after reopening", () => {
+    vi.stubGlobal("innerWidth", 1440);
+    vi.stubGlobal("innerHeight", 1000);
+    const view = renderList(["agent-one"]);
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(panel).toHaveStyle({ "--callback-font-size": "14px", width: "390px", height: "520px" });
+    expect(screen.queryByRole("slider", { name: "Callback text size" })).not.toBeInTheDocument();
+    const appearance = screen.getByRole("button", { name: "Callback appearance" });
+    fireEvent.click(appearance);
+    fireEvent.change(screen.getByRole("slider", { name: "Callback text size" }), { target: { value: "18" } });
+    const preset = screen.getByRole("combobox", { name: "Callback window size" });
+    fireEvent.change(preset, { target: { value: "medium" } });
+    expect(panel).toHaveStyle({ width: "640px", height: "560px", left: "788px" });
+    fireEvent.change(preset, { target: { value: "large" } });
+    expect(panel).toHaveStyle({ width: "860px", height: "720px", left: "568px", "--callback-font-size": "18px" });
+    fireEvent.keyDown(preset, { key: "Escape" });
+    expect(panel).toBeInTheDocument();
+    expect(appearance).toHaveFocus();
+    expect(appearance).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Close callback list" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    expect(screen.getByRole("dialog", { name: "Callback list" })).toHaveStyle({ width: "860px", "--callback-font-size": "18px" });
+    view.unmount();
+    renderList(["agent-one"]);
+    expect(screen.getByRole("dialog", { name: "Callback list" })).toHaveStyle({ width: "860px", height: "720px", "--callback-font-size": "18px" });
+    fireEvent.click(screen.getByRole("button", { name: "Callback appearance" }));
+    expect(screen.getByRole("combobox", { name: "Callback window size" })).toHaveValue("large");
+    fireEvent.change(screen.getByRole("combobox", { name: "Callback window size" }), { target: { value: "small" } });
+    expect(screen.getByRole("dialog", { name: "Callback list" })).toHaveStyle({ width: "390px", height: "520px", "--callback-font-size": "18px" });
+  });
+
+  it("fits large presets to a smaller screen without losing the selected preset", () => {
+    vi.stubGlobal("innerWidth", 700);
+    vi.stubGlobal("innerHeight", 600);
+    renderList();
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    fireEvent.click(screen.getByRole("button", { name: "Callback appearance" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Callback window size" }), { target: { value: "large" } });
+    expect(screen.getByRole("dialog", { name: "Callback list" })).toHaveStyle({ width: "676px", height: "576px", left: "12px", top: "12px" });
+    expect(screen.getByRole("combobox", { name: "Callback window size" })).toHaveValue("large");
+  });
+
   it("opens a focused floating list and adds the current or selected session", async () => {
     const onChange = vi.fn(async () => undefined);
     const view = renderList([], onChange);
@@ -293,6 +336,8 @@ describe("WorkspaceCallbackList", () => {
       expect(stored?.size).toEqual({ width: 342, height: 378 });
     });
     expect(disconnect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Callback appearance" }));
+    expect(screen.getByRole("combobox", { name: "Callback window size" })).toHaveValue("custom");
   });
 
   it("keeps both footer counts independent of the open scope and updates them with live status", () => {

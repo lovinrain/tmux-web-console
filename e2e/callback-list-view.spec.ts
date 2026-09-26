@@ -347,9 +347,53 @@ test("filtered clearing preserves callbacks and messages inside collapsed groups
   await expect(panel.locator(".workspace-callback-message")).toHaveCount(2);
 });
 
+test("callback appearance resizes from the screen edge and persists readable text", async ({ page }, testInfo) => {
+  await installCallbacks(page);
+  const panel = await openPanel(page);
+  const appearance = panel.getByRole("button", { name: "Callback appearance", exact: true });
+  await expect(rowTitles(panel).first()).toHaveCSS("font-size", "14px");
+  await appearance.click();
+  const preset = panel.getByRole("combobox", { name: "Callback window size", exact: true });
+  const textSize = panel.getByRole("slider", { name: "Callback text size", exact: true });
+  await textSize.focus();
+  await page.keyboard.press("End");
+  await expect(textSize).toHaveValue("20");
+  await expect(rowTitles(panel).first()).toHaveCSS("font-size", "20px");
+  await expect(panel.locator(".workspace-callback-message p").first()).toHaveCSS("font-size", "20px");
+  await expect(panel.locator(".workspace-callback-timing").first()).toHaveCSS("font-size", "18px");
+  await preset.selectOption("large");
+  await expect(panel).toHaveCSS("width", "860px");
+  await expect(panel).toHaveCSS("height", "720px");
+  const largeBounds = await panel.boundingBox();
+  expect(largeBounds!.x + largeBounds!.width).toBeLessThanOrEqual(1428);
+  await panel.screenshot({ path: testInfo.outputPath("callback-appearance-large.png") });
+  await textSize.press("Escape");
+  await expect(panel).toBeVisible();
+  await expect(appearance).toBeFocused();
+  await page.reload();
+  await expect(panel).toHaveCSS("width", "860px");
+  await expect(rowTitles(panel).first()).toHaveCSS("font-size", "20px");
+  await appearance.click();
+  await expect(preset).toHaveValue("large");
+  await preset.selectOption("medium");
+  await expect(panel).toHaveCSS("width", "640px");
+  await preset.selectOption("small");
+  await expect(panel).toHaveCSS("width", "390px");
+  await page.setViewportSize({ width: 800, height: 600 });
+  await preset.selectOption("large");
+  await expect(panel).toHaveCSS("width", "776px");
+  await expect(panel).toHaveCSS("height", "576px");
+  const fittedBounds = await panel.boundingBox();
+  expect(fittedBounds!.x).toBe(12);
+  expect(fittedBounds!.y).toBe(12);
+});
+
 test("filter controls fit the default and narrow callback panel in both themes", async ({ page }, testInfo) => {
   await installCallbacks(page);
   const panel = await openPanel(page);
+  await panel.getByRole("button", { name: "Callback appearance", exact: true }).click();
+  await panel.getByRole("slider", { name: "Callback text size", exact: true }).focus();
+  await page.keyboard.press("End");
   await expandFilters(panel);
   for (const theme of ["dark", "light"] as const) {
     if (theme === "light") {
