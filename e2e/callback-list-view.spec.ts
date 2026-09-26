@@ -138,6 +138,10 @@ function rowTitles(panel: Locator): Locator {
   return panel.locator(".workspace-callback-session strong");
 }
 
+function callbackGroup(panel: Locator, key: string): Locator {
+  return panel.locator(`.workspace-callback-group[data-group-key="${key}"]`);
+}
+
 async function expandFilters(panel: Locator): Promise<void> {
   const more = panel.getByRole("button", { name: "More callback filters", exact: true });
   if (await more.getAttribute("aria-expanded") !== "true") await more.click();
@@ -224,6 +228,125 @@ test("clearing filtered ended callbacks preserves all hidden rows and messages",
   await expect(panel.locator(".workspace-callback-message")).toHaveCount(2);
 });
 
+test("groups callbacks by status, agent, or workspace with counts and sorting within each group", async ({ page }) => {
+  await installCallbacks(page);
+  const panel = await openPanel(page);
+  const grouping = panel.getByRole("combobox", { name: "Group callbacks by", exact: true });
+  await expect(grouping).toHaveValue("none");
+  await grouping.selectOption("status");
+  await expect(panel.locator(".workspace-callback-group-toggle")).toHaveCount(5);
+  await expect(panel.locator(".workspace-callback-group-toggle").first()).toHaveAttribute("aria-expanded", "true");
+  await expect(panel.locator(".workspace-callback-group-title")).toHaveText([
+    "Ready", "Working", "Waiting", "Status unknown", "Ended / unavailable",
+  ]);
+  const ready = callbackGroup(panel, "status:ready");
+  await expect(ready.locator(".workspace-callback-group-count")).toHaveText("3");
+  await expect(rowTitles(ready)).toHaveText([titles[1], titles[2], titles[6]]);
+  await panel.getByRole("combobox", { name: "Sort callbacks", exact: true }).selectOption("name-desc");
+  await expect(rowTitles(ready)).toHaveText([titles[6], titles[2], titles[1]]);
+  await expect(callbackGroup(panel, "status:working").locator(".workspace-callback-group-count")).toHaveText("1");
+  await grouping.selectOption("agent");
+  await expect(panel.locator(".workspace-callback-group-title")).toHaveText([
+    "Claude", "Codex", "Copilot", "Cursor", "Grok", "Shells",
+  ]);
+  const codex = callbackGroup(panel, "agent:codex");
+  await expect(codex.locator(".workspace-callback-group-count")).toHaveText("2");
+  await expect(rowTitles(codex)).toHaveText([titles[5], titles[0]]);
+  await grouping.selectOption("workspace");
+  await expect(panel.locator(".workspace-callback-group-title")).toHaveText([
+    "Another review workspace", "Callback view review", "Global queue",
+  ]);
+  await expect(rowTitles(callbackGroup(panel, `workspace:id:${currentWorkspaceId}`))).toHaveText([titles[0], titles[1]]);
+  await expect(callbackGroup(panel, `workspace:id:${otherWorkspaceId}`).locator(".workspace-callback-group-count")).toHaveText("1");
+  await expect(callbackGroup(panel, "workspace:global").locator(".workspace-callback-group-count")).toHaveText("4");
+  await expect(rowTitles(callbackGroup(panel, "workspace:global"))).toHaveText([titles[6], titles[5], titles[4], titles[3]]);
+  await expect(rowTitles(panel)).toHaveCount(7);
+  await expect(panel.getByText("7 of 7 shown", { exact: true })).toBeVisible();
+});
+
+test("group collapse supports keyboard, scope persistence, revealing search results, and expand all", async ({ page }, testInfo) => {
+  await installCallbacks(page);
+  let panel = await openPanel(page);
+  let grouping = panel.getByRole("combobox", { name: "Group callbacks by", exact: true });
+  await grouping.selectOption("status");
+  const readyToggle = panel.getByRole("button", { name: "Ready callback group", exact: true });
+  await readyToggle.focus();
+  await readyToggle.press("Enter");
+  await expect(readyToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(rowTitles(panel)).toHaveCount(4);
+  await expect(panel.getByText("4 of 7 shown", { exact: true })).toBeVisible();
+  await expect(panel.getByText("3 collapsed", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(grouping).toHaveValue("status");
+  await expect(readyToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(rowTitles(panel)).toHaveCount(4);
+
+  // Each grouping mode remembers its own collapsed sections.
+  await grouping.selectOption("agent");
+  await panel.getByRole("button", { name: "Codex callback group", exact: true }).click();
+  await expect(rowTitles(panel)).toHaveCount(5);
+  await grouping.selectOption("status");
+  await expect(readyToggle).toHaveAttribute("aria-expanded", "false");
+  await panel.getByRole("combobox", { name: "Sort callbacks", exact: true }).selectOption("name-desc");
+  await panel.getByRole("searchbox", { name: "Search callbacks", exact: true }).fill("alpha");
+  await expect(readyToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(rowTitles(panel)).toHaveText([titles[1]]);
+  await panel.getByRole("button", { name: "Reset callback filters", exact: true }).click();
+  await expect(grouping).toHaveValue("status");
+  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("name-desc");
+  await expect(rowTitles(panel)).toHaveCount(7);
+  await grouping.selectOption("agent");
+  await expect(panel.getByRole("button", { name: "Codex callback group", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await panel.getByRole("button", { name: "Collapse all callback groups", exact: true }).click();
+  await expect(rowTitles(panel)).toHaveCount(0);
+  await expect(panel.getByText("0 of 7 shown", { exact: true })).toBeVisible();
+  await expect(panel.getByText("7 collapsed", { exact: true })).toBeVisible();
+  await expect(panel.getByText("All matching groups are collapsed.", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: /^Clear (shown|ended shown|global|all|ended)$/ })).toHaveCount(0);
+  await panel.screenshot({ path: testInfo.outputPath("callback-groups-collapsed-dark.png") });
+  await panel.getByRole("button", { name: "Expand all callback groups", exact: true }).click();
+  await expect(rowTitles(panel)).toHaveCount(7);
+
+  // The saved workspace has its own grouping and collapse state.
+  await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
+  await expect(grouping).toHaveValue("none");
+  await grouping.selectOption("status");
+  await panel.getByRole("button", { name: "Working callback group", exact: true }).click();
+  await expect(rowTitles(panel)).toHaveText([titles[1]]);
+  await panel.getByRole("button", { name: "Global callback scope", exact: true }).click();
+  await expect(grouping).toHaveValue("agent");
+  await expect(rowTitles(panel)).toHaveCount(7);
+  await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
+  await expect(grouping).toHaveValue("status");
+  await expect(panel.getByRole("button", { name: "Working callback group", exact: true })).toHaveAttribute("aria-expanded", "false");
+  panel = await openPanel(page, otherWorkspaceId);
+  grouping = panel.getByRole("combobox", { name: "Group callbacks by", exact: true });
+  await expect(grouping).toHaveValue("none");
+  await expect(rowTitles(panel)).toHaveText([titles[2]]);
+});
+
+test("filtered clearing preserves callbacks and messages inside collapsed groups", async ({ page }) => {
+  await installCallbacks(page);
+  const panel = await openPanel(page);
+  await panel.getByRole("combobox", { name: "Group callbacks by", exact: true }).selectOption("status");
+  await expandFilters(panel);
+  await panel.getByRole("combobox", { name: "Filter callbacks by messages", exact: true }).selectOption("with-messages");
+  await panel.getByRole("button", { name: "Ready callback group", exact: true }).click();
+  await expect(rowTitles(panel)).toHaveText([titles[5]]);
+  await expect(panel.getByText("1 of 7 shown", { exact: true })).toBeVisible();
+  await expect(panel.getByText("2 collapsed", { exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Clear shown", exact: true }).click();
+  await expect(rowTitles(panel)).toHaveCount(0);
+  await expect(panel.getByText("0 of 6 shown", { exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Reset callback filters", exact: true }).click();
+  await expect(panel.getByRole("combobox", { name: "Group callbacks by", exact: true })).toHaveValue("status");
+  await expect(rowTitles(panel)).toHaveText([titles[1], titles[2], titles[6], titles[0], titles[3], titles[4]]);
+  await expect(panel.locator(".workspace-callback-message")).toHaveCount(2);
+  await page.reload();
+  await expect(rowTitles(panel)).toHaveText([titles[1], titles[2], titles[6], titles[0], titles[3], titles[4]]);
+  await expect(panel.locator(".workspace-callback-message")).toHaveCount(2);
+});
+
 test("filter controls fit the default and narrow callback panel in both themes", async ({ page }, testInfo) => {
   await installCallbacks(page);
   const panel = await openPanel(page);
@@ -256,6 +379,20 @@ test("filter controls fit the default and narrow callback panel in both themes",
       }
       await panel.getByRole("searchbox", { name: "Search callbacks", exact: true }).scrollIntoViewIfNeeded();
       await panel.screenshot({ path: testInfo.outputPath(`callback-filters-${theme}-${width}.png`) });
+      await panel.getByRole("combobox", { name: "Group callbacks by", exact: true }).selectOption("status");
+      await panel.getByRole("button", { name: "More callback filters", exact: true }).click();
+      await expect(panel.getByRole("button", { name: "Ready callback group", exact: true })).toBeVisible();
+      const groupedLayout = await panel.locator(".workspace-callback-groups").evaluate((element) => {
+        const groupBounds = element.getBoundingClientRect();
+        const panelBounds = element.closest(".workspace-callback-panel")!.getBoundingClientRect();
+        return { width: element.clientWidth, scrollWidth: element.scrollWidth,
+          right: groupBounds.right, panelRight: panelBounds.right };
+      });
+      expect(groupedLayout.scrollWidth).toBeLessThanOrEqual(groupedLayout.width + 1);
+      expect(groupedLayout.right).toBeLessThanOrEqual(groupedLayout.panelRight);
+      await panel.screenshot({ path: testInfo.outputPath(`callback-groups-${theme}-${width}.png`) });
+      await panel.getByRole("combobox", { name: "Group callbacks by", exact: true }).selectOption("none");
+      await expandFilters(panel);
     }
   }
 });

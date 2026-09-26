@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { CallbackMessage } from "./api";
 import {
+  CALLBACK_GROUP_OPTIONS,
   DEFAULT_CALLBACK_LIST_VIEW,
   callbackEntryLatestCallbackAt,
   callbackEntryReadySince,
   callbackStatus,
   filterAndSortCallbacks,
+  groupCallbacks,
   parseCallbackListViewPreferences,
   validateCallbackListViewPreferences,
   type CallbackListEntry,
@@ -218,6 +220,142 @@ describe("callback list view", () => {
   });
 });
 
+describe("callback list grouping", () => {
+  it("keeps an ungrouped list in order and emits no empty groups", () => {
+    const entries = Object.freeze([entry("z"), entry("a")]);
+    const groups = groupCallbacks(entries, "none");
+    expect(groups).toEqual([{ key: "none", label: "All callbacks", entries }]);
+    expect(groups[0].entries).not.toBe(entries);
+    expect(groups[0].entries[0]).toBe(entries[0]);
+    for (const { value } of CALLBACK_GROUP_OPTIONS) expect(groupCallbacks([], value)).toEqual([]);
+  });
+
+  it("groups live statuses in priority order and combines running commands with working sessions", () => {
+    const entries = [
+      entry("ended", { session: undefined }),
+      entry("unknown", { session: session("unknown", { agentState: "unknown" }) }),
+      entry("waiting", { session: session("waiting", { agentState: "waiting_command" }) }),
+      entry("command", { session: session("command", { agentState: "running_command" }) }),
+      entry("ready"),
+      entry("shell", { session: session("shell", { agentState: "other" }) }),
+      entry("working", { session: session("working", { agentState: "working" }) }),
+    ];
+    const groups = groupCallbacks(entries, "status");
+    expect(groups.map(({ label, tone, entries: rows }) => [label, tone, rows.map((row) => row.name)]))
+      .toEqual([
+        ["Ready", "ready", ["ready", "shell"]],
+        ["Working", "working", ["command", "working"]],
+        ["Waiting", "waiting", ["waiting"]],
+        ["Status unknown", "unknown", ["unknown"]],
+        ["Ended / unavailable", "ended", ["ended"]],
+      ]);
+    expect(groups.flatMap((group) => group.entries)).toHaveLength(entries.length);
+  });
+
+  it("preserves filtering and selected sort, including stable ties, within groups", () => {
+    const entries = [
+      entry("z", { session: session("z", { agentState: "working", customTitle: "Item 2" }) }),
+      entry("hidden", { session: session("hidden", { customTitle: "Unrelated" }) }),
+      entry("ready-late", { session: session("ready-late", { customTitle: "Item 10" }) }),
+      entry("a", { session: session("a", { agentState: "working", customTitle: "Item 2" }) }),
+      entry("ready-early", { session: session("ready-early", { customTitle: "Item 1" }) }),
+    ];
+    const filtered = filterAndSortCallbacks(entries, { ...DEFAULT_CALLBACK_LIST_VIEW, sort: "name-asc" }, "Item");
+    const groups = groupCallbacks(filtered, "status");
+    expect(groups.map((group) => group.entries.map((row) => row.name)))
+      .toEqual([["ready-early", "ready-late"], ["z", "a"]]);
+    expect(entries.map((row) => row.name)).toEqual(["z", "hidden", "ready-late", "a", "ready-early"]);
+  });
+
+  it("groups agents from live metadata, active panes, and pending messages in a fixed order", () => {
+    const entries = [
+      entry("unknown", { session: undefined }),
+      entry("mixed", {
+        session: session("mixed", { agentType: "codex" }), messages: [message({ agentType: "Claude" })],
+      }),
+      entry("shell", { session: session("shell", { panes: [pane("bash")] }) }),
+      entry("grok", { session: session("grok", { agentType: "grok" }) }),
+      entry("cursor", { session: session("cursor", { agentType: "cursor" }) }),
+      entry("copilot", { session: session("copilot", { panes: [pane("node", { title: "GitHub Copilot" })] }) }),
+      entry("codex", { session: session("codex", {
+        activePaneId: "%2", panes: [pane("bash"), pane("codex", { id: "%2" })],
+      }) }),
+      entry("claude", { session: undefined, messages: [message({ agentType: "Claude" }), message({ agentType: "claude" })] }),
+    ];
+    const groups = groupCallbacks(entries, "agent");
+    expect(groups.map((group) => group.label))
+      .toEqual(["Claude", "Codex", "Copilot", "Cursor", "Grok", "Shells", "Multiple agents", "Other / unknown"]);
+    expect(groups.map((group) => group.entries.map((row) => row.name)))
+      .toEqual([["claude"], ["codex"], ["copilot"], ["cursor"], ["grok"], ["shell"], ["mixed"], ["unknown"]]);
+  });
+
+  it("keeps mixed-agent rows once when filtered by any of their agents", () => {
+    const mixed = entry("mixed", {
+      session: session("mixed", { agentType: "claude" }),
+      messages: [message({ agentType: "codex" }), message({ agentType: "grok" })],
+    });
+    const codex = entry("codex", { session: session("codex", { agentType: "codex" }) });
+    const filtered = filterAndSortCallbacks([mixed, codex], { ...DEFAULT_CALLBACK_LIST_VIEW, agent: "codex" });
+    const groups = groupCallbacks(filtered, "agent");
+    expect(groups.map((group) => [group.key, group.entries.map((row) => row.name)]))
+      .toEqual([["agent:codex", ["codex"]], ["agent:multiple", ["mixed"]]]);
+    expect(groups[1].entries[0].messages).toBe(mixed.messages);
+  });
+
+  it("distinguishes same-name workspaces by ID and puts shared sessions in one separate group", () => {
+    const sources = Object.freeze([{ id: "room-b", name: "Room" }, { id: "room-a", name: "Room" }]);
+    const entries = Object.freeze([
+      entry("shared", { workspaceSources: sources }),
+      entry("b", { workspaceSources: [sources[0]] }),
+      entry("a", { workspaceSources: [sources[1], sources[1]] }),
+      entry("global", { workspaceSources: [] }),
+      entry("b-later", { workspaceSources: [sources[0]] }),
+    ]);
+    const groups = groupCallbacks(entries, "workspace");
+    expect(groups.map((group) => [group.key, group.label, group.entries.map((row) => row.name)]))
+      .toEqual([
+        ["workspace:id:room-a", "Room", ["a"]],
+        ["workspace:id:room-b", "Room", ["b", "b-later"]],
+        ["workspace:multiple", "Multiple workspaces", ["shared"]],
+        ["workspace:global", "Global queue", ["global"]],
+      ]);
+    expect(new Set(groups.flatMap((group) => group.entries))).toEqual(new Set(entries));
+    expect(groups.flatMap((group) => group.entries)).toHaveLength(entries.length);
+    expect(entries[0].workspaceSources).toBe(sources);
+  });
+
+  it("naturally orders workspace groups independently of callback order and preserves IDs after renaming", () => {
+    const entries = [
+      entry("ten", { workspaceSources: [{ id: "global", name: "Workspace 10" }] }),
+      entry("two", { workspaceSources: [{ id: "multiple", name: "workspace 2" }] }),
+      entry("first", { workspaceSources: [{ id: "one", name: "Workspace 1" }] }),
+    ];
+    const groups = groupCallbacks(entries, "workspace");
+    expect(groups.map((group) => group.key))
+      .toEqual(["workspace:id:one", "workspace:id:multiple", "workspace:id:global"]);
+    expect(groupCallbacks([...entries].reverse(), "workspace").map((group) => group.key))
+      .toEqual(groups.map((group) => group.key));
+    expect(groupCallbacks([entry("renamed", { workspaceSources: [{ id: "one", name: "New name" }] })], "workspace"))
+      .toMatchObject([{ key: "workspace:id:one", label: "New name" }]);
+  });
+
+  it("supports legacy workspace names while treating supplied sources as authoritative", () => {
+    const entries = [
+      entry("legacy", { workspaceNames: ["Legacy", "Legacy"] }),
+      entry("legacy-shared", { workspaceNames: ["One", "Two"] }),
+      entry("global", { workspaceNames: ["Stale name"], workspaceSources: [] }),
+      entry("unnamed", { workspaceSources: [{ id: "untitled", name: "  " }] }),
+    ];
+    expect(groupCallbacks(entries, "workspace").map((group) => [group.key, group.label]))
+      .toEqual([
+        ["workspace:name:Legacy", "Legacy"],
+        ["workspace:id:untitled", "Unnamed workspace"],
+        ["workspace:multiple", "Multiple workspaces"],
+        ["workspace:global", "Global queue"],
+      ]);
+  });
+});
+
 describe("callback list view preferences", () => {
   it.each([null, "{bad json", "null", "[]", "42", '"queue"'])("falls back safely for malformed storage %s", (raw) => {
     const result = parseCallbackListViewPreferences(raw);
@@ -230,9 +368,44 @@ describe("callback list view preferences", () => {
       sort: "ready-longest", status: "working", agent: "future-agent", messages: "with-messages",
       location: 3, query: "secret draft", unexpected: true,
     })).toEqual({
+      ...DEFAULT_CALLBACK_LIST_VIEW,
       sort: "ready-longest", status: "working", agent: "all", messages: "with-messages", location: "all",
     });
     expect(parseCallbackListViewPreferences(JSON.stringify({ sort: "name-desc" })))
       .toEqual({ ...DEFAULT_CALLBACK_LIST_VIEW, sort: "name-desc" });
+  });
+
+  it("restores grouping and independent collapse keys across grouping modes", () => {
+    const preferences = {
+      ...DEFAULT_CALLBACK_LIST_VIEW, group: "workspace",
+      collapsedGroups: ["status:working", "agent:multiple", "workspace:id:team:1", "workspace:global"],
+    };
+    expect(parseCallbackListViewPreferences(JSON.stringify(preferences))).toEqual(preferences);
+    expect(validateCallbackListViewPreferences({ group: "future-group" }))
+      .toEqual(DEFAULT_CALLBACK_LIST_VIEW);
+  });
+
+  it("drops invalid collapse values and deduplicates keys without retaining the stored array", () => {
+    const collapsedGroups = [
+      "status:ready", "status:ready", "agent:codex", "workspace:multiple", "workspace:name:Old workspace",
+      null, 42, {}, "", "none", "status:bad", "agent:all", "workspace:id:", "workspace:id:a\nb",
+      `workspace:id:${"x".repeat(2048)}`,
+    ];
+    const result = validateCallbackListViewPreferences({ collapsedGroups });
+    expect(result.collapsedGroups)
+      .toEqual(["status:ready", "agent:codex", "workspace:multiple", "workspace:name:Old workspace"]);
+    expect(result.collapsedGroups).not.toBe(collapsedGroups);
+    expect(validateCallbackListViewPreferences({ collapsedGroups: "status:ready" }).collapsedGroups).toEqual([]);
+    expect(validateCallbackListViewPreferences({ collapsedGroups: { "status:ready": true } }).collapsedGroups).toEqual([]);
+  });
+
+  it("bounds retained collapse keys and gives fallback preferences their own array", () => {
+    const collapsedGroups = Array.from({ length: 600 }, (_, index) => `workspace:id:${index}`);
+    expect(validateCallbackListViewPreferences({ collapsedGroups }).collapsedGroups).toEqual(collapsedGroups.slice(0, 512));
+    const empty = parseCallbackListViewPreferences(null);
+    empty.collapsedGroups.push("status:working");
+    expect(DEFAULT_CALLBACK_LIST_VIEW.collapsedGroups).toEqual([]);
+    expect(parseCallbackListViewPreferences("{bad").collapsedGroups).toEqual([]);
+    expect(validateCallbackListViewPreferences(null).collapsedGroups).toEqual([]);
   });
 });

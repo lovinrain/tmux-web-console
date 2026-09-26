@@ -12,6 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import {
   CheckIcon,
+  ChevronRightIcon,
   CloseIcon,
   HistoryIcon,
   PinIcon,
@@ -25,6 +26,7 @@ import "./WorkspaceCallbackFilters.css";
 import type { Session } from "../types";
 import {
   CALLBACK_AGENT_OPTIONS,
+  CALLBACK_GROUP_OPTIONS,
   CALLBACK_LOCATION_OPTIONS,
   CALLBACK_MESSAGE_OPTIONS,
   CALLBACK_SORT_OPTIONS,
@@ -34,6 +36,7 @@ import {
   callbackEntryReadySince,
   callbackStatus,
   filterAndSortCallbacks,
+  groupCallbacks,
   parseCallbackListViewPreferences,
   sessionDisplayName,
   validateCallbackListViewPreferences,
@@ -331,16 +334,41 @@ export function WorkspaceCallbackList({
     }
   }, [identity, viewStore.identity, viewStore.preferences]);
   const changeViewPreference = (key: keyof CallbackListViewPreferences, value: string) => {
+    const preferences = validateCallbackListViewPreferences({ ...listView.preferences, [key]: value });
+    if (key !== "sort" && key !== "group") {
+      preferences.collapsedGroups = preferences.collapsedGroups.filter((groupKey) => !groupKey.startsWith(`${preferences.group}:`));
+    }
     setViewStore({
       ...listView,
-      preferences: validateCallbackListViewPreferences({ ...listView.preferences, [key]: value }),
+      preferences,
     });
   };
+  const changeQuery = (query: string) => setViewStore({
+    ...listView,
+    query,
+    preferences: {
+      ...listView.preferences,
+      collapsedGroups: listView.preferences.collapsedGroups.filter((key) => !key.startsWith(`${listView.preferences.group}:`)),
+    },
+  });
   const resetFilters = () => setViewStore({
     ...listView,
     query: "",
-    preferences: { ...DEFAULT_CALLBACK_LIST_VIEW, sort: listView.preferences.sort },
+    preferences: {
+      ...DEFAULT_CALLBACK_LIST_VIEW,
+      sort: listView.preferences.sort,
+      group: listView.preferences.group,
+      collapsedGroups: listView.preferences.collapsedGroups.filter((key) => !key.startsWith(`${listView.preferences.group}:`)),
+    },
   });
+  const setGroupsCollapsed = (keys: readonly string[], collapsed: boolean) => {
+    const next = new Set(listView.preferences.collapsedGroups);
+    for (const key of keys) {
+      if (collapsed) next.add(key);
+      else next.delete(key);
+    }
+    setViewStore({ ...listView, preferences: { ...listView.preferences, collapsedGroups: [...next] } });
+  };
   const initialStoreRef = useRef<CallbackPanelStore | null>(null);
   if (initialStoreRef.current === null) {
     initialStoreRef.current = { identity, panel: readPreference(identity) };
@@ -727,13 +755,20 @@ export function WorkspaceCallbackList({
       session: sessionMap.get(name),
       messages: messagesBySession.get(name) ?? [],
       workspaceNames: sources.map((source) => source.workspaceName),
+      workspaceSources: sources.map((source) => ({ id: source.workspaceId, name: source.workspaceName })),
       inCurrentWorkspace: workspaceSessionSet === null || workspaceSessionSet.has(name),
       // Match the row's "Global only" location, including message-only callbacks.
       globalOnly: workspaceSessionSet !== null && !workspaceSessionSet.has(name) && sources.length === 0,
       latestCallbackAt: times && Object.hasOwn(times, name) ? times[name] : undefined,
     };
   });
-  const displayedEntries = filterAndSortCallbacks(entries, listView.preferences, listView.query);
+  const matchingEntries = filterAndSortCallbacks(entries, listView.preferences, listView.query);
+  const groups = groupCallbacks(matchingEntries, listView.preferences.group);
+  const grouped = listView.preferences.group !== "none";
+  const collapsedGroups = new Set(listView.preferences.collapsedGroups);
+  const expandedGroups = groups.filter((group) => !grouped || !collapsedGroups.has(group.key));
+  const displayedEntries = expandedGroups.flatMap((group) => group.entries);
+  const collapsedCount = matchingEntries.length - displayedEntries.length;
   const displayedNames = displayedEntries.map((entry) => entry.name);
   const clearableEntries = displayedEntries.filter((entry) => activeScope !== "global"
     || explicitGlobalSessions.includes(entry.name) || entry.messages.length > 0);
@@ -741,6 +776,7 @@ export function WorkspaceCallbackList({
   const extraFilterCount = [listView.preferences.agent, listView.preferences.messages, listView.preferences.location]
     .filter((value) => value !== "all").length;
   const filtersActive = Boolean(listView.query.trim()) || listView.preferences.status !== "all" || extraFilterCount > 0;
+  const viewRestricted = filtersActive || collapsedCount > 0;
   const inheritedCount = activeScope === "global"
     ? visibleCallbackSessions.filter((name) => !explicitGlobalSessions.includes(name)
       && globalWorkspaceSources.has(name)).length
@@ -758,6 +794,176 @@ export function WorkspaceCallbackList({
     top: panel.position.y,
     width: panel.size.width,
     height: panel.size.height,
+  };
+
+  const renderEntry = (entry: CallbackListEntry, index: number) => {
+    const { name, session, messages } = entry;
+    const status = callbackStatus(session);
+    const latestCallbackAt = callbackEntryLatestCallbackAt(entry);
+    const readySince = callbackEntryReadySince(entry);
+    const timingLabel = latestCallbackAt === undefined ? "Ready since" : "Latest callback";
+    const timingAt = latestCallbackAt ?? readySince;
+    const timingDate = timingAt === undefined ? null : new Date(timingAt * 1000);
+    const globalOnly = activeScope === "global" && explicitGlobalSessions.includes(name);
+    const sources = globalWorkspaceSources.get(name) ?? [];
+    const inCurrentWorkspace = workspaceSessionSet === null
+      || workspaceSessionSet.has(name);
+    const sourceLabel = sources.length > 0
+      ? sources.length === 1
+        ? sources[0].workspaceName
+        : `${sources.length} workspaces`
+      : "Global queue";
+    const locationLabel = activeScope === "global"
+      ? inCurrentWorkspace
+        ? "This workspace"
+        : sources.length > 0
+          ? `Other · ${sourceLabel}`
+          : "Global only"
+      : inCurrentWorkspace
+        ? (session && session.customTitle ? name : status.label)
+        : "Not in this workspace";
+    const canOpen = Boolean(session && inCurrentWorkspace);
+    const currentSourceOwnsEntry = sources.some(
+      (source) => source.workspaceId === currentSourceId,
+    );
+    const canRemove = activeScope !== "global"
+      || Boolean(onReviewSession)
+      || globalOnly
+      || currentSourceOwnsEntry;
+    const removeLabel = activeScope === "global"
+      ? onReviewSession
+        ? `Mark ${name} reviewed and remove from all callback lists`
+        : globalOnly
+          ? `Remove ${name} from the global callback list`
+          : `Remove ${name} from this workspace callback list`
+      : `Mark ${name} reviewed and remove from callback list`;
+    const sessionTitle = !session
+      ? `${name} is no longer live`
+      : canOpen
+        ? `Open ${name}`
+        : `${name} is not open in this workspace; switch workspaces to open it`;
+    return (
+        <li
+          key={name}
+          className={`workspace-callback-item ${status.tone}${activeScope === "global" && !inCurrentWorkspace ? " inherited" : ""}`}
+          data-workspace-presence={activeScope === "global"
+            ? inCurrentWorkspace ? "current" : "other"
+            : inCurrentWorkspace ? "current" : "other"}
+        >
+        <span className="workspace-callback-index" aria-hidden="true">{index + 1}</span>
+        <span className={`workspace-callback-status-dot ${status.tone}`} aria-hidden="true" />
+        <button
+          type="button"
+          className="workspace-callback-session"
+          aria-current={name === activeSessionName ? "true" : undefined}
+          onClick={() => onSelectSession(name)}
+          disabled={!canOpen}
+          title={sessionTitle}
+        >
+          <strong>{sessionDisplayName(session, name)}</strong>
+          <span className="workspace-callback-session-details">
+            <small title={sources.length > 0 ? sources.map((source) => source.workspaceName).join(", ") : undefined}>{locationLabel}</small>
+            {name === activeSessionName && (
+              <span className="workspace-callback-current-session">Current session</span>
+            )}
+          </span>
+        </button>
+        <span className={`workspace-callback-status ${status.tone}`}>{status.label}</span>
+        <button
+          type="button"
+          className="workspace-callback-open"
+          disabled={!canOpen}
+          onClick={() => canOpen && onSelectSession(name)}
+          aria-label={`Open ${name}`}
+          title={sessionTitle}
+        >
+          <TerminalIcon />
+        </button>
+        <button
+          type="button"
+          className="workspace-callback-remove"
+          disabled={isBusy || !canRemove}
+          onClick={() => {
+            if ((activeScope === "global" || messages.length > 0) && onReviewSession) {
+              void reviewSession(name);
+            } else {
+              removeSession(name);
+            }
+          }}
+          aria-label={removeLabel}
+          title={canRemove
+            ? activeScope === "global" && onReviewSession
+              ? "Mark reviewed and remove it from every callback scope"
+              : activeScope === "global" && !globalOnly
+                ? "Remove this workspace-owned entry from its current workspace"
+                : activeScope === "global"
+                  ? sources.length > 0
+                    ? "Remove the global marker; workspace-owned entries remain"
+                    : "Remove this global callback entry"
+                  : "Mark reviewed and remove"
+            : "This entry is owned by another workspace; remove it there"}
+        >
+          <CheckIcon />
+        </button>
+        {timingDate && Number.isFinite(timingDate.getTime()) && (
+          <div className="workspace-callback-timing">
+            <span>{timingLabel}</span>
+            <time
+              dateTime={timingDate.toISOString()}
+              title={`${timingLabel === "Ready since" ? "Ready observed" : timingLabel}: ${timingDate.toLocaleString(undefined, {
+                year: "numeric", month: "long", day: "numeric",
+                hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+              })}`}
+            >
+              {timingDate.toLocaleString(undefined, {
+                month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+              })}
+            </time>
+          </div>
+        )}
+        {messages.length > 0 && (
+          <div className="workspace-callback-messages" aria-label={`Messages for ${name}`}>
+            {messages.map((message) => (
+              <article className="workspace-callback-message" key={message.id}>
+                <div className="workspace-callback-message-meta">
+                  <strong>{message.agentType}</strong>
+                  <time dateTime={new Date(message.createdAt * 1000).toISOString()}>
+                    {new Date(message.createdAt * 1000).toLocaleString()}
+                  </time>
+                  <button
+                    type="button"
+                    className="workspace-callback-message-review"
+                    disabled={isBusy || !onReviewMessage}
+                    onClick={() => void reviewMessage(message.id)}
+                    aria-label={`Mark message from ${message.agentType} in ${name} reviewed`}
+                    title="Mark this message reviewed; keep its history"
+                  >
+                    <CheckIcon />
+                  </button>
+                </div>
+                <div className="workspace-callback-message-cwd" title={message.cwd}>
+                  {message.cwd}
+                </div>
+                {message.message.length > 600 ? (
+                  <details className="workspace-callback-message-details">
+                    <summary>
+                      <span className="workspace-callback-message-preview">{message.message.slice(0, 240)}…</span>
+                      <span className="workspace-callback-message-expand">Show full message</span>
+                    </summary>
+                    <p>{message.message}</p>
+                  </details>
+                ) : <p>{message.message}</p>}
+                {(message.tmuxSessionId || message.tmuxPaneId || message.host) && (
+                  <small className="workspace-callback-message-origin">
+                    {[message.host, message.tmuxSessionId, message.tmuxPaneId].filter(Boolean).join(" · ")}
+                  </small>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </li>
+    );
   };
 
   const floatingPanel = panel.open ? (
@@ -889,15 +1095,16 @@ export function WorkspaceCallbackList({
           </div>
         )}
         <div className="workspace-callback-view-controls" role="group" aria-label="Callback sorting and filters">
-          <input
-            type="search"
-            className="workspace-callback-search"
-            aria-label="Search callbacks"
-            placeholder="Search sessions, messages, workspaces…"
-            value={listView.query}
-            onChange={(event) => setViewStore({ ...listView, query: event.target.value })}
-          />
-          <div className="workspace-callback-view-primary">
+          <div className="workspace-callback-view-search-row">
+            <input
+              type="search"
+              className="workspace-callback-search"
+              aria-label="Search callbacks"
+              placeholder="Search callbacks…"
+              title="Search session names, titles, messages, agents, directories, and workspace names"
+              value={listView.query}
+              onChange={(event) => changeQuery(event.target.value)}
+            />
             <label className="workspace-callback-view-field">
               <span>Status</span>
               <select aria-label="Filter callbacks by status" value={listView.preferences.status}
@@ -905,6 +1112,8 @@ export function WorkspaceCallbackList({
                 {CALLBACK_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
+          </div>
+          <div className="workspace-callback-view-primary">
             <label className="workspace-callback-view-field">
               <span>Sort</span>
               <select aria-label="Sort callbacks" value={listView.preferences.sort}
@@ -912,9 +1121,17 @@ export function WorkspaceCallbackList({
                 {CALLBACK_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
             </label>
+            <label className="workspace-callback-view-field">
+              <span>Group by</span>
+              <select aria-label="Group callbacks by" value={listView.preferences.group}
+                onChange={(event) => changeViewPreference("group", event.target.value)}>
+                {CALLBACK_GROUP_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
           </div>
           <div className="workspace-callback-view-meta">
             <span role="status">{displayedEntries.length} of {entries.length} shown</span>
+            {collapsedCount > 0 && <span>{collapsedCount} collapsed</span>}
             <button type="button" aria-label="More callback filters" aria-expanded={listView.moreFiltersOpen}
               aria-controls={`${panelId}-filters`}
               onClick={() => setViewStore({ ...listView, moreFiltersOpen: !listView.moreFiltersOpen })}>
@@ -922,6 +1139,17 @@ export function WorkspaceCallbackList({
             </button>
             {filtersActive && <button type="button" aria-label="Reset callback filters" onClick={resetFilters}>Reset</button>}
           </div>
+          {grouped && groups.length > 0 && (
+            <div className="workspace-callback-group-toolbar">
+              <span>{groups.length} {groups.length === 1 ? "group" : "groups"}</span>
+              <div className="workspace-callback-group-actions">
+                <button type="button" aria-label="Expand all callback groups" disabled={collapsedCount === 0}
+                  onClick={() => setGroupsCollapsed(groups.map((group) => group.key), false)}>Expand all</button>
+                <button type="button" aria-label="Collapse all callback groups" disabled={displayedEntries.length === 0}
+                  onClick={() => setGroupsCollapsed(groups.map((group) => group.key), true)}>Collapse all</button>
+              </div>
+            </div>
+          )}
           {listView.moreFiltersOpen && (
             <div className="workspace-callback-view-extra" id={`${panelId}-filters`}>
               <label className="workspace-callback-view-field">
@@ -956,183 +1184,40 @@ export function WorkspaceCallbackList({
               ? "Add sessions globally, or mark one in any workspace to inherit it here."
               : "Add sessions here before you step away. Their live status stays visible."}</span>
           </div>
-        ) : displayedEntries.length === 0 ? (
+        ) : matchingEntries.length === 0 ? (
           <div className="workspace-callback-no-matches">
             <strong>No callbacks match these filters</strong>
             <span>Try another search or reset the filters to show the full queue.</span>
             <button type="button" onClick={resetFilters}>Show all callbacks</button>
           </div>
-        ) : (
-          <ol className="workspace-callback-list" aria-label="Sessions to call back">
-            {displayedEntries.map((entry, index) => {
-              const { name, session, messages } = entry;
-              const status = callbackStatus(session);
-              const latestCallbackAt = callbackEntryLatestCallbackAt(entry);
-              const readySince = callbackEntryReadySince(entry);
-              const timingLabel = latestCallbackAt === undefined ? "Ready since" : "Latest callback";
-              const timingAt = latestCallbackAt ?? readySince;
-              const timingDate = timingAt === undefined ? null : new Date(timingAt * 1000);
-              const globalOnly = activeScope === "global" && explicitGlobalSessions.includes(name);
-              const sources = globalWorkspaceSources.get(name) ?? [];
-              const inCurrentWorkspace = workspaceSessionSet === null
-                || workspaceSessionSet.has(name);
-              const sourceLabel = sources.length > 0
-                ? sources.length === 1
-                  ? sources[0].workspaceName
-                  : `${sources.length} workspaces`
-                : "Global queue";
-              const locationLabel = activeScope === "global"
-                ? inCurrentWorkspace
-                  ? "This workspace"
-                  : sources.length > 0
-                    ? `Other · ${sourceLabel}`
-                    : "Global only"
-                : inCurrentWorkspace
-                  ? (session && session.customTitle ? name : status.label)
-                  : "Not in this workspace";
-              const canOpen = Boolean(session && inCurrentWorkspace);
-              const currentSourceOwnsEntry = sources.some(
-                (source) => source.workspaceId === currentSourceId,
-              );
-              const canRemove = activeScope !== "global"
-                || Boolean(onReviewSession)
-                || globalOnly
-                || currentSourceOwnsEntry;
-              const removeLabel = activeScope === "global"
-                ? onReviewSession
-                  ? `Mark ${name} reviewed and remove from all callback lists`
-                  : globalOnly
-                    ? `Remove ${name} from the global callback list`
-                    : `Remove ${name} from this workspace callback list`
-                : `Mark ${name} reviewed and remove from callback list`;
-              const sessionTitle = !session
-                ? `${name} is no longer live`
-                : canOpen
-                  ? `Open ${name}`
-                  : `${name} is not open in this workspace; switch workspaces to open it`;
+        ) : grouped ? (
+          <div className="workspace-callback-groups" aria-label="Grouped callbacks">
+            {groups.map((group) => {
+              const expanded = !collapsedGroups.has(group.key);
+              const groupId = `${panelId}-group-${encodeURIComponent(group.key)}`;
               return (
-                  <li
-                    key={name}
-                    className={`workspace-callback-item ${status.tone}${activeScope === "global" && !inCurrentWorkspace ? " inherited" : ""}`}
-                    data-workspace-presence={activeScope === "global"
-                      ? inCurrentWorkspace ? "current" : "other"
-                      : inCurrentWorkspace ? "current" : "other"}
-                  >
-                  <span className="workspace-callback-index" aria-hidden="true">{index + 1}</span>
-                  <span className={`workspace-callback-status-dot ${status.tone}`} aria-hidden="true" />
-                  <button
-                    type="button"
-                    className="workspace-callback-session"
-                    aria-current={name === activeSessionName ? "true" : undefined}
-                    onClick={() => onSelectSession(name)}
-                    disabled={!canOpen}
-                    title={sessionTitle}
-                  >
-                    <strong>{sessionDisplayName(session, name)}</strong>
-                    <span className="workspace-callback-session-details">
-                      <small>{locationLabel}</small>
-                      {name === activeSessionName && (
-                        <span className="workspace-callback-current-session">Current session</span>
-                      )}
-                    </span>
+                <section className="workspace-callback-group" key={group.key}
+                  data-group-key={group.key} data-tone={group.tone} aria-labelledby={`${groupId}-heading`}>
+                  <button type="button" className="workspace-callback-group-toggle" id={`${groupId}-heading`}
+                    aria-label={`${group.label} callback group`} aria-expanded={expanded} aria-controls={groupId}
+                    title={`${group.label}: ${group.entries.length} ${group.entries.length === 1 ? "callback" : "callbacks"}`}
+                    onClick={() => setGroupsCollapsed([group.key], expanded)}>
+                    <ChevronRightIcon />
+                    <span className="workspace-callback-group-title">{group.label}</span>
+                    <span className="workspace-callback-group-count" aria-label={`${group.entries.length} ${group.entries.length === 1 ? "callback" : "callbacks"}`}>{group.entries.length}</span>
                   </button>
-                  <span className={`workspace-callback-status ${status.tone}`}>{status.label}</span>
-                  <button
-                    type="button"
-                    className="workspace-callback-open"
-                    disabled={!canOpen}
-                    onClick={() => canOpen && onSelectSession(name)}
-                    aria-label={`Open ${name}`}
-                    title={sessionTitle}
-                  >
-                    <TerminalIcon />
-                  </button>
-                  <button
-                    type="button"
-                    className="workspace-callback-remove"
-                    disabled={isBusy || !canRemove}
-                    onClick={() => {
-                      if ((activeScope === "global" || messages.length > 0) && onReviewSession) {
-                        void reviewSession(name);
-                      } else {
-                        removeSession(name);
-                      }
-                    }}
-                    aria-label={removeLabel}
-                    title={canRemove
-                      ? activeScope === "global" && onReviewSession
-                        ? "Mark reviewed and remove it from every callback scope"
-                        : activeScope === "global" && !globalOnly
-                          ? "Remove this workspace-owned entry from its current workspace"
-                          : activeScope === "global"
-                            ? sources.length > 0
-                              ? "Remove the global marker; workspace-owned entries remain"
-                              : "Remove this global callback entry"
-                            : "Mark reviewed and remove"
-                      : "This entry is owned by another workspace; remove it there"}
-                  >
-                    <CheckIcon />
-                  </button>
-                  {timingDate && Number.isFinite(timingDate.getTime()) && (
-                    <div className="workspace-callback-timing">
-                      <span>{timingLabel}</span>
-                      <time
-                        dateTime={timingDate.toISOString()}
-                        title={`${timingLabel === "Ready since" ? "Ready observed" : timingLabel}: ${timingDate.toLocaleString(undefined, {
-                          year: "numeric", month: "long", day: "numeric",
-                          hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
-                        })}`}
-                      >
-                        {timingDate.toLocaleString(undefined, {
-                          month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-                        })}
-                      </time>
-                    </div>
-                  )}
-                  {messages.length > 0 && (
-                    <div className="workspace-callback-messages" aria-label={`Messages for ${name}`}>
-                      {messages.map((message) => (
-                        <article className="workspace-callback-message" key={message.id}>
-                          <div className="workspace-callback-message-meta">
-                            <strong>{message.agentType}</strong>
-                            <time dateTime={new Date(message.createdAt * 1000).toISOString()}>
-                              {new Date(message.createdAt * 1000).toLocaleString()}
-                            </time>
-                            <button
-                              type="button"
-                              className="workspace-callback-message-review"
-                              disabled={isBusy || !onReviewMessage}
-                              onClick={() => void reviewMessage(message.id)}
-                              aria-label={`Mark message from ${message.agentType} in ${name} reviewed`}
-                              title="Mark this message reviewed; keep its history"
-                            >
-                              <CheckIcon />
-                            </button>
-                          </div>
-                          <div className="workspace-callback-message-cwd" title={message.cwd}>
-                            {message.cwd}
-                          </div>
-                          {message.message.length > 600 ? (
-                            <details className="workspace-callback-message-details">
-                              <summary>
-                                <span className="workspace-callback-message-preview">{message.message.slice(0, 240)}…</span>
-                                <span className="workspace-callback-message-expand">Show full message</span>
-                              </summary>
-                              <p>{message.message}</p>
-                            </details>
-                          ) : <p>{message.message}</p>}
-                          {(message.tmuxSessionId || message.tmuxPaneId || message.host) && (
-                            <small className="workspace-callback-message-origin">
-                              {[message.host, message.tmuxSessionId, message.tmuxPaneId].filter(Boolean).join(" · ")}
-                            </small>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </li>
+                  <ol className="workspace-callback-list workspace-callback-group-list" id={groupId}
+                    aria-label={`${group.label} callbacks`} hidden={!expanded}>
+                    {expanded && group.entries.map(renderEntry)}
+                  </ol>
+                </section>
               );
             })}
+            {displayedEntries.length === 0 && <p className="workspace-callback-groups-collapsed">All matching groups are collapsed.</p>}
+          </div>
+        ) : (
+          <ol className="workspace-callback-list" aria-label="Sessions to call back">
+            {displayedEntries.map(renderEntry)}
           </ol>
         )}
         <footer className="workspace-callback-footer">
@@ -1143,7 +1228,7 @@ export function WorkspaceCallbackList({
                 displayedNames.filter((name) => !sessionMap.has(name)),
               )}>
                 <TrashIcon />
-                <span>{filtersActive ? "Clear ended shown" : "Clear ended"}</span>
+                <span>{viewRestricted ? "Clear ended shown" : "Clear ended"}</span>
               </button>
             )}
             {clearableEntries.length > 0 && (
@@ -1155,7 +1240,7 @@ export function WorkspaceCallbackList({
                   ? "Review shown messages and remove shown global markers; workspace markers remain"
                   : "Review shown messages and remove their workspace callback markers"}
               >
-                {filtersActive ? "Clear shown" : activeScope === "global" ? "Clear global" : "Clear all"}
+                {viewRestricted ? "Clear shown" : activeScope === "global" ? "Clear global" : "Clear all"}
               </button>
             )}
           </div>

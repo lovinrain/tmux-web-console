@@ -1590,6 +1590,23 @@ chosen sort. With filters active, bulk actions become `Clear shown` and
 still preserves workspace-owned markers. Sorting and filtering never reorder
 or rewrite the shared callback queue.
 
+`Group by` offers None (the default), Status, Agent, and Workspace. Filters apply
+first, and the selected sort orders entries within each group. Status groups put
+Ready first, followed by Working, Waiting, Unknown, and Ended; running commands
+belong to Working. Agent groups include both session and pending-message origins.
+Workspace groups use callback ownership, with unowned entries in Global queue.
+Each session appears once: shared origins use Multiple agents or Multiple
+workspaces instead of duplicating rows. Workspace identity keeps separate
+workspaces distinct even when they have the same name.
+
+Click a group header to collapse or expand its rows; the badge counts all matching
+entries in that group. `Expand all` and `Collapse all` operate on the matching
+groups. Grouping and collapsed sections are remembered per Global/workspace view
+and grouping mode. Search or filter changes reveal matching groups, and Reset
+preserves the chosen sort and grouping. The result count reports expanded rows
+and separately shows how many are collapsed. Collapsed callbacks are excluded
+from `Clear shown` and `Clear ended shown`, just like filtered-out rows.
+
 Each entry with a posted message shows `Latest callback` using the server's most
 recent receipt time, including reviewed messages for sessions still in the
 saved callback queue. Reviewing a newer message does not move that time back to

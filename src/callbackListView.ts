@@ -12,6 +12,13 @@ export const CALLBACK_SORT_OPTIONS = [
   { value: "name-desc", label: "Name Z–A" },
 ] as const;
 
+export const CALLBACK_GROUP_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "status", label: "Status" },
+  { value: "agent", label: "Agent" },
+  { value: "workspace", label: "Workspace" },
+] as const;
+
 export const CALLBACK_STATUS_OPTIONS = [
   { value: "all", label: "All statuses" },
   { value: "ready", label: "Ready" },
@@ -46,6 +53,7 @@ export const CALLBACK_LOCATION_OPTIONS = [
 ] as const;
 
 export type CallbackListSort = typeof CALLBACK_SORT_OPTIONS[number]["value"];
+export type CallbackListGroupBy = typeof CALLBACK_GROUP_OPTIONS[number]["value"];
 export type CallbackListStatusFilter = typeof CALLBACK_STATUS_OPTIONS[number]["value"];
 export type CallbackListAgentFilter = typeof CALLBACK_AGENT_OPTIONS[number]["value"];
 export type CallbackListMessageFilter = typeof CALLBACK_MESSAGE_OPTIONS[number]["value"];
@@ -53,6 +61,8 @@ export type CallbackListLocationFilter = typeof CALLBACK_LOCATION_OPTIONS[number
 
 export interface CallbackListViewPreferences {
   sort: CallbackListSort;
+  group: CallbackListGroupBy;
+  collapsedGroups: string[];
   status: CallbackListStatusFilter;
   agent: CallbackListAgentFilter;
   messages: CallbackListMessageFilter;
@@ -61,6 +71,8 @@ export interface CallbackListViewPreferences {
 
 export const DEFAULT_CALLBACK_LIST_VIEW: Readonly<CallbackListViewPreferences> = {
   sort: "queue",
+  group: "none",
+  collapsedGroups: [],
   status: "all",
   agent: "all",
   messages: "all",
@@ -73,6 +85,7 @@ export interface CallbackListEntry {
   session?: Session;
   messages: readonly CallbackMessage[];
   workspaceNames: readonly string[];
+  workspaceSources?: readonly { id: string; name: string }[];
   inCurrentWorkspace: boolean;
   globalOnly: boolean;
   latestCallbackAt?: number;
@@ -82,6 +95,13 @@ export interface CallbackStatus {
   label: string;
   tone: "ended" | "working" | "running_command" | "ready" | "waiting" | "unknown";
   working: boolean;
+}
+
+export interface CallbackListGroup {
+  key: string;
+  label: string;
+  entries: CallbackListEntry[];
+  tone?: CallbackStatus["tone"];
 }
 
 export function callbackStatus(session: Session | undefined): CallbackStatus {
@@ -130,11 +150,22 @@ function optionValue<T extends string>(
   return options.find((option) => option.value === value)?.value ?? fallback;
 }
 
+function validCollapsedGroupKey(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 2048 || /[\u0000-\u001f\u007f]/u.test(value)) return false;
+  return /^(status:(ready|working|waiting|unknown|ended)|agent:(claude|codex|copilot|cursor|grok|shells|multiple|other)|workspace:(multiple|global|(id|name):.+))$/u.test(value);
+}
+
 export function validateCallbackListViewPreferences(value: unknown): CallbackListViewPreferences {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...DEFAULT_CALLBACK_LIST_VIEW };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ...DEFAULT_CALLBACK_LIST_VIEW, collapsedGroups: [] };
+  }
   const candidate = value as Partial<Record<keyof CallbackListViewPreferences, unknown>>;
   return {
     sort: optionValue(CALLBACK_SORT_OPTIONS, candidate.sort, DEFAULT_CALLBACK_LIST_VIEW.sort),
+    group: optionValue(CALLBACK_GROUP_OPTIONS, candidate.group, DEFAULT_CALLBACK_LIST_VIEW.group),
+    collapsedGroups: Array.isArray(candidate.collapsedGroups)
+      ? [...new Set(candidate.collapsedGroups.filter(validCollapsedGroupKey))].slice(0, 512)
+      : [],
     status: optionValue(CALLBACK_STATUS_OPTIONS, candidate.status, DEFAULT_CALLBACK_LIST_VIEW.status),
     agent: optionValue(CALLBACK_AGENT_OPTIONS, candidate.agent, DEFAULT_CALLBACK_LIST_VIEW.agent),
     messages: optionValue(CALLBACK_MESSAGE_OPTIONS, candidate.messages, DEFAULT_CALLBACK_LIST_VIEW.messages),
@@ -146,7 +177,7 @@ export function parseCallbackListViewPreferences(raw: string | null): CallbackLi
   try {
     return validateCallbackListViewPreferences(raw === null ? null : JSON.parse(raw));
   } catch {
-    return { ...DEFAULT_CALLBACK_LIST_VIEW };
+    return { ...DEFAULT_CALLBACK_LIST_VIEW, collapsedGroups: [] };
   }
 }
 
@@ -189,6 +220,78 @@ function compareTimes(left: number | undefined, right: number | undefined, newes
 }
 
 const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+const STATUS_GROUPS: readonly Omit<CallbackListGroup, "entries">[] = [
+  { key: "status:ready", label: "Ready", tone: "ready" },
+  { key: "status:working", label: "Working", tone: "working" },
+  { key: "status:waiting", label: "Waiting", tone: "waiting" },
+  { key: "status:unknown", label: "Status unknown", tone: "unknown" },
+  { key: "status:ended", label: "Ended / unavailable", tone: "ended" },
+];
+
+const AGENT_GROUPS: readonly Omit<CallbackListGroup, "entries">[] = [
+  ...CALLBACK_AGENT_OPTIONS
+    .filter((option) => option.value !== "all" && option.value !== "other")
+    .map((option) => ({ key: `agent:${option.value}`, label: option.label })),
+  { key: "agent:multiple", label: "Multiple agents" },
+  { key: "agent:other", label: "Other / unknown" },
+];
+
+function workspaceGroup(entry: CallbackListEntry): Omit<CallbackListGroup, "entries"> {
+  // IDs keep identically named workspaces distinct. Older callers can still supply names alone.
+  const sources = entry.workspaceSources === undefined
+    ? entry.workspaceNames.map((name) => ({ key: `workspace:name:${name}`, name }))
+    : entry.workspaceSources.map((source) => ({ key: `workspace:id:${source.id}`, name: source.name }));
+  const uniqueSources = new Map(sources.map((source) => [source.key, source.name]));
+  if (uniqueSources.size > 1) return { key: "workspace:multiple", label: "Multiple workspaces" };
+  const source = uniqueSources.entries().next().value;
+  return source
+    ? { key: source[0], label: source[1].trim() || "Unnamed workspace" }
+    : { key: "workspace:global", label: "Global queue" };
+}
+
+/** Group already-filtered, sorted rows exactly once, retaining their order within each group. */
+export function groupCallbacks(
+  entries: readonly CallbackListEntry[],
+  group: CallbackListGroupBy,
+): CallbackListGroup[] {
+  if (entries.length === 0) return [];
+  if (group === "none") return [{ key: "none", label: "All callbacks", entries: [...entries] }];
+
+  const definitions = group === "status" ? STATUS_GROUPS : group === "agent" ? AGENT_GROUPS : [];
+  const groups = new Map<string, CallbackListGroup>();
+  for (const entry of entries) {
+    let definition: Omit<CallbackListGroup, "entries">;
+    if (group === "status") {
+      const status = callbackStatus(entry.session);
+      const key = `status:${status.working ? "working" : status.tone}`;
+      definition = STATUS_GROUPS.find((candidate) => candidate.key === key)!;
+    } else if (group === "agent") {
+      const agents = entryAgentKinds(entry);
+      const key = `agent:${agents.size > 1 ? "multiple" : agents.values().next().value}`;
+      definition = AGENT_GROUPS.find((candidate) => candidate.key === key)!;
+    } else {
+      definition = workspaceGroup(entry);
+    }
+    const existing = groups.get(definition.key);
+    if (existing) {
+      existing.entries.push(entry);
+    } else {
+      groups.set(definition.key, { ...definition, entries: [entry] });
+    }
+  }
+
+  if (group !== "workspace") {
+    return definitions.flatMap((definition) => {
+      const result = groups.get(definition.key);
+      return result ? [result] : [];
+    });
+  }
+  const workspaceRank = (key: string) => key === "workspace:multiple" ? 1 : key === "workspace:global" ? 2 : 0;
+  return [...groups.values()].sort((left, right) => workspaceRank(left.key) - workspaceRank(right.key)
+    || NAME_COLLATOR.compare(left.label, right.label)
+    || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+}
 
 export function filterAndSortCallbacks(
   entries: readonly CallbackListEntry[],
