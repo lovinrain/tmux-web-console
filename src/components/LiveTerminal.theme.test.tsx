@@ -54,6 +54,19 @@ const terminalMocks = vi.hoisted(() => ({
   fit: vi.fn(),
 }));
 
+const codexThemeMocks = vi.hoisted(() => ({
+  setTheme: vi.fn(),
+  dispose: vi.fn(),
+  attach: vi.fn(),
+}));
+
+vi.mock("../codexComposerTheme", () => ({
+  attachCodexComposerTheme: (terminal: unknown, theme: string) => {
+    codexThemeMocks.attach(terminal, theme);
+    return { setTheme: codexThemeMocks.setTheme, dispose: codexThemeMocks.dispose };
+  },
+}));
+
 const webLinkMocks = vi.hoisted(() => ({
   instances: [] as MockWebLinksAddonInstance[],
 }));
@@ -235,6 +248,9 @@ function LayoutPhaseProbe({
 beforeEach(() => {
   terminalMocks.instances.length = 0;
   terminalMocks.fit.mockClear();
+  codexThemeMocks.attach.mockClear();
+  codexThemeMocks.setTheme.mockClear();
+  codexThemeMocks.dispose.mockClear();
   webLinkMocks.instances.length = 0;
   fileLinkMocks.instances.length = 0;
   fileLinkMocks.dispose.mockClear();
@@ -1053,6 +1069,36 @@ describe("LiveTerminal themes", () => {
     expect(terminalMocks.instances).toHaveLength(1);
     expect(socketMocks.instances).toHaveLength(1);
     expect(terminalMocks.fit).toHaveBeenCalledTimes(1);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("adapts a detected Codex composer across theme changes without reconnecting or sending input", () => {
+    const view = render(
+      <LiveTerminal session="agent" ignoreSize={false} theme="dark" agentKind="shells" {...callbacks} />,
+    );
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    act(() => socket.emit("open"));
+    expect(codexThemeMocks.attach).not.toHaveBeenCalled();
+
+    view.rerender(
+      <LiveTerminal session="agent" ignoreSize={false} theme="dark" agentKind="codex" {...callbacks} />,
+    );
+    expect(codexThemeMocks.attach).toHaveBeenCalledWith(terminal, "dark");
+    view.rerender(
+      <LiveTerminal session="agent" ignoreSize={false} theme="light" agentKind="codex" {...callbacks} />,
+    );
+    expect(codexThemeMocks.attach).toHaveBeenCalledTimes(1);
+    expect(codexThemeMocks.setTheme).toHaveBeenLastCalledWith("light");
+    expect(terminalMocks.instances).toHaveLength(1);
+    expect(socketMocks.instances).toHaveLength(1);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <LiveTerminal session="agent" ignoreSize={false} theme="light" agentKind="claude" {...callbacks} />,
+    );
+    expect(codexThemeMocks.dispose).toHaveBeenCalledTimes(1);
+    expect(terminalMocks.instances).toHaveLength(1);
     expect(socket.send).toHaveBeenCalledTimes(1);
   });
 

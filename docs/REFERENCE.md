@@ -64,6 +64,13 @@ or `Ctrl+Shift+Z`, then `T`; the visible Theme button remains available on the
 landing page and compact layouts. The Theme toggle never sends terminal input,
 resizes tmux, or reconnects the PTY client.
 
+Codex caches its input area's background when it starts. Muxdeck adapts that
+area's shading to the current browser theme, including existing unsent text,
+without restarting Codex. The correction is local to the browser and leaves
+transcript colors, selections, and other applications' output intact. It applies
+when the active Codex input cursor and shaded prompt can be identified; modal
+views and unrecognized layouts retain the application's own colors.
+
 On desktop, the `Copy` control starts a fresh detached shell in the active pane's
 current working directory and immediately opens it as the active workspace tab. The
 server tries `<source>_1`, then increments the suffix until it can atomically

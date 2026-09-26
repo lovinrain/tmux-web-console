@@ -2668,6 +2668,7 @@ export function ConsoleScreen({
             `desktop-tab-rail-${clampedDesktopTabRailWidth}`,
           ].join(":")}
           theme={theme}
+          agentKind={scrollAgentKind}
           onUploadAttachment={uploadAttachment}
           onOpenFilePath={mobileLayout ? undefined : openTerminalFilePath}
           onStateChange={stateChange}

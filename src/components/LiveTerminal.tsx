@@ -12,6 +12,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl } from "../api";
+import { attachCodexComposerTheme } from "../codexComposerTheme";
 import {
   desktopAttachmentsAvailable,
   MAX_ATTACHMENT_UPLOAD_BATCH,
@@ -27,6 +28,7 @@ import { TerminalFileLinkProvider } from "../terminalFileLinks";
 import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import type { ConnectionState } from "../types";
 import type { ApplicationScrollProfile } from "../agentScrollPreferences";
+import type { SessionKind } from "../sessionDashboardModel";
 
 export type TerminalHistoryAction = "page-up" | "page-down" | "line-up" | "line-down" | "exit";
 export type TerminalHistoryResult = "accepted" | "rejected" | "disconnected";
@@ -56,6 +58,7 @@ interface LiveTerminalProps {
   layoutSuspended?: boolean;
   layoutRefreshToken?: string;
   theme: TerminalThemeMode;
+  agentKind?: SessionKind;
   onUploadAttachment?: SessionAttachmentUploader;
   onOpenFilePath?: (path: string) => void;
   onStateChange: (state: ConnectionState) => void;
@@ -130,6 +133,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     layoutSuspended = false,
     layoutRefreshToken = "default",
     theme,
+    agentKind,
     onUploadAttachment,
     onOpenFilePath,
     onStateChange,
@@ -138,6 +142,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
   }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
+    const codexThemeRef = useRef<ReturnType<typeof attachCodexComposerTheme> | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const applicationScrollRequestsRef = useRef(new Map<string, {
       socket: WebSocket;
@@ -588,6 +593,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       };
 
       const terminal = new Terminal({
+        // Codex composer shading uses xterm's public decoration API.
+        allowProposedApi: true,
         cursorBlink: true,
         cursorStyle: "bar",
         fontFamily: '"JetBrains Mono Variable", monospace',
@@ -953,14 +960,29 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           socketRef.current.close(1000, "view closed");
         }
         socketRef.current = null;
+        codexThemeRef.current?.dispose();
+        codexThemeRef.current = null;
         terminal.dispose();
         terminalRef.current = null;
       };
     }, [identity, ignoreSize, onPaneChange, onStateChange, session]);
 
     useEffect(() => {
+      const terminal = terminalRef.current;
+      if (!terminal || agentKind !== "codex") return;
+      const adapter = attachCodexComposerTheme(terminal, theme);
+      codexThemeRef.current = adapter;
+      return () => {
+        adapter.dispose();
+        if (codexThemeRef.current === adapter) codexThemeRef.current = null;
+      };
+      // Theme updates are applied in place below; agent detection must not reconnect the PTY.
+    }, [agentKind, identity, ignoreSize, onPaneChange, onStateChange, session]);
+
+    useEffect(() => {
       if (terminalRef.current) {
         terminalRef.current.options.theme = TERMINAL_THEMES[theme];
+        codexThemeRef.current?.setTheme(theme);
       }
     }, [theme]);
 
