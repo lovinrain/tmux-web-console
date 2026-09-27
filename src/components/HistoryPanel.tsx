@@ -62,6 +62,9 @@ export function HistoryPanel({
   const viewId = useId();
   const isAgent = ["codex", "claude", "copilot", "cursor", "grok"].includes(paneCommandKind(pane.command, pane.title));
   const [view, setView] = useState<"transcript" | "scrollback" | "beginning" | "submitted">(isAgent ? "transcript" : "scrollback");
+  const [recordedBeginning, setRecordedBeginning] = useState(false);
+  const selectView = (next: typeof view) => { setView(next); setRecordedBeginning(false); };
+  const showRecordedBeginning = () => { setView("beginning"); setRecordedBeginning(true); };
   const views = sessionName ? ["transcript", "scrollback", "beginning", "submitted"] as const : ["transcript", "scrollback", "beginning"] as const;
   const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", beginning: "Saved beginning", submitted: "Submitted messages" };
   const [page, setPage] = useState<HistoryPage | null>(null);
@@ -269,7 +272,7 @@ export function HistoryPanel({
         <header className="history-header">
           <div>
             <p className="eyebrow">{view === "submitted" ? `SESSION ${sessionName}` : `PANE ${pane.id}`} / HISTORY</p>
-            <h2>{viewLabels[view]}</h2>
+            <h2>{view === "beginning" && recordedBeginning ? "Recorded terminal output" : viewLabels[view]}</h2>
           </div>
           <div className="history-header-actions">
             {view === "scrollback" && <button type="button" className="icon-button" onClick={() => void capture()} aria-label="Capture a new snapshot"><RefreshIcon /></button>}
@@ -285,22 +288,25 @@ export function HistoryPanel({
             const index = event.key === "Home" ? 0 : event.key === "End" ? views.length - 1
               : (current + (event.key === "ArrowRight" ? 1 : -1) + views.length) % views.length;
             const next = views[index];
-            setView(next);
+            selectView(next);
             event.currentTarget.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
           }}>
           {views.map((value) => <button type="button" key={value}
             id={`${viewId}-${value}`} data-view={value} role="tab" aria-selected={view === value}
             aria-controls={`${viewId}-content`} tabIndex={view === value ? 0 : -1}
-            onClick={() => setView(value)}>{viewLabels[value]}</button>)}
+            onClick={() => selectView(value)}>{viewLabels[value]}</button>)}
         </div>
 
         <div className="history-view-content" id={`${viewId}-content`} role="tabpanel"
           aria-labelledby={`${viewId}-${view}`}>
-        {view === "transcript" ? <>
-          <AgentTranscript target={{ paneId: pane.id, identity: sessionIdentity }}
-            onShowScrollback={() => setView("scrollback")} onShowBeginning={() => setView("beginning")} />
+        {view === "transcript" || view === "beginning" && isAgent && !recordedBeginning ? <>
+          <AgentTranscript key={view} target={{ paneId: pane.id, identity: sessionIdentity }}
+            onShowScrollback={() => selectView("scrollback")} onShowBeginning={showRecordedBeginning} />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
         </> : view === "beginning" ? <>
+          {isAgent && <div className="history-notice">Recorded terminal output may begin after the conversation started.
+            {" "}<button type="button" onClick={() => selectView("beginning")}>Read conversation from first prompt</button>
+          </div>}
           <SavedScrollback target={{ paneId: pane.id, identity: sessionIdentity }} part="beginning" />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
         </> : view === "submitted" && sessionName ? <>
@@ -314,7 +320,7 @@ export function HistoryPanel({
 
         {page && ((page.alternateOn && page.historySize === 0) || lines.some((line) => line.includes("Earlier messages are available"))) && (
           <div className="history-notice">The terminal may show only part of this conversation.
-            {" "}<button type="button" onClick={() => setView("transcript")}>Read the local agent transcript</button>
+            {" "}<button type="button" onClick={() => selectView("transcript")}>Read the local agent transcript</button>
             {" "}Saved beginning and Submitted messages are also available.</div>
         )}
 

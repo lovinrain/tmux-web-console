@@ -172,9 +172,32 @@ describe("HistoryPanel resizing", () => {
     expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
     await screen.findByText("The local transcript was not found.");
     expect(createHistorySnapshot).not.toHaveBeenCalled();
-    expect(loadAgentTranscript).toHaveBeenCalledWith({ paneId: "%7", identity: "$1:1:1:1" }, null, null, expect.any(AbortSignal));
+    expect(loadAgentTranscript).toHaveBeenCalledWith({ paneId: "%7", identity: "$1:1:1:1" }, null, null, expect.any(AbortSignal), "conversation");
     fireEvent.click(screen.getByRole("button", { name: "Terminal scrollback" }));
     expect(createHistorySnapshot).toHaveBeenCalledWith("%7");
+  });
+
+  it.each(["codex", "claude", "copilot", "cursor-agent", "grok"])("opens %s Saved beginning at the native first prompt instead of a recorded placeholder", async (command) => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue({
+      sources: [], selectedSource: null, status: "available", nextCursor: null, partial: false, notice: null,
+      messages: [{ id: "first", role: "user", kind: "prompt", text: "Actual original prompt", timestamp: null, truncated: false }],
+    });
+    vi.mocked(loadSavedScrollback).mockResolvedValue({
+      part: "beginning", lines: ["Earlier messages are available — press ctrl+t to view the full transcript"],
+      panes: [], selectedPane: null, capturedAt: 100, firstCapturedAt: 100, sessionCreatedAt: 1,
+      limited: false, lineLimit: 2000, byteLimit: 1048576,
+    });
+    render(<HistoryPanel pane={{ ...pane(), command }} onClose={vi.fn()} />);
+    await screen.findByText("Actual original prompt");
+    fireEvent.click(screen.getByRole("tab", { name: "Saved beginning" }));
+    await screen.findByText("Actual original prompt");
+    expect(screen.queryByText(/Earlier messages are available/)).not.toBeInTheDocument();
+    expect(loadSavedScrollback).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Recorded terminal output" }));
+    await screen.findByText(/Earlier messages are available/);
+    fireEvent.click(screen.getByRole("button", { name: "Read conversation from first prompt" }));
+    await screen.findByText("Actual original prompt");
+    expect(screen.queryByText(/Earlier messages are available/)).not.toBeInTheDocument();
   });
 
   it("exposes the initial width and desktop bounds through the separator", () => {

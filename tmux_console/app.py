@@ -5553,7 +5553,7 @@ def create_app(
     async def agent_transcript(request: web.Request) -> web.Response:
         try:
             history_id = request.match_info.get("history_id")
-            allowed = {"source", "cursor", "limit"}
+            allowed = {"source", "cursor", "limit", "view"}
             if history_id is None:
                 allowed.add("identity")
             if set(request.query) - allowed:
@@ -5562,6 +5562,7 @@ def create_app(
             if not 1 <= limit <= 100:
                 raise ValueError("limit must be between 1 and 100")
             live_identity: tuple[str, str, int] | None = None
+            recorded_fallback = False
             if history_id is None:
                 pane_id = validate_tmux_pane_id(request.match_info["pane_id"])
                 async with app[SESSION_RENAME_LOCK_KEY]:
@@ -5578,7 +5579,15 @@ def create_app(
                     reference = await app[AGENT_REFERENCES_KEY].detect_pane(pane, refresh=True)
                     live_identity = (identity, pane.id, pane.process_pid)
                     agents = [{"agentType": reference.agent_type, "agentSessionId": reference.session_id}]
-                    app[SESSION_REGISTRY_KEY].observe_history(session, reference)
+                    recorded_history_id = app[SESSION_REGISTRY_KEY].observe_history(session, reference)
+                    # Some CLIs close their transcript descriptor while idle.
+                    # Only use IDs actually recorded for this same single-pane
+                    # session incarnation; never select by shared CWD or mtime.
+                    if reference.agent_type and not reference.session_id and len(session.panes) == 1:
+                        recorded = [item for item in app[SESSION_REGISTRY_KEY].list_session_agents(recorded_history_id)
+                                    if item["agentType"] == reference.agent_type and item["agentSessionId"]]
+                        if recorded:
+                            agents, recorded_fallback = recorded, True
             else:
                 app[SESSION_REGISTRY_KEY].get_history(history_id)
                 agents = app[SESSION_REGISTRY_KEY].list_session_agents(history_id)
@@ -5586,7 +5595,13 @@ def create_app(
                 result = await asyncio.to_thread(
                     app[AGENT_TRANSCRIPTS_KEY].read, agents,
                     selected=request.query.get("source"), cursor=request.query.get("cursor"), limit=limit,
+                    view=request.query.get("view", "all"),
                 )
+            if recorded_fallback:
+                result["notice"] = " ".join(filter(None, [
+                    "Showing a conversation previously recorded for this session. The current agent did not expose a conversation ID.",
+                    result.get("notice"),
+                ]))
             if live_identity is not None:
                 sessions = await app[TMUX_KEY].list_sessions()
                 if not any((session_identity(session), pane.id, pane.process_pid) == live_identity

@@ -1,17 +1,32 @@
 # Agent transcripts
 
-Open **Pane scrollback → Transcript** to read the coding agent's local
+Open **Pane scrollback → Transcript** or **Saved beginning** to read the coding agent's local
 conversation. Recognized Codex, Claude Code, Copilot, Cursor, and Grok panes open
 this view first. It can show messages that the terminal replaced with a notice
 such as “Earlier messages are available — press ctrl+t to view the full
 transcript,” or that tmux no longer retains.
 
-Messages appear in conversation order from the beginning. **Load later
-messages** continues through the saved conversation. **Show tool activity**
-includes collapsible tool calls and results; **Copy loaded transcript** copies
-the loaded messages included by that choice. Refresh returns to the beginning
+The default conversation view shows your prompts and agent replies, starting
+with the first saved prompt. Progress updates, tool calls/results, and generated
+setup context stay out of that view. **Show activity** includes those records in
+collapsed groups between messages. Text accompanying a tool call is kept separate
+from the tool payload. Unmarked assistant text stays visible so a provider without
+completion metadata does not lose its answers.
+
+**First prompt** and **Latest loaded reply** navigate the loaded conversation.
+**Load later messages** continues through it. Filtering happens before page limits,
+and the browser automatically continues past bounded windows of metadata, so
+setup instructions or tool chatter do not occupy the whole first page. Very large
+empty scans offer **Continue searching**. **Copy loaded transcript** copies the
+loaded messages included by the activity choice. Refresh returns to the beginning
 and includes newly saved records. Transcript text is selectable plain text:
 embedded HTML, scripts, and remote images are not rendered.
+
+For a recognized agent, **Saved beginning** now opens this same native
+conversation at its beginning. **Recorded terminal output** explicitly opens the
+old terminal recording. A captured “Earlier messages are available” notice is
+not presented as the beginning of the conversation. Plain shell panes continue
+to show their saved terminal output directly.
 
 **Session history / Agents → Transcript** reads a recorded conversation even
 after its shell ends. When several conversations ran in that tmux session, use
@@ -45,6 +60,20 @@ reference detector uses PID registrations when available, with legacy detection
 for older versions. An ID that was never detectable cannot be reconstructed by
 the transcript reader.
 
+Codex discovery follows executable launchers such as Volta and Node before
+looking for the actual CLI's rollout, while still excluding nested agents.
+When an idle CLI exposes no current ID, a single-pane session can offer IDs
+previously recorded for that exact session incarnation, with an explicit notice
+and conversation selector. This fallback never guesses from a shared working
+directory, and does not reuse another pane's or a replacement session's IDs.
+
+Reply classification uses Codex/Copilot `phase` (`commentary` versus
+`final_answer`), Claude's `stop_reason` (`tool_use` versus `end_turn`), and
+Cursor/Grok tool-call structure. Legacy Codex `channel` markers also work.
+Claude metadata messages, Codex environment/AGENTS blocks, and Grok synthetic
+reminders are activity rather than user prompts. Cursor's generated context is
+excluded, and native `<user_query>` wrappers are unwrapped for Cursor and Grok.
+
 Only visible user/assistant text and supported tool records are extracted.
 System/developer instructions, provider context, reasoning blocks, encrypted
 reasoning, and image bytes are omitted. Image and file attachments have text
@@ -75,7 +104,10 @@ Malformed/oversized records produce a partial-result notice. Discovery scans
 fixed native layouts with a 50,000-entry bound and never follows child symlinks.
 
 JSONL pagination fixes the file's original end so appends do not shift the
-pages; identity and boundary fingerprints detect rotation or rewriting.
+pages; identity and boundary fingerprints detect rotation or rewriting. Cursors
+are bound to the selected conversation/activity view and can resume within a
+record containing both text and tool activity. A read-budget boundary defers a
+whole native record rather than discarding the first prompt in that record.
 Cursor pagination retains the original root's order while its current root
 advances. Changed or removed snapshots require a refresh. Timestamps are shown
 only when present in the native record; Cursor and Grok may have no per-message

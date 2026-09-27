@@ -120,6 +120,7 @@ export interface AgentTranscriptSource {
 export interface AgentTranscriptMessage {
   id: string;
   role: "user" | "assistant" | "tool";
+  kind?: "prompt" | "response" | "progress" | "tool" | "context";
   text: string;
   timestamp: number | null;
   truncated: boolean;
@@ -140,8 +141,10 @@ export function loadAgentTranscript(
   source: string | null = null,
   cursor: string | null = null,
   signal?: AbortSignal,
+  view: "conversation" | "all" = "conversation",
 ): Promise<AgentTranscriptPage> {
   const search = new URLSearchParams();
+  search.set("view", view);
   if (source !== null) search.set("source", source);
   if (cursor !== null) search.set("cursor", cursor);
   if ("paneId" in target && target.identity) search.set("identity", target.identity);

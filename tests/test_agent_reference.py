@@ -133,6 +133,29 @@ async def test_current_codex_rollout_beats_stale_resume_and_in_process_workers(t
     assert (await detector.detect_pane(active, refresh=True)).session_id == current
 
 
+@pytest.mark.parametrize("resumed", [False, True])
+def test_codex_discovery_follows_volta_and_node_to_the_native_process(tmp_path: Path, resumed: bool):
+    proc_root = tmp_path / "proc"
+    old = "11111111-1111-4111-8111-111111111111"
+    current = "22222222-2222-4222-8222-222222222222"
+    arguments = ["resume", old] if resumed else []
+    shim = process(proc_root, 100, ["codex", *arguments])
+    node = process(proc_root, 101, ["node", "/opt/codex/bin/codex.js", *arguments])
+    native = process(proc_root, 102, ["codex", *arguments])
+    nested = process(proc_root, 103, ["codex", "worker"])
+    for root, child, executable in [(shim, 101, "volta-shim"), (node, 102, "node"), (native, 103, "codex (deleted)")]:
+        (root / "task" / root.name / "children").write_text(str(child))
+        (root / "exe").symlink_to(f"/opt/bin/{executable}")
+    rollout = tmp_path / f"rollout-{current}.jsonl"
+    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": current, "source": "cli"}}) + "\n")
+    (native / "fd" / "9").symlink_to(rollout)
+    assert discover_agent_session_id(pane(command="codex"), "codex", proc_root=proc_root) == current
+    (native / "fd" / "9").unlink()
+    (nested / "fd" / "9").symlink_to(rollout)
+    # Still stop at the real foreground process; never substitute a worker.
+    assert discover_agent_session_id(pane(command="codex"), "codex", proc_root=proc_root) == (old if resumed else None)
+
+
 @pytest.mark.asyncio
 async def test_detector_keeps_agent_type_when_no_reference_id_is_visible(tmp_path: Path):
     proc_root = tmp_path / "proc"

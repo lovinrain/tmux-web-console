@@ -27,8 +27,8 @@ describe("SessionHistoryDialog", () => {
     render(<SessionHistoryDialog onClose={vi.fn()} onOpenSession={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Transcript for named-agent" }));
     await screen.findByText("Original request");
-    expect(loadAgentTranscript).toHaveBeenCalledWith({ historyId: entry.id }, null, null, expect.any(AbortSignal));
-    fireEvent.click(screen.getByRole("button", { name: "Saved beginning" }));
+    expect(loadAgentTranscript).toHaveBeenCalledWith({ historyId: entry.id }, null, null, expect.any(AbortSignal), "conversation");
+    fireEvent.click(screen.getByRole("button", { name: "Recorded terminal output" }));
     await screen.findByText("Earlier output");
     expect(screen.queryByText("Original request")).not.toBeInTheDocument();
     expect(loadSavedScrollback).toHaveBeenCalledWith({ historyId: entry.id }, "beginning", null, expect.any(AbortSignal));

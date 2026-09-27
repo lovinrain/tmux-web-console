@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from .agent_reference import UUID_PATTERN
-from .transcript_formats import visible_message
+from .transcript_formats import CONVERSATION_KINDS, visible_messages
 
 AGENTS = ("codex", "claude", "copilot", "cursor", "grok")
 MAX_RECORD_BYTES = 16 * 1024 * 1024
@@ -53,14 +53,16 @@ def _encode_cursor(value: dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
-def _decode_cursor(value: str | None, key: str) -> dict[str, Any] | None:
+def _decode_cursor(value: str | None, key: str, view: str) -> dict[str, Any] | None:
     if value is None:
         return None
     try:
         if len(value) > 2048:
             raise ValueError()
         cursor = json.loads(base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True))
-        if (not isinstance(cursor, dict) or cursor.get("v") != 1 or cursor.get("source") != key
+        if (not isinstance(cursor, dict) or cursor.get("v") != 2 or cursor.get("source") != key
+                or cursor.get("view") != view
+                or type(cursor.get("part")) is not int or not 0 <= cursor["part"] <= 2
                 or not isinstance(cursor.get("file"), list) or len(cursor["file"]) != 2
                 or any(type(part) is not int or part < 0 for part in cursor["file"])
                 or type(cursor.get("offset")) is not int or cursor["offset"] < 0):
@@ -169,10 +171,12 @@ class AgentTranscriptReader:
 
     def read(
         self, agents: list[dict[str, Any]], *, selected: str | None = None,
-        cursor: str | None = None, limit: int = 50,
+        cursor: str | None = None, limit: int = 50, view: str = "all",
     ) -> dict[str, Any]:
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
+        if view not in {"conversation", "all"}:
+            raise ValueError("view must be conversation or all")
         sources = list({
             _source_key(item): {"key": _source_key(item), "agentType": item["agentType"],
                                 "agentSessionId": item.get("agentSessionId")}
@@ -191,16 +195,16 @@ class AgentTranscriptReader:
         if agent not in AGENTS or not isinstance(identifier, str) or not UUID_PATTERN.fullmatch(identifier):
             result.update(status="unsupported", notice="This agent's native transcript format is not supported.")
             return result
-        position = _decode_cursor(cursor, chosen["key"])
+        position = _decode_cursor(cursor, chosen["key"], view)
         try:
             path = self._locate(agent, identifier.lower())
             if path is None:
                 result.update(status="missing", notice="The recorded conversation's local transcript was not found. It may have been removed or stored in a different agent directory.")
                 return result
             if agent == "cursor":
-                page = self._read_cursor(path, identifier, chosen["key"], position, limit)
+                page = self._read_cursor(path, identifier, chosen["key"], position, limit, view)
             else:
-                page = self._read_jsonl(path, agent, identifier, chosen["key"], position, limit)
+                page = self._read_jsonl(path, agent, identifier, chosen["key"], position, limit, view)
             result.update(status="available", notice=None, **page)
             if result["partial"]:
                 result["notice"] = "Some native records could not be read or were too large. Long entries are marked when shortened."
@@ -212,13 +216,14 @@ class AgentTranscriptReader:
 
     def _read_jsonl(
         self, path: Path, agent: str, identifier: str, key: str,
-        cursor: dict[str, Any] | None, limit: int,
+        cursor: dict[str, Any] | None, limit: int, view: str,
     ) -> dict[str, Any]:
         with _open_file(path) as source:
             info = os.fstat(source.fileno())
             file_id = [info.st_dev, info.st_ino]
             _native_header(source, agent, identifier)
             end, offset, skipping = info.st_size, 0, False
+            part = cursor["part"] if cursor else 0
             if cursor is not None:
                 cursor_end = cursor.get("end")
                 offset, skipping = cursor["offset"], cursor.get("skip", False)
@@ -238,9 +243,14 @@ class AgentTranscriptReader:
                    and scanned < MAX_SCAN_BYTES and records < MAX_RECORDS_PER_PAGE):
                 records += 1
                 start = source.tell()
-                line = source.readline(min(MAX_RECORD_BYTES + 1, end - start, MAX_SCAN_BYTES - scanned))
+                line = source.readline(min(MAX_RECORD_BYTES + 1, end - start))
                 if not line:
                     raise TranscriptChangedError("The transcript changed while being read. Refresh to retry.")
+                # A page budget is not an oversized native record. Leave a valid
+                # record whole for the next page instead of discarding its tail.
+                if scanned and scanned + len(line) > MAX_SCAN_BYTES:
+                    source.seek(start)
+                    break
                 scanned += len(line)
                 if skipping or len(line) > MAX_RECORD_BYTES or (not line.endswith(b"\n") and source.tell() < end):
                     partial = True
@@ -253,23 +263,32 @@ class AgentTranscriptReader:
                     if agent == "claude" and record.get("sessionId", identifier) != identifier:
                         partial = True
                         continue
-                    entry = visible_message(agent, record)
+                    entries = visible_messages(agent, record)
                 except (ValueError, TypeError, RecursionError):
                     partial = True
                     continue
-                if entry is None:
-                    continue
-                length = len(entry["text"].encode("utf-8"))
-                if messages and size + length > MAX_PAGE_BYTES:
+                if part and part >= len(entries):
+                    raise ValueError("invalid transcript cursor; refresh the transcript")
+                deferred = False
+                for index, entry in enumerate(entries):
+                    if index < part or view == "conversation" and entry["kind"] not in CONVERSATION_KINDS:
+                        continue
+                    length = len(entry["text"].encode("utf-8"))
+                    if len(messages) >= limit or messages and size + length > MAX_PAGE_BYTES:
+                        part, deferred = index, True
+                        break
+                    entry["id"] = f"{key}:{start}:{index}"
+                    messages.append(entry)
+                    size += length
+                    partial |= entry["truncated"]
+                if deferred:
                     source.seek(start)
                     break
-                entry["id"] = f"{key}:{start}"
-                messages.append(entry)
-                size += length
-                partial |= entry["truncated"]
+                part = 0
             offset = source.tell()
             next_cursor = _encode_cursor({
-                "v": 1, "source": key, "file": file_id, "offset": offset, "end": end,
+                "v": 2, "source": key, "view": view, "part": part,
+                "file": file_id, "offset": offset, "end": end,
                 "skip": skipping, "head": head,
                 "anchor": _digest(source, max(0, offset - 256), min(256, offset)),
             }) if offset < end else None
@@ -277,7 +296,7 @@ class AgentTranscriptReader:
 
     def _read_cursor(
         self, path: Path, identifier: str, key: str,
-        cursor: dict[str, Any] | None, limit: int,
+        cursor: dict[str, Any] | None, limit: int, view: str,
     ) -> dict[str, Any]:
         info = path.stat()
         file_id = [info.st_dev, info.st_ino]
@@ -303,6 +322,7 @@ class AgentTranscriptReader:
                 raise TranscriptChangedError("Cursor's saved conversation changed. Refresh to read it again.")
             ids = _cursor_message_ids(row[0])
             offset = cursor["offset"] if cursor else 0
+            part = cursor["part"] if cursor else 0
             if offset > len(ids):
                 raise ValueError("invalid transcript cursor; refresh the transcript")
             messages: list[dict[str, Any]] = []
@@ -314,6 +334,7 @@ class AgentTranscriptReader:
                 row = connection.execute("SELECT data FROM blobs WHERE id = ? AND length(data) <= ?", (ids[offset], MAX_RECORD_BYTES)).fetchone()
                 if row is None:
                     partial = True
+                    part = 0
                     offset += 1
                     continue
                 scanned += len(row[0])
@@ -321,21 +342,31 @@ class AgentTranscriptReader:
                     record = json.loads(row[0])
                     if not isinstance(record, dict):
                         raise TypeError()
-                    entry = visible_message("cursor", record)
+                    entries = visible_messages("cursor", record)
                 except (ValueError, TypeError, RecursionError):
-                    entry = None
+                    entries = []
                     partial = True
-                if entry is not None:
+                if part and part >= len(entries):
+                    raise ValueError("invalid transcript cursor; refresh the transcript")
+                deferred = False
+                for index, entry in enumerate(entries):
+                    if index < part or view == "conversation" and entry["kind"] not in CONVERSATION_KINDS:
+                        continue
                     length = len(entry["text"].encode("utf-8"))
-                    if messages and size + length > MAX_PAGE_BYTES:
+                    if len(messages) >= limit or messages and size + length > MAX_PAGE_BYTES:
+                        part, deferred = index, True
                         break
-                    entry["id"] = f"{key}:{root}:{offset}"
+                    entry["id"] = f"{key}:{root}:{offset}:{index}"
                     messages.append(entry)
                     size += length
                     partial |= entry["truncated"]
+                if deferred:
+                    break
+                part = 0
                 offset += 1
             return {"messages": messages, "partial": partial, "nextCursor": _encode_cursor({
-                "v": 1, "source": key, "file": file_id, "root": root, "offset": offset,
+                "v": 2, "source": key, "view": view, "part": part,
+                "file": file_id, "root": root, "offset": offset,
             }) if offset < len(ids) else None}
 
 

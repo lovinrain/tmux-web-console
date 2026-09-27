@@ -305,6 +305,15 @@ def _uuid_from_explicit_arguments(arguments: list[str]) -> str | None:
     return None
 
 
+def _is_process_launcher(proc_root: Path, process_id: int) -> bool:
+    """argv[0] can say 'codex' while Volta is still launching Node and the CLI."""
+    try:
+        executable = Path(os.readlink(proc_root / str(process_id) / "exe")).name.removesuffix(" (deleted)")
+    except OSError:
+        return False
+    return executable in {"volta-shim", "node", "nodejs", "bash", "sh", "zsh", "env", "python", "python3"} or executable.startswith("python3.")
+
+
 def _path_matches_agent(path: str, agent_type: AgentType) -> bool:
     normalized = path.casefold()
     basename = Path(path).name.casefold()
@@ -377,12 +386,16 @@ def discover_agent_session_id(
 ) -> str | None:
     agent_processes = 0
     foreground_process: int | None = None
+    launcher_reference: str | None = None
     for process_id in _bounded_process_tree(proc_root, pane.process_pid):
         arguments = _process_arguments(proc_root, process_id)
         if not _looks_like_agent_process(arguments, agent_type):
             continue
         agent_processes += 1
         if foreground_process is None:
+            foreground_process = process_id
+        launcher = _is_process_launcher(proc_root, process_id)
+        if not launcher:
             foreground_process = process_id
         if agent_type == "claude":
             registered = _claude_registered_session(
@@ -399,13 +412,17 @@ def discover_agent_session_id(
             return max(candidates)[2]
         explicit = _uuid_from_explicit_arguments(arguments)
         if explicit is not None:
-            return explicit
+            if not launcher:
+                return explicit
+            launcher_reference = launcher_reference or explicit
         # A native foreground agent with no current ID must not borrow its
         # nested worker's ID. Continue through interpreter/launcher wrappers.
-        if agent_type in {"codex", "claude"} and Path(arguments[0]).name == agent_type:
+        if agent_type in {"codex", "claude"} and Path(arguments[0]).name == agent_type and not launcher:
             break
         if agent_processes >= MAX_AGENT_PROCESSES:
             break
+    if launcher_reference is not None:
+        return launcher_reference
     if agent_type == "claude" and foreground_process is not None:
         return _claude_session_from_transcripts(
             pane,

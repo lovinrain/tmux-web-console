@@ -285,3 +285,142 @@ async def test_api_query_validation_and_identity_change_during_read(tmp_path):
         assert (await client.get("/api/session-history/missing/agent-transcript")).status == 404
         assert (await client.get("/api/panes/%25999/agent-transcript")).status == 404
         assert (await client.get(path)).status == 409
+
+
+CONVERSATION_RECORDS = {
+    "codex": [
+        codex_message('<environment_context>Runtime setup</environment_context>'),
+        codex_message('First prompt'),
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "commentary", "content": [{"type": "output_text", "text": "Checking the files"}]}},
+        {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "inspect", "input": "tool arguments"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": "Finished reply"}]}},
+        codex_message("Unmarked reply", "assistant"),
+    ],
+    "claude": [
+        {"type": "user", "isMeta": True, "message": {"role": "user", "content": "Runtime setup"}},
+        {"type": "user", "message": {"role": "user", "content": "First prompt"}},
+        {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use", "content": [{"type": "text", "text": "Checking the files"}, {"type": "tool_use", "name": "inspect", "input": {"path": "example"}}]}},
+        {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "Tool result"}]}},
+        {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "Finished reply"}]}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Unmarked reply"}]}},
+    ],
+    "copilot": [
+        {"type": "user.message", "data": {"content": "First prompt"}},
+        {"type": "assistant.message", "data": {"content": "Checking the files", "toolRequests": [{"name": "inspect", "arguments": "tool arguments"}]}},
+        {"type": "assistant.message", "data": {"phase": "commentary", "content": "More progress"}},
+        {"type": "assistant.message", "data": {"phase": "final_answer", "content": "Finished reply"}},
+        {"type": "assistant.message", "data": {"content": "Unmarked reply"}},
+    ],
+    "cursor": [
+        {"role": "user", "content": "Runtime setup", "providerOptions": {"cursor": {"requestContextCompleteness": {}}}},
+        {"role": "user", "content": [{"type": "text", "text": "<user_query>First prompt</user_query>"}]},
+        {"role": "assistant", "content": [{"type": "reasoning", "text": "Hidden reasoning"}, {"type": "text", "text": "Checking the files"}, {"type": "tool-call", "toolName": "inspect", "args": "tool arguments"}]},
+        {"role": "tool", "content": [{"type": "tool-result", "toolName": "inspect", "result": "Tool result"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Finished reply"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Unmarked reply"}]},
+    ],
+    "grok": [
+        {"type": "user", "content": [{"type": "text", "text": "<user_info>Runtime setup</user_info>"}]},
+        {"type": "user", "synthetic_reason": "system_reminder", "content": [{"type": "text", "text": "Injected reminder"}]},
+        {"type": "user", "prompt_index": 0, "content": [{"type": "text", "text": "<user_query>First prompt</user_query>"}]},
+        {"type": "assistant", "content": "Checking the files", "tool_calls": [{"function": {"name": "inspect", "arguments": "tool arguments"}}]},
+        {"type": "assistant", "content": "Finished reply"},
+        {"type": "assistant", "content": "Unmarked reply"},
+    ],
+}
+
+
+@pytest.mark.parametrize("agent", CONVERSATION_RECORDS)
+def test_conversation_pages_start_at_real_prompt_and_keep_replies_out_of_activity(tmp_path, agent):
+    write_native(tmp_path, agent, CONVERSATION_RECORDS[agent])
+    reader = AgentTranscriptReader(roots={agent: tmp_path})
+    page = reader.read(references(agent), view="conversation", limit=1)
+    assert page["messages"][0]["text"] == "First prompt"
+    messages = page["messages"][:]
+    while page["nextCursor"]:
+        page = reader.read(references(agent), view="conversation", cursor=page["nextCursor"], limit=1)
+        assert len(page["messages"]) <= 1
+        messages += page["messages"]
+    assert [(m["text"], m["kind"]) for m in messages] == [
+        ("First prompt", "prompt"), ("Finished reply", "response"), ("Unmarked reply", "response"),
+    ]
+    # Activity paging can stop inside a mixed text/tool record without losing
+    # either part, repeating it, or changing a conversation message's identity.
+    page = reader.read(references(agent), view="all", limit=1)
+    activity = page["messages"][:]
+    while page["nextCursor"]:
+        page = reader.read(references(agent), view="all", cursor=page["nextCursor"], limit=1)
+        assert len(page["messages"]) <= 1
+        activity += page["messages"]
+    assert len({m["id"] for m in activity}) == len(activity)
+    assert [m for m in activity if m["kind"] in {"prompt", "response"}] == messages
+    assert any(m["kind"] == "progress" and m["text"] == "Checking the files" for m in activity)
+    assert any(m["kind"] == "tool" for m in activity)
+    assert all("Hidden reasoning" not in m["text"] for m in activity)
+
+
+def test_codex_mixed_context_preserves_first_prompt_and_legacy_phase(tmp_path):
+    record = codex_message("unused")
+    record["payload"]["content"] = [
+        {"type": "input_text", "text": "# AGENTS.md instructions for /work\n<INSTRUCTIONS>Setup</INSTRUCTIONS>"},
+        {"type": "input_text", "text": "<environment_context>Setup</environment_context>"},
+        {"type": "input_text", "text": "Actual first prompt"},
+    ]
+    progress = codex_message("Old progress", "assistant")
+    progress["payload"].update(phase=None, channel="commentary")
+    answer = codex_message("Old answer", "assistant")
+    answer["payload"]["channel"] = "final"
+    write_native(tmp_path, "codex", [record, progress, answer])
+    reader = AgentTranscriptReader(roots={"codex": tmp_path})
+    result = reader.read(references(), view="conversation")
+    assert [m["text"] for m in result["messages"]] == ["Actual first prompt", "Old answer"]
+    result = reader.read(references(), view="all", limit=1)
+    assert result["messages"][0]["kind"] == "context"
+    result = reader.read(references(), view="all", cursor=result["nextCursor"], limit=1)
+    assert result["messages"][0]["text"] == "Actual first prompt"
+    with pytest.raises(ValueError, match="cursor"):
+        reader.read(references(), view="conversation", cursor=result["nextCursor"])
+
+
+def test_read_budget_does_not_discard_a_prompt_that_straddles_scan_pages(tmp_path, monkeypatch):
+    monkeypatch.setattr("tmux_console.agent_transcripts.MAX_SCAN_BYTES", 500)
+    write_native(tmp_path, "codex", [
+        {"type": "event_msg", "payload": {"type": "token_count", "padding": "x" * 250}},
+        codex_message("Original prompt " + "z" * 220),
+    ])
+    reader = AgentTranscriptReader(roots={"codex": tmp_path})
+    first = reader.read(references(), view="conversation")
+    assert first["messages"] == [] and first["nextCursor"]
+    second = reader.read(references(), view="conversation", cursor=first["nextCursor"])
+    assert second["messages"][0]["text"].startswith("Original prompt")
+    assert not second["partial"]
+
+
+def test_unknown_phase_does_not_hide_an_answer(tmp_path):
+    record = codex_message("Future-format answer", "assistant")
+    record["payload"]["phase"] = {"new": "marker"}
+    write_native(tmp_path, "codex", [record])
+    result = AgentTranscriptReader(roots={"codex": tmp_path}).read(references(), view="conversation")
+    assert result["messages"][0]["text"] == "Future-format answer"
+    assert not result["partial"]
+
+
+async def test_idle_single_pane_can_read_its_recorded_conversation_without_guessing_by_directory(tmp_path):
+    write_native(tmp_path, "codex", CONVERSATION_RECORDS["codex"])
+    tmux, detector = TranscriptTmux(), References()
+    tmux.session = replace(tmux.session, panes=[tmux.session.panes[0]])
+    app = create_app(tmux=tmux, agent_references=detector,
+                     agent_transcripts=AgentTranscriptReader(roots={"codex": tmp_path}), base_path="")
+    async with TestClient(TestServer(app)) as client:
+        path = "/api/panes/%251/agent-transcript"
+        first = await (await client.get(path, params={"view": "conversation"})).json()
+        assert first["messages"][0]["text"] == "First prompt"
+        assert [m["kind"] for m in first["messages"]] == ["prompt", "response", "response"]
+        detector.identifiers["%1"] = None
+        recorded = await (await client.get(path, params={"view": "conversation"})).json()
+        assert recorded["messages"] == first["messages"]
+        assert "previously recorded" in recorded["notice"]
+        assert (await client.get(path, params={"view": "unknown"})).status == 400
+        assert (await client.get(path, params={"source": f"codex:{OTHER}"})).status == 400
+        tmux.session = replace(tmux.session, id="$new", created=500)
+        assert (await (await client.get(path)).json())["status"] == "unidentified"

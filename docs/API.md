@@ -718,12 +718,22 @@ recorded under a stable history ID, including ended sessions. Optional `source`
 selects a key from `sources`; arbitrary agent IDs and paths are not accepted.
 The most recently observed source is selected by default.
 
-Both accept opaque `cursor` and `limit` (1–100, default 50). Responses contain
+Both accept opaque `cursor`, `limit` (1–100, default 50), and `view`
+(`all` by default for API compatibility, or `conversation` for prompts/replies).
+The browser uses `conversation` by default; activity is filtered before page
+limits. A cursor is bound to its view and source. Responses contain
 `sources` (`key`, `agentType`, `agentSessionId`), `selectedSource`, `status`,
 `messages`, `nextCursor`, `partial`, and `notice`. Messages have `id`, `role`
-(`user`, `assistant`, or `tool`), `text`, nullable Unix-millisecond `timestamp`,
+(`user`, `assistant`, or `tool`), `kind` (`prompt`, `response`, `progress`, `tool`,
+or `context`), `text`, nullable Unix-millisecond `timestamp`,
 and `truncated`. Results are in conversation order, earliest first. Status is
 `available`, `missing`, `unreadable`, `unsupported`, or `unidentified`.
+
+Text and tools from a single native record can produce separate entries with
+stable IDs, including across pages. Unmarked assistant text remains a response.
+For a single-pane session whose current agent ID is unavailable, previously
+recorded IDs from that same session incarnation can be returned with an explicit
+notice; multi-pane requests never borrow another pane's reference.
 
 Unknown query fields, invalid cursors/limits, and foreign source keys return
 `400`; changed pane or transcript identity returns `409`; missing pane/history

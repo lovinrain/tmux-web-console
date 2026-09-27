@@ -9,7 +9,16 @@
 .agent-transcript-description, .agent-transcript-notice, .agent-transcript-end { color: var(--muted); }
 .agent-transcript-tools { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .agent-transcript-messages { flex: 1; min-height: 80px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 4px; background: var(--ink); padding: 12px; }
-.agent-transcript-message { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.agent-transcript-message { margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--ink-raised); }
+.agent-transcript-message[data-kind="prompt"] { border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 6%, var(--ink-raised)); }
+.agent-transcript-message[data-kind="response"] { border-left: 3px solid var(--cyan); }
+.agent-transcript-message[data-kind="response"] .agent-transcript-message-heading strong { color: var(--cyan); }
+.agent-transcript-reply-label { color: var(--muted); font-size: 10px; }
+.agent-transcript-activity { margin-bottom: 14px; color: var(--muted); border: 1px dashed var(--line); border-radius: 6px; padding: 10px; }
+.agent-transcript-activity > summary { cursor: pointer; font-size: 12px; }
+.agent-transcript-activity[open] > summary { margin-bottom: 12px; }
+.agent-transcript-activity .agent-transcript-message { color: var(--muted); padding: 10px; }
+.agent-transcript-activity .agent-transcript-message:last-child { margin-bottom: 0; }
 .agent-transcript-message-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 12px; }
 .agent-transcript-message-heading time { color: var(--muted); font-size: 11px; }
 .agent-transcript-message[data-role="user"] .agent-transcript-message-heading strong { color: var(--amber); }
