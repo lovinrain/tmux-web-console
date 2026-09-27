@@ -294,6 +294,10 @@ CONVERSATION_RECORDS = {
         {"type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "commentary", "content": [{"type": "output_text", "text": "Checking the files"}]}},
         {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "inspect", "input": "tool arguments"}},
         {"type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": "Finished reply"}]}},
+        {"type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": "Internal handoff"}]}},
+        {"type": "token_usage_record", "payload": {"response_id": "compaction-1"}},
+        {"type": "event_msg", "payload": {"type": "token_count"}},
+        {"type": "compacted", "payload": {"compaction_response_id": "compaction-1", "message": "Native handoff preamble\nInternal handoff"}},
         codex_message("Unmarked reply", "assistant"),
     ],
     "claude": [
@@ -357,6 +361,70 @@ def test_conversation_pages_start_at_real_prompt_and_keep_replies_out_of_activit
     assert any(m["kind"] == "progress" and m["text"] == "Checking the files" for m in activity)
     assert any(m["kind"] == "tool" for m in activity)
     assert all("Hidden reasoning" not in m["text"] for m in activity)
+    if agent == "codex":
+        assert any(m["kind"] == "context" and m["text"] == "Internal handoff" for m in activity)
+
+
+@pytest.mark.parametrize("phase", [{"phase": "final_answer"}, {"channel": "final"}, {}])
+def test_codex_compaction_uses_full_text_across_scan_pages(tmp_path, monkeypatch, phase):
+    monkeypatch.setattr("tmux_console.transcript_formats.MAX_MESSAGE_BYTES", 48)
+    monkeypatch.setattr("tmux_console.agent_transcripts.MAX_RECORDS_PER_PAGE", 2)
+    summary = codex_message("Continuation details " * 10, "assistant")
+    summary["payload"].update(phase)
+    original = write_native(tmp_path, "codex", [
+        codex_message("First prompt"),
+        codex_message("## Active request\nA real answer", "assistant"),
+        summary,
+        {"type": "event_msg", "payload": {"type": "token_count"}},
+        {"type": "compacted", "payload": {"message": summary["payload"]["content"][0]["text"]}},
+        codex_message("Reply after compaction", "assistant"),
+    ])
+    before = original.read_bytes()
+    reader = AgentTranscriptReader(roots={"codex": tmp_path})
+    conversations = []
+    for view in ("conversation", "all"):
+        messages, cursor = [], None
+        for _ in range(20):
+            page = reader.read(references(), view=view, cursor=cursor, limit=1)
+            messages.extend(page["messages"])
+            cursor = page["nextCursor"]
+            if not cursor:
+                break
+        assert cursor is None
+        assert len({m["id"] for m in messages}) == len(messages)
+        visible = [m for m in messages if m["kind"] in {"prompt", "response"}]
+        assert [m["text"] for m in visible] == ["First prompt", "## Active request\nA real answer", "Reply after compaction"]
+        conversations.append(visible)
+        if view == "all":
+            context = [m for m in messages if m["kind"] == "context"]
+            assert len(context) == 1 and context[0]["truncated"]
+    assert conversations[0] == conversations[1]
+    assert original.read_bytes() == before
+
+
+@pytest.mark.parametrize("following", [
+    [{"type": "compacted", "payload": {"message": "Different summary"}}],
+    [{"type": "token_usage_record", "payload": {"response_id": "real-answer"}},
+     {"type": "compacted", "payload": {"compaction_response_id": "other-response", "message": "## Active request"}}],
+    [codex_message("Intervening prompt"), {"type": "compacted", "payload": {"message": "## Active request"}}],
+])
+def test_codex_compaction_does_not_claim_an_unrelated_reply(tmp_path, following):
+    write_native(tmp_path, "codex", [codex_message("## Active request", "assistant"), *following])
+    result = AgentTranscriptReader(roots={"codex": tmp_path}).read(references(), view="conversation")
+    assert result["messages"][0]["text"] == "## Active request"
+    assert result["messages"][0]["kind"] == "response"
+
+
+def test_codex_compaction_lookahead_does_not_read_beyond_snapshot(tmp_path):
+    path = write_native(tmp_path, "codex", [codex_message("First prompt"), codex_message("Handoff", "assistant")])
+    reader = AgentTranscriptReader(roots={"codex": tmp_path})
+    first = reader.read(references(), view="conversation", limit=1)
+    with path.open("a") as stream:
+        stream.write(json.dumps({"type": "compacted", "payload": {"message": "Handoff"}}) + "\n")
+    pinned = reader.read(references(), view="conversation", cursor=first["nextCursor"])
+    assert [m["text"] for m in pinned["messages"]] == ["Handoff"]
+    refreshed = reader.read(references(), view="conversation")
+    assert [m["text"] for m in refreshed["messages"]] == ["First prompt"]
 
 
 def test_codex_mixed_context_preserves_first_prompt_and_legacy_phase(tmp_path):

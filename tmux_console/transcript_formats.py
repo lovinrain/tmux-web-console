@@ -81,6 +81,28 @@ def _entry(role: str, kind: str, text: str, timestamp: int | None) -> dict[str, 
             "timestamp": timestamp, "truncated": len(encoded) > MAX_MESSAGE_BYTES}
 
 
+def codex_compaction_matches(
+    message: dict[str, Any], compaction: dict[str, Any], response_id: str | None,
+) -> bool:
+    """Match a native handoff to its full message, before display truncation.
+
+    Codex also saves compaction output as an assistant final_answer. The later
+    compacted record contains that output, sometimes after a handoff preamble.
+    Neither the final phase nor headings such as "Active request" identify it.
+    """
+    payload, compacted = message.get("payload"), compaction.get("payload")
+    if (compaction.get("type") != "compacted" or not isinstance(payload, dict)
+            or not isinstance(compacted, dict)):
+        return False
+    compaction_id = compacted.get("compaction_response_id")
+    if isinstance(compaction_id, str) and response_id is not None and compaction_id != response_id:
+        return False
+    text, summary = _text(payload.get("content")), compacted.get("message")
+    return bool(text.strip()) and isinstance(summary, str) and (
+        summary == text or summary.endswith("\n" + text)
+    )
+
+
 def visible_messages(agent: str, record: dict[str, Any]) -> list[dict[str, Any]]:
     """Split visible text and tools; never treat tool results as user prompts.
 

@@ -75,6 +75,13 @@ directory, and does not reuse another pane's or a replacement session's IDs.
 Reply classification uses Codex/Copilot `phase` (`commentary` versus
 `final_answer`), Claude's `stop_reason` (`tool_use` versus `end_turn`), and
 Cursor/Grok tool-call structure. Legacy Codex `channel` markers also work.
+Codex also marks internal compaction summaries as `final_answer`. Bounded
+lookahead links these messages to the following native `compacted` record,
+checking the full summary text and response ID when available. Confirmed
+summaries appear as **Session context** under **Show activity**, not as replies.
+Headings such as "Active request" alone never hide a genuine answer. Lookahead
+respects the saved pagination snapshot; refresh after an unfinished compaction
+has been written to update its classification.
 Claude metadata messages, Codex environment/AGENTS blocks, and Grok synthetic
 reminders are activity rather than user prompts. Cursor's generated context is
 excluded, and native `<user_query>` wrappers are unwrapped for Cursor and Grok.

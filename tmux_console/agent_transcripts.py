@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from .agent_reference import UUID_PATTERN
-from .transcript_formats import CONVERSATION_KINDS, visible_messages
+from .transcript_formats import (
+    CONVERSATION_KINDS,
+    codex_compaction_matches,
+    visible_messages,
+)
 
 AGENTS = ("codex", "claude", "copilot", "cursor", "grok")
 MAX_RECORD_BYTES = 16 * 1024 * 1024
@@ -22,6 +26,7 @@ MAX_PAGE_BYTES = 1024 * 1024
 MAX_DISCOVERY_ENTRIES = 50_000
 MAX_CURSOR_MESSAGES = 100_000
 MAX_RECORDS_PER_PAGE = 5_000
+MAX_CODEX_COMPACTION_RECORDS = 8
 
 
 class TranscriptChangedError(ValueError):
@@ -120,6 +125,45 @@ def _native_header(source: BinaryIO, agent: str, identifier: str) -> None:
             raise ValueError()
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as error:
         raise _Unsupported("The native transcript header does not match the recorded conversation.") from error
+
+
+def _codex_compaction_follows(
+    source: BinaryIO, end: int, message: dict[str, Any],
+) -> tuple[bool, int, int]:
+    """Look past accounting records only, within this page's pinned snapshot.
+
+    Restore the stream so pagination and message IDs still use native offsets.
+    Charge these bounded extra reads to the page's scan and record budgets.
+    """
+    position = source.tell()
+    scanned = records = 0
+    response_id = None
+    try:
+        while source.tell() < end and records < MAX_CODEX_COMPACTION_RECORDS and scanned < MAX_RECORD_BYTES:
+            line = source.readline(min(end - source.tell(), MAX_RECORD_BYTES - scanned + 1))
+            scanned += len(line)
+            records += 1
+            if not line:
+                raise TranscriptChangedError("The transcript changed while being read. Refresh to retry.")
+            if scanned > MAX_RECORD_BYTES or (not line.endswith(b"\n") and source.tell() < end):
+                break
+            try:
+                record = json.loads(line)
+            except (ValueError, RecursionError):
+                break
+            if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
+                break
+            payload = record["payload"]
+            if record.get("type") == "token_usage_record":
+                value = payload.get("response_id")
+                response_id = value if isinstance(value, str) else None
+                continue
+            if record.get("type") == "event_msg" and payload.get("type") == "token_count":
+                continue
+            return codex_compaction_matches(message, record, response_id), scanned, records
+        return False, scanned, records
+    finally:
+        source.seek(position)
 
 
 class AgentTranscriptReader:
@@ -267,6 +311,14 @@ class AgentTranscriptReader:
                 except (ValueError, TypeError, RecursionError):
                     partial = True
                     continue
+                if agent == "codex" and any(entry["kind"] == "response" for entry in entries):
+                    compacted, ahead_bytes, ahead_records = _codex_compaction_follows(source, end, record)
+                    scanned += ahead_bytes
+                    records += ahead_records
+                    if compacted:
+                        for entry in entries:
+                            if entry["kind"] == "response":
+                                entry["kind"] = "context"
                 if part and part >= len(entries):
                     raise ValueError("invalid transcript cursor; refresh the transcript")
                 deferred = False
