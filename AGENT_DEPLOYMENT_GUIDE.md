@@ -1066,6 +1066,62 @@ Never use `tmux kill-server` as deployment cleanup or rollback.
 
 ## 13. Updating an existing deployment later
 
+### Reusable checks and progress
+
+Use `scripts/check_deployment.py` for the common read-only checks instead of
+writing temporary verification and report scripts for every release. It uses
+Python's standard library and runs as the service user. It reads the running
+service's environment privately to select the correct tmux socket, loopback URL,
+base path, and authentication mode. It never restarts services or sends input.
+
+Before an authorized update, record the existing identities in a new private
+evidence directory:
+
+```bash
+MUXDEPLOY_EVIDENCE="$HOME/.local/state/muxdeck/deployments/$(date -u +%Y%m%dT%H%M%SZ)"
+python3 scripts/check_deployment.py snapshot \
+  --service muxdeck.service --output "$MUXDEPLOY_EVIDENCE/before.json"
+```
+
+After the update, use that baseline and a fresh report directory:
+
+```bash
+python3 scripts/check_deployment.py verify \
+  --baseline "$MUXDEPLOY_EVIDENCE/before.json" \
+  --output-dir "$MUXDEPLOY_EVIDENCE/checks" \
+  --public-origin https://console.example.test \
+  --expected-dist /absolute/path/to/tested-release/dist
+```
+
+Replace the example public origin with the exact configured HTTPS origin, or
+omit it for a loopback-only deployment. Repeat `--public-origin` for multiple
+routes. Use `--expected-dist` to compare the installed frontend with the separate
+tested build; omit it for a change that does not replace frontend assets.
+
+Every phase prints its start, result, and elapsed time immediately. Commands
+have an eight-second timeout; HTTP requests have a five-second timeout. There
+are no automatic retry loops. `verification.json` and `report.md` are written
+automatically on success or check failure, with private permissions; existing
+evidence is never overwritten. A nonzero exit requires review. A pane identity
+change can be legitimate user activity, so inspect it rather than discarding
+the original baseline. A previous web-process stop timeout is reported separately
+from application errors and merits graceful-shutdown investigation.
+
+Protected assets correctly return `401` without a login. The checker verifies
+that denial, the server-mode login redirect, Basic challenges when applicable,
+and rejection of an untrusted Host. It does not create credentials or claim to
+validate authenticated application behavior. Keep task-specific browser tests,
+database/migration checks, CI results, and rollback backups as separate evidence.
+
+Do independent development in a separate worktree before changing a dirty live
+checkout. Stage frontend builds outside the live `dist/`, validate them, then
+install the reviewed assets. Documentation and tooling changes require neither
+a frontend build nor a service restart. Announce phase changes and report
+progress at least every 60 seconds, including while preparing code or reports.
+Once checks finish, link the generated report rather than reconstructing it.
+
+### Release installation
+
 Prefer versioned release directories rather than extracting over the running
 tree:
 
