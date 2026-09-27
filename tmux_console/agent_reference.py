@@ -394,9 +394,9 @@ def discover_agent_session_id(
         agent_processes += 1
         if foreground_process is None:
             foreground_process = process_id
-        launcher = _is_process_launcher(proc_root, process_id)
-        if not launcher:
-            foreground_process = process_id
+        # Codex's Node entry point launches a native CLI. Other agents can be
+        # implemented in Node itself, so their explicit ID must keep priority.
+        launcher = agent_type == "codex" and _is_process_launcher(proc_root, process_id)
         if agent_type == "claude":
             registered = _claude_registered_session(
                 process_id, proc_root,

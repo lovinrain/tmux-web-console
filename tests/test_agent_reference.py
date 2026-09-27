@@ -167,6 +167,19 @@ async def test_detector_keeps_agent_type_when_no_reference_id_is_visible(tmp_pat
     }
 
 
+@pytest.mark.parametrize("agent", ["claude", "copilot", "cursor", "grok"])
+def test_javascript_agents_keep_their_explicit_id_before_nested_workers(tmp_path: Path, agent: str):
+    proc_root = tmp_path / "proc"
+    current = "11111111-1111-4111-8111-111111111111"
+    worker = "22222222-2222-4222-8222-222222222222"
+    command = "cursor-agent" if agent == "cursor" else agent
+    parent = process(proc_root, 100, ["node", f"/opt/{command}/cli.js", "--resume", current])
+    (parent / "exe").symlink_to("/usr/bin/node")
+    (parent / "task/100/children").write_text("101")
+    process(proc_root, 101, [command, "--resume", worker])
+    assert discover_agent_session_id(pane(command=command), agent, proc_root=proc_root) == current
+
+
 @pytest.mark.asyncio
 async def test_detector_does_not_walk_proc_for_a_plain_shell(tmp_path: Path):
     detector = AgentReferenceDetector(proc_root=tmp_path / "missing-proc")
