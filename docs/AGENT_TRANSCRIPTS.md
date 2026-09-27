@@ -1,6 +1,6 @@
 # Agent transcripts
 
-Open **Pane scrollback → Transcript** or **Conversation beginning** to read the coding agent's local
+Open **Pane scrollback → Transcript** to read the coding agent's local
 conversation. Recognized Codex, Claude Code, Copilot, Cursor, and Grok panes open
 this view first. It can show messages that the terminal replaced with a notice
 such as “Earlier messages are available — press ctrl+t to view the full
@@ -19,14 +19,19 @@ and the browser automatically continues past bounded windows of metadata, so
 setup instructions or tool chatter do not occupy the whole first page. Very large
 empty scans offer **Continue searching**. **Copy loaded transcript** copies the
 loaded messages included by the activity choice. Refresh returns to the beginning
-and includes newly saved records. Transcript text is selectable plain text:
-embedded HTML, scripts, and remote images are not rendered.
+and includes newly saved records. **Formatted** displays Markdown paragraphs,
+headings, lists, tables, links, and code blocks in a conversation layout. **Plain
+text** shows the original text; switching formats does not reload the conversation.
+Copying preserves the original Markdown in either format. Text stays selectable;
+embedded HTML and scripts are skipped, remote images become text placeholders,
+and links open separately. Activity remains literal text.
 
-For a recognized agent, **Conversation beginning** opens this same native
-conversation at its beginning. **Recorded terminal output** explicitly opens the
-old terminal recording. A captured “Earlier messages are available” notice is
-not presented as the beginning of the conversation. Plain shell panes continue
-to show their saved terminal output directly.
+There is one **Transcript** tab. **Scrollback** captures the retained tmux buffer;
+**Recorded output** opens the earliest terminal output saved by Muxdeck, which can
+start after the conversation began. A captured “Earlier messages are available”
+notice belongs to that recording. **Submitted messages** is the separate archive
+of input. Plain shell panes default to Scrollback. **Escape** closes pane history
+and returns keyboard focus to its opener without sending input to the terminal.
 
 **Session history / Agents → Transcript** reads a recorded conversation even
 after its shell ends. When several conversations ran in that tmux session, use

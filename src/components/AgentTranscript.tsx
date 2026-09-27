@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   loadAgentTranscript,
   type AgentTranscriptMessage,
@@ -9,6 +9,8 @@ import {
 import { agentDisplayLabel, type RecoveryAgentType } from "../agentResume";
 import { RefreshIcon } from "../icons";
 import "./AgentTranscript.css";
+
+const TranscriptMarkdown = lazy(() => import("./TranscriptMarkdown"));
 
 interface Props {
   target: SavedScrollbackTarget;
@@ -56,6 +58,7 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
+  const [plainText, setPlainText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
   const request = useRef<AbortController | null>(null);
@@ -149,7 +152,10 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
       {kindOf(message) === "response" && <span className="agent-transcript-reply-label">Reply</span>}
       {message.timestamp !== null && <time dateTime={new Date(message.timestamp).toISOString()}>{new Date(message.timestamp).toLocaleString()}</time>}
     </div>
-    <pre>{message.text}</pre>
+    {plainText || isActivity(message) ? <pre className="agent-transcript-plain">{message.text}</pre>
+      : <Suspense fallback={<pre className="agent-transcript-plain">{message.text}</pre>}>
+        <TranscriptMarkdown text={message.text} />
+      </Suspense>}
     {message.truncated && <p className="agent-transcript-notice">This long entry was shortened.</p>}
   </article>;
 
@@ -165,9 +171,15 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
         {selected.agentSessionId && <code>{selected.agentSessionId}</code>}</span>}
       <button type="button" className="icon-button" aria-label="Refresh transcript" disabled={loading} onClick={refresh}><RefreshIcon /></button>
     </div>
-    <p className="agent-transcript-description">Your prompts and agent replies, starting with the first saved prompt. Refresh to include new messages.</p>
-    <label className="agent-transcript-tools"><input type="checkbox" checked={showActivity}
-      onChange={(event) => setShowActivity(event.target.checked)} />Show activity</label>
+    <p className="agent-transcript-description">Your prompts and agent replies from the local conversation, starting with the first saved prompt. Refresh for new messages.</p>
+    <div className="agent-transcript-options">
+      <div className="agent-transcript-format" role="group" aria-label="Transcript format">
+        <button type="button" aria-pressed={!plainText} onClick={() => setPlainText(false)}>Formatted</button>
+        <button type="button" aria-pressed={plainText} onClick={() => setPlainText(true)}>Plain text</button>
+      </div>
+      <label className="agent-transcript-tools"><input type="checkbox" checked={showActivity}
+        onChange={(event) => setShowActivity(event.target.checked)} />Show activity</label>
+    </div>
     {page?.notice && <p className="agent-transcript-notice" role="status">{page.notice}</p>}
     {error && <p className="agent-transcript-error" role="alert">{error} <button type="button" onClick={refresh}>Refresh</button></p>}
     <div className="agent-transcript-messages" ref={scroll} aria-label="Transcript messages" tabIndex={0} aria-busy={loading || loadingMore}>

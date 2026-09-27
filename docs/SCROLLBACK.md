@@ -14,12 +14,11 @@ for formats, paging, and availability limits.
 
 - **Pane scrollback → Scrollback** captures the live pane's currently retained
   tmux buffer. Its older pages belong to one immutable, ten-minute snapshot.
-- **Pane scrollback → Conversation beginning** opens the earliest local conversation for
-  recognized coding agents, with prompts and replies separated from activity.
-  **Recorded terminal output** opens the earliest output Muxdeck saved for that
-  pane, which can start after the conversation began. Plain shell panes open
-  that recording directly under **Saved beginning**. Recordings survive clearing
-  tmux history and restarting Muxdeck.
+- **Pane scrollback → Recorded output** opens the earliest terminal output Muxdeck
+  saved for that pane, which can start after the conversation began. This is
+  separate from the native **Transcript**, which shows prompts and replies with
+  optional Markdown formatting. Recordings survive clearing tmux history and
+  restarting Muxdeck.
 - **Session history / Agents → Saved output** offers Beginning and Recent,
   including for ended sessions. Select a saved pane when a session had several
   panes or a pane was respawned. Viewing saved output never recreates a shell.

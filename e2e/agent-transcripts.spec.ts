@@ -13,7 +13,7 @@ if (!socketName?.startsWith("muxdeck-playwright-") || !transcriptsDirectory?.sta
 }
 const tmux = ["-L", socketName];
 
-test("Conversation beginning finds the first Codex prompt through launchers and separates replies from activity", async ({ page, context }, testInfo) => {
+test("Transcript formats the first Codex prompt and replies, separates recorded output, and closes on Escape", async ({ page, context }, testInfo) => {
   const directory = mkdtempSync(join(tmpdir(), "muxdeck-transcript-fixture-"));
   const identifier = randomUUID();
   const name = `transcript-${process.pid}`;
@@ -21,6 +21,13 @@ test("Conversation beginning finds the first Codex prompt through launchers and 
   const launcher = join(directory, "launcher.py");
   const nativeDirectory = join(transcriptsDirectory, "codex", "sessions", "2026", "09", "26");
   const transcript = join(nativeDirectory, `rollout-2026-09-26T12-00-00-${identifier}.jsonl`);
+  const terminalInputs: string[] = [];
+  page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
+    if (Buffer.isBuffer(payload)) terminalInputs.push(payload.toString("utf8"));
+    else if (payload.includes('"type":"input"')) terminalInputs.push(payload);
+  }));
+  const formattedReply = ["## A readable reply", "", "The **conversation** is ready.", "",
+    "- Prompts and replies", "- Progress stays separate", "", "```ts", `const example = "${"long code ".repeat(20)}";`, "```"].join("\n");
   mkdirSync(nativeDirectory, { recursive: true });
   const message = (text: string, role = "assistant", phase = "final_answer") => ({ type: "response_item", payload: {
     type: "message", role, phase: role === "assistant" ? phase : undefined,
@@ -33,7 +40,7 @@ test("Conversation beginning finds the first Codex prompt through launchers and 
     message("The original request before the terminal buffer", "user"),
     message("Checking files in a progress update", "assistant", "commentary"),
     { type: "response_item", payload: { type: "function_call_output", output: "Detailed tool output" } },
-    ...Array.from({ length: 52 }, (_, index) => message(`Saved answer ${index + 1}`))];
+    ...Array.from({ length: 52 }, (_, index) => message(index === 0 ? formattedReply : `Saved answer ${index + 1}`))];
   writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
   writeFileSync(fakeCodex, `#!/usr/bin/python3
 import ctypes, sys, time
@@ -57,11 +64,24 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     await page.goto(`/mux/session/${name}`);
     await expect(page.locator(".connection-badge")).toContainText("Live");
     await page.getByRole("button", { name: "Pane scrollback" }).click();
+    const dialog = page.getByRole("dialog", { name: "Tmux pane history" });
+    await expect(dialog.getByRole("tab")).toHaveText(["Transcript", "Scrollback", "Recorded output", "Submitted messages"]);
+    await expect(page.getByRole("button", { name: "Close history" })).toBeFocused();
     await expect(page.getByRole("tab", { name: "Transcript", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByText("The original request before the terminal buffer")).toBeVisible();
     await expect(page.locator(".agent-transcript")).not.toContainText("Earlier messages are available");
     await expect(page.locator(".agent-transcript")).not.toContainText("Injected setup");
     await expect(page.locator(".agent-transcript")).not.toContainText("Checking files in a progress update");
+    await expect(page.getByRole("heading", { name: "A readable reply" })).toBeVisible();
+    await page.getByRole("button", { name: "Plain text", exact: true }).click();
+    await expect(page.locator(".agent-transcript-plain").filter({ hasText: "## A readable reply" })).toBeVisible();
+    const inputBeforeEscape = terminalInputs.length;
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Pane scrollback" })).toBeFocused();
+    expect(terminalInputs.slice(inputBeforeEscape)).toEqual([]);
+    await page.getByRole("button", { name: "Pane scrollback" }).click();
+    await expect(page.getByRole("heading", { name: "A readable reply" })).toBeVisible();
     await page.getByRole("button", { name: "Load later messages" }).click();
     await page.getByRole("button", { name: "Latest loaded reply" }).click();
     await expect(page.getByText("Saved answer 52", { exact: true })).toBeInViewport();
@@ -80,16 +100,14 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     await expect(activity.getByText("Checking files in a progress update")).toBeVisible();
     await expect(activity.getByText("Detailed tool output")).toBeVisible();
 
-    await page.getByRole("tab", { name: "Conversation beginning", exact: true }).click();
-    await expect(page.getByText("The original request before the terminal buffer")).toBeVisible();
-    await expect(page.locator(".history-panel")).not.toContainText("Earlier messages are available");
-    await page.getByRole("button", { name: "Recorded terminal output", exact: true }).click();
+    await page.getByRole("tab", { name: "Recorded output", exact: true }).click();
     await expect(page.locator(".saved-scrollback-content")).toContainText("Earlier messages are available");
-    await page.getByRole("button", { name: "Read conversation from first prompt", exact: true }).click();
+    await page.getByRole("button", { name: "Read the transcript", exact: true }).click();
     await expect(page.getByText("The original request before the terminal buffer")).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByText("The original request before the terminal buffer")).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator(".agent-transcript-messages").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("conversation-mobile.png"), animations: "disabled" });
 
     await page.getByRole("tab", { name: "Scrollback", exact: true }).click();

@@ -18,6 +18,11 @@ again. Preserve unrelated work and follow the deployment safety checks above.
 
 ## Execution and progress
 
+- Start a private task timeline with `scripts/task_timeline.py` before investigation
+  or editing. Mark phase changes, wrap commands (including tests, staging, push,
+  deployment and CI waits), and include the generated report at completion.
+  Record GitHub job timestamps with its `github` command. See
+  `docs/TASK_TIMELINES.md`; distinguish command runtime from time between commands.
 - Before editing a dirty checkout, use a separate worktree for independent
   changes. When the task depends on existing uncommitted work, snapshot that
   baseline first and define which changes belong to the task before editing.

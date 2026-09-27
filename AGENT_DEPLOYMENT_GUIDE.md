@@ -1068,6 +1068,15 @@ Never use `tmux kill-server` as deployment cleanup or rollback.
 
 ### Reusable checks and progress
 
+Start `scripts/task_timeline.py` before investigating or preparing an update,
+and keep its timeline through validation, staging, commit/push, deployment, CI,
+and reporting. Wrap independent commands separately so their overlap remains
+visible. Mark non-command work with phase/activity labels. Capture remote CI job
+timestamps as well as local wait time, and link the generated timeline alongside
+the deployment checker report. See [Task timelines](docs/TASK_TIMELINES.md) for
+the commands and measurement limits. Do not infer total task time from test
+runtime or file modification times.
+
 Use `scripts/check_deployment.py` for the common read-only checks instead of
 writing temporary verification and report scripts for every release. It uses
 Python's standard library and runs as the service user. It reads the running

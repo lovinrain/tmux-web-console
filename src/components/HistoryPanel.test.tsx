@@ -124,8 +124,8 @@ afterEach(() => {
   document.documentElement.classList.remove("history-resizing");
 });
 
-describe("HistoryPanel resizing", () => {
-  it("navigates beginning and submitted input without changing the scrollback snapshot", async () => {
+describe("HistoryPanel", () => {
+  it("navigates recorded output and submitted input without changing the scrollback snapshot", async () => {
     vi.mocked(loadAgentTranscript).mockResolvedValue({ sources: [], selectedSource: null, status: "unidentified", messages: [], nextCursor: null, partial: false, notice: "No conversation ID recorded." });
     vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
     vi.mocked(loadSavedScrollback).mockResolvedValue({
@@ -136,7 +136,7 @@ describe("HistoryPanel resizing", () => {
     render(<HistoryPanel pane={pane()} sessionName="agent" sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
     const scrollback = screen.getByRole("tab", { name: "Scrollback" });
     fireEvent.keyDown(scrollback, { key: "ArrowRight" });
-    const beginning = screen.getByRole("tab", { name: "Saved beginning" });
+    const beginning = screen.getByRole("tab", { name: "Recorded output" });
     expect(beginning).toHaveFocus();
     expect(beginning).toHaveAttribute("aria-selected", "true");
     await screen.findByText("Saved opening");
@@ -177,7 +177,7 @@ describe("HistoryPanel resizing", () => {
     expect(createHistorySnapshot).toHaveBeenCalledWith("%7");
   });
 
-  it.each(["codex", "claude", "copilot", "cursor-agent", "grok"])("opens %s Conversation beginning at the native first prompt instead of a recorded placeholder", async (command) => {
+  it.each(["codex", "claude", "copilot", "cursor-agent", "grok"])("keeps the %s transcript distinct from recorded terminal output", async (command) => {
     vi.mocked(loadAgentTranscript).mockResolvedValue({
       sources: [], selectedSource: null, status: "available", nextCursor: null, partial: false, notice: null,
       messages: [{ id: "first", role: "user", kind: "prompt", text: "Actual original prompt", timestamp: null, truncated: false }],
@@ -189,15 +189,53 @@ describe("HistoryPanel resizing", () => {
     });
     render(<HistoryPanel pane={{ ...pane(), command }} onClose={vi.fn()} />);
     await screen.findByText("Actual original prompt");
-    fireEvent.click(screen.getByRole("tab", { name: "Conversation beginning" }));
-    await screen.findByText("Actual original prompt");
+    expect(screen.queryByRole("tab", { name: /Conversation beginning|Saved beginning/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
     expect(screen.queryByText(/Earlier messages are available/)).not.toBeInTheDocument();
     expect(loadSavedScrollback).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Recorded terminal output" }));
     await screen.findByText(/Earlier messages are available/);
-    fireEvent.click(screen.getByRole("button", { name: "Read conversation from first prompt" }));
+    expect(screen.getByRole("tab", { name: "Recorded output" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Read the transcript" }));
     await screen.findByText("Actual original prompt");
     expect(screen.queryByText(/Earlier messages are available/)).not.toBeInTheDocument();
+  });
+
+  it("contains focus and keyboard events, closes on Escape, and restores the opener", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const leakedKey = vi.fn();
+    window.addEventListener("keydown", leakedKey);
+    const view = render(<HistoryPanel pane={pane()} onClose={onClose} />);
+    try {
+      const close = screen.getByRole("button", { name: "Close history" });
+      const last = screen.getByRole("button", { name: "Back to live" });
+      const first = screen.getByRole("separator", { name: "Resize scrollback panel" });
+      expect(close).toHaveFocus();
+      opener.focus();
+      expect(close).toHaveFocus();
+      last.focus();
+      fireEvent.keyDown(last, { key: "Tab" });
+      expect(first).toHaveFocus();
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+      expect(last).toHaveFocus();
+      fireEvent.keyDown(last, { key: "x" });
+      fireEvent.keyDown(last, { key: "Escape", isComposing: true });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(fireEvent.keyDown(last, { key: "Escape" })).toBe(false);
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(leakedKey).not.toHaveBeenCalled();
+      view.unmount();
+      expect(opener).toHaveFocus();
+      fireEvent.keyDown(opener, { key: "x" });
+      expect(leakedKey).toHaveBeenCalledOnce();
+    } finally {
+      view.unmount();
+      window.removeEventListener("keydown", leakedKey);
+      opener.remove();
+    }
   });
 
   it("exposes the initial width and desktop bounds through the separator", () => {

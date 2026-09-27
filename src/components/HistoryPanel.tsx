@@ -15,6 +15,7 @@ import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
 import { AgentTranscript } from "./AgentTranscript";
 import { paneCommandKind } from "../sessionDashboardModel";
+import { acquireBodyScrollLock } from "../bodyScrollLock";
 
 export const DEFAULT_HISTORY_PANEL_WIDTH = 680;
 export const MIN_HISTORY_PANEL_WIDTH = 360;
@@ -61,12 +62,9 @@ export function HistoryPanel({
 }: HistoryPanelProps) {
   const viewId = useId();
   const isAgent = ["codex", "claude", "copilot", "cursor", "grok"].includes(paneCommandKind(pane.command, pane.title));
-  const [view, setView] = useState<"transcript" | "scrollback" | "beginning" | "submitted">(isAgent ? "transcript" : "scrollback");
-  const [recordedBeginning, setRecordedBeginning] = useState(false);
-  const selectView = (next: typeof view) => { setView(next); setRecordedBeginning(false); };
-  const showRecordedBeginning = () => { setView("beginning"); setRecordedBeginning(true); };
-  const views = sessionName ? ["transcript", "scrollback", "beginning", "submitted"] as const : ["transcript", "scrollback", "beginning"] as const;
-  const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", beginning: isAgent ? "Conversation beginning" : "Saved beginning", submitted: "Submitted messages" };
+  const [view, selectView] = useState<"transcript" | "scrollback" | "recorded" | "submitted">(isAgent ? "transcript" : "scrollback");
+  const views = sessionName ? ["transcript", "scrollback", "recorded", "submitted"] as const : ["transcript", "scrollback", "recorded"] as const;
+  const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", recorded: "Recorded output", submitted: "Submitted messages" };
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,6 +78,51 @@ export function HistoryPanel({
   const capturePending = useRef(false);
   const panelWidthRef = useRef(panelWidth);
   const resizeRef = useRef<ResizeState | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const releaseBodyScroll = acquireBodyScrollLock();
+    const containFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !panelRef.current?.contains(event.target)) closeRef.current?.focus();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onCloseRef.current();
+        return;
+      }
+      const panel = panelRef.current;
+      if (event.key !== "Tab" || !panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+        "button, [href], input, select, textarea, summary, [tabindex]",
+      )).filter((element) => {
+        if (element.tabIndex < 0 || element.matches(":disabled") || element.closest("[hidden], [aria-hidden='true']")) return false;
+        const closedDetails = element.closest("details:not([open])");
+        return !closedDetails || !!closedDetails.querySelector(":scope > summary")?.contains(element);
+      });
+      const first = focusable[0] ?? panel;
+      const last = focusable.at(-1) ?? panel;
+      if (!panel.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+    };
+    document.addEventListener("focusin", containFocus);
+    window.addEventListener("keydown", handleKeyDown, true);
+    closeRef.current?.focus();
+    return () => {
+      document.removeEventListener("focusin", containFocus);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      releaseBodyScroll();
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, []);
 
   const updatePanelWidth = useCallback((width: number) => {
     panelWidthRef.current = width;
@@ -242,11 +285,15 @@ export function HistoryPanel({
   return (
     <div className="history-backdrop" role="presentation" onMouseDown={onClose}>
       <aside
+        ref={panelRef}
         className="history-panel"
         style={panelStyle}
         role="dialog"
         aria-modal="true"
         aria-label="Tmux pane history"
+        tabIndex={-1}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyUp={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div
@@ -272,11 +319,11 @@ export function HistoryPanel({
         <header className="history-header">
           <div>
             <p className="eyebrow">{view === "submitted" ? `SESSION ${sessionName}` : `PANE ${pane.id}`} / HISTORY</p>
-            <h2>{view === "beginning" && recordedBeginning ? "Recorded terminal output" : viewLabels[view]}</h2>
+            <h2>{viewLabels[view]}</h2>
           </div>
           <div className="history-header-actions">
             {view === "scrollback" && <button type="button" className="icon-button" onClick={() => void capture()} aria-label="Capture a new snapshot"><RefreshIcon /></button>}
-            <button type="button" className="icon-button" onClick={onClose} aria-label="Close history"><CloseIcon /></button>
+            <button ref={closeRef} type="button" className="icon-button" onClick={onClose} aria-label="Close history" title="Close history (Esc)"><CloseIcon /></button>
           </div>
         </header>
 
@@ -299,13 +346,13 @@ export function HistoryPanel({
 
         <div className="history-view-content" id={`${viewId}-content`} role="tabpanel"
           aria-labelledby={`${viewId}-${view}`}>
-        {view === "transcript" || view === "beginning" && isAgent && !recordedBeginning ? <>
-          <AgentTranscript key={view} target={{ paneId: pane.id, identity: sessionIdentity }}
-            onShowScrollback={() => selectView("scrollback")} onShowBeginning={showRecordedBeginning} />
+        {view === "transcript" ? <>
+          <AgentTranscript target={{ paneId: pane.id, identity: sessionIdentity }}
+            onShowScrollback={() => selectView("scrollback")} onShowBeginning={() => selectView("recorded")} />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
-        </> : view === "beginning" ? <>
-          {isAgent && <div className="history-notice">Recorded terminal output may begin after the conversation started.
-            {" "}<button type="button" onClick={() => selectView("beginning")}>Read conversation from first prompt</button>
+        </> : view === "recorded" ? <>
+          {isAgent && <div className="history-notice">Terminal output saved by Muxdeck. Recording may begin after the conversation started.
+            {" "}<button type="button" onClick={() => selectView("transcript")}>Read the transcript</button>
           </div>}
           <SavedScrollback target={{ paneId: pane.id, identity: sessionIdentity }} part="beginning" />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
@@ -321,7 +368,7 @@ export function HistoryPanel({
         {page && ((page.alternateOn && page.historySize === 0) || lines.some((line) => line.includes("Earlier messages are available"))) && (
           <div className="history-notice">The terminal may show only part of this conversation.
             {" "}<button type="button" onClick={() => selectView("transcript")}>Read the local agent transcript</button>
-            {" "}{viewLabels.beginning} and Submitted messages are also available.</div>
+            {" "}Recorded output{sessionName ? " and Submitted messages are" : " is"} also available.</div>
         )}
 
         <div className="history-scroll" ref={scrollRef}>

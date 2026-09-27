@@ -18,6 +18,36 @@ beforeEach(() => {
 });
 
 describe("AgentTranscript", () => {
+  it("formats Markdown safely and switches to original text without refetching or altering copies", async () => {
+    const markdown = [
+      "## Release notes", "", "A **formatted** answer with `inline code`.", "",
+      "- First item", "- Second item", "", "```ts", 'const value = "<safe>";', "```", "",
+      "| Check | Result |", "| --- | --- |", "| Tests | Passed |", "",
+      "[Documentation](https://example.test/docs)", "[Unsafe](javascript:alert%281%29)",
+      "![Private image](https://example.test/private.png)", '<script>window.secret = true</script>',
+    ].join("\n");
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page([message("answer", markdown, "assistant")]));
+    render(<AgentTranscript target={{ paneId: "%1" }} />);
+    await screen.findByRole("heading", { name: "Release notes", level: 2 });
+    expect(screen.getByText("formatted").tagName).toBe("STRONG");
+    expect(screen.getByRole("list")).toHaveTextContent("First item");
+    expect(screen.getByRole("table")).toHaveTextContent("TestsPassed");
+    expect(screen.getByText('const value = "<safe>";').closest("pre")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Documentation" })).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText("Unsafe").getAttribute("href")).not.toMatch(/^javascript:/);
+    expect(document.querySelector("img, script")).toBeNull();
+    expect(screen.getByRole("note")).toHaveTextContent("Image: Private image");
+    fireEvent.click(screen.getByRole("button", { name: "Plain text" }));
+    expect(screen.queryByRole("heading", { name: "Release notes" })).not.toBeInTheDocument();
+    expect(document.querySelector(".agent-transcript-plain")?.textContent).toBe(markdown);
+    fireEvent.click(screen.getByRole("button", { name: "Copy loaded transcript" }));
+    await screen.findByText("Copied");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`Assistant\n${markdown}`);
+    fireEvent.click(screen.getByRole("button", { name: "Formatted" }));
+    await screen.findByRole("heading", { name: "Release notes" });
+    expect(loadAgentTranscript).toHaveBeenCalledOnce();
+  });
+
   it("pages through prompts and replies, expands activity, and copies selectable text without rendering HTML", async () => {
     const first = message("one", "First request <img src='https://example.test/private'>");
     const answer = { ...message("two", "Answer", "assistant"), kind: "response" as const };

@@ -92,6 +92,10 @@ for (const width of [1440, 390]) {
       await expect(page.getByText("An older Claude answer preserved in the local transcript")).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await page.screenshot({ path: `artifacts/claude-transcript-${width}.png`, animations: "disabled" });
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog", { name: "Tmux pane history" })).not.toBeVisible();
+      expect(execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", pane], { encoding: "utf8" })).toContain("A draft that must be replaced");
+      await page.getByRole("button", { name: "Pane scrollback" }).click();
       await page.getByRole("tab", { name: "Submitted messages" }).click();
       await expect(page.getByText("No submitted messages recorded yet.")).toBeVisible();
       expect(submitted()).toHaveLength(0);
@@ -120,8 +124,7 @@ for (const width of [1440, 390]) {
       expect(recentOutput.lines.join("\n")).toContain("Output row 2999");
       expect(recentOutput.lines.join("\n")).not.toContain(`Opening context for ${identifier}`);
 
-      await page.getByRole("tab", { name: "Conversation beginning" }).click();
-      await page.getByRole("button", { name: "Recorded terminal output", exact: true }).click();
+      await page.getByRole("tab", { name: "Recorded output" }).click();
       await expect(page.getByLabel("Beginning output", { exact: true })).toContainText(`Opening context for ${identifier}`);
       await expect(page.locator(".saved-scrollback")).toContainText("Recording began");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
