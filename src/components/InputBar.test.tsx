@@ -312,22 +312,22 @@ describe("InputBar", () => {
     expect(onScrollApplication).toHaveBeenCalledTimes(2);
     view.rerender(
       <InputBar {...props} preferredScrollMode="application" preferredScrollLabel="Codex"
-        onScrollApplication={onScrollApplication} />,
+        applicationScrollProfile="codex" onScrollApplication={onScrollApplication} />,
     );
     for (const button of [up, down]) {
       expect(button).toBeVisible();
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute("title", expect.stringContaining("not supported for Codex"));
+      expect(button).toBeEnabled();
+      expect(button).toHaveAttribute("title", expect.stringContaining("three rows"));
       fireEvent.click(button);
     }
-    expect(onScrollApplication).toHaveBeenCalledTimes(2);
+    expect(onScrollApplication).toHaveBeenCalledTimes(4);
     for (const name of ["Tmux scrolling", "Application scrolling"]) {
       expect(within(screen.getByRole("group", { name })).getAllByRole("button")).toHaveLength(4);
     }
     expect(screen.getByRole("group", { name: "Application scrolling" }).nextElementSibling)
       .toBe(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }));
     expect(screen.getByRole("button", { name: "Tmux Line Up" }))
-      .toHaveAttribute("data-scroll-preferred", "true");
+      .not.toHaveAttribute("data-scroll-preferred");
   });
 
   it("keeps session termination separate from terminal key delivery", () => {

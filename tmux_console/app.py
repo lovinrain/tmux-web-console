@@ -5805,7 +5805,7 @@ def create_app(
                             continue
                         direction = payload.get("direction")
                         profile = payload.get("profile")
-                        profiles = {"claude": "claude", "copilot": "alt-wheel", "grok": "wheel"}
+                        profiles = {"claude": "claude", "codex": "codex", "copilot": "alt-wheel", "grok": "wheel"}
                         result: dict[str, object] = {
                             "type": "applicationScrollNack",
                             "id": scroll_id,
@@ -5824,6 +5824,9 @@ def create_app(
                             except (TmuxError, ValueError) as error:
                                 LOGGER.debug("Application scrolling failed for client %s: %s", bridge.client_pid, error)
                                 result["message"] = (
+                                    "Codex could not scroll. Use its full-screen conversation or Ctrl+T "
+                                    "transcript; inline output uses the tmux controls."
+                                    if profile == "codex" else
                                     "The application could not scroll. Its mouse scrolling may be disabled, "
                                     "or the active pane changed."
                                 )

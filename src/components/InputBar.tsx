@@ -1445,7 +1445,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               disabled={!enabled || !applicationScrollProfile || !onScrollApplication || applicationScrollPending}
               aria-label={`Application Scroll ${direction === "up" ? "Up" : "Down"}`}
               aria-controls={terminalControlId}
-              title={!applicationScrollProfile
+              title={applicationScrollProfile === "codex"
+                ? `Scroll Codex's current page ${direction} by three rows; continues from PgUp/PgDn`
+                : !applicationScrollProfile
                 ? `Application fine scrolling is not supported for ${preferredScrollLabel || "this session"}. Use the highlighted tmux controls.`
                 : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
                 preferredLineScrollMode === "application"

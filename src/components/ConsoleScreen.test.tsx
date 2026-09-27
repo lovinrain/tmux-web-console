@@ -36,7 +36,7 @@ const liveTerminalHandle = vi.hoisted(() => ({
   focus: vi.fn(),
   redraw: vi.fn(() => true),
   navigateHistory: vi.fn((_action: "page-up" | "page-down" | "line-up" | "line-down" | "exit") => true),
-  scrollApplication: vi.fn(async (_direction: "up" | "down", _profile: "claude" | "copilot" | "grok"): Promise<ApplicationScrollResult> => ({ status: "accepted", paneId: "%1" })),
+  scrollApplication: vi.fn(async (_direction: "up" | "down", _profile: "claude" | "codex" | "copilot" | "grok"): Promise<ApplicationScrollResult> => ({ status: "accepted", paneId: "%1" })),
   jumpToLive: vi.fn(),
 }));
 const liveTerminalState = vi.hoisted(() => ({
@@ -891,7 +891,7 @@ describe("ConsoleScreen session identity", () => {
       screen.getByRole("group", { name: "Terminal input shortcuts" }),
       screen.getByRole("navigation", { name: "Terminal view controls" }),
     ];
-    const recommendedMode = ["claude", "copilot", "grok"].includes(kind) ? "application" : "tmux";
+    const recommendedMode = ["claude", "codex", "copilot", "grok"].includes(kind) ? "application" : "tmux";
     const controls = groups.flatMap((group) => [
       within(group).getByRole("button", { name: "Tmux Line Up" }),
       within(group).getByRole("button", { name: "Tmux Line Down" }),
@@ -941,7 +941,7 @@ describe("ConsoleScreen session identity", () => {
 
   it.each([
     ["claude", "claude", "application"],
-    ["codex", "codex", "tmux"],
+    ["codex", "codex", "application"],
     ["copilot", "copilot", "application"],
     ["cursor-agent", "cursor", "tmux"],
     ["grok", "grok", "application"],
@@ -1048,7 +1048,7 @@ describe("ConsoleScreen session identity", () => {
     act(() => liveTerminalState.onStateChange?.("live"));
     fireEvent.click(screen.getAllByRole("button", { name: "Tmux Page Up" })[0]);
     const replacements = [
-      { snapshot: { ...first, panes: [{ ...pane(), command: "codex", title: "Codex" }] }, kind: "codex", mode: "tmux" },
+      { snapshot: { ...first, panes: [{ ...pane(), command: "codex", title: "Codex" }] }, kind: "codex", mode: "application" },
       { snapshot: { ...first, name: "next", id: "$2", panes: [{ ...pane(), command: "copilot", title: "Copilot" }] }, kind: "copilot", mode: "application" },
       { snapshot: first, kind: "claude", mode: "application" },
     ];
@@ -1072,7 +1072,7 @@ describe("ConsoleScreen session identity", () => {
     renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
     act(() => liveTerminalState.onStateChange?.("live"));
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
-    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "tmux");
+    expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
     fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
     expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[5~"], ["\x1b[8^"]]);
     expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
@@ -1211,7 +1211,7 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.send).toHaveBeenCalledOnce();
   });
 
-  it.each(["claude", "copilot", "grok"] as const)(
+  it.each(["claude", "codex", "copilot", "grok"] as const)(
     "continues %s application paging without changing its recommendation or old saved preferences",
     async (kind) => {
       window.localStorage.setItem("muxdeck-agent-scroll-preferences", JSON.stringify({ [kind]: "tmux" }));
@@ -1322,8 +1322,8 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getAllByRole("button", { name: "Application Scroll Up" })[0]).toBeEnabled();
   });
 
-  it("ignores an old application preference when recommending Codex page and line controls", () => {
-    window.localStorage.setItem("muxdeck-agent-scroll-preferences", JSON.stringify({ codex: "application" }));
+  it("explains Codex's small steps and ignores old tmux preferences", () => {
+    window.localStorage.setItem("muxdeck-agent-scroll-preferences", JSON.stringify({ codex: "tmux" }));
     const agentSession = { ...session(), panes: [{ ...pane(), command: "codex", title: "Codex" }] };
     renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
     for (const direction of ["Up", "Down"]) {
@@ -1332,11 +1332,12 @@ describe("ConsoleScreen session identity", () => {
       for (const button of nativeControls) {
         expect(button).toBeVisible();
         expect(button).toBeDisabled();
-        expect(button).not.toHaveAttribute("data-scroll-preferred");
+        expect(button).toHaveAttribute("data-scroll-preferred", "true");
+        expect(button).toHaveAttribute("title", expect.stringContaining("three rows"));
       }
     }
     for (const button of screen.getAllByRole("button", { name: "Tmux Line Up" })) {
-      expect(button).toHaveAttribute("data-scroll-preferred", "true");
+      expect(button).not.toHaveAttribute("data-scroll-preferred");
       expect(button).not.toHaveAttribute("aria-keyshortcuts");
     }
   });

@@ -2733,7 +2733,9 @@ export function ConsoleScreen({
               data-scroll-preferred={preferredLineScrollMode === "application" ? "true" : undefined}
               aria-label={`Application Scroll ${direction === "up" ? "Up" : "Down"}`}
               aria-controls={activeConsoleId}
-              title={!nativeScrollProfile
+              title={nativeScrollProfile === "codex"
+                ? `Scroll Codex's current page ${direction} by three rows; continues from PgUp/PgDn`
+                : !nativeScrollProfile
                 ? `Application fine scrolling is not supported for ${classification.label}. Use the highlighted tmux controls.`
                 : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
                 preferredLineScrollMode === "application" ? `; recommended for ${classification.label}` : ""

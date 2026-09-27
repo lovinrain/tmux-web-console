@@ -55,7 +55,7 @@ TERMINAL_HISTORY_ACTIONS = frozenset(
     {"page-up", "page-down", "line-up", "line-down", "exit"}
 )
 APPLICATION_SCROLL_DIRECTIONS = frozenset({"up", "down"})
-APPLICATION_SCROLL_PROFILES = frozenset({"wheel", "alt-wheel", "claude"})
+APPLICATION_SCROLL_PROFILES = frozenset({"wheel", "alt-wheel", "claude", "codex"})
 CLAUDE_SCROLL_SETTLE_SECONDS = 0.22
 HISTORY_USER_KEY_PATTERN = re.compile(r"\bUser(\d{1,3})\b")
 HISTORY_USER_OPTION_PATTERN = re.compile(r"^user-keys\[(\d{1,3})\]")
@@ -869,10 +869,17 @@ class TmuxClient:
             8 if profile == "alt-wheel" else 0
         )
         buffer_name = f"muxdeck-scroll-{secrets.token_hex(12)}"
-        # Copilot reserves its left columns for a sidebar. Aim inside the main
-        # body, using this client's actual pane geometry at dispatch time.
-        column = "#{?#{>:#{pane_width},1},#{e|-:#{pane_width},1},1}"
-        row = "#{?#{>:#{pane_height},1},#{e|/:#{pane_height},2},1}"
+        if profile == "codex":
+            # Codex caps its transcript width and keeps the composer below it.
+            # Its second row is inside both the main view and Ctrl+T overlay;
+            # the right edge/midpoint can miss the transcript entirely.
+            column = "1"
+            row = "#{?#{>:#{pane_height},1},2,1}"
+        else:
+            # Copilot reserves its left columns for a sidebar. Aim inside the
+            # main body using this client's pane geometry at dispatch time.
+            column = "#{?#{>:#{pane_width},1},#{e|-:#{pane_width},1},1}"
+            row = "#{?#{>:#{pane_height},1},#{e|/:#{pane_height},2},1}"
         set_buffer_command = (
             f'set-buffer -b {buffer_name} "\\033[<{button};{column};{row}M"'
         )
@@ -889,20 +896,56 @@ class TmuxClient:
             f"paste-buffer -r -d -b {buffer_name}"
         )
         allowed_mode = "#{||:#{==:#{pane_mode},},#{==:#{pane_mode},copy-mode}}"
-        mouse_enabled = "#{&&:#{mouse_any_flag},#{mouse_sgr_flag}}"
+        if profile == "codex":
+            # Codex accepts SGR events even when it disables mouse capture to
+            # honor tmux's mouse=off. Verify the foreground process here and
+            # inspect its view below: --no-alt-screen also keeps the Ctrl+T
+            # transcript on the normal screen, while inline output ignores wheels.
+            receiver_ready = "#{==:#{pane_current_command},codex}"
+            rejection_message = (
+                "Codex scrolling requires a foreground Codex full-screen view "
+                "that accepts input. Inline output uses tmux history controls."
+            )
+        else:
+            receiver_ready = "#{&&:#{mouse_any_flag},#{mouse_sgr_flag}}"
+            rejection_message = (
+                "Application scrolling is unavailable: the active pane must "
+                "have SGR mouse reporting enabled and accept input."
+            )
         input_enabled = "#{&&:#{==:#{pane_dead},0},#{==:#{pane_input_off},0}}"
-        condition = f"#{{&&:{allowed_mode},#{{&&:{mouse_enabled},{input_enabled}}}}}"
-        rejection_message = (
-            "Application scrolling is unavailable: the active pane must "
-            "have SGR mouse reporting enabled and accept input."
-        )
+        condition = f"#{{&&:{allowed_mode},#{{&&:{receiver_ready},{input_enabled}}}}}"
         capture_buffer = f"{buffer_name}-before" if profile == "claude" else None
+        codex_view_buffer = f"{buffer_name}-codex-view" if profile == "codex" else None
         commands = f"{cancel_copy_mode} ; "
         if capture_buffer is not None:
             commands += f"capture-pane -b {capture_buffer} ; "
         commands += wheel_commands
         async with self._history_dispatch_lock:
             try:
+                if codex_view_buffer is not None:
+                    inspected_pane = await self._dispatch_client_command(
+                        client_pid,
+                        session_id,
+                        f"capture-pane -b {codex_view_buffer} -S 0 -E 0",
+                        condition,
+                        rejection_message=rejection_message,
+                    )
+                    alternate = (
+                        await self.run([
+                            "display-message", "-p", "-t", inspected_pane,
+                            "#{alternate_on}",
+                        ])
+                    ).strip() == "1"
+                    header = await self.run(["show-buffer", "-b", codex_view_buffer])
+                    if not alternate and not header.startswith("/ T R A N S C R I P T"):
+                        raise TmuxError(rejection_message)
+                    # Do not follow an independent client to a different pane
+                    # after inspecting its view. A closed inline overlay will
+                    # ignore a wheel event, never turn it into prompt editing.
+                    same_view = f"#{{==:#{{pane_id}},{inspected_pane}}}"
+                    if alternate:
+                        same_view = f"#{{&&:{same_view},#{{alternate_on}}}}"
+                    condition = f"#{{&&:{condition},{same_view}}}"
                 if profile == "claude":
                     # Let an immediately preceding PageUp/PageDown or resize
                     # finish painting before measuring this wheel event. Its
@@ -944,6 +987,9 @@ class TmuxClient:
                     await asyncio.sleep(CLAUDE_SCROLL_SETTLE_SECONDS)
                 return pane_id
             finally:
+                if codex_view_buffer is not None:
+                    with contextlib.suppress(TmuxError):
+                        await self.run(["delete-buffer", "-b", codex_view_buffer])
                 if capture_buffer is not None:
                     with contextlib.suppress(TmuxError):
                         await self.run(["delete-buffer", "-b", capture_buffer])

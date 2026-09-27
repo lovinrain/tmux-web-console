@@ -28,6 +28,10 @@ class RecordingScrollTmux(TmuxClient):
         if list(args[:2]) == ["show-options", "-gv"]:
             status = "rejected" if self.reject else "ok"
             return f"{status}:4321:$7:%12\n"
+        if args[0] == "display-message":
+            return "1\n"
+        if args[0] == "show-buffer":
+            return "/ T R A N S C R I P T\n"
         return ""
 
 
@@ -38,6 +42,8 @@ class RecordingScrollTmux(TmuxClient):
         ("down", "wheel", 65),
         ("up", "alt-wheel", 72),
         ("down", "alt-wheel", 73),
+        ("up", "codex", 64),
+        ("down", "codex", 65),
     ],
 )
 async def test_application_scroll_encodes_only_allowed_wheel_profiles(
@@ -50,21 +56,32 @@ async def test_application_scroll_encodes_only_allowed_wheel_profiles(
         await tmux.navigate_application_scroll(4321, "$7", direction, profile) == "%12"
     )
 
-    dispatch = next(call for call in tmux.calls if "if-shell" in call)
+    dispatch = [call for call in tmux.calls if "if-shell" in call][-1]
     condition, command = dispatch[6:8]
-    assert "#{mouse_any_flag}" in condition
-    assert "#{mouse_sgr_flag}" in condition
+    if profile == "codex":
+        assert "#{==:#{pane_current_command},codex}" in condition
+        assert "#{alternate_on}" in condition
+        assert "#{mouse_any_flag}" not in condition
+        assert "#{mouse_sgr_flag}" not in condition
+        assert "#{pane_width}" not in command
+        assert f"\\033[<{button};1;#{{?#{{>:#{{pane_height}},1}},2,1}}M" in command
+    else:
+        assert "#{mouse_any_flag}" in condition
+        assert "#{mouse_sgr_flag}" in condition
+        assert "#{pane_width}" in command
     assert "#{pane_input_off}" in condition
     assert "#{pane_dead}" in condition
     assert "copy-mode" in condition
     assert f"\\033[<{button};" in command
-    assert "#{pane_width}" in command
     assert "#{pane_height}" in command
     assert "run-shell -C" in command
     assert "paste-buffer -r -d -b muxdeck-scroll-abc123" in command
     assert " -p " not in command
     assert "send-keys -H" not in command
-    assert tmux.calls[-1] == ["delete-buffer", "-b", "muxdeck-scroll-abc123"]
+    assert ["delete-buffer", "-b", "muxdeck-scroll-abc123"] in tmux.calls
+    if profile == "codex":
+        assert "#{==:#{pane_id},%12}" in condition
+        assert tmux.calls[-1] == ["delete-buffer", "-b", "muxdeck-scroll-abc123-codex-view"]
 
 
 @pytest.mark.parametrize(
@@ -137,7 +154,7 @@ async def test_claude_retries_only_when_transcript_body_does_not_move(
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
-@pytest.mark.parametrize("profile", ["wheel", "alt-wheel", "claude"])
+@pytest.mark.parametrize("profile", ["wheel", "alt-wheel", "claude", "codex"])
 async def test_real_application_scroll_uses_client_pane_without_leaking_input(
     tmp_path, monkeypatch, profile
 ):
@@ -145,13 +162,17 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
     command = ["tmux", "-L", socket_name, "-f", "/dev/null"]
     fixture = tmp_path / "record_input.py"
     fixture.write_text(
-        "import os, signal, sys, tty\n"
+        "import ctypes, os, signal, sys, tty\n"
         "tty.setraw(0)\n"
-        "def legacy(*_): os.write(1, b'\\x1b[?1006l')\n"
-        "def disabled(*_): os.write(1, b'\\x1b[?1000l')\n"
+        "codex = sys.argv[2] == 'codex'\n"
+        "def legacy(*_): os.write(1, b'\\x1b[?1049l' if codex else b'\\x1b[?1006l')\n"
+        "def disabled(*_): os.write(1, b'\\x1b[H/ T R A N S C R I P T\\r\\n' if codex else b'\\x1b[?1000l')\n"
         "signal.signal(signal.SIGUSR1, legacy)\n"
         "signal.signal(signal.SIGUSR2, disabled)\n"
-        "os.write(1, b'\\x1b[?1000h\\x1b[?1006h\\x1b[?2004h')\n"
+        "if codex:\n"
+        " ctypes.CDLL(None).prctl(15, b'codex', 0, 0, 0)\n"
+        " os.write(1, b'\\x1b[?1049h\\x1b[?2004h')\n"
+        "else: os.write(1, b'\\x1b[?1000h\\x1b[?1006h\\x1b[?2004h')\n"
         "os.write(1, b'\\r\\n'.join(b'HISTORY '+str(i).encode() "
         "for i in range(100)) + b'\\r\\nREADY\\r\\n')\n"
         "with open(sys.argv[1], 'ab', buffering=0) as log:\n"
@@ -203,7 +224,15 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
             "python3",
             str(fixture),
             str(global_log),
+            "other",
         )
+        target_command = ["python3", str(fixture), str(target_log), profile]
+        if profile == "codex":
+            target_command = [
+                "bash", "--noprofile", "--norc", "-c",
+                'exec -a codex python3 "$1" "$2" codex',
+                "fixture", str(fixture), str(target_log),
+            ]
         target_pane = tmux_run(
             "split-window",
             "-d",
@@ -212,9 +241,7 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
             "#{pane_id}",
             "-t",
             global_pane,
-            "python3",
-            str(fixture),
-            str(target_log),
+            *target_command,
         )
         tmux_run("set-option", "-g", "prefix", "C-a")
         tmux_run("bind-key", "-T", "prefix", "o", "select-pane", "-t", target_pane)
@@ -278,9 +305,8 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
             button = (64 if direction == "up" else 65) + (
                 8 if profile == "alt-wheel" else 0
             )
-            expected = (
-                f"\x1b[<{button};{max(1, width - 1)};{max(1, height // 2)}M".encode()
-            )
+            column, row = (1, min(2, height)) if profile == "codex" else (max(1, width - 1), max(1, height // 2))
+            expected = f"\x1b[<{button};{column};{row}M".encode()
             if profile == "claude":
                 # This recording app keeps the viewport unchanged, so the
                 # production Claude path must perform its one allowed retry.
@@ -362,12 +388,35 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
 
         before = target_log.read_bytes()
         tmux_run("select-pane", "-d", "-t", target_pane)
-        with pytest.raises(TmuxError, match="SGR mouse reporting"):
+        rejection = "foreground Codex" if profile == "codex" else "SGR mouse reporting"
+        with pytest.raises(TmuxError, match=rejection):
             await tmux.navigate_application_scroll(
                 bridge.client_pid, session_id, "up", profile
             )
         tmux_run("select-pane", "-e", "-t", target_pane)
         pid = int(tmux_run("display-message", "-p", "-t", target_pane, "#{pane_pid}"))
+        if profile == "codex":
+            # Mouse-disabled Codex works; a stale Codex profile must not send
+            # anything to another program or a Codex inline view.
+            assert tmux_run("display-message", "-p", "-t", target_pane, "#{mouse_any_flag}:#{mouse_sgr_flag}") == "0:0"
+            await select_client_pane(b"p", global_pane)
+            with pytest.raises(TmuxError, match=rejection):
+                await tmux.navigate_application_scroll(bridge.client_pid, session_id, "up", profile)
+            await select_client_pane(b"o", target_pane)
+            os.kill(pid, signal.SIGUSR1)
+            await wait_for(lambda: tmux_run("display-message", "-p", "-t", target_pane, "#{alternate_on}") == "0")
+            with pytest.raises(TmuxError, match=rejection):
+                await tmux.navigate_application_scroll(bridge.client_pid, session_id, "up", profile)
+            assert target_log.read_bytes() == before
+            assert global_log.read_bytes() == b""
+            assert tmux_run("list-buffers", "-F", "#{buffer_name}") == "user-buffer"
+            # --no-alt-screen also keeps Codex's full Ctrl+T transcript on
+            # the normal screen. Recognize that view without toggling it.
+            os.kill(pid, signal.SIGUSR2)
+            await wait_for(lambda: tmux_run("capture-pane", "-p", "-t", target_pane).startswith("/ T R A N S C R I P T"))
+            await expect_wheel("down")
+            assert tmux_run("display-message", "-p", "-t", target_pane, "#{alternate_on}") == "0"
+            return
         os.kill(pid, signal.SIGUSR1)
         await wait_for(
             lambda: (

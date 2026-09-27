@@ -7,7 +7,7 @@ import {
 describe("agent scroll recommendations", () => {
   it.each([
     ["claude", "application"],
-    ["codex", "tmux"],
+    ["codex", "application"],
     ["copilot", "application"],
     ["cursor", "tmux"],
     ["grok", "application"],
@@ -19,9 +19,10 @@ describe("agent scroll recommendations", () => {
 
   it("only enables application wheel scrolling for verified agent profiles", () => {
     expect(applicationScrollProfile("claude")).toBe("claude");
+    expect(applicationScrollProfile("codex")).toBe("codex");
     expect(applicationScrollProfile("copilot")).toBe("copilot");
     expect(applicationScrollProfile("grok")).toBe("grok");
-    for (const kind of ["codex", "cursor", "shells", "other"] as const) {
+    for (const kind of ["cursor", "shells", "other"] as const) {
       expect(applicationScrollProfile(kind)).toBeNull();
     }
   });

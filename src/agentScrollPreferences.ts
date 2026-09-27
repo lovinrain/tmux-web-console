@@ -1,15 +1,15 @@
 import type { SessionKind } from "./sessionDashboardModel";
 
 export type AgentScrollMode = "application" | "tmux";
-export type ApplicationScrollProfile = "claude" | "copilot" | "grok";
+export type ApplicationScrollProfile = "claude" | "codex" | "copilot" | "grok";
 
 export function applicationScrollProfile(kind: SessionKind): ApplicationScrollProfile | null {
-  return kind === "claude" || kind === "copilot" || kind === "grok" ? kind : null;
+  return kind === "claude" || kind === "codex" || kind === "copilot" || kind === "grok" ? kind : null;
 }
 
 const AGENT_SCROLL_MODE: Readonly<Record<SessionKind, AgentScrollMode>> = {
   claude: "application",
-  codex: "tmux",
+  codex: "application",
   copilot: "application",
   cursor: "tmux",
   grok: "application",

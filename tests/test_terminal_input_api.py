@@ -224,6 +224,8 @@ async def test_application_scroll_validates_profiles_and_reports_guard_rejection
         cases = [
             ("copilot", "up", "applicationScrollAck"),
             ("claude", "up", "applicationScrollAck"),
+            ("codex", "up", "applicationScrollAck"),
+            ("codex", "down", "applicationScrollNack"),
             ("grok", "up", "applicationScrollAck"),
             ("grok", "down", "applicationScrollNack"),
             ("shell", "up", "applicationScrollNack"),
@@ -242,9 +244,14 @@ async def test_application_scroll_validates_profiles_and_reports_guard_rejection
                 assert response["paneId"] == "%9"
             else:
                 assert response["message"]
+                if profile == "codex":
+                    assert "Ctrl+T" in response["message"]
+                    assert "tmux controls" in response["message"]
         assert tmux.application_scroll_calls == [
             (4321, "$1", "up", "alt-wheel"),
             (4321, "$1", "up", "claude"),
+            (4321, "$1", "up", "codex"),
+            (4321, "$1", "down", "codex"),
             (4321, "$1", "up", "wheel"),
             (4321, "$1", "down", "wheel"),
         ]

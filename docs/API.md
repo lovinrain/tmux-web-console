@@ -836,13 +836,18 @@ the verified attachment's active pane and do not inject application input.
 
 Native fine scrolling uses `{type:"applicationScroll",id,direction,profile}`,
 with a nonempty ID of at most 128 characters, direction `up`/`down`, and profile
-`claude`, `copilot`, or `grok`. The reply is
+`claude`, `codex`, `copilot`, or `grok`. The reply is
 `{type:"applicationScrollAck",id,paneId}` or
 `{type:"applicationScrollNack",id,message}`. This explicitly sends application
-mouse input, requires SGR mouse reporting and enabled input in the verified
-attachment's active pane, and exits tmux copy mode before scrolling. It bypasses
+mouse input and requires enabled input in the verified attachment's active pane.
+The `codex` profile requires foreground `codex` and a full-screen view, detected
+from alternate-screen state or its Ctrl+T transcript header;
+it supports Codex's SGR parser even when tmux mouse reporting is off. Other
+profiles require SGR mouse reporting. Requests exit tmux copy mode before scrolling and bypass
 custom tmux mouse bindings and synchronized input to other panes. Native step
-size remains subject to the application's settings.
+size remains subject to the application's settings. Codex 0.157.1 uses fixed
+three-row steps at coordinates inside its transcript column; inline output
+rejects the request with guidance to use tmux controls or its Ctrl+T transcript.
 
 ## Current limits
 

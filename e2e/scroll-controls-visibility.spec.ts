@@ -129,11 +129,11 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
     }
     for (const name of ["Application Scroll Up", "Application Scroll Down"]) {
       const button = strip.getByRole("button", { name });
-      await expect(button).toBeDisabled();
-      await expect(button).toHaveAttribute("title", /not supported for Codex/);
-      await expect(button).not.toHaveAttribute("data-scroll-preferred", "true");
+      await expect(button).toBeEnabled();
+      await expect(button).toHaveAttribute("title", /three rows/);
+      await expect(button).toHaveAttribute("data-scroll-preferred", "true");
     }
-    await expect(strip.getByRole("button", { name: "Tmux Line Up" })).toHaveAttribute("data-scroll-preferred", "true");
+    await expect(strip.getByRole("button", { name: "Tmux Line Up" })).not.toHaveAttribute("data-scroll-preferred", "true");
     await page.screenshot({ path: `artifacts/all-eight-controls-codex-${viewport.width}.png`, animations: "disabled" });
   });
 }

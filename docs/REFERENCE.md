@@ -164,8 +164,8 @@ copy mode one page back; `Tmux PgDn` pages down once that mode is active. `^C`
 returns to the live pane. The tmux controls assume the default `Ctrl+B` prefix.
 
 Muxdeck highlights the paging pair preferred for the detected foreground agent
-in both the phone terminal rail and desktop shortcut strip. Claude, Copilot,
-and Grok start with application `PgUp` / `PgDn`; Codex, Cursor, shells, and
+in both the phone terminal rail and desktop shortcut strip. Claude, Codex, Copilot,
+and Grok start with application `PgUp` / `PgDn`; Cursor, shells, and
 unrecognized processes use the tmux pair. The highlight follows the detected
 agent across sessions, workspaces, and reloads; clicking an alternative control
 does not move it. Older browser preferences learned from clicks are ignored.
@@ -193,24 +193,30 @@ copy mode after using them, including for agents that prefer application paging.
 Desktop shortcut rows wrap to fit the available width, keeping each scrolling
 set together. The phone control rail scrolls horizontally when its buttons
 exceed the width. All eight scrolling buttons remain visible in every session.
-Application fine-scroll buttons are enabled for Claude, Copilot, and Grok;
-elsewhere they remain visible but disabled with an explanation. Codex and
-Cursor retain their highlighted tmux controls.
+Application fine-scroll buttons are enabled for Claude, Codex, Copilot, and Grok;
+elsewhere they remain visible but disabled with an explanation. Cursor retains
+its highlighted tmux controls.
 Tmux paging and line scrolling can be interleaved: use `Tmux PgUp` to move back,
 then `Tmux Line↑` / `Tmux Line↓` to adjust the same position by one row. `Tmux
 PgDn` can then resume paging. Plain `PgUp` / `PgDn` used inside an agent's own
 scroll view navigate that application; switching to the tmux line controls
 does not continue its internal scroll position. This distinction particularly
 affects Claude Code, whose default paging preference is application scrolling.
-For Claude Code, Copilot, and Grok, use the adjacent `App↑` / `App↓` controls
+For Claude Code, Codex, Copilot, and Grok, use the adjacent `App↑` / `App↓` controls
 after plain PgUp/PgDn to continue the application's current view. These send
-native wheel steps through the verified attachment, require application mouse
-reporting, and leave tmux copy mode when switching back to the application.
+native wheel steps through the verified attachment and leave tmux copy mode
+when switching back to the application. Codex's full-screen view works even
+when tmux mouse reporting is off; the other profiles require mouse reporting.
 Claude lets preceding paging/rendering settle and retries once if its transcript
 did not move, accounting for its wheel direction-change filter. Copilot uses Alt+wheel for one row; Claude and Grok
 move one row at their tested tmux defaults but honor application speed settings.
+Codex moves three rows per App click from the current native page position;
+these are small steps, not exact single-row movements. Its controls target the
+transcript column even on wide terminals. For Codex started with
+`--no-alt-screen`, use the tmux Page/Line family for its inline output, or open
+Codex's Ctrl+T transcript before using App scrolling.
 The page and fine-scroll controls highlight together for the detected agent.
-They remain recommendations while either scrolling family is used. Codex,
+They remain recommendations while either scrolling family is used.
 Cursor, shells, and unknown processes use the tmux fine-scroll pair. A rejected
 native request shows feedback. Live tracks the actual scrolling view separately
 so it can still exit tmux copy mode after an alternative control is used.

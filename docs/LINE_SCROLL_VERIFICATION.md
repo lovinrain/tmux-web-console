@@ -1,6 +1,6 @@
 # Terminal page and fine-scrolling verification
 
-Verified on 2026-09-25 against the versions below. The controls have two
+Verified on 2026-09-25, with real Codex checks added on 2026-09-27. The controls have two
 families, because tmux history and an application's internal transcript keep
 separate scroll positions:
 
@@ -13,11 +13,11 @@ separate scroll positions:
   change the distance of a wheel step.
 
 Desktop and mobile highlight the matching page and fine-scroll family. Recommendations
-are application scrolling for Claude, Copilot, and Grok; tmux for Codex, Cursor,
+are application scrolling for Claude, Codex, Copilot, and Grok; tmux for Cursor,
 shells, and other programs. Clicks do not change the highlight or the recommended
 paging shortcuts, and older browser preferences learned from clicks are ignored.
 All eight controls are always shown. App fine controls are enabled for Claude,
-Copilot, and Grok; for other agents they remain visible but disabled with an
+Codex, Copilot, and Grok; for other agents they remain visible but disabled with an
 explanation. Tmux line controls remain available for every kind.
 
 Switching from tmux to App scrolling exits tmux copy mode and resumes the
@@ -36,7 +36,7 @@ editor shortcut precedes the wheel event.
 | Claude Code 2.1.283 | Plain SGR wheel: `ESC[<64;X;YM` up, `ESC[<65;X;YM` down. Uses the same native transcript position as PgUp/PgDn. | One row in the tested default Linux/tmux configuration. `CLAUDE_CODE_SCROLL_SPEED=2` produced two rows. Claude can suppress the first event after reversing direction; the bounded retry below addresses this. |
 | GitHub Copilot CLI 1.0.80 | Alt+SGR wheel: buttons `72` up and `73` down. Wheel and PgUp/PgDn call the same transcript offset callback. | Alt selects exactly one row; ordinary wheel selects three. The callback checks transcript horizontal bounds, including its left sidebar. |
 | Grok CLI 1.0.40 | Plain SGR wheel: buttons `64` up and `65` down. Continues from native PgUp/PgDn while leaving the draft intact. | Default tmux profile is one row per event. `scroll_lines`, `scroll_speed`, and `invert_scroll` apply. Alt does not override those settings. |
-| Codex CLI 0.157.0 | Keep the tmux family for the main view. | Its Ctrl+T transcript overlay supports exact one-row Up/k and Down/j, but those bindings require the overlay. Main-view mouse steps are three rows; modified arrows also have prompt meanings. |
+| Codex CLI 0.157.1 | Plain SGR wheel at column 1, row 2, delivered directly to its verified full-screen pane. Continues the same PgUp/PgDn position even with tmux mouse reporting off. | Each wheel step moves three rows. Inline output rejects App requests: use tmux Page/Line or open Codex's Ctrl+T transcript. Inline mode's Ctrl+T pager supports exact one-row Up/k and Down/j; main-view arrows can edit the prompt. |
 | Cursor Agent 2026.08.31-4057e58 | Keep the tmux family for the main conversation, which uses Ink Static output. | No native main-conversation wheel/page handler was found. PgUp/PgDn are no-ops in the main input handler. Native line navigation exists in separate diff/list pagers; main-input arrows and control keys edit drafts or recall history. |
 | Shells and other applications | Keep the tmux family. | No application-specific scroll binding is assumed. |
 
@@ -59,12 +59,22 @@ profile. The backend resolves the attached client's actual active pane,
 including clients with an independent active pane. Before dispatch it checks
 client/session identity, pane liveness, input permission, mouse reporting
 (`mouse_any_flag`), SGR encoding (`mouse_sgr_flag`), and an empty or copy-mode
-pane mode. Other tmux modes and mouse-disabled panes reject the request. Copy
-mode is cancelled before native delivery.
+pane mode. Other tmux modes reject the request. Codex is a specific exception
+to the mouse-reporting requirement: it parses SGR events while suppressing mouse
+capture when tmux has `mouse=off`. Its profile instead requires foreground
+`pane_current_command=codex` and a full-screen view, in addition to the same
+attachment, mode, liveness, and input guards. It reads only the first visible
+row into a temporary buffer to recognize the Ctrl+T transcript header when
+`--no-alt-screen` keeps that view on the normal screen; otherwise it requires
+`alternate_on=1`. Dispatch rechecks the inspected pane identity. The temporary
+buffer is always removed. Other programs and ordinary Codex inline output
+cannot use that exception. Copy mode is cancelled before native delivery.
 
 Coordinates are computed from that pane at dispatch time:
 `X = max(1, width - 1)`, `Y = max(1, floor(height / 2))`. This targets the main
-body near its right edge, avoiding Copilot's left sidebar. A private named tmux
+body near its right edge, avoiding Copilot's left sidebar. Codex instead uses
+`X = 1`, `Y = min(2, height)`: its transcript width can be narrower than the
+pane, and its composer can cover the midpoint. A private named tmux
 buffer is pasted with `paste-buffer -r -d`, without bracketed-paste wrapping.
 This bypasses custom mouse bindings and `synchronize-panes`, preserves existing
 buffers, and directs the frame only to the intended pane. Temporary buffers
@@ -129,10 +139,22 @@ checks are identified separately below.
    for modes 1000/1002/1003/1006. The complete CLI's isolated login startup also
    emitted none. An authenticated main conversation was not exercised.
 
-Codex's native overlay behavior remains release-source evidence. Its earlier
-isolated standalone startup lacked its complete package, so it did not verify
-an interactive transcript. Its shipped recommendation uses the separately
-verified tmux controls.
+5. **Codex, complete installed CLI through production transport.** A synthetic
+   resumed conversation in Codex 0.157.1 reproduced the failure with tmux
+   `mouse=off`: PgUp moved the first visible numbered row `210 → 181`, while the
+   generic profile rejected App input. The Codex profile moved `181 → 178 → 181`
+   without changing an unsent draft or entering tmux copy mode. PgDn resumed
+   paging. The original right-edge coordinate can also miss Codex's bounded
+   transcript column. No user configuration or mouse setting is changed.
+
+   `e2e/codex-native-scroll.spec.ts` exercises the real CLI through the browser,
+   backend, and tmux at desktop and phone widths, checking visible numbered rows,
+   direction changes, draft preservation, and returning from tmux copy mode to
+   the existing native page position. It is opt-in because CI does not install
+   Codex: set `MUXDECK_NATIVE_CODEX_BINARY` to the installed native executable.
+   The fixture creates a private Codex home, an offline provider, and a disposable
+   session on the Playwright socket. The ordinary transport tests also reject
+   Codex-profile delivery to another program, disabled input, and inline output.
 
 ## Transport and browser coverage
 
@@ -183,10 +205,11 @@ without the pre-scroll pause and passes with it.
   `1931.index.js` main UI byte 819501, Ink Static render byte 846765, diff
   handler byte 144674; `1218.index.js` input-key module byte 31959 and main
   Up/Down dispatch byte 19823.
-- Codex 0.157.0: matching release
-  [pager bindings](https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/tui/src/keymap.rs#L1868),
-  [row deltas](https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/tui/src/transcript_view/input.rs#L94),
-  and [overlay dispatch](https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/tui/src/pager_overlay/transcript.rs#L416).
+- Codex 0.157.1: matching release
+  [pager bindings](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/tui/src/keymap.rs#L1868),
+  [row deltas and hit testing](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/tui/src/transcript_view/input.rs#L179),
+  [main viewport](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/tui/src/app/owned_transcript.rs#L83),
+  and [tmux input policy](https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/tui/src/tui/keyboard_modes.rs#L209).
 
 ## Session-local evidence
 
