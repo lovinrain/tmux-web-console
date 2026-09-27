@@ -10403,9 +10403,15 @@ html.scoped-note-resizing-bottom-left * {
 }
 
 .callback-session-toggle.active {
-  color: var(--amber);
-  background: rgba(255, 182, 72, 0.08);
-  border-color: rgba(255, 182, 72, 0.42);
+  color: #281900;
+  background: var(--amber);
+  border-color: #ffcc79;
+  font-weight: 700;
+}
+
+.callback-session-toggle.active:hover:not(:disabled) {
+  background: #ffc776;
+  border-color: #ffdb9c;
 }
 
 .workspace-pin-button.active {

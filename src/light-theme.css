@@ -3392,7 +3392,8 @@ html[data-theme="light"] .size-mode,
 html[data-theme="light"] .copy-new-button,
 html[data-theme="light"] .split-workspace-button,
 html[data-theme="light"] .workspace-pin-button,
-html[data-theme="light"] .workspace-transfer-button {
+html[data-theme="light"] .workspace-transfer-button,
+html[data-theme="light"] .callback-session-toggle {
   color: #424c40;
   background: #eeeae2;
   border-color: #c6bfb3;
@@ -3403,7 +3404,8 @@ html[data-theme="light"] .size-mode:hover,
 html[data-theme="light"] .copy-new-button:hover,
 html[data-theme="light"] .split-workspace-button:hover,
 html[data-theme="light"] .workspace-pin-button:hover,
-html[data-theme="light"] .workspace-transfer-button:hover {
+html[data-theme="light"] .workspace-transfer-button:hover,
+html[data-theme="light"] .callback-session-toggle:hover {
   color: #20261e;
   background: #fffdf8;
   border-color: #828d7c;
@@ -3437,9 +3439,21 @@ html[data-theme="light"] .split-action-group .split-workspace-button:focus-visib
   background: #e0e8d1;
 }
 
-html[data-theme="light"] .workspace-transfer-button {
+html[data-theme="light"] .workspace-transfer-button,
+html[data-theme="light"] .callback-session-toggle {
   color: #8a5a13;
   border-color: #c9ad7d;
+}
+
+html[data-theme="light"] .callback-session-toggle.active {
+  color: #fffdf8;
+  background: #8a4b00;
+  border-color: #703b00;
+}
+
+html[data-theme="light"] .callback-session-toggle.active:hover:not(:disabled) {
+  background: #6b3b00;
+  border-color: #542e00;
 }
 
 html[data-theme="light"] .workspace-transfer-backdrop {
@@ -3749,20 +3763,6 @@ html[data-theme="light"]
 html[data-theme="light"]
   .console-shell[data-console-header-tray="true"] .console-header-tray-chrome {
   color: #273224;
-}
-
-html[data-theme="light"]
-  .console-shell[data-console-header-tray="true"] .callback-session-toggle {
-  color: #85550b;
-  background: #f6f0df;
-  border-color: #c9ad7d;
-}
-
-html[data-theme="light"]
-  .console-shell[data-console-header-tray="true"] .callback-session-toggle.active {
-  color: #694000;
-  background: #f5e4b8;
-  border-color: #aa792d;
 }
 
 html[data-theme="light"]
