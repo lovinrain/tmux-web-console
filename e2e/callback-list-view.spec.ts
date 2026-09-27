@@ -347,6 +347,51 @@ test("filtered clearing preserves callbacks and messages inside collapsed groups
   await expect(panel.locator(".workspace-callback-message")).toHaveCount(2);
 });
 
+test("callback status shares the top console toolbar and Escape closes its window", async ({ page }, testInfo) => {
+  await installCallbacks(page);
+  await page.route("**/mux/api/**/quick-links", (route) => route.fulfill({ json: { links: [] } }));
+  await page.route("**/mux/api/sessions/*/note", (route) => route.fulfill({ json: { note: "", updatedAt: 0 } }));
+  const terminalInput: Array<string | Buffer> = [];
+  await page.routeWebSocket("**/mux/ws/terminal**", (socket) => {
+    socket.onMessage((message) => {
+      if (typeof message === "string" && message.startsWith('{"type":"resize"')) return;
+      terminalInput.push(message);
+    });
+  });
+  await page.goto(`/mux/session/bravo-work?workspace=${currentWorkspaceId}`);
+  const toolbar = page.getByRole("group", { name: "Console bars", exact: true });
+  const show = toolbar.getByRole("button", { name: "Show callback list", exact: true });
+  const tabs = toolbar.getByRole("button", { name: "Session tabs", exact: true });
+  await expect(show).toBeVisible();
+  await expect(show).toContainText("Global 3/7");
+  await expect(show).toContainText("Local 1/2");
+  await expect(page.locator(".workspace-callback-footnote")).toHaveCount(0);
+  for (const [theme, width] of [["dark", 1440], ["light", 1100]] as const) {
+    await page.setViewportSize({ width, height: 1000 });
+    if (theme === "light") await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+    const statusBox = (await show.boundingBox())!;
+    const tabsBox = (await tabs.boundingBox())!;
+    expect(statusBox.y).toBeLessThan(50);
+    expect(statusBox.x + statusBox.width).toBeLessThanOrEqual(tabsBox.x);
+    expect(Math.abs(statusBox.y - tabsBox.y)).toBeLessThan(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await toolbar.screenshot({ path: testInfo.outputPath(`callback-toolbar-${theme}.png`) });
+  }
+  await show.click();
+  const panel = page.getByRole("dialog", { name: "Callback list", exact: true });
+  await expect(panel).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(panel).not.toBeVisible();
+  await expect(show).toBeFocused();
+  await show.click();
+  await panel.getByRole("button", { name: "Pin callback list", exact: true }).click();
+  await panel.getByRole("searchbox", { name: "Search callbacks", exact: true }).fill("review");
+  await page.keyboard.press("Escape");
+  await expect(panel).not.toBeVisible();
+  await expect(show).toBeFocused();
+  expect(terminalInput).toEqual([]);
+});
+
 test("callback appearance resizes from the screen edge and persists readable text", async ({ page }, testInfo) => {
   await installCallbacks(page);
   const panel = await openPanel(page);

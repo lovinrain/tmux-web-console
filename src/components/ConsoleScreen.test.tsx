@@ -2186,6 +2186,7 @@ describe("ConsoleScreen session identity", () => {
         sessionName="test"
         onBack={vi.fn()}
         workspaceLinks={<section aria-label="Workspace links">Pinned links</section>}
+        callbackControl={<button type="button">Callback status</button>}
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
       />,
     );
@@ -2202,6 +2203,9 @@ describe("ConsoleScreen session identity", () => {
     });
 
     expect(workspaceLinks).toBeVisible();
+    const callback = within(toolbar).getByRole("button", { name: "Callback status" });
+    expect(callback).toBeVisible();
+    expect(callback.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(tabs).toBePressed();
     expect(tabs).toHaveAttribute("aria-controls", "muxdeck-session-tabs");
     expect(tabs).toHaveAttribute("aria-keyshortcuts", "Control+Shift+S");
@@ -2233,7 +2237,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabs).toHaveAttribute("title", "Show session tabs (Ctrl+Shift+S)");
     expect(workspaceLinks).toBeVisible();
     expect(within(screen.getByRole("group", { name: "Console bars" }))
-      .getAllByRole("button")).toHaveLength(8);
+      .getAllByRole("button")).toHaveLength(9);
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();

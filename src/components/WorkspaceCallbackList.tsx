@@ -23,7 +23,7 @@ import {
 import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
 import "./WorkspaceCallbackMessages.css";
 import "./WorkspaceCallbackFilters.css";
-import "./WorkspaceCallbackFootnote.css";
+import "./WorkspaceCallbackStatus.css";
 import "./WorkspaceCallbackAppearance.css";
 import type { Session } from "../types";
 import {
@@ -314,6 +314,7 @@ export function WorkspaceCallbackList({
   const headingId = useId();
   const panelId = `${headingId}-panel`;
   const panelRef = useRef<HTMLElement>(null);
+  const summaryRef = useRef<HTMLButtonElement>(null);
   const interactionCleanupRef = useRef<(() => void) | null>(null);
   const globalEnabled = globalCallbackSnapshot !== null || Boolean(onGlobalChange);
   const initialScopeRef = useRef<CallbackScope | null>(null);
@@ -537,6 +538,15 @@ export function WorkspaceCallbackList({
       ? { ...current, panel: updater(current.panel) }
       : current);
   }, [identity]);
+
+  useEffect(() => {
+    if (desktop && panel.open) panelRef.current?.focus({ preventScroll: true });
+  }, [desktop, panel.open]);
+
+  const closePanel = () => {
+    updatePanel((current) => ({ ...current, open: false, pinned: false }));
+    summaryRef.current?.focus({ preventScroll: true });
+  };
 
   useEffect(() => {
     if (!active || !desktop || !panel.open || typeof ResizeObserver !== "function") return;
@@ -1002,17 +1012,18 @@ export function WorkspaceCallbackList({
       className={`workspace-callback-panel${panel.pinned ? " pinned" : ""}${workingCount > 0 ? " has-working" : ""}`}
       style={panelStyle}
       role="dialog"
+      tabIndex={-1}
       aria-labelledby={headingId}
       data-pinned={panel.pinned ? "true" : "false"}
       data-scope={activeScope}
       onKeyDown={(event) => {
-        if (event.key === "Escape") {
+        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
           event.preventDefault();
           if (appearanceOpen) {
             setAppearanceOpen(false);
             appearanceButtonRef.current?.focus();
           } else {
-            updatePanel((current) => ({ ...current, open: false, pinned: false }));
+            closePanel();
           }
         }
         event.stopPropagation();
@@ -1062,8 +1073,8 @@ export function WorkspaceCallbackList({
         <button
           type="button"
           aria-label="Close callback list"
-          title="Hide the callback list"
-          onClick={() => updatePanel((current) => ({ ...current, open: false, pinned: false }))}
+          title="Hide the callback list (Esc)"
+          onClick={closePanel}
         >
           <CloseIcon />
         </button>
@@ -1318,6 +1329,7 @@ export function WorkspaceCallbackList({
     : `${readyCount} ready out of ${visibleCallbackSessions.length} sessions; ${workingCount} working${visibleMessages.length > 0 ? `; ${visibleMessages.length} messages` : ""}`;
   const summaryButton = <button
         type="button"
+        ref={summaryRef}
         className={`workspace-callback-card${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}${(globalEnabled ? globalWorkingCount : workingCount) > 0 ? " has-working" : ""}`}
         aria-label={panel.open ? "Hide callback list" : "Show callback list"}
         aria-description={summaryDescription}
@@ -1351,7 +1363,7 @@ export function WorkspaceCallbackList({
       </button>;
   return (
     <>
-      {globalEnabled ? createPortal(<div className="workspace-callback-footnote">{summaryButton}</div>, document.body) : summaryButton}
+      {globalEnabled ? <div className="workspace-callback-status-control">{summaryButton}</div> : summaryButton}
       {floatingPanel && createPortal(floatingPanel, document.body)}
     </>
   );

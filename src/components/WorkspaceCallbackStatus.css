@@ -1,0 +1,35 @@
+@media (min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  .workspace-callback-status-control {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+  .workspace-callback-status-control > .workspace-callback-card {
+    position: relative;
+    display: inline-flex;
+    flex: 0 1 auto;
+    gap: 6px;
+    width: auto;
+    min-width: 0;
+    height: 30px;
+    min-height: 30px;
+    padding: 2px 6px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+  .workspace-callback-status-control > .workspace-callback-card:is(:hover, :focus-visible, .window-open) {
+    border-color: var(--callback-accent);
+    background: var(--ink-raised);
+  }
+  .workspace-callback-status-control .workspace-callback-card > svg { width: 12px; height: 12px; }
+  .workspace-callback-status-control .workspace-callback-card > span { display: grid; gap: 2px; }
+  .workspace-callback-status-control .workspace-callback-card strong { font-size: 8px; }
+  .workspace-callback-status-control .workspace-callback-card small { font-size: 9px; font-weight: 400; color: var(--muted); }
+  .workspace-callback-status-control .workspace-callback-card small b { color: var(--paper); font-variant-numeric: tabular-nums; }
+  .workspace-callback-status-control .workspace-callback-card > em { position: static; font-size: 7px; }
+  .workspace-callback-counts { display: flex; align-items: baseline; gap: 8px; color: var(--muted); }
+  .workspace-callback-count-hint { font-size: 9px; }
+}

@@ -137,6 +137,7 @@ describe("WorkspaceCallbackList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
     const panel = screen.getByRole("dialog", { name: "Callback list" });
     expect(within(panel).getByText("Nothing queued for a callback")).toBeInTheDocument();
+    expect(panel).toHaveFocus();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Current" }));
     expect(onChange).toHaveBeenLastCalledWith(["agent-one"]);
@@ -340,7 +341,31 @@ describe("WorkspaceCallbackList", () => {
     expect(screen.getByRole("combobox", { name: "Callback window size" })).toHaveValue("custom");
   });
 
-  it("keeps both footer counts independent of the open scope and updates them with live status", () => {
+  it("closes a pinned callback window with Escape, restores its opener, and contains the key", () => {
+    renderList(["agent-one"]);
+    const toggle = screen.getByRole("button", { name: "Show callback list" });
+    fireEvent.click(toggle);
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(panel).toHaveFocus();
+    fireEvent.click(within(panel).getByRole("button", { name: "Pin callback list" }));
+    const search = within(panel).getByRole("searchbox", { name: "Search callbacks" });
+    search.focus();
+    const forwardedKey = vi.fn();
+    window.addEventListener("keydown", forwardedKey);
+    try {
+      fireEvent.keyDown(search, { key: "Escape", isComposing: true });
+      expect(panel).toBeInTheDocument();
+      expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+      expect(screen.queryByRole("dialog", { name: "Callback list" })).not.toBeInTheDocument();
+      expect(toggle).toHaveFocus();
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(forwardedKey).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", forwardedKey);
+    }
+  });
+
+  it("keeps both inline counts independent of the open scope and updates them with live status", () => {
     const props = {
       sessionName: "agent-one", workspaceId: "workspace-one", workspaceName: "Launch room",
       workspaceSessionNames: ["agent-one"], callbackSessions: ["agent-one"],
@@ -351,7 +376,8 @@ describe("WorkspaceCallbackList", () => {
     const view = renderWithTheme(<WorkspaceCallbackList {...props}
       sessions={[session("agent-one"), session("agent-two", "working")]} />);
     const toggle = screen.getByRole("button", { name: "Show callback list" });
-    expect(toggle.closest(".workspace-callback-footnote")).not.toBeNull();
+    expect(toggle.closest(".workspace-callback-status-control")).not.toBeNull();
+    expect(document.querySelector(".workspace-callback-footnote")).toBeNull();
     expect(toggle).toHaveTextContent("Global 1/3");
     expect(toggle).toHaveTextContent("Local 1/1");
     fireEvent.click(toggle);

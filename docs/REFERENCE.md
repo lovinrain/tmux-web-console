@@ -1582,7 +1582,7 @@ session.
 
 ### Workspace callback list
 
-The desktop `Callback` footer opens a deliberate follow-up queue for sessions that
+The desktop `Callback` status button opens a deliberate follow-up queue for sessions that
 need a human check later. It has two scopes: `Global` (the default) and
 `Workspace`. `Current` marks the active session, or the chooser can add another
 known session; each entry is deduplicated, initially ordered by the user's additions, and
@@ -1591,12 +1591,16 @@ shown as `Working`, `Command running`, `Ready`, `Waiting`, or
 `Ended / unavailable`, so a completed session remains easy to find after the
 operator returns. `Clear ended` removes
 stale entries and `Clear all` empties the active queue.
-The bottom-right footer shows both scopes together, such as
+The button sits in the top console toolbar immediately before `Tabs`, `Input`,
+and `Keys`, or in the dashboard/pane-view header. It shows both scopes together, such as
 `Global 9/9 · Local 1/1 ready`. Each fraction means ready / watched, counting
 entries labeled `Ready` or `Ready for review`; Local refers to this workspace's
 queue. The counts stay visible and independent of the open scope, filters,
 or collapsed groups. Running commands count as working, never ready. Click the
-footer to open the list and hover for the expanded count descriptions.
+status button to open the list and hover for the expanded count descriptions.
+Opening the window moves keyboard focus inside. `Escape` closes it and restores
+focus to the status button; when appearance settings are open, the first Escape
+closes those settings. The window remains non-modal, like sticky notes.
 
 Search matches session names, custom titles, message text, agent names, working
 directories, and source workspace names. Multiple search words must all match

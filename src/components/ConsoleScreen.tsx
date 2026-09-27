@@ -131,6 +131,7 @@ interface ConsoleScreenProps {
   dashboardWindowHref?: string;
   headerNotes?: ReactNode;
   workspaceLinks?: ReactNode;
+  callbackControl?: ReactNode;
   sessionNavigation?: ReactNode;
   workspaceOverlayOpen?: boolean;
   mobileMode?: MobileConsoleMode;
@@ -305,6 +306,7 @@ interface ConsoleBarToolbarProps {
   availability?: Partial<Record<ConsoleBar, boolean>>;
   onChange: (bar: ConsoleBar, visible: boolean) => void;
   workspaceLinks?: ReactNode;
+  callbackControl?: ReactNode;
   desktopCopyMode?: boolean;
   onDesktopCopyModeChange?: (enabled: boolean) => void;
   onEnterDesktopFocus?: () => void;
@@ -378,6 +380,7 @@ function ConsoleBarToolbar({
   availability,
   onChange,
   workspaceLinks,
+  callbackControl,
   desktopCopyMode = false,
   onDesktopCopyModeChange,
   onEnterDesktopFocus,
@@ -416,6 +419,7 @@ function ConsoleBarToolbar({
       {workspaceLinks && (
         <div className="console-bar-toolbar-links">{workspaceLinks}</div>
       )}
+      {callbackControl}
       <div className="console-bar-toggle-group">
         {CONSOLE_BARS.map(({ bar, label, shortLabel, controls }) => {
           if (hideSessionTabs && bar === "sessionTabs") return null;
@@ -584,6 +588,7 @@ export function ConsoleScreen({
   dashboardWindowHref,
   headerNotes: providedHeaderNotes,
   workspaceLinks: providedWorkspaceLinks,
+  callbackControl: providedCallbackControl,
   sessionNavigation: providedSessionNavigation,
   workspaceOverlayOpen: providedWorkspaceOverlayOpen = false,
   mobileMode,
@@ -630,6 +635,7 @@ export function ConsoleScreen({
   const { bindings: shortcutBindings } = useShortcutSettings();
   const headerNotes = ephemeral ? undefined : providedHeaderNotes;
   const workspaceLinks = ephemeral ? undefined : providedWorkspaceLinks;
+  const callbackControl = ephemeral ? undefined : providedCallbackControl;
   const sessionNavigation = ephemeral ? undefined : providedSessionNavigation;
   const workspaceOverlayOpen = !ephemeral && providedWorkspaceOverlayOpen;
   const resolvedDashboardWindowHref = dashboardWindowHref
@@ -2069,6 +2075,7 @@ export function ConsoleScreen({
           }}
           onChange={setBarVisible}
           workspaceLinks={workspaceLinks}
+          callbackControl={callbackControl}
           desktopTabOrientation={desktopTabOrientation}
           onDesktopTabOrientationChange={sessionNavigation
             ? onDesktopTabOrientationChange
@@ -2202,6 +2209,7 @@ export function ConsoleScreen({
         availability={{ sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
         workspaceLinks={workspaceLinks}
+        callbackControl={callbackControl}
         desktopTabOrientation={desktopTabOrientation}
         onDesktopTabOrientationChange={sessionNavigation
           ? onDesktopTabOrientationChange

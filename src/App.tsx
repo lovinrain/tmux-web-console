@@ -4708,27 +4708,9 @@ function AppRoutes() {
                 : null}
               workspaceName={workspaceName}
             />
-            <WorkspaceCallbackList
-              sessionName={sessionName}
-              workspaceId={hydratedWorkspaceId === locationWorkspaceId
-                ? locationWorkspaceId
-                : null}
-              workspaceName={workspaceName}
-              temporaryKey={temporaryTerminalKey}
-              sessions={knownSessions}
-              workspaceSessionNames={workspace.openSessions}
-              callbackSessions={workspaceCallbackSessions}
-              onChange={updateWorkspaceCallbackSessions}
-              globalCallbackSnapshot={globalCallbackSnapshot}
-              onGlobalChange={updateGlobalCallbackSessions}
-              globalCallbackBusy={globalCallbackBusy}
-              onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
-              onReviewSession={reviewCallbackSession}
-              onReviewMessage={reviewAgentCallbackMessage}
-              onSelectSession={switchSession}
-            />
           </div>
         )}
+        callbackControl={renderCallbackList(sessionName)}
         workspaceLinks={(
           <WorkspaceQuickLinks
             sessionName={sessionName}
