@@ -2003,6 +2003,57 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onReparentSession).toHaveBeenLastCalledWith("zulu", "beta");
   });
 
+  it("opens placement for the current session even when tab actions are hidden", () => {
+    const props = navigationProps({
+      tabActionsVisible: false,
+      onReparentSession: vi.fn(),
+      onTransferSelectedSessions: vi.fn(),
+    });
+    const { rerender } = render(<SessionWorkspaceNavigation {...props} />);
+    const button = screen.getByRole("button", { name: "Move / Nest" });
+    expect(button).toHaveAttribute("aria-haspopup", "dialog");
+    expect(button).toHaveAccessibleDescription(/Organize Alpha control/);
+    fireEvent.click(button);
+    expect(props.onTransferSelectedSessions).toHaveBeenLastCalledWith(["alpha"]);
+
+    // Placement changes workspace metadata, so unavailable sessions can still move.
+    rerender(<SessionWorkspaceNavigation {...props} activeSession="beta" sessions={[]} />);
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(props.onTransferSelectedSessions).toHaveBeenLastCalledWith(["beta"]);
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onReparentSession).not.toHaveBeenCalled();
+  });
+
+  it.each<Partial<NavigationProps>>([
+    { workspacePersistenceState: "loading" },
+    { workspacePersistenceState: "error" },
+    { separatorsBusy: true },
+    { newSessionActive: true },
+    { activeSession: null },
+    { activeSession: "not-in-workspace" },
+  ])("disables the placement button when the workspace or session is unavailable: %j", (overrides) => {
+    const onTransferSelectedSessions = vi.fn();
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      onReparentSession: vi.fn(), onTransferSelectedSessions, ...overrides,
+    })} />);
+    const button = screen.getByRole("button", { name: "Move / Nest" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onTransferSelectedSessions).not.toHaveBeenCalled();
+  });
+
+  it("opens placement for the focused session in a multi-pane view", () => {
+    const onTransferSelectedSessions = vi.fn();
+    render(<ActivePaneSessionContext.Provider value="beta">
+      <SessionWorkspaceNavigation {...navigationProps({
+        activeSession: null, onReparentSession: vi.fn(), onTransferSelectedSessions,
+      })} />
+    </ActivePaneSessionContext.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: "Move / Nest" }));
+    expect(onTransferSelectedSessions).toHaveBeenCalledWith(["beta"]);
+  });
+
   it("drags horizontal desktop tabs to a new position without selecting or closing them", () => {
     const onMoveTab = vi.fn();
     const props = navigationProps({

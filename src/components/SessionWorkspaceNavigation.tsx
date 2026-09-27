@@ -2212,6 +2212,13 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const desktopTabMultiSelectEnabled = desktopTabDragEnabled && Boolean(onMoveTabs);
   const nestingEnabled = Boolean(onReparentSession && workspacePersistenceState !== "loading"
     && workspacePersistenceState !== "error" && !separatorsBusy);
+  const placementSession = newSessionActive ? null : activeSession ?? activePaneSession;
+  const placementSessionAvailable = Boolean(placementSession && openSessions.includes(placementSession));
+  const placementHint = !placementSessionAvailable
+    ? "Select a session to move or nest"
+    : !nestingEnabled
+      ? "Wait for the workspace to finish syncing"
+      : `Organize ${tabTitle(placementSession!, sessionsByName)}: move up a level, choose a parent session, or move to another workspace`;
   const selectedWorkspaceTabSet = useMemo(
     () => new Set(selectedWorkspaceTabs),
     [selectedWorkspaceTabs],
@@ -3620,6 +3627,22 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <PlusIcon />
               <span>Add sessions</span>
               {addableSessionCount > 0 && <strong>{addableSessionCount}</strong>}
+            </button>
+          )}
+          {onReparentSession && props.onTransferSelectedSessions && (
+            <button
+              type="button"
+              className="workspace-session-placement-button"
+              disabled={!nestingEnabled || !placementSessionAvailable}
+              aria-haspopup="dialog"
+              aria-description={placementHint}
+              title={placementHint}
+              onClick={() => {
+                if (placementSession) props.onTransferSelectedSessions?.([placementSession]);
+              }}
+            >
+              <WindowMoveIcon />
+              <span>Move / Nest</span>
             </button>
           )}
           {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (

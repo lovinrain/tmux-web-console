@@ -2847,6 +2847,7 @@ a:focus-visible {
 .workspace-new-session-button,
 .workspace-quick-new-session-button,
 .workspace-add-session-button,
+.workspace-session-placement-button,
 .workspace-save-button,
 .workspace-saved-indicator,
 .workspace-rename-button,
@@ -2990,7 +2991,13 @@ a:focus-visible {
   border-left: 1px solid #30382e;
 }
 
-.workspace-add-session-button:disabled {
+.workspace-session-placement-button {
+  color: var(--cyan);
+  border-left: 1px solid #30382e;
+}
+
+.workspace-add-session-button:disabled,
+.workspace-session-placement-button:disabled {
   color: #778173;
   cursor: not-allowed;
   opacity: 0.48;
@@ -3473,6 +3480,8 @@ a:focus-visible {
 .workspace-quick-new-session-button:focus-visible,
 .workspace-add-session-button:hover:not(:disabled),
 .workspace-add-session-button:focus-visible,
+.workspace-session-placement-button:hover:not(:disabled),
+.workspace-session-placement-button:focus-visible,
 .workspace-save-button:hover,
 .workspace-save-button:focus-visible,
 .workspace-rename-button:hover,
@@ -3499,6 +3508,7 @@ a:focus-visible {
 .workspace-new-session-button svg,
 .workspace-quick-new-session-button svg,
 .workspace-add-session-button svg,
+.workspace-session-placement-button svg,
 .workspace-save-button svg,
 .workspace-saved-indicator svg,
 .workspace-rename-button svg,
@@ -12299,6 +12309,7 @@ html.scoped-note-resizing-bottom-left * {
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-dashboard-actions,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-new-session-actions,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-add-session-button,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-session-placement-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-save-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-saved-indicator,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-rename-button,
@@ -12712,6 +12723,16 @@ html.scoped-note-resizing-bottom-left * {
 
   /* The rail's query size excludes its 12px gutter and 1px border. */
   @container workspace-tab-rail (max-width: 227px) {
+    .workspace-navigation-vertical[data-orientation="vertical"] .workspace-session-placement-button {
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      padding-inline: 4px;
+      font-size: 8px;
+      line-height: 10px;
+      letter-spacing: 0;
+    }
+
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-dashboard-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-quick-new-session-button,
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-new-session-button,
@@ -14637,6 +14658,7 @@ html.history-resizing * {
   .workspace-new-session-button,
   .workspace-quick-new-session-button,
   .workspace-add-session-button,
+  .workspace-session-placement-button,
   .workspace-save-button,
   .workspace-saved-indicator,
   .workspace-recents-button {
@@ -14647,6 +14669,14 @@ html.history-resizing * {
     flex: 0 0 48px;
     justify-content: center;
     padding: 0;
+  }
+
+  .workspace-session-placement-button {
+    flex-direction: column;
+    gap: 2px;
+    font-size: 8px;
+    line-height: 10px;
+    letter-spacing: 0;
   }
 
   .workspace-dashboard-button > span,

@@ -94,6 +94,15 @@ async function selectTab(page: Page, name: string): Promise<void> {
   await expect(page.locator(".connection-badge")).toContainText("Live");
 }
 
+async function startTabDrag(page: Page, name: string): Promise<void> {
+  const tab = tabRow(page, name).getByRole("tab");
+  await tab.hover();
+  await page.mouse.down();
+  const box = (await tab.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 12, { steps: 5 });
+  await expect(tabRow(page, name)).toHaveAttribute("data-tab-dragging", "true");
+}
+
 async function copySession(page: Page, parent: string, child: boolean): Promise<string> {
   await selectTab(page, parent);
   if (child && parent === sourceName) {
@@ -246,7 +255,7 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
   }
 });
 
-test("existing branches promote, drag to nest, and move under a parent in another workspace", async ({ page, context }) => {
+test("existing branches move through the placement button, drag to nest, and transfer across workspaces", async ({ page, context }) => {
   test.setTimeout(60_000);
   const branch = `${sourceName}_ux-branch`;
   const child = `${sourceName}_ux-child`;
@@ -277,12 +286,34 @@ test("existing branches promote, drag to nest, and move under a parent in anothe
   await second.goto(`/mux/session/${sourceName}?workspace=${source.id}`);
   await expectTree(second, source.tabs, source.parents!);
 
-  await tabRow(page, branch).getByRole("tab").click({ button: "right" });
+  await selectTab(page, branch);
+  const tabActions = page.getByRole("button", { name: "Tab action buttons", exact: true });
+  await tabActions.click();
+  await expect(tabActions).toHaveAttribute("aria-pressed", "false");
+  const placementButton = page.getByRole("button", { name: "Move / Nest", exact: true });
+  await expect(placementButton).toBeVisible();
+  await placementButton.click();
   let dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
+  await expect(dialog.locator(".session-placement-source > strong")).toHaveText("API implementation");
+  await expect(dialog.getByRole("searchbox", { name: "Find a parent session" })).toBeFocused();
+  await expect(dialog.getByRole("radio", { name: "Nest under API tests", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: join(reviewDirectory, "placement-button-dialog.png") });
   await dialog.getByRole("button", { name: "Up one level", exact: true }).click();
   await expectTree(page, source.tabs, { [child]: branch });
   await expectTree(second, source.tabs, { [child]: branch });
-  await tabRow(page, branch).getByRole("tab").dragTo(tabRow(page, target).getByRole("tab"));
+  await expect(placementButton).toBeFocused();
+
+  // Reveal the complete target before dragging so auto-scroll cannot
+  // move its nesting zone out from under the pointer just before the drop.
+  await tabRow(page, target).scrollIntoViewIfNeeded();
+  await startTabDrag(page, branch);
+  const targetTab = tabRow(page, target).getByRole("tab");
+  await targetTab.hover();
+  const targetBox = (await targetTab.boundingBox())!;
+  // Chromium needs a move inside the target after dragenter to dispatch dragover.
+  await page.mouse.move(targetBox.x + targetBox.width / 2 + 1, targetBox.y + targetBox.height / 2);
+  await expect(tabRow(page, target)).toHaveAttribute("data-tab-drop-nest", "true");
+  await page.mouse.up();
   const nestedTabs = [sourceName, target, branch, child];
   await expectTree(page, nestedTabs, { [branch]: target, [child]: branch });
   await expectTree(second, nestedTabs, { [branch]: target, [child]: branch });
@@ -290,10 +321,14 @@ test("existing branches promote, drag to nest, and move under a parent in anothe
 
   await page.getByRole("button", { name: "Show callback list", exact: true }).click();
   await page.getByRole("button", { name: "Pin callback list", exact: true }).click();
-  await tabRow(page, branch).getByRole("tab").click({ button: "right" });
+  await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
+  await expect(page.locator("#muxdeck-session-tabs")).toHaveAttribute("data-orientation", "horizontal");
+  await page.screenshot({ path: join(reviewDirectory, "placement-button-top-tabs.png") });
+  await placementButton.click();
   dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
   await expect(dialog.getByRole("radio", { name: "Nest under API tests", exact: true })).toHaveCount(0);
   await dialog.getByRole("combobox", { name: "Destination workspace" }).selectOption(destination.id);
+  await dialog.getByRole("searchbox", { name: "Find a parent session" }).fill("Review queue");
   await dialog.getByRole("radio", { name: "Nest under Review queue", exact: true }).check();
   await page.screenshot({ path: join(reviewDirectory, "move-nest-across-workspaces.png") });
   await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
@@ -308,11 +343,7 @@ test("existing branches promote, drag to nest, and move under a parent in anothe
   const destinationTabs = [destinationRoot, destinationParent, branch, child];
   await page.goto(`/mux/session/${branch}?workspace=${destination.id}`);
   await expectTree(page, destinationTabs, { [destinationParent]: destinationRoot, [branch]: destinationParent, [child]: branch });
-  const branchTab = tabRow(page, branch).getByRole("tab");
-  await branchTab.hover();
-  await page.mouse.down();
-  const box = (await branchTab.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 12, { steps: 5 });
+  await startTabDrag(page, branch);
   const rootDrop = page.getByRole("group", { name: "Top level drop target", exact: true });
   await expect(rootDrop).toBeVisible();
   await rootDrop.hover();
