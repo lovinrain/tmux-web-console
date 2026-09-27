@@ -1029,7 +1029,14 @@ workspace a server identity. Multi-pane rendering is intentionally desktop-only.
 The landing-page `New session` action opens `/sessions/new` as a synthetic
 workspace tab and waits for explicit confirmation before changing tmux. On
 confirmation, Muxdeck uses the optional native tmux name entered in the form or
-assigns a collision-resistant `muxdeck-*` name when the field is empty. It starts
+assigns a name from the starting folder, its parent, and a unique ID when the
+field is empty: `/srv/acme/backend` becomes `backend--acme--7f3a91c2`. The last
+two resolved path components appear in reverse order, normalized to letters,
+numbers, underscores, and single hyphens and shortened to 32 characters each.
+The eight-character random hex suffix distinguishes sessions in the same folder;
+collisions retry automatically. A top-level folder uses one component (`/root`
+becomes `root--7f3a91c2`), and `/` also uses `root`. Names stay fixed after creation
+even if the shell changes directory. It starts
 tmux's configured default shell in the optional absolute server directory entered
 in the form, or in the service user's home directory when that field is blank.
 The server rejects missing paths and paths that are not directories before it
@@ -1047,7 +1054,7 @@ Muxdeck windows. Unlike named Muxdeck workspaces, it is not written to
 directory lists from the earlier picker are migrated as pins.
 
 The workspace strip's split `New session` control also provides a quick action.
-It skips the form, asks the server for a collision-resistant `muxdeck-*` name,
+It skips the form, uses the same folder-and-ID naming scheme,
 and focuses the created session immediately. Its starting directory follows a
 strict browser-memory precedence: a pinned path first, then a path with at least
 three observed/explicit launches ranked by frequency, then the most recently

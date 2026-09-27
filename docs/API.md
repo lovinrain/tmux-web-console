@@ -559,6 +559,15 @@ Responses contain both `note` and `notebook`.
 
 Creation launches the configured default shell; it does not automatically
 start a coding agent. `directory` must be an absolute accessible server path.
+When `name` is omitted, the resolved starting directory supplies the last two
+path components in reverse order, followed by an eight-character random hex ID:
+`/srv/acme/backend` becomes `backend--acme--7f3a91c2`. An omitted `directory`
+uses the service user's home directory. Each path component is normalized to
+letters, numbers, underscores, and single hyphens, then shortened to 32 characters;
+an empty component becomes `directory`. Paths with only one component use that
+component, and `/` uses `root`. Generated-name collisions retry with a fresh ID
+up to five attempts. Explicit names are preserved, and changing directory later
+does not rename a session.
 
 Session snapshots include `agentState`, `agentStateReason`, and
 `agentStateChangedAt`. State values are `working`, `running_command`,

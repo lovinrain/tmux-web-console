@@ -103,7 +103,7 @@ describe("NewSessionScreen", () => {
     const nameInput = screen.getByRole("textbox", { name: /tmux session name/i });
     expect(nameInput).toHaveValue("");
     expect(nameInput).toHaveAttribute("maxlength", "256");
-    expect(nameInput).toHaveAccessibleDescription(/leave blank for an assigned name/i);
+    expect(nameInput).toHaveAccessibleDescription(/leave blank to use the folder, its parent, and a unique ID/i);
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledOnce();

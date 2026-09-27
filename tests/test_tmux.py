@@ -23,6 +23,7 @@ from tmux_console.tmux import (
     TmuxError,
     TmuxRenameUnverifiedError,
     TmuxSessionIdentityChangedError,
+    _automatic_session_name,
     parse_sessions,
     validate_tmux_new_session_name,
     validate_tmux_session_name,
@@ -157,15 +158,51 @@ def guarded_terminate_call(
     ]
 
 
-async def test_create_session_uses_collision_resistant_name_default_shell_and_home(
+@pytest.mark.parametrize(
+    ("directory", "prefix"),
+    [
+        ("/root/projects/acme/backend", "backend--acme"),
+        ("/root/tmux-web-console", "tmux-web-console--root"),
+        ("/srv/payments/api", "api--payments"),
+        ("/root", "root"),
+        ("/", "root"),
+        ("//", "root"),
+        ("/srv/Acme Team/api.v2/", "api-v2--Acme-Team"),
+        ("/srv/project_2/.config", "config--project_2"),
+        ("/srv/a--b/c---d", "c-d--a-b"),
+        ("/srv/研发/机器人", "机器人--研发"),
+        ("/srv/cafe\u0301/backend", "backend--café"),
+        ("/srv/###/...", "directory--directory"),
+        ("/srv/project/subdir/../backend", "backend--project"),
+        (f"/srv/{'p' * 80}/{'l' * 80}", f"{'l' * 32}--{'p' * 32}"),
+    ],
+)
+def test_automatic_session_name_uses_two_safe_reversed_path_components(
+    monkeypatch, directory, prefix,
+):
+    def identifier(byte_count):
+        assert byte_count == 4
+        return "7f3a91c2"
+
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", identifier)
+
+    name = _automatic_session_name(directory)
+
+    assert name == f"{prefix}--7f3a91c2"
+    assert validate_tmux_new_session_name(name) == name
+
+
+async def test_create_session_uses_the_home_path_name_and_default_shell(
     monkeypatch,
 ):
-    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
-    tmux = RecordingRunTmux("muxdeck-abc123def456\t$9\n")
+    monkeypatch.setattr("tmux_console.tmux.Path.home", lambda: Path("/home/developer"))
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "7f3a91c2")
+    tmux = RecordingRunTmux("developer--home--7f3a91c2\t$9\n")
 
     created = await tmux.create_session()
 
-    assert created == CreatedSession(name="muxdeck-abc123def456", id="$9")
+    assert created == CreatedSession(name="developer--home--7f3a91c2", id="$9")
+    assert created.directory == "/home/developer"
     assert tmux.calls == [
         [
             "new-session",
@@ -174,11 +211,69 @@ async def test_create_session_uses_collision_resistant_name_default_shell_and_ho
             "-F",
             CREATED_SESSION_FORMAT,
             "-s",
-            "muxdeck-abc123def456",
+            "developer--home--7f3a91c2",
             "-c",
-            str(Path.home()),
+            "/home/developer",
         ],
     ]
+
+
+async def test_create_session_names_the_resolved_start_directory(monkeypatch, tmp_path):
+    directory = tmp_path / "Acme project" / "api.v2"
+    directory.mkdir(parents=True)
+    alias = tmp_path / "workspace-link"
+    alias.symlink_to(directory, target_is_directory=True)
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "7f3a91c2")
+    tmux = RecordingRunTmux("api-v2--Acme-project--7f3a91c2\t$9\n")
+
+    created = await tmux.create_session(start_directory=str(alias))
+
+    assert created.name == "api-v2--Acme-project--7f3a91c2"
+    assert created.directory == str(alias)
+    assert tmux.calls[0][-2:] == ["-c", str(alias)]
+
+
+async def test_create_session_uses_fresh_ids_and_retries_generated_collisions(
+    monkeypatch, tmp_path,
+):
+    directory = tmp_path / "acme" / "backend"
+    directory.mkdir(parents=True)
+    identifiers = iter(["11111111", "22222222", "33333333"])
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: next(identifiers))
+    tmux = RecordingRunTmux([
+        TmuxError("duplicate session: backend--acme--11111111", returncode=1),
+        "backend--acme--22222222\t$9\n",
+        "backend--acme--33333333\t$10\n",
+    ])
+
+    first = await tmux.create_session(start_directory=str(directory))
+    second = await tmux.create_session(start_directory=str(directory))
+
+    assert first == CreatedSession("backend--acme--22222222", "$9")
+    assert second == CreatedSession("backend--acme--33333333", "$10")
+    assert [call[call.index("-s") + 1] for call in tmux.calls] == [
+        "backend--acme--11111111", "backend--acme--22222222", "backend--acme--33333333",
+    ]
+    assert all(call[-2:] == ["-c", str(directory)] for call in tmux.calls)
+
+
+@pytest.mark.parametrize(
+    ("requested_name", "message", "attempts"),
+    [
+        (None, "duplicate session: generated-name", 5),
+        ("custom-name", "duplicate session: custom-name", 1),
+        (None, "server exited unexpectedly", 1),
+    ],
+)
+async def test_create_session_limits_retries_to_generated_name_conflicts(
+    requested_name, message, attempts,
+):
+    tmux = RecordingRunTmux(TmuxError(message, returncode=1))
+
+    with pytest.raises(TmuxError, match=re.escape(message)):
+        await tmux.create_session(requested_name)
+
+    assert len(tmux.calls) == attempts
 
 
 async def test_create_session_preserves_a_requested_name_exactly():
@@ -496,7 +591,7 @@ async def test_create_session_rejects_missing_or_ambiguous_name(output: str):
 
 
 async def test_create_session_rejects_an_unexpected_returned_name(monkeypatch):
-    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "7f3a91c2")
     tmux = RecordingRunTmux("some-other-session\t$1\n")
 
     with pytest.raises(TmuxError, match="unexpected created session name"):
@@ -504,8 +599,9 @@ async def test_create_session_rejects_an_unexpected_returned_name(monkeypatch):
 
 
 async def test_create_session_rejects_an_invalid_returned_id(monkeypatch):
-    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123def456")
-    tmux = RecordingRunTmux("muxdeck-abc123def456\tnot-an-id\n")
+    monkeypatch.setattr("tmux_console.tmux.Path.home", lambda: Path("/root"))
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "7f3a91c2")
+    tmux = RecordingRunTmux("root--7f3a91c2\tnot-an-id\n")
 
     with pytest.raises(TmuxError, match="created session id"):
         await tmux.create_session()

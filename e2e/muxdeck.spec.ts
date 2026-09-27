@@ -768,7 +768,8 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
   let popup: Page | null = null;
   const dashboardQuery = { kind: "shells", view: "list" };
   const requestedSessionName = `${sessionName}-named-#{pid}`;
-  const workingDirectory = `/tmp/${sessionName}-new-session-workspace`;
+  const workspaceRoot = `/tmp/${sessionName}-new-session-workspace`;
+  const workingDirectory = `${workspaceRoot}/acme/backend`;
   mkdirSync(workingDirectory, { recursive: true });
 
   const createdSessionName = async (target: Page): Promise<string> => {
@@ -888,13 +889,17 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
     const quickSession = quickActions.getByRole("button", {
       name: "Quick new temporary session",
     });
-    await expect(quickSession).toHaveAttribute("aria-keyshortcuts", "Control+Shift+K");
-    await page.keyboard.press("Control+Shift+K");
+    await expect(quickSession).toHaveAttribute(
+      "title", "Quick temporary session from workspace memory (Ctrl+Shift+Z, then K)",
+    );
+    await page.keyboard.press("Control+Shift+Z");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await page.keyboard.press("k");
     await expect.poll(() => (
       decodeURIComponent(new URL(page.url()).pathname.replace("/mux/session/", ""))
-    )).toMatch(/^muxdeck-[0-9a-f]{12}$/);
+    )).toMatch(/^backend--acme--[0-9a-f]{8}$/);
     const createdQuick = await createdSessionName(page);
-    expect(createdQuick).toMatch(/^muxdeck-[0-9a-f]{12}$/);
+    expect(createdQuick).toMatch(/^backend--acme--[0-9a-f]{8}$/);
     createdSessions.push(createdQuick);
     await expectRoute(
       page,
@@ -941,8 +946,14 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
       dashboardQuery,
     );
 
+    await openedPopup.getByRole("button", {
+      name: `Use workspace ${workingDirectory}`,
+      exact: true,
+    }).click();
     await openedPopup.getByRole("button", { name: "Create session" }).click();
     const createdInWindow = await createdSessionName(openedPopup);
+    expect(createdInWindow).toMatch(/^backend--acme--[0-9a-f]{8}$/);
+    expect(createdInWindow).not.toBe(createdQuick);
     createdSessions.push(createdInWindow);
     await expectRoute(
       openedPopup,
@@ -968,7 +979,7 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
         // Cleanup stays scoped to sessions created on this test's disposable socket.
       }
     }
-    rmSync(workingDirectory, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
   }
 });
 

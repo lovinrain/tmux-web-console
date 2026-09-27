@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 from urllib.parse import quote
@@ -672,7 +673,10 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(
 
 
 @pytest.mark.asyncio
-async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path):
+async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path, monkeypatch):
+    home = tmp_path / "home" / "tester"
+    home.mkdir(parents=True)
+    monkeypatch.setattr("tmux_console.tmux.Path.home", lambda: home)
     socket_name = f"muxdeck-create-pytest-{os.getpid()}-{time.time_ns()}"
     tmux_command = ["tmux", "-L", socket_name]
     tmux_client = TmuxClient(socket_name=socket_name)
@@ -692,10 +696,7 @@ async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path):
         created_payload = await response.json()
         session_name = created_payload["session"]
         assert created_payload["sessionId"].startswith("$")
-        suffix = session_name.removeprefix("muxdeck-")
-        assert session_name.startswith("muxdeck-")
-        assert len(suffix) == 12
-        assert all(character in "0123456789abcdef" for character in suffix)
+        assert re.fullmatch(r"tester--home--[0-9a-f]{8}", session_name)
 
         listed = await (await client.get("/mux/api/sessions")).json()
         assert [session["name"] for session in listed["sessions"]] == [session_name]
@@ -725,17 +726,17 @@ async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path):
         assert named_payload["session"] == requested_name
         assert named_payload["sessionId"].startswith("$")
 
-        working_directory = tmp_path / "working #directory"
-        working_directory.mkdir()
-        directory_name = "directory-work"
+        working_directory = tmp_path / "Acme project" / "working #directory"
+        working_directory.mkdir(parents=True)
         directory_response = await client.post(
             "/mux/api/sessions",
             json={
-                "name": directory_name,
                 "directory": str(working_directory),
             },
         )
         assert directory_response.status == 201
+        directory_name = (await directory_response.json())["session"]
+        assert re.fullmatch(r"working-directory--Acme-project--[0-9a-f]{8}", directory_name)
         assert (
             await tmux_client.run(
                 [

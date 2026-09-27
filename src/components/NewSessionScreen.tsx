@@ -320,7 +320,7 @@ export function NewSessionScreen({
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                placeholder="muxdeck-generated-name"
+                placeholder="backend--acme--7f3a91c2"
                 aria-describedby={nameError
                   ? "new-session-name-hint new-session-name-error"
                   : "new-session-name-hint"}
@@ -331,8 +331,9 @@ export function NewSessionScreen({
                 }}
               />
               <small id="new-session-name-hint">
-                Leave blank for an assigned name. Colons, periods, backslashes, and a
-                final semicolon are not allowed; leading and trailing spaces are preserved.
+                Leave blank to use the folder, its parent, and a unique ID.
+                Colons, periods, backslashes, and a final semicolon are not allowed;
+                leading and trailing spaces are preserved.
               </small>
             </div>
 

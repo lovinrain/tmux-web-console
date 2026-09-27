@@ -48,6 +48,8 @@ PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT
 CREATED_SESSION_FORMAT = "#{session_name}\t#{session_id}"
 CLIENT_IDENTITY_FORMAT = "#{client_pid}\t#{client_name}\t#{session_id}"
 MAX_SESSION_NAME_LENGTH = 256
+AUTOMATIC_SESSION_NAME_COMPONENT_LENGTH = 32
+AUTOMATIC_SESSION_NAME_ATTEMPTS = 5
 TMUX_SESSION_ID_PATTERN = re.compile(r"^\$\d+$")
 TMUX_PANE_ID_PATTERN = re.compile(r"^%\d+$")
 TERMINATE_IDENTITY_MISMATCH = "MUXDECK_SESSION_IDENTITY_CHANGED"
@@ -134,6 +136,17 @@ def validate_tmux_new_session_name(value: str) -> str:
         # tmux parses a final semicolon as a command separator even with exec argv.
         raise ValueError("session name cannot end with ';'")
     return value
+
+
+def _automatic_session_name(directory: str) -> str:
+    path = Path(directory).resolve()
+    parts = [part for part in path.parts if part != path.anchor]
+    components = []
+    for part in reversed(parts[-2:] or ["root"]):
+        component = re.sub(r"\W+", "-", unicodedata.normalize("NFC", part)).strip("-")
+        component = component[:AUTOMATIC_SESSION_NAME_COMPONENT_LENGTH].rstrip("-")
+        components.append(component or "directory")
+    return "--".join([*components, secrets.token_hex(4)])
 
 
 def validate_tmux_start_directory(value: str) -> str:
@@ -389,11 +402,23 @@ class TmuxClient:
             else None
         )
         async with self._session_creation_lock:
-            return await self._create_session(
-                requested_name,
-                theme=theme,
-                start_directory=directory,
-            )
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    return await self._create_session(
+                        requested_name,
+                        theme=theme,
+                        start_directory=directory,
+                    )
+                except TmuxError as error:
+                    # tmux checks uniqueness atomically, including external creators.
+                    if (
+                        requested_name is not None
+                        or attempts >= AUTOMATIC_SESSION_NAME_ATTEMPTS
+                        or not str(error).lower().startswith("duplicate session:")
+                    ):
+                        raise
 
     async def utility_session(
         self, workspace_key: str, source_name: str, source_id: str, *, create: bool
@@ -566,8 +591,9 @@ class TmuxClient:
         start_directory: str | None = None,
         shell_only: bool = False,
     ) -> CreatedSession:
+        directory = start_directory if start_directory is not None else str(Path.home())
         requested_name = (
-            f"muxdeck-{secrets.token_hex(6)}"
+            _automatic_session_name(directory)
             if requested_name is None
             else validate_tmux_new_session_name(requested_name)
         )
@@ -604,7 +630,6 @@ class TmuxClient:
                 "creating %r without a Grok appearance hint",
                 requested_name,
             )
-        directory = start_directory if start_directory is not None else str(Path.home())
         args.extend(["-c", _escape_tmux_format(directory)])
         if shell_only:
             try:
