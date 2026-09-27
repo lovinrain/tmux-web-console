@@ -1,5 +1,7 @@
 import type {
   HistoryPage,
+  SavedScrollbackPage,
+  SavedScrollbackPart,
   MemorandumState,
   MessageQueue,
   QueuedMessage,
@@ -105,6 +107,23 @@ export function listSubmittedMessages(
     ? `/api/sessions/${encodeURIComponent(target.sessionName)}`
     : `/api/session-history/${encodeURIComponent(target.historyId)}`;
   return jsonRequest(`${path}/submitted-messages?${search}`, { signal });
+}
+
+export type SavedScrollbackTarget = { paneId: string; identity?: string } | { historyId: string };
+
+export function loadSavedScrollback(
+  target: SavedScrollbackTarget,
+  part: SavedScrollbackPart = "beginning",
+  pane: string | null = null,
+  signal?: AbortSignal,
+): Promise<SavedScrollbackPage> {
+  const search = new URLSearchParams({ part });
+  if ("paneId" in target && target.identity) search.set("identity", target.identity);
+  if ("historyId" in target && pane) search.set("pane", pane);
+  const path = "paneId" in target
+    ? `/api/panes/${encodeURIComponent(target.paneId)}`
+    : `/api/session-history/${encodeURIComponent(target.historyId)}`;
+  return jsonRequest(`${path}/saved-scrollback?${search}`, { signal });
 }
 
 type SessionListWithRecovery = Session[] & {

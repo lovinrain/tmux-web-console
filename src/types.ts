@@ -83,6 +83,21 @@ export interface HistoryPage {
   alternateOn: boolean;
 }
 
+export type SavedScrollbackPart = "beginning" | "recent";
+
+export interface SavedScrollbackPage {
+  panes: Array<{ id: string; paneId: string; firstCapturedAt: number }>;
+  selectedPane: string | null;
+  part: SavedScrollbackPart;
+  lines: string[];
+  capturedAt: number | null;
+  firstCapturedAt: number | null;
+  sessionCreatedAt: number | null;
+  limited: boolean;
+  lineLimit: number;
+  byteLimit: number;
+}
+
 export type MemorandumState = "note" | "queued";
 
 export interface QueuedMessage {

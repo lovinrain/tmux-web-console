@@ -424,6 +424,16 @@ archives or print its contents in deployment evidence. Native agent history is
 read only. See [Submitted messages](docs/SUBMITTED_MESSAGES.md) for source paths,
 capture limits, and history-file overrides for isolated installations and tests.
 
+Saved beginning and recent output uses a separate private `scrollback.sqlite3`
+archive beside the recovery registry, overridden by `MUXDECK_SCROLLBACK_FILE`.
+It uses schema version 1 and mode `0600`. Back it up with SQLite's backup API
+alongside the recovery and submitted-message databases, include it in private
+state migrations, and retain it during rollback; older code ignores it. This
+does not change any existing state schema. Never include its terminal text in
+source archives or deployment evidence. Output recording begins with the first
+available capture after installation and cannot recover previously lost output.
+See [Saved scrollback](docs/SCROLLBACK.md) for sampling, bounds, and limitations.
+
 The separate `callbacks.sqlite3` file stores agent-posted callback messages,
 reported session/agent/CWD metadata, receipt times, idempotency keys, and review
 history. It uses schema version 1 and does not alter workspace or recovery

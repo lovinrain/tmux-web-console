@@ -37,6 +37,8 @@ be recovered. Other coding agents currently have no submitted-input adapter.
 
 Saved entries survive tmux scrollback truncation, native input-history rotation,
 session termination, and Muxdeck restarts. There is no automatic archive expiry.
+The separate [saved beginning and recent output](SCROLLBACK.md) limits do not
+trim submitted input. Messages from the omitted middle remain in this archive.
 Identical submissions at different times remain separate; repeated identical
 records within one native timestamp are preserved without duplication on refresh.
 

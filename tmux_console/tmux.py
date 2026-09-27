@@ -1135,3 +1135,14 @@ class TmuxClient:
         while lines and not lines[-1].strip():
             lines.pop()
         return HistoryCapture(pane=pane, lines=lines)
+
+    async def capture_history_slice(self, pane: Pane, start: int, end: int) -> HistoryCapture:
+        validate_tmux_pane_id(pane.id)
+        output = await self.run([
+            "capture-pane", "-p", "-J", "-t", pane.id,
+            "-S", str(start), "-E", str(end),
+        ])
+        lines = output.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return HistoryCapture(pane=pane, lines=lines)

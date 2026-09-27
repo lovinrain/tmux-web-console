@@ -112,6 +112,12 @@ from .messages import (
 )
 from .metadata import SessionTitleStore, normalize_tags, normalize_title
 from .pty_bridge import PtyBridge, clamp_size
+from .scrollback import (
+    ScrollbackRecorder,
+    ScrollbackStore,
+    ScrollbackStoreUnavailable,
+    default_scrollback_path,
+)
 from .session_registry import (
     RecoveryRecord,
     RecoveryRecordNotFoundError,
@@ -207,6 +213,8 @@ HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 SUBMITTED_MESSAGES_KEY = web.AppKey("submitted_messages", SubmittedMessageStore)
+SCROLLBACK_KEY = web.AppKey("scrollback", ScrollbackStore)
+SCROLLBACK_RECORDER_KEY = web.AppKey("scrollback_recorder", ScrollbackRecorder)
 SUBMITTED_MESSAGE_POLL_SECONDS = 5.0
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
@@ -1069,6 +1077,7 @@ def create_app(
     session_registry: SessionRegistry | None = None,
     agent_references: AgentReferenceDetector | None = None,
     submitted_messages: SubmittedMessageStore | None = None,
+    scrollback: ScrollbackStore | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -1138,6 +1147,13 @@ def create_app(
     app[SUBMITTED_MESSAGES_KEY] = submitted_messages or SubmittedMessageStore(
         default_submitted_messages_path(app[SESSION_REGISTRY_KEY].path)
     )
+    app[SCROLLBACK_KEY] = scrollback or ScrollbackStore(
+        default_scrollback_path(app[SESSION_REGISTRY_KEY].path)
+    )
+    app[SCROLLBACK_RECORDER_KEY] = ScrollbackRecorder(
+        app[TMUX_KEY], app[SESSION_REGISTRY_KEY], app[SCROLLBACK_KEY],
+    )
+    history_capture_wake = asyncio.Event()
     app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     forgotten_sessions: dict[str, ForgottenSession] = {}
@@ -1299,7 +1315,12 @@ def create_app(
     async def submitted_message_lifecycle(application: web.Application) -> AsyncIterator[None]:
         async def monitor() -> None:
             while True:
-                await asyncio.sleep(SUBMITTED_MESSAGE_POLL_SECONDS)
+                try:
+                    await asyncio.wait_for(history_capture_wake.wait(), SUBMITTED_MESSAGE_POLL_SECONDS)
+                except TimeoutError:
+                    pass
+                history_capture_wake.clear()
+                live = None
                 try:
                     # Keep recording even when no browser has a session stream
                     # open. Observe a successful inventory without sending input.
@@ -1310,6 +1331,11 @@ def create_app(
                             application[SESSION_REGISTRY_KEY].observe_history(session, references.get(session.name))
                 except (TmuxError, SessionRegistryUnavailable):
                     LOGGER.warning("Unable to refresh conversation IDs for submitted messages")
+                if live is not None:
+                    try:
+                        await application[SCROLLBACK_RECORDER_KEY].sample(live)
+                    except (TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable):
+                        LOGGER.warning("Unable to capture saved scrollback")
                 try:
                     known = application[SESSION_REGISTRY_KEY].list_agent_references()
                     await asyncio.to_thread(application[SUBMITTED_MESSAGES_KEY].sync, known)
@@ -1324,6 +1350,7 @@ def create_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await task
             await asyncio.to_thread(application[SUBMITTED_MESSAGES_KEY].close)
+            await asyncio.to_thread(application[SCROLLBACK_KEY].close)
 
     app.cleanup_ctx.append(submitted_message_lifecycle)
 
@@ -1690,6 +1717,8 @@ def create_app(
         *,
         registry_id: str | None = None,
     ) -> list[str]:
+        # Capture a new session promptly, even when no browser has opened it yet.
+        history_capture_wake.set()
         directory = (
             created_session.directory
             or requested_directory
@@ -3165,6 +3194,13 @@ def create_app(
                 )
             except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
                 return json_error(str(error), 503)
+
+            try:
+                # Preserve the last visible output before an explicit console
+                # termination, without making an archive failure block it.
+                await asyncio.wait_for(app[SCROLLBACK_RECORDER_KEY].sample([target], force=True), 3)
+            except (TimeoutError, TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable):
+                LOGGER.warning("Unable to save final pane output before session termination")
 
             try:
                 await app[TMUX_KEY].terminate_session(
@@ -5507,6 +5543,38 @@ def create_app(
         except (TmuxError, SessionRegistryUnavailable, SubmittedMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
 
+    async def saved_scrollback(request: web.Request) -> web.Response:
+        try:
+            history_id = request.match_info.get("history_id")
+            allowed = {"part", "pane"} if history_id is not None else {"part", "identity"}
+            if set(request.query) - allowed:
+                raise ValueError("unknown saved-scrollback query field")
+            part = request.query.get("part", "beginning")
+            if part not in {"beginning", "recent"}:
+                raise ValueError("part must be beginning or recent")
+            pane = None
+            if history_id is None:
+                history_id, pane = await app[SCROLLBACK_RECORDER_KEY].capture_pane(
+                    request.match_info["pane_id"], request.query.get("identity"),
+                )
+            else:
+                app[SESSION_REGISTRY_KEY].get_history(history_id)
+            result = await asyncio.to_thread(
+                app[SCROLLBACK_KEY].read, history_id, part=part,
+                record_id=request.query.get("pane"), pane=pane,
+            )
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionIdentityChangedError as error:
+            return json_error(str(error), 409)
+        except RecoveryRecordNotFoundError:
+            return json_error("session history not found", 404)
+        except (SessionRegistryUnavailable, ScrollbackStoreUnavailable) as error:
+            return json_error(str(error), 503)
+        except TmuxError as error:
+            return json_error(str(error), 404)
+
     async def create_history(request: web.Request) -> web.Response:
         pane_id = request.match_info["pane_id"]
         limit = max(20, min(parse_int(request.query.get("limit"), 250), 1000))
@@ -6065,6 +6133,8 @@ def create_app(
     app.router.add_put(f"{prefix}/api/session-details", update_session_details)
     app.router.add_post(f"{prefix}/api/panes/{{pane_id}}/history", create_history)
     app.router.add_get(f"{prefix}/api/history/{{snapshot_id}}", history_page)
+    app.router.add_get(f"{prefix}/api/panes/{{pane_id}}/saved-scrollback", saved_scrollback)
+    app.router.add_get(f"{prefix}/api/session-history/{{history_id}}/saved-scrollback", saved_scrollback)
     app.router.add_get(f"{prefix}/api/sessions/{{session}}/submitted-messages", submitted_message_history)
     app.router.add_get(f"{prefix}/api/session-history/{{history_id}}/submitted-messages", submitted_message_history)
     app.router.add_get(f"{prefix}/ws/terminal", terminal)

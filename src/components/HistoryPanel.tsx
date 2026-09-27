@@ -12,6 +12,7 @@ import { createHistorySnapshot, loadHistoryPage } from "../api";
 import { CloseIcon, RefreshIcon } from "../icons";
 import type { HistoryPage, Pane } from "../types";
 import { SubmittedMessages } from "./SubmittedMessages";
+import { SavedScrollback } from "./SavedScrollback";
 
 export const DEFAULT_HISTORY_PANEL_WIDTH = 680;
 export const MIN_HISTORY_PANEL_WIDTH = 360;
@@ -57,7 +58,9 @@ export function HistoryPanel({
   onPreferredWidthChange,
 }: HistoryPanelProps) {
   const viewId = useId();
-  const [view, setView] = useState<"scrollback" | "submitted">("scrollback");
+  const [view, setView] = useState<"scrollback" | "beginning" | "submitted">("scrollback");
+  const views = sessionName ? ["scrollback", "beginning", "submitted"] as const : ["scrollback", "beginning"] as const;
+  const viewLabels = { scrollback: "Scrollback", beginning: "Beginning", submitted: "Submitted messages" };
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -259,7 +262,7 @@ export function HistoryPanel({
         <header className="history-header">
           <div>
             <p className="eyebrow">{view === "submitted" ? `SESSION ${sessionName}` : `PANE ${pane.id}`} / HISTORY</p>
-            <h2>{view === "submitted" ? "Submitted messages" : "Scrollback"}</h2>
+            <h2>{viewLabels[view]}</h2>
           </div>
           <div className="history-header-actions">
             {view === "scrollback" && <button type="button" className="icon-button" onClick={() => void capture()} aria-label="Capture a new snapshot"><RefreshIcon /></button>}
@@ -267,24 +270,29 @@ export function HistoryPanel({
           </div>
         </header>
 
-        {sessionName && <div className="history-view-tabs" role="tablist" aria-label="History view"
+        <div className="history-view-tabs" role="tablist" aria-label="History view"
           onKeyDown={(event) => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
-            const next = event.key === "Home" ? "scrollback" : event.key === "End" ? "submitted"
-              : view === "scrollback" ? "submitted" : "scrollback";
+            const current = views.findIndex((value) => value === view);
+            const index = event.key === "Home" ? 0 : event.key === "End" ? views.length - 1
+              : (current + (event.key === "ArrowRight" ? 1 : -1) + views.length) % views.length;
+            const next = views[index];
             setView(next);
             event.currentTarget.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
           }}>
-          {(["scrollback", "submitted"] as const).map((value) => <button type="button" key={value}
+          {views.map((value) => <button type="button" key={value}
             id={`${viewId}-${value}`} data-view={value} role="tab" aria-selected={view === value}
             aria-controls={`${viewId}-content`} tabIndex={view === value ? 0 : -1}
-            onClick={() => setView(value)}>{value === "scrollback" ? "Scrollback" : "Submitted messages"}</button>)}
-        </div>}
+            onClick={() => setView(value)}>{viewLabels[value]}</button>)}
+        </div>
 
-        <div className="history-view-content" id={`${viewId}-content`} role={sessionName ? "tabpanel" : undefined}
-          aria-labelledby={sessionName ? `${viewId}-${view}` : undefined}>
-        {view === "submitted" && sessionName ? <>
+        <div className="history-view-content" id={`${viewId}-content`} role="tabpanel"
+          aria-labelledby={`${viewId}-${view}`}>
+        {view === "beginning" ? <>
+          <SavedScrollback target={{ paneId: pane.id, identity: sessionIdentity }} part="beginning" />
+          <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
+        </> : view === "submitted" && sessionName ? <>
           <SubmittedMessages key={`${sessionName}:${sessionIdentity}`} target={{ sessionName, identity: sessionIdentity }} />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
         </> : <>
@@ -294,7 +302,7 @@ export function HistoryPanel({
         </div>
 
         {page?.alternateOn && page.historySize === 0 && (
-          <div className="history-notice">This full-screen app has no retained tmux scrollback. The current screen is shown; older screens cannot be recovered by tmux.</div>
+          <div className="history-notice">This full-screen app has no retained tmux scrollback. The current screen is shown. Check Beginning for saved opening output and Submitted messages for recorded input.</div>
         )}
 
         <div className="history-scroll" ref={scrollRef}>

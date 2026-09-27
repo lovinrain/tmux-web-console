@@ -29,6 +29,10 @@ shortcuts.json
 auth.json
 sessions.sqlite3
 sessions.sqlite3-*
+scrollback.sqlite3
+scrollback.sqlite3-*
+submitted-messages.sqlite3
+submitted-messages.sqlite3-*
 .session-titles.json.*.tmp
 .session-messages.json.*.tmp
 .snippets.json.*.tmp

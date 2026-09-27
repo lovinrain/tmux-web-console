@@ -1,4 +1,4 @@
-.history-view-tabs { display: flex; gap: 6px; padding: 0 20px 12px; border-bottom: 1px solid var(--line); }
+.history-view-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 12px; border-bottom: 1px solid var(--line); }
 .history-view-tabs button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--ink-soft); color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
 .history-view-tabs button[aria-selected="true"] { color: var(--amber); border-color: var(--amber); }
 .history-view-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }

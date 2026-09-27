@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHistorySnapshot, listSubmittedMessages } from "../api";
+import { createHistorySnapshot, listSubmittedMessages, loadSavedScrollback } from "../api";
 import type { HistoryPage, Pane } from "../types";
 import {
   DEFAULT_HISTORY_PANEL_WIDTH,
@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
   createHistorySnapshot: vi.fn(),
   loadHistoryPage: vi.fn(),
   listSubmittedMessages: vi.fn(),
+  loadSavedScrollback: vi.fn(),
 }));
 
 const DESKTOP_VIEWPORT_WIDTH = 1200;
@@ -123,18 +124,36 @@ afterEach(() => {
 });
 
 describe("HistoryPanel resizing", () => {
-  it("opens submitted messages from the history tabs without changing the scrollback snapshot", async () => {
+  it("navigates beginning and submitted input without changing the scrollback snapshot", async () => {
     vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
+    vi.mocked(loadSavedScrollback).mockResolvedValue({
+      part: "beginning", lines: ["Saved opening"], panes: [], selectedPane: null,
+      capturedAt: 100, firstCapturedAt: 100, sessionCreatedAt: 90, limited: false,
+      lineLimit: 2000, byteLimit: 1048576,
+    });
     render(<HistoryPanel pane={pane()} sessionName="agent" sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
     const scrollback = screen.getByRole("tab", { name: "Scrollback" });
     fireEvent.keyDown(scrollback, { key: "ArrowRight" });
+    const beginning = screen.getByRole("tab", { name: "Beginning" });
+    expect(beginning).toHaveFocus();
+    expect(beginning).toHaveAttribute("aria-selected", "true");
+    await screen.findByText("Saved opening");
+    expect(loadSavedScrollback).toHaveBeenCalledWith({ paneId: "%7", identity: "$1:1:1:1" }, "beginning", null, expect.any(AbortSignal));
+    fireEvent.keyDown(beginning, { key: "ArrowRight" });
     const submitted = screen.getByRole("tab", { name: "Submitted messages" });
     expect(submitted).toHaveFocus();
     expect(submitted).toHaveAttribute("aria-selected", "true");
     await screen.findByText(/No Claude Code or Codex conversation ID/);
     expect(listSubmittedMessages).toHaveBeenCalledWith({ sessionName: "agent", identity: "$1:1:1:1" }, "", null, expect.any(AbortSignal));
-    fireEvent.click(scrollback);
+    fireEvent.keyDown(submitted, { key: "ArrowRight" });
+    expect(scrollback).toHaveFocus();
     expect(scrollback).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(scrollback, { key: "ArrowLeft" });
+    expect(submitted).toHaveFocus();
+    fireEvent.keyDown(submitted, { key: "Home" });
+    expect(scrollback).toHaveFocus();
+    fireEvent.keyDown(scrollback, { key: "End" });
+    expect(submitted).toHaveFocus();
     expect(createHistorySnapshot).toHaveBeenCalledTimes(1);
   });
 

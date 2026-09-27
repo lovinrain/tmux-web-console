@@ -727,6 +727,46 @@ and native-history configuration.
 
 `limit` is clamped to 20-1000.
 
+### Saved scrollback
+
+`GET /api/panes/{paneId}/saved-scrollback?part=beginning` captures and reads a live
+pane's saved output. Optional `identity` guards the session with the same
+`id:created:serverStarted:serverPid` value used by the terminal WebSocket.
+
+`GET /api/session-history/{historyId}/saved-scrollback?part=recent` reads saved
+output under a stable history ID, including ended sessions. Optional `pane`
+selects an opaque saved-pane ID returned in `panes`; the oldest saved pane is
+selected by default. It must belong to that history record.
+
+Both accept `part=beginning|recent` (default `beginning`) and return:
+
+```json
+{
+  "panes": [{ "id": "saved-pane-id", "paneId": "%1", "firstCapturedAt": 1700000010 }],
+  "selectedPane": "saved-pane-id",
+  "part": "beginning",
+  "lines": ["Opening output"],
+  "capturedAt": 1700000020,
+  "firstCapturedAt": 1700000010,
+  "sessionCreatedAt": 1700000000,
+  "limited": false,
+  "lineLimit": 2000,
+  "byteLimit": 1048576
+}
+```
+
+Times are Unix seconds. Each response contains the entire bounded section;
+there is no pagination. An empty archive returns `panes: []`, `lines: []`, and
+null selection/timestamps. `limited` means a line or text-byte limit was reached,
+not that the section is a full transcript when false. The live route selects
+only the current pane incarnation. Historical selection can include respawns.
+
+Unknown query fields, invalid parts, and foreign saved-pane IDs return `400`;
+changed live identity returns `409`; missing history or pane returns `404`;
+unavailable persistent stores return `503`. Responses use `Cache-Control:
+no-store` and require normal console authentication, excluding callback-only
+tokens. See [Saved scrollback](SCROLLBACK.md) for sampling and retention limits.
+
 ### Session event stream
 
 `GET /api/sessions/stream` is a Server-Sent Events stream. `sessions` events

@@ -27,6 +27,7 @@ import {
   getShortcutSettings,
   listSessionFiles,
   listSessions,
+  loadSavedScrollback,
   listQueuedMessages,
   listCallbackMessages,
   previewSessionFile,
@@ -102,6 +103,26 @@ class MockEventSource {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 }
+
+describe("saved scrollback API", () => {
+  it("encodes live identity and saved pane selection on their separate routes", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+    await loadSavedScrollback({ paneId: "%1", identity: "$2:100:90:321" }, "beginning", null, signal);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${BASE_PATH}/api/panes/%251/saved-scrollback?part=beginning&identity=%242%3A100%3A90%3A321`,
+      expect.objectContaining({ signal }),
+    );
+    await loadSavedScrollback({ historyId: "history/one" }, "recent", "pane/two", signal);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `${BASE_PATH}/api/session-history/history%2Fone/saved-scrollback?part=recent&pane=pane%2Ftwo`,
+      expect.objectContaining({ signal }),
+    );
+  });
+});
 
 function session(): Session {
   return {

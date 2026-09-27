@@ -125,6 +125,17 @@ class RecordingRunTmux(TmuxClient):
         return result
 
 
+async def test_capture_history_slice_reads_only_requested_rows_without_changing_tmux():
+    tmux = RecordingRunTmux("first\n\nlast\n \n\n")
+    pane = parse_sessions(pane_row())[0].panes[0]
+    capture = await tmux.capture_history_slice(pane, -2000, -1)
+    assert tmux.calls == [["capture-pane", "-p", "-J", "-t", pane.id, "-S", "-2000", "-E", "-1"]]
+    assert capture.lines == ["first", "", "last"]
+    with pytest.raises(ValueError, match="invalid tmux pane id"):
+        await tmux.capture_history_slice(replace(pane, id="other;command"), 0, 20)
+    assert len(tmux.calls) == 1
+
+
 def guarded_terminate_call(
     session_id: str = "$7",
     session_created: int = 1_700_000_000,

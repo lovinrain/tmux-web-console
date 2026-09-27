@@ -1690,14 +1690,31 @@ refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
 ## Scrollback behavior
 
-Opening Scrollback runs `tmux capture-pane` and stores the result in memory for ten
+Opening the Scrollback tab runs `tmux capture-pane` and stores the result in memory for ten
 minutes. Older pages come from that immutable snapshot, so live output cannot
 cause duplicate or skipped lines while the user reads.
+
+The **Beginning** tab shows persistent opening output, and **Session history →
+Saved output** offers both Beginning and Recent for live or ended sessions.
+Each section is bounded to 2,000 terminal rows and 1 MiB of text per pane
+incarnation. A background recorder operates without a browser, approximately
+every five seconds, with unchanged panes sampled at least every thirty seconds.
+The opening freezes on redraw, history rollover, or reaching its limit; recent
+output continues updating. Saved sections survive tmux clears and Muxdeck
+restarts. The separate **Submitted messages** archive retains all recorded input,
+including submissions from the omitted middle, without applying output limits.
+
+**Recording began** identifies the first nonempty capture. Output already lost
+before that time, or redrawn between captures, cannot be recovered. For existing
+sessions this preserves the earliest output still available, not necessarily
+their original start. See [Saved scrollback](SCROLLBACK.md) for the retention
+policy and [Submitted messages](SUBMITTED_MESSAGES.md) for input sources.
 
 Tmux retains normal-screen rows according to its `history-limit` option (2,000 by
 default). Claude Code commonly uses the alternate screen, and Grok Build defaults
 to it, where tmux often retains no previous rows. Muxdeck can show the current
-screen but cannot reconstruct alternate-screen content that tmux never saved.
+screen and its saved opening, but cannot reconstruct intermediate alternate-screen
+content that neither tmux nor the recorder observed.
 
 Scrollback follows the pane selected when the web client attaches. If you switch to
 another tmux pane or window from inside the live terminal, return to the session
@@ -1722,6 +1739,7 @@ list and reopen it before capturing that pane's history.
 | `MUXDECK_WORKSPACES_FILE` | `~/.local/state/muxdeck/workspaces.json` | Persistent named workspaces, ordered tabs, scoped quick links and notes, and activity times |
 | `MUXDECK_SHORTCUTS_FILE` | `~/.local/state/muxdeck/shortcuts.json` | Persistent global desktop shortcut keymap |
 | `MUXDECK_SESSION_REGISTRY_FILE` | `~/.local/state/muxdeck/sessions.sqlite3` | Persistent session reconstruction metadata and reference-only detected agent IDs |
+| `MUXDECK_SCROLLBACK_FILE` | `scrollback.sqlite3` beside the session registry | Persistent bounded beginning and recent output |
 | `MUXDECK_UPLOADS_DIR` | `~/.local/state/muxdeck/uploads` | Private host files uploaded from desktop staged input |
 | `MUXDECK_FILE_BROWSER_ROOT` | `/` | Absolute directory the file browser may never be pointed above; a relative, missing, or non-directory value fails startup |
 | `LOG_LEVEL` | `INFO` | Python log level |

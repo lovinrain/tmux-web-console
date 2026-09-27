@@ -30,6 +30,7 @@ from tmux_console.session_registry import (
 from tmux_console.status import AgentState, AgentStateDetector
 from tmux_console.tmux import (
     CreatedSession,
+    HistoryCapture,
     Pane,
     Session,
     TmuxClient,
@@ -123,6 +124,9 @@ class FakeTmux(TmuxClient):
         self.list_calls = 0
         self.active_calls = 0
         self.max_active_calls = 0
+
+    async def capture_history_slice(self, pane, start, end):
+        return HistoryCapture(pane, [])
 
     async def list_sessions(self) -> list[Session]:
         self.list_calls += 1

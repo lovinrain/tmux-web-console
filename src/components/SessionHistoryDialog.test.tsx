@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listSessionHistory, listSubmittedMessages, restoreSessionHistory, type SessionHistoryEntry } from "../api";
+import { listSessionHistory, listSubmittedMessages, loadSavedScrollback, restoreSessionHistory, type SessionHistoryEntry } from "../api";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 
-vi.mock("../api", () => ({ listSessionHistory: vi.fn(), listSubmittedMessages: vi.fn(), restoreSessionHistory: vi.fn() }));
+vi.mock("../api", () => ({ listSessionHistory: vi.fn(), listSubmittedMessages: vi.fn(), loadSavedScrollback: vi.fn(), restoreSessionHistory: vi.fn() }));
 const entry: SessionHistoryEntry = {
   id: "history-1", name: "named-agent", title: "Project notes", names: ["old-agent", "named-agent"],
   directory: "/work/project", directoryAvailable: true, agentType: "codex", agentSessionId: "reference-id",
@@ -17,6 +17,19 @@ beforeEach(() => {
 });
 
 describe("SessionHistoryDialog", () => {
+  it("opens saved output for an ended session without recreating its shell", async () => {
+    vi.mocked(loadSavedScrollback).mockResolvedValue({
+      part: "beginning", lines: ["Earlier output"], panes: [], selectedPane: null,
+      capturedAt: 100, firstCapturedAt: 100, sessionCreatedAt: 90, limited: false,
+      lineLimit: 2000, byteLimit: 1048576,
+    });
+    render(<SessionHistoryDialog onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Saved output for named-agent" }));
+    await screen.findByText("Earlier output");
+    expect(loadSavedScrollback).toHaveBeenCalledWith({ historyId: entry.id }, "beginning", null, expect.any(AbortSignal));
+    expect(restoreSessionHistory).not.toHaveBeenCalled();
+  });
+
   it("opens saved messages for an ended session without recreating its shell", async () => {
     vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
     render(<SessionHistoryDialog onClose={vi.fn()} onOpenSession={vi.fn()} />);
