@@ -3070,7 +3070,10 @@ export function ConsoleScreen({
       )}
       {!workspaceOverlayOpen && historyOpen && pane && (
         <HistoryPanel
+          key={`${session?.id}:${session?.created}:${session?.serverStarted}:${session?.serverPid}:${pane.id}`}
           pane={pane}
+          sessionName={sessionName}
+          sessionIdentity={session ? `${session.id}:${session.created}:${session.serverStarted}:${session.serverPid}` : undefined}
           onClose={() => setHistoryOpen(false)}
           preferredWidth={visibleHistoryPanelWidth}
           onPreferredWidthChange={setHistoryPanelWidth}

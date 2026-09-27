@@ -80,6 +80,8 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
+- [Submitted-message history](docs/SUBMITTED_MESSAGES.md) for Claude Code and Codex,
+  with final edited input, search, copying, and persistence beyond tmux scrollback.
 
 ## Quick start
 

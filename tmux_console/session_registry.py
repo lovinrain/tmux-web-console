@@ -652,6 +652,19 @@ class SessionRegistry:
         """, (history_id, agent_type, agent_id or "", timestamp, timestamp,
               LAST_SEEN_WRITE_INTERVAL_SECONDS))
 
+    def list_agent_references(self) -> list[dict[str, str]]:
+        """Only conversations actually observed in this Muxdeck installation."""
+        with self._lock:
+            try:
+                return [
+                    {"agentType": row["agent_type"], "agentSessionId": row["agent_id"]}
+                    for row in self._require_connection().execute(
+                        "SELECT DISTINCT agent_type, agent_id FROM session_agents WHERE agent_id != ''"
+                    )
+                ]
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
     def list_session_agents(self, history_id: str) -> list[dict[str, Any]]:
         with self._lock:
             try:

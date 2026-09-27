@@ -5,8 +5,8 @@ import json
 import os
 import re
 import time
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import islice
 from pathlib import Path
 
@@ -30,7 +30,7 @@ TRANSCRIPT_START_TOLERANCE_SECONDS = 60.0
 
 
 def default_claude_projects_root() -> Path:
-    return Path.home() / ".claude" / "projects"
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "projects"
 
 
 def _claude_project_slug(directory: str) -> str:
@@ -49,15 +49,21 @@ def _boot_time(proc_root: Path) -> int | None:
     return None
 
 
-def _process_start_time(proc_root: Path, process_id: int) -> float | None:
+def _process_start_ticks(proc_root: Path, process_id: int) -> int | None:
     raw = _read_bytes(proc_root / str(process_id) / "stat", 8 * 1024)
     if not raw:
         return None
     text = raw.decode("utf-8", "replace")
     try:
         # comm can contain spaces and parentheses; fields follow the last ')'.
-        start_ticks = int(text[text.rindex(")") + 2:].split()[19])
+        return int(text[text.rindex(")") + 2:].split()[19])
     except (ValueError, IndexError):
+        return None
+
+
+def _process_start_time(proc_root: Path, process_id: int) -> float | None:
+    start_ticks = _process_start_ticks(proc_root, process_id)
+    if start_ticks is None:
         return None
     boot = _boot_time(proc_root)
     if boot is None:
@@ -66,11 +72,30 @@ def _process_start_time(proc_root: Path, process_id: int) -> float | None:
     return boot + start_ticks / ticks_per_second
 
 
+def _claude_registered_session(process_id: int, proc_root: Path, projects_root: Path) -> str | None:
+    """Recent Claude versions publish the exact current conversation per PID.
+
+    Validate the process start ticks so a stale registration cannot attach a
+    reused PID to another conversation. This also follows in-app /resume.
+    """
+    try:
+        record = json.loads(_read_bytes(projects_root.parent / "sessions" / f"{process_id}.json"))
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(record, dict) or record.get("pid") != process_id:
+        return None
+    ticks = _process_start_ticks(proc_root, process_id)
+    if ticks is None or record.get("procStart") != str(ticks):
+        return None
+    identifier = record.get("sessionId")
+    return identifier.lower() if isinstance(identifier, str) and UUID_PATTERN.fullmatch(identifier) else None
+
+
 def _parse_transcript_timestamp(value: object) -> float | None:
     if not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        return datetime.fromisoformat(value).timestamp()
     except ValueError:
         return None
 
@@ -347,6 +372,13 @@ def discover_agent_session_id(
         agent_processes += 1
         if foreground_process is None:
             foreground_process = process_id
+        if agent_type == "claude":
+            registered = _claude_registered_session(
+                process_id, proc_root,
+                claude_projects_root if claude_projects_root is not None else default_claude_projects_root(),
+            )
+            if registered is not None:
+                return registered
         explicit = _uuid_from_explicit_arguments(arguments)
         if explicit is not None:
             return explicit

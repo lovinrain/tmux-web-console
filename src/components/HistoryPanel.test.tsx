@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHistorySnapshot } from "../api";
+import { createHistorySnapshot, listSubmittedMessages } from "../api";
 import type { HistoryPage, Pane } from "../types";
 import {
   DEFAULT_HISTORY_PANEL_WIDTH,
@@ -12,6 +12,7 @@ import {
 vi.mock("../api", () => ({
   createHistorySnapshot: vi.fn(),
   loadHistoryPage: vi.fn(),
+  listSubmittedMessages: vi.fn(),
 }));
 
 const DESKTOP_VIEWPORT_WIDTH = 1200;
@@ -122,6 +123,21 @@ afterEach(() => {
 });
 
 describe("HistoryPanel resizing", () => {
+  it("opens submitted messages from the history tabs without changing the scrollback snapshot", async () => {
+    vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
+    render(<HistoryPanel pane={pane()} sessionName="agent" sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
+    const scrollback = screen.getByRole("tab", { name: "Scrollback" });
+    fireEvent.keyDown(scrollback, { key: "ArrowRight" });
+    const submitted = screen.getByRole("tab", { name: "Submitted messages" });
+    expect(submitted).toHaveFocus();
+    expect(submitted).toHaveAttribute("aria-selected", "true");
+    await screen.findByText(/No Claude Code or Codex conversation ID/);
+    expect(listSubmittedMessages).toHaveBeenCalledWith({ sessionName: "agent", identity: "$1:1:1:1" }, "", null, expect.any(AbortSignal));
+    fireEvent.click(scrollback);
+    expect(scrollback).toHaveAttribute("aria-selected", "true");
+    expect(createHistorySnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("exposes the initial width and desktop bounds through the separator", () => {
     const { handle, onPreferredWidthChange } = renderPanel({ preferredWidth: 704 });
 

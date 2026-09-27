@@ -4,6 +4,7 @@ import { listSessionHistory, restoreSessionHistory, type SessionHistoryEntry } f
 import { CloseIcon, HistoryIcon, RefreshIcon, SearchIcon } from "../icons";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import { agentDisplayLabel } from "../agentResume";
+import { SubmittedMessages } from "./SubmittedMessages";
 import "./SessionHistoryDialog.css";
 
 interface Props {
@@ -32,6 +33,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<SessionHistoryEntry | null>(null);
+  const [messagesFor, setMessagesFor] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const dialog = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
@@ -162,11 +164,14 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
               </div>
             : <p className="session-history-agent">{entry.agentType || "Agent not detected"}{entry.agentSessionId && <> / Reference ID: <code>{entry.agentSessionId}</code></>}</p>}
           <footer><div><span>First seen {date(entry.firstSeenAt)}</span><span>Last seen {date(entry.lastSeenAt)}</span>{(entry.endedAt || entry.tabClosedAt) && <span>{entry.endedAt ? "End/disappearance recorded" : "Tab closed"} {date(entry.endedAt || entry.tabClosedAt)}</span>}</div>
+            <button type="button" aria-label={`Submitted messages for ${entry.name}`} aria-expanded={messagesFor === entry.id}
+              onClick={() => setMessagesFor((current) => current === entry.id ? null : entry.id)}>Submitted messages</button>
             <button type="button" disabled={Boolean(busy) || loading || (entry.state !== "live" && !entry.directoryAvailable)}
               onClick={() => entry.state === "live" ? void restore(entry, false) : setConfirm(entry)}>
               {busy === entry.id ? "Opening..." : entry.state === "live" ? "Reopen session" : "Recreate shell"}
             </button>
           </footer>
+          {messagesFor === entry.id && <SubmittedMessages key={entry.id} target={{ historyId: entry.id }} />}
           {!entry.directoryAvailable && entry.state !== "live" && <p>Saved directory is unavailable. Restore the directory before recreating this shell.</p>}
         </article>)}
         {loading && <p role="status">Loading session history...</p>}

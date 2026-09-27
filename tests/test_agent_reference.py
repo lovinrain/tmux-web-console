@@ -373,3 +373,21 @@ def test_ignores_conversations_abandoned_before_the_process_started(tmp_path: Pa
         pane(command="claude"), "claude",
         proc_root=proc_root, claude_projects_root=projects,
     ) is None
+
+
+def test_claude_process_registration_follows_the_current_conversation(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    boot(proc_root, BOOT)
+    root = claude_process(proc_root, 100, started_ticks=600 * HZ)
+    previous = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    current = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    (root / "cmdline").write_bytes(f"claude\0--resume\0{previous}".encode())
+    sessions = tmp_path / "claude" / "sessions"
+    sessions.mkdir(parents=True)
+    registration = sessions / "100.json"
+    registration.write_text(json.dumps({"pid": 100, "procStart": str(600 * HZ), "sessionId": current}))
+    options = {"proc_root": proc_root, "claude_projects_root": sessions.parent / "projects"}
+    assert discover_agent_session_id(pane(command="claude"), "claude", **options) == current
+    # A stale PID registration must not override a live process's reference.
+    registration.write_text(json.dumps({"pid": 100, "procStart": "1", "sessionId": current}))
+    assert discover_agent_session_id(pane(command="claude"), "claude", **options) == previous

@@ -413,6 +413,17 @@ does not resume an agent. Treat the whole database as sensitive and keep it mode
 An existing unit may override any path; inspect its environment rather than
 assuming defaults.
 
+Submitted-message history uses a separate private `submitted-messages.sqlite3`
+archive beside the configured recovery registry, overridden by
+`MUXDECK_SUBMITTED_MESSAGES_FILE`. It contains submitted Claude Code/Codex input
+text and uses schema version 1, with no change to the recovery or workspace
+schemas. Back it up consistently with SQLite's backup API alongside
+`sessions.sqlite3`, include it in private state migrations, and retain it during
+rollback; older code ignores the separate archive. Do not include it in source
+archives or print its contents in deployment evidence. Native agent history is
+read only. See [Submitted messages](docs/SUBMITTED_MESSAGES.md) for source paths,
+capture limits, and history-file overrides for isolated installations and tests.
+
 The separate `callbacks.sqlite3` file stores agent-posted callback messages,
 reported session/agent/CWD metadata, receipt times, idempotency keys, and review
 history. It uses schema version 1 and does not alter workspace or recovery

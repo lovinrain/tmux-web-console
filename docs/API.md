@@ -706,6 +706,18 @@ archive completed.
 
 ## Terminal history and real-time APIs
 
+### Submitted messages
+
+`GET /api/sessions/{name}/submitted-messages` and
+`GET /api/session-history/{historyId}/submitted-messages` return the persistent
+Claude Code/Codex input archive, including input submitted directly in a terminal.
+Both accept `q`, `before`, and `limit`; the live-session route also accepts an
+`identity` fence. Responses contain `messages`, `nextCursor`, and native-history
+`sources` statuses. Message times are Unix milliseconds. These routes require
+normal console authentication and reject callback-only tokens. See
+[Submitted messages](SUBMITTED_MESSAGES.md) for the schema, capture boundaries,
+and native-history configuration.
+
 ### Scrollback snapshots
 
 | Method and route | Purpose |

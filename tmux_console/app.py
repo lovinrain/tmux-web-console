@@ -129,6 +129,11 @@ from .snippets import (
     SnippetStoreUnavailable,
 )
 from .status import AgentStateDetector
+from .submitted_messages import (
+    SubmittedMessageStore,
+    SubmittedMessageStoreUnavailable,
+    default_submitted_messages_path,
+)
 from .tmux import (
     TERMINAL_HISTORY_ACTIONS,
     TmuxClient,
@@ -201,6 +206,8 @@ HTML_PREVIEW_ROUTE_NAME = "html-preview-asset"
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
+SUBMITTED_MESSAGES_KEY = web.AppKey("submitted_messages", SubmittedMessageStore)
+SUBMITTED_MESSAGE_POLL_SECONDS = 5.0
 SESSION_STREAM_SAMPLE_SECONDS = 1.0
 SESSION_STREAM_HEARTBEAT_SECONDS = 15.0
 CALLBACK_STREAM_HEARTBEAT_SECONDS = 15.0
@@ -1061,6 +1068,7 @@ def create_app(
     host_metrics: HostMetricsSampler | None = None,
     session_registry: SessionRegistry | None = None,
     agent_references: AgentReferenceDetector | None = None,
+    submitted_messages: SubmittedMessageStore | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -1127,6 +1135,9 @@ def create_app(
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[HOST_METRICS_KEY] = host_metrics or HostMetricsSampler()
     app[SESSION_REGISTRY_KEY] = session_registry or SessionRegistry()
+    app[SUBMITTED_MESSAGES_KEY] = submitted_messages or SubmittedMessageStore(
+        default_submitted_messages_path(app[SESSION_REGISTRY_KEY].path)
+    )
     app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     forgotten_sessions: dict[str, ForgottenSession] = {}
@@ -1284,6 +1295,37 @@ def create_app(
             await task
 
     app.cleanup_ctx.append(utility_lifecycle)
+
+    async def submitted_message_lifecycle(application: web.Application) -> AsyncIterator[None]:
+        async def monitor() -> None:
+            while True:
+                await asyncio.sleep(SUBMITTED_MESSAGE_POLL_SECONDS)
+                try:
+                    # Keep recording even when no browser has a session stream
+                    # open. Observe a successful inventory without sending input.
+                    async with application[SESSION_RENAME_LOCK_KEY]:
+                        live = await application[TMUX_KEY].list_sessions()
+                        references = await application[AGENT_REFERENCES_KEY].detect_sessions(live)
+                        for session in live:
+                            application[SESSION_REGISTRY_KEY].observe_history(session, references.get(session.name))
+                except (TmuxError, SessionRegistryUnavailable):
+                    LOGGER.warning("Unable to refresh conversation IDs for submitted messages")
+                try:
+                    known = application[SESSION_REGISTRY_KEY].list_agent_references()
+                    await asyncio.to_thread(application[SUBMITTED_MESSAGES_KEY].sync, known)
+                except (SessionRegistryUnavailable, SubmittedMessageStoreUnavailable):
+                    LOGGER.warning("Unable to archive submitted messages")
+
+        task = asyncio.create_task(monitor())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await asyncio.to_thread(application[SUBMITTED_MESSAGES_KEY].close)
+
+    app.cleanup_ctx.append(submitted_message_lifecycle)
 
     def auth_html_response(document: str, *, status: int = 200) -> web.Response:
         response = web.Response(text=document, content_type="text/html", status=status)
@@ -5430,6 +5472,41 @@ def create_app(
             return json_error("unable to save workspace", 500)
         return web.Response(status=204)
 
+    async def submitted_message_history(request: web.Request) -> web.Response:
+        try:
+            if set(request.query) - {"before", "q", "limit", "identity"}:
+                raise ValueError("unknown submitted-message query field")
+            limit = int(request.query.get("limit", "50"))
+            query = request.query.get("q", "").strip()
+            before = request.query.get("before")
+            history_id = request.match_info.get("history_id")
+            if history_id is None:
+                async with app[SESSION_RENAME_LOCK_KEY]:
+                    session = await app[TMUX_KEY].get_session(request.match_info["session"])
+                    expected = request.query.get("identity")
+                    if expected is not None and expected != (
+                        f"{session.id}:{session.created}:{session.server_started}:{session.server_pid}"
+                    ):
+                        return json_error("session identity changed", 409)
+                    references = await app[AGENT_REFERENCES_KEY].detect_sessions([session])
+                    history_id = app[SESSION_REGISTRY_KEY].observe_history(session, references.get(session.name))
+            else:
+                app[SESSION_REGISTRY_KEY].get_history(history_id)
+            agents = app[SESSION_REGISTRY_KEY].list_session_agents(history_id)
+            known = app[SESSION_REGISTRY_KEY].list_agent_references()
+            await asyncio.to_thread(app[SUBMITTED_MESSAGES_KEY].sync, known)
+            result = await asyncio.to_thread(
+                app[SUBMITTED_MESSAGES_KEY].list_messages, agents,
+                before=before, query=query, limit=limit,
+            )
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 400)
+        except (TmuxSessionNotFoundError, RecoveryRecordNotFoundError):
+            return json_error("session history not found", 404)
+        except (TmuxError, SessionRegistryUnavailable, SubmittedMessageStoreUnavailable) as error:
+            return json_error(str(error), 503)
+
     async def create_history(request: web.Request) -> web.Response:
         pane_id = request.match_info["pane_id"]
         limit = max(20, min(parse_int(request.query.get("limit"), 250), 1000))
@@ -5988,6 +6065,8 @@ def create_app(
     app.router.add_put(f"{prefix}/api/session-details", update_session_details)
     app.router.add_post(f"{prefix}/api/panes/{{pane_id}}/history", create_history)
     app.router.add_get(f"{prefix}/api/history/{{snapshot_id}}", history_page)
+    app.router.add_get(f"{prefix}/api/sessions/{{session}}/submitted-messages", submitted_message_history)
+    app.router.add_get(f"{prefix}/api/session-history/{{history_id}}/submitted-messages", submitted_message_history)
     app.router.add_get(f"{prefix}/ws/terminal", terminal)
     if DIST.exists():
         app.router.add_static(f"{prefix}/assets/", DIST / "assets", name="assets")

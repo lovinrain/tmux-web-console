@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -10,6 +11,7 @@ import {
 import { createHistorySnapshot, loadHistoryPage } from "../api";
 import { CloseIcon, RefreshIcon } from "../icons";
 import type { HistoryPage, Pane } from "../types";
+import { SubmittedMessages } from "./SubmittedMessages";
 
 export const DEFAULT_HISTORY_PANEL_WIDTH = 680;
 export const MIN_HISTORY_PANEL_WIDTH = 360;
@@ -21,6 +23,8 @@ const HISTORY_PANEL_KEYBOARD_LARGE_STEP = 64;
 
 interface HistoryPanelProps {
   pane: Pane;
+  sessionName?: string;
+  sessionIdentity?: string;
   onClose: () => void;
   preferredWidth?: number;
   onPreferredWidthChange?: (width: number) => void;
@@ -46,10 +50,14 @@ function clampWidth(width: number, viewportWidth: number): number {
 
 export function HistoryPanel({
   pane,
+  sessionName,
+  sessionIdentity,
   onClose,
   preferredWidth = DEFAULT_HISTORY_PANEL_WIDTH,
   onPreferredWidthChange,
 }: HistoryPanelProps) {
+  const viewId = useId();
+  const [view, setView] = useState<"scrollback" | "submitted">("scrollback");
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -250,15 +258,36 @@ export function HistoryPanel({
         />
         <header className="history-header">
           <div>
-            <p className="eyebrow">PANE {pane.id} / HISTORY</p>
-            <h2>Scrollback</h2>
+            <p className="eyebrow">{view === "submitted" ? `SESSION ${sessionName}` : `PANE ${pane.id}`} / HISTORY</p>
+            <h2>{view === "submitted" ? "Submitted messages" : "Scrollback"}</h2>
           </div>
           <div className="history-header-actions">
-            <button type="button" className="icon-button" onClick={() => void capture()} aria-label="Capture a new snapshot"><RefreshIcon /></button>
+            {view === "scrollback" && <button type="button" className="icon-button" onClick={() => void capture()} aria-label="Capture a new snapshot"><RefreshIcon /></button>}
             <button type="button" className="icon-button" onClick={onClose} aria-label="Close history"><CloseIcon /></button>
           </div>
         </header>
 
+        {sessionName && <div className="history-view-tabs" role="tablist" aria-label="History view"
+          onKeyDown={(event) => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === "Home" ? "scrollback" : event.key === "End" ? "submitted"
+              : view === "scrollback" ? "submitted" : "scrollback";
+            setView(next);
+            event.currentTarget.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
+          }}>
+          {(["scrollback", "submitted"] as const).map((value) => <button type="button" key={value}
+            id={`${viewId}-${value}`} data-view={value} role="tab" aria-selected={view === value}
+            aria-controls={`${viewId}-content`} tabIndex={view === value ? 0 : -1}
+            onClick={() => setView(value)}>{value === "scrollback" ? "Scrollback" : "Submitted messages"}</button>)}
+        </div>}
+
+        <div className="history-view-content" id={`${viewId}-content`} role={sessionName ? "tabpanel" : undefined}
+          aria-labelledby={sessionName ? `${viewId}-${view}` : undefined}>
+        {view === "submitted" && sessionName ? <>
+          <SubmittedMessages key={`${sessionName}:${sessionIdentity}`} target={{ sessionName, identity: sessionIdentity }} />
+          <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
+        </> : <>
         <div className="history-meta">
           <span>{page ? `${page.totalLines.toLocaleString()} captured lines` : "Capturing pane"}</span>
           <span>{page ? new Date(page.capturedAt * 1000).toLocaleTimeString() : "-"}</span>
@@ -284,6 +313,8 @@ export function HistoryPanel({
           <button type="button" className="secondary-button" onClick={() => void copyHistory()} disabled={lines.length === 0}>Copy loaded</button>
           <button type="button" className="primary-button" onClick={onClose}>Back to live</button>
         </footer>
+        </>}
+        </div>
       </aside>
     </div>
   );

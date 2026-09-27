@@ -12,6 +12,9 @@ const snippetsFile = `/tmp/muxdeck-playwright-${runId}-snippets.json`;
 const workspacesFile = `/tmp/muxdeck-playwright-${runId}-workspaces.json`;
 const shortcutsFile = `/tmp/muxdeck-playwright-${runId}-shortcuts.json`;
 const sessionRegistryFile = `/tmp/muxdeck-playwright-${runId}-sessions.sqlite3`;
+const submittedMessagesFile = `/tmp/muxdeck-playwright-${runId}-submitted-messages.sqlite3`;
+const codexHistoryFile = `/tmp/muxdeck-playwright-${runId}-codex-history.jsonl`;
+const claudeHistoryFile = `/tmp/muxdeck-playwright-${runId}-claude-history.jsonl`;
 const callbacksFile = `/tmp/muxdeck-playwright-${runId}-callbacks.sqlite3`;
 const callbackTokenFile = `/tmp/muxdeck-playwright-${runId}-callback-token`;
 const authFile = `/tmp/muxdeck-playwright-${runId}-auth.json`;
@@ -57,6 +60,9 @@ process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE = snippetsFile;
 process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE = workspacesFile;
 process.env.MUXDECK_PLAYWRIGHT_SHORTCUTS_FILE = shortcutsFile;
 process.env.MUXDECK_PLAYWRIGHT_SESSION_REGISTRY_FILE = sessionRegistryFile;
+process.env.MUXDECK_PLAYWRIGHT_SUBMITTED_MESSAGES_FILE = submittedMessagesFile;
+process.env.MUXDECK_PLAYWRIGHT_CODEX_HISTORY_FILE = codexHistoryFile;
+process.env.MUXDECK_PLAYWRIGHT_CLAUDE_HISTORY_FILE = claudeHistoryFile;
 process.env.MUXDECK_PLAYWRIGHT_CALLBACKS_FILE = callbacksFile;
 process.env.MUXDECK_PLAYWRIGHT_CALLBACK_TOKEN_FILE = callbackTokenFile;
 process.env.MUXDECK_PLAYWRIGHT_AUTH_FILE = authFile;
@@ -76,6 +82,11 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
+    env: {
+      MUXDECK_SUBMITTED_MESSAGES_FILE: submittedMessagesFile,
+      MUXDECK_CODEX_HISTORY_FILE: codexHistoryFile,
+      MUXDECK_CLAUDE_HISTORY_FILE: claudeHistoryFile,
+    },
     command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} MUXDECK_WORKSPACES_FILE=${workspacesFile} MUXDECK_SHORTCUTS_FILE=${shortcutsFile} MUXDECK_SESSION_REGISTRY_FILE=${sessionRegistryFile} MUXDECK_CALLBACKS_FILE=${callbacksFile} MUXDECK_CALLBACK_TOKEN_FILE=${callbackTokenFile} MUXDECK_AUTH_MODE=server MUXDECK_AUTH_FILE=${authFile} MUXDECK_AUTH_COOKIE_SECURE=false MUXDECK_UPLOADS_DIR=${uploadsDirectory} ${pythonBin} -m tmux_console.app`,
     url: "http://127.0.0.1:7684/mux/login",
     reuseExistingServer: false,

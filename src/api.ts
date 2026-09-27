@@ -75,6 +75,38 @@ export function restoreSessionHistory(id: string, create: boolean): Promise<{ se
   });
 }
 
+export interface SubmittedMessage {
+  id: string;
+  agentType: "claude" | "codex";
+  agentSessionId: string;
+  submittedAt: number;
+  text: string;
+  complete: boolean;
+}
+
+export interface SubmittedMessagePage {
+  messages: SubmittedMessage[];
+  nextCursor: string | null;
+  sources: Array<{ agentType: "claude" | "codex"; status: "available" | "missing" | "unreadable" | "partial" }>;
+}
+
+export type SubmittedMessageTarget = { sessionName: string; identity?: string } | { historyId: string };
+
+export function listSubmittedMessages(
+  target: SubmittedMessageTarget,
+  query = "",
+  before: string | null = null,
+  signal?: AbortSignal,
+): Promise<SubmittedMessagePage> {
+  const search = new URLSearchParams({ q: query });
+  if (before !== null) search.set("before", before);
+  if ("sessionName" in target && target.identity) search.set("identity", target.identity);
+  const path = "sessionName" in target
+    ? `/api/sessions/${encodeURIComponent(target.sessionName)}`
+    : `/api/session-history/${encodeURIComponent(target.historyId)}`;
+  return jsonRequest(`${path}/submitted-messages?${search}`, { signal });
+}
+
 type SessionListWithRecovery = Session[] & {
   recoverableSessions?: RecoverableSession[];
 };

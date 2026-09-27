@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listSessionHistory, restoreSessionHistory, type SessionHistoryEntry } from "../api";
+import { listSessionHistory, listSubmittedMessages, restoreSessionHistory, type SessionHistoryEntry } from "../api";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 
-vi.mock("../api", () => ({ listSessionHistory: vi.fn(), restoreSessionHistory: vi.fn() }));
+vi.mock("../api", () => ({ listSessionHistory: vi.fn(), listSubmittedMessages: vi.fn(), restoreSessionHistory: vi.fn() }));
 const entry: SessionHistoryEntry = {
   id: "history-1", name: "named-agent", title: "Project notes", names: ["old-agent", "named-agent"],
   directory: "/work/project", directoryAvailable: true, agentType: "codex", agentSessionId: "reference-id",
@@ -17,6 +17,15 @@ beforeEach(() => {
 });
 
 describe("SessionHistoryDialog", () => {
+  it("opens saved messages for an ended session without recreating its shell", async () => {
+    vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
+    render(<SessionHistoryDialog onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Submitted messages for named-agent" }));
+    await screen.findByText(/No Claude Code or Codex conversation ID/);
+    expect(listSubmittedMessages).toHaveBeenCalledWith({ historyId: entry.id }, "", null, expect.any(AbortSignal));
+    expect(restoreSessionHistory).not.toHaveBeenCalled();
+  });
+
   it("filters workspace history on demand and shows names, agent references and membership", async () => {
     render(<SessionHistoryDialog workspaceId="project" workspaceName="Project" onClose={vi.fn()} onOpenSession={vi.fn()} />);
     const dialog = screen.getByRole("dialog", { name: "Session history" });
