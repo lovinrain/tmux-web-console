@@ -4,9 +4,17 @@ Muxdeck keeps the **beginning and recent output**, with **all recorded submitted
 input in a separate archive**. Output retention limits never trim submitted
 messages, including input from the omitted middle of a session.
 
+For coding-agent conversations, **Pane scrollback → Transcript** reads the local
+Codex, Claude Code, Copilot, Cursor, or Grok transcript by conversation ID. This
+view opens first for recognized agent panes and can recover messages hidden by
+Codex's “Earlier messages are available” notice or absent from tmux's buffer.
+**Session history / Agents → Transcript** also works for ended sessions while
+their native files remain available. See [Agent transcripts](AGENT_TRANSCRIPTS.md)
+for formats, paging, and availability limits.
+
 - **Pane scrollback → Scrollback** captures the live pane's currently retained
   tmux buffer. Its older pages belong to one immutable, ten-minute snapshot.
-- **Pane scrollback → Beginning** shows the earliest output Muxdeck saved for
+- **Pane scrollback → Saved beginning** shows the earliest output Muxdeck saved for
   that pane. It survives clearing tmux history and restarting Muxdeck.
 - **Session history / Agents → Saved output** offers Beginning and Recent,
   including for ended sessions. Select a saved pane when a session had several
@@ -25,7 +33,7 @@ useful saved output. Copy saved output copies the whole selected section.
 Recording runs on the server with no browser required. A background pass runs
 approximately every five seconds; unchanged pane signatures skip recapture for
 up to thirty seconds. Creating a session through Muxdeck wakes the recorder.
-Opening or refreshing a live pane's Beginning forces a capture. Ending a session
+Opening or refreshing a live pane's Saved beginning forces a capture. Ending a session
 through Muxdeck attempts a final capture with a three-second timeout; a storage
 failure does not prevent the requested termination.
 

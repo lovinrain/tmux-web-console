@@ -8,7 +8,8 @@ import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 
 const socketName = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
 const historyFile = process.env.MUXDECK_PLAYWRIGHT_CLAUDE_HISTORY_FILE;
-if (!socketName?.startsWith("muxdeck-playwright-") || !historyFile?.startsWith("/tmp/muxdeck-playwright-")) {
+const transcriptsDirectory = process.env.MUXDECK_PLAYWRIGHT_TRANSCRIPTS_DIR;
+if (!socketName?.startsWith("muxdeck-playwright-") || !historyFile?.startsWith("/tmp/muxdeck-playwright-") || !transcriptsDirectory?.startsWith("/tmp/muxdeck-playwright-")) {
   throw new Error("Submitted-message checks require isolated tmux and native history fixtures");
 }
 const tmux = ["-L", socketName];
@@ -19,10 +20,17 @@ test.beforeAll(() => {
   // This local line editor writes the same submitted-input schema as Claude.
   // It makes no model requests and uses only the disposable tmux socket.
   writeFileSync(fakeClaude, `#!/usr/bin/python3
-import ctypes, json, readline, sys, time
+import ctypes, json, pathlib, readline, sys, time
 ctypes.CDLL(None).prctl(15, b'claude', 0, 0, 0)
 identifier = sys.argv[sys.argv.index('--session-id') + 1]
-history = sys.argv[-1]
+history = sys.argv[-2]
+transcript = pathlib.Path(sys.argv[-1]) / 'claude' / '-fixture' / (identifier + '.jsonl')
+transcript.parent.mkdir(parents=True, exist_ok=True)
+def record(role, text):
+    with transcript.open('a') as target:
+        target.write(json.dumps({'type': role, 'sessionId': identifier, 'message': {'role': role, 'content': text}}) + '\\n')
+record('user', 'A request from before terminal recording began')
+record('assistant', 'An older Claude answer preserved in the local transcript')
 print('\\033]2;Claude Code\\007', end='', flush=True)
 print('Opening context for ' + identifier, flush=True)
 while True:
@@ -32,6 +40,8 @@ while True:
         break
     with open(history, 'a') as target:
         target.write(json.dumps({'sessionId': identifier, 'timestamp': int(time.time() * 1000), 'display': message, 'pastedContents': {}}) + '\\n')
+    record('user', message)
+    record('assistant', 'Recorded answer to: ' + message)
     print('\\033[2J\\033[H', end='', flush=True)
     if message.startswith('Middle request'):
         for index in range(3000):
@@ -52,7 +62,7 @@ for (const width of [1440, 390]) {
     const name = `submitted-${width}-${process.pid}`;
     const identifier = randomUUID();
     execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name,
-      "bash", "-c", 'exec -a claude /usr/bin/python3 "$@"', "fixture", fakeClaude, "--session-id", identifier, historyFile]);
+      "bash", "-c", 'exec -a claude /usr/bin/python3 "$@"', "fixture", fakeClaude, "--session-id", identifier, historyFile, transcriptsDirectory]);
     const pane = execFileSync("tmux", [...tmux, "list-panes", "-t", `=${name}`, "-F", "#{pane_id}"], { encoding: "utf8" }).trim();
     const finalText = `The final edited request for ${width}px`;
     const middleText = `Middle request to keep for ${width}px`;
@@ -78,6 +88,10 @@ for (const width of [1440, 390]) {
       // Type and edit directly in the terminal, outside Muxdeck's composer.
       execFileSync("tmux", [...tmux, "send-keys", "-t", pane, "-l", "A draft that must be replaced"]);
       await page.getByRole("button", { name: "Pane scrollback" }).click();
+      await expect(page.getByRole("tab", { name: "Transcript", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByText("An older Claude answer preserved in the local transcript")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: `artifacts/claude-transcript-${width}.png`, animations: "disabled" });
       await page.getByRole("tab", { name: "Submitted messages" }).click();
       await expect(page.getByText("No submitted messages recorded yet.")).toBeVisible();
       expect(submitted()).toHaveLength(0);
@@ -106,7 +120,7 @@ for (const width of [1440, 390]) {
       expect(recentOutput.lines.join("\n")).toContain("Output row 2999");
       expect(recentOutput.lines.join("\n")).not.toContain(`Opening context for ${identifier}`);
 
-      await page.getByRole("tab", { name: "Beginning" }).click();
+      await page.getByRole("tab", { name: "Saved beginning" }).click();
       await expect(page.getByLabel("Beginning output", { exact: true })).toContainText(`Opening context for ${identifier}`);
       await expect(page.locator(".saved-scrollback")).toContainText("Recording began");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -132,6 +146,9 @@ for (const width of [1440, 390]) {
         await page.goto("/mux/");
         await page.getByRole("button", { name: "Session history", exact: true }).click();
         const history = page.getByRole("dialog", { name: "Session history" });
+        await history.getByRole("button", { name: `Transcript for ${name}`, exact: true }).click();
+        await expect(history.getByText("An older Claude answer preserved in the local transcript")).toBeVisible();
+        await expect(history.getByText(finalText, { exact: true })).toBeVisible();
         await history.getByRole("button", { name: `Saved output for ${name}`, exact: true }).click();
         await expect(history.getByLabel("Beginning output", { exact: true })).toContainText(`Opening context for ${identifier}`);
         await history.getByLabel("Output", { exact: true }).selectOption("recent");
@@ -143,6 +160,7 @@ for (const width of [1440, 390]) {
     } finally {
       await page.close();
       if (!ended) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+      rmSync(join(transcriptsDirectory, "claude", "-fixture", `${identifier}.jsonl`), { force: true });
     }
   });
 }

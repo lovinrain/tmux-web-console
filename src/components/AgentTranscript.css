@@ -1,0 +1,23 @@
+.agent-transcript { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; padding: 16px 20px; gap: 12px; color: var(--paper); }
+.agent-transcript p { margin: 0; font-size: 12px; line-height: 1.6; }
+.agent-transcript-controls, .agent-transcript-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.agent-transcript-controls > button { margin-left: auto; }
+.agent-transcript-controls label { display: flex; flex: 1; align-items: center; min-width: 0; gap: 8px; font-size: 12px; }
+.agent-transcript-controls select { min-width: 0; max-width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--paper); background: var(--ink); font: inherit; }
+.agent-transcript-source { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; gap: 8px; font-size: 12px; }
+.agent-transcript-source code { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
+.agent-transcript-description, .agent-transcript-notice, .agent-transcript-end { color: var(--muted); }
+.agent-transcript-tools { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.agent-transcript-messages { flex: 1; min-height: 80px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 4px; background: var(--ink); padding: 12px; }
+.agent-transcript-message { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.agent-transcript-message-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 8px; font-size: 12px; }
+.agent-transcript-message-heading time { color: var(--muted); font-size: 11px; }
+.agent-transcript-message[data-role="user"] .agent-transcript-message-heading strong { color: var(--amber); }
+.agent-transcript-message pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 "JetBrains Mono Variable", monospace; user-select: text; }
+.agent-transcript-message summary { color: var(--muted); cursor: pointer; font-size: 12px; }
+.agent-transcript-message details[open] summary { margin-bottom: 8px; }
+.agent-transcript-error { color: var(--red); }
+.agent-transcript-actions > span { font-size: 11px; color: var(--muted); }
+.agent-transcript-actions > span:empty { display: none; }
+.session-history-entry > .agent-transcript { height: min(65dvh, 640px); padding: 12px 0 0; margin-top: 12px; border-top: 1px solid var(--line); }
+@media (max-width: 640px) { .agent-transcript { padding: 12px; gap: 10px; } }

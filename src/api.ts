@@ -111,6 +111,46 @@ export function listSubmittedMessages(
 
 export type SavedScrollbackTarget = { paneId: string; identity?: string } | { historyId: string };
 
+export interface AgentTranscriptSource {
+  key: string;
+  agentType: string;
+  agentSessionId: string | null;
+}
+
+export interface AgentTranscriptMessage {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  text: string;
+  timestamp: number | null;
+  truncated: boolean;
+}
+
+export interface AgentTranscriptPage {
+  sources: AgentTranscriptSource[];
+  selectedSource: string | null;
+  status: "available" | "missing" | "unreadable" | "unsupported" | "unidentified";
+  messages: AgentTranscriptMessage[];
+  nextCursor: string | null;
+  partial: boolean;
+  notice: string | null;
+}
+
+export function loadAgentTranscript(
+  target: SavedScrollbackTarget,
+  source: string | null = null,
+  cursor: string | null = null,
+  signal?: AbortSignal,
+): Promise<AgentTranscriptPage> {
+  const search = new URLSearchParams();
+  if (source !== null) search.set("source", source);
+  if (cursor !== null) search.set("cursor", cursor);
+  if ("paneId" in target && target.identity) search.set("identity", target.identity);
+  const path = "paneId" in target
+    ? `/api/panes/${encodeURIComponent(target.paneId)}`
+    : `/api/session-history/${encodeURIComponent(target.historyId)}`;
+  return jsonRequest(`${path}/agent-transcript?${search}`, { signal });
+}
+
 export function loadSavedScrollback(
   target: SavedScrollbackTarget,
   part: SavedScrollbackPart = "beginning",

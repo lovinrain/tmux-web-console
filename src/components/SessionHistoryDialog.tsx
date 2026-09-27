@@ -6,6 +6,7 @@ import { acquireBodyScrollLock } from "../bodyScrollLock";
 import { agentDisplayLabel } from "../agentResume";
 import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
+import { AgentTranscript } from "./AgentTranscript";
 import "./SessionHistoryDialog.css";
 
 interface Props {
@@ -36,6 +37,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
   const [confirm, setConfirm] = useState<SessionHistoryEntry | null>(null);
   const [messagesFor, setMessagesFor] = useState<string | null>(null);
   const [outputFor, setOutputFor] = useState<string | null>(null);
+  const [transcriptFor, setTranscriptFor] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const dialog = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
@@ -125,7 +127,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
       <p className="session-history-explainer">{sessionName
         ? `Every coding agent recorded in ${sessionName}, including earlier shells under this name. `
         : workspaceId ? `Previously associated with ${workspaceName || "this workspace"}. ` : "Closed tabs and ended or missing sessions. "}
-        Browse saved output and submitted messages, reopen a running session, or explicitly create a fresh shell. Recreating a shell does not restore its running processes.</p>
+        Browse local agent transcripts, saved output and submitted messages, reopen a running session, or explicitly create a fresh shell. Recreating a shell does not restore its running processes.</p>
       <form className="session-history-search" onSubmit={(event) => { event.preventDefault(); setOffset(0); setSearch(query.trim()); setRevision((current) => current + 1); }}>
         <SearchIcon /><input ref={input} aria-label="Search session history" placeholder="Session name, old name, directory, or agent ID" maxLength={256} value={query} onChange={(event) => setQuery(event.target.value)} />
         <button type="submit" disabled={Boolean(busy)}>Search</button>
@@ -166,10 +168,12 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
               </div>
             : <p className="session-history-agent">{entry.agentType || "Agent not detected"}{entry.agentSessionId && <> / Reference ID: <code>{entry.agentSessionId}</code></>}</p>}
           <footer><div><span>First seen {date(entry.firstSeenAt)}</span><span>Last seen {date(entry.lastSeenAt)}</span>{(entry.endedAt || entry.tabClosedAt) && <span>{entry.endedAt ? "End/disappearance recorded" : "Tab closed"} {date(entry.endedAt || entry.tabClosedAt)}</span>}</div>
+            <button type="button" aria-label={`Transcript for ${entry.name}`} aria-expanded={transcriptFor === entry.id}
+              onClick={() => { setTranscriptFor((current) => current === entry.id ? null : entry.id); setOutputFor(null); setMessagesFor(null); }}>Transcript</button>
             <button type="button" aria-label={`Saved output for ${entry.name}`} aria-expanded={outputFor === entry.id}
-              onClick={() => { setOutputFor((current) => current === entry.id ? null : entry.id); setMessagesFor(null); }}>Saved output</button>
+              onClick={() => { setOutputFor((current) => current === entry.id ? null : entry.id); setMessagesFor(null); setTranscriptFor(null); }}>Saved output</button>
             <button type="button" aria-label={`Submitted messages for ${entry.name}`} aria-expanded={messagesFor === entry.id}
-              onClick={() => { setMessagesFor((current) => current === entry.id ? null : entry.id); setOutputFor(null); }}>Submitted messages</button>
+              onClick={() => { setMessagesFor((current) => current === entry.id ? null : entry.id); setOutputFor(null); setTranscriptFor(null); }}>Submitted messages</button>
             <button type="button" disabled={Boolean(busy) || loading || (entry.state !== "live" && !entry.directoryAvailable)}
               onClick={() => entry.state === "live" ? void restore(entry, false) : setConfirm(entry)}>
               {busy === entry.id ? "Opening..." : entry.state === "live" ? "Reopen session" : "Recreate shell"}
@@ -177,6 +181,8 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
           </footer>
           {messagesFor === entry.id && <SubmittedMessages key={entry.id} target={{ historyId: entry.id }} />}
           {outputFor === entry.id && <SavedScrollback target={{ historyId: entry.id }} />}
+          {transcriptFor === entry.id && <AgentTranscript target={{ historyId: entry.id }}
+            onShowBeginning={() => { setOutputFor(entry.id); setTranscriptFor(null); }} />}
           {!entry.directoryAvailable && entry.state !== "live" && <p>Saved directory is unavailable. Restore the directory before recreating this shell.</p>}
         </article>)}
         {loading && <p role="status">Loading session history...</p>}

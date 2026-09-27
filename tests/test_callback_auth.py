@@ -103,12 +103,15 @@ async def test_bearer_is_scoped_and_keeps_host_origin_and_cookie_boundaries(tmp_
         assert (await history.json())["messages"][0]["id"] == record["id"]
         for path, method in (
             ("/mux/api/sessions", "GET"),
+            ("/mux/api/panes/%251/agent-transcript", "GET"),
+            ("/mux/api/session-history/private/agent-transcript", "GET"),
             ("/mux/ws/terminal", "GET"),
             ("/mux/api/callback-sessions", "POST"),
             ("/mux/api/callback-sessions/review", "POST"),
         ):
             response = await client.request(method, path, headers=headers)
             assert response.status == 403
+            assert (await client.request(method, path)).status == 401
         response = await client.get(
             "/mux/api/callback-sessions", headers={**headers, "Host": "untrusted.invalid"}
         )

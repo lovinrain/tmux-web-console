@@ -13,6 +13,8 @@ import { CloseIcon, RefreshIcon } from "../icons";
 import type { HistoryPage, Pane } from "../types";
 import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
+import { AgentTranscript } from "./AgentTranscript";
+import { paneCommandKind } from "../sessionDashboardModel";
 
 export const DEFAULT_HISTORY_PANEL_WIDTH = 680;
 export const MIN_HISTORY_PANEL_WIDTH = 360;
@@ -58,9 +60,10 @@ export function HistoryPanel({
   onPreferredWidthChange,
 }: HistoryPanelProps) {
   const viewId = useId();
-  const [view, setView] = useState<"scrollback" | "beginning" | "submitted">("scrollback");
-  const views = sessionName ? ["scrollback", "beginning", "submitted"] as const : ["scrollback", "beginning"] as const;
-  const viewLabels = { scrollback: "Scrollback", beginning: "Beginning", submitted: "Submitted messages" };
+  const isAgent = ["codex", "claude", "copilot", "cursor", "grok"].includes(paneCommandKind(pane.command, pane.title));
+  const [view, setView] = useState<"transcript" | "scrollback" | "beginning" | "submitted">(isAgent ? "transcript" : "scrollback");
+  const views = sessionName ? ["transcript", "scrollback", "beginning", "submitted"] as const : ["transcript", "scrollback", "beginning"] as const;
+  const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", beginning: "Saved beginning", submitted: "Submitted messages" };
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +74,7 @@ export function HistoryPanel({
     clampWidth(preferredWidth, window.innerWidth)
   ));
   const scrollRef = useRef<HTMLDivElement>(null);
+  const capturePending = useRef(false);
   const panelWidthRef = useRef(panelWidth);
   const resizeRef = useRef<ResizeState | null>(null);
 
@@ -95,6 +99,8 @@ export function HistoryPanel({
   }, []);
 
   const capture = async () => {
+    if (capturePending.current) return;
+    capturePending.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -107,13 +113,14 @@ export function HistoryPanel({
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to capture history");
     } finally {
+      capturePending.current = false;
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void capture();
-  }, [pane.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (view === "scrollback" && page === null) void capture();
+  }, [pane.id, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadOlder = async () => {
     if (!page?.nextCursor || loadingOlder) return;
@@ -289,7 +296,11 @@ export function HistoryPanel({
 
         <div className="history-view-content" id={`${viewId}-content`} role="tabpanel"
           aria-labelledby={`${viewId}-${view}`}>
-        {view === "beginning" ? <>
+        {view === "transcript" ? <>
+          <AgentTranscript target={{ paneId: pane.id, identity: sessionIdentity }}
+            onShowScrollback={() => setView("scrollback")} onShowBeginning={() => setView("beginning")} />
+          <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
+        </> : view === "beginning" ? <>
           <SavedScrollback target={{ paneId: pane.id, identity: sessionIdentity }} part="beginning" />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
         </> : view === "submitted" && sessionName ? <>
@@ -301,8 +312,10 @@ export function HistoryPanel({
           <span>{page ? new Date(page.capturedAt * 1000).toLocaleTimeString() : "-"}</span>
         </div>
 
-        {page?.alternateOn && page.historySize === 0 && (
-          <div className="history-notice">This full-screen app has no retained tmux scrollback. The current screen is shown. Check Beginning for saved opening output and Submitted messages for recorded input.</div>
+        {page && ((page.alternateOn && page.historySize === 0) || lines.some((line) => line.includes("Earlier messages are available"))) && (
+          <div className="history-notice">The terminal may show only part of this conversation.
+            {" "}<button type="button" onClick={() => setView("transcript")}>Read the local agent transcript</button>
+            {" "}Saved beginning and Submitted messages are also available.</div>
         )}
 
         <div className="history-scroll" ref={scrollRef}>

@@ -19,6 +19,7 @@ from urllib.parse import SplitResult, quote, urlsplit
 from aiohttp import WSMsgType, web
 
 from .agent_reference import AgentReferenceDetector
+from .agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from .auth import (
     AuthConfigurationError,
     AuthMode,
@@ -117,6 +118,7 @@ from .scrollback import (
     ScrollbackStore,
     ScrollbackStoreUnavailable,
     default_scrollback_path,
+    session_identity,
 )
 from .session_registry import (
     RecoveryRecord,
@@ -212,6 +214,8 @@ HTML_PREVIEW_ROUTE_NAME = "html-preview-asset"
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
+AGENT_TRANSCRIPTS_KEY = web.AppKey("agent_transcripts", AgentTranscriptReader)
+TRANSCRIPT_READ_LIMIT_KEY = web.AppKey("transcript_read_limit", asyncio.Semaphore)
 SUBMITTED_MESSAGES_KEY = web.AppKey("submitted_messages", SubmittedMessageStore)
 SCROLLBACK_KEY = web.AppKey("scrollback", ScrollbackStore)
 SCROLLBACK_RECORDER_KEY = web.AppKey("scrollback_recorder", ScrollbackRecorder)
@@ -1078,6 +1082,7 @@ def create_app(
     agent_references: AgentReferenceDetector | None = None,
     submitted_messages: SubmittedMessageStore | None = None,
     scrollback: ScrollbackStore | None = None,
+    agent_transcripts: AgentTranscriptReader | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -1155,6 +1160,8 @@ def create_app(
     )
     history_capture_wake = asyncio.Event()
     app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
+    app[AGENT_TRANSCRIPTS_KEY] = agent_transcripts or AgentTranscriptReader()
+    app[TRANSCRIPT_READ_LIMIT_KEY] = asyncio.Semaphore(3)
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     forgotten_sessions: dict[str, ForgottenSession] = {}
     forgotten_session_timers: dict[str, asyncio.TimerHandle] = {}
@@ -5543,6 +5550,58 @@ def create_app(
         except (TmuxError, SessionRegistryUnavailable, SubmittedMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
 
+    async def agent_transcript(request: web.Request) -> web.Response:
+        try:
+            history_id = request.match_info.get("history_id")
+            allowed = {"source", "cursor", "limit"}
+            if history_id is None:
+                allowed.add("identity")
+            if set(request.query) - allowed:
+                raise ValueError("unknown transcript query field")
+            limit = int(request.query.get("limit", "50"))
+            if not 1 <= limit <= 100:
+                raise ValueError("limit must be between 1 and 100")
+            live_identity: tuple[str, str, int] | None = None
+            if history_id is None:
+                pane_id = validate_tmux_pane_id(request.match_info["pane_id"])
+                async with app[SESSION_RENAME_LOCK_KEY]:
+                    sessions = await app[TMUX_KEY].list_sessions()
+                    match = next(((session, pane) for session in sessions for pane in session.panes if pane.id == pane_id), None)
+                    if match is None:
+                        return json_error("pane not found", 404)
+                    session, pane = match
+                    identity = session_identity(session)
+                    if request.query.get("identity", identity) != identity:
+                        return json_error("session identity changed", 409)
+                    # Resolve the requested pane, even when another pane is active.
+                    # Bypass the status cache to follow in-app resume immediately.
+                    reference = await app[AGENT_REFERENCES_KEY].detect_pane(pane, refresh=True)
+                    live_identity = (identity, pane.id, pane.process_pid)
+                    agents = [{"agentType": reference.agent_type, "agentSessionId": reference.session_id}]
+                    app[SESSION_REGISTRY_KEY].observe_history(session, reference)
+            else:
+                app[SESSION_REGISTRY_KEY].get_history(history_id)
+                agents = app[SESSION_REGISTRY_KEY].list_session_agents(history_id)
+            async with app[TRANSCRIPT_READ_LIMIT_KEY]:
+                result = await asyncio.to_thread(
+                    app[AGENT_TRANSCRIPTS_KEY].read, agents,
+                    selected=request.query.get("source"), cursor=request.query.get("cursor"), limit=limit,
+                )
+            if live_identity is not None:
+                sessions = await app[TMUX_KEY].list_sessions()
+                if not any((session_identity(session), pane.id, pane.process_pid) == live_identity
+                           for session in sessions for pane in session.panes):
+                    return json_error("pane identity changed; refresh the transcript", 409)
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except TranscriptChangedError as error:
+            return json_error(str(error), 409)
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 400)
+        except RecoveryRecordNotFoundError:
+            return json_error("session history not found", 404)
+        except (TmuxError, SessionRegistryUnavailable) as error:
+            return json_error(str(error), 503)
+
     async def saved_scrollback(request: web.Request) -> web.Response:
         try:
             history_id = request.match_info.get("history_id")
@@ -6135,6 +6194,8 @@ def create_app(
     app.router.add_get(f"{prefix}/api/history/{{snapshot_id}}", history_page)
     app.router.add_get(f"{prefix}/api/panes/{{pane_id}}/saved-scrollback", saved_scrollback)
     app.router.add_get(f"{prefix}/api/session-history/{{history_id}}/saved-scrollback", saved_scrollback)
+    app.router.add_get(f"{prefix}/api/panes/{{pane_id}}/agent-transcript", agent_transcript)
+    app.router.add_get(f"{prefix}/api/session-history/{{history_id}}/agent-transcript", agent_transcript)
     app.router.add_get(f"{prefix}/api/sessions/{{session}}/submitted-messages", submitted_message_history)
     app.router.add_get(f"{prefix}/api/session-history/{{history_id}}/submitted-messages", submitted_message_history)
     app.router.add_get(f"{prefix}/ws/terminal", terminal)

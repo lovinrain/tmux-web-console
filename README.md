@@ -79,6 +79,10 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   workspace-pinned panel
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
+- Read local Codex, Claude Code, Copilot, Cursor, and Grok conversations from
+  **Pane scrollback → Transcript**, including messages no longer visible in the
+  terminal. Recorded conversations are also available from session history.
+  See [Agent transcripts](docs/AGENT_TRANSCRIPTS.md) for source availability.
 - Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
 - [Saved beginning and recent output](docs/SCROLLBACK.md), available after
   scrollback clears and sessions end, with submitted input retained separately

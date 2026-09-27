@@ -1690,11 +1690,20 @@ refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
 ## Scrollback behavior
 
+**Pane scrollback → Transcript** opens first for recognized coding-agent panes.
+It reads user and assistant messages from local Codex, Claude Code, Copilot,
+Cursor, or Grok storage, using the conversation ID rather than terminal rows.
+Messages start at the beginning, with **Load later messages**, optional tool
+activity, copying, and refresh. **Session history / Agents → Transcript** offers
+the recorded conversations even after a shell ends. Missing files and unknown
+IDs have explicit notices and terminal-history alternatives. See
+[Agent transcripts](AGENT_TRANSCRIPTS.md) for availability and source formats.
+
 Opening the Scrollback tab runs `tmux capture-pane` and stores the result in memory for ten
 minutes. Older pages come from that immutable snapshot, so live output cannot
 cause duplicate or skipped lines while the user reads.
 
-The **Beginning** tab shows persistent opening output, and **Session history →
+The **Saved beginning** tab shows persistent opening output, and **Session history →
 Saved output** offers both Beginning and Recent for live or ended sessions.
 Each section is bounded to 2,000 terminal rows and 1 MiB of text per pane
 incarnation. A background recorder operates without a browser, approximately

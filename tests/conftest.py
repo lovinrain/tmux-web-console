@@ -25,6 +25,8 @@ def isolate_default_state_files(
     monkeypatch.setenv("MUXDECK_SCROLLBACK_FILE", str(state_dir / "scrollback.sqlite3"))
     monkeypatch.setenv("MUXDECK_CODEX_HISTORY_FILE", str(state_dir / "codex-history.jsonl"))
     monkeypatch.setenv("MUXDECK_CLAUDE_HISTORY_FILE", str(state_dir / "claude-history.jsonl"))
+    for agent in ("CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK"):
+        monkeypatch.setenv(f"MUXDECK_{agent}_TRANSCRIPTS_DIR", str(state_dir / "transcripts" / agent.lower()))
     monkeypatch.delenv("MUXDECK_AUTH_FILE", raising=False)
     monkeypatch.delenv("MUXDECK_AUTH_MODE", raising=False)
     monkeypatch.delenv("MUXDECK_AUTH_COOKIE_SECURE", raising=False)

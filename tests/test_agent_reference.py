@@ -74,14 +74,15 @@ def test_discovers_codex_rollout_from_a_bounded_child_process(tmp_path: Path):
     ) == agent_id
 
 
-def test_prefers_an_explicit_resume_id_without_scanning_the_filesystem(tmp_path: Path):
+@pytest.mark.parametrize(("agent", "option"), [("claude", "--resume"), ("codex", "resume")])
+def test_discovers_an_explicit_resume_id_when_no_file_is_open(tmp_path: Path, agent: str, option: str):
     proc_root = tmp_path / "proc"
     agent_id = "12345678-1234-1234-1234-1234567890ab"
-    process(proc_root, 100, ["claude", "--resume", agent_id])
+    process(proc_root, 100, [agent, option, agent_id])
 
     assert discover_agent_session_id(
-        pane(command="claude"),
-        "claude",
+        pane(command=agent),
+        agent,
         proc_root=proc_root,
     ) == agent_id
 
@@ -109,6 +110,27 @@ def test_foreground_reference_wins_over_a_newer_nested_agent(tmp_path: Path):
         "codex",
         proc_root=proc_root,
     ) == foreground_id
+
+    (foreground / "fd" / "9").unlink()
+    assert discover_agent_session_id(pane(command="codex"), "codex", proc_root=proc_root) is None
+
+
+async def test_current_codex_rollout_beats_stale_resume_and_in_process_workers(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    old = "11111111-1111-4111-8111-111111111111"
+    current = "22222222-2222-4222-8222-222222222222"
+    worker = "33333333-3333-4333-8333-333333333333"
+    root = process(proc_root, 100, ["codex", "resume", old])
+    detector = AgentReferenceDetector(proc_root=proc_root)
+    active = pane(command="codex")
+    assert (await detector.detect_pane(active)).session_id == old
+    for number, identifier, source in [(9, current, "cli"), (10, worker, {"subagent": {"thread_spawn": {}}})]:
+        rollout = tmp_path / f"rollout-{identifier}.jsonl"
+        rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": identifier, "source": source}}) + "\n")
+        os.utime(rollout, ns=(number, number))
+        os.symlink(rollout, root / "fd" / str(number))
+    assert (await detector.detect_pane(active)).session_id == old  # Ordinary inventory uses its cache.
+    assert (await detector.detect_pane(active, refresh=True)).session_id == current
 
 
 @pytest.mark.asyncio

@@ -706,6 +706,33 @@ archive completed.
 
 ## Terminal history and real-time APIs
 
+### Agent transcripts
+
+`GET /api/panes/{paneId}/agent-transcript` reads the requested pane's current
+agent conversation. Optional `identity` uses the terminal WebSocket's
+`id:created:serverStarted:serverPid` fence. The pane is resolved independently
+of the session's active pane; its identity is checked before and after reading.
+
+`GET /api/session-history/{historyId}/agent-transcript` reads conversations
+recorded under a stable history ID, including ended sessions. Optional `source`
+selects a key from `sources`; arbitrary agent IDs and paths are not accepted.
+The most recently observed source is selected by default.
+
+Both accept opaque `cursor` and `limit` (1–100, default 50). Responses contain
+`sources` (`key`, `agentType`, `agentSessionId`), `selectedSource`, `status`,
+`messages`, `nextCursor`, `partial`, and `notice`. Messages have `id`, `role`
+(`user`, `assistant`, or `tool`), `text`, nullable Unix-millisecond `timestamp`,
+and `truncated`. Results are in conversation order, earliest first. Status is
+`available`, `missing`, `unreadable`, `unsupported`, or `unidentified`.
+
+Unknown query fields, invalid cursors/limits, and foreign source keys return
+`400`; changed pane or transcript identity returns `409`; missing pane/history
+returns `404`; unavailable tmux/registry returns `503`. Native file availability
+is reported in a successful response so terminal-history alternatives remain
+usable. Responses use `Cache-Control: no-store`, require normal console
+authentication, and reject callback-only tokens. See
+[Agent transcripts](AGENT_TRANSCRIPTS.md) for native layouts and read limits.
+
 ### Submitted messages
 
 `GET /api/sessions/{name}/submitted-messages` and

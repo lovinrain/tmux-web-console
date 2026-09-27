@@ -16,6 +16,10 @@ const submittedMessagesFile = `/tmp/muxdeck-playwright-${runId}-submitted-messag
 const scrollbackFile = `/tmp/muxdeck-playwright-${runId}-scrollback.sqlite3`;
 const codexHistoryFile = `/tmp/muxdeck-playwright-${runId}-codex-history.jsonl`;
 const claudeHistoryFile = `/tmp/muxdeck-playwright-${runId}-claude-history.jsonl`;
+const transcriptsDirectory = `/tmp/muxdeck-playwright-${runId}-transcripts`;
+const transcriptEnvironment = Object.fromEntries(["CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK"].map(
+  (agent) => [`MUXDECK_${agent}_TRANSCRIPTS_DIR`, `${transcriptsDirectory}/${agent.toLowerCase()}`],
+));
 const callbacksFile = `/tmp/muxdeck-playwright-${runId}-callbacks.sqlite3`;
 const callbackTokenFile = `/tmp/muxdeck-playwright-${runId}-callback-token`;
 const authFile = `/tmp/muxdeck-playwright-${runId}-auth.json`;
@@ -65,6 +69,7 @@ process.env.MUXDECK_PLAYWRIGHT_SUBMITTED_MESSAGES_FILE = submittedMessagesFile;
 process.env.MUXDECK_PLAYWRIGHT_SCROLLBACK_FILE = scrollbackFile;
 process.env.MUXDECK_PLAYWRIGHT_CODEX_HISTORY_FILE = codexHistoryFile;
 process.env.MUXDECK_PLAYWRIGHT_CLAUDE_HISTORY_FILE = claudeHistoryFile;
+process.env.MUXDECK_PLAYWRIGHT_TRANSCRIPTS_DIR = transcriptsDirectory;
 process.env.MUXDECK_PLAYWRIGHT_CALLBACKS_FILE = callbacksFile;
 process.env.MUXDECK_PLAYWRIGHT_CALLBACK_TOKEN_FILE = callbackTokenFile;
 process.env.MUXDECK_PLAYWRIGHT_AUTH_FILE = authFile;
@@ -89,6 +94,7 @@ export default defineConfig({
       MUXDECK_SCROLLBACK_FILE: scrollbackFile,
       MUXDECK_CODEX_HISTORY_FILE: codexHistoryFile,
       MUXDECK_CLAUDE_HISTORY_FILE: claudeHistoryFile,
+      ...transcriptEnvironment,
     },
     command: `MUXDECK_PORT=7684 MUXDECK_TMUX_SOCKET=${socketName} MUXDECK_TITLES_FILE=${titlesFile} MUXDECK_MESSAGES_FILE=${messagesFile} MUXDECK_SNIPPETS_FILE=${snippetsFile} MUXDECK_WORKSPACES_FILE=${workspacesFile} MUXDECK_SHORTCUTS_FILE=${shortcutsFile} MUXDECK_SESSION_REGISTRY_FILE=${sessionRegistryFile} MUXDECK_CALLBACKS_FILE=${callbacksFile} MUXDECK_CALLBACK_TOKEN_FILE=${callbackTokenFile} MUXDECK_AUTH_MODE=server MUXDECK_AUTH_FILE=${authFile} MUXDECK_AUTH_COOKIE_SECURE=false MUXDECK_UPLOADS_DIR=${uploadsDirectory} ${pythonBin} -m tmux_console.app`,
     url: "http://127.0.0.1:7684/mux/login",

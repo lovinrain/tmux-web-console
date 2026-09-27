@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHistorySnapshot, listSubmittedMessages, loadSavedScrollback } from "../api";
+import { createHistorySnapshot, listSubmittedMessages, loadSavedScrollback, loadAgentTranscript } from "../api";
 import type { HistoryPage, Pane } from "../types";
 import {
   DEFAULT_HISTORY_PANEL_WIDTH,
@@ -14,6 +14,7 @@ vi.mock("../api", () => ({
   loadHistoryPage: vi.fn(),
   listSubmittedMessages: vi.fn(),
   loadSavedScrollback: vi.fn(),
+  loadAgentTranscript: vi.fn(),
 }));
 
 const DESKTOP_VIEWPORT_WIDTH = 1200;
@@ -125,6 +126,7 @@ afterEach(() => {
 
 describe("HistoryPanel resizing", () => {
   it("navigates beginning and submitted input without changing the scrollback snapshot", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue({ sources: [], selectedSource: null, status: "unidentified", messages: [], nextCursor: null, partial: false, notice: "No conversation ID recorded." });
     vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
     vi.mocked(loadSavedScrollback).mockResolvedValue({
       part: "beginning", lines: ["Saved opening"], panes: [], selectedPane: null,
@@ -134,7 +136,7 @@ describe("HistoryPanel resizing", () => {
     render(<HistoryPanel pane={pane()} sessionName="agent" sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
     const scrollback = screen.getByRole("tab", { name: "Scrollback" });
     fireEvent.keyDown(scrollback, { key: "ArrowRight" });
-    const beginning = screen.getByRole("tab", { name: "Beginning" });
+    const beginning = screen.getByRole("tab", { name: "Saved beginning" });
     expect(beginning).toHaveFocus();
     expect(beginning).toHaveAttribute("aria-selected", "true");
     await screen.findByText("Saved opening");
@@ -146,15 +148,33 @@ describe("HistoryPanel resizing", () => {
     await screen.findByText(/No Claude Code or Codex conversation ID/);
     expect(listSubmittedMessages).toHaveBeenCalledWith({ sessionName: "agent", identity: "$1:1:1:1" }, "", null, expect.any(AbortSignal));
     fireEvent.keyDown(submitted, { key: "ArrowRight" });
+    const transcript = screen.getByRole("tab", { name: "Transcript" });
+    expect(transcript).toHaveFocus();
+    expect(transcript).toHaveAttribute("aria-selected", "true");
+    await screen.findByText("No conversation ID recorded.");
+    fireEvent.keyDown(transcript, { key: "ArrowRight" });
     expect(scrollback).toHaveFocus();
     expect(scrollback).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(scrollback, { key: "ArrowLeft" });
+    expect(transcript).toHaveFocus();
+    fireEvent.keyDown(transcript, { key: "ArrowLeft" });
     expect(submitted).toHaveFocus();
     fireEvent.keyDown(submitted, { key: "Home" });
-    expect(scrollback).toHaveFocus();
-    fireEvent.keyDown(scrollback, { key: "End" });
+    expect(transcript).toHaveFocus();
+    fireEvent.keyDown(transcript, { key: "End" });
     expect(submitted).toHaveFocus();
     expect(createHistorySnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a Codex transcript first and offers terminal history when it is unavailable", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue({ sources: [], selectedSource: null, status: "missing", messages: [], nextCursor: null, partial: false, notice: "The local transcript was not found." });
+    render(<HistoryPanel pane={{ ...pane(), command: "codex" }} sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
+    await screen.findByText("The local transcript was not found.");
+    expect(createHistorySnapshot).not.toHaveBeenCalled();
+    expect(loadAgentTranscript).toHaveBeenCalledWith({ paneId: "%7", identity: "$1:1:1:1" }, null, null, expect.any(AbortSignal));
+    fireEvent.click(screen.getByRole("button", { name: "Terminal scrollback" }));
+    expect(createHistorySnapshot).toHaveBeenCalledWith("%7");
   });
 
   it("exposes the initial width and desktop bounds through the separator", () => {

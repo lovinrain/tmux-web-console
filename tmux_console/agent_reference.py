@@ -290,7 +290,7 @@ def _looks_like_agent_process(arguments: list[str], agent_type: AgentType) -> bo
 def _uuid_from_explicit_arguments(arguments: list[str]) -> str | None:
     for index, argument in enumerate(arguments):
         candidate: str | None = None
-        if argument in {"--resume", "--session-id", "--conversation-id"}:
+        if argument in {"resume", "--resume", "--session-id", "--conversation-id"}:
             if index + 1 < len(arguments):
                 candidate = arguments[index + 1]
         elif any(
@@ -345,6 +345,18 @@ def _open_reference_paths(
             continue
         if not _path_matches_agent(target, agent_type):
             continue
+        if agent_type == "codex":
+            # In-process Codex workers can keep newer rollouts open in the same
+            # process. Their explicit source marker must not replace the CLI chat.
+            try:
+                header = json.loads(_read_bytes(Path(descriptor.path)).split(b"\n", 1)[0])
+                payload = header.get("payload", {}) if isinstance(header, dict) else {}
+                source = payload.get("source") if isinstance(payload, dict) else None
+                if (isinstance(source, dict) and "subagent" in source
+                        or isinstance(source, str) and source.startswith("subagent")):
+                    continue
+            except (ValueError, RecursionError):
+                pass
         identifiers = UUID_PATTERN.findall(target)
         if not identifiers:
             continue
@@ -379,15 +391,19 @@ def discover_agent_session_id(
             )
             if registered is not None:
                 return registered
-        explicit = _uuid_from_explicit_arguments(arguments)
-        if explicit is not None:
-            return explicit
         candidates = _open_reference_paths(proc_root, process_id, agent_type)
         if candidates:
             # Breadth-first traversal encounters the foreground agent before
             # any nested workers. Do not let a newer subagent file replace the
             # foreground conversation reference.
             return max(candidates)[2]
+        explicit = _uuid_from_explicit_arguments(arguments)
+        if explicit is not None:
+            return explicit
+        # A native foreground agent with no current ID must not borrow its
+        # nested worker's ID. Continue through interpreter/launcher wrappers.
+        if agent_type in {"codex", "claude"} and Path(arguments[0]).name == agent_type:
+            break
         if agent_processes >= MAX_AGENT_PROCESSES:
             break
     if agent_type == "claude" and foreground_process is not None:
@@ -419,6 +435,25 @@ class AgentReferenceDetector:
         self._proc_root = proc_root
         self._cache: dict[str, _CachedReference] = {}
 
+    async def detect_pane(self, pane: Pane | None, *, refresh: bool = False) -> AgentReference:
+        agent_type = classify_agent_type(pane)
+        if pane is None or agent_type is None or pane.process_pid <= 0:
+            return AgentReference(agent_type, None)
+        now = time.monotonic()
+        signature = (pane.process_pid, pane.command, pane.title, agent_type)
+        cached = self._cache.get(pane.id)
+        if not refresh and cached is not None and cached.signature == signature and cached.expires_at > now:
+            return cached.reference
+        async with self._limit:
+            session_id = await asyncio.to_thread(
+                discover_agent_session_id, pane, agent_type, proc_root=self._proc_root,
+                claude_projects_root=self._claude_projects_root,
+            )
+        reference = AgentReference(agent_type, session_id)
+        ttl = self._cache_seconds if session_id is not None else self._missing_cache_seconds
+        self._cache[pane.id] = _CachedReference(signature, now + ttl, reference)
+        return reference
+
     async def detect_sessions(
         self,
         sessions: list[Session],
@@ -427,28 +462,7 @@ class AgentReferenceDetector:
         results: dict[str, AgentReference] = {}
 
         async def inspect(session: Session) -> None:
-            pane = session.active_pane
-            agent_type = classify_agent_type(pane)
-            if pane is None or agent_type is None or pane.process_pid <= 0:
-                results[session.name] = AgentReference(agent_type, None)
-                return
-            signature = (pane.process_pid, pane.command, pane.title, agent_type)
-            cached = self._cache.get(pane.id)
-            if cached is not None and cached.signature == signature and cached.expires_at > now:
-                results[session.name] = cached.reference
-                return
-            async with self._limit:
-                session_id = await asyncio.to_thread(
-                    discover_agent_session_id,
-                    pane,
-                    agent_type,
-                    proc_root=self._proc_root,
-                    claude_projects_root=self._claude_projects_root,
-                )
-            reference = AgentReference(agent_type, session_id)
-            ttl = self._cache_seconds if session_id is not None else self._missing_cache_seconds
-            self._cache[pane.id] = _CachedReference(signature, now + ttl, reference)
-            results[session.name] = reference
+            results[session.name] = await self.detect_pane(session.active_pane)
 
         await asyncio.gather(*(inspect(session) for session in sessions))
         live_panes = {

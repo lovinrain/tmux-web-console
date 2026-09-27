@@ -1,0 +1,86 @@
+# Agent transcripts
+
+Open **Pane scrollback → Transcript** to read the coding agent's local
+conversation. Recognized Codex, Claude Code, Copilot, Cursor, and Grok panes open
+this view first. It can show messages that the terminal replaced with a notice
+such as “Earlier messages are available — press ctrl+t to view the full
+transcript,” or that tmux no longer retains.
+
+Messages appear in conversation order from the beginning. **Load later
+messages** continues through the saved conversation. **Show tool activity**
+includes collapsible tool calls and results; **Copy loaded transcript** copies
+the loaded messages included by that choice. Refresh returns to the beginning
+and includes newly saved records. Transcript text is selectable plain text:
+embedded HTML, scripts, and remote images are not rendered.
+
+**Session history / Agents → Transcript** reads a recorded conversation even
+after its shell ends. When several conversations ran in that tmux session, use
+the conversation selector. Viewing a transcript never resumes an agent, sends
+terminal input, switches the agent into its transcript mode, or changes tmux's
+history limit.
+
+## Sources
+
+| Agent | Native source | Default transcript directory |
+| --- | --- | --- |
+| Codex | `sessions/YYYY/MM/DD/rollout-…-ID.jsonl`, also `archived_sessions/rollout-…-ID.jsonl` | `$CODEX_HOME`, otherwise `~/.codex` |
+| Claude Code | `PROJECT/ID.jsonl` | `$CLAUDE_CONFIG_DIR/projects`, otherwise `~/.claude/projects` |
+| Copilot | `ID/events.jsonl` | `~/.copilot/session-state` |
+| Cursor CLI | `PROJECT/ID/store.db` | `~/.cursor/chats` |
+| Grok | `PROJECT/ID/chat_history.jsonl` | `$GROK_HOME/sessions`, otherwise `~/.grok/sessions` |
+
+Override a directory with `MUXDECK_CODEX_TRANSCRIPTS_DIR`,
+`MUXDECK_CLAUDE_TRANSCRIPTS_DIR`, `MUXDECK_COPILOT_TRANSCRIPTS_DIR`,
+`MUXDECK_CURSOR_TRANSCRIPTS_DIR`, or `MUXDECK_GROK_TRANSCRIPTS_DIR`. The configured
+directory must retain the corresponding layout above. The Muxdeck service user
+must be able to read it. Tests use separate directories for every provider.
+
+Selection uses the recorded conversation ID, never the newest file in a shared
+working directory. Live panes refresh reference detection rather than waiting
+for the inventory cache. Codex's current open rollout takes precedence over an
+old command-line resume argument; rollouts marked as subagents are excluded.
+Session history keeps existing stable history identities, so renaming preserves
+access and reusing a tmux name does not merge conversations. Claude's existing
+reference detector uses PID registrations when available, with legacy detection
+for older versions. An ID that was never detectable cannot be reconstructed by
+the transcript reader.
+
+Only visible user/assistant text and supported tool records are extracted.
+System/developer instructions, provider context, reasoning blocks, encrypted
+reasoning, and image bytes are omitted. Image and file attachments have text
+placeholders. Codex's duplicate event notifications are ignored. Cursor follows
+the ordered message list in its saved root, including committed WAL data,
+rather than showing unrelated or abandoned blobs from SQLite insertion order.
+
+## Availability and limits
+
+Native transcript files are read only and on demand. This feature creates no
+new archive or database schema. If an agent disables logging, removes a file,
+uses a different directory, or changes to an unsupported storage format, Muxdeck
+shows an availability notice. **Terminal scrollback**, **Saved beginning**, and
+the independent **Submitted messages** archive remain available.
+
+The reader cannot recover messages deleted from native storage. Cursor exposes
+its saved active conversation; context removed from that conversation by native
+compaction may be absent even if older internal blobs remain. Grok and Claude
+also depend on what their native files retained. Protect and back up agent
+storage separately if long-term transcript retention is needed. Muxdeck's saved
+terminal-output and submitted-input retention policies are unchanged.
+
+Pages have at most 100 entries (50 by default) and 1 MiB of message text. Each
+entry is capped at 256 KiB and visibly marked if shortened. JSONL records are
+bounded to 16 MiB; each request scans at most 32 MiB or 5,000 records and returns
+a continuation when needed, including when a page contains only metadata.
+Malformed/oversized records produce a partial-result notice. Discovery scans
+fixed native layouts with a 50,000-entry bound and never follows child symlinks.
+
+JSONL pagination fixes the file's original end so appends do not shift the
+pages; identity and boundary fingerprints detect rotation or rewriting.
+Cursor pagination retains the original root's order while its current root
+advances. Changed or removed snapshots require a refresh. Timestamps are shown
+only when present in the native record; Cursor and Grok may have no per-message
+timestamp.
+
+Both endpoints require the console's existing authentication and reject
+callback-only tokens. They accept no filesystem path and return no source path
+or native credentials. See [the API reference](API.md#agent-transcripts).
