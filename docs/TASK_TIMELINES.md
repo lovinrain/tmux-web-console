@@ -21,7 +21,7 @@ copied into the journal. Use safe labels without credentials or private content.
 
 ```bash
 python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" phase validation --label "Check the affected behavior"
-python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" run --label "Related frontend tests" -- npm run test:related -- src/components/HistoryPanel.tsx
+python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" run --label "Affected frontend tests" -- npm test -- src/components/HistoryPanel.test.tsx
 python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" run --label "Staged frontend build" -- npm run build
 ```
 
