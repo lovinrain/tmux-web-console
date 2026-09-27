@@ -13,7 +13,7 @@ if (!socketName?.startsWith("muxdeck-playwright-") || !transcriptsDirectory?.sta
 }
 const tmux = ["-L", socketName];
 
-test("Saved beginning finds the first Codex prompt through launchers and separates replies from activity", async ({ page, context }, testInfo) => {
+test("Conversation beginning finds the first Codex prompt through launchers and separates replies from activity", async ({ page, context }, testInfo) => {
   const directory = mkdtempSync(join(tmpdir(), "muxdeck-transcript-fixture-"));
   const identifier = randomUUID();
   const name = `transcript-${process.pid}`;
@@ -80,7 +80,7 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     await expect(activity.getByText("Checking files in a progress update")).toBeVisible();
     await expect(activity.getByText("Detailed tool output")).toBeVisible();
 
-    await page.getByRole("tab", { name: "Saved beginning", exact: true }).click();
+    await page.getByRole("tab", { name: "Conversation beginning", exact: true }).click();
     await expect(page.getByText("The original request before the terminal buffer")).toBeVisible();
     await expect(page.locator(".history-panel")).not.toContainText("Earlier messages are available");
     await page.getByRole("button", { name: "Recorded terminal output", exact: true }).click();

@@ -1,6 +1,6 @@
 # Agent transcripts
 
-Open **Pane scrollback → Transcript** or **Saved beginning** to read the coding agent's local
+Open **Pane scrollback → Transcript** or **Conversation beginning** to read the coding agent's local
 conversation. Recognized Codex, Claude Code, Copilot, Cursor, and Grok panes open
 this view first. It can show messages that the terminal replaced with a notice
 such as “Earlier messages are available — press ctrl+t to view the full
@@ -22,7 +22,7 @@ loaded messages included by the activity choice. Refresh returns to the beginnin
 and includes newly saved records. Transcript text is selectable plain text:
 embedded HTML, scripts, and remote images are not rendered.
 
-For a recognized agent, **Saved beginning** now opens this same native
+For a recognized agent, **Conversation beginning** opens this same native
 conversation at its beginning. **Recorded terminal output** explicitly opens the
 old terminal recording. A captured “Earlier messages are available” notice is
 not presented as the beginning of the conversation. Plain shell panes continue
@@ -86,7 +86,7 @@ rather than showing unrelated or abandoned blobs from SQLite insertion order.
 Native transcript files are read only and on demand. This feature creates no
 new archive or database schema. If an agent disables logging, removes a file,
 uses a different directory, or changes to an unsupported storage format, Muxdeck
-shows an availability notice. **Terminal scrollback**, **Saved beginning**, and
+shows an availability notice. **Terminal scrollback**, **Recorded terminal output**, and
 the independent **Submitted messages** archive remain available.
 
 The reader cannot recover messages deleted from native storage. Cursor exposes

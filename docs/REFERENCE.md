@@ -1716,8 +1716,10 @@ Opening the Scrollback tab runs `tmux capture-pane` and stores the result in mem
 minutes. Older pages come from that immutable snapshot, so live output cannot
 cause duplicate or skipped lines while the user reads.
 
-The **Saved beginning** tab shows persistent opening output, and **Session history →
-Saved output** offers both Beginning and Recent for live or ended sessions.
+The **Conversation beginning** tab reads a coding agent's local transcript from
+its first saved prompt. **Recorded terminal output** shows persistent opening
+output, which plain shell panes open directly under **Saved beginning**.
+**Session history → Saved output** offers both Beginning and Recent for live or ended sessions.
 Each section is bounded to 2,000 terminal rows and 1 MiB of text per pane
 incarnation. A background recorder operates without a browser, approximately
 every five seconds, with unchanged panes sampled at least every thirty seconds.

@@ -177,7 +177,7 @@ describe("HistoryPanel resizing", () => {
     expect(createHistorySnapshot).toHaveBeenCalledWith("%7");
   });
 
-  it.each(["codex", "claude", "copilot", "cursor-agent", "grok"])("opens %s Saved beginning at the native first prompt instead of a recorded placeholder", async (command) => {
+  it.each(["codex", "claude", "copilot", "cursor-agent", "grok"])("opens %s Conversation beginning at the native first prompt instead of a recorded placeholder", async (command) => {
     vi.mocked(loadAgentTranscript).mockResolvedValue({
       sources: [], selectedSource: null, status: "available", nextCursor: null, partial: false, notice: null,
       messages: [{ id: "first", role: "user", kind: "prompt", text: "Actual original prompt", timestamp: null, truncated: false }],
@@ -189,7 +189,7 @@ describe("HistoryPanel resizing", () => {
     });
     render(<HistoryPanel pane={{ ...pane(), command }} onClose={vi.fn()} />);
     await screen.findByText("Actual original prompt");
-    fireEvent.click(screen.getByRole("tab", { name: "Saved beginning" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Conversation beginning" }));
     await screen.findByText("Actual original prompt");
     expect(screen.queryByText(/Earlier messages are available/)).not.toBeInTheDocument();
     expect(loadSavedScrollback).not.toHaveBeenCalled();

@@ -66,7 +66,7 @@ export function HistoryPanel({
   const selectView = (next: typeof view) => { setView(next); setRecordedBeginning(false); };
   const showRecordedBeginning = () => { setView("beginning"); setRecordedBeginning(true); };
   const views = sessionName ? ["transcript", "scrollback", "beginning", "submitted"] as const : ["transcript", "scrollback", "beginning"] as const;
-  const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", beginning: "Saved beginning", submitted: "Submitted messages" };
+  const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", beginning: isAgent ? "Conversation beginning" : "Saved beginning", submitted: "Submitted messages" };
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -321,7 +321,7 @@ export function HistoryPanel({
         {page && ((page.alternateOn && page.historySize === 0) || lines.some((line) => line.includes("Earlier messages are available"))) && (
           <div className="history-notice">The terminal may show only part of this conversation.
             {" "}<button type="button" onClick={() => selectView("transcript")}>Read the local agent transcript</button>
-            {" "}Saved beginning and Submitted messages are also available.</div>
+            {" "}{viewLabels.beginning} and Submitted messages are also available.</div>
         )}
 
         <div className="history-scroll" ref={scrollRef}>
