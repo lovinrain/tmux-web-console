@@ -362,6 +362,7 @@ test("callback status shares the top console toolbar and Escape closes its windo
   const toolbar = page.getByRole("group", { name: "Console bars", exact: true });
   const show = toolbar.getByRole("button", { name: "Show callback list", exact: true });
   const tabs = toolbar.getByRole("button", { name: "Session tabs", exact: true });
+  const watch = page.getByRole("button", { name: "Remove bravo-work from callback list", exact: true });
   await expect(show).toBeVisible();
   await expect(show).toContainText("Global 3/7");
   await expect(show).toContainText("Local 1/2");
@@ -375,8 +376,38 @@ test("callback status shares the top console toolbar and Escape closes its windo
     expect(statusBox.x + statusBox.width).toBeLessThanOrEqual(tabsBox.x);
     expect(Math.abs(statusBox.y - tabsBox.y)).toBeLessThan(2);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const labelBox = (await show.locator(".workspace-callback-label").boundingBox())!;
+    const countsBox = (await show.locator(".workspace-callback-counts").boundingBox())!;
+    expect(Math.abs((labelBox.y + labelBox.height / 2) - (countsBox.y + countsBox.height / 2))).toBeLessThan(2);
+    await expect(show.locator(".workspace-callback-label")).toHaveCSS("font-size", "11px");
+    await expect(show).toHaveCSS("box-shadow", "none");
     await toolbar.screenshot({ path: testInfo.outputPath(`callback-toolbar-${theme}.png`) });
+    await watch.scrollIntoViewIfNeeded();
+    await expect(watch).toHaveAttribute("aria-pressed", "true");
+    await expect(watch.locator("span")).toHaveText("Watching");
+    expect((await watch.locator("span").boundingBox())!.width).toBeGreaterThan(35);
+    const contrast = await watch.evaluate((element) => {
+      const luminance = (color: string) => {
+        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((channel) => {
+          const value = channel / 255;
+          return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+        });
+        return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      };
+      const style = getComputedStyle(element);
+      const text = luminance(style.color), background = luminance(style.backgroundColor);
+      return (Math.max(text, background) + 0.05) / (Math.min(text, background) + 0.05);
+    });
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
+    await watch.screenshot({ path: testInfo.outputPath(`callback-watching-${theme}.png`) });
   }
+  await watch.click();
+  const add = page.getByRole("button", { name: "Add bravo-work to callback list", exact: true });
+  await expect(add).toHaveAttribute("aria-pressed", "false");
+  await expect(add.locator("span")).toHaveText("Callback");
+  await add.screenshot({ path: testInfo.outputPath("callback-idle-light.png") });
+  await add.click();
+  await expect(watch).toHaveAttribute("aria-pressed", "true");
   await show.click();
   const panel = page.getByRole("dialog", { name: "Callback list", exact: true });
   await expect(panel).toBeFocused();

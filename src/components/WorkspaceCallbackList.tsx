@@ -780,7 +780,6 @@ export function WorkspaceCallbackList({
   const sessionMap = activeScope === "global" ? globalSessionMap : localSessionMap;
   const globalReadyCount = globalSessionList.filter((name) => callbackStatus(globalSessionMap.get(name)).tone === "ready").length;
   const localReadyCount = localSessionList.filter((name) => callbackStatus(localSessionMap.get(name)).tone === "ready").length;
-  const globalWorkingCount = globalSessionList.filter((name) => callbackStatus(globalSessionMap.get(name)).working).length;
   const availableSessions = sessions.filter((item) => !visibleCallbackSessions.includes(item.name));
   const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
   const readyCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).tone === "ready").length;
@@ -1330,7 +1329,7 @@ export function WorkspaceCallbackList({
   const summaryButton = <button
         type="button"
         ref={summaryRef}
-        className={`workspace-callback-card${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}${(globalEnabled ? globalWorkingCount : workingCount) > 0 ? " has-working" : ""}`}
+        className={`workspace-callback-card${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}`}
         aria-label={panel.open ? "Hide callback list" : "Show callback list"}
         aria-description={summaryDescription}
         aria-expanded={panel.open}
@@ -1351,19 +1350,18 @@ export function WorkspaceCallbackList({
       >
         <HistoryIcon />
         <span>
-          <strong>Callback</strong>
+          <strong className="workspace-callback-label">Callbacks</strong>
           {globalEnabled ? <span className="workspace-callback-counts" aria-live="polite" aria-atomic="true">
-            <small>Global <b>{globalReadyCount}/{globalSessionList.length}</b></small>
-            <span aria-hidden="true">·</span>
-            <small>Local <b>{localReadyCount}/{localSessionList.length}</b></small>
+            <small data-ready={globalReadyCount > 0}>Global <b>{globalReadyCount}/{globalSessionList.length}</b></small>
+            <small data-ready={localReadyCount > 0}>Local <b>{localReadyCount}/{localSessionList.length}</b></small>
             <span className="workspace-callback-count-hint">ready</span>
           </span> : <small>{summaryLabel}</small>}
         </span>
-        {(panel.open || panel.pinned) && <em aria-hidden="true">{panel.pinned ? "PIN" : "OPEN"}</em>}
+        {panel.pinned ? <em aria-hidden="true">PIN</em> : <ChevronRightIcon className="workspace-callback-chevron" />}
       </button>;
   return (
     <>
-      {globalEnabled ? <div className="workspace-callback-status-control">{summaryButton}</div> : summaryButton}
+      <div className="workspace-callback-status-control">{summaryButton}</div>
       {floatingPanel && createPortal(floatingPanel, document.body)}
     </>
   );

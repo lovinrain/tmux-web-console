@@ -4,32 +4,159 @@
     align-items: center;
     flex: 0 0 auto;
   }
-  .workspace-callback-status-control > .workspace-callback-card {
-    position: relative;
+
+  /* Override the older floating-card presentation in both theme layers. */
+  html .workspace-callback-status-control > button.workspace-callback-card {
     display: inline-flex;
-    flex: 0 1 auto;
-    gap: 6px;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 7px;
     width: auto;
     min-width: 0;
     height: 30px;
     min-height: 30px;
-    padding: 2px 6px;
+    padding: 0 9px;
+    color: var(--paper);
+    background: var(--ink-raised);
     border: 1px solid var(--line);
-    border-radius: 4px;
-    background: transparent;
+    border-radius: 6px;
     box-shadow: none;
     transform: none;
+    font-family: "Space Grotesk Variable", sans-serif;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background 120ms ease, border-color 120ms ease;
   }
-  .workspace-callback-status-control > .workspace-callback-card:is(:hover, :focus-visible, .window-open) {
-    border-color: var(--callback-accent);
+
+  html .workspace-callback-status-control > button.workspace-callback-card:is(:hover, .window-open) {
+    background: var(--ink-soft);
+    border-color: var(--muted);
+  }
+
+  html .workspace-callback-status-control > button.workspace-callback-card:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+
+  html .workspace-callback-status-control > button.workspace-callback-card > svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    color: var(--muted);
+  }
+
+  html .workspace-callback-status-control > button.workspace-callback-card > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  html .workspace-callback-status-control .workspace-callback-card .workspace-callback-label {
+    color: var(--paper);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .workspace-callback-counts {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding-left: 9px;
+    border-left: 1px solid var(--line);
+  }
+
+  html .workspace-callback-status-control .workspace-callback-card small {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    overflow: visible;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  html .workspace-callback-status-control .workspace-callback-card small b {
+    color: var(--paper);
+    font-size: 11px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  html .workspace-callback-status-control .workspace-callback-card small[data-ready="true"] b {
+    color: var(--amber);
+  }
+
+  .workspace-callback-count-hint { color: var(--muted); font-size: 10px; }
+  .workspace-callback-status-control .workspace-callback-chevron { transition: rotate 120ms ease; }
+  .workspace-callback-status-control .window-open .workspace-callback-chevron { rotate: 90deg; }
+
+  html .workspace-callback-status-control > button.workspace-callback-card > em {
+    position: static;
+    padding: 3px 4px;
+    color: var(--muted);
+    background: var(--ink-soft);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+
+  html .console-actions button.callback-session-toggle {
+    width: auto;
+    gap: 6px;
+    padding: 0 10px;
+    color: var(--paper);
     background: var(--ink-raised);
+    border-color: var(--line);
+    border-radius: 6px;
+    font-family: "Space Grotesk Variable", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
   }
-  .workspace-callback-status-control .workspace-callback-card > svg { width: 12px; height: 12px; }
-  .workspace-callback-status-control .workspace-callback-card > span { display: grid; gap: 2px; }
-  .workspace-callback-status-control .workspace-callback-card strong { font-size: 8px; }
-  .workspace-callback-status-control .workspace-callback-card small { font-size: 9px; font-weight: 400; color: var(--muted); }
-  .workspace-callback-status-control .workspace-callback-card small b { color: var(--paper); font-variant-numeric: tabular-nums; }
-  .workspace-callback-status-control .workspace-callback-card > em { position: static; font-size: 7px; }
-  .workspace-callback-counts { display: flex; align-items: baseline; gap: 8px; color: var(--muted); }
-  .workspace-callback-count-hint { font-size: 9px; }
+
+  html .console-actions button.callback-session-toggle:hover:not(:disabled) {
+    background: var(--ink-soft);
+    border-color: var(--muted);
+  }
+
+  html .console-actions button.callback-session-toggle.active {
+    color: #281900;
+    background: #ffbd5a;
+    border-color: #ffbd5a;
+  }
+
+  html .console-actions button.callback-session-toggle.active:hover:not(:disabled) {
+    background: #ffcd82;
+    border-color: #ffcd82;
+  }
+
+  html[data-theme="light"] .console-actions button.callback-session-toggle.active {
+    color: #fffdf8;
+    background: #91520b;
+    border-color: #91520b;
+  }
+
+  html[data-theme="light"] .console-actions button.callback-session-toggle.active:hover:not(:disabled) {
+    background: #744109;
+    border-color: #744109;
+  }
+
+  html .console-actions button.callback-session-toggle:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+
+  html .console-actions button.callback-session-toggle > span {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+  }
+
+  html .console-actions button.callback-session-toggle > svg { width: 15px; height: 15px; }
 }
