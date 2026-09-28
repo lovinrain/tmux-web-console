@@ -1556,6 +1556,7 @@ describe("ConsoleScreen session identity", () => {
   });
 
   it("fills the desktop viewport without remounting the terminal or losing its draft", async () => {
+    const onOpenTabSearch = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([
       session(),
       session(null, "next-session"),
@@ -1565,6 +1566,7 @@ describe("ConsoleScreen session identity", () => {
         sessionName="test"
         onBack={vi.fn()}
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+        onOpenTabSearch={onOpenTabSearch}
       />,
     );
 
@@ -1626,7 +1628,18 @@ describe("ConsoleScreen session identity", () => {
     const focusInput = within(focusControls).getByRole("button", {
       name: "Show floating staged input",
     });
-    expect(within(focusControls).getAllByRole("button")).toHaveLength(6);
+    const focusSessions = within(focusControls).getByRole("button", {
+      name: "Switch workspace session",
+    });
+    expect(focusSessions).toHaveTextContent("Sessions");
+    expect(focusSessions).toHaveAttribute("aria-haspopup", "dialog");
+    expect(focusSessions).toHaveAttribute("aria-expanded", "false");
+    expect(focusSessions).toHaveAttribute("aria-keyshortcuts", "Control+Shift+;");
+    expect(fireEvent.mouseDown(focusSessions)).toBe(false);
+    fireEvent.click(focusSessions);
+    expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
     expect(focusRedraw).toHaveTextContent("Redraw");
     expect(focusInput).toHaveTextContent("Float input");
     expect(focusInput).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Y");
@@ -1748,7 +1761,8 @@ describe("ConsoleScreen session identity", () => {
         />
       </ThemeProvider>,
     );
-    await waitFor(() => expect(shell).toHaveAttribute("data-desktop-focus", "false"));
+    await screen.findByRole("heading", { name: "next-session" });
+    expect(shell).toHaveAttribute("data-desktop-focus", "true");
     expect(shell).toHaveAttribute("data-desktop-focus-shortcuts", "false");
   });
 

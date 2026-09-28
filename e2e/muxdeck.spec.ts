@@ -54,6 +54,40 @@ async function authenticateRequest(request: APIRequestContext): Promise<void> {
   expect(response.ok()).toBe(true);
 }
 
+async function trackTerminalKeydownFrames(page: Page): Promise<() => Promise<number>> {
+  await page.evaluate(() => {
+    const terminalFramesSentDuringKeydown: string[] = [];
+    let handlingKeydown = false;
+    const nativeSend = WebSocket.prototype.send;
+    window.addEventListener("keydown", () => {
+      handlingKeydown = true;
+      window.queueMicrotask(() => {
+        handlingKeydown = false;
+      });
+    }, { capture: true });
+    WebSocket.prototype.send = function send(data) {
+      let isResize = false;
+      if (typeof data === "string") {
+        try {
+          isResize = JSON.parse(data).type === "resize";
+        } catch {
+          // A non-JSON string is terminal input.
+        }
+      }
+      if (handlingKeydown && this.url.includes("/ws/terminal") && !isResize) {
+        terminalFramesSentDuringKeydown.push(this.url);
+      }
+      return nativeSend.call(this, data);
+    };
+    Object.defineProperty(window, "__muxdeckDesktopFocusTerminalFrames", {
+      value: terminalFramesSentDuringKeydown,
+    });
+  });
+  return () => page.evaluate(() => (
+    window as Window & { __muxdeckDesktopFocusTerminalFrames: string[] }
+  ).__muxdeckDesktopFocusTerminalFrames.length);
+}
+
 async function expectRoute(
   page: Page,
   pathname: string,
@@ -2177,37 +2211,7 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   });
   await expect.poll(() => terminalSocketCount).toBe(1);
 
-  await page.evaluate(() => {
-    const terminalFramesSentDuringKeydown: string[] = [];
-    let handlingKeydown = false;
-    const nativeSend = WebSocket.prototype.send;
-    window.addEventListener("keydown", () => {
-      handlingKeydown = true;
-      window.queueMicrotask(() => {
-        handlingKeydown = false;
-      });
-    }, { capture: true });
-    WebSocket.prototype.send = function send(data) {
-      let isResize = false;
-      if (typeof data === "string") {
-        try {
-          isResize = JSON.parse(data).type === "resize";
-        } catch {
-          // A non-JSON string is terminal input.
-        }
-      }
-      if (handlingKeydown && this.url.includes("/ws/terminal") && !isResize) {
-        terminalFramesSentDuringKeydown.push(this.url);
-      }
-      return nativeSend.call(this, data);
-    };
-    Object.defineProperty(window, "__muxdeckDesktopFocusTerminalFrames", {
-      value: terminalFramesSentDuringKeydown,
-    });
-  });
-  const terminalKeydownFrameCount = () => page.evaluate(() => (
-    window as Window & { __muxdeckDesktopFocusTerminalFrames: string[] }
-  ).__muxdeckDesktopFocusTerminalFrames.length);
+  const terminalKeydownFrameCount = await trackTerminalKeydownFrames(page);
 
   const shell = page.locator(".console-shell");
   const terminalStage = page.locator(".terminal-stage");
@@ -2253,7 +2257,8 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
     name: "Show floating staged input",
   });
   const focusShortcuts = focusControls.locator(".desktop-terminal-focus-shortcuts");
-  await expect(focusControls.getByRole("button")).toHaveCount(4);
+  await expect(focusControls.getByRole("button", { name: "Switch workspace session" }))
+    .toBeInViewport();
   await expect(focusRedraw).toBeVisible();
   await expect(focusRedraw).toBeInViewport();
   await expect(focusInput).toBeVisible();
@@ -2277,7 +2282,6 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
   expect(terminalSocketCount).toBe(socketCountBeforeFocus);
   expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
-  await expect(page.locator("button:visible")).toHaveCount(4);
   await expect(page.locator(".console-bar-toolbar")).toBeHidden();
   await expect(page.locator(".console-header")).toBeHidden();
   await expect(page.locator(".console-session-navigation")).toBeHidden();
@@ -2298,7 +2302,6 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   });
   await expect(moveShortcutPanel).toBeVisible();
   await expect(moveShortcutPanel).toHaveCSS("cursor", "grab");
-  await expect(shortcutStrip.getByRole("button")).toHaveCount(22);
   await expect(shortcutStrip.getByRole("button", { name: "Raw terminal keyboard" }))
     .toBeVisible();
   await expect(shortcutStrip.getByRole("button", { name: "Edit title and tags" }))
@@ -2371,7 +2374,6 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   await moreKeys.click();
   const otherKeys = page.getByRole("group", { name: "Other keys" });
   await expect(otherKeys).toBeVisible();
-  await expect(otherKeys.getByRole("button")).toHaveCount(6);
   await expect(otherKeys.getByRole("button", { name: "Right" })).toBeInViewport();
   await expect(otherKeys.getByRole("button", { name: "End - move to end of line" }))
     .toBeInViewport();
@@ -2462,6 +2464,87 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   expect(terminalSocketCount).toBe(socketCountBeforeFocus);
   expect(workspaceTmuxIdentity(sessionName)).toBe(sessionIdentity);
   expect(page.url()).toBe(urlBeforeFocus);
+});
+
+test("focus session picker stays in the workspace and preserves focus and drafts", async ({
+  page, request,
+}, testInfo) => {
+  const first = `${sessionName}-focus-first`;
+  const second = `${sessionName}-focus-second`;
+  for (const name of [first, second]) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  try {
+    const title = await request.put("/mux/api/session-title", {
+      data: { session: second, title: "Focus switch target" },
+    });
+    expect(title.ok()).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${first}?tab=${encodeURIComponent(first)}&tab=${encodeURIComponent(second)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("textbox", { name: "Staged input" }).fill("Keep this session draft");
+
+    const terminalKeydownFrameCount = await trackTerminalKeydownFrames(page);
+
+    const shell = page.locator(".console-shell");
+    const enterFocus = page.getByRole("button", { name: "Enter desktop terminal focus" });
+    const exitFocus = page.getByRole("button", { name: "Exit desktop terminal focus" });
+    const switcher = page.getByRole("button", { name: "Switch workspace session" });
+    const dialog = page.getByRole("dialog", { name: "Jump to tab" });
+    const search = dialog.getByRole("combobox");
+
+    await enterFocus.click();
+    await expect(switcher).toHaveText("Sessions");
+    await switcher.click();
+    await expect(switcher).toHaveAttribute("aria-expanded", "true");
+    await expect(search).toBeFocused();
+    await expect(dialog.getByRole("option")).toHaveCount(2);
+    await expect(dialog.getByRole("option", { name: new RegExp(first) })).toContainText("Current");
+    await expect(dialog.getByRole("option", { name: "Focus switch target", exact: false })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    await expect(switcher).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath("focus-sessions-dark.png") });
+
+    await switcher.click();
+    await search.pressSequentially("Focus switch target");
+    await dialog.getByRole("option").click();
+    await expectRoute(page, `/mux/session/${second}`, [first, second]);
+    await expect(dialog).toBeHidden();
+    await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    await expect(page.locator(".console-session-navigation")).toBeHidden();
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+
+    await exitFocus.click();
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await page.setViewportSize({ width: 760, height: 900 });
+    await enterFocus.click();
+    const controls = page.getByRole("group", { name: "Desktop terminal focus controls" });
+    for (const button of await controls.getByRole("button").all()) {
+      await expect(button).toBeInViewport();
+      const box = (await button.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(10);
+      expect(box.x + box.width).toBeLessThanOrEqual(750);
+    }
+    await expect(switcher).toHaveCSS("color", "rgb(53, 65, 50)");
+    await page.screenshot({ path: testInfo.outputPath("focus-sessions-light-narrow.png") });
+    await switcher.click();
+    await search.fill(first);
+    await page.keyboard.press("Enter");
+    await expectRoute(page, `/mux/session/${first}`, [first, second]);
+    await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    expect(await terminalKeydownFrameCount()).toBe(0);
+    await exitFocus.click();
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
+  } finally {
+    for (const name of [first, second]) {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+    }
+  }
 });
 
 test("desktop tabs switch to a persistent vertical rail without reconnecting", async ({

@@ -3690,35 +3690,41 @@ html[data-theme="light"] .jump-live {
   box-shadow: 0 8px 24px rgba(65, 55, 38, 0.24);
 }
 
-html[data-theme="light"] .desktop-terminal-focus-redraw,
-html[data-theme="light"] .desktop-terminal-focus-input,
-html[data-theme="light"] .desktop-terminal-focus-shortcuts,
-html[data-theme="light"] .desktop-terminal-focus-exit {
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit {
   color: #354132;
   background: rgba(255, 253, 248, 0.92);
   border-color: #9eaa99;
   box-shadow: 0 8px 26px rgba(65, 55, 38, 0.24);
 }
 
-html[data-theme="light"] .desktop-terminal-focus-redraw:hover,
-html[data-theme="light"] .desktop-terminal-focus-redraw:focus-visible,
-html[data-theme="light"] .desktop-terminal-focus-input:hover,
-html[data-theme="light"] .desktop-terminal-focus-input:focus-visible,
-html[data-theme="light"] .desktop-terminal-focus-shortcuts:hover,
-html[data-theme="light"] .desktop-terminal-focus-shortcuts:focus-visible,
-html[data-theme="light"] .desktop-terminal-focus-exit:hover,
-html[data-theme="light"] .desktop-terminal-focus-exit:focus-visible {
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:focus-visible,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:focus-visible,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input:focus-visible,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts:focus-visible,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-exit:focus-visible {
   color: #fff;
   background: #557c1d;
   border-color: #557c1d;
 }
 
-html[data-theme="light"] .desktop-terminal-focus-input[aria-expanded="true"],
-html[data-theme="light"] .desktop-terminal-focus-input[aria-expanded="true"]:hover,
-html[data-theme="light"] .desktop-terminal-focus-input[aria-expanded="true"]:focus-visible,
-html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"],
-html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:hover,
-html[data-theme="light"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:focus-visible {
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions[aria-expanded="true"],
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions[aria-expanded="true"]:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions[aria-expanded="true"]:focus-visible,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input[aria-expanded="true"],
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input[aria-expanded="true"]:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-input[aria-expanded="true"]:focus-visible,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts[aria-expanded="true"],
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-shortcuts[aria-expanded="true"]:focus-visible {
   color: #fff;
   background: #087a70;
   border-color: #087a70;

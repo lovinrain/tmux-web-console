@@ -4723,6 +4723,8 @@ function AppRoutes() {
         onBack={returnToDashboard}
         dashboardWindowHref={dashboardWindowHref}
         workspaceOverlayOpen={recentsOpen}
+        onOpenTabSearch={openTabSearch}
+        tabSearchOpen={tabSearchOpen}
         mobileMode={mobileConsoleMode}
         onMobileModeChange={setMobileConsoleMode}
         onOpenWorkspaceOverview={openRecents}

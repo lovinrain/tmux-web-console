@@ -133,6 +133,8 @@ interface ConsoleScreenProps {
   workspaceLinks?: ReactNode;
   callbackControl?: ReactNode;
   sessionNavigation?: ReactNode;
+  onOpenTabSearch?: () => void;
+  tabSearchOpen?: boolean;
   workspaceOverlayOpen?: boolean;
   mobileMode?: MobileConsoleMode;
   onMobileModeChange?: (mode: MobileConsoleMode) => void;
@@ -590,6 +592,8 @@ export function ConsoleScreen({
   workspaceLinks: providedWorkspaceLinks,
   callbackControl: providedCallbackControl,
   sessionNavigation: providedSessionNavigation,
+  onOpenTabSearch,
+  tabSearchOpen = false,
   workspaceOverlayOpen: providedWorkspaceOverlayOpen = false,
   mobileMode,
   onMobileModeChange,
@@ -1455,7 +1459,7 @@ export function ConsoleScreen({
     setPaneId(null);
     setMobileDistractionFreeMode(null);
     setDesktopCopyMode(false);
-    setDesktopTerminalFocus(false);
+    // Keep the chosen desktop view while moving between workspace sessions.
     setDesktopFocusShortcutsOpen(false);
     resetDesktopFocusShortcutsPosition();
     setHistoryOpen(false);
@@ -2874,6 +2878,22 @@ export function ConsoleScreen({
             role="group"
             aria-label="Desktop terminal focus controls"
           >
+            {!ephemeral && onOpenTabSearch && (
+              <button
+                type="button"
+                className="desktop-terminal-focus-sessions"
+                aria-label="Switch workspace session"
+                aria-haspopup="dialog"
+                aria-expanded={tabSearchOpen}
+                aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-find-tab"])}
+                title="Switch to another session in this workspace"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={onOpenTabSearch}
+              >
+                <ListIcon />
+                <span>Sessions</span>
+              </button>
+            )}
             <button
               type="button"
               className="desktop-terminal-focus-redraw"
