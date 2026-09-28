@@ -595,6 +595,15 @@ function buildWorkspaceCommands({
       disabledReason: "Open a live session first.",
     }, "terminal-return-live"),
     shortcutCommand({
+      id: "terminal-scrollback",
+      label: "Open scrollback",
+      description: "Open the current pane's scrollback and recorded session output.",
+      category: "Terminal",
+      keywords: ["history", "transcript", "past output", "scrollback"],
+      disabled: !snippetSessionAvailable,
+      disabledReason: "Open a session first.",
+    }, "terminal-scrollback"),
+    shortcutCommand({
       id: "terminal-page-up",
       label: "Preferred page up",
       description: "Use the highlighted paging method for the current agent.",

@@ -65,6 +65,9 @@ describe("shortcut helpers", () => {
       .toBe("Ctrl+Shift+H");
     expect(directShortcutLabel(DEFAULT_SHORTCUT_BINDINGS["view-floating-input"]))
       .toBe("Ctrl+Shift+Y");
+    expect(directShortcutLabel(DEFAULT_SHORTCUT_BINDINGS["terminal-scrollback"]))
+      .toBe("Ctrl+Shift+P");
+    expect(shortcutConflictMessages(DEFAULT_SHORTCUT_BINDINGS)).toEqual([]);
 
     const duplicate = cloneShortcutBindings(DEFAULT_SHORTCUT_BINDINGS);
     duplicate["session-end"].launcher = "KeyR";
@@ -75,34 +78,36 @@ describe("shortcut helpers", () => {
 });
 
 describe("ShortcutSettingsProvider", () => {
-  it.each(["none", "direct", "launcher", "both"] as const)(
-    "adds the snippet binding to older responses while preserving occupied layers: %s",
-    async (occupied) => {
+  it.each([
+    ["input-insert-snippet", "KeyI"], ["terminal-scrollback", "KeyP"],
+  ] as const)("adds %s to older responses without overwriting occupied layers", async (action, code) => {
+    for (const occupied of ["none", "direct", "launcher", "both"]) {
       const occupiedLayers = (["direct", "launcher"] as const).filter((layer) => (
         occupied === "both" || occupied === layer
       ));
       const previous = snapshot();
-      delete previous.bindings["input-insert-snippet"];
+      delete previous.bindings[action];
       previous.bindings["shortcut-launcher"].direct = "KeyX";
-      for (const layer of occupiedLayers) previous.bindings["command-palette"][layer] = "KeyI";
+      for (const layer of occupiedLayers) previous.bindings["command-palette"][layer] = code;
       getShortcutSettingsMock.mockResolvedValue(previous);
       function KeymapProbe() {
         const { status, bindings } = useShortcutSettings();
         return <output data-testid="keymap">{JSON.stringify({ status, bindings })}</output>;
       }
-      render(<ShortcutSettingsProvider><KeymapProbe /></ShortcutSettingsProvider>);
+      const view = render(<ShortcutSettingsProvider><KeymapProbe /></ShortcutSettingsProvider>);
 
       await waitFor(() => expect(screen.getByTestId("keymap")).toHaveTextContent('"status":"ready"'));
       const result = JSON.parse(screen.getByTestId("keymap").textContent || "{}");
-      expect(result.bindings["input-insert-snippet"]).toEqual({
-        direct: occupiedLayers.includes("direct") ? null : "KeyI",
-        launcher: occupiedLayers.includes("launcher") ? null : "KeyI",
+      expect(result.bindings[action]).toEqual({
+        direct: occupiedLayers.includes("direct") ? null : code,
+        launcher: occupiedLayers.includes("launcher") ? null : code,
       });
       for (const [action, binding] of Object.entries(previous.bindings)) {
         expect(result.bindings[action]).toEqual(binding);
       }
-    },
-  );
+      view.unmount();
+    }
+  });
 
   it("edits, persists, and immediately applies direct and shortcut-window keys", async () => {
     const runEnd = vi.fn();

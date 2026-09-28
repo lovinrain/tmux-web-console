@@ -13,12 +13,13 @@ from typing import Any
 
 LOGGER = logging.getLogger("muxdeck.shortcuts")
 MAX_SHORTCUT_REVISION = (1 << 53) - 1
-SHORTCUT_DOCUMENT_VERSION = 7
+SHORTCUT_DOCUMENT_VERSION = 8
 PREVIOUS_SHORTCUT_DOCUMENT_VERSION = 2
 LEGACY_SHORTCUT_DOCUMENT_VERSION = 1
 QUICK_SESSION_ACTION = "workspace-quick-new-session"
 CALLBACK_ACTION = "workspace-callback"
 INSERT_SNIPPET_ACTION = "input-insert-snippet"
+SCROLLBACK_ACTION = "terminal-scrollback"
 FLOATING_INPUT_ACTION = "view-floating-input"
 FLOATING_TERMINAL_ACTION = "view-floating-terminal"
 PANE_NAVIGATION_ACTION = "view-pane-navigation"
@@ -54,6 +55,7 @@ DEFAULT_SHORTCUT_BINDINGS: dict[str, dict[str, str | None]] = {
     "command-palette": _binding("KeyH", "KeyH"),
     "shortcut-launcher": _binding("KeyZ", None),
     INSERT_SNIPPET_ACTION: _binding("KeyI", "KeyI"),
+    SCROLLBACK_ACTION: _binding("KeyP", "KeyP"),
     "workspace-new-session": _binding("KeyB", "KeyB"),
     # K is reserved for the direct callback toggle; quick session creation
     # remains available from the Z shortcut window (Z, then K).
@@ -200,13 +202,15 @@ def _validate_stored_bindings(
         4,
         5,
         6,
+        7,
     }:
         raise ValueError("unsupported document version")
     if not isinstance(value, dict):
         return validate_bindings(value)
 
     current_actions = set(DEFAULT_SHORTCUT_BINDINGS)
-    version_six_actions = current_actions - {INSERT_SNIPPET_ACTION}
+    version_seven_actions = current_actions - {SCROLLBACK_ACTION}
+    version_six_actions = version_seven_actions - {INSERT_SNIPPET_ACTION}
     version_five_actions = version_six_actions - {CALLBACK_ACTION}
     version_four_actions = version_five_actions - {PANE_NAVIGATION_ACTION}
     version_three_actions = version_four_actions - {FLOATING_TERMINAL_ACTION}
@@ -214,7 +218,9 @@ def _validate_stored_bindings(
     version_one_actions = version_two_actions - {QUICK_SESSION_ACTION}
     if set(value) == set(DEFAULT_SHORTCUT_BINDINGS):
         return validate_bindings(value)
-    allowed_actions = [version_six_actions]
+    allowed_actions = [version_seven_actions]
+    if version <= 6:
+        allowed_actions.append(version_six_actions)
     if version <= 5:
         allowed_actions.append(version_five_actions)
     if version <= 4:
@@ -267,6 +273,8 @@ def _validate_stored_bindings(
             add_available_binding(CALLBACK_ACTION, "KeyK")
     if INSERT_SNIPPET_ACTION not in upgraded:
         add_available_binding(INSERT_SNIPPET_ACTION, "KeyI")
+    if SCROLLBACK_ACTION not in upgraded:
+        add_available_binding(SCROLLBACK_ACTION, "KeyP")
     return validate_bindings(upgraded)
 
 

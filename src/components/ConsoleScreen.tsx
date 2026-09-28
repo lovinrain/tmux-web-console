@@ -95,6 +95,7 @@ import {
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { ScrollControlIcon } from "./ScrollControlIcon";
+import { ScrollButton } from "./ScrollButton";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
@@ -280,6 +281,7 @@ interface DesktopFocusShortcutsDrag {
 type DesktopSessionShortcut = "end" | "rename";
 type DesktopConsoleShortcutAction =
   | "input-insert-snippet"
+  | "terminal-scrollback"
   | "view-terminal-focus"
   | "view-floating-input"
   | "view-floating-terminal"
@@ -829,6 +831,7 @@ export function ConsoleScreen({
   // Track actual scrolling separately from the agent recommendation so Live
   // can leave an outstanding tmux request before returning to the application.
   const scrollTargetKey = JSON.stringify([sessionName, session?.id, pane?.id]);
+  const scrollRepeatContext = JSON.stringify([scrollTargetKey, scrollAgentKind]);
   const applicationReturnMode = applicationScrollTargets.has(scrollTargetKey)
     ? "application"
     : preferredScrollMode;
@@ -1650,11 +1653,11 @@ export function ConsoleScreen({
     }
     return accepted;
   }, [scrollTargetKey, updatePendingTmuxScroll]);
-  const scrollApplication = useCallback(async (direction: "up" | "down") => {
+  const scrollApplication = useCallback(async (direction: "up" | "down"): Promise<boolean> => {
     if (
       !nativeScrollProfile || connection !== "live"
       || applicationScrollRequestsRef.current.has(scrollTargetKey)
-    ) return;
+    ) return false;
     const version = ++scrollActionVersionRef.current;
     applicationScrollRequestsRef.current.set(scrollTargetKey, version);
     setApplicationScrollPendingTargets((current) => new Set([...current, scrollTargetKey]));
@@ -1666,7 +1669,7 @@ export function ConsoleScreen({
         active.scrollTargetKey !== scrollTargetKey
         || active.connection !== "live"
         || scrollActionVersionRef.current !== version
-      ) return;
+      ) return false;
       if (result?.status === "accepted" && (!result.paneId || result.paneId === pane?.id)) {
         tmuxScrollResetVersionRef.current = version;
         forgetTmuxScrollTarget();
@@ -1676,6 +1679,7 @@ export function ConsoleScreen({
           return next;
         });
         trackScrollUsed("application");
+        return true;
       } else {
         setApplicationScrollMessage({
           target: scrollTargetKey,
@@ -1700,6 +1704,7 @@ export function ConsoleScreen({
         });
       }
     }
+    return false;
   }, [connection, forgetTmuxScrollTarget, nativeScrollProfile, pane?.id, trackScrollUsed, scrollTargetKey]);
   const scrollRecommendedTerminal = useCallback((direction: "up" | "down") => {
     scrollTerminal(direction, preferredScrollMode);
@@ -1791,6 +1796,7 @@ export function ConsoleScreen({
     ): DesktopConsoleShortcutAction | null => {
       const candidates: DesktopConsoleShortcutAction[] = [
         "input-insert-snippet",
+        "terminal-scrollback",
         "view-terminal-focus",
         "view-floating-input",
         "view-floating-terminal",
@@ -1812,6 +1818,10 @@ export function ConsoleScreen({
       repeated = false,
       rememberKeyDown = false,
     ) => {
+      if (action === "terminal-scrollback") {
+        if (!repeated && pane) setHistoryOpen(true);
+        return;
+      }
       if (action === "input-insert-snippet") {
         if (!repeated) setSnippetsOpen(true);
         return;
@@ -1922,6 +1932,7 @@ export function ConsoleScreen({
       const action = (event as CustomEvent<ShortcutActionId>).detail;
       const supportedActions: DesktopConsoleShortcutAction[] = [
         "input-insert-snippet",
+        "terminal-scrollback",
         "view-terminal-focus",
         "view-floating-input",
         "view-floating-terminal",
@@ -1967,6 +1978,7 @@ export function ConsoleScreen({
     visibleBars.sessionTabs,
     workspaceOverlayOpen,
     keyboardShortcutsEnabled,
+    pane,
   ]);
   const saveSessionDetails = useCallback(async (title: string, tags: SessionTag[]) => {
     if (!session) return;
@@ -2428,7 +2440,10 @@ export function ConsoleScreen({
               >
                 {ignoreSize ? "Size protected" : "Fit active"}
               </button>
-              <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback">
+              <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback"
+                aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-scrollback"])}
+                title={`Open pane scrollback${directShortcutLabel(shortcutBindings["terminal-scrollback"])
+                  ? ` (${directShortcutLabel(shortcutBindings["terminal-scrollback"])})` : ""}`}>
                 <HistoryIcon /><span>Scrollback</span>
               </button>
               <button
@@ -2703,8 +2718,9 @@ export function ConsoleScreen({
           onHistoryNavigation={historyNavigation}
         />
         <nav className="terminal-view-controls" aria-label="Terminal view controls">
-          <button
+          <ScrollButton
             type="button"
+            repeatContext={scrollRepeatContext}
             className={preferredScrollMode === "application"
               ? "terminal-view-control preferred-scroll-control"
               : "terminal-view-control"}
@@ -2720,13 +2736,13 @@ export function ConsoleScreen({
                 : ""}`
               : "Send Page Up to the foreground terminal application"}
             disabled={connection !== "live"}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("up", "application")}
+            onActivate={() => scrollTerminal("up", "application")}
           >
             <ScrollControlIcon mode="application" step="page" direction="up" />
-          </button>
-          <button
+          </ScrollButton>
+          <ScrollButton
             type="button"
+            repeatContext={scrollRepeatContext}
             className={preferredScrollMode === "application"
               ? "terminal-view-control preferred-scroll-control"
               : "terminal-view-control"}
@@ -2742,15 +2758,15 @@ export function ConsoleScreen({
                 : ""}`
               : "Send Page Down to the foreground terminal application"}
             disabled={connection !== "live"}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("down", "application")}
+            onActivate={() => scrollTerminal("down", "application")}
           >
             <ScrollControlIcon mode="application" step="page" direction="down" />
-          </button>
+          </ScrollButton>
           {(["up", "down"] as const).map((direction) => (
-            <button
+            <ScrollButton
               key={`application-scroll-${direction}`}
               type="button"
+              repeatContext={scrollRepeatContext}
               className={preferredLineScrollMode === "application"
                 ? "terminal-view-control preferred-scroll-control" : "terminal-view-control"}
               data-scroll-preferred={preferredLineScrollMode === "application" ? "true" : undefined}
@@ -2763,15 +2779,16 @@ export function ConsoleScreen({
                 : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
                 preferredLineScrollMode === "application" ? `; recommended for ${classification.label}` : ""
               }`}
-              disabled={!nativeScrollProfile || connection !== "live" || applicationScrollPendingTargets.has(scrollTargetKey)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => void scrollApplication(direction)}
+              disabled={!nativeScrollProfile || connection !== "live"}
+              busy={applicationScrollPendingTargets.has(scrollTargetKey)}
+              onActivate={() => scrollApplication(direction)}
             >
               <ScrollControlIcon mode="application" step="line" direction={direction} />
-            </button>
+            </ScrollButton>
           ))}
-          <button
+          <ScrollButton
             type="button"
+            repeatContext={scrollRepeatContext}
             className={preferredScrollMode === "tmux"
               ? "terminal-view-control tmux-history preferred-scroll-control"
               : "terminal-view-control tmux-history"}
@@ -2787,13 +2804,13 @@ export function ConsoleScreen({
                 : ""}`
               : "Enter tmux copy mode one page up"}
             disabled={connection !== "live"}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("up", "tmux")}
+            onActivate={() => scrollTerminal("up", "tmux")}
           >
             <ScrollControlIcon mode="tmux" step="page" direction="up" />
-          </button>
-          <button
+          </ScrollButton>
+          <ScrollButton
             type="button"
+            repeatContext={scrollRepeatContext}
             className={preferredScrollMode === "tmux"
               ? "terminal-view-control tmux-history preferred-scroll-control"
               : "terminal-view-control tmux-history"}
@@ -2809,15 +2826,15 @@ export function ConsoleScreen({
                 : ""}`
               : "Page down while tmux copy mode is active"}
             disabled={connection !== "live"}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => scrollTerminal("down", "tmux")}
+            onActivate={() => scrollTerminal("down", "tmux")}
           >
             <ScrollControlIcon mode="tmux" step="page" direction="down" />
-          </button>
+          </ScrollButton>
           {(["up", "down"] as const).map((direction) => (
-            <button
+            <ScrollButton
               key={`tmux-line-${direction}`}
               type="button"
+              repeatContext={scrollRepeatContext}
               className={preferredLineScrollMode === "tmux"
                 ? "terminal-view-control tmux-history preferred-scroll-control"
                 : "terminal-view-control tmux-history"}
@@ -2828,11 +2845,10 @@ export function ConsoleScreen({
                 preferredLineScrollMode === "tmux" ? `; recommended for ${classification.label}` : ""
               }`}
               disabled={connection !== "live"}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => scrollTerminalLine(direction)}
+              onActivate={() => scrollTerminalLine(direction)}
             >
               <ScrollControlIcon mode="tmux" step="line" direction={direction} />
-            </button>
+            </ScrollButton>
           ))}
           <button
             type="button"
@@ -3061,7 +3077,8 @@ export function ConsoleScreen({
         onScrollUsed={trackScrollUsed}
         onScrollLine={scrollTerminalLine}
         applicationScrollProfile={nativeScrollProfile}
-        onScrollApplication={(direction) => void scrollApplication(direction)}
+        onScrollApplication={scrollApplication}
+        scrollContext={scrollRepeatContext}
         applicationScrollPending={applicationScrollPendingTargets.has(scrollTargetKey)}
         returnScrollMode={returnScrollMode}
         onSend={(data) => terminalRef.current?.send(data) ?? false}

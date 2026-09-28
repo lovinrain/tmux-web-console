@@ -33,6 +33,7 @@ const CORE_SHORTCUT_DEFINITIONS = [
   { id: "command-palette", label: "Fuzzy command search", group: "Open", direct: "KeyH", launcher: "KeyH" },
   { id: "shortcut-launcher", label: "Shortcut window", group: "Open", direct: "KeyZ", launcher: null, launcherEditable: false },
   { id: "input-insert-snippet", label: "Insert snippet", group: "Open", direct: "KeyI", launcher: "KeyI" },
+  { id: "terminal-scrollback", label: "Open scrollback", group: "Terminal", direct: "KeyP", launcher: "KeyP" },
   { id: "workspace-new-session", label: "New session", group: "Session", direct: "KeyB", launcher: "KeyB" },
   { id: "workspace-callback", label: "Add or remove callback session", group: "Session", direct: "KeyK", launcher: null },
   { id: "workspace-quick-new-session", label: "Quick temporary session", group: "Session", direct: null, launcher: "KeyK" },
@@ -212,7 +213,8 @@ function normalizePayload(payload: ShortcutSettingsPayload): {
   const missingIds = [...expectedIds].filter((id) => !actualIds.includes(id));
   const legacyMissingCallback = missingIds.includes("workspace-callback");
   const legacyMissingSnippet = missingIds.includes("input-insert-snippet");
-  if (missingIds.some((id) => id !== "workspace-callback" && id !== "input-insert-snippet")
+  const legacyMissingScrollback = missingIds.includes("terminal-scrollback");
+  if (missingIds.some((id) => !["workspace-callback", "input-insert-snippet", "terminal-scrollback"].includes(id))
     || actualIds.some((id) => !expectedIds.has(id))) {
     throw new Error("The shortcut response does not match this Muxdeck version.");
   }
@@ -226,6 +228,7 @@ function normalizePayload(payload: ShortcutSettingsPayload): {
       continue;
     }
     if (!binding && action === "input-insert-snippet" && legacyMissingSnippet) continue;
+    if (!binding && action === "terminal-scrollback" && legacyMissingScrollback) continue;
     if (!binding || typeof binding !== "object") {
       throw new Error(`The shortcut response is missing ${definition.label}.`);
     }
@@ -247,13 +250,17 @@ function normalizePayload(payload: ShortcutSettingsPayload): {
   ) {
     bindings["workspace-quick-new-session"].direct = null;
   }
-  if (legacyMissingSnippet) {
+  for (const [action, code, missing] of [
+    ["input-insert-snippet", "KeyI", legacyMissingSnippet],
+    ["terminal-scrollback", "KeyP", legacyMissingScrollback],
+  ] as const) {
+    if (!missing) continue;
     // New defaults may only claim keys that the existing keymap leaves free.
     for (const layer of ["direct", "launcher"] as const) {
-      const keyOccupied = Object.entries(bindings).some(([action, binding]) => (
-        action !== "input-insert-snippet" && binding[layer] === "KeyI"
+      const keyOccupied = Object.entries(bindings).some(([owner, binding]) => (
+        owner !== action && binding[layer] === code
       ));
-      bindings["input-insert-snippet"][layer] = keyOccupied ? null : "KeyI";
+      bindings[action][layer] = keyOccupied ? null : code;
     }
   }
   const conflicts = shortcutConflictMessages(bindings);

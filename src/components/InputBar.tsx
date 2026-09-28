@@ -33,6 +33,7 @@ import {
 } from "../attachments";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
 import { ScrollControlIcon } from "./ScrollControlIcon";
+import { ScrollButton } from "./ScrollButton";
 import {
   directShortcutAria,
   directShortcutLabel,
@@ -47,6 +48,7 @@ interface InputBarProps {
   sessionId?: string;
   idScope?: string;
   terminalControlId?: string;
+  scrollContext?: string;
   enabled: boolean;
   composerVisible?: boolean;
   shortcutsVisible?: boolean;
@@ -56,7 +58,7 @@ interface InputBarProps {
   onScrollUsed?: (mode: AgentScrollMode) => void;
   onScrollLine?: (direction: "up" | "down") => boolean;
   applicationScrollProfile?: ApplicationScrollProfile | null;
-  onScrollApplication?: (direction: "up" | "down") => void;
+  onScrollApplication?: (direction: "up" | "down") => boolean | void | Promise<boolean | void>;
   applicationScrollPending?: boolean;
   returnScrollMode?: AgentScrollMode;
   mobileDistractionFree?: boolean;
@@ -215,6 +217,8 @@ const OTHER_KEYS: TerminalKey[] = [
 ];
 
 interface TerminalKeyButtonProps {
+  repeatContext?: string;
+  repeatEnabled?: boolean;
   terminalKey: TerminalKey;
   enabled: boolean;
   onSend: (data: string) => boolean;
@@ -224,6 +228,8 @@ interface TerminalKeyButtonProps {
 }
 
 function TerminalKeyButton({
+  repeatContext,
+  repeatEnabled = true,
   terminalKey,
   enabled,
   onSend,
@@ -250,8 +256,10 @@ function TerminalKeyButton({
     }`
     : terminalKey.title;
   return (
-    <button
+    <ScrollButton
       type="button"
+      repeat={Boolean(terminalKey.scrollMode) && repeatEnabled}
+      repeatContext={repeatContext}
       className={[
         "key-button",
         preferred ? "preferred-scroll-key" : "",
@@ -262,10 +270,10 @@ function TerminalKeyButton({
       aria-keyshortcuts={shortcut}
       data-scroll-preferred={preferred ? "true" : undefined}
       title={title}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => {
+      onActivate={() => {
         const sent = onSend(terminalKey.data);
         if (sent && terminalKey.scrollMode) onScrollUsed?.(terminalKey.scrollMode);
+        return sent;
       }}
     >
       {terminalKey.scrollMode && terminalKey.scrollDirection ? (
@@ -276,7 +284,7 @@ function TerminalKeyButton({
           {terminalKey.compact && <span className="compact-key-label">{terminalKey.compact}</span>}
         </>
       )}
-    </button>
+    </ScrollButton>
   );
 }
 
@@ -412,6 +420,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   sessionId,
   idScope,
   terminalControlId = "muxdeck-active-console",
+  scrollContext = JSON.stringify([sessionName, sessionId]),
   enabled,
   composerVisible = true,
   shortcutsVisible = true,
@@ -1396,6 +1405,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               key={terminalKey.label}
               terminalKey={terminalKey}
               enabled={enabled}
+              repeatEnabled={shortcutsVisible}
+              repeatContext={scrollContext}
               onSend={onSend}
               preferredScrollMode={preferredScrollMode}
               preferredScrollLabel={preferredScrollLabel}
@@ -1403,9 +1414,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             />
           ))}
           {(["up", "down"] as const).map((direction) => (
-            <button
+            <ScrollButton
               key={`tmux-line-${direction}`}
               type="button"
+              repeat={shortcutsVisible}
+              repeatContext={scrollContext}
               className={preferredLineScrollMode === "tmux"
                 ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}
               data-scroll-preferred={preferredLineScrollMode === "tmux" ? "true" : undefined}
@@ -1416,11 +1429,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
                 preferredLineScrollMode === "tmux"
                   ? `. Recommended for ${preferredScrollLabel || "this agent"}` : ""
               }`}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onScrollLine?.(direction)}
+              onActivate={() => onScrollLine?.(direction)}
             >
               <ScrollControlIcon mode="tmux" step="line" direction={direction} />
-            </button>
+            </ScrollButton>
           ))}
         </div>
         <div className="scroll-key-family" role="group" aria-label="Application scrolling">
@@ -1429,6 +1441,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               key={terminalKey.label}
               terminalKey={terminalKey}
               enabled={enabled}
+              repeatEnabled={shortcutsVisible}
+              repeatContext={scrollContext}
               onSend={onSend}
               preferredScrollMode={preferredScrollMode}
               preferredScrollLabel={preferredScrollLabel}
@@ -1436,13 +1450,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             />
           ))}
           {(["up", "down"] as const).map((direction) => (
-            <button
+            <ScrollButton
               key={`application-scroll-${direction}`}
               type="button"
+              repeat={shortcutsVisible}
+              repeatContext={scrollContext}
               className={preferredLineScrollMode === "application"
                 ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}
               data-scroll-preferred={preferredLineScrollMode === "application" ? "true" : undefined}
-              disabled={!enabled || !applicationScrollProfile || !onScrollApplication || applicationScrollPending}
+              disabled={!enabled || !applicationScrollProfile || !onScrollApplication}
+              busy={applicationScrollPending}
               aria-label={`Application Scroll ${direction === "up" ? "Up" : "Down"}`}
               aria-controls={terminalControlId}
               title={applicationScrollProfile === "codex"
@@ -1453,11 +1470,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
                 preferredLineScrollMode === "application"
                   ? `. Recommended for ${preferredScrollLabel || "this agent"}` : ""
               }`}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onScrollApplication?.(direction)}
+              onActivate={() => onScrollApplication?.(direction)}
             >
               <ScrollControlIcon mode="application" step="line" direction={direction} />
-            </button>
+            </ScrollButton>
           ))}
         </div>
         {INPUT_EDIT_KEYS.map((terminalKey) => (

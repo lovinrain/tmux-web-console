@@ -11181,6 +11181,12 @@ html.scoped-note-resizing-bottom-left * {
   padding-inline: 4px;
 }
 
+button[data-hold-scroll="true"] {
+  touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .scroll-control-icons {
   display: inline-flex;
   align-items: center;

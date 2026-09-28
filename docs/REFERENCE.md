@@ -185,6 +185,14 @@ The history actions are available while the terminal connection is live; `Focus`
 retained snapshot.
 
 Both layouts also offer `Tmux Line↑` and `Tmux Line↓` directly after the tmux
+page controls. Press and hold any enabled page or line scroll button to scroll
+continuously: one step happens immediately, repeating starts after 350 ms, and
+further steps are spaced by at least 100 ms. Releasing or moving off the button
+stops scrolling. Switching sessions, hiding the controls, disconnecting, or
+leaving the browser also stops the hold. Native application requests finish
+before another step starts; releasing does not queue more steps.
+
+The tmux line buttons follow the tmux
 paging pair. Up enters copy mode without
 a page jump and scrolls one terminal row; Down scrolls one row toward live output
 while copy mode is active. They bypass custom keybindings and do not send input
@@ -1382,7 +1390,10 @@ creates a numbered session in the active pane's directory, `B` opens New session
 entry is automatically visible in the global callback list),
 `F` enters or exits terminal Focus, `Y` toggles the floating staged-input
 window, and `S` shows or hides the session strip. The
-desktop command palette uses `Ctrl+Shift+H`. The console-only
+desktop command palette uses `Ctrl+Shift+H`. `Ctrl+Shift+P` opens the current
+pane's Scrollback, including in terminal Focus. `Open scrollback` is also
+available in command search and as `P` in the shortcut window. Both bindings
+are configurable and are added only if their keys are free. The console-only
 chords are captured before xterm can turn them into terminal input, keep unrelated
 modifier combinations untouched, and pause while a modal dialog or mobile
 workspace layout is active.
@@ -1508,7 +1519,8 @@ browsers, uses revision-checked whole-document writes, and defaults to the
 built-in bindings until the first save. An unreadable, malformed, conflicting,
 or unsupported document makes shortcut persistence unavailable rather than
 overwriting the file; the browser continues with built-in defaults and exposes a
-retry state in the editor. Shortcut documents are version 7. Version 6 loads by
+retry state in the editor. Shortcut documents are version 8. Version 7 loads by
+adding Open scrollback with `P` in each unoccupied layer. Version 6 loads by
 adding Insert snippet with `I` in each unoccupied layer. Version 5 loads by
 adding the workspace callback action with `K`; if the legacy quick temporary
 session still owns `K` directly, that direct binding is moved out of the way while
@@ -1518,7 +1530,7 @@ floating utility terminal with `J`; version 2 adds floating input with `Y`, and
 version 1 first adds the quick temporary session with `K`. Upgrades add each
 later action in order, and a conflict leaves only that layer unbound instead of
 replacing a custom key. The first keymap save atomically rewrites a version 1
-through 6 document as version 7. Keep a pre-upgrade backup when rollback to an
+through 7 document as version 8. Keep a pre-upgrade backup when rollback to an
 older release is possible.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.

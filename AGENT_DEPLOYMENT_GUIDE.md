@@ -504,7 +504,8 @@ characters). Loading a version-1 file does not rewrite it; the next snippet
 save atomically writes version 2. Preserve the pre-upgrade `snippets.json` for
 rollback because older releases reject version 2.
 
-The shortcut file uses schema version 7. Version 6 loads by adding Insert snippet
+The shortcut file uses schema version 8. Version 7 loads by adding Open scrollback
+with `KeyP` only in unoccupied direct/shortcut-window layers. Version 6 loads by adding Insert snippet
 with `KeyI` only in unoccupied direct/shortcut-window layers. Existing custom
 bindings, including the shortcut-window opening chord, remain unchanged.
 Version 5 loads by adding the workspace
@@ -516,8 +517,8 @@ floating utility-terminal binding with `KeyJ`; version 2 adds the floating
 staged-input binding with `KeyY`, and version 1 first adds the quick
 temporary-session binding with `KeyK`. Each legacy upgrade adds the later bindings
 in that order; occupied keys leave only that layer unbound. The next keymap save
-atomically writes version 7. Keep a pre-upgrade copy for rollback: releases that
-only understand versions 1 through 6 reject version 7. An unreadable, malformed,
+atomically writes version 8. Keep a pre-upgrade copy for rollback: releases that
+only understand versions 1 through 7 reject version 8. An unreadable, malformed,
 conflicting, or unsupported shortcut file makes that store unavailable instead
 of overwriting it.
 
@@ -1041,6 +1042,9 @@ For a failed replacement:
    ignored statuses.
    When rolling back to a release that only reads snippet-file version 1,
    preserve the version-2 document and restore the pre-upgrade `snippets.json`.
+   When rolling back to a release that only understands shortcut-file version 7
+   or earlier, preserve the version-8 document and restore the pre-upgrade
+   `shortcuts.json`; the Open scrollback binding is unavailable there.
    When rolling back to a release that only understands shortcut-file version 6
    or earlier, preserve the version-7 document and restore the pre-upgrade
    `shortcuts.json`; the Insert snippet binding is unavailable there.

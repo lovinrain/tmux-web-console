@@ -183,6 +183,34 @@ describe("InputBar", () => {
     ]);
   });
 
+  it("repeats page, tmux-line, and native-line actions while held, stopping when the panel hides", async () => {
+    vi.useFakeTimers();
+    try {
+      const onScrollLine = vi.fn(() => true);
+      const onScrollApplication = vi.fn(async () => true);
+      const view = render(<InputBar {...props} onScrollLine={onScrollLine}
+        applicationScrollProfile="codex" onScrollApplication={onScrollApplication} />);
+      for (const [name, callback] of [
+        ["PgUp", props.onSend], ["Tmux Line Up", onScrollLine], ["Application Scroll Up", onScrollApplication],
+      ] as const) {
+        const button = screen.getByRole("button", { name });
+        fireEvent(button, Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), {
+          pointerId: 1, isPrimary: true,
+        }));
+        await act(() => vi.advanceTimersByTimeAsync(550));
+        expect(callback).toHaveBeenCalledTimes(4);
+        fireEvent(window, Object.assign(new Event("pointerup"), { pointerId: 1 }));
+      }
+      const pageUp = screen.getByRole("button", { name: "PgUp" });
+      fireEvent(pageUp, Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), {
+        pointerId: 1, isPrimary: true,
+      }));
+      view.rerender(<InputBar {...props} shortcutsVisible={false} />);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(props.onSend).toHaveBeenCalledTimes(5);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("marks the recommended paging family and reports only successful sends", () => {
     const onScrollUsed = vi.fn();
     const onSend = vi.fn(() => true);
