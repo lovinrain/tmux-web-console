@@ -47,13 +47,16 @@ import {
   adjacentWorkspacePaneId,
   assignWorkspacePaneSession,
   canSplitWorkspacePane,
+  dropWorkspacePaneSession,
   MAX_WORKSPACE_PANE_LAYOUT_NAME_LENGTH,
   removeWorkspacePane,
   resizeWorkspacePaneSplit,
   splitWorkspacePane,
   workspacePaneLeaves,
+  workspacePaneDropRegion,
   workspacePaneSessions,
   type WorkspacePaneDirection,
+  type WorkspacePaneDropRegion,
 } from "../workspacePaneLayouts";
 import {
   ActivePaneSessionContext,
@@ -95,6 +98,14 @@ interface ResizeDrag {
 }
 
 const PANE_NAVIGATION_REPEAT_MS = 1_500;
+const DROP_REGIONS = ["left", "right", "top", "bottom", "center"] as const;
+const DROP_LABELS: Record<WorkspacePaneDropRegion, string> = {
+  left: "Split left",
+  right: "Split right",
+  top: "Split above",
+  bottom: "Split below",
+  center: "Drop session into this pane",
+};
 
 function sameLayout(left: WorkspacePaneLayout, right: WorkspacePaneLayout): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -127,7 +138,11 @@ export function WorkspacePaneBoard({
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(layout.name);
   const [saving, setSaving] = useState(false);
-  const [sessionDropPaneId, setSessionDropPaneId] = useState<string | null>(null);
+  const [sessionDrop, setSessionDrop] = useState<{
+    paneId: string;
+    region: WorkspacePaneDropRegion;
+    blocked: boolean;
+  } | null>(null);
   const [error, setError] = useState("");
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [paneNavigationArmed, setPaneNavigationArmed] = useState(false);
@@ -144,7 +159,7 @@ export function WorkspacePaneBoard({
   activePaneIdRef.current = activePaneId;
 
   useEffect(() => {
-    const clearDropPreview = () => setSessionDropPaneId(null);
+    const clearDropPreview = () => setSessionDrop(null);
     const cancelOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") clearDropPreview();
     };
@@ -160,7 +175,7 @@ export function WorkspacePaneBoard({
     };
   }, []);
 
-  useEffect(() => setSessionDropPaneId(null), [layout.id, saving]);
+  useEffect(() => setSessionDrop(null), [layout.id, saving]);
 
   useEffect(() => {
     setDraft(layout);
@@ -380,8 +395,14 @@ export function WorkspacePaneBoard({
     event.preventDefault();
     event.stopPropagation();
     const disabled = sessionDropDisabled || isCompactWorkspaceViewport();
-    event.dataTransfer.dropEffect = disabled ? "none" : "move";
-    setSessionDropPaneId(disabled ? null : pane.id);
+    const region = workspacePaneDropRegion(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+    const blocked = region !== "center" && !canSplitWorkspacePane(draftRef.current, pane.id);
+    event.dataTransfer.dropEffect = disabled || blocked ? "none" : "move";
+    setSessionDrop((current) => {
+      if (disabled) return null;
+      return current?.paneId === pane.id && current.region === region && current.blocked === blocked
+        ? current : { paneId: pane.id, region, blocked };
+    });
   };
 
   const dropSession = (
@@ -391,7 +412,7 @@ export function WorkspacePaneBoard({
     if (!hasWorkspaceSessionDrag(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
-    setSessionDropPaneId(null);
+    setSessionDrop(null);
     if (sessionDropDisabled || isCompactWorkspaceViewport()) return;
     const sessionName = readWorkspaceSessionDrag(event.dataTransfer, openSessions);
     if (!sessionName) {
@@ -399,7 +420,13 @@ export function WorkspacePaneBoard({
       return;
     }
     disarmPaneNavigation();
-    assignSession(pane, sessionName);
+    const region = workspacePaneDropRegion(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+    const next = dropWorkspacePaneSession(draftRef.current, pane.id, sessionName, region);
+    if (next === draftRef.current) return;
+    const nextPaneId = workspacePaneLeaves(next.root).find((item) => item.session === sessionName)!.id;
+    activePaneIdRef.current = nextPaneId;
+    setActivePaneId(nextPaneId);
+    void commit(next);
   };
 
   const splitPane = (
@@ -499,13 +526,14 @@ export function WorkspacePaneBoard({
           active && paneNavigationArmed ? "navigation-target" : "",
         ].filter(Boolean).join(" ")}
         data-pane-id={pane.id}
-        data-session-drop-active={sessionDropPaneId === pane.id ? "true" : undefined}
+        data-session-drop-active={sessionDrop?.paneId === pane.id ? "true" : undefined}
+        data-session-drop-region={sessionDrop?.paneId === pane.id ? sessionDrop.region : undefined}
         onDragEnterCapture={(event) => previewSessionDrop(event, pane)}
         onDragOverCapture={(event) => previewSessionDrop(event, pane)}
         onDropCapture={(event) => dropSession(event, pane)}
         onDragLeaveCapture={(event) => {
           if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
-          setSessionDropPaneId((current) => current === pane.id ? null : current);
+          setSessionDrop((current) => current?.paneId === pane.id ? null : current);
         }}
         onPointerDownCapture={() => {
           activePaneIdRef.current = pane.id;
@@ -520,7 +548,7 @@ export function WorkspacePaneBoard({
               className="workspace-pane-session-drag-handle"
               role="img"
               aria-label={`Drag ${selectedSession ? sessionDisplayTitle(selectedSession) : pane.session} to another pane`}
-              title="Drag this session to another pane"
+              title="Drag to a pane edge to split, or the center to replace"
               draggable={!sessionDropDisabled}
               onDragStart={(event) => {
                 if (sessionDropDisabled || isCompactWorkspaceViewport()) {
@@ -605,10 +633,30 @@ export function WorkspacePaneBoard({
               </div>
             )}
         </div>
-        {sessionDropPaneId === pane.id && (
-          <div className="workspace-pane-session-drop" role="status">
-            <MoveIcon />
-            <strong>Drop session into this pane</strong>
+        {sessionDrop?.paneId === pane.id && (
+          <div
+            className="workspace-pane-session-drop"
+            data-region={sessionDrop.region}
+            data-blocked={sessionDrop.blocked ? "true" : undefined}
+          >
+            <div className="workspace-pane-drop-preview" />
+            <svg className="workspace-pane-drop-guides" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M0 0 L30 30 H70 L100 0 M0 100 L30 70 H70 L100 100 M30 30 V70 M70 30 V70" />
+            </svg>
+            {DROP_REGIONS.map((region) => (
+              <span
+                key={region}
+                className={`workspace-pane-drop-label workspace-pane-drop-label-${region}`}
+                data-active={sessionDrop.region === region ? "true" : undefined}
+                data-disabled={region !== "center" && !canSplitWorkspacePane(draft, pane.id) ? "true" : undefined}
+                aria-hidden="true"
+              >
+                {region === "center" ? (pane.session ? "Replace" : "Place here") : DROP_LABELS[region]}
+              </span>
+            ))}
+            <span className="workspace-sr-only" role="status">
+              {sessionDrop.blocked ? "Split limit reached. Drop in the center to replace this pane." : DROP_LABELS[sessionDrop.region]}
+            </span>
           </div>
         )}
         {pane.session && !selectedSession && (

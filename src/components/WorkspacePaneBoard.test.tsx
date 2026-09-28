@@ -143,6 +143,30 @@ describe("WorkspacePaneBoard", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("previews a top split, preserves the target session and activates the dropped session", async () => {
+    const { onChange, terminalDrop } = renderDropBoard();
+    const target = screen.getByTestId("terminal-right");
+    const pane = target.closest(".workspace-pane-leaf")!;
+    vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(paneRect(400, 800));
+    const dataTransfer = sessionTransfer({ [WORKSPACE_SESSION_DRAG_TYPE]: "gamma" });
+    const dragEvent = (type: string) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 600, clientY: 20 });
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+      return event;
+    };
+    fireEvent(target, dragEvent("dragover"));
+    expect(pane).toHaveAttribute("data-session-drop-region", "top");
+    expect(screen.getByRole("status")).toHaveTextContent("Split above");
+    expect(dataTransfer.getData).not.toHaveBeenCalled();
+    fireEvent(target, dragEvent("drop"));
+    await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
+    expect(onChange.mock.calls[0][0].root).toMatchObject({
+      second: { direction: "vertical", first: { session: "gamma" }, second: { id: "right", session: "beta" } },
+    });
+    expect(screen.getByText("gamma", { selector: "[data-testid]" }).closest(".workspace-pane-leaf")).toHaveClass("active");
+    expect(terminalDrop).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["plain text", { "text/plain": "alpha" }, false],
     ["files", { Files: "", [WORKSPACE_SESSION_DRAG_TYPE]: "alpha" }, false],

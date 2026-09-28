@@ -13,6 +13,23 @@ export const MIN_WORKSPACE_PANE_RATIO = 0.15;
 export const MAX_WORKSPACE_PANE_RATIO = 0.85;
 
 export type WorkspacePaneDirection = "left" | "right" | "up" | "down";
+export type WorkspacePaneDropRegion = "left" | "right" | "top" | "bottom" | "center";
+
+export function workspacePaneDropRegion(
+  clientX: number,
+  clientY: number,
+  bounds: Pick<DOMRect, "left" | "top" | "width" | "height">,
+): WorkspacePaneDropRegion {
+  if (!bounds.width || !bounds.height) return "center";
+  const x = (clientX - bounds.left) / bounds.width;
+  const y = (clientY - bounds.top) / bounds.height;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return "center";
+  if (x >= 0.3 && x <= 0.7 && y >= 0.3 && y <= 0.7) return "center";
+  const edges: [WorkspacePaneDropRegion, number][] = [
+    ["left", x], ["right", 1 - x], ["top", y], ["bottom", 1 - y],
+  ];
+  return edges.reduce((nearest, edge) => edge[1] < nearest[1] ? edge : nearest)[0];
+}
 
 export interface WorkspacePaneBounds {
   id: string;
@@ -199,6 +216,30 @@ export function splitWorkspacePane(
     };
   });
   return split ? { ...layout, root } : layout;
+}
+
+export function dropWorkspacePaneSession(
+  layout: WorkspacePaneLayout,
+  paneId: string,
+  session: string,
+  region: WorkspacePaneDropRegion,
+  idFactory: typeof newWorkspacePaneId = newWorkspacePaneId,
+): WorkspacePaneLayout {
+  if (region === "center") return assignWorkspacePaneSession(layout, paneId, session);
+  const target = workspacePaneLeaves(layout.root).find((pane) => pane.id === paneId);
+  // Dropping a session on its own edge must not create an empty split.
+  if (!target || target.session === session || !canSplitWorkspacePane(layout, paneId)) return layout;
+  const newPane: WorkspaceSessionPane = { id: idFactory("pane"), kind: "pane", session: null };
+  const before = region === "left" || region === "top";
+  const root = replaceWorkspacePaneNode(layout.root, paneId, (node) => ({
+    id: idFactory("split"),
+    kind: "split",
+    direction: region === "left" || region === "right" ? "horizontal" : "vertical",
+    ratio: 0.5,
+    first: before ? newPane : node,
+    second: before ? node : newPane,
+  }));
+  return assignWorkspacePaneSession({ ...layout, root }, newPane.id, session);
 }
 
 function removePaneNode(

@@ -11,6 +11,11 @@ python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" start "Describe the 
 python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" phase implementation --label "Investigate and edit"
 ```
 
+When run inside Codex, `start` automatically records `CODEX_THREAD_ID` (falling back
+to `CODEX_SESSION_ID`) and the native transcript location under `CODEX_HOME`.
+It never guesses a session from the working directory or the most recently modified
+transcript. Outside Codex, the command/phase recorder works without native timing.
+
 The journal path is absolute so commands from a worktree or staging directory can
 share it. Mark the next phase **before** doing the work; repeat a phase with a new
 label when useful. Phases are implementation, validation, deployment and reporting.
@@ -54,6 +59,16 @@ leaves a visibly unfinished command rather than reporting a false pass. Commands
 cannot append to a finished journal. `report` also works during a task; choose a
 fresh output directory for each report because prior evidence is never overwritten.
 
+For a linked Codex session, `finish` also starts a bounded, read-only background
+exporter. It tails the native transcript until the overlapping turn completes, so
+the final reply and Codex's reported first-token latency can be included. Waiting
+for that event inside the agent turn would deadlock. The completed report goes to
+`timing-codex/report.md` beside the journal; override it with
+`finish --codex-report-dir PATH`. Its log is `codex-export.log`. It exits after
+15 minutes if completion is not observed and leaves open turns explicitly incomplete.
+The ordinary `report` command remains an immediate snapshot. No service is installed
+or restarted, and the native transcript and finished journal are never changed.
+
 The report includes:
 
 - UTC start/end timestamps and monotonic durations for each phase and command.
@@ -64,8 +79,51 @@ The report includes:
   commands; they are **not automatically idle time**.
 - GitHub workflow/job timestamps when captured, without adding remote execution
   to overlapping local time.
+- Native Codex turn start/completion, full turn duration, first-token delay, final
+  reply boundaries, context compaction, and tool activity when those records exist.
+- Each completed model response's observed window, from turn start, the last tool
+  result, or the preceding response completion to its `token_usage_record`.
+  These are **client response windows**, including preparation, orchestration,
+  waiting and generation. They are not measured HTTP request latency or pure model
+  inference time; the transcript does not provide a per-request send timestamp.
+- An exclusive wall-time breakdown: timed commands, compaction, other recorded
+  tools, response windows, then unobserved time. Higher-priority categories win
+  overlaps. Recorded reasoning/message item durations are shown separately
+  because they cover only part of a streamed model response.
 
-It cannot reconstruct work before recording started or determine what happened
-inside an unlabelled gap. Clock changes do not distort local durations. After a
+Only native event types, IDs, timestamps and numeric token counts are imported.
+Prompts, reasoning text, tool arguments and outputs are not copied. Missing records
+remain missing: older Codex versions may lack turn duration, first-token, item, or
+response-completion metadata. Full Codex turns can extend before/after the command
+journal, and their durations are not added to the journal's elapsed time.
+
+The command recorder cannot reconstruct commands before recording started or
+determine what happened inside an unlabelled gap. Clock changes do not distort
+local command durations; native Codex timestamps use a separate UTC wall clock. After a
 host reboot, keep the old evidence and start a new timeline; do not mix monotonic
 clocks from different boots. Finished reports can still be regenerated.
+
+To associate a journal that was started before automatic linking:
+
+```bash
+python3 scripts/task_timeline.py --file "$MUXTASK_TIMELINE" codex --codex-session-id SESSION_UUID
+```
+
+For a finished journal, supply `--codex-session-id` to `report` instead; this
+backfills a new report without rewriting prior evidence. An explicit native path
+can be passed as `--codex-rollout PATH`; use `--codex-home PATH` for a different
+Codex data directory. If both an ID and path are given, their identities must match.
+
+Analyze every completed task under the recording directory:
+
+```bash
+python3 scripts/task_timeline.py analyze \
+  --root "$HOME/.local/state/muxdeck/deployments" \
+  --output-dir "$MUXTASK_DIR/history"
+```
+
+This uses each journal's own linked session. For older journals known to belong
+to one session, add `--codex-session-id SESSION_UUID` explicitly. The analysis
+includes per-task and phase totals, native turn/response timing, failed commands,
+and GitHub job metadata. Open tasks and gaps between tasks are excluded. Totals sum
+task durations; concurrent tasks must not be interpreted as calendar elapsed time.

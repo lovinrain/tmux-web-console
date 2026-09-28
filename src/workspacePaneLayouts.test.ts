@@ -5,12 +5,14 @@ import {
   assignWorkspacePaneSession,
   canSplitWorkspacePane,
   createWorkspacePaneLayout,
+  dropWorkspacePaneSession,
   reconcileWorkspacePaneLayouts,
   removeWorkspacePane,
   renameWorkspacePaneSession,
   resizeWorkspacePaneSplit,
   splitWorkspacePane,
   workspacePaneLeaves,
+  workspacePaneDropRegion,
   workspacePaneSessions,
 } from "./workspacePaneLayouts";
 
@@ -35,6 +37,58 @@ function pair(): WorkspacePaneLayout {
 }
 
 describe("workspace pane layouts", () => {
+  it.each([
+    [0.1, 0.5, "left"], [0.9, 0.5, "right"],
+    [0.5, 0.1, "top"], [0.5, 0.9, "bottom"],
+    [0.5, 0.5, "center"], [0.3, 0.7, "center"],
+    [0.1, 0.2, "left"], [0.2, 0.1, "top"],
+    [0.8, 0.9, "bottom"], [0.9, 0.8, "right"],
+  ] as const)("maps normalized drop point %s,%s to %s", (x, y, region) => {
+    // A non-square pane at a page offset uses the same visible regions.
+    expect(workspacePaneDropRegion(100 + x * 800, 50 + y * 300, {
+      left: 100, top: 50, width: 800, height: 300,
+    })).toBe(region);
+  });
+
+  it.each([
+    ["left", "horizontal", true], ["right", "horizontal", false],
+    ["top", "vertical", true], ["bottom", "vertical", false],
+  ] as const)("splits on the %s and moves the grabbed session exactly once", (region, direction, before) => {
+    const source = pair();
+    const next = dropWorkspacePaneSession(source, "right", "alpha", region, idFactory());
+    expect(workspacePaneLeaves(source.root).map((pane) => pane.session)).toEqual(["alpha", "beta"]);
+    expect(next.root).toMatchObject({
+      first: { id: "left", session: null },
+      second: {
+        kind: "split", direction, ratio: 0.5,
+        first: before ? { session: "alpha" } : { id: "right", session: "beta" },
+        second: before ? { id: "right", session: "beta" } : { session: "alpha" },
+      },
+    });
+    expect(workspacePaneLeaves(next.root)).toHaveLength(3);
+    expect(workspacePaneSessions(next).filter((session) => session === "alpha")).toHaveLength(1);
+  });
+
+  it("replaces in the center, ignores self-splits and missing targets, and respects pane limits", () => {
+    const source = pair();
+    expect(dropWorkspacePaneSession(source, "right", "alpha", "center"))
+      .toEqual(assignWorkspacePaneSession(source, "right", "alpha"));
+    expect(dropWorkspacePaneSession(source, "right", "beta", "top")).toBe(source);
+    expect(dropWorkspacePaneSession(source, "missing", "alpha", "left")).toBe(source);
+    const ids = idFactory();
+    let capped = source;
+    // Split the shallowest branch first so the pane-count limit is reached first.
+    const queue = ["left", "right"];
+    while (workspacePaneLeaves(capped.root).length < 12) {
+      const paneId = queue.shift()!;
+      const previous = new Set(workspacePaneLeaves(capped.root).map((pane) => pane.id));
+      capped = splitWorkspacePane(capped, paneId, "horizontal", ids);
+      queue.push(paneId, workspacePaneLeaves(capped.root).find((pane) => !previous.has(pane.id))!.id);
+    }
+    expect(dropWorkspacePaneSession(capped, "right", "gamma", "bottom")).toBe(capped);
+    expect(dropWorkspacePaneSession(capped, "right", "gamma", "center")).not.toBe(capped);
+  });
+
   it("finds the nearest geometrically adjacent pane without wrapping", () => {
     const panes = [
       { id: "left", left: 0, right: 40, top: 0, bottom: 100 },
@@ -83,6 +137,7 @@ describe("workspace pane layouts", () => {
     const deepest = workspacePaneLeaves(layout.root).at(-1)!;
     expect(canSplitWorkspacePane(layout, deepest.id)).toBe(false);
     expect(splitWorkspacePane(layout, deepest.id, "vertical", ids)).toBe(layout);
+    expect(dropWorkspacePaneSession(layout, deepest.id, "beta", "right", ids)).toBe(layout);
   });
 
   it("collapses a removed pane into its sibling and keeps one empty root", () => {

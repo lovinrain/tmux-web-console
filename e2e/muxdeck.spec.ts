@@ -5396,6 +5396,68 @@ for (const orientation of ["horizontal", "vertical"] as const) {
   });
 }
 
+test("workspace pane edge drops preview and persist horizontal and vertical splits", async ({ page, request }, testInfo) => {
+  await withPaneView(page, request, async ({ leftSession, rightSession, workspaceId }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const identities = [leftSession, rightSession, sessionName].map(workspaceTmuxIdentity);
+    const terminalInputFrames = await trackTerminalInputFrames(page, ["drop"]);
+    const rightPane = page.locator('.workspace-pane-leaf[data-pane-id="right"]');
+    const tab = page.getByRole("tab", { name: new RegExp(`^${sessionName},`) });
+    const source = await tab.boundingBox();
+    const target = await rightPane.boundingBox();
+    expect(source).not.toBeNull();
+    expect(target).not.toBeNull();
+    await page.mouse.move(source!.x + source!.width / 2, source!.y + source!.height / 2);
+    await page.mouse.down();
+    const x = target!.x + target!.width * 0.85;
+    const y = target!.y + target!.height / 2;
+    await page.mouse.move(x, y, { steps: 10 });
+    await page.mouse.move(x + 1, y);
+    await expect(rightPane).toHaveAttribute("data-session-drop-region", "right");
+    await expect(rightPane.getByRole("status")).toHaveText("Split right");
+    expect(await rightPane.locator(".workspace-pane-drop-guides")
+      .evaluate((element) => getComputedStyle(element).stroke)).not.toBe("none");
+    expect((await rightPane.getByRole("status").boundingBox())!.width).toBeLessThanOrEqual(1);
+    const preview = await rightPane.locator(".workspace-pane-drop-preview").boundingBox();
+    expect(preview!.width / target!.width).toBeCloseTo(0.5, 1);
+    await page.screenshot({ path: testInfo.outputPath("split-right-preview-dark.png") });
+    await page.mouse.up();
+    await expect(page.locator(".workspace-pane-leaf")).toHaveCount(3);
+    await expect(rightPane.getByRole("combobox", { name: "Session shown in pane right" })).toHaveValue(rightSession);
+    await expect(rightPane.getByRole("combobox", { name: "Session shown in pane right" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Light theme", exact: true }).first().click();
+    const leftHandle = page.getByRole("img", { name: `Drag ${leftSession} to another pane` });
+    const narrowTarget = await rightPane.boundingBox();
+    await leftHandle.dragTo(rightPane, { targetPosition: {
+      x: narrowTarget!.width / 2, y: narrowTarget!.height * 0.15,
+    } });
+    await expect(page.locator(".workspace-pane-leaf")).toHaveCount(4);
+    await expect(rightPane.getByRole("combobox", { name: "Session shown in pane right" })).toBeEnabled();
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      return (await response.json()).workspace.paneLayouts[0].root;
+    }).toMatchObject({
+      kind: "split", direction: "horizontal",
+      first: { id: "left", session: null },
+      second: {
+        kind: "split", direction: "horizontal",
+        first: {
+          kind: "split", direction: "vertical",
+          first: { session: leftSession }, second: { id: "right", session: rightSession },
+        },
+        second: { session: sessionName },
+      },
+    });
+    expect(await terminalInputFrames()).toBe(0);
+    expect([leftSession, rightSession, sessionName].map(workspaceTmuxIdentity)).toEqual(identities);
+    await page.screenshot({ path: testInfo.outputPath("directional-splits-light.png") });
+    await page.reload();
+    await expect(page.locator(".workspace-pane-leaf")).toHaveCount(4);
+    await expect(page.locator(".workspace-pane-split-vertical")).toHaveCount(1);
+  }, [sessionName]);
+});
+
 test("global session pin deduplicates saved, inherited, and future workspaces", async ({
   page,
   request,
