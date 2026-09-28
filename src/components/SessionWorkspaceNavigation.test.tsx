@@ -2159,6 +2159,62 @@ describe("SessionWorkspaceNavigation", () => {
       .not.toBeInTheDocument();
   });
 
+  it("drags a separator between groups without selecting or reordering tabs", () => {
+    const props = navigationProps({
+      orientation: "vertical", openSessions: ["alpha", "beta", "zulu"],
+      separators: ["alpha"], onCrossSeparator: vi.fn(), onMoveTab: vi.fn(), onMoveTabs: vi.fn(),
+      groups: [{ id: "pair", name: "Pair", color: "blue", collapsed: false, tabs: ["alpha", "beta"] }],
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const line = screen.getByRole("separator", { name: "Separator after Alpha control" });
+    const row = screen.getByRole("tab", { name: "Zulu shell, Other" }).closest<HTMLElement>(".workspace-tab")!;
+    mockElementBounds(row, { top: 100, height: 40 });
+    const dataTransfer = dragDataTransfer();
+    expect(line).toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(line, { dataTransfer });
+    expect(line.parentElement).toHaveAttribute("data-separator-dragging", "true");
+    expect(dataTransfer.setData).toHaveBeenCalledExactlyOnceWith(
+      "application/x-muxdeck-separator", JSON.stringify({ name: "alpha", side: "after" }),
+    );
+    fireEvent.dragOver(row, { dataTransfer, clientY: 102 });
+    expect(row).toHaveAttribute("data-separator-drop-edge", "before");
+    fireEvent.dragOver(row, { dataTransfer, clientY: 138 });
+    expect(row).toHaveAttribute("data-separator-drop-edge", "after");
+    fireEvent.drop(row, { dataTransfer, clientY: 138 });
+    expect(props.onCrossSeparator).toHaveBeenCalledExactlyOnceWith({
+      from: { name: "alpha", side: "after" }, to: { name: "zulu", side: "after" },
+    });
+    expect(row).not.toHaveAttribute("data-separator-drop-edge");
+    expect(line.parentElement).not.toHaveAttribute("data-separator-dragging");
+    expect(props.onMoveTab).not.toHaveBeenCalled();
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("cancels separator dragging on drag end or workspace changes and ignores external drops", () => {
+    const props = navigationProps({ orientation: "vertical", separators: ["alpha"], onCrossSeparator: vi.fn(), activeWorkspaceId: "one" });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const line = screen.getByRole("separator", { name: "Separator after Alpha control" });
+    const row = screen.getByRole("tab", { name: "beta, Working" }).closest<HTMLElement>(".workspace-tab")!;
+    mockElementBounds(row, { top: 100, height: 40 });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.drop(row, { dataTransfer, clientY: 138 });
+    expect(props.onCrossSeparator).not.toHaveBeenCalled();
+    fireEvent.dragStart(line, { dataTransfer });
+    fireEvent.dragOver(row, { dataTransfer, clientY: 138 });
+    fireEvent.dragEnd(line);
+    expect(row).not.toHaveAttribute("data-separator-drop-edge");
+    fireEvent.dragStart(line, { dataTransfer });
+    fireEvent.dragOver(row, { dataTransfer, clientY: 138 });
+    view.rerender(<SessionWorkspaceNavigation {...props} activeWorkspaceId="two" />);
+    expect(row).not.toHaveAttribute("data-separator-drop-edge");
+    fireEvent.drop(row, { dataTransfer, clientY: 138 });
+    expect(props.onCrossSeparator).not.toHaveBeenCalled();
+    view.rerender(<SessionWorkspaceNavigation {...props} separatorsBusy />);
+    expect(line).toHaveAttribute("draggable", "false");
+    expect(fireEvent.dragStart(line, { dataTransfer })).toBe(false);
+  });
+
   it("moves an adjacent tab across a separator with arrows or drag without changing tab order", () => {
     const onCrossSeparator = vi.fn();
     const props = navigationProps({ orientation: "vertical", separators: ["alpha"], onCrossSeparator, onMoveTab: vi.fn(), onMoveTabs: vi.fn() });

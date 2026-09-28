@@ -3794,10 +3794,51 @@ span.workspace-tab-group-toggle {
 }
 
 .workspace-tab-separator > [role="separator"] {
+  display: flex;
+  align-items: center;
   flex: 1;
+  height: 18px;
+}
+
+.workspace-tab-separator > [role="separator"]::before {
+  content: "";
+  width: 100%;
   height: 2px;
   background: #cc9649;
   border-radius: 2px;
+  pointer-events: none;
+}
+
+.workspace-tab-separator > [draggable="true"] {
+  cursor: grab;
+}
+
+.workspace-tab-separator[data-separator-dragging="true"] {
+  opacity: 0.45;
+}
+
+.workspace-tab-separator[data-separator-dragging="true"] > [role="separator"] {
+  cursor: grabbing;
+}
+
+.workspace-tab[data-separator-drop-edge]::before {
+  position: absolute;
+  z-index: 7;
+  left: 2px;
+  right: 2px;
+  height: 3px;
+  content: "";
+  background: #cc9649;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.workspace-tab[data-separator-drop-edge="before"]::before {
+  top: 1px;
+}
+
+.workspace-tab[data-separator-drop-edge="after"]::before {
+  bottom: 1px;
 }
 
 .workspace-tab-separator > button {

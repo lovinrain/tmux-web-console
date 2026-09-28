@@ -21,6 +21,7 @@ import type {
   WorkspacePaneLayout,
 } from "../api";
 import { adjacentSeparatorCrossing, type SeparatorCrossing } from "../workspaceSeparatorMovement";
+import { useWorkspaceSeparatorDrag } from "../useWorkspaceSeparatorDrag";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
   ArrowDownIcon,
@@ -2211,6 +2212,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && tabsVisible,
   );
   const desktopTabMultiSelectEnabled = desktopTabDragEnabled && Boolean(onMoveTabs);
+  const separatorDragEnabled = Boolean(props.onCrossSeparator && orientation === "vertical"
+    && !compactViewport && tabsVisible && !separatorsBusy
+    && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error");
   const nestingEnabled = Boolean(onReparentSession && workspacePersistenceState !== "loading"
     && workspacePersistenceState !== "error" && !separatorsBusy);
   const placementSession = newSessionActive ? null : activeSession ?? activePaneSession;
@@ -2525,6 +2529,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     if (!delta) return;
     viewport.scrollBy(orientation === "vertical" ? { top: delta } : { left: delta });
   }, [orientation]);
+
+  const separatorDrag = useWorkspaceSeparatorDrag({
+    enabled: separatorDragEnabled, workspaceId: activeWorkspaceId ?? null,
+    tabs: openSessions, before: separatorsBefore, after: separators,
+    onMove: props.onCrossSeparator, onDragOver: nudgeWorkspaceTabViewport,
+  });
 
   const dragOverWorkspaceTab = useCallback((
     event: ReactDragEvent<HTMLDivElement>,
@@ -3213,6 +3223,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     orientation === "vertical" && (side === "before" ? separatorsBefore : separators).includes(sessionName)
       ? <div className="workspace-tab-separator" data-separator-after={side === "after" ? sessionName : undefined}
           data-separator-before={side === "before" ? sessionName : undefined}
+          data-separator-dragging={separatorDrag.source?.name === sessionName && separatorDrag.source.side === side ? "true" : undefined}
           onDragOver={(event) => {
             const crossing = ["previous", "next"].map((direction) => separatorCrossing(workspaceTabDragSessionsRef.current, direction as "previous" | "next"))
               .find((value) => value?.from.name === sessionName && value.from.side === side);
@@ -3233,8 +3244,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             props.onCrossSeparator?.(crossing);
             finishWorkspaceTabDrag();
           }}
-          title="Drop adjacent tabs here to move them across this separator">
-          <span role="separator" aria-label={`Separator ${side} ${title}`} />
+          title="Drag this separator to another session row, or drop adjacent tabs here to move them across it">
+          <span role="separator" aria-label={`Separator ${side} ${title}`}
+            draggable={separatorDragEnabled}
+            aria-description="Drag to the top or bottom half of a session row to place this separator before or after it."
+            onDragStart={(event) => {
+              finishWorkspaceTabDrag();
+              separatorDrag.start(event, { name: sessionName, side });
+            }}
+            onDragEnd={separatorDrag.cancel} />
           {onChangeSeparator && (
             <button
               type="button"
@@ -3297,13 +3315,18 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           ? "true"
           : undefined}
         data-tab-drop-edge={dropEdge}
+        data-separator-drop-edge={separatorDrag.target?.name === sessionName ? separatorDrag.target.side : undefined}
         data-tab-drop-nest={workspaceTabDrag?.target?.kind === "nest" && workspaceTabDrag.target.id === sessionName ? "true" : undefined}
         key={sessionName}
-        onDragOver={desktopTabDragEnabled
-          ? (event) => dragOverWorkspaceTab(event, sessionName)
+        onDragOver={desktopTabDragEnabled || separatorDragEnabled
+          ? (event) => {
+            if (!separatorDrag.over(event, sessionName)) dragOverWorkspaceTab(event, sessionName);
+          }
           : undefined}
-        onDrop={desktopTabDragEnabled
-          ? (event) => dropOnWorkspaceTab(event, sessionName)
+        onDrop={desktopTabDragEnabled || separatorDragEnabled
+          ? (event) => {
+            if (!separatorDrag.drop(event, sessionName)) dropOnWorkspaceTab(event, sessionName);
+          }
           : undefined}
       >
         <button
@@ -3733,10 +3756,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               role="tablist"
               aria-label="Session workspace tabs"
               aria-orientation={orientation}
-              onDragOver={desktopTabDragEnabled
-                ? clearWorkspaceTabDropTarget
+              onDragOver={desktopTabDragEnabled || separatorDragEnabled
+                ? () => { clearWorkspaceTabDropTarget(); separatorDrag.clearTarget(); }
                 : undefined}
-              onDragLeave={desktopTabDragEnabled
+              onDragLeave={desktopTabDragEnabled || separatorDragEnabled
                 ? (event) => {
                   const relatedTarget = event.relatedTarget;
                   if (
@@ -3744,9 +3767,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     && event.currentTarget.contains(relatedTarget)
                   ) return;
                   clearWorkspaceTabDropTarget();
+                  separatorDrag.clearTarget();
                 }
                 : undefined}
-              onDrop={desktopTabDragEnabled ? finishWorkspaceTabDrag : undefined}
+              onDrop={desktopTabDragEnabled || separatorDragEnabled
+                ? () => { finishWorkspaceTabDrag(); separatorDrag.cancel(); }
+                : undefined}
             >
               {workspaceTabItems.map((item) => {
                 if (item.kind === "tab") return renderWorkspaceTab(item.sessionName);

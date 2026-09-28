@@ -1152,8 +1152,13 @@ In Side tabs, select a session and use the two separator buttons on the same row
 `Insert separator` puts an amber line immediately before it (including the first tab), while
 `Append separator` puts one immediately after it. In narrow rails, the buttons
 use up/down icons and descriptive tooltips.
-Use a line's small remove button to delete it. Separators
-are independent of named groups and can appear inside expanded groups; collapsing
+Use a line's small remove button to delete it. Separators can also be dragged
+in desktop Side tabs: grab the line and drop onto the top
+or bottom half of a session row to place it before or after that session. An
+amber preview marks the destination. Moving a separator preserves session order
+and the active session; an occupied gap keeps its existing separator. Dropping
+outside the rows or pressing Escape cancels the drag.
+Separators are independent of named groups and can appear inside expanded groups; collapsing
 a group hides separators belonging to its hidden tabs. A line follows its anchor
 tab when reordered, and saved-workspace lines follow native renames made through
 Muxdeck. Closing or moving the anchor out of the workspace removes its line.

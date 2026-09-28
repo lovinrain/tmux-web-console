@@ -4171,7 +4171,7 @@ test("temporary workspace terminals transfer on save and release when leaving", 
   }
 });
 
-test("sidebar tabs cross separators independently and persist after reload", async ({ page, request }) => {
+test("sidebar separators can be dragged and crossed without reordering tabs", async ({ page, request }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const helpers = [`${sessionName}-cross-b`, `${sessionName}-cross-c`];
   for (const name of helpers) execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
@@ -4202,7 +4202,43 @@ test("sidebar tabs cross separators independently and persist after reload", asy
     expect((await snapshot()).tabs).toEqual(tabs);
     await page.reload();
     await expect(page.locator(`[data-separator-after="${helpers[1]}"]`)).toBeVisible();
-    await page.screenshot({ path: "artifacts/separator-crossing.png" });
+    const dragEvents = ["keydown", "dragstart", "dragover", "drop"];
+    let terminalInputFrameCount = await trackTerminalInputFrames(page, dragEvents);
+    const originalUrl = page.url();
+    const firstRow = page.locator(`.workspace-tab[data-workspace-session-name="${sessionName}"]`);
+    const line = page.locator(`[data-separator-after="${helpers[1]}"] [role=separator]`);
+    await expect(line).toHaveCSS("cursor", "grab");
+    await line.hover();
+    await page.mouse.down();
+    const firstBounds = (await firstRow.boundingBox())!;
+    await page.mouse.move(firstBounds.x + 40, firstBounds.y + 3, { steps: 5 });
+    await page.mouse.move(firstBounds.x + 41, firstBounds.y + 3);
+    await expect(firstRow).toHaveAttribute("data-separator-drop-edge", "before");
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(firstRow).not.toHaveAttribute("data-separator-drop-edge");
+    expect((await snapshot()).separators).toEqual([helpers[1]]);
+    await line.dragTo(firstRow, { targetPosition: { x: 40, y: 3 } });
+    await expect.poll(async () => (await snapshot()).separatorsBefore).toEqual([sessionName]);
+    expect((await snapshot()).separators).toEqual([]);
+    expect((await snapshot()).tabs).toEqual(tabs);
+    expect(page.url()).toBe(originalUrl);
+    expect(await terminalInputFrameCount()).toBe(0);
+    await page.reload();
+    terminalInputFrameCount = await trackTerminalInputFrames(page, dragEvents);
+    const movedLine = page.locator(`[data-separator-before="${sessionName}"] [role=separator]`);
+    await expect(movedLine).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("separator-drag-dark.png") });
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    const secondRow = page.locator(`.workspace-tab[data-workspace-session-name="${helpers[0]}"]`);
+    const secondBounds = (await secondRow.boundingBox())!;
+    await movedLine.dragTo(secondRow, { targetPosition: { x: 40, y: secondBounds.height - 3 } });
+    await expect.poll(async () => (await snapshot()).separators).toEqual([helpers[0]]);
+    expect((await snapshot()).separatorsBefore).toEqual([]);
+    expect((await snapshot()).tabs).toEqual(tabs);
+    expect(page.url()).toBe(originalUrl);
+    expect(await terminalInputFrameCount()).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath("separator-drag-light.png") });
   } finally {
     await request.delete(`/mux/api/workspaces/${id}`);
     for (const name of helpers) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
@@ -4219,7 +4255,8 @@ test("sidebar separators save with a temporary workspace and can be removed afte
   const beforeLine = page.locator("[data-separator-before] [role=separator]");
   await expect(beforeLine).toBeVisible();
   await expect(line).toBeVisible();
-  await expect(line).toHaveCSS("height", "2px");
+  await expect(line).toHaveCSS("height", "18px");
+  expect(await line.evaluate((element) => getComputedStyle(element, "::before").height)).toBe("2px");
   await page.getByRole("button", { name: "Save workspace", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Save this workspace" });
   await dialog.getByRole("textbox", { name: "Workspace name" }).fill("Separator check");
