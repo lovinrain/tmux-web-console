@@ -120,6 +120,9 @@ let reportSessionCopy: (
   (sourceName: string, sessionName: string, sessionId: string, placement?: "sibling" | "child") => void
 ) | null = null;
 let reportKnownSessions: ((sessions: Session[]) => void) | null = null;
+let navigateConsoleSessionHistory: ((direction: "back" | "forward") => void) | null = null;
+let consoleSessionHistoryBack: string | null = null;
+let consoleSessionHistoryForward: string | null = null;
 let openSessionFromDashboard: ((sessionName: string) => void) | null = null;
 let openSavedWorkspaceFromDashboard: ((workspace: SavedWorkspace) => void) | null = null;
 let reportSavedWorkspaceDeleted: ((workspaceId: string) => void) | null = null;
@@ -284,6 +287,9 @@ vi.mock("./components/ConsoleScreen", () => ({
     workspaceLinks,
     onBack,
     sessionNavigation,
+    sessionHistoryBack,
+    sessionHistoryForward,
+    onNavigateSessionHistory,
     workspaceOverlayOpen,
     mobileMode = "terminal",
     onMobileModeChange = () => undefined,
@@ -317,6 +323,9 @@ vi.mock("./components/ConsoleScreen", () => ({
     workspaceLinks?: ReactNode;
     onBack: () => void;
     sessionNavigation?: ReactNode;
+    sessionHistoryBack?: string | null;
+    sessionHistoryForward?: string | null;
+    onNavigateSessionHistory?: (direction: "back" | "forward") => void;
     workspaceOverlayOpen?: boolean;
     mobileMode?: "terminal" | "input";
     onMobileModeChange?: (mode: "terminal" | "input") => void;
@@ -382,6 +391,9 @@ vi.mock("./components/ConsoleScreen", () => ({
     onForgetSession?: () => void | Promise<void>;
   }) => {
     reportKnownSessions = onSessionsChange ?? null;
+    navigateConsoleSessionHistory = onNavigateSessionHistory ?? null;
+    consoleSessionHistoryBack = sessionHistoryBack ?? null;
+    consoleSessionHistoryForward = sessionHistoryForward ?? null;
     reportWorkspacePinChange = onWorkspacePinChange ?? null;
     reportSessionWorkspaceTransfer = onSessionWorkspaceTransfer ?? null;
     reportSessionRename = onSessionRenamed ?? null;
@@ -747,6 +759,9 @@ describe("App routing", () => {
     reportSessionTerminate = null;
     reportSessionCopy = null;
     reportKnownSessions = null;
+    navigateConsoleSessionHistory = null;
+    consoleSessionHistoryBack = null;
+    consoleSessionHistoryForward = null;
     consoleSessionRecovery = null;
     recreateConsoleSession = null;
     forgetConsoleSession = null;
@@ -901,6 +916,27 @@ describe("App routing", () => {
       expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
     });
     expectWorkspaceSearch("?kind=codex", ["alpha", "beta", "fresh/session"]);
+  });
+
+  it("routes session history through renames and closed tabs without reopening them", () => {
+    replaceUrl(sessionUrl("alpha", "?kind=codex&tab=alpha&tab=beta&tab=gamma"));
+    render(<App />);
+    expect(consoleSessionHistoryBack).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /^gamma,/ }));
+    act(() => navigateConsoleSessionHistory?.("back"));
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "beta");
+    expect(consoleSessionHistoryForward).toBe("gamma");
+    act(() => reportSessionRename?.("beta", "renamed", "$beta"));
+    act(() => navigateConsoleSessionHistory?.("forward"));
+    expect(consoleSessionHistoryBack).toBe("renamed");
+    fireEvent.click(screen.getByRole("button", { name: "Close renamed quick tab" }));
+    act(() => navigateConsoleSessionHistory?.("back"));
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+    expectWorkspaceSearch("?kind=codex", ["alpha", "gamma"]);
+    expect(consoleSessionHistoryBack).toBeNull();
+    expect(consoleSessionHistoryForward).toBe("gamma");
+    expect(terminateSessionMock).not.toHaveBeenCalled();
   });
 
   it("inserts a copied session after its source and focuses it", () => {

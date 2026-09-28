@@ -3701,7 +3701,7 @@ html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-term
   box-shadow: 0 8px 26px rgba(65, 55, 38, 0.24);
 }
 
-html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:hover,
+html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:hover:not(:disabled),
 html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:focus-visible,
 html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:hover,
 html[data-theme="light"] .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:focus-visible,

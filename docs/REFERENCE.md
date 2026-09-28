@@ -254,7 +254,7 @@ ephemeral and resets on session changes, workspace overview, mobile layout,
 desktop Focus, or reload.
 
 On desktop, `Focus` in the top `VIEW` toolbar expands the live terminal to the
-full browser viewport and leaves floating `Redraw`, `Float input`, `Show all
+full browser viewport and leaves floating `Sessions`, `Redraw`, `Float input`, `Show all
 buttons`, and `Exit` controls. `Show all buttons` overlays the existing bottom
 shortcut strip
 as a wrapped floating panel, including `More Keys`; it does not shrink the
@@ -274,12 +274,19 @@ full input` leaves Focus and reveals the complete composer. Focus does not
 invoke the browser Fullscreen API, remount
 xterm, reconnect the WebSocket, change the URL, or discard the staged draft.
 Entering and leaving refits the existing PTY attachment so tmux receives the new
-dimensions. The choice is session-local and resets when the active session
-changes, the workspace overview opens, the layout switches to mobile, the
+dimensions. Focus stays active when switching sessions. It resets when
+the workspace overview opens, the layout switches to mobile, the
 console is left, or the page reloads. Escape remains raw terminal input rather
 than an exit shortcut; `Ctrl+Shift+F` enters or exits Focus and
 `Ctrl+Shift+Y` toggles floating input even while xterm or staged input owns
 keyboard focus.
+
+The `<` and `>` buttons beside `Sessions` move backward and forward through
+session visits in the current workspace. Selecting a different session after
+going back replaces the forward path. Closed tabs are removed from this history,
+and session renames follow their existing visits. The arrows are disabled at
+either end. History retains up to 100 visits for the current page and resets on
+reload or a workspace switch; tab order and staged drafts are preserved.
 
 ### Session history
 

@@ -13038,7 +13038,28 @@ html.scoped-note-resizing-bottom-left * {
     padding: 0;
   }
 
-  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:hover,
+  .desktop-terminal-session-navigation {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-session-history {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .desktop-terminal-session-history[data-direction="back"] svg {
+    transform: rotate(180deg);
+  }
+
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-session-history:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:hover:not(:disabled),
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-sessions:focus-visible,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:hover,
   .console-shell[data-desktop-focus="true"] .desktop-terminal-focus-redraw:focus-visible,

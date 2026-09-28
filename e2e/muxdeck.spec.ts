@@ -2473,7 +2473,9 @@ test("focus session picker stays in the workspace and preserves focus and drafts
 }, testInfo) => {
   const first = `${sessionName}-focus-first`;
   const second = `${sessionName}-focus-second`;
-  for (const name of [first, second]) {
+  const third = `${sessionName}-focus-third`;
+  const tabs = [first, second, third];
+  for (const name of tabs) {
     execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
   }
   try {
@@ -2482,7 +2484,7 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     });
     expect(title.ok()).toBe(true);
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`/mux/session/${first}?tab=${encodeURIComponent(first)}&tab=${encodeURIComponent(second)}`);
+    await page.goto(`/mux/session/${first}?${tabs.map((name) => `tab=${encodeURIComponent(name)}`).join("&")}`);
     await expect(page.locator(".connection-badge")).toContainText("Live");
     await page.getByRole("textbox", { name: "Staged input" }).fill("Keep this session draft");
 
@@ -2492,15 +2494,19 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     const enterFocus = page.getByRole("button", { name: "Enter desktop terminal focus" });
     const exitFocus = page.getByRole("button", { name: "Exit desktop terminal focus" });
     const switcher = page.getByRole("button", { name: "Switch workspace session" });
+    const back = page.getByRole("button", { name: "Back to previous session" });
+    const forward = page.getByRole("button", { name: "Forward to next session" });
     const dialog = page.getByRole("dialog", { name: "Jump to tab" });
     const search = dialog.getByRole("combobox");
 
     await enterFocus.click();
     await expect(switcher).toHaveText("Sessions");
+    await expect(back).toBeDisabled();
+    await expect(forward).toBeDisabled();
     await switcher.click();
     await expect(switcher).toHaveAttribute("aria-expanded", "true");
     await expect(search).toBeFocused();
-    await expect(dialog.getByRole("option")).toHaveCount(2);
+    await expect(dialog.getByRole("option")).toHaveCount(3);
     await expect(dialog.getByRole("option", { name: new RegExp(first) })).toContainText("Current");
     await expect(dialog.getByRole("option", { name: "Focus switch target", exact: false })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -2513,11 +2519,29 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     await switcher.click();
     await search.pressSequentially("Focus switch target");
     await dialog.getByRole("option").click();
-    await expectRoute(page, `/mux/session/${second}`, [first, second]);
+    await expectRoute(page, `/mux/session/${second}`, tabs);
     await expect(dialog).toBeHidden();
     await expect(shell).toHaveAttribute("data-desktop-focus", "true");
     await expect(page.locator(".console-session-navigation")).toBeHidden();
     await expect(page.locator(".connection-badge")).toContainText("Live");
+
+    await expect(back).toHaveAttribute("title", `Back to ${first}`);
+    await expect(forward).toBeDisabled();
+    await back.click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    await expect(back).toBeDisabled();
+    await expect(forward).toHaveAttribute("title", `Forward to ${second}`);
+    await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+    await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await forward.click();
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await back.click();
+    await switcher.click();
+    await search.fill(third);
+    await page.keyboard.press("Enter");
+    await expectRoute(page, `/mux/session/${third}`, tabs);
+    await expect(forward).toBeDisabled();
+    await expect(back).toHaveAttribute("title", `Back to ${first}`);
 
     await exitFocus.click();
     await page.getByRole("button", { name: "Light theme", exact: true }).click();
@@ -2532,10 +2556,9 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     }
     await expect(switcher).toHaveCSS("color", "rgb(53, 65, 50)");
     await page.screenshot({ path: testInfo.outputPath("focus-sessions-light-narrow.png") });
-    await switcher.click();
-    await search.fill(first);
+    await back.focus();
     await page.keyboard.press("Enter");
-    await expectRoute(page, `/mux/session/${first}`, [first, second]);
+    await expectRoute(page, `/mux/session/${first}`, tabs);
     await expect(shell).toHaveAttribute("data-desktop-focus", "true");
     await expect(dialog).toBeHidden();
     await expect(page.locator(".connection-badge")).toContainText("Live");
@@ -2543,7 +2566,7 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     await exitFocus.click();
     await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
   } finally {
-    for (const name of [first, second]) {
+    for (const name of tabs) {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
     }
   }

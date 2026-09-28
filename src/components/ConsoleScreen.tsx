@@ -28,6 +28,7 @@ import {
 import {
   ArrowLeftIcon,
   CheckIcon,
+  ChevronRightIcon,
   ContractIcon,
   ExpandIcon,
   ExternalLinkIcon,
@@ -135,6 +136,9 @@ interface ConsoleScreenProps {
   sessionNavigation?: ReactNode;
   onOpenTabSearch?: () => void;
   tabSearchOpen?: boolean;
+  sessionHistoryBack?: string | null;
+  sessionHistoryForward?: string | null;
+  onNavigateSessionHistory?: (direction: "back" | "forward") => void;
   workspaceOverlayOpen?: boolean;
   mobileMode?: MobileConsoleMode;
   onMobileModeChange?: (mode: MobileConsoleMode) => void;
@@ -594,6 +598,9 @@ export function ConsoleScreen({
   sessionNavigation: providedSessionNavigation,
   onOpenTabSearch,
   tabSearchOpen = false,
+  sessionHistoryBack,
+  sessionHistoryForward,
+  onNavigateSessionHistory,
   workspaceOverlayOpen: providedWorkspaceOverlayOpen = false,
   mobileMode,
   onMobileModeChange,
@@ -1753,6 +1760,10 @@ export function ConsoleScreen({
     resetDesktopFocusShortcutsPosition();
     window.requestAnimationFrame(() => terminalRef.current?.focus());
   }, [resetDesktopFocusShortcutsPosition]);
+  const navigateSessionHistory = (direction: "back" | "forward") => {
+    onNavigateSessionHistory?.(direction);
+    window.requestAnimationFrame(() => terminalRef.current?.focus());
+  };
   const openTerminateEditor = useCallback(() => {
     if (!session) return;
     setTerminateTarget({
@@ -2879,20 +2890,46 @@ export function ConsoleScreen({
             aria-label="Desktop terminal focus controls"
           >
             {!ephemeral && onOpenTabSearch && (
-              <button
-                type="button"
-                className="desktop-terminal-focus-sessions"
-                aria-label="Switch workspace session"
-                aria-haspopup="dialog"
-                aria-expanded={tabSearchOpen}
-                aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-find-tab"])}
-                title="Switch to another session in this workspace"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={onOpenTabSearch}
-              >
-                <ListIcon />
-                <span>Sessions</span>
-              </button>
+              <div className="desktop-terminal-session-navigation" role="group" aria-label="Session navigation">
+                <button
+                  type="button"
+                  className="desktop-terminal-focus-sessions desktop-terminal-session-history"
+                  data-direction="back"
+                  aria-label="Back to previous session"
+                  title={sessionHistoryBack ? `Back to ${sessionHistoryBack}` : "No previous session"}
+                  disabled={!sessionHistoryBack || !onNavigateSessionHistory}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => navigateSessionHistory("back")}
+                >
+                  <ChevronRightIcon />
+                </button>
+                <button
+                  type="button"
+                  className="desktop-terminal-focus-sessions"
+                  aria-label="Switch workspace session"
+                  aria-haspopup="dialog"
+                  aria-expanded={tabSearchOpen}
+                  aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-find-tab"])}
+                  title="Switch to another session in this workspace"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={onOpenTabSearch}
+                >
+                  <ListIcon />
+                  <span>Sessions</span>
+                </button>
+                <button
+                  type="button"
+                  className="desktop-terminal-focus-sessions desktop-terminal-session-history"
+                  data-direction="forward"
+                  aria-label="Forward to next session"
+                  title={sessionHistoryForward ? `Forward to ${sessionHistoryForward}` : "No next session"}
+                  disabled={!sessionHistoryForward || !onNavigateSessionHistory}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => navigateSessionHistory("forward")}
+                >
+                  <ChevronRightIcon />
+                </button>
+              </div>
             )}
             <button
               type="button"

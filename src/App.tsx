@@ -38,6 +38,7 @@ import {
   type WorkspaceSessionsTransferResult,
 } from "./api";
 import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
+import { useSessionNavigationHistory } from "./useSessionNavigationHistory";
 import {
   ConsoleScreen,
   DEFAULT_CONSOLE_BAR_VISIBILITY,
@@ -1923,6 +1924,12 @@ function AppRoutes() {
   const newSessionRoute = parseNewSessionRoute(location.path);
   const paneLayoutRoute = parsePaneLayoutRoute(location.path);
   const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+  const sessionNavigationHistory = useSessionNavigationHistory(
+    locationWorkspaceId ?? temporaryTerminalKey,
+    activeRoute?.sessionName ?? null,
+    workspace.openSessions,
+  );
+  const renameSessionNavigationHistory = sessionNavigationHistory.rename;
   useEffect(() => {
     if (locationWorkspaceId) return;
     setWorkspaceCallbackSessions(readTemporaryCallbackSessions(temporaryTerminalKey));
@@ -2827,6 +2834,13 @@ function AppRoutes() {
     setWorkspace(nextWorkspace);
     finishSessionSwitch(sessionName, nextWorkspace);
   }, [finishSessionSwitch]);
+
+  const navigateSessionHistory = (direction: "back" | "forward") => {
+    const sessionName = sessionNavigationHistory.navigate(direction);
+    if (!sessionName) return;
+    setTabSearchOpen(false);
+    switchSession(sessionName);
+  };
 
   const addSessionToWorkspace = useCallback((sessionName: string, open: boolean) => {
     const liveSession = knownSessionsRef.current.find((session) => (
@@ -4056,6 +4070,7 @@ function AppRoutes() {
     workspaceRef.current = nextWorkspace;
     setWorkspace(nextWorkspace);
     if (previousNameStillBelongsToSession) {
+      renameSessionNavigationHistory(previousName, nextName);
       const renamedCallbacks = normalizeCallbackSessions(
         workspaceCallbackSessionsRef.current.map((item) => (
           item === previousName ? nextName : item
@@ -4139,7 +4154,7 @@ function AppRoutes() {
       [{ name: nextName, sessionId }],
     );
     syncLocation();
-  }, [replaceLocation, syncLocation]);
+  }, [renameSessionNavigationHistory, replaceLocation, syncLocation]);
 
   const dismissRenameWarning = useCallback((sessionId: string) => {
     setRenameWarnings((current) => {
@@ -4725,6 +4740,9 @@ function AppRoutes() {
         workspaceOverlayOpen={recentsOpen}
         onOpenTabSearch={openTabSearch}
         tabSearchOpen={tabSearchOpen}
+        sessionHistoryBack={sessionNavigationHistory.previousSession}
+        sessionHistoryForward={sessionNavigationHistory.nextSession}
+        onNavigateSessionHistory={navigateSessionHistory}
         mobileMode={mobileConsoleMode}
         onMobileModeChange={setMobileConsoleMode}
         onOpenWorkspaceOverview={openRecents}

@@ -1557,6 +1557,7 @@ describe("ConsoleScreen session identity", () => {
 
   it("fills the desktop viewport without remounting the terminal or losing its draft", async () => {
     const onOpenTabSearch = vi.fn();
+    const onNavigateSessionHistory = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([
       session(),
       session(null, "next-session"),
@@ -1567,6 +1568,8 @@ describe("ConsoleScreen session identity", () => {
         onBack={vi.fn()}
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
         onOpenTabSearch={onOpenTabSearch}
+        sessionHistoryBack="earlier-session"
+        onNavigateSessionHistory={onNavigateSessionHistory}
       />,
     );
 
@@ -1638,6 +1641,16 @@ describe("ConsoleScreen session identity", () => {
     expect(fireEvent.mouseDown(focusSessions)).toBe(false);
     fireEvent.click(focusSessions);
     expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    const sessionBack = within(focusControls).getByRole("button", { name: "Back to previous session" });
+    const sessionForward = within(focusControls).getByRole("button", { name: "Forward to next session" });
+    expect(sessionBack).toHaveAttribute("title", "Back to earlier-session");
+    expect(fireEvent.mouseDown(sessionBack)).toBe(false);
+    fireEvent.click(sessionBack);
+    expect(onNavigateSessionHistory).toHaveBeenCalledExactlyOnceWith("back");
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(2));
+    expect(sessionForward).toBeDisabled();
+    fireEvent.click(sessionForward);
+    expect(onNavigateSessionHistory).toHaveBeenCalledOnce();
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
     expect(liveTerminalHandle.send).not.toHaveBeenCalled();
     expect(focusRedraw).toHaveTextContent("Redraw");
@@ -1713,7 +1726,7 @@ describe("ConsoleScreen session identity", () => {
       "data-layout-refresh-token",
       "terminal:standard:desktop-standard:desktop-tabs-horizontal:desktop-tab-rail-288",
     );
-    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(4));
 
     expect(fireEvent.keyDown(window, {
       code: "KeyF",
@@ -1746,7 +1759,7 @@ describe("ConsoleScreen session identity", () => {
       shiftKey: true,
     })).toBe(false);
     expect(shell).toHaveAttribute("data-desktop-focus", "false");
-    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(5));
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(6));
 
     fireEvent.click(enterFocus);
     expect(shell).toHaveAttribute("data-desktop-focus", "true");
