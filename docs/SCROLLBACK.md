@@ -12,6 +12,14 @@ Codex's “Earlier messages are available” notice or absent from tmux's buffer
 their native files remain available. See [Agent transcripts](AGENT_TRANSCRIPTS.md)
 for formats, paging, and availability limits.
 
+On desktop, the pane-history header offers **50%**, **75%**, and **100%** window
+widths across all its tabs. **Restore** returns to the width used before the
+presets; dragging the edge or using its arrow keys sets a new custom width.
+The minimum desktop width is 360 pixels, and phones always use the full width.
+Sizing keeps the loaded transcript or scrollback snapshot intact. The chosen
+pixel width is retained for the current browser page, as with manual resizing;
+**Esc** closes the window.
+
 - **Pane scrollback → Scrollback** captures the live pane's currently retained
   tmux buffer. Its older pages belong to one immutable, ten-minute snapshot.
 - **Pane scrollback → Recorded output** opens the earliest terminal output Muxdeck

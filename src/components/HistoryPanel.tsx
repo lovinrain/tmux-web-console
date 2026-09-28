@@ -21,9 +21,9 @@ export const DEFAULT_HISTORY_PANEL_WIDTH = 680;
 export const MIN_HISTORY_PANEL_WIDTH = 360;
 export const HISTORY_PANEL_MOBILE_BREAKPOINT = 640;
 
-const HISTORY_PANEL_BACKDROP_GUTTER = 48;
 const HISTORY_PANEL_KEYBOARD_STEP = 16;
 const HISTORY_PANEL_KEYBOARD_LARGE_STEP = 64;
+const HISTORY_PANEL_WIDTH_PRESETS = [50, 75, 100] as const;
 
 interface HistoryPanelProps {
   pane: Pane;
@@ -43,7 +43,7 @@ interface ResizeState {
 function widthBounds(viewportWidth: number) {
   return {
     min: MIN_HISTORY_PANEL_WIDTH,
-    max: Math.max(MIN_HISTORY_PANEL_WIDTH, viewportWidth - HISTORY_PANEL_BACKDROP_GUTTER),
+    max: Math.max(MIN_HISTORY_PANEL_WIDTH, viewportWidth),
   };
 }
 
@@ -74,6 +74,7 @@ export function HistoryPanel({
   const [panelWidth, setPanelWidth] = useState(() => (
     clampWidth(preferredWidth, window.innerWidth)
   ));
+  const [restoreWidth, setRestoreWidth] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const capturePending = useRef(false);
   const panelWidthRef = useRef(panelWidth);
@@ -191,7 +192,9 @@ export function HistoryPanel({
     await navigator.clipboard.writeText(lines.join("\n"));
   };
 
-  const commitWidth = useCallback((width: number) => {
+  const commitWidth = useCallback((width: number, preset = false) => {
+    const previousWidth = panelWidthRef.current;
+    setRestoreWidth((previous) => preset ? previous ?? previousWidth : null);
     const nextWidth = clampWidth(width, window.innerWidth);
     updatePanelWidth(nextWidth);
     onPreferredWidthChange?.(nextWidth);
@@ -322,6 +325,21 @@ export function HistoryPanel({
             <h2>{viewLabels[view]}</h2>
           </div>
           <div className="history-header-actions">
+            {!mobile && <div className="history-width-presets" role="group" aria-label="History window width">
+              {HISTORY_PANEL_WIDTH_PRESETS.map((percent) => {
+                const width = clampWidth(viewportWidth * percent / 100, viewportWidth);
+                const selected = panelWidth === width;
+                return <button type="button" key={percent}
+                  className={selected ? "primary-button" : "secondary-button"}
+                  aria-label={`${percent}% width`} aria-pressed={selected}
+                  title={`Fit to ${percent}% of the window width`}
+                  onClick={() => commitWidth(width, true)}>{percent}%</button>;
+              })}
+              <button type="button" className="secondary-button"
+                aria-label="Restore previous width" title="Restore the width before using presets"
+                disabled={restoreWidth === null}
+                onClick={() => { if (restoreWidth !== null) commitWidth(restoreWidth); }}>Restore</button>
+            </div>}
             {view === "scrollback" && <button type="button" className="icon-button" onClick={() => void capture()} aria-label="Capture a new snapshot"><RefreshIcon /></button>}
             <button ref={closeRef} type="button" className="icon-button" onClick={onClose} aria-label="Close history" title="Close history (Esc)"><CloseIcon /></button>
           </div>

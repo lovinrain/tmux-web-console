@@ -1129,7 +1129,7 @@ test("tab bar opens and cancels New session without a dashboard round trip", asy
   await expect(page.getByRole("tab", { name: new RegExp(sessionName) })).toBeFocused();
 });
 
-test("desktop scrollback width is adjustable for the current browser tab", async ({ page }) => {
+test("desktop scrollback width is adjustable for the current browser tab", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/mux/session/${sessionName}`);
   await expect(page.getByRole("button", { name: "Pane scrollback" })).toBeEnabled();
@@ -1141,6 +1141,22 @@ test("desktop scrollback width is adjustable for the current browser tab", async
   });
   await expect(panel).toHaveCSS("width", "680px");
   await expect(resizeHandle).toHaveAttribute("aria-valuenow", "680");
+
+  for (const percent of [50, 75, 100]) {
+    const preset = page.getByRole("button", { name: `${percent}% width`, exact: true });
+    await preset.click();
+    await expect(panel).toHaveCSS("width", `${1440 * percent / 100}px`);
+    await expect(preset).toHaveAttribute("aria-pressed", "true");
+  }
+  expect((await panel.boundingBox())?.x).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("history-full-width-dark.png"), animations: "disabled" });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await page.getByRole("button", { name: "50% width", exact: true }).click();
+  await expect(panel).toHaveCSS("width", "720px");
+  await page.screenshot({ path: testInfo.outputPath("history-half-width-light.png"), animations: "disabled" });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await page.getByRole("button", { name: "Restore previous width", exact: true }).click();
+  await expect(panel).toHaveCSS("width", "680px");
 
   const handleBox = await resizeHandle.boundingBox();
   if (!handleBox) throw new Error("Scrollback resize handle has no bounding box");
@@ -1180,6 +1196,16 @@ test("desktop scrollback width is adjustable for the current browser tab", async
   await expect(page.getByRole("button", { name: "Pane scrollback" })).toBeEnabled();
   await page.getByRole("button", { name: "Pane scrollback" }).click();
   await expect(panel).toHaveCSS("width", "680px");
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.getByRole("button", { name: "50% width", exact: true }).click();
+  await expect(panel).toHaveCSS("width", "360px");
+  await expect(page.getByRole("button", { name: "Close history" })).toBeInViewport();
+  expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(panel).toHaveCSS("width", "390px");
+  await expect(page.getByRole("group", { name: "History window width" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
 });
 
 test("terminal HTTP links require Ctrl-click and do not send a mouse frame", async ({ page }) => {

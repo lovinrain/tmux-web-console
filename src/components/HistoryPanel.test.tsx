@@ -18,7 +18,7 @@ vi.mock("../api", () => ({
 }));
 
 const DESKTOP_VIEWPORT_WIDTH = 1200;
-const DESKTOP_MAX_PANEL_WIDTH = DESKTOP_VIEWPORT_WIDTH - 48;
+const DESKTOP_MAX_PANEL_WIDTH = DESKTOP_VIEWPORT_WIDTH;
 const originalInnerWidth = window.innerWidth;
 
 function pane(): Pane {
@@ -294,6 +294,44 @@ describe("HistoryPanel", () => {
     ]);
   });
 
+  it("fits to width presets and restores the previous custom width without recapturing", () => {
+    const { handle, onPreferredWidthChange } = renderPanel({ preferredWidth: 704 });
+    const restore = screen.getByRole("button", { name: "Restore previous width" });
+    expect(restore).toBeDisabled();
+    for (const percent of [50, 75, 100]) {
+      const button = screen.getByRole("button", { name: `${percent}% width` });
+      fireEvent.click(button);
+      expect(panelWidth()).toBe(`${DESKTOP_VIEWPORT_WIDTH * percent / 100}px`);
+      expect(button).toHaveAttribute("aria-pressed", "true");
+      expect(onPreferredWidthChange).toHaveBeenLastCalledWith(DESKTOP_VIEWPORT_WIDTH * percent / 100);
+    }
+    fireEvent.click(restore);
+    expect(panelWidth()).toBe("704px");
+    expect(onPreferredWidthChange).toHaveBeenLastCalledWith(704);
+    expect(restore).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "100% width" }));
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(panelWidth()).toBe("1184px");
+    expect(screen.getByRole("button", { name: "100% width" })).toHaveAttribute("aria-pressed", "false");
+    expect(restore).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "50% width" }));
+    fireEvent.click(restore);
+    expect(panelWidth()).toBe("1184px");
+    expect(createHistorySnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps half-width readable on a narrow desktop and clamps restore after a viewport change", () => {
+    renderPanel({ preferredWidth: 1000 });
+    fireEvent.click(screen.getByRole("button", { name: "100% width" }));
+    setViewportWidth(700);
+    fireEvent(window, new Event("resize"));
+    fireEvent.click(screen.getByRole("button", { name: "50% width" }));
+    expect(panelWidth()).toBe(`${MIN_HISTORY_PANEL_WIDTH}px`);
+    fireEvent.click(screen.getByRole("button", { name: "Restore previous width" }));
+    expect(panelWidth()).toBe("700px");
+  });
+
   it("drags wider and narrower, ignores other pointers, and clamps both bounds", () => {
     const onPreferredWidthChange = vi.fn();
     const { handle } = renderPanel({ onPreferredWidthChange });
@@ -369,6 +407,7 @@ describe("HistoryPanel", () => {
 
     expect(handle).toHaveAttribute("aria-hidden", "true");
     expect(handle).toHaveAttribute("tabindex", "-1");
+    expect(screen.queryByRole("group", { name: "History window width" })).not.toBeInTheDocument();
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
     dispatchPointer(handle, "pointerdown", { pointerId: 2, clientX: 300 });
     expect(onPreferredWidthChange).not.toHaveBeenCalled();

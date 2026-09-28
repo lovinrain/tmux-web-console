@@ -13302,7 +13302,7 @@ html.workspace-tab-rail-resizing * {
   flex-direction: column;
   width: var(--history-panel-width, 680px);
   min-width: 360px;
-  max-width: calc(100vw - 48px);
+  max-width: 100vw;
   height: 100dvh;
   background: #151915;
   border-left: 1px solid #3a4337;
@@ -13375,9 +13375,28 @@ html.history-resizing * {
   letter-spacing: -0.045em;
 }
 
+.history-header {
+  flex-wrap: wrap;
+}
+
 .history-header-actions {
   display: flex;
+  align-items: center;
   gap: 7px;
+  margin-left: auto;
+}
+
+.history-width-presets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.history-width-presets button {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .history-meta {
