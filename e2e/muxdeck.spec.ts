@@ -5187,10 +5187,11 @@ test("saved workspace survives reload and device handoff without touching tmux p
   }
 });
 
-test("desktop pane view keeps embedded input controls flush and visible", async ({
-  page,
-  request,
-}) => {
+async function withPaneView(
+  page: Page,
+  request: APIRequestContext,
+  check: () => Promise<void>,
+): Promise<void> {
   const leftSession = `${sessionName}-pane-left`;
   const rightSession = `${sessionName}-pane-right`;
   const layoutId = `pane-input-fit-${process.pid}`;
@@ -5244,6 +5245,28 @@ test("desktop pane view keeps embedded input controls flush and visible", async 
     await expect(consoles).toHaveCount(2);
     await expect(page.locator(".embedded-console .connection-badge")).toHaveCount(2);
 
+    await check();
+  } finally {
+    if (workspaceId) {
+      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    }
+    for (const name of [leftSession, rightSession]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], {
+          stdio: "ignore",
+        });
+      } catch {
+        // Cleanup stays scoped to this test's sessions on the disposable socket.
+      }
+    }
+  }
+}
+
+test("desktop pane view keeps embedded input controls flush and visible", async ({
+  page, request,
+}) => {
+  await withPaneView(page, request, async () => {
+    const consoles = page.locator(".embedded-console");
     const metrics = await consoles.evaluateAll((elements) => elements.map((root) => {
       const dock = root.querySelector<HTMLElement>(":scope > .input-dock");
       const composer = dock?.querySelector<HTMLElement>(".staged-composer");
@@ -5269,20 +5292,43 @@ test("desktop pane view keeps embedded input controls flush and visible", async 
       expect(metric.composerInsideDock).toBe(true);
       expect(metric.inputBarInsideDock).toBe(true);
     }
-  } finally {
-    if (workspaceId) {
-      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
-    }
-    for (const name of [leftSession, rightSession]) {
-      try {
-        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], {
-          stdio: "ignore",
-        });
-      } catch {
-        // Cleanup stays scoped to this test's sessions on the disposable socket.
-      }
-    }
-  }
+  });
+});
+
+test("desktop pane view headers follow light and dark themes", async ({
+  page, request,
+}, testInfo) => {
+  await withPaneView(page, request, async () => {
+    const header = page.locator(".workspace-pane-header");
+    const paneToolbar = page.locator(".workspace-pane-leaf-toolbar").first();
+    const themeToggle = page.getByRole("button", { name: "Light theme", exact: true }).first();
+    const paneSession = paneToolbar.getByRole("combobox");
+    await expect(header).toHaveCSS("background-color", "rgba(18, 23, 18, 0.97)");
+    await expect(paneToolbar).toHaveCSS("background-color", "rgb(21, 26, 20)");
+    await themeToggle.click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(header).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await expect(header).toHaveCSS("color", "rgb(34, 38, 31)");
+    await expect(page.locator(".workspace-pane-top-strip")).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await expect(paneToolbar).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await expect(paneSession).toHaveCSS("color", "rgb(34, 38, 31)");
+    await expect(paneSession).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await header.getByRole("button", { name: "Rename pane view Input fit" }).click();
+    const nameInput = header.getByRole("textbox", { name: "Pane view name" });
+    await expect(nameInput).toHaveCSS("color", "rgb(34, 38, 31)");
+    await expect(nameInput).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await nameInput.press("Escape");
+    await header.getByRole("button", { name: /Navigate/ }).click();
+    await expect(header.getByRole("button", { name: /Navigating/ }))
+      .toHaveCSS("color", "rgb(8, 122, 112)");
+    await page.keyboard.press("Escape");
+    await page.screenshot({ path: testInfo.outputPath("pane-view-light.png") });
+    await themeToggle.click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(header).toHaveCSS("background-color", "rgba(18, 23, 18, 0.97)");
+    await expect(paneToolbar).toHaveCSS("background-color", "rgb(21, 26, 20)");
+    await page.screenshot({ path: testInfo.outputPath("pane-view-dark.png") });
+  });
 });
 
 test("global session pin deduplicates saved, inherited, and future workspaces", async ({
