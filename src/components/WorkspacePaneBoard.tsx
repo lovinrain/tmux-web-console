@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -20,12 +21,18 @@ import {
   EditIcon,
   GridIcon,
   ListIcon,
+  MoveIcon,
   PlusIcon,
   SaveIcon,
   TrashIcon,
   WindowMoveIcon,
 } from "../icons";
 import { sessionDisplayTitle } from "../sessionDashboardModel";
+import {
+  hasWorkspaceSessionDrag,
+  readWorkspaceSessionDrag,
+  WORKSPACE_SESSION_DRAG_TYPE,
+} from "../workspaceSessionDrag";
 import {
   PANE_NAVIGATION_ACTION,
   SHORTCUT_ACTION_EVENT,
@@ -120,6 +127,7 @@ export function WorkspacePaneBoard({
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(layout.name);
   const [saving, setSaving] = useState(false);
+  const [sessionDropPaneId, setSessionDropPaneId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [paneNavigationArmed, setPaneNavigationArmed] = useState(false);
@@ -134,6 +142,25 @@ export function WorkspacePaneBoard({
   const resizeDragRef = useRef<ResizeDrag | null>(null);
   draftRef.current = draft;
   activePaneIdRef.current = activePaneId;
+
+  useEffect(() => {
+    const clearDropPreview = () => setSessionDropPaneId(null);
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") clearDropPreview();
+    };
+    window.addEventListener("dragend", clearDropPreview, true);
+    window.addEventListener("drop", clearDropPreview);
+    window.addEventListener("blur", clearDropPreview);
+    window.addEventListener("keydown", cancelOnEscape, true);
+    return () => {
+      window.removeEventListener("dragend", clearDropPreview, true);
+      window.removeEventListener("drop", clearDropPreview);
+      window.removeEventListener("blur", clearDropPreview);
+      window.removeEventListener("keydown", cancelOnEscape, true);
+    };
+  }, []);
+
+  useEffect(() => setSessionDropPaneId(null), [layout.id, saving]);
 
   useEffect(() => {
     setDraft(layout);
@@ -340,6 +367,41 @@ export function WorkspacePaneBoard({
     void commit(assignWorkspacePaneSession(draftRef.current, pane.id, session));
   };
 
+  const sessionDropDisabled = saving
+    || workspacePersistenceState === "loading"
+    || workspacePersistenceState === "error";
+
+  const previewSessionDrop = (
+    event: ReactDragEvent<HTMLElement>,
+    pane: WorkspaceSessionPane,
+  ) => {
+    if (!hasWorkspaceSessionDrag(event.dataTransfer)) return;
+    // Capture session drops before terminal/composer drop handlers can paste text.
+    event.preventDefault();
+    event.stopPropagation();
+    const disabled = sessionDropDisabled || isCompactWorkspaceViewport();
+    event.dataTransfer.dropEffect = disabled ? "none" : "move";
+    setSessionDropPaneId(disabled ? null : pane.id);
+  };
+
+  const dropSession = (
+    event: ReactDragEvent<HTMLElement>,
+    pane: WorkspaceSessionPane,
+  ) => {
+    if (!hasWorkspaceSessionDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSessionDropPaneId(null);
+    if (sessionDropDisabled || isCompactWorkspaceViewport()) return;
+    const sessionName = readWorkspaceSessionDrag(event.dataTransfer, openSessions);
+    if (!sessionName) {
+      setError("This session is not in the current workspace.");
+      return;
+    }
+    disarmPaneNavigation();
+    assignSession(pane, sessionName);
+  };
+
   const splitPane = (
     pane: WorkspaceSessionPane,
     direction: WorkspacePaneSplit["direction"],
@@ -437,6 +499,14 @@ export function WorkspacePaneBoard({
           active && paneNavigationArmed ? "navigation-target" : "",
         ].filter(Boolean).join(" ")}
         data-pane-id={pane.id}
+        data-session-drop-active={sessionDropPaneId === pane.id ? "true" : undefined}
+        onDragEnterCapture={(event) => previewSessionDrop(event, pane)}
+        onDragOverCapture={(event) => previewSessionDrop(event, pane)}
+        onDropCapture={(event) => dropSession(event, pane)}
+        onDragLeaveCapture={(event) => {
+          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          setSessionDropPaneId((current) => current === pane.id ? null : current);
+        }}
         onPointerDownCapture={() => {
           activePaneIdRef.current = pane.id;
           setActivePaneId(pane.id);
@@ -445,6 +515,25 @@ export function WorkspacePaneBoard({
       >
         <header className="workspace-pane-leaf-toolbar">
           <span className="workspace-pane-leaf-mark" aria-hidden="true" />
+          {pane.session && (
+            <span
+              className="workspace-pane-session-drag-handle"
+              role="img"
+              aria-label={`Drag ${selectedSession ? sessionDisplayTitle(selectedSession) : pane.session} to another pane`}
+              title="Drag this session to another pane"
+              draggable={!sessionDropDisabled}
+              onDragStart={(event) => {
+                if (sessionDropDisabled || isCompactWorkspaceViewport()) {
+                  event.preventDefault();
+                  return;
+                }
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData(WORKSPACE_SESSION_DRAG_TYPE, pane.session!);
+              }}
+            >
+              <MoveIcon />
+            </span>
+          )}
           <label>
             <span>Session</span>
             <select
@@ -512,10 +601,16 @@ export function WorkspacePaneBoard({
               <div className="workspace-pane-empty">
                 <GridIcon />
                 <strong>Empty pane</strong>
-                <p>Choose an open workspace session, then split this pane again whenever you need more.</p>
+                <p>Choose a workspace session above or drag one into this pane.</p>
               </div>
             )}
         </div>
+        {sessionDropPaneId === pane.id && (
+          <div className="workspace-pane-session-drop" role="status">
+            <MoveIcon />
+            <strong>Drop session into this pane</strong>
+          </div>
+        )}
         {pane.session && !selectedSession && (
           <span className="workspace-pane-session-unavailable" role="status">
             Waiting for {pane.session} to become available

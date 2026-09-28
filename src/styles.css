@@ -16390,6 +16390,17 @@ html.history-resizing * {
     min-height: 0;
   }
 
+  .workspace-pane-screen[data-desktop-tabs="horizontal"] .workspace-navigation-horizontal {
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .workspace-pane-screen[data-desktop-tabs="horizontal"] .workspace-tab-viewport {
+    height: 50px;
+    flex: 0 0 100%;
+    order: -1;
+  }
+
   .workspace-pane-canvas {
     position: relative;
     display: block;
@@ -16659,6 +16670,50 @@ html.history-resizing * {
     flex: 0 0 auto;
     align-items: center;
     gap: 3px;
+  }
+
+  .workspace-pane-session-drag-handle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 26px;
+    color: var(--muted);
+  }
+
+  .workspace-pane-session-drag-handle[draggable="true"] {
+    cursor: grab;
+  }
+
+  .workspace-pane-session-drag-handle[draggable="true"]:hover {
+    color: var(--cyan);
+  }
+
+  .workspace-pane-session-drag-handle svg {
+    width: 15px;
+    pointer-events: none;
+  }
+
+  .workspace-pane-session-drop {
+    position: absolute;
+    z-index: 90;
+    inset: 4px;
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 10px;
+    color: var(--paper);
+    background: color-mix(in srgb, var(--ink-raised) 92%, transparent);
+    border: 2px dashed var(--cyan);
+    border-radius: 4px;
+    pointer-events: none;
+    font-size: 14px;
+  }
+
+  .workspace-pane-session-drop svg {
+    width: 28px;
+    color: var(--cyan);
   }
 
   .workspace-pane-leaf-actions button {

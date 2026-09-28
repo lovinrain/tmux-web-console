@@ -54,17 +54,19 @@ async function authenticateRequest(request: APIRequestContext): Promise<void> {
   expect(response.ok()).toBe(true);
 }
 
-async function trackTerminalKeydownFrames(page: Page): Promise<() => Promise<number>> {
-  await page.evaluate(() => {
-    const terminalFramesSentDuringKeydown: string[] = [];
-    let handlingKeydown = false;
+async function trackTerminalInputFrames(page: Page, events = ["keydown"]): Promise<() => Promise<number>> {
+  await page.evaluate((eventTypes) => {
+    const terminalFramesSentDuringInput: string[] = [];
+    let handlingInputEvent = false;
     const nativeSend = WebSocket.prototype.send;
-    window.addEventListener("keydown", () => {
-      handlingKeydown = true;
-      window.queueMicrotask(() => {
-        handlingKeydown = false;
-      });
-    }, { capture: true });
+    for (const type of eventTypes) {
+      window.addEventListener(type, () => {
+        handlingInputEvent = true;
+        window.queueMicrotask(() => {
+          handlingInputEvent = false;
+        });
+      }, { capture: true });
+    }
     WebSocket.prototype.send = function send(data) {
       let isResize = false;
       if (typeof data === "string") {
@@ -74,15 +76,15 @@ async function trackTerminalKeydownFrames(page: Page): Promise<() => Promise<num
           // A non-JSON string is terminal input.
         }
       }
-      if (handlingKeydown && this.url.includes("/ws/terminal") && !isResize) {
-        terminalFramesSentDuringKeydown.push(this.url);
+      if (handlingInputEvent && this.url.includes("/ws/terminal") && !isResize) {
+        terminalFramesSentDuringInput.push(this.url);
       }
       return nativeSend.call(this, data);
     };
     Object.defineProperty(window, "__muxdeckDesktopFocusTerminalFrames", {
-      value: terminalFramesSentDuringKeydown,
+      value: terminalFramesSentDuringInput,
     });
-  });
+  }, events);
   return () => page.evaluate(() => (
     window as Window & { __muxdeckDesktopFocusTerminalFrames: string[] }
   ).__muxdeckDesktopFocusTerminalFrames.length);
@@ -2211,7 +2213,7 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   });
   await expect.poll(() => terminalSocketCount).toBe(1);
 
-  const terminalKeydownFrameCount = await trackTerminalKeydownFrames(page);
+  const terminalKeydownFrameCount = await trackTerminalInputFrames(page);
 
   const shell = page.locator(".console-shell");
   const terminalStage = page.locator(".terminal-stage");
@@ -2484,7 +2486,7 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     await expect(page.locator(".connection-badge")).toContainText("Live");
     await page.getByRole("textbox", { name: "Staged input" }).fill("Keep this session draft");
 
-    const terminalKeydownFrameCount = await trackTerminalKeydownFrames(page);
+    const terminalKeydownFrameCount = await trackTerminalInputFrames(page);
 
     const shell = page.locator(".console-shell");
     const enterFocus = page.getByRole("button", { name: "Enter desktop terminal focus" });
@@ -5190,7 +5192,8 @@ test("saved workspace survives reload and device handoff without touching tmux p
 async function withPaneView(
   page: Page,
   request: APIRequestContext,
-  check: () => Promise<void>,
+  check: (fixture: { leftSession: string; rightSession: string; workspaceId: string }) => Promise<void>,
+  extraSessions: string[] = [],
 ): Promise<void> {
   const leftSession = `${sessionName}-pane-left`;
   const rightSession = `${sessionName}-pane-right`;
@@ -5214,7 +5217,7 @@ async function withPaneView(
     const response = await request.post("/mux/api/workspaces", {
       data: {
         name: `Pane input fit ${process.pid}`,
-        tabs: [leftSession, rightSession],
+        tabs: [leftSession, rightSession, ...extraSessions],
         groups: [],
         activeSession: leftSession,
         paneLayouts: [{
@@ -5239,16 +5242,21 @@ async function withPaneView(
       `/mux/panes/${encodeURIComponent(layoutId)}`
         + `?workspace=${encodeURIComponent(workspaceId)}`
         + `&tab=${encodeURIComponent(leftSession)}`
-        + `&tab=${encodeURIComponent(rightSession)}`,
+        + `&tab=${encodeURIComponent(rightSession)}`
+        + extraSessions.map((name) => `&tab=${encodeURIComponent(name)}`).join(""),
     );
     const consoles = page.locator(".embedded-console");
     await expect(consoles).toHaveCount(2);
     await expect(page.locator(".embedded-console .connection-badge")).toHaveCount(2);
 
-    await check();
+    await check({ leftSession, rightSession, workspaceId });
   } finally {
     if (workspaceId) {
-      await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      try {
+        await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+      } catch {
+        // The isolated server may already be closed after a test timeout.
+      }
     }
     for (const name of [leftSession, rightSession]) {
       try {
@@ -5330,6 +5338,63 @@ test("desktop pane view headers follow light and dark themes", async ({
     await page.screenshot({ path: testInfo.outputPath("pane-view-dark.png") });
   });
 });
+
+for (const orientation of ["horizontal", "vertical"] as const) {
+  test("workspace tabs and pane handles drag sessions into panes: " + orientation, async ({
+    page, request,
+  }, testInfo) => {
+    await page.evaluate((value) => localStorage.setItem("muxdeck-desktop-tab-orientation", value), orientation);
+    await withPaneView(page, request, async ({ leftSession, rightSession, workspaceId }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const originalUrl = page.url();
+      const identities = [leftSession, rightSession, sessionName].map(workspaceTmuxIdentity);
+      const terminalInputFrames = await trackTerminalInputFrames(page, ["drop"]);
+      const leftPane = page.locator('.workspace-pane-leaf[data-pane-id="left"]');
+      const rightPane = page.locator('.workspace-pane-leaf[data-pane-id="right"]');
+      const leftSelector = leftPane.getByRole("combobox", { name: "Session shown in pane left" });
+      const rightSelector = rightPane.getByRole("combobox", { name: "Session shown in pane right" });
+      await expect(page.locator(".workspace-pane-screen")).toHaveAttribute("data-desktop-tabs", orientation);
+      const spareTab = page.getByRole("tab", { name: new RegExp(`^${sessionName},`) });
+
+      await spareTab.dragTo(leftPane.locator(".terminal-host"));
+      await expect(leftSelector).toHaveValue(sessionName);
+      await expect(rightSelector).toHaveValue(rightSession);
+      await expect(leftSelector).toBeEnabled();
+      expect(page.url()).toBe(originalUrl);
+
+      await page.getByRole("button", { name: "Light theme", exact: true }).first().click();
+      const handle = leftPane.getByRole("img", { name: `Drag ${sessionName} to another pane` });
+      await handle.dragTo(rightPane.locator(".terminal-host"));
+      await expect(leftSelector).toHaveValue("");
+      await expect(rightSelector).toHaveValue(sessionName);
+      await expect(rightSelector).toBeEnabled();
+      await expect(page.locator(".workspace-pane-session-drop")).toHaveCount(0);
+
+      await page.getByRole("tab", { name: new RegExp(`^${leftSession},`) })
+        .dragTo(leftPane.locator(".workspace-pane-empty"));
+      await expect(leftSelector).toHaveValue(leftSession);
+      await expect(leftSelector).toBeEnabled();
+      expect(await terminalInputFrames()).toBe(0);
+      expect([leftSession, rightSession, sessionName].map(workspaceTmuxIdentity)).toEqual(identities);
+      await expect.poll(async () => {
+        const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
+        const workspace = (await response.json()).workspace;
+        return { tabs: workspace.tabs, root: workspace.paneLayouts[0].root };
+      }).toEqual({
+        tabs: [leftSession, rightSession, sessionName],
+        root: {
+          id: "root-split", kind: "split", direction: "horizontal", ratio: 0.5,
+          first: { id: "left", kind: "pane", session: leftSession },
+          second: { id: "right", kind: "pane", session: sessionName },
+        },
+      });
+      await page.screenshot({ path: testInfo.outputPath("pane-session-drag-light.png") });
+      await page.reload();
+      await expect(leftSelector).toHaveValue(leftSession);
+      await expect(rightSelector).toHaveValue(sessionName);
+    }, [sessionName]);
+  });
+}
 
 test("global session pin deduplicates saved, inherited, and future workspaces", async ({
   page,

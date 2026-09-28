@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useContext } from "react";
+import { useContext, type ComponentProps } from "react";
 import type { WorkspacePaneLayout } from "../api";
 import type { Session } from "../types";
 import { WorkspacePaneBoard } from "./WorkspacePaneBoard";
 import { ActivePaneSessionContext } from "./SessionWorkspaceNavigation";
+import { WORKSPACE_SESSION_DRAG_TYPE } from "../workspaceSessionDrag";
 
 const layout: WorkspacePaneLayout = {
   id: "pair",
@@ -68,7 +69,118 @@ function session(name: string): Session {
 
 afterEach(() => vi.restoreAllMocks());
 
+function sessionTransfer(data: Record<string, string>): DataTransfer {
+  const transfer = {
+    types: Object.keys(data),
+    dropEffect: "none",
+    effectAllowed: "uninitialized",
+    getData: vi.fn((type: string) => data[type] ?? ""),
+    setData: vi.fn((type: string, value: string) => {
+      data[type] = value;
+      transfer.types = Object.keys(data);
+    }),
+  };
+  return transfer as unknown as DataTransfer;
+}
+
+function renderDropBoard(overrides: Partial<ComponentProps<typeof WorkspacePaneBoard>> = {}) {
+  const onChange = vi.fn(async (_layout: WorkspacePaneLayout) => undefined);
+  const terminalDrop = vi.fn();
+  const view = render(<WorkspacePaneBoard
+    layout={pairLayout}
+    openSessions={["alpha", "beta", "gamma"]}
+    sessions={[session("alpha"), session("beta"), session("gamma")]}
+    sessionNavigation={<nav />}
+    desktopTabOrientation="horizontal"
+    desktopTabRailWidth={288}
+    workspacePersistenceState="saved"
+    onChange={onChange}
+    onDelete={vi.fn()}
+    onExit={vi.fn()}
+    renderSession={(name, paneId) => (
+      <div data-testid={`terminal-${paneId}`} onDrop={terminalDrop}>{name}</div>
+    )}
+    {...overrides}
+  />);
+  return { ...view, onChange, terminalDrop };
+}
+
 describe("WorkspacePaneBoard", () => {
+  it("moves a dropped workspace session and intercepts the terminal drop", async () => {
+    const { onChange, terminalDrop } = renderDropBoard();
+    const target = screen.getByTestId("terminal-right");
+    const pane = target.closest(".workspace-pane-leaf")!;
+    const dataTransfer = sessionTransfer({ [WORKSPACE_SESSION_DRAG_TYPE]: "alpha", "text/plain": "alpha" });
+    expect(fireEvent.dragEnter(target, { dataTransfer })).toBe(false);
+    expect(fireEvent.dragOver(target, { dataTransfer })).toBe(false);
+    expect(dataTransfer.getData).not.toHaveBeenCalled(); // Browser data is protected until drop.
+    expect(pane).toHaveAttribute("data-session-drop-active", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("Drop session into this pane");
+    expect(fireEvent.drop(target, { dataTransfer })).toBe(false);
+    expect(terminalDrop).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
+    expect(screen.getByRole("combobox", { name: "Session shown in pane left" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Session shown in pane right" })).toHaveValue("alpha");
+    expect(pane).toHaveClass("active");
+    expect(pane).not.toHaveAttribute("data-session-drop-active");
+    expect(screen.queryByText("Drop session into this pane")).not.toBeInTheDocument();
+  });
+
+  it("uses a pane session handle as a drag source and clears a canceled preview", () => {
+    const { onChange } = renderDropBoard();
+    const handle = screen.getByRole("img", { name: "Drag alpha to another pane" });
+    const dataTransfer = sessionTransfer({});
+    expect(handle).toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(handle, { dataTransfer });
+    expect(dataTransfer.getData(WORKSPACE_SESSION_DRAG_TYPE)).toBe("alpha");
+    const target = screen.getByTestId("terminal-right");
+    fireEvent.dragEnter(target, { dataTransfer });
+    fireEvent.dragLeave(target, { relatedTarget: document.body });
+    expect(screen.queryByText("Drop session into this pane")).not.toBeInTheDocument();
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.dragEnd(handle, { dataTransfer });
+    expect(screen.queryByText("Drop session into this pane")).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["plain text", { "text/plain": "alpha" }, false],
+    ["files", { Files: "", [WORKSPACE_SESSION_DRAG_TYPE]: "alpha" }, false],
+    ["another workspace", { [WORKSPACE_SESSION_DRAG_TYPE]: "outside" }, true],
+    ["empty session", { [WORKSPACE_SESSION_DRAG_TYPE]: "" }, true],
+  ] as const)("does not assign a pane from %s", (_label, data, captured) => {
+    const { onChange, terminalDrop } = renderDropBoard();
+    const target = screen.getByTestId("terminal-right");
+    expect(fireEvent.drop(target, { dataTransfer: sessionTransfer({ ...data }) })).toBe(!captured);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(terminalDrop).toHaveBeenCalledTimes(captured ? 0 : 1);
+  });
+
+  it.each(["loading", "error"] as const)("rejects drops while the workspace is %s", (workspacePersistenceState) => {
+    const { onChange, terminalDrop } = renderDropBoard({ workspacePersistenceState });
+    const target = screen.getByTestId("terminal-right");
+    const dataTransfer = sessionTransfer({ [WORKSPACE_SESSION_DRAG_TYPE]: "alpha" });
+    fireEvent.dragOver(target, { dataTransfer });
+    expect(dataTransfer.dropEffect).toBe("none");
+    fireEvent.drop(target, { dataTransfer });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(terminalDrop).not.toHaveBeenCalled();
+  });
+
+  it("does not save an unchanged assignment or start overlapping saves and reports a failed drop", async () => {
+    let rejectSave!: (reason: Error) => void;
+    const onChange = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSave = reject; }));
+    renderDropBoard({ onChange });
+    const target = screen.getByTestId("terminal-right");
+    fireEvent.drop(target, { dataTransfer: sessionTransfer({ [WORKSPACE_SESSION_DRAG_TYPE]: "beta" }) });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.drop(target, { dataTransfer: sessionTransfer({ [WORKSPACE_SESSION_DRAG_TYPE]: "alpha" }) });
+    fireEvent.drop(target, { dataTransfer: sessionTransfer({ [WORKSPACE_SESSION_DRAG_TYPE]: "gamma" }) });
+    expect(onChange).toHaveBeenCalledOnce();
+    await act(async () => rejectSave(new Error("Unable to save this layout")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Unable to save this layout");
+  });
+
   it("arms pane navigation and moves active terminal focus geometrically", () => {
     function ActiveSessionProbe() {
       return <span data-testid="active-command-session">{useContext(ActivePaneSessionContext)}</span>;

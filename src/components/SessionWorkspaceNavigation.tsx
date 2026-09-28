@@ -55,6 +55,7 @@ import {
 } from "../shortcutSettings";
 import type { AgentState, Pane, Session } from "../types";
 import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
+import { WORKSPACE_SESSION_DRAG_TYPE } from "../workspaceSessionDrag";
 import {
   expandWorkspaceTabSelection,
   MAX_WORKSPACE_TAB_GROUPS,
@@ -2205,7 +2206,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   );
   const desktopTabDragEnabled = Boolean(
     onMoveTab
-    && openSessions.length > 1
+    && (openSessions.length > 1 || (activePaneLayoutId && openSessions.length > 0))
     && !compactViewport
     && tabsVisible,
   );
@@ -2387,6 +2388,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     workspaceTabDragSessionsRef.current = sessionNames;
     setWorkspaceTabDrag({ sessionNames, target: null });
     event.dataTransfer.effectAllowed = "move";
+    // A pane accepts the grabbed session, even when tabs are multi-selected.
+    event.dataTransfer.setData(WORKSPACE_SESSION_DRAG_TYPE, sessionName);
     event.dataTransfer.setData("text/plain", sessionNames.join("\n"));
     if (sessionNames.length > 1) {
       event.dataTransfer.setData("application/x-muxdeck-tabs", JSON.stringify(sessionNames));

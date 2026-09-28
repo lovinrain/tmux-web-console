@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
 import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
 import { moveWorkspaceSession, moveWorkspaceSessions } from "../workspaceState";
+import { WORKSPACE_SESSION_DRAG_TYPE } from "../workspaceSessionDrag";
 import {
   PANE_NAVIGATION_ACTION,
   SHORTCUT_ACTION_EVENT,
@@ -2072,6 +2073,7 @@ describe("SessionWorkspaceNavigation", () => {
     expect(alpha).toHaveAttribute("draggable", "true");
     fireEvent.dragStart(alpha, { dataTransfer });
     expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "alpha");
+    expect(dataTransfer.setData).toHaveBeenCalledWith(WORKSPACE_SESSION_DRAG_TYPE, "alpha");
     expect(alphaContainer).toHaveAttribute("data-tab-dragging", "true");
 
     fireEvent.dragOver(zuluContainer, {
@@ -2095,6 +2097,19 @@ describe("SessionWorkspaceNavigation", () => {
       "Alpha control moved to position 3 of 3.",
       { selector: "[role='status']" },
     )).toBeInTheDocument();
+  });
+
+  it("allows a workspace's only tab to be dragged into a pane view", () => {
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      openSessions: ["alpha"],
+      activePaneLayoutId: "pair",
+      onMoveTab: vi.fn(),
+    })} />);
+    const tab = screen.getByRole("tab", { name: "Alpha control, Needs input" });
+    const dataTransfer = dragDataTransfer();
+    expect(tab).toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(tab, { dataTransfer });
+    expect(dataTransfer.setData).toHaveBeenCalledWith(WORKSPACE_SESSION_DRAG_TYPE, "alpha");
   });
 
   it("selects desktop tab ranges and clears the move selection on a normal click or Escape", () => {
@@ -2258,6 +2273,7 @@ describe("SessionWorkspaceNavigation", () => {
       "application/x-muxdeck-tabs",
       JSON.stringify(["beta", "zulu"]),
     );
+    expect(dataTransfer.setData).toHaveBeenCalledWith(WORKSPACE_SESSION_DRAG_TYPE, "zulu");
     expect(betaContainer).toHaveAttribute("data-tab-dragging", "true");
     expect(zuluContainer).toHaveAttribute("data-tab-dragging", "true");
 
