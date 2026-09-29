@@ -1,11 +1,12 @@
 """Claude status regressions for the expandable panel below its input footer."""
 
 from dataclasses import replace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from tmux_console.status import classify_agent_state
-from tmux_console.tmux import Pane
+from tmux_console.status import AgentStateDetector, classify_agent_state
+from tmux_console.tmux import Pane, Session, TmuxClient
 
 CLAUDE_MODE_FOOTER = "⏵⏵ bypass permissions on (shift+tab to cycle)"
 CLAUDE_RUNNING_STATUS = (
@@ -133,6 +134,109 @@ def test_idle_prompt_remains_ready_with_an_expanded_agent_panel(
 
     assert state.name == "waiting_human"
     assert state.reason == "Claude is paused at its input prompt"
+
+
+RUNNING_AGENT_PANEL = (
+    "  ● main\n"
+    "  ◯ general-purpose  Checking review evidence          15m 15s · ↓ 347.9k tokens\n"
+    "  ◯ general-purpose  Reading a fixture                 14m 7s · ↓ 309.3k tokens\n"
+    "  ↓ 3 more"
+)
+
+
+@pytest.mark.parametrize("title", ["✳ Review changes", "build-host", "◐ Claude Code"])
+def test_idle_main_stays_working_while_subagents_show_live_progress(title: str):
+    # The parent has finished its response and shows neither a wait headline nor
+    # an interrupt hint, but its current agent panel still contains live workers.
+    screen = input_screen(
+        transcript="● The background reviewers are checking the results.",
+        footer=f"{CLAUDE_MODE_FOOTER} · ← 4 agents · ↓ to manage",
+        panel=RUNNING_AGENT_PANEL,
+    )
+
+    state = classify_agent_state(claude_pane(title), visible_screen=screen, now=1000)
+
+    assert state.name == "working"
+    assert state.reason == "Claude has active background agents"
+
+
+@pytest.mark.parametrize(
+    "progress",
+    ["0s · ↓ 0 tokens", "3m 2s · ↓ 12.5k tokens", "1h 2m 3s · ↓ 1.2M tokens"],
+)
+def test_subagent_progress_can_wrap_and_appear_above_a_long_roster(progress: str):
+    panel = (
+        "  ● main\n"
+        f"  ◯ Plan  Reviewing a long task\n      {progress}\n"
+        + "\n".join(f"  ◯ helper  Task {index}" for index in range(24))
+    )
+
+    state = classify_agent_state(
+        claude_pane(), visible_screen=input_screen(panel=panel), now=1000
+    )
+
+    assert state.name == "working"
+
+
+def test_subagent_progress_requires_fresh_pane_activity():
+    state = classify_agent_state(
+        replace(claude_pane(), activity=900),
+        visible_screen=input_screen(panel=RUNNING_AGENT_PANEL),
+        now=1000,
+    )
+
+    assert state.name == "unknown"
+
+
+@pytest.mark.parametrize(
+    "screen",
+    [
+        input_screen(transcript=RUNNING_AGENT_PANEL),
+        input_screen(prompt=f"❯ Document this display:\n{RUNNING_AGENT_PANEL}"),
+        input_screen(footer="", panel=RUNNING_AGENT_PANEL),
+        input_screen(panel=RUNNING_AGENT_PANEL)
+        + "\n● The reviewers finished.\n❯ \n" + CLAUDE_MODE_FOOTER,
+        input_screen(panel=RUNNING_AGENT_PANEL)
+        + "\n● The reviewers finished.",
+        input_screen(panel="  ● main\n  ◯ helper  Explain '15m 15s · ↓ 347.9k tokens'"),
+        input_screen(panel="  ● main\n  ✓ helper  Completed          15m 15s · ↓ 347.9k tokens"),
+        input_screen(footer=f"{CLAUDE_MODE_FOOTER} · ← 4 agents · ↓ to manage"),
+    ],
+)
+def test_old_quoted_or_completed_agent_rows_do_not_make_an_idle_main_working(screen: str):
+    assert classify_agent_state(
+        claude_pane(), visible_screen=screen, now=1000
+    ).name == "waiting_human"
+
+
+def test_running_shell_keeps_command_status_when_subagents_are_also_active():
+    screen = input_screen(
+        footer=f"{CLAUDE_MODE_FOOTER} · 1 shell",
+        panel=RUNNING_AGENT_PANEL,
+    )
+
+    assert classify_agent_state(
+        claude_pane(), visible_screen=screen, now=1000
+    ).name == "running_command"
+
+
+async def test_detector_updates_when_background_workers_finish(monkeypatch):
+    monkeypatch.setattr("tmux_console.status.time.time", lambda: 1000)
+    tmux = TmuxClient()
+    capture = AsyncMock(side_effect=[
+        input_screen(panel=RUNNING_AGENT_PANEL),
+        input_screen(transcript="● The reviewers finished.", panel=agent_panel()),
+    ])
+    monkeypatch.setattr(tmux, "capture_visible", capture)
+    session = Session(
+        name="review", id="$1", windows=1, attached=0, created=1,
+        panes=[claude_pane()],
+    )
+    detector = AgentStateDetector(cache_seconds=0)
+
+    assert (await detector.detect_sessions(tmux, [session]))[session.name].name == "working"
+    assert (await detector.detect_sessions(tmux, [session]))[session.name].name == "waiting_human"
+    assert capture.await_count == 2
 
 
 @pytest.mark.parametrize("title", ["✳ Review changes", "build-host"])

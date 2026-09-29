@@ -107,6 +107,12 @@ CLAUDE_AGENT_PANEL_HEADER_PATTERN = re.compile(r"^\s*[●○◯]\s+main\s*$")
 CLAUDE_AGENT_PANEL_ROW_PATTERN = re.compile(
     r"^\s+(?:[●○◯]\s+\S.*|[↓↑]\s+\d+\s+more)\s*$"
 )
+# A current worker row includes its elapsed runtime and live token counter.
+# Names, agent counts, and completed/quoted rows alone are not activity signals.
+CLAUDE_AGENT_PROGRESS_PATTERN = re.compile(
+    r"^[●○◯]\s+\S.*?\s+(?:\d+[hms]\s+){1,3}·\s+↓\s+"
+    r"\d+(?:\.\d+)?[kKmM]?\s+tokens\s*$"
+)
 # Cursor's interrupt hint sits in the footer during a live turn, but it is drawn
 # as a placeholder, so typing a follow-up mid-turn hides it again.
 CURSOR_RUNNING_PATTERN = re.compile(
@@ -190,8 +196,9 @@ def _claude_background_work_state(screen: str) -> AgentState | None:
     return None
 
 
-def _claude_footer(screen: str) -> list[str]:
+def _claude_footer_and_agents(screen: str) -> tuple[list[str], list[str]]:
     lines = _rendered_lines(screen)
+    agents: list[str] = []
     prompt = next(
         (
             index
@@ -219,11 +226,31 @@ def _claude_footer(screen: str) -> list[str]:
                 for line in lines[index + 1 :]
             ):
                 continue
+            agents = lines[index + 1 :]
             lines = lines[:index]
             while lines and not lines[-1].strip():
                 lines.pop()
             break
-    return lines[-CLAUDE_FOOTER_LINES:]
+    return lines[-CLAUDE_FOOTER_LINES:], agents
+
+
+def _claude_footer(screen: str) -> list[str]:
+    return _claude_footer_and_agents(screen)[0]
+
+
+def _claude_has_running_agents(screen: str) -> bool:
+    _, agents = _claude_footer_and_agents(screen)
+    row = ""
+    for line in agents:
+        if CLAUDE_AGENT_PANEL_ROW_PATTERN.fullmatch(line):
+            row = line.strip()
+        elif line.startswith("  ") and row:
+            row += " " + line.strip()
+        else:
+            row = ""
+        if CLAUDE_AGENT_PROGRESS_PATTERN.fullmatch(row):
+            return True
+    return False
 
 
 def _claude_turn_is_live(screen: str) -> bool:
@@ -470,6 +497,14 @@ def classify_agent_state(
             if _activity_is_stale(pane, now):
                 return AgentState("unknown", "Agent activity indicator is stale")
             return AgentState("running_command", "Claude is running a terminal command")
+        if _claude_has_running_agents(visible_screen):
+            if _activity_is_stale(pane, now):
+                # Explicit background waits can legitimately stop redrawing,
+                # unlike the elapsed counters on current worker rows.
+                return _claude_background_work_state(visible_screen) or AgentState(
+                    "unknown", "Agent activity indicator is stale"
+                )
+            return AgentState("working", "Claude has active background agents")
 
     title = pane.title.strip()
     if _title_has_live_activity(command, title):
