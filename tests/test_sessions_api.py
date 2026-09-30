@@ -345,6 +345,7 @@ async def test_create_session_api_returns_created_native_name():
         assert await response.json() == {
             "session": "muxdeck-abc123def456",
             "sessionId": "$12",
+            "launchMode": "default",
         }
         assert tmux.create_calls == [None]
         assert tmux.create_theme_calls == [None]
@@ -367,6 +368,7 @@ async def test_create_session_api_preserves_a_requested_native_name():
         assert await response.json() == {
             "session": requested_name,
             "sessionId": "$13",
+            "launchMode": "default",
         }
         assert tmux.create_calls == [requested_name]
         assert tmux.create_theme_calls == [None]
@@ -393,6 +395,7 @@ async def test_create_session_api_passes_the_requested_theme(
         assert await response.json() == {
             "session": "themed-work",
             "sessionId": session_id,
+            "launchMode": "default",
         }
         assert tmux.create_calls == ["themed-work"]
         assert tmux.create_theme_calls == [theme]
@@ -419,6 +422,7 @@ async def test_create_session_api_passes_an_exact_working_directory(tmp_path):
         assert await response.json() == {
             "session": "directory-work",
             "sessionId": "$16",
+            "launchMode": "default",
         }
         assert tmux.create_calls == ["directory-work"]
         assert tmux.create_theme_calls == [None]

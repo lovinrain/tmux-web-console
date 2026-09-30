@@ -97,7 +97,8 @@ must rebuild it on the target. An archive of this folder does not include:
   keymap, authentication state, and uploaded attachments stored outside the
   source folder;
 - the SQLite session-recovery registry, including saved CWDs and reference-only
-  coding-agent IDs, and the separate persistent callback-message database;
+  coding-agent IDs, the separate persistent callback-message database, and the
+  persistent launch-request receipt database;
 - browser-local staged drafts and dashboard preferences;
 - in-memory history snapshots or agent-state transition timestamps.
 
@@ -277,8 +278,10 @@ caddy validate --config /etc/caddy/Caddyfile
 ```
 
 Back up the existing unit, the relevant Caddy configuration, all six state JSON
-files, the `sessions.sqlite3` recovery registry when present, the upload
-directory when present, and the old release path. Stop only Muxdeck or use
+files, every configured SQLite database (including recovery, callbacks,
+submitted messages, scrollback and launch requests), the upload directory when
+present, and the old release path. Preserve control and callback credentials
+separately as private secrets when automation access is in scope. Stop only Muxdeck or use
 SQLite's backup API before copying the database so the backup is consistent. Use
 timestamped copies; do not overwrite the only known-good copy. In particular,
 retain the pre-upgrade
@@ -383,6 +386,7 @@ The default source paths are under the old service user's state directory:
 ~/.local/state/muxdeck/auth.json
 ~/.local/state/muxdeck/sessions.sqlite3
 ~/.local/state/muxdeck/callbacks.sqlite3
+~/.local/state/muxdeck/launch-requests.sqlite3
 ~/.local/state/muxdeck/uploads/
 ```
 
@@ -443,6 +447,29 @@ the recovery registry, migrate it as a private `0600` file, and retain it during
 rollback even when the older release does not display messages. The callback
 token file described in section 13 is a separate secret: migrate it privately
 only when agent callback access should carry over.
+
+Programmatic launch idempotency uses a separate private
+`launch-requests.sqlite3`, overridden by `MUXDECK_LAUNCH_REQUESTS_FILE`, beside
+the configured recovery registry. Schema version 1 stores request fingerprints,
+reservations and creation receipts, not the original argument vector or
+environment overlay. Back it up with SQLite's backup API alongside the other
+databases, migrate it as a private `0600` file, and retain it during rollback.
+Deleting or replacing it with an older copy can permit a previously submitted
+request ID to launch again. An interrupted pending reservation deliberately
+returns an uncertain `409`; inspect the tmux inventory and controller evidence
+instead of deleting the reservation or blindly creating a new attempt.
+This feature does not change workspace or session-registry schemas.
+All request IDs remain indefinitely, with a 100,000-ID lifetime cap; after
+that, new IDs are refused. Do not remove the database as space/capacity cleanup
+while prior request retries could occur.
+
+The control-token file described in section 13 is a separate secret. Migrate it
+privately only when shell-control access should carry over. Keep it outside
+source archives and ordinary evidence; never print its contents. The local
+stdio bridge's temporary Unix sockets are not persistent state and must not be
+archived or migrated. A bridge invocation is owned by its controller and is
+cancelled if that controller disconnects; detached interactive sessions retain
+their normal tmux lifetime.
 
 The SQLite registry uses `PRAGMA user_version = 2`. Version 1 upgrades in a
 transaction by adding `session_history` and `history_workspaces` and importing
@@ -1062,6 +1089,12 @@ For a failed replacement:
    support it. Before exposing an older unauthenticated release, remove the
    public route or add a separate authenticated proxy/access layer; retaining an
    ignored auth file does not protect old application code.
+   Retain the current `launch-requests.sqlite3` even if the rollback release
+   ignores it. Restoring an older launch-request backup discards newer duplicate
+   fences, so reconcile outstanding attempts before allowing launch traffic
+   after a database restore. Keep the control and callback token files private;
+   retaining an ignored control credential does not grant a rollback release
+   any automation features or protect an otherwise unauthenticated route.
 5. Run `systemctl daemon-reload` and start only `muxdeck.service`.
 6. Recheck local health, external routing, persistent session organization, and
    the recorded tmux identities.
@@ -1142,8 +1175,9 @@ tree:
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
 4. retain the external state directory unchanged and keep timestamped
-   pre-upgrade copies of all six JSON state files, `sessions.sqlite3`, plus the
-   upload directory when it exists;
+   pre-upgrade copies of all six JSON state files, all configured SQLite
+   databases (including `launch-requests.sqlite3`), plus the upload directory
+   when it exists; preserve private credentials separately;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;
@@ -1183,6 +1217,55 @@ the explicit `400` error `unknown field: expectedUpdatedAt`; it remembers that
 decision for the current page, including page-exit requests. It never strips
 the check on `409`. Reload after the backend upgrade to clear that compatibility
 decision and restore guarded writes.
+
+### Trusted controller setup
+
+`muxdeckctl` is installed with the Python package and talks to the existing
+authenticated service. Programmatic launch, capture and input use the existing
+HTTP route/base path; no public port, authentication-mode change or proxy
+exception is needed. The dedicated `MUXDECK_CONTROL_TOKEN_FILE` grants session,
+workspace and callback operations with shell-control privileges, while account,
+file-browser and terminal-WebSocket routes stay outside its bearer scope.
+Browser access retains its usual authentication. Keep this credential with
+the trusted controller rather than every delegated agent; it does not restrict
+holders to one workspace or one process.
+
+Provision it as the service user, refusing any existing file:
+
+```bash
+.venv/bin/python -m tmux_console.control_auth provision \
+  --path "$HOME/.config/muxdeck/control-token"
+```
+
+The command creates a private file and prints its path, not its token value.
+Ensure the containing directory is mode `0700`. Configure the service's
+`MUXDECK_CONTROL_TOKEN_FILE` to that absolute path, and set the controller's
+same variable or `muxdeckctl --token-file` to its accessible private path.
+A missing, unsafe or malformed configured token fails startup closed.
+Callback and control credentials must differ; accidental reuse is rejected so
+a callback-only credential cannot gain command-execution privileges. Rotation
+and removal take effect when the token is reread on a request; long-lived
+control event streams also recheck authorization.
+
+For an existing installation, retain all persistent paths and existing browser
+authentication settings, including `MUXDECK_LAUNCH_REQUESTS_FILE` if overridden.
+A backend/CLI-only update can reuse the validated existing frontend; Python
+changes require restarting only Muxdeck after the cgroup/KillMode preflight.
+Follow section 13's deployment checker and timeline, and keep task-specific
+tests against an isolated tmux socket. Verify control scope with authenticated
+capabilities and read-only inventory; test launch/input/cancellation only on
+deliberately disposable sessions.
+
+The transparent `muxdeckctl exec` runner must be installed on the service host
+and accessible to the same effective Unix UID with shared filesystem visibility
+of its interpreter, runner and private socket paths. It exchanges provider argv, environment
+and stdio through a private local Unix socket. These temporary sockets need no
+migration or public route. The pane is a best-effort output mirror; the
+controller receives the real provider protocol. Browser disconnect leaves the
+run alone, but loss of the owning controller cancels the bridge's owned provider
+process group.
+See [Agent orchestration](docs/AGENT_ORCHESTRATION.md) for setup, launch-request
+recovery rules and a Multica custom-runtime profile example.
 
 ### Agent callback endpoint setup
 

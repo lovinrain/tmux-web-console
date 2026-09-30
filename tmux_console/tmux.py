@@ -14,6 +14,8 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import TypedDict
+from weakref import WeakValueDictionary
 
 # tmux escapes this control byte as the literal text ``\037`` in format output.
 FORMAT_FIELD_SEPARATOR = "\x1f"
@@ -43,9 +45,31 @@ PANE_FORMAT_FIELDS = (
     "alternate_on",
     "pane_dead",
     "pane_pid",
+    "pane_dead_status",
+    "@muxdeck_exit_status",
 )
 PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT_FIELDS)
-CREATED_SESSION_FORMAT = "#{session_name}\t#{session_id}"
+CREATED_SESSION_FORMAT = "\t".join(
+    f"#{{{field}}}" for field in (
+        "session_name", "session_id", "pane_id", "pane_pid",
+        "session_created", "start_time", "pid",
+    )
+)
+TMUX_LAUNCH_MODES = frozenset({"default", "shell", "command"})
+MAX_LAUNCH_ARGUMENTS = 128
+MAX_LAUNCH_BYTES = 65_536
+MAX_ENVIRONMENT_ENTRIES = 64
+MAX_PANE_CAPTURE_LINES = 2000
+MAX_PANE_CAPTURE_BYTES = 1_048_576
+MAX_PANE_INPUT_BYTES = 65_536
+MAX_PANE_INPUT_KEYS = 32
+TMUX_INPUT_KEYS = frozenset({
+    "Enter", "Tab", "Escape", "BSpace", "Up", "Down", "Left", "Right",
+    "Home", "End", "PageUp", "PageDown", "C-c", "C-d", "C-u", "C-l",
+})
+PANE_IDENTITY_MISMATCH = "MUXDECK_PANE_IDENTITY_CHANGED"
+PANE_INPUT_UNAVAILABLE = "MUXDECK_PANE_INPUT_UNAVAILABLE"
+PANE_INPUT_PARTIAL = "MUXDECK_PANE_INPUT_PARTIAL"
 CLIENT_IDENTITY_FORMAT = "#{client_pid}\t#{client_name}\t#{session_id}"
 MAX_SESSION_NAME_LENGTH = 256
 AUTOMATIC_SESSION_NAME_COMPONENT_LENGTH = 32
@@ -71,6 +95,15 @@ TMUX_CONNECTION_ERROR_MARKERS = (
 )
 
 LOGGER = logging.getLogger("muxdeck")
+
+
+class _PaneIdentity(TypedDict):
+    session_id: str
+    session_created: int
+    server_started: int
+    server_pid: int
+    pane_id: str
+    pane_pid: int
 
 
 def _application_scroll_signature(screen: str) -> tuple[str, ...]:
@@ -102,11 +135,30 @@ class TmuxSessionIdentityChangedError(TmuxError):
     pass
 
 
+class TmuxPaneInputUnavailableError(TmuxError):
+    pass
+
+
+class TmuxInputDeliveryUncertainError(TmuxError):
+    delivery = "uncertain"
+    retryable = False
+
+
 @dataclass(frozen=True)
 class CreatedSession:
     name: str
     id: str
     directory: str | None = field(default=None, compare=False)
+    pane_id: str | None = field(default=None, compare=False)
+    pane_pid: int = field(default=0, compare=False)
+    session_created: int = field(default=0, compare=False)
+    server_started: int = field(default=0, compare=False)
+    server_pid: int = field(default=0, compare=False)
+    launch_mode: str = field(default="default", compare=False)
+
+    @property
+    def identity(self) -> str:
+        return f"{self.id}:{self.session_created}:{self.server_started}:{self.server_pid}"
 
 
 def validate_tmux_session_name(value: str) -> str:
@@ -190,6 +242,90 @@ def _escape_tmux_format(value: str) -> str:
     return value.replace("#", "##")
 
 
+def _utf8_bytes(value: str, field: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise ValueError(f"{field} must contain valid Unicode") from error
+
+
+def validate_tmux_launch_options(
+    launch_mode: str = "default", command: list[str] | None = None,
+    environment: dict[str, str] | None = None, remain_on_exit: bool | None = None,
+) -> tuple[str, list[str] | None, dict[str, str], bool | None]:
+    if not isinstance(launch_mode, str) or launch_mode not in TMUX_LAUNCH_MODES:
+        raise ValueError("launch mode must be default, shell, or command")
+    if remain_on_exit is not None and not isinstance(remain_on_exit, bool):
+        raise ValueError("remainOnExit must be a boolean")
+    if launch_mode == "default" and remain_on_exit is not None:
+        raise ValueError("remainOnExit requires shell or command launch mode")
+    if launch_mode == "command":
+        if not isinstance(command, list) or not 1 <= len(command) <= MAX_LAUNCH_ARGUMENTS:
+            raise ValueError(f"command must contain 1-{MAX_LAUNCH_ARGUMENTS} arguments")
+        total = 0
+        for argument in command:
+            if not isinstance(argument, str) or "\0" in argument:
+                raise ValueError("command arguments must be strings without NUL")
+            total += _utf8_bytes(argument, "command") + 1
+        if not command[0].strip():
+            raise ValueError("command executable cannot be blank")
+        if total > MAX_LAUNCH_BYTES:
+            raise ValueError(f"command must be {MAX_LAUNCH_BYTES} bytes or fewer")
+        command = list(command)
+    elif command is not None:
+        raise ValueError("command is only allowed in command launch mode")
+    if environment is None:
+        environment = {}
+    if not isinstance(environment, dict) or len(environment) > MAX_ENVIRONMENT_ENTRIES:
+        raise ValueError(f"environment must have at most {MAX_ENVIRONMENT_ENTRIES} entries")
+    total = 0
+    for name, value in environment.items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError("environment names must be valid variable names")
+        if name in {"TMUX", "TMUX_PANE"}:
+            raise ValueError(f"environment cannot override {name}")
+        if not isinstance(value, str) or "\0" in value:
+            raise ValueError("environment values must be strings without NUL")
+        total += _utf8_bytes(name, "environment") + _utf8_bytes(value, "environment") + 2
+    if total > MAX_LAUNCH_BYTES:
+        raise ValueError(f"environment must be {MAX_LAUNCH_BYTES} bytes or fewer")
+    return launch_mode, command, dict(environment), (
+        True if launch_mode == "command" and remain_on_exit is None else remain_on_exit
+    )
+
+
+def validate_tmux_input_options(
+    text: str | None = None, keys: list[str] | None = None, submit: bool = False,
+    allow_multiline: bool = False,
+) -> tuple[str | None, list[str] | None, bool]:
+    if not isinstance(submit, bool):
+        raise TypeError("submit must be a boolean")
+    if not isinstance(allow_multiline, bool):
+        raise TypeError("allowMultiline must be a boolean")
+    if (text is None) == (keys is None):
+        raise ValueError("provide exactly one of text or keys")
+    if text is not None:
+        if not isinstance(text, str) or not text:
+            raise ValueError("text must be a nonempty string")
+        if _utf8_bytes(text, "text") > MAX_PANE_INPUT_BYTES:
+            raise ValueError(f"text must be {MAX_PANE_INPUT_BYTES} bytes or fewer")
+        if any(unicodedata.category(c) == "Cc" and c not in "\r\n\t" for c in text):
+            raise ValueError("text cannot contain terminal control characters")
+        if not allow_multiline and ("\r" in text or "\n" in text):
+            raise ValueError(
+                "multiline text requires allowMultiline: true; a receiver without bracketed paste may execute each line"
+            )
+    else:
+        if not isinstance(keys, list) or not 1 <= len(keys) <= MAX_PANE_INPUT_KEYS:
+            raise ValueError(f"keys must contain 1-{MAX_PANE_INPUT_KEYS} entries")
+        if any(not isinstance(key, str) or key not in TMUX_INPUT_KEYS for key in keys):
+            raise ValueError("unsupported terminal key")
+        if submit:
+            raise ValueError("submit is only allowed with text")
+        keys = list(keys)
+    return text, keys, submit
+
+
 @dataclass(frozen=True)
 class Pane:
     id: str
@@ -209,12 +345,13 @@ class Pane:
     dead: bool
     activity: int
     process_pid: int = 0
+    exit_status: int | None = None
 
     def to_dict(self) -> dict:
-        # The pane process is only used for bounded local agent-reference
-        # discovery; it is not part of the browser-facing terminal inventory.
         record = asdict(self)
-        record.pop("process_pid", None)
+        record["processPid"] = record.pop("process_pid")
+        record["panePid"] = record["processPid"]
+        record["exitStatus"] = record.pop("exit_status")
         return record
 
 
@@ -229,6 +366,10 @@ class Session:
     server_pid: int = 0
     activity: int = 0
     panes: list[Pane] = field(default_factory=list)
+
+    @property
+    def identity(self) -> str:
+        return f"{self.id}:{self.created}:{self.server_started}:{self.server_pid}"
 
     @property
     def active_pane(self) -> Pane | None:
@@ -249,6 +390,7 @@ class Session:
             "created": self.created,
             "serverStarted": self.server_started,
             "serverPid": self.server_pid,
+            "identity": self.identity,
             "activity": self.activity,
             "activePaneId": self.active_pane.id if self.active_pane else None,
             "panes": [pane.to_dict() for pane in self.panes],
@@ -310,6 +452,7 @@ def parse_sessions(output: str) -> list[Session]:
             dead=row["pane_dead"] == "1",
             activity=_as_int(row["window_activity"]),
             process_pid=_as_int(row["pane_pid"]),
+            exit_status=_pane_exit_status(row),
         )
         session.panes.append(pane)
         session.activity = max(session.activity, pane.activity)
@@ -317,6 +460,20 @@ def parse_sessions(output: str) -> list[Session]:
     return sorted(
         sessions.values(), key=lambda item: (-item.activity, item.name.lower())
     )
+
+
+def _pane_exit_status(row: dict[str, str]) -> int | None:
+    if row["pane_dead"] != "1":
+        return None
+    if row["pane_dead_status"].isdigit():
+        return int(row["pane_dead_status"])
+    # Some tmux versions observe PTY EOF without retaining waitpid status for
+    # very short commands. The launch wrapper records its result before exit.
+    # Bind the fallback to pane_pid so respawn cannot reuse an old result.
+    recorded = row["@muxdeck_exit_status"].split(":")
+    if len(recorded) == 2 and recorded[0] == row["pane_pid"] and recorded[1].isdigit():
+        return int(recorded[1])
+    return None
 
 
 class TmuxClient:
@@ -336,6 +493,7 @@ class TmuxClient:
         self._history_dispatch_lock = asyncio.Lock()
         self._capability_probe_lock = asyncio.Lock()
         self._session_creation_lock = asyncio.Lock()
+        self._pane_input_locks: WeakValueDictionary[tuple[str, str, int], asyncio.Lock] = WeakValueDictionary()
         self._new_session_environment_supported: bool | None = None
 
     @property
@@ -350,10 +508,13 @@ class TmuxClient:
     async def _run_binary(self, args: Sequence[str]) -> str:
         return await self._run_command([self.binary, *args])
 
-    async def _run_command(self, command: Sequence[str]) -> str:
+    async def _run_command(
+        self, command: Sequence[str], *, input_data: bytes | None = None,
+    ) -> str:
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
+                stdin=asyncio.subprocess.PIPE if input_data is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -361,7 +522,8 @@ class TmuxClient:
             raise TmuxError(f"Unable to start tmux: {error}") from error
 
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), self.timeout)
+            communication = process.communicate(input_data) if input_data is not None else process.communicate()
+            stdout, stderr = await asyncio.wait_for(communication, self.timeout)
         except TimeoutError as error:
             process.kill()
             await process.wait()
@@ -395,7 +557,14 @@ class TmuxClient:
         theme: str | None = None,
         *,
         start_directory: str | None = None,
+        launch_mode: str = "default",
+        command: list[str] | None = None,
+        environment: dict[str, str] | None = None,
+        remain_on_exit: bool | None = None,
     ) -> CreatedSession:
+        launch_mode, command, environment, remain_on_exit = validate_tmux_launch_options(
+            launch_mode, command, environment, remain_on_exit,
+        )
         directory = (
             validate_tmux_start_directory(start_directory)
             if start_directory is not None
@@ -410,6 +579,10 @@ class TmuxClient:
                         requested_name,
                         theme=theme,
                         start_directory=directory,
+                        launch_mode=launch_mode,
+                        command=command,
+                        environment=environment,
+                        remain_on_exit=remain_on_exit,
                     )
                 except TmuxError as error:
                     # tmux checks uniqueness atomically, including external creators.
@@ -590,7 +763,16 @@ class TmuxClient:
         *,
         start_directory: str | None = None,
         shell_only: bool = False,
+        launch_mode: str = "default",
+        command: list[str] | None = None,
+        environment: dict[str, str] | None = None,
+        remain_on_exit: bool | None = None,
     ) -> CreatedSession:
+        if shell_only:
+            launch_mode = "shell"
+        launch_mode, command, environment, remain_on_exit = validate_tmux_launch_options(
+            launch_mode, command, environment, remain_on_exit,
+        )
         directory = start_directory if start_directory is not None else str(Path.home())
         requested_name = (
             _automatic_session_name(directory)
@@ -612,6 +794,12 @@ class TmuxClient:
             "-s",
             _escape_tmux_format(requested_name),
         ]
+        if environment and not await self._supports_new_session_environment():
+            raise TmuxError("tmux new-session -e is required for launch environment")
+        for name, value in sorted(environment.items()):
+            # The suffix cannot be parsed as a tmux command separator.
+            value = value[:-1] + "\\;" if value.endswith(";") else value
+            args.extend(["-e", f"{name}={value}"])
         if (
             grok_appearance is not None
             and await self._supports_new_session_environment()
@@ -631,7 +819,8 @@ class TmuxClient:
                 requested_name,
             )
         args.extend(["-c", _escape_tmux_format(directory)])
-        if shell_only:
+        shell: str | None = None
+        if launch_mode == "shell":
             try:
                 shell = (await self.run(["show-options", "-gv", "default-shell"])).strip()
             except TmuxError as error:
@@ -640,19 +829,58 @@ class TmuxClient:
                 shell = pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
             if not shell or not os.path.isabs(shell):
                 raise TmuxError("tmux default-shell is not an absolute executable path")
+        if launch_mode == "command" or remain_on_exit is not None:
+            if launch_mode == "default":
+                raise ValueError("remainOnExit requires shell or command launch mode")
+            if launch_mode == "command":
+                assert command is not None
+                target_command = command
+            else:
+                assert shell is not None
+                target_command = [shell]
+            assert target_command is not None
+            control = shlex.join(self.command_prefix)
+            script = ""
+            if remain_on_exit is not None:
+                # Set this new window's option from its own process before exec:
+                # even a command that exits immediately remains inspectable.
+                script = (
+                    f'{control} set-option -w -t "$TMUX_PANE" remain-on-exit '
+                    f'{"on" if remain_on_exit else "off"} || exit 125; '
+                )
+            script += (
+                # Give the command its own foreground process group so tmux
+                # observes the agent (rather than this wrapper) and terminal
+                # interrupts reach the command naturally.
+                'set -m || exit 125; "$@"; muxdeck_exit_status=$?; '
+                f'{control} set-option -pF -t "$TMUX_PANE" @muxdeck_exit_status '
+                '"#{pane_pid}:$muxdeck_exit_status"; exit "$muxdeck_exit_status"'
+            )
+            args.append(shlex.join(["/bin/sh", "-c", script, "muxdeck-launch", *target_command]))
+        elif shell is not None:
             args.append(shlex.quote(shell))
         output = await self.run(args)
         # Tabs and line separators are invalid in names, so this preserves spaces.
         rows = output.splitlines()
         fields = rows[0].split("\t") if len(rows) == 1 else []
-        if len(fields) != 2 or not fields[0]:
+        if len(fields) != 7 or not fields[0]:
             raise TmuxError("tmux did not return the created session name")
-        actual_name, session_id = fields
+        actual_name, session_id, pane_id, pane_pid, created, server_started, server_pid = fields
         if actual_name != requested_name:
             raise TmuxError("tmux returned an unexpected created session name")
         if not session_id.startswith("$") or not session_id[1:].isdigit():
             raise TmuxError("tmux did not return the created session id")
-        return CreatedSession(name=requested_name, id=session_id, directory=directory)
+        if not TMUX_PANE_ID_PATTERN.fullmatch(pane_id) or any(
+            not value.isdigit() or int(value) <= 0
+            for value in (pane_pid, created, server_started, server_pid)
+        ):
+            raise TmuxError("tmux did not return the created pane identity")
+        return CreatedSession(
+            name=requested_name, id=session_id, directory=directory,
+            pane_id=pane_id, pane_pid=int(pane_pid), session_created=int(created),
+            server_started=int(server_started), server_pid=int(server_pid),
+            launch_mode=launch_mode,
+        )
 
     async def _supports_new_session_environment(self) -> bool:
         if self._new_session_environment_supported is not None:
@@ -1195,6 +1423,208 @@ class TmuxClient:
         if not pane_id.startswith("%") or not pane_id[1:].isdigit():
             raise TmuxError("invalid tmux pane id")
         return await self.run(["capture-pane", "-p", "-J", "-t", pane_id])
+
+    async def _resolve_programmatic_pane(
+        self, session: str, *, session_id: str, session_created: int,
+        server_started: int, server_pid: int, pane_id: str, pane_pid: int,
+    ) -> tuple[Session, Pane, str]:
+        validate_tmux_session_name(session)
+        validate_tmux_session_id(session_id)
+        validate_tmux_pane_id(pane_id)
+        for name, value in (
+            ("sessionCreated", session_created), ("serverStarted", server_started),
+            ("serverPid", server_pid), ("panePid", pane_pid),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        found = next((item for item in await self.list_sessions() if item.name == session), None)
+        if found is None:
+            raise TmuxSessionNotFoundError(f"tmux session not found: {session}")
+        pane = next((item for item in found.panes if item.id == pane_id), None)
+        if (
+            (found.id, found.created, found.server_started, found.server_pid)
+            != (session_id, session_created, server_started, server_pid)
+            or pane is None or pane.process_pid != pane_pid
+        ):
+            raise TmuxSessionIdentityChangedError("tmux pane identity changed; refresh before retrying")
+        conditions = [
+            f"#{{==:#{{{field}}},{value}}}" for field, value in (
+                ("session_id", session_id), ("session_created", session_created),
+                ("start_time", server_started), ("pid", server_pid),
+                ("pane_id", pane_id), ("pane_pid", pane_pid),
+            )
+        ]
+        condition = conditions.pop()
+        for item in reversed(conditions):
+            condition = f"#{{&&:{item},{condition}}}"
+        return found, pane, condition
+
+    @staticmethod
+    def _programmatic_identity(session: Session, pane: Pane) -> dict:
+        return {
+            "session": session.name, "sessionId": session.id,
+            "sessionCreated": session.created, "serverStarted": session.server_started,
+            "serverPid": session.server_pid, "identity": session.identity,
+            "paneId": pane.id, "panePid": pane.process_pid,
+        }
+
+    async def capture_pane(
+        self, session: str, *, session_id: str, session_created: int,
+        server_started: int, server_pid: int, pane_id: str, pane_pid: int,
+        lines: int = 200,
+    ) -> dict:
+        if isinstance(lines, bool) or not isinstance(lines, int) or not 1 <= lines <= MAX_PANE_CAPTURE_LINES:
+            raise ValueError(f"lines must be between 1 and {MAX_PANE_CAPTURE_LINES}")
+        identity = _PaneIdentity(
+            session_id=session_id, session_created=session_created,
+            server_started=server_started, server_pid=server_pid,
+            pane_id=pane_id, pane_pid=pane_pid,
+        )
+        found, pane, condition = await self._resolve_programmatic_pane(session, **identity)
+        buffer_name = f"muxdeck-capture-{secrets.token_hex(12)}"
+        marker = f"MUXDECK_CAPTURE_{secrets.token_hex(12)}"
+        try:
+            output = await self.run([
+                "if-shell", "-F", "-t", pane.id, condition,
+                f"capture-pane -J -b {buffer_name} -t {pane.id} -S -{lines} ; display-message -p {marker}",
+                f"display-message -p {PANE_IDENTITY_MISMATCH}",
+            ])
+            if output.strip() != marker:
+                raise TmuxSessionIdentityChangedError("tmux pane identity changed during capture")
+            text = await self.run(["save-buffer", "-b", buffer_name, "-"])
+            # A captured buffer is immutable, but do not return it under a
+            # replaced/moved pane's identity. Dead panes remain readable.
+            found, pane, _ = await self._resolve_programmatic_pane(session, **identity)
+        finally:
+            with contextlib.suppress(TmuxError):
+                await self.run(["delete-buffer", "-b", buffer_name])
+        captured = text.splitlines()
+        limited = len(captured) > lines or pane.history_size + pane.height > lines
+        captured = captured[-lines:]
+        text = "\n".join(captured)
+        encoded = text.encode("utf-8")
+        if len(encoded) > MAX_PANE_CAPTURE_BYTES:
+            text = encoded[-MAX_PANE_CAPTURE_BYTES:].decode("utf-8", "ignore")
+            captured = text.splitlines()
+            limited = True
+        return {
+            **self._programmatic_identity(found, pane),
+            "text": text, "lines": captured, "byteLimit": MAX_PANE_CAPTURE_BYTES,
+            "alternateOn": pane.alternate_on, "limited": limited,
+            "exitStatus": pane.exit_status,
+        }
+
+    async def send_pane_input(
+        self, session: str, *, session_id: str, session_created: int,
+        server_started: int, server_pid: int, pane_id: str, pane_pid: int,
+        text: str | None = None, keys: list[str] | None = None, submit: bool = False,
+        allow_multiline: bool = False,
+    ) -> dict:
+        text, keys, submit = validate_tmux_input_options(text, keys, submit, allow_multiline)
+        identity = _PaneIdentity(
+            session_id=session_id, session_created=session_created,
+            server_started=server_started, server_pid=server_pid,
+            pane_id=pane_id, pane_pid=pane_pid,
+        )
+        lock_key = (f"{session_id}:{session_created}:{server_started}:{server_pid}", pane_id, pane_pid)
+        lock = self._pane_input_locks.setdefault(lock_key, asyncio.Lock())
+        async with lock:
+            found, pane, condition = await self._resolve_programmatic_pane(session, **identity)
+            if pane.dead:
+                raise TmuxPaneInputUnavailableError("terminal pane is dead")
+            buffer_name = f"muxdeck-input-{secrets.token_hex(12)}"
+            enter_buffer = f"muxdeck-enter-{secrets.token_hex(12)}" if submit else None
+            marker = f"MUXDECK_INPUT_{secrets.token_hex(12)}"
+            ready = (
+                "#{&&:#{==:#{pane_dead},0},#{&&:#{==:#{pane_input_off},0},"
+                "#{&&:#{==:#{pane_mode},},#{!=:#{@muxdeck_input_owner},stdio}}}}"
+            )
+            try:
+                if text is not None:
+                    # stdin avoids command parsing, shell interpolation, and
+                    # exposing prompt text in the tmux client's argv.
+                    assert text is not None
+                    await self._run_command(
+                        [*self.command_prefix, "load-buffer", "-b", buffer_name, "-"],
+                        input_data=text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"),
+                    )
+                    commands = f"paste-buffer -d -p -b {buffer_name} -t {pane.id}"
+                    if submit:
+                        # Recheck immediately before Enter: an intervening pane
+                        # respawn must not submit pasted text to a replacement.
+                        assert enter_buffer is not None
+                        await self._run_command(
+                            [*self.command_prefix, "load-buffer", "-b", enter_buffer, "-"],
+                            input_data=b"\r",
+                        )
+                        enter = f"paste-buffer -d -r -b {enter_buffer} -t {pane.id} ; display-message -p {marker}"
+                        commands += (
+                            f" ; if-shell -F -t {pane.id} {shlex.quote(f'#{{&&:{condition},{ready}}}') } "
+                            f"{shlex.quote(enter)} {shlex.quote(f'display-message -p {PANE_INPUT_PARTIAL}')}"
+                        )
+                    else:
+                        commands += f" ; display-message -p {marker}"
+                else:
+                    assert keys is not None
+                    # send-keys broadcasts under synchronize-panes, including
+                    # explicit targets. Raw paste writes only the requested pane.
+                    cursor_mode = (await self.run([
+                        "display-message", "-p", "-t", pane.id, "#{keypad_cursor_flag}",
+                    ])).strip()
+                    if cursor_mode not in {"0", "1"}:
+                        raise TmuxError("tmux did not report terminal cursor-key mode")
+                    prefix = b"\x1bO" if cursor_mode == "1" else b"\x1b["
+                    key_bytes = {
+                        "Enter": b"\r", "Tab": b"\t", "Escape": b"\x1b", "BSpace": b"\x7f",
+                        "C-c": b"\x03", "C-d": b"\x04", "C-u": b"\x15", "C-l": b"\x0c",
+                        "Up": prefix + b"A", "Down": prefix + b"B", "Right": prefix + b"C",
+                        "Left": prefix + b"D", "Home": prefix + b"H", "End": prefix + b"F",
+                        "PageUp": b"\x1b[5~", "PageDown": b"\x1b[6~",
+                    }
+                    ready = f"#{{&&:{ready},#{{==:#{{keypad_cursor_flag}},{cursor_mode}}}}}"
+                    await self._run_command(
+                        [*self.command_prefix, "load-buffer", "-b", buffer_name, "-"],
+                        input_data=b"".join(key_bytes[key] for key in keys),
+                    )
+                    commands = f"paste-buffer -d -r -b {buffer_name} -t {pane.id}"
+                    commands += f" ; display-message -p {marker}"
+                guarded = (
+                    f"if-shell -F -t {pane.id} {shlex.quote(ready)} {shlex.quote(commands)} "
+                    f"{shlex.quote(f'display-message -p {PANE_INPUT_UNAVAILABLE}') }"
+                )
+                try:
+                    output = await self.run([
+                        "if-shell", "-F", "-t", pane.id, condition, guarded,
+                        f"display-message -p {PANE_IDENTITY_MISMATCH}",
+                    ])
+                except TmuxError as error:
+                    raise TmuxInputDeliveryUncertainError(
+                        "terminal input dispatch was not confirmed; delivery is uncertain; do not resend automatically"
+                    ) from error
+                if output.strip() == PANE_INPUT_PARTIAL:
+                    raise TmuxInputDeliveryUncertainError(
+                        "text was pasted but Enter was not confirmed; delivery is uncertain; do not resend automatically"
+                    )
+                if output.strip() == PANE_INPUT_UNAVAILABLE:
+                    raise TmuxPaneInputUnavailableError(
+                        "terminal input is disabled, reserved for stdio, or pane is in a tmux mode"
+                    )
+                if output.strip() == PANE_IDENTITY_MISMATCH:
+                    raise TmuxSessionIdentityChangedError("tmux pane identity changed during input")
+                if output.strip() != marker:
+                    raise TmuxInputDeliveryUncertainError(
+                        "terminal input receipt was not recognized; delivery is uncertain; do not resend automatically"
+                    )
+            finally:
+                for temporary_buffer in (buffer_name, enter_buffer):
+                    if temporary_buffer is None:
+                        continue
+                    with contextlib.suppress(TmuxError):
+                        await self.run(["delete-buffer", "-b", temporary_buffer])
+            return {
+                **self._programmatic_identity(found, pane),
+                "delivery": "delivered", "submitted": submit,
+            }
 
     async def capture_history(self, pane_id: str) -> HistoryCapture:
         pane = await self.get_pane(pane_id)

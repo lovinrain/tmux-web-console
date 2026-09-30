@@ -108,7 +108,9 @@ async def test_configured_reverse_proxy_origin_allows_reads_and_mutations():
             },
         )
         assert created.status == 201
-        assert await created.json() == {"session": "allowed", "sessionId": "$1"}
+        assert await created.json() == {
+            "session": "allowed", "sessionId": "$1", "launchMode": "default",
+        }
         assert tmux.create_calls == [("allowed", None, None)]
     finally:
         await client.close()

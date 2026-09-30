@@ -20,6 +20,7 @@ dev = [
 
 [project.scripts]
 muxdeck = "tmux_console.app:main"
+muxdeckctl = "tmux_console.control_cli:main"
 
 [tool.setuptools]
 packages = ["tmux_console"]

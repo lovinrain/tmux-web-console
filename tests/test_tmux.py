@@ -21,10 +21,14 @@ from tmux_console.tmux import (
     Session,
     TmuxClient,
     TmuxError,
+    TmuxInputDeliveryUncertainError,
+    TmuxPaneInputUnavailableError,
     TmuxRenameUnverifiedError,
     TmuxSessionIdentityChangedError,
     _automatic_session_name,
     parse_sessions,
+    validate_tmux_input_options,
+    validate_tmux_launch_options,
     validate_tmux_new_session_name,
     validate_tmux_session_name,
     validate_tmux_start_directory,
@@ -66,6 +70,8 @@ def pane_row(**overrides: str) -> str:
         "alternate_on": "1",
         "pane_dead": "0",
         "pane_pid": "4321",
+        "pane_dead_status": "",
+        "@muxdeck_exit_status": "",
     }
     values.update(overrides)
     return OUTPUT_FIELD_SEPARATOR.join(values[field] for field in PANE_FORMAT_FIELDS)
@@ -123,6 +129,9 @@ class RecordingRunTmux(TmuxClient):
         result = self.output.pop(0) if isinstance(self.output, list) else self.output
         if isinstance(result, TmuxError):
             raise result
+        if args[0] == "new-session" and len(result.rstrip("\n").split("\t")) == 2:
+            # Creation fixtures predate the full initial-pane identity format.
+            result = result.rstrip("\n") + "\t%12\t4321\t1700000000\t1699999900\t4242\n"
         return result
 
 
@@ -156,6 +165,179 @@ def guarded_terminate_call(
         f"kill-session -t {session_id}",
         f"display-message -p {TERMINATE_IDENTITY_MISMATCH}",
     ]
+
+
+PANE_IDENTITY = {
+    "session_id": "$7", "session_created": 1_700_000_000,
+    "server_started": 1_699_999_900, "server_pid": 4242, "pane_id": "%12", "pane_pid": 4321,
+}
+
+
+class ProgrammaticPaneTmux(RecordingRunTmux):
+    def __init__(self, *, rejection: str | None = None, **pane_overrides: str):
+        super().__init__("")
+        self.rejection = rejection
+        self.pane_overrides = pane_overrides
+        self.loaded: list[bytes] = []
+
+    async def run(self, args: Sequence[str]) -> str:
+        self.calls.append(list(args))
+        if args[0] == "list-panes":
+            return pane_row(**self.pane_overrides)
+        if args[0] == "if-shell":
+            return self.rejection or re.search(
+                r"MUXDECK_(?:INPUT|CAPTURE)_[0-9a-f]+", args[-2],
+            ).group(0)
+        if args[0] == "save-buffer":
+            return "old\nfirst\nsecond\nthird\n"
+        if args[0] == "display-message":
+            return "0"
+        return ""
+
+    async def _run_command(self, command: Sequence[str], *, input_data=None) -> str:
+        self.calls.append(list(command))
+        self.loaded.append(input_data)
+        return ""
+
+
+def test_launch_validation_bounds_literal_argv_and_environment():
+    argv = ["fake-agent", "$(touch /never)", ";", "", "line\nnext"]
+    assert validate_tmux_launch_options("command", argv, {"TASK": "literal;"}) == (
+        "command", argv, {"TASK": "literal;"}, True,
+    )
+    for options in (
+        ("invalid", None, None, None), ("shell", argv, None, None),
+        ("command", [], None, None), ("command", [""], None, None),
+        ("command", ["fake", "\0"], None, None),
+        ("command", ["fake", "x" * 65536], None, None),
+        ("shell", None, {"TMUX_PANE": "%12"}, None),
+        ("shell", None, {"BAD-NAME": "value"}, None),
+        ("shell", None, {"OK": "\ud800"}, None),
+        ("default", None, None, True), ("shell", None, None, "yes"),
+    ):
+        with pytest.raises(ValueError):
+            validate_tmux_launch_options(*options)
+
+
+def test_input_validation_rejects_control_sequences_and_unsafe_keys():
+    assert validate_tmux_input_options("quotes ' $ ;\nnext\tline", None, True, True)[2]
+    assert validate_tmux_input_options(None, ["C-c", "Enter"], False)[1] == ["C-c", "Enter"]
+    for options in (
+        (None, None, False), ("text", ["Enter"], False), ("", None, False),
+        ("\x1b[201~", None, False), ("\0", None, False),
+        ("\ud800", None, False), ("é" * 32769, None, False),
+        ("first\nsecond", None, False), ("first\rsecond", None, False),
+        (None, ["Enter; kill-server"], False), (None, [], False),
+        (None, ["Enter"], True), ("text", None, "false"),
+    ):
+        with pytest.raises((ValueError, TypeError)):
+            validate_tmux_input_options(*options)
+
+
+async def test_programmatic_capture_is_bounded_and_fences_dead_pane_identity():
+    tmux = ProgrammaticPaneTmux(pane_dead="1", pane_dead_status="17")
+    result = await tmux.capture_pane("agent-one", **PANE_IDENTITY, lines=2)
+    assert result["lines"] == ["second", "third"]
+    assert result["text"] == "second\nthird"
+    assert result["limited"] is True
+    assert result["exitStatus"] == 17
+    assert result["panePid"] == 4321
+    dispatch = next(call for call in tmux.calls if call[0] == "if-shell")
+    assert "#{pane_pid},4321" in dispatch[4]
+    assert "#{session_id},$7" in dispatch[4]
+    assert "capture-pane -J -b muxdeck-capture-" in dispatch[5]
+    assert tmux.calls[-1][0] == "delete-buffer"
+
+
+async def test_capture_byte_bound_preserves_utf8_and_marks_truncation(monkeypatch):
+    class UnicodeCaptureTmux(ProgrammaticPaneTmux):
+        async def run(self, args: Sequence[str]) -> str:
+            if args[0] == "save-buffer":
+                return "old" + "✅" * 10 + "尾"
+            return await super().run(args)
+
+    monkeypatch.setattr("tmux_console.tmux.MAX_PANE_CAPTURE_BYTES", 10)
+    result = await UnicodeCaptureTmux().capture_pane("agent-one", **PANE_IDENTITY)
+    assert result["text"] == "✅✅尾"
+    assert result["lines"] == ["✅✅尾"]
+    assert result["limited"] is True
+    assert result["byteLimit"] == 10
+
+
+async def test_programmatic_input_uses_stdin_and_scoped_guarded_paste():
+    tmux = ProgrammaticPaneTmux()
+    result = await tmux.send_pane_input(
+        "agent-one", **PANE_IDENTITY, text="literal $(never);\r\nsecond", submit=True, allow_multiline=True,
+    )
+    assert tmux.loaded == [b"literal $(never);\nsecond", b"\r"]
+    assert result["delivery"] == "delivered"
+    assert result["submitted"] is True
+    dispatch = next(call for call in tmux.calls if call[0] == "if-shell")
+    assert "paste-buffer -d -p" in dispatch[5]
+    assert "paste-buffer -d -r -b muxdeck-enter-" in dispatch[5]
+    assert "pane_input_off" in dispatch[5]
+    assert tmux.calls[-1][0] == "delete-buffer"
+
+
+@pytest.mark.parametrize("change", [{"pane_pid": "999"}, {"pid": "999"}, {"session_created": "1"}])
+async def test_programmatic_input_rejects_replacement_before_loading_buffer(change):
+    tmux = ProgrammaticPaneTmux(**change)
+    with pytest.raises(TmuxSessionIdentityChangedError):
+        await tmux.send_pane_input("agent-one", **PANE_IDENTITY, text="do not send")
+    assert tmux.loaded == []
+
+
+@pytest.mark.parametrize("rejection,error", [
+    ("MUXDECK_PANE_IDENTITY_CHANGED", TmuxSessionIdentityChangedError),
+    ("MUXDECK_PANE_INPUT_UNAVAILABLE", TmuxPaneInputUnavailableError),
+    ("MUXDECK_PANE_INPUT_PARTIAL", TmuxInputDeliveryUncertainError),
+])
+async def test_programmatic_input_cleans_buffer_after_atomic_rejection(rejection, error):
+    tmux = ProgrammaticPaneTmux(rejection=rejection)
+    with pytest.raises(error):
+        await tmux.send_pane_input("agent-one", **PANE_IDENTITY, text="guard me")
+    assert tmux.calls[-1][0] == "delete-buffer"
+
+
+async def test_dispatch_timeout_reports_uncertainty_without_repeating_input():
+    class TimeoutTmux(ProgrammaticPaneTmux):
+        async def run(self, args: Sequence[str]) -> str:
+            if args[0] == "if-shell":
+                self.calls.append(list(args))
+                raise TmuxError("tmux command timed out")
+            return await super().run(args)
+
+    tmux = TimeoutTmux()
+    with pytest.raises(TmuxInputDeliveryUncertainError) as failure:
+        await tmux.send_pane_input("agent-one", **PANE_IDENTITY, text="exactly one attempt")
+    assert failure.value.delivery == "uncertain"
+    assert failure.value.retryable is False
+    assert sum(call[0] == "if-shell" for call in tmux.calls) == 1
+
+
+async def test_command_launch_returns_full_identity_and_fails_closed_without_env_support():
+    tmux = RecordingRunTmux([TMUX_WITH_SESSION_ENV_USAGE, "agent\t$9\n"])
+    created = await tmux.create_session(
+        "agent", launch_mode="command", command=["fake-agent", "$(literal)", ";"],
+        environment={"TASK": "task;"},
+    )
+    assert created.identity == "$9:1700000000:1699999900:4242"
+    assert created.pane_id == "%12" and created.pane_pid == 4321
+    assert created.launch_mode == "command"
+    assert "remain-on-exit" in tmux.calls[-1][-1]
+    assert "muxdeck_exit_status=$?" in tmux.calls[-1][-1]
+    legacy = RecordingRunTmux(TMUX_WITHOUT_SESSION_ENV_USAGE)
+    with pytest.raises(TmuxError, match="-e is required"):
+        await legacy.create_session("agent", launch_mode="shell", environment={"TASK": "x"})
+    assert legacy.calls == [["new-session", "-?"]]
+
+
+@pytest.mark.parametrize("dead,recorded,expected", [
+    ("1", "4321:17", 17), ("1", "4322:17", None), ("0", "4321:17", None),
+])
+def test_recorded_exit_status_is_fenced_against_respawn(dead, recorded, expected):
+    session = parse_sessions(pane_row(pane_dead=dead, **{"@muxdeck_exit_status": recorded}))[0]
+    assert session.active_pane.exit_status == expected
 
 
 @pytest.mark.parametrize(

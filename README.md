@@ -79,6 +79,10 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
   workspace-pinned panel
 - Confirmed session creation with reusable starting directories, native rename,
   and whole-session termination
+- Programmatic agent launch and control through `muxdeckctl` and the authenticated
+  API, with argument-vector launch, guarded pane input/capture, and a local stdio
+  bridge for external orchestrators. See [Agent orchestration](docs/AGENT_ORCHESTRATION.md)
+  for nested task/epic organization and a Multica custom-runtime wrapper.
 - Read local Codex, Claude Code, Copilot, Cursor, and Grok conversations from
   **Pane scrollback → Transcript**, including messages no longer visible in the
   terminal. Recorded conversations are also available from session history.

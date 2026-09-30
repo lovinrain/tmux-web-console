@@ -12,6 +12,7 @@ const snippetsFile = `/tmp/muxdeck-playwright-${runId}-snippets.json`;
 const workspacesFile = `/tmp/muxdeck-playwright-${runId}-workspaces.json`;
 const shortcutsFile = `/tmp/muxdeck-playwright-${runId}-shortcuts.json`;
 const sessionRegistryFile = `/tmp/muxdeck-playwright-${runId}-sessions.sqlite3`;
+const launchRequestsFile = `/tmp/muxdeck-playwright-${runId}-launch-requests.sqlite3`;
 const submittedMessagesFile = `/tmp/muxdeck-playwright-${runId}-submitted-messages.sqlite3`;
 const scrollbackFile = `/tmp/muxdeck-playwright-${runId}-scrollback.sqlite3`;
 const codexHistoryFile = `/tmp/muxdeck-playwright-${runId}-codex-history.jsonl`;
@@ -65,6 +66,7 @@ process.env.MUXDECK_PLAYWRIGHT_SNIPPETS_FILE = snippetsFile;
 process.env.MUXDECK_PLAYWRIGHT_WORKSPACES_FILE = workspacesFile;
 process.env.MUXDECK_PLAYWRIGHT_SHORTCUTS_FILE = shortcutsFile;
 process.env.MUXDECK_PLAYWRIGHT_SESSION_REGISTRY_FILE = sessionRegistryFile;
+process.env.MUXDECK_PLAYWRIGHT_LAUNCH_REQUESTS_FILE = launchRequestsFile;
 process.env.MUXDECK_PLAYWRIGHT_SUBMITTED_MESSAGES_FILE = submittedMessagesFile;
 process.env.MUXDECK_PLAYWRIGHT_SCROLLBACK_FILE = scrollbackFile;
 process.env.MUXDECK_PLAYWRIGHT_CODEX_HISTORY_FILE = codexHistoryFile;
@@ -90,6 +92,8 @@ export default defineConfig({
   },
   webServer: {
     env: {
+      MUXDECK_LAUNCH_REQUESTS_FILE: launchRequestsFile,
+      MUXDECK_CONTROL_TOKEN_FILE: "",
       MUXDECK_SUBMITTED_MESSAGES_FILE: submittedMessagesFile,
       MUXDECK_SCROLLBACK_FILE: scrollbackFile,
       MUXDECK_CODEX_HISTORY_FILE: codexHistoryFile,

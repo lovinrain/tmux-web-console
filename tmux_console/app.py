@@ -46,6 +46,11 @@ from .callback_messages import (
     CallbackMessageStoreUnavailable,
     default_callback_messages_path,
 )
+from .control_auth import (
+    ControlTokenVerifier,
+    control_token_allows,
+    control_token_conflicts_with_callback,
+)
 from .file_browser import (
     ENTRY_KINDS,
     MAX_FILE_UPLOAD_BYTES,
@@ -104,6 +109,15 @@ from .html_preview import (
     HtmlPreviewGrantStore,
     resolve_html_preview_asset,
 )
+from .launch_requests import (
+    MAX_LAUNCH_REQUESTS,
+    LaunchRequestConflictError,
+    LaunchRequestFailedError,
+    LaunchRequestStore,
+    LaunchRequestUnavailableError,
+    LaunchRequestUncertainError,
+    validate_request_id,
+)
 from .messages import (
     MessageNotFoundError,
     SessionMessageStore,
@@ -143,12 +157,24 @@ from .submitted_messages import (
     default_submitted_messages_path,
 )
 from .tmux import (
+    MAX_ENVIRONMENT_ENTRIES,
+    MAX_LAUNCH_ARGUMENTS,
+    MAX_LAUNCH_BYTES,
+    MAX_PANE_CAPTURE_BYTES,
+    MAX_PANE_CAPTURE_LINES,
+    MAX_PANE_INPUT_BYTES,
+    MAX_PANE_INPUT_KEYS,
     TERMINAL_HISTORY_ACTIONS,
+    TMUX_INPUT_KEYS,
+    TMUX_LAUNCH_MODES,
     TmuxClient,
     TmuxError,
+    TmuxPaneInputUnavailableError,
     TmuxRenameUnverifiedError,
     TmuxSessionIdentityChangedError,
     TmuxSessionNotFoundError,
+    validate_tmux_input_options,
+    validate_tmux_launch_options,
     validate_tmux_new_session_name,
     validate_tmux_pane_id,
     validate_tmux_session_id,
@@ -198,6 +224,10 @@ AUTH_KEY = web.AppKey("auth", AuthStore)
 AUTH_MODE_KEY = web.AppKey("auth_mode", AuthMode)
 BASIC_AUTH_KEY = web.AppKey("basic_auth", BasicAuthVerifier)
 CALLBACK_TOKEN_KEY = web.AppKey("callback_token", CallbackTokenVerifier)
+CONTROL_TOKEN_KEY = web.AppKey("control_token", ControlTokenVerifier)
+CONTROL_AUTHORIZATION_REQUEST_KEY = web.RequestKey("muxdeck_control_authorization", str)
+LAUNCH_REQUESTS_KEY = web.AppKey("launch_requests", LaunchRequestStore)
+LAUNCH_REQUEST_LOCK_KEY = web.AppKey("launch_request_lock", asyncio.Lock)
 AUTH_COOKIE_SECURE_KEY = web.AppKey("auth_cookie_secure", bool)
 LOGIN_SEMAPHORE_KEY = web.AppKey("login_semaphore", asyncio.Semaphore)
 FILE_ARCHIVE_SEMAPHORE_KEY = web.AppKey(
@@ -914,12 +944,30 @@ async def authentication_middleware(
     authorization_values = request.headers.getall("Authorization", [])
     if any(value.partition(" ")[0].casefold() == "bearer" for value in authorization_values):
         verifier = request.app.get(CALLBACK_TOKEN_KEY)
+        control_verifier = request.app.get(CONTROL_TOKEN_KEY)
         authenticated = (
             len(authorization_values) == 1
             and verifier is not None
             and await asyncio.to_thread(verifier.verify, authorization_values[0])
         )
-        if not authenticated:
+        control_authenticated = (
+            len(authorization_values) == 1
+            and control_verifier is not None
+            and await asyncio.to_thread(control_verifier.verify, authorization_values[0])
+        )
+        if authenticated and control_authenticated:
+            # Rotation must not silently turn a callback-only secret into a
+            # control secret, even if the files were distinct at startup.
+            response = json_error("automation credential scopes conflict", 401)
+        elif control_authenticated:
+            if not control_token_allows(
+                request.rel_url.raw_path, request.app[BASE_PATH_KEY], request.method
+            ):
+                response = json_error("control credential does not allow this operation", 403)
+            else:
+                request[CONTROL_AUTHORIZATION_REQUEST_KEY] = authorization_values[0]
+                response = await handler(request)
+        elif not authenticated:
             if request.app[AUTH_MODE_KEY] is AuthMode.BASIC:
                 response = json_error("authentication required", 401)
                 response.headers["WWW-Authenticate"] = BASIC_AUTH_CHALLENGE
@@ -1076,6 +1124,7 @@ def create_app(
     auth_mode: str | AuthMode | None = None,
     auth_cookie_secure: bool | None = None,
     callback_token_file: str | Path | None = None,
+    control_token_file: str | Path | None = None,
     file_browser_root: str | None = None,
     host_metrics: HostMetricsSampler | None = None,
     session_registry: SessionRegistry | None = None,
@@ -1120,6 +1169,13 @@ def create_app(
     configured_callback_token = callback_token_file or os.environ.get("MUXDECK_CALLBACK_TOKEN_FILE")
     if configured_callback_token:
         app[CALLBACK_TOKEN_KEY] = CallbackTokenVerifier(Path(configured_callback_token))
+    configured_control_token = control_token_file or os.environ.get("MUXDECK_CONTROL_TOKEN_FILE")
+    if configured_control_token:
+        app[CONTROL_TOKEN_KEY] = ControlTokenVerifier(Path(configured_control_token))
+        if CALLBACK_TOKEN_KEY in app and control_token_conflicts_with_callback(
+            app[CONTROL_TOKEN_KEY], app[CALLBACK_TOKEN_KEY]
+        ):
+            raise AuthConfigurationError("control and callback tokens must be different")
     if resolved_auth is not None:
         app[AUTH_KEY] = resolved_auth
     if resolved_auth_mode is AuthMode.BASIC:
@@ -1149,6 +1205,12 @@ def create_app(
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[HOST_METRICS_KEY] = host_metrics or HostMetricsSampler()
     app[SESSION_REGISTRY_KEY] = session_registry or SessionRegistry()
+    launch_requests_path = Path(os.environ.get(
+        "MUXDECK_LAUNCH_REQUESTS_FILE",
+        str(app[SESSION_REGISTRY_KEY].path.with_name("launch-requests.sqlite3")),
+    )).expanduser()
+    app[LAUNCH_REQUESTS_KEY] = LaunchRequestStore(launch_requests_path)
+    app[LAUNCH_REQUEST_LOCK_KEY] = asyncio.Lock()
     app[SUBMITTED_MESSAGES_KEY] = submitted_messages or SubmittedMessageStore(
         default_submitted_messages_path(app[SESSION_REGISTRY_KEY].path)
     )
@@ -1294,11 +1356,15 @@ def create_app(
             discard_forgotten_session(token)
         application[SESSION_REGISTRY_KEY].close()
 
+    async def close_launch_requests(application: web.Application) -> None:
+        application[LAUNCH_REQUESTS_KEY].close()
+
     app.on_cleanup.append(close_session_stream_broker)
     app.on_cleanup.append(close_callback_stream_broker)
     app.on_cleanup.append(close_workspace_stream_broker)
     app.on_cleanup.append(close_callback_messages)
     app.on_cleanup.append(close_session_registry)
+    app.on_cleanup.append(close_launch_requests)
     app.on_response_prepare.append(add_browser_security_headers)
 
     async def utility_lifecycle(application: web.Application) -> AsyncIterator[None]:
@@ -1378,6 +1444,17 @@ def create_app(
         return device if isinstance(device, RememberedDevice) else None
 
     async def request_auth_still_valid(request: web.Request) -> bool:
+        control_authorization = request.get(CONTROL_AUTHORIZATION_REQUEST_KEY)
+        if isinstance(control_authorization, str):
+            verifier = app.get(CONTROL_TOKEN_KEY)
+            callback_verifier = app.get(CALLBACK_TOKEN_KEY)
+            return (
+                verifier is not None
+                and await asyncio.to_thread(verifier.verify, control_authorization)
+                and not (callback_verifier is not None and await asyncio.to_thread(
+                    callback_verifier.verify, control_authorization
+                ))
+            )
         if app[AUTH_MODE_KEY] is not AuthMode.SERVER:
             return True
         store = auth_store()
@@ -1651,6 +1728,31 @@ def create_app(
                 "apiVersion": 1,
                 "basePath": prefix,
                 "authentication": {"mode": app[AUTH_MODE_KEY].value},
+                "control": {
+                    "bearerConfigured": CONTROL_TOKEN_KEY in app,
+                    "credentialScope": "terminal-orchestration",
+                    "launchModes": sorted(TMUX_LAUNCH_MODES),
+                    "launchIdempotency": "persistent-request-id",
+                    "launchRequestRetention": "indefinite",
+                    "inputDelivery": "tmux-dispatch-only",
+                    "inputAutomaticRetry": False,
+                    "multilineRequiresOptIn": True,
+                    "identityFields": [
+                        "sessionId", "sessionCreated", "serverStarted", "serverPid",
+                        "paneId", "panePid",
+                    ],
+                    "inputKeys": sorted(TMUX_INPUT_KEYS),
+                    "limits": {
+                        "launchArguments": MAX_LAUNCH_ARGUMENTS,
+                        "launchRequests": MAX_LAUNCH_REQUESTS,
+                        "launchBytes": MAX_LAUNCH_BYTES,
+                        "environmentEntries": MAX_ENVIRONMENT_ENTRIES,
+                        "captureLines": MAX_PANE_CAPTURE_LINES,
+                        "captureBytes": MAX_PANE_CAPTURE_BYTES,
+                        "inputBytes": MAX_PANE_INPUT_BYTES,
+                        "inputKeys": MAX_PANE_INPUT_KEYS,
+                    },
+                },
                 "workspace": workspace_api_capabilities(),
                 "callbackMessages": {
                     "persistent": True,
@@ -1671,6 +1773,9 @@ def create_app(
                         "messages",
                         "files",
                         "attachments",
+                        "launch",
+                        "input",
+                        "capture",
                     ],
                     "workspaces": [
                         "create",
@@ -1746,17 +1851,33 @@ def create_app(
             return ["session was created but recovery metadata could not be saved"]
         return []
 
-    def created_session_response(
+    def created_session_payload(
         created_session: Any,
         warnings: list[str],
-    ) -> web.Response:
+        *,
+        launch_mode: str | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "session": created_session.name,
             "sessionId": created_session.id,
         }
+        if getattr(created_session, "pane_id", None) is not None:
+            payload.update({
+                "paneId": created_session.pane_id,
+                "panePid": created_session.pane_pid,
+                "sessionCreated": created_session.session_created,
+                "serverStarted": created_session.server_started,
+                "serverPid": created_session.server_pid,
+                "identity": created_session.identity,
+            })
+        if launch_mode is not None:
+            payload["launchMode"] = launch_mode
         if warnings:
             payload["warnings"] = warnings
-        return web.json_response(payload, status=201)
+        return payload
+
+    def created_session_response(created_session: Any, warnings: list[str]) -> web.Response:
+        return web.json_response(created_session_payload(created_session, warnings), status=201)
 
     async def create_session(request: web.Request) -> web.Response:
         try:
@@ -1765,7 +1886,10 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        unknown_fields = sorted(set(payload) - {"directory", "name", "theme"})
+        unknown_fields = sorted(set(payload) - {
+            "directory", "name", "theme", "launchMode", "command", "environment",
+            "remainOnExit", "requestId",
+        })
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
 
@@ -1786,30 +1910,203 @@ def create_app(
                 return json_error("theme must be dark or light", 400)
 
         requested_directory = payload.get("directory")
-        if "directory" in payload:
-            if not isinstance(requested_directory, str):
-                return json_error("directory must be a string", 400)
-            try:
-                requested_directory = validate_tmux_start_directory(requested_directory)
-            except ValueError as error:
-                return json_error(str(error), 400)
+        if "directory" in payload and not isinstance(requested_directory, str):
+            return json_error("directory must be a string", 400)
 
         try:
-            created_session = await app[TMUX_KEY].create_session(
-                requested_name,
-                theme=requested_theme,
-                start_directory=requested_directory,
+            if "command" in payload and not isinstance(payload["command"], list):
+                raise ValueError("command must be an array")
+            if "environment" in payload and not isinstance(payload["environment"], dict):
+                raise ValueError("environment must be an object")
+            if "remainOnExit" in payload and not isinstance(payload["remainOnExit"], bool):
+                raise ValueError("remainOnExit must be a boolean")
+            launch_mode, command, environment, remain_on_exit = validate_tmux_launch_options(
+                payload.get("launchMode", "default"), payload.get("command"),
+                payload.get("environment"), payload.get("remainOnExit"),
             )
-        except ValueError as error:
+            request_id = validate_request_id(payload["requestId"]) if "requestId" in payload else None
+        except (ValueError, TypeError) as error:
             return json_error(str(error), 400)
+
+        launch_payload = {
+            "name": requested_name, "theme": requested_theme,
+            "directory": requested_directory if requested_directory is not None else str(Path.home()),
+            "launchMode": launch_mode, "command": command,
+            "environment": environment, "remainOnExit": remain_on_exit,
+        }
+
+        async def perform_launch() -> web.Response:
+            if request_id is not None:
+                try:
+                    prior = app[LAUNCH_REQUESTS_KEY].reserve(request_id, launch_payload)
+                except (LaunchRequestConflictError, LaunchRequestUncertainError) as error:
+                    return web.json_response({
+                        "error": str(error), "requestId": request_id, "retryable": False,
+                    }, status=409)
+                except LaunchRequestFailedError as error:
+                    return json_error(error.message, error.status)
+                except LaunchRequestUnavailableError as error:
+                    return json_error(str(error), 503)
+                if prior is not None:
+                    return web.json_response({**prior, "duplicate": True}, status=200)
+
+            kwargs: dict[str, Any] = {
+                "theme": requested_theme, "start_directory": requested_directory,
+            }
+            if set(payload) & {"launchMode", "command", "environment", "remainOnExit"}:
+                kwargs.update({
+                    "launch_mode": launch_mode, "command": command,
+                    "environment": environment, "remain_on_exit": remain_on_exit,
+                })
+            try:
+                if requested_directory is not None:
+                    kwargs["start_directory"] = validate_tmux_start_directory(requested_directory)
+                created_session = await app[TMUX_KEY].create_session(requested_name, **kwargs)
+            except (ValueError, TmuxError) as error:
+                message = str(error)
+                definite = isinstance(error, ValueError) or message.lower().startswith("duplicate session:")
+                status = 400 if isinstance(error, ValueError) else (409 if definite else 503)
+                if request_id is not None and definite:
+                    try:
+                        app[LAUNCH_REQUESTS_KEY].fail(request_id, status=status, error=message)
+                    except LaunchRequestUnavailableError:
+                        LOGGER.exception("Unable to persist failed launch receipt")
+                if request_id is not None and not definite:
+                    return web.json_response({
+                        "error": message, "requestId": request_id,
+                        "delivery": "uncertain", "retryable": False,
+                    }, status=status)
+                return json_error(message, status)
+
+            result = created_session_payload(
+                created_session, record_created_session(created_session, requested_directory),
+                launch_mode=launch_mode,
+            )
+            if request_id is not None:
+                result["requestId"] = request_id
+                try:
+                    app[LAUNCH_REQUESTS_KEY].complete(request_id, result)
+                except LaunchRequestUnavailableError:
+                    LOGGER.exception("Session created but durable launch receipt could not be saved")
+                    result.setdefault("warnings", []).append(
+                        "session was created but its launch receipt could not be saved; do not relaunch"
+                    )
+            return web.json_response(result, status=201)
+
+        if request_id is not None:
+            async with app[LAUNCH_REQUEST_LOCK_KEY]:
+                return await perform_launch()
+        return await perform_launch()
+
+    pane_identity_fields = {
+        "sessionId", "sessionCreated", "serverStarted", "serverPid", "paneId", "panePid",
+    }
+
+    def pane_control_identity(payload: dict[str, Any], *, query: bool = False) -> dict[str, Any]:
+        missing = sorted(pane_identity_fields - set(payload))
+        if missing:
+            raise ValueError(f"{missing[0]} is required")
+        session_id = payload["sessionId"]
+        pane_id = payload["paneId"]
+        if not isinstance(session_id, str) or not isinstance(pane_id, str):
+            raise TypeError("sessionId and paneId must be strings")
+        result: dict[str, Any] = {
+            "session_id": validate_tmux_session_id(session_id),
+            "pane_id": validate_tmux_pane_id(pane_id),
+        }
+        for api_field, tmux_field in (
+            ("sessionCreated", "session_created"), ("serverStarted", "server_started"),
+            ("serverPid", "server_pid"), ("panePid", "pane_pid"),
+        ):
+            value = payload[api_field]
+            if query:
+                if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+                    raise ValueError(f"{api_field} must be a positive integer")
+                value = int(value)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{api_field} must be a positive integer")
+            result[tmux_field] = value
+        return result
+
+    async def capture_session_pane(request: web.Request) -> web.Response:
+        try:
+            session_name = validate_tmux_session_name(request.match_info["session"])
+            unknown = sorted(set(request.query) - pane_identity_fields - {"lines"})
+            if unknown:
+                raise ValueError(f"unknown query field: {unknown[0]}")
+            if any(len(request.query.getall(field)) != 1 for field in request.query):
+                raise ValueError("query fields must appear exactly once")
+            identity = pane_control_identity(dict(request.query), query=True)
+            raw_lines = request.query.get("lines", "250")
+            if not raw_lines.isascii() or not raw_lines.isdecimal():
+                raise ValueError("lines must be a positive integer")
+            lines = int(raw_lines)
+            if not 1 <= lines <= MAX_PANE_CAPTURE_LINES:
+                raise ValueError(f"lines must be between 1 and {MAX_PANE_CAPTURE_LINES}")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                result = await app[TMUX_KEY].capture_pane(session_name, lines=lines, **identity)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxSessionIdentityChangedError as error:
+            return json_error(str(error), 409)
         except TmuxError as error:
-            message = str(error)
-            status = 409 if "duplicate session" in message.lower() else 503
-            return json_error(message, status)
-        return created_session_response(
-            created_session,
-            record_created_session(created_session, requested_directory),
-        )
+            return json_error(str(error), 503)
+        response = web.json_response(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    async def input_session_pane(request: web.Request) -> web.Response:
+        try:
+            if request.query:
+                return json_error(f"unknown query field: {min(request.query)}", 400)
+            session_name = validate_tmux_session_name(request.match_info["session"])
+            payload = await request.json()
+        except (TypeError, ValueError, RecursionError) as error:
+            return json_error(str(error), 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        try:
+            unknown = sorted(set(payload) - pane_identity_fields - {
+                "text", "keys", "submit", "allowMultiline",
+            })
+            if unknown:
+                raise ValueError(f"unknown field: {unknown[0]}")
+            identity = pane_control_identity(payload)
+            if ("text" in payload) == ("keys" in payload):
+                raise ValueError("provide exactly one of text or keys")
+            if "text" in payload and not isinstance(payload["text"], str):
+                raise ValueError("text must be a string")
+            if "keys" in payload and not isinstance(payload["keys"], list):
+                raise ValueError("keys must be an array")
+            allow_multiline = payload.get("allowMultiline", False)
+            if not isinstance(allow_multiline, bool):
+                raise TypeError("allowMultiline must be a boolean")
+            text, keys, submit = validate_tmux_input_options(
+                payload.get("text"), payload.get("keys"), payload.get("submit", False),
+                allow_multiline=allow_multiline,
+            )
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                result = await app[TMUX_KEY].send_pane_input(
+                    session_name, text=text, keys=keys, submit=submit,
+                    allow_multiline=allow_multiline, **identity,
+                )
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TmuxSessionIdentityChangedError, TmuxPaneInputUnavailableError) as error:
+            return json_error(str(error), 409)
+        except TmuxError as error:
+            # Even when the client sees a timeout, tmux may already have
+            # delivered bytes. Input has no exactly-once retry guarantee.
+            return web.json_response({
+                "error": str(error), "delivery": "uncertain", "retryable": False,
+            }, status=503)
+        response = web.json_response(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     async def utility_terminal(request: web.Request) -> web.Response:
         try:
@@ -5919,6 +6216,8 @@ def create_app(
     app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)
     app.router.add_post(f"{prefix}/api/sessions", create_session)
+    app.router.add_post(f"{prefix}/api/sessions/{session_segment}/input", input_session_pane)
+    app.router.add_get(f"{prefix}/api/sessions/{session_segment}/capture", capture_session_pane)
     app.router.add_post(f"{prefix}/api/utility-terminal", utility_terminal)
     app.router.add_post(f"{prefix}/api/utility-terminal/release", release_utility_terminal)
     app.router.add_get(f"{prefix}/api/session-history", list_session_history)

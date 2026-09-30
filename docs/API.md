@@ -29,6 +29,16 @@ mode, supported resource families, and workspace limits.
 All terminal and automation routes use the configured server authentication
 mode. There is no separate unauthenticated automation API.
 
+Trusted controllers can use a separate bearer credential configured by
+`MUXDECK_CONTROL_TOKEN_FILE` for session/terminal, workspace, callback, and
+discovery operations. It grants shell control with the service user's Unix
+privileges, but does not grant general file-browser or account access. It is
+not restricted to a particular workspace, and terminal WebSocket attachment
+still uses the browser/server authentication mode. `muxdeckctl` reads this private file
+through `--token-file` or `MUXDECK_CONTROL_TOKEN_FILE`; it never needs a token
+value on the command line. See [Agent orchestration](AGENT_ORCHESTRATION.md) and
+the [deployment runbook](../AGENT_DEPLOYMENT_GUIDE.md) for usage and provisioning.
+
 Callback automation can also use a dedicated `Authorization: Bearer <token>`
 credential configured by `MUXDECK_CALLBACK_TOKEN_FILE`. It permits only listing,
 posting, and reviewing callback messages, plus reading `/api/callback-sessions`.
@@ -119,6 +129,9 @@ safe identity.
 - `sessionCreated`, `serverStarted`, and `serverPid` fence session termination.
 - `paneId` fences file and history operations to a pane from the current
   session snapshot.
+- Machine terminal capture and input additionally require `panePid` with the
+  complete session/server identity tuple, fencing a pane respawn as well as
+  session-name reuse and tmux-server replacement.
 
 Refresh the session inventory and retry deliberately after a `409`; do not
 blindly retry a destructive request with old identity values.
@@ -552,13 +565,14 @@ Responses contain both `note` and `notebook`.
 | Method and route | Request | Result |
 | --- | --- | --- |
 | `GET /api/sessions` | None | Live session snapshot, metadata, pane identities, agent state/reference, recovery history, and workspace pin state. |
-| `POST /api/sessions` | Optional `name`, `directory`, `theme` (`dark` or `light`) | Creates a tmux session; returns `session` and `sessionId` with `201`. |
+| `POST /api/sessions` | Optional `name`, `directory`, `theme` (`dark` or `light`), `launchMode`, `command`, `environment`, `remainOnExit`, `requestId` | Creates a tmux session; returns its identity receipt with `201`, or a saved identical receipt with `200` and `duplicate: true`. |
 | `POST /api/sessions/{session}/copy` | `sessionId`; optional `theme` | Creates a session in the source PWD with the next available suffixed name. |
 | `PUT /api/session-name` | `session`, `name` | Renames a live native tmux session and migrates Muxdeck references. |
 | `DELETE /api/sessions/{session}` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid` | Terminates exactly the identified tmux session. This is destructive. |
 
-Creation launches the configured default shell; it does not automatically
-start a coding agent. `directory` must be an absolute accessible server path.
+Omitting `launchMode` retains the configured tmux default-shell behavior; it
+does not automatically start a coding agent. `directory` must be an absolute
+accessible server path.
 When `name` is omitted, the resolved starting directory supplies the last two
 path components in reverse order, followed by an eight-character random hex ID:
 `/srv/acme/backend` becomes `backend--acme--7f3a91c2`. An omitted `directory`
@@ -576,6 +590,124 @@ identifies a coding agent's detected terminal command, including an active
 background shell while its main prompt accepts input. It is an active state,
 not a ready-for-review state. Session streams publish transitions into and out
 of it with the same snapshot fields.
+
+### Programmatic launch
+
+`launchMode` is `default`, `shell`, or `command`. `shell` explicitly starts
+tmux's configured default shell and avoids a configured default command.
+`command` requires a `command` array of 1-128 strings, including its executable;
+the total argument vector is limited to 65,536 UTF-8 bytes including separators.
+Arguments are passed literally, without shell expansion. NUL bytes and a blank
+executable are rejected. `command` is rejected outside command mode.
+
+`environment` is an optional per-launch object of at most 64 string values
+with shell-style variable names, limited to 65,536 UTF-8 bytes. It cannot
+override `TMUX` or `TMUX_PANE`, requires tmux `new-session -e` support, and does
+not change the tmux server's global environment. `remainOnExit` is an optional
+boolean in `shell` and `command` modes, rejected in `default`. Command mode
+defaults it to `true`, keeping immediately exited processes inspectable.
+With `false`, an exited single pane may disappear with its session.
+
+```json
+{
+  "name": "agent-api",
+  "directory": "/srv/project",
+  "launchMode": "command",
+  "command": ["codex"],
+  "environment": {"PROJECT_TASK_ID": "TASK-42"},
+  "remainOnExit": true,
+  "requestId": "task-42-attempt-1"
+}
+```
+
+The receipt includes `session`, `sessionId`, `sessionCreated`,
+`serverStarted`, `serverPid`, `paneId`, `panePid`, `identity`, and `launchMode`,
+plus `requestId` when supplied. Optional `warnings` mean creation succeeded
+but some persistence could not be completed; do not launch another process
+to fix the metadata warning.
+
+`requestId` is an optional stable ID of 1-128 ASCII letters, digits,
+underscores or hyphens. Completed
+identical retries return the saved receipt with `duplicate: true`; a different
+normalized launch body under that ID returns `409`. Requests are reserved
+durably before tmux creation. An interrupted reservation returns `409` with
+`retryable: false` instead of risking a duplicate launch. Some tmux failures
+return `503`, `delivery: "uncertain"`, and `retryable: false`. Inspect the live
+inventory and attempt evidence; a new request ID can start a second process.
+The saved receipt is historical and does not assert that its session is still
+live. Launch deduplication persists in `launch-requests.sqlite3` and does not
+promise exactly-once task execution. Without `requestId`, creation remains
+non-idempotent.
+
+The store retains pending, completed and failed IDs without expiry or automatic
+pruning, up to a lifetime cap of 100,000 IDs. A new ID after that cap returns
+`503`; retained retries remain available. Deleting the database loses duplicate
+fences, so do not treat that as ordinary capacity cleanup.
+
+Workspace placement is separate from tmux creation. Add/nest the returned
+session using guarded workspace operations; if placement fails, reconcile and
+place that existing session rather than relaunching it. See the
+[CLI integration guide](AGENT_ORCHESTRATION.md).
+
+### Machine terminal capture and input
+
+These routes avoid opening a browser-style terminal attachment and do not
+resize the shared pane. Every request requires all six fields from the current
+launch receipt or inventory: `sessionId`, `sessionCreated`, `serverStarted`,
+`serverPid`, `paneId`, and `panePid`. A changed session, server, pane or pane PID
+returns `409`; a missing session returns `404`. Use the saved attempt's
+identity when input must not target a later session with the same name.
+
+| Method and route | Request | Result |
+| --- | --- | --- |
+| `GET /api/sessions/{session}/capture` | Six identity fields as query parameters; optional `lines` (1-2,000, default 250) | Identity fields, bounded `text` and `lines`, `alternateOn`, `limited`, and nullable `exitStatus`. |
+| `POST /api/sessions/{session}/input` | Six identity fields plus exactly one of `text` or `keys`; optional `submit` and `allowMultiline` for text only | Identity fields, `delivery: "delivered"`, and `submitted`. |
+
+Query fields must occur exactly once. Captures read retained tmux output;
+`limited: true` indicates that the available history exceeded the requested
+bound. They are snapshots, not a log cursor. Dead retained panes remain
+readable and expose their process exit status.
+
+`text` must be nonempty, at most 65,536 UTF-8 bytes, and contain no terminal
+control characters other than newlines, carriage returns and tabs. Line breaks
+are rejected unless `allowMultiline: true` explicitly opts in. CRLF and carriage
+returns are normalized to newlines. Text is loaded privately and
+pasted literally with tmux bracketed-paste behavior; `submit: true` additionally
+sends Enter, while the default is `false`. `keys` accepts 1-32 entries from
+`control.inputKeys` returned by `/api/capabilities`; it cannot be combined with
+`submit: true`. `allowMultiline` changes only text delivery. Input rejects dead panes, disabled
+pane input and tmux modes such as copy mode instead of silently changing those modes.
+
+With explicit multiline opt-in, bracketed paste still depends on the receiving
+application's terminal mode. Embedded newlines can execute multiple commands in
+a shell or submit multiple messages
+in a receiver without paste handling, even with `submit: false`. Literal input
+does not establish a task/message protocol; use the provider's structured
+stdio transport when an unattended controller needs that contract.
+
+```json
+{
+  "sessionId": "$12",
+  "sessionCreated": 1790730000,
+  "serverStarted": 1790700000,
+  "serverPid": 4210,
+  "paneId": "%18",
+  "panePid": 8321,
+  "text": "Please inspect the failing tests.",
+  "submit": true
+}
+```
+
+`delivery: "delivered"` acknowledges tmux dispatch, not provider acceptance or
+completion. A tmux input failure returns `503` with `delivery: "uncertain"`
+and `retryable: false`; some or all bytes may already have been sent. There
+is no input request-ID deduplication and no automatic retry. Reconcile through
+the agent protocol or operator observation before another delivery.
+
+The transparent `muxdeckctl exec` stdio bridge is a same-host CLI facility,
+not an HTTP protocol tunnel. Use it when a controller needs the provider's
+original stdout/stderr framing, stdin EOF and exit status while retaining a
+visible tmux session.
 
 ### Metadata
 
@@ -887,7 +1019,14 @@ Do not hard-code these where discovery is possible. Read
    force an old snapshot over new state.
 5. Prefer granular workspace endpoints for adds/removes; use whole-array
    replacements for intentional import/export.
-6. Apply your own idempotency logic around tmux session creation. Workspace
-   session adds and callback adds are already deduplicating/idempotent.
+6. Supply a stable `requestId` for each tmux launch attempt. A completed
+   identical retry returns its receipt; an uncertain reservation or a changed
+   body returns `409`. Do not create a new request ID automatically after a
+   timeout. Workspace session adds and callback adds are already deduplicating.
 7. Never automate `DELETE /api/sessions/{session}` from a name alone; use the
    complete current identity tuple and require an explicit operator policy.
+
+For CLI launch, placement, communication choices and Multica integration,
+see [Agent orchestration](AGENT_ORCHESTRATION.md). Terminal delivery
+acknowledgement is not an agent task-completion receipt; callback reports are
+durable but self-reported, and SSE snapshots are not an execution event log.
