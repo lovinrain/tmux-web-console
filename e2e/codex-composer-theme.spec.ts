@@ -11,13 +11,15 @@ if (!socket?.startsWith("muxdeck-playwright-")) {
 }
 const tmux = ["-L", socket];
 
-// The installed Codex 0.157.1 emits these cached composer fills. This fixture
-// keeps the same bytes after a browser toggle, just as the real application does.
+// Codex caches these fills. Sent messages can use a different shade from the
+// composer; both keep the same terminal bytes after a browser theme toggle.
 const fixture = `import ctypes, os, select, signal, sys, termios, tty
 kind, color, recording = sys.argv[1:]
+history_color = {'48;5;235': '48;5;236', '48;2;240;240;235': '48;2;245;245;240'}[color]
 assert ctypes.CDLL(None).prctl(15, kind.encode(), 0, 0, 0) == 0
 tty.setraw(sys.stdin.fileno())
 dirty = True
+submitted = False
 def resize(*args):
     global dirty
     dirty = True
@@ -27,17 +29,22 @@ with open(recording, 'wb', buffering=0) as captured:
         if dirty:
             dirty = False
             cols, rows = os.get_terminal_size()
-            top = max(6, rows - 6)
+            top = max(12, rows - 6)
             output = '\\x1b[0m\\x1b[2J\\x1b[H'
             def row(y, text, background):
                 return f'\\x1b[{y};1H\\x1b[39;{background}m' + text.ljust(cols) + '\\x1b[0m'
-            output += row(2, '› HISTORICAL_PROMPT', color)
+            output += row(2, '› HISTORICAL_PROMPT', history_color)
+            output += row(3, '  HISTORICAL_CONTINUATION', history_color)
             output += row(4, 'COLORED_BLOCK', '48;2;120;20;40')
+            output += row(5, 'NEUTRAL_OUTPUT', color)
+            if submitted:
+                output += row(7, '› SUBMITTED_PROMPT', history_color)
+                output += row(8, '  SUBMITTED_CONTINUATION', history_color)
             output += row(top, '', color)
             output += row(top + 1, '› MUXDECK_THEME_DRAFT', color)
             output += row(top + 2, '  second draft line', color)
             output += row(top + 3, '', color)
-            output += f'\\x1b[{top + 2};20H\\x1b[?25h'
+            output += f'\\x1b[{top - 1};1H\\x1b[?25l' if submitted else f'\\x1b[{top + 2};20H\\x1b[?25h'
             sys.stdout.write(output)
             sys.stdout.flush()
         ready, _, _ = select.select([sys.stdin], [], [], .05)
@@ -45,6 +52,9 @@ with open(recording, 'wb', buffering=0) as captured:
             data = os.read(sys.stdin.fileno(), 4096)
             if not data: break
             captured.write(data)
+            if b'\\r' in data:
+                submitted = True
+                dirty = True
 `;
 
 async function backgrounds(page: Page, text: string) {
@@ -56,11 +66,11 @@ async function backgrounds(page: Page, text: string) {
 
 for (const scenario of [
   { name: "indexed-dark", color: "48;5;235", start: "dark", width: 1366 },
-  { name: "indexed-light", color: "48;5;255", start: "light", width: 390 },
-  { name: "rgb-dark", color: "48;2;40;42;41", start: "dark", width: 390 },
-  { name: "rgb-light", color: "48;2;240;240;235", start: "light", width: 1366 },
+  { name: "rgb-light", color: "48;2;240;240;235", start: "light", width: 390 },
 ] as const) {
-  test(`Codex composer follows theme in both directions: ${scenario.name}`, async ({ context, page }) => {
+  // Unit tests cover the full color mapping; these retain indexed/RGB rendering,
+  // desktop/mobile wiring, both toggle directions, and the submission transition.
+  test(`Codex input and sent messages follow theme: ${scenario.name}`, async ({ context, page }) => {
     const directory = mkdtempSync(join(tmpdir(), "muxdeck-composer-theme-"));
     const session = `muxdeck-theme-${process.pid}-${scenario.name}`;
     const script = join(directory, "fixture.py");
@@ -83,23 +93,37 @@ for (const scenario of [
       await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "codex");
       await expect(page.locator(".connection-badge")).toContainText("Live");
       await expect(page.locator(".xterm-rows")).toContainText("MUXDECK_THEME_DRAFT");
-      const historicalColors = await backgrounds(page, "HISTORICAL_PROMPT");
       const codeColors = await backgrounds(page, "COLORED_BLOCK");
-      const before = readFileSync(recording);
-      for (const theme of [scenario.start === "dark" ? "light" : "dark", scenario.start]) {
-        await page.getByTitle(`Switch to ${theme} theme`, { exact: true }).click();
-        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      const neutralColors = await backgrounds(page, "NEUTRAL_OUTPUT");
+      const themedBackgrounds = async (theme: string, submitted: boolean) => {
         const fill = theme === "light" ? "rgb(240, 240, 235)" : "rgb(40, 42, 41)";
-        await expect.poll(() => backgrounds(page, "MUXDECK_THEME_DRAFT")).toEqual([fill]);
-        await expect.poll(() => backgrounds(page, "second draft line")).toEqual([fill]);
-        await expect.poll(() => backgrounds(page, "HISTORICAL_PROMPT")).toEqual(historicalColors);
+        for (const text of [
+          "MUXDECK_THEME_DRAFT", "second draft line", "HISTORICAL_PROMPT", "HISTORICAL_CONTINUATION",
+          ...(submitted ? ["SUBMITTED_PROMPT", "SUBMITTED_CONTINUATION"] : []),
+        ]) {
+          await expect.poll(() => backgrounds(page, text), { message: `${text} follows ${theme} theme` }).toEqual([fill]);
+        }
         await expect.poll(() => backgrounds(page, "COLORED_BLOCK")).toEqual(codeColors);
-        expect(readFileSync(recording)).toEqual(before);
+        await expect.poll(() => backgrounds(page, "NEUTRAL_OUTPUT")).toEqual(neutralColors);
+      };
+      for (const submitted of [false, true]) {
+        if (submitted) {
+          await page.locator(".xterm-helper-textarea").focus();
+          await page.keyboard.press("Enter");
+          await expect(page.locator(".xterm-rows")).toContainText("SUBMITTED_PROMPT");
+        }
+        await themedBackgrounds(scenario.start, submitted);
+        const before = readFileSync(recording);
+        for (const theme of [scenario.start === "dark" ? "light" : "dark", scenario.start]) {
+          await page.getByTitle(`Switch to ${theme} theme`, { exact: true }).click();
+          await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+          await themedBackgrounds(theme, submitted);
+          expect(readFileSync(recording)).toEqual(before);
+        }
       }
       // A new terminal frame after resizing must retain the correction.
       await page.setViewportSize({ width: scenario.width + 20, height: 940 });
-      const fill = scenario.start === "light" ? "rgb(240, 240, 235)" : "rgb(40, 42, 41)";
-      await expect.poll(() => backgrounds(page, "MUXDECK_THEME_DRAFT")).toEqual([fill]);
+      await themedBackgrounds(scenario.start, true);
       await page.screenshot({ path: `artifacts/codex-theme-${scenario.name}.png`, animations: "disabled" });
     } finally {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${session}`]);
