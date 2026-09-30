@@ -3,36 +3,69 @@
 [![CI](https://github.com/lovinrain/tmux-web-console/actions/workflows/ci.yml/badge.svg)](https://github.com/lovinrain/tmux-web-console/actions/workflows/ci.yml)
 [![Secret scan](https://github.com/lovinrain/tmux-web-console/actions/workflows/secret-scan.yml/badge.svg)](https://github.com/lovinrain/tmux-web-console/actions/workflows/secret-scan.yml)
 
-Muxdeck is a mobile-friendly web console for monitoring and controlling tmux
-sessions from a browser. It combines real PTY terminals with persistent
-workspaces, session organization, and status detection for Claude Code, Codex,
-GitHub Copilot CLI, Cursor Agent, and Grok Build.
+A browser workspace for tmux and coding agents. Run parallel sessions, browse
+project files, keep sticky notes, and track the agents that need your attention.
+Pick up the same sessions from your desktop or phone; tmux keeps them running
+when you disconnect.
 
-> [!CAUTION]
-> `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none`. Without an explicit
-> mode, Muxdeck keeps its legacy behavior: a configured `MUXDECK_AUTH_FILE`
-> enables the remembered-browser login and no file means no authentication.
-> Anyone who can reach a `none` instance can control shells with the tmux
-> owner's privileges. Keep the service bound to loopback, enable authentication
-> or another access-control layer before exposing it, and never publish its HTTP
-> port directly to the internet.
+![Muxdeck workspace with coding-agent sessions, live terminal output, scoped notes, and staged input](docs/images/muxdeck-workspace.png)
 
-## Screenshots
+## Why Muxdeck
 
-### Desktop
+- **A file browser beside your terminal.** Open the current project folder,
+  search nested files, preview Markdown, images, PDFs, and sandboxed HTML pages,
+  edit text, upload files, or download a selection as a ZIP. Stage a file's path
+  directly into your next prompt.
+- **Sticky notes that stay with your work.** Keep multi-page notebooks for
+  Common, Workspace, and Session notes. They autosave to the server; floating,
+  resizable windows can stay pinned while you switch sessions.
+- **A callback list for parallel agents.** Watch working, ready, and ended
+  sessions across one workspace or your global queue. Read agent-posted reports,
+  filter and sort the list, open a session, and mark it reviewed.
+- **Workspaces for many sessions.** Save ordered tabs, colored groups, nested
+  sessions, quick links, and multi-pane layouts. Resume on another device and
+  receive workspace changes live across open browser tabs.
+- **Real terminals, comfortable input.** Use direct keyboard input or compose
+  a prompt before sending it. Reuse snippets, keep session memos, attach files on
+  desktop, and switch between terminal and input focus on mobile.
+- **Context beyond scrollback.** Read local agent transcripts, search submitted
+  Claude Code/Codex messages, and revisit saved output and session history.
+  Launch and control agents through the authenticated API and `muxdeckctl`.
 
-<p align="center">
-  <img src="docs/images/muxdeck-workspace.png" alt="Muxdeck desktop workspace with ordered tmux tabs, a live terminal, staged input, and terminal controls">
-</p>
+Agent status detection supports Claude Code, Codex, GitHub Copilot CLI, Cursor
+Agent, and Grok Build. Ambiguous activity appears as **Unclear**.
+
+## See it in action
+
+### File browser
+
+Browse and preview project files without leaving the session.
+
+![Floating file browser with project folders, file actions, and a rendered Markdown preview](docs/images/muxdeck-file-browser.png)
+
+### Sticky notes
+
+Keep your plan and handoff notes next to the terminal, with named pages and
+separate scopes.
+
+![Pinned workspace and session notebooks with named pages beside the terminal](docs/images/muxdeck-sticky-notes.png)
+
+### Callback list
+
+See which agents are ready, read their reports, and review them from one queue.
+
+![Global callback list with agent reports, readiness, search, sorting, and review controls](docs/images/muxdeck-callback-list.png)
+
+### Dashboard and multi-pane workspaces
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/muxdeck-dashboard.png" alt="Muxdeck desktop dashboard with saved workspaces, session filters, tags, and agent states"></td>
-    <td width="50%"><img src="docs/images/muxdeck-workspace-vertical-tabs.png" alt="Muxdeck desktop workspace using an adjustable vertical session tab rail"></td>
+    <td width="50%"><img src="docs/images/muxdeck-dashboard.png" alt="Session dashboard with saved workspaces and coding-agent states"></td>
+    <td width="50%"><img src="docs/images/muxdeck-multi-pane.png" alt="Saved multi-pane workspace showing an agent terminal beside a test terminal"></td>
   </tr>
   <tr>
-    <td align="center">Session dashboard</td>
-    <td align="center">Adjustable side tabs</td>
+    <td align="center">Find a session or resume a workspace</td>
+    <td align="center">Watch multiple sessions side by side</td>
   </tr>
 </table>
 
@@ -40,65 +73,26 @@ GitHub Copilot CLI, Cursor Agent, and Grok Build.
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/images/muxdeck-mobile-overview.png" alt="Muxdeck mobile workspace overview with ordered sessions and agent states"></td>
-    <td width="33%"><img src="docs/images/muxdeck-mobile-terminal-focus.png" alt="Muxdeck distraction-free mobile terminal with touch navigation controls"></td>
-    <td width="33%"><img src="docs/images/muxdeck-mobile-input-focus.png" alt="Muxdeck distraction-free mobile staged input with compact send and memo controls"></td>
+    <td width="33%"><img src="docs/images/muxdeck-mobile-overview.png" alt="Mobile workspace switcher with session titles and agent states"></td>
+    <td width="33%"><img src="docs/images/muxdeck-mobile-terminal-focus.png" alt="Mobile terminal focus with touch navigation controls"></td>
+    <td width="33%"><img src="docs/images/muxdeck-mobile-input-focus.png" alt="Mobile staged prompt editor with send and memo controls"></td>
   </tr>
   <tr>
-    <td align="center">Overview</td>
-    <td align="center">Terminal focus</td>
-    <td align="center">Input focus</td>
+    <td align="center">Switch sessions</td>
+    <td align="center">Watch the terminal</td>
+    <td align="center">Compose a prompt</td>
   </tr>
 </table>
 
-## Highlights
-
-- Live tmux inventory with conservative status detection for Claude Code, Codex,
-  GitHub Copilot CLI, Cursor Agent, and Grok Build
-- Real xterm.js terminals with direct keyboard input and responsive desktop,
-  tablet, and phone layouts
-- Persistent named workspaces with colored, collapsible tab groups, ordered top
-  or side tabs with desktop multi-select dragging, common/workspace/session
-  quick-link shelves, scoped sticky notes, saved recursive multi-pane views,
-  workspace and global callback lists, and cross-device resume
-- Promote or nest existing session branches with drag-and-drop or one Move / Nest
-  chooser, including placement under a session in another workspace; a compact
-  footer keeps global and local callback readiness visible together
-- Session titles, tags, search, filters, grouping, stars, and an ignored-session
-  bucket
-- Dictation-friendly staged input, durable per-session memos, queued-input
-  indicators, reusable snippets, and desktop file attachments
-- A desktop file manager that opens at the pane CWD and browses anywhere inside
-  a configurable boundary, with an address bar that opens absolute file or
-  directory paths, safe text and raster-image previews, uploads/downloads,
-  recursive ZIP downloads for checked files and folders, shell-safe path
-  staging, in-place text editing, and confirmed
-  create/rename/move/duplicate/delete including multi-select bulk actions
-- A demand-driven desktop Host Pulse card with aggregate and per-core CPU,
-  memory PSI, swap activity, on-view history, and a movable, resizable,
-  workspace-pinned panel
-- Confirmed session creation with reusable starting directories, native rename,
-  and whole-session termination
-- Programmatic agent launch and control through `muxdeckctl` and the authenticated
-  API, with argument-vector launch, guarded pane input/capture, and a local stdio
-  bridge for external orchestrators. See [Agent orchestration](docs/AGENT_ORCHESTRATION.md)
-  for nested task/epic organization and a Multica custom-runtime wrapper.
-- Read local Codex, Claude Code, Copilot, Cursor, and Grok conversations from
-  **Pane scrollback → Transcript**, including messages no longer visible in the
-  terminal. Recorded conversations are also available from session history.
-  See [Agent transcripts](docs/AGENT_TRANSCRIPTS.md) for source availability.
-- Light/dark appearance, reconnect support, and retained tmux scrollback snapshots
-- [Saved beginning and recent output](docs/SCROLLBACK.md), available after
-  scrollback clears and sessions end, with submitted input retained separately
-- [Submitted-message history](docs/SUBMITTED_MESSAGES.md) for Claude Code and Codex,
-  with final edited input, search, copying, and persistence beyond tmux scrollback.
+Screenshots use demo project data. The file browser, sticky notes, and floating
+callback panel are desktop features.
 
 ## Quick start
 
-Requirements: Python 3.11+, tmux 3.x, and Node.js `^20.19.0` or
-`>=22.12.0`.
+Requirements: Python 3.11+, tmux 3.x, and Node.js `^20.19.0` or `>=22.12.0`.
+Run Muxdeck as the Unix user who owns your tmux sessions.
 
-~~~bash
+```bash
 git clone https://github.com/lovinrain/tmux-web-console.git
 cd tmux-web-console
 python3 -m venv .venv
@@ -106,331 +100,42 @@ python3 -m venv .venv
 npm ci
 npm run build
 .venv/bin/python -m tmux_console.app
-~~~
+```
 
-Open `http://127.0.0.1:7683/mux/`.
+Open <http://127.0.0.1:7683/mux/>. Existing tmux sessions appear in the dashboard;
+you can also create a session from **New Session**.
 
-For frontend development, run `npm run dev`. Vite serves
-`http://127.0.0.1:5173/mux/` and proxies the API and WebSocket to port 7683.
+> [!CAUTION]
+> The quick start has no authentication unless you configure it. Anyone who can
+> reach the console can control shells as its Unix user. Keep it on loopback;
+> configure authentication and protected access before allowing remote traffic.
+> Follow the [deployment guide](AGENT_DEPLOYMENT_GUIDE.md) for login, HTTPS,
+> reverse proxies, upgrades, and backups.
 
-## Important behavior
-
-- Opening a console attaches a real tmux client. Closing the browser disconnects
-  that client but leaves the tmux session and foreground process running.
-- A tab's `X` and workspace deletion only remove Muxdeck navigation records.
-  `End` terminates the entire tmux session after confirmation.
-- Closing or forgetting entries keeps a long sidebar at the current position,
-  including when the selected entry disappears. Selecting a different tab
-  deliberately still brings it into view.
-- Dashboard sessions show their saved workspace membership. An amber
-  `No workspace` label highlights live and recoverable sessions that belong
-  to none; additional memberships appear as a count with all names on hover.
-- Open pages of the same saved workspace receive changes in real time. Closing
-  a tab in one page removes it from the others, while each page keeps its own
-  selected session when it still exists. Concurrent tab edits are reconciled,
-  and stale saves cannot restore a tab another page closed. Reconnecting loads
-  the current server state; a four-second poll backs up unavailable streaming.
-- Landing-page workspace cards can resume in place or open the same saved
-  workspace in a separate browser window. The console header uses a joined
-  back/new-window control so the Sessions and Workspaces landing page can also
-  be opened without replacing the active console. The fixed `Sessions` action
-  in the horizontal tab bar or vertical tab rail offers the same split choice.
-- Desktop consoles can use `Space` (`Split workspace`) in the header to open the active
-  session alone in a new no-opener window. The destination starts as an unsaved
-  temporary workspace: `Save workspace` gives it a persistent server identity,
-  and saved workspaces can be renamed directly from the same tab strip.
-- `Tab` (`Split to ephemeral tab`), beside `Space`, opens only the current
-  session in a new browser tab with no sidebar, workspace controls, or workspace
-  persistence. It attaches to the same running tmux session; closing the tab
-  leaves that session running and the source workspace unchanged.
-- Desktop workspaces can add a named `Pane view` beside their session tabs.
-  Every leaf embeds a complete session console, can select any open workspace
-  session, and can split left/right or top/bottom again for arbitrary nested
-  layouts. Dividers resize by drag or keyboard. Named workspaces persist pane
-  assignments, names, split directions, and ratios on the server; a temporary
-  workspace carries them into its explicit `Save workspace` operation. Use the
-  configurable `Ctrl+Shift+G`, then Arrow leader to move real terminal focus
-  geometrically between visible panes; `Ctrl+Shift+Z`, then `G` provides the
-  shortcut-window route.
-- New Session can start in an absolute server directory. Its browser-local
-  Workspace Memory ranks paths learned from tmux sessions and successful
-  launches by recency and frequency; paths can also be pinned, hidden, restored,
-  or entered manually. Blank continues to use the service user's home directory.
-- `Fit active` may resize the shared tmux window. Use `Size protected` when
-  observing a valuable session without disturbing another client.
-- Desktop consoles place Common, Workspace, and Session sticky notes beside the
-  header controls. They autosave to the server; temporary workspaces can use the
-  Common and Session notes until the workspace itself is saved. Each note button
-  toggles a floating window that moves by dragging its title strip and resizes
-  from any corner. Pinned Common and Workspace windows stay visible while
-  switching session tabs. The browser remembers the open, pinned, position, and
-  size state separately for each saved workspace and restores that arrangement
-  when the workspace is resumed. Each
-  note is a multi-page notebook. Opening it shows the first page and the page
-  sidebar, with named entries for quick switching. Use the sidebar to add pages;
-  the new page's name is selected for editing. The `Pages` button hides or shows
-  the list while editing. Existing notes become Page 1 and
-  page text has no application-level character cap (the normal request-size
-  safety boundary still applies).
-- All eight scrolling buttons remain visible in every session. A terminal
-  badge marks tmux controls; application controls show only arrows.
-  Double chevrons move by pages; single arrows make fine adjustments.
-  Hover for a description. Tmux fine controls scroll retained output one row at
-  a time. Application fine controls are enabled for Claude, Copilot, and Grok,
-  continuing the application's own
-  transcript in small steps. The appropriate page and fine-scroll controls
-  highlight together according to the detected agent. Using another control
-  does not change that recommendation.
-  Unsupported application fine controls stay visible but disabled with a tooltip.
-  Native step size follows application settings. See
-  [verification details](docs/LINE_SCROLL_VERIFICATION.md).
-- The desktop `Callback` card has Global and Workspace scopes. Add the current
-  session or choose another live session, then return to it with `Open` or mark
-  it reviewed with the check button. Working, ready, and ended states remain
-  visible while you are away. The global list identifies entries from this
-  workspace, other workspaces, or the global-only queue; entries outside the
-  current workspace are display-only for navigation, but can still be reviewed
-  from here. Workspace entries are saved with a named workspace, while an
-  unsaved workspace keeps a browser-local queue until it is explicitly saved.
-  Its list opens as a movable, resizable floating window, can be pinned across
-  session switches, and remembers its layout per scope/workspace. Open pages
-  receive callback changes from other browser tabs immediately over the
-  authenticated event stream.
-- The adjacent desktop timer card provides countdown and stopwatch modes in a
-  draggable floating window. Pinning keeps it visible while switching sessions;
-  saved workspaces restore its browser-local clock, layout, and pin state. An
-  expired countdown rings, stays visibly alarmed, and marks the browser-tab title
-  until dismissed.
-- Host Pulse adds a compact live CPU/memory card beside the timer. Its floating
-  panel keeps the existing aggregate overview and adds a detailed view for every
-  logical CPU core, RAM headroom, Linux PSI `some`/`full` memory stalls, swap use,
-  and swap-in/out rates. It can chart 15 minutes, one hour, or 24 hours of history,
-  move, resize, pause, and stay pinned across session switches; layout, view, and
-  pin state persist locally per saved workspace. Sampling is demand-driven: the
-  compact card takes one lightweight sample, and five-second history collection
-  runs only while the floating panel is open and unpaused. The backend coalesces
-  simultaneous requests instead of running a permanent timer.
-- A staged-input acknowledgement confirms only that bytes reached the PTY, not
-  that a command or agent turn completed. Uncertain deliveries are never
-  retried automatically.
-- Desktop staged input also has a movable floating editor for terminal Focus and
-  scrollback work. It mirrors the active session's saved draft in both
-  directions, can be pinned across session switches, and remembers its open,
-  pin, and position state per saved workspace. Use `Float input` or
-  `Ctrl+Shift+Y`; `Open full input` returns to the complete composer controls.
-- Desktop staged input accepts any non-empty file from its picker, clipboard, or
-  drag-and-drop target (12 MiB per file, six at once). Composer attachments
-  stage shell-safe paths for review; dropping files over the live terminal
-  pastes those paths at its cursor without pressing Enter. The active CLI agent
-  runs as the same Unix user and can read the private host files directly.
-- On desktop, click the working-directory line beneath the session title to open
-  a movable file browser that resizes from any corner or its left edge. It starts
-  at the live tmux pane, while the
-  address row can open an absolute directory or open and preview an absolute file
-  directly anywhere inside `MUXDECK_FILE_BROWSER_ROOT`. Every operation remains
-  scoped to the displayed directory and cannot follow a symlink outside it. Text
-  previews are UTF-8, capped at 1 MiB, and wrap long lines without changing the
-  file's content.
-  `Find` opens a keyboard-friendly fuzzy locator for files and folders anywhere
-  below the browser's current root. Searches run only when submitted, skip
-  dotfiles unless they are enabled, and bound traversal on very large trees.
-  The directory filter starts with the current folder for instant local
-  matching; press `Nested` beside it to search the displayed folder and all of
-  its descendants. Nested results show their relative path and use the same
-  open, preview, and bulk actions as a normal listing.
-  `Recent` keeps the last 32 successfully opened files and folders in two compact
-  lists, scoped to the current tmux session. The list survives panel closes and
-  reloads in that browser, supports one-click reopening and individual or bulk
-  removal, and is not copied into backend state.
-  Signature-verified PNG, JPEG, GIF, WebP, AVIF, BMP, and ICO files render in a
-  fitted viewer up to 25 MiB and can be opened full size; active formats such as
-  SVG are never embedded. HTML/HTM files offer `Open webpage`, which opens a
-  10 MiB-bounded, opaque-origin sandboxed tab with scripts, forms, and network
-  connections disabled. Signature-verified PDFs up to 50 MiB open in the
-  browser's built-in PDF viewer with new-tab and download fallbacks. Other
-  binary files show metadata. Markdown files can switch between raw source and
-  a rendered view whose remembered text size steps from 100% to 175%. Regular
-  files can be downloaded directly from their row or selected-file toolbar
-  without a preview-size limit. Check several files and folders, then use `Download ZIP`
-  to fetch the whole selection recursively in one browser download; symlinks and
-  special files are skipped, and bounded size/entry limits protect the host.
-  `Upload` and
-  drag-and-drop write up to six files at once into the folder shown (12 MiB
-  each, mode `0600`) and refuse to overwrite an existing name. `Copy path`
-  copies the absolute server path, while `Stage path` inserts its shell-quoted
-  form into the composer without sending. Deletion is locked behind a
-  confirmation by default; use the title-strip `Unlock` control for a
-  deliberate, temporary unsafe-delete mode when cleaning up many entries. In
-  that mode row and bulk deletes (including non-empty folders) run immediately;
-  the mode is local to the open browser panel and resets when it is closed or
-  pointed at another session.
-- On desktop, terminal output ending in `.md`, `.pdf`, `.png`, `.txt`, `.json`,
-  `.csv`, `.svg`, `.html`, or `.htm` is also linkified.
-  `Ctrl`+click (Windows/Linux) or `Cmd`+click (macOS) opens that path directly
-  in the floating file browser; a relative path is resolved from the live pane
-  CWD, while absolute and `~/` paths keep their server meaning. Plain clicks
-  remain terminal input. For HTML files, use `Open webpage` in the file browser
-  to open the sandboxed hosted document in a new tab. HTTP(S) links keep opening
-  as web links, and no filesystem request is made until the link is activated.
-- Agent activity is inferred conservatively from tmux-visible signals.
-  Unsupported or ambiguous states appear as `Unclear` instead of being guessed.
-- Muxdeck records live tmux reconstruction metadata in a private SQLite registry.
-  If a session is missing after a host or tmux restart, the landing page and the
-  unavailable session view offer an explicit `Recreate shell` action using its
-  saved native name and last CWD, plus `Forget` to remove that recovery record.
-  Forgetting also removes that dead shell from open and recent navigation in
-  the current browser and from every saved workspace. A floating `Undo`
-  notification remains for 30 seconds and restores its recovery record and
-  workspace placement while retaining later edits. After the deadline,
-  Forget is final. Recreate never launches
-  or resumes a coding agent. A passively detected agent type and conversation
-  ID may be shown solely as a reference, and a missing directory or live name
-  conflict blocks recovery instead of changing another session. Sessions ended
-  through Muxdeck are intentionally excluded from recovery.
-- SQLite also retains a searchable session history: native and previous names,
-  display titles, CWD, saved-workspace membership, timestamps, and every coding
-  agent observed in a session. Open `Session history` from the landing page, or
-  from a workspace's tab controls to scope it to that workspace. Reopen attaches
-  to the original live session; confirmed recreation starts a fresh shell without
-  resuming an agent.
-- Alternate-screen applications may leave no retained tmux history; Muxdeck
-  cannot reconstruct output tmux did not save.
-
-## Workspace shortcuts
-
-These are the default shortcuts for the desktop multi-tab view. They are not
-active on the landing page or compact mobile layout.
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+Shift+H` | Open fuzzy command search |
-| `Ctrl+Shift+Z` | Open the shortcut window; then press one action key |
-| `Ctrl+Shift+B` | Open New session in the current workspace |
-| `Ctrl+Shift+K` | Add or remove the active session from the workspace callback list (which also appears globally) |
-| `Ctrl+Shift+,` | Previous tab |
-| `Ctrl+Shift+.` | Next tab |
-| `Ctrl+Shift+1...9` | Jump to a numbered tab |
-| `Ctrl+Shift+;` | Find a tab by title, tmux name, or group |
-| `Ctrl+Shift+A` | Show or hide tab action buttons |
-| `Ctrl+Shift+S` | Show or hide the session tab strip |
-| `Ctrl+Shift+F` | Enter or exit terminal Focus |
-| `Ctrl+Shift+G`, then Arrow | Move terminal focus between panes in a multi-pane view |
-| `Ctrl+Shift+Y` | Show or hide the movable staged-input window |
-| `Ctrl+Shift+J` | Show or hide the independent floating workspace terminal |
-| `Ctrl+Shift+U` / `Ctrl+Shift+D` | Page with the current agent's recommended controls |
-| `Ctrl+Shift+L` | Leave scrollback and return to live output |
-| `Ctrl+Shift+C` | Toggle browser terminal Copy mode |
-| `Ctrl+Shift+M` | Create and open a numbered session in the active pane's directory |
-| `Ctrl+Shift+R` | Rename the active tmux session |
-| `Ctrl+Shift+E` | Open the End-session confirmation |
-| `Ctrl+Shift+Z`, then `T` | Toggle the saved light/dark theme |
-
-Quick temporary session creation remains available from the shortcut window as
-`Ctrl+Shift+Z`, then `K` (its direct chord is intentionally free because `K` is
-reserved for the callback toggle).
-
-The shortcut window provides a browser-safe second route to known actions. In
-particular, the defaults `Z` then `E`, `R`, or `H` open End confirmation, Rename,
-or fuzzy command search; `Z`, then `G`, then Arrow enters pane navigation. Open
-`Shortcuts`, then `Customize`, to change every
-direct `Ctrl+Shift` chord and every one-key shortcut-window action. The keymap is
-stored by the backend and shared by every browser using this Muxdeck instance;
-all visible hints update after saving. Browsers and operating systems may still
-reserve a direct chord, so keep a shortcut-window binding as a fallback.
-
-Use `Keymap` in the desktop workspace strip to see these chords in the app.
-Muxdeck highlights the recommended page and fine-scroll controls for the active
-agent. Clicking another control does not move the highlight or change the
-paging shortcuts; previously learned browser choices are ignored.
-
-## Deployment and security
-
-Follow [`AGENT_DEPLOYMENT_GUIDE.md`](AGENT_DEPLOYMENT_GUIDE.md) for fresh
-installs, state migration, systemd, Caddy, validation, upgrades, and rollback.
-Report vulnerabilities through the private process in
-[`SECURITY.md`](SECURITY.md).
-
-Keep `MUXDECK_HOST=127.0.0.1`. For a reverse proxy, list each exact external
-origin and preserve the browser's `Host` and `Origin` headers:
-
-~~~bash
-MUXDECK_TRUSTED_ORIGINS=https://console.example.test
-~~~
-
-Origin validation prevents cross-site requests and DNS rebinding; it is not
-authentication. To enable Muxdeck's remembered-browser login, provision its
-state interactively outside the repository, then select `server` mode and set
-the resulting absolute path in the service environment:
-
-~~~bash
-.venv/bin/python -m tmux_console.auth provision \
-  --path /var/lib/muxdeck/auth.json \
-  --username console-admin
-export MUXDECK_AUTH_FILE=/var/lib/muxdeck/auth.json
-export MUXDECK_AUTH_MODE=server
-~~~
-
-The command prompts for the password without echoing it. The file contains only
-a salted scrypt password hash and hashes of random remembered-device tokens; it
-uses mode `0600` and must never be committed, copied into a source archive, or
-placed directly in a systemd unit. The browser receives an `HttpOnly`, `Secure`,
-`SameSite=Strict` cookie shared across tabs in that browser profile. Server-side
-device tokens have no fixed expiration, while the browser cookie uses the
-maximum broadly supported lifetime and is renewed on authenticated requests.
-Clearing browser data still removes it. Use **Account** to revoke remembered
-browsers or log out.
-
-The same private credential file can instead back standard HTTP Basic
-authentication with `MUXDECK_AUTH_MODE=basic`. Muxdeck validates the Basic
-credentials but does not issue device cookies or create remembered-browser
-records. The browser decides how long to cache those credentials, and HTTP Basic
-has no reliable application-level logout; close the browser or clear its saved
-site credentials to forget them. A Basic-auth username cannot contain `:`.
-
-Set `MUXDECK_AUTH_MODE=none` only when deliberately relying on loopback, a
-private tunnel/network, or a separate authentication layer. Explicit `none`
-ignores `MUXDECK_AUTH_FILE`. Explicit `server` and `basic` modes require a valid
-private auth file and fail startup closed if it is absent or unsafe. An unknown
-mode also prevents startup.
-
-Titles, session names, memos, snippets, workspace state, authentication state,
-and uploaded files can contain sensitive information and should remain outside
-the source tree.
-
-## Configuration
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MUXDECK_HOST` | `127.0.0.1` | HTTP listen address |
-| `MUXDECK_PORT` | `7683` | HTTP listen port |
-| `MUXDECK_BASE_PATH` | `/mux` | API, WebSocket, and SPA prefix |
-| `MUXDECK_TRUSTED_ORIGINS` | unset | Exact external origins allowed through a proxy |
-| `MUXDECK_AUTH_MODE` | inferred | `server`, `basic`, or `none`; when omitted, an auth file selects `server` and no file selects `none` |
-| `MUXDECK_AUTH_FILE` | unset | Absolute path to provisioned credential and remembered-device state; required by `server` and `basic` |
-| `MUXDECK_AUTH_COOKIE_SECURE` | `true` | Require HTTPS for the `server`-mode remembered-browser cookie; disable only for intentional direct loopback HTTP development |
-| `TMUX_BIN` | `tmux` | tmux executable |
-| `MUXDECK_TMUX_SOCKET` | unset | Optional tmux socket name |
-| `MUXDECK_SESSION_REGISTRY_FILE` | `~/.local/state/muxdeck/sessions.sqlite3` | Private SQLite recovery metadata for observed tmux sessions |
-
-The [complete reference](docs/REFERENCE.md#configuration) documents persistence
-paths and every runtime setting.
-
-## Development
-
-~~~bash
-.venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/python -m pytest -q
-npm test
-npm run build
-npm run test:e2e
-~~~
-
-Python and Playwright end-to-end tests use isolated disposable tmux sockets and
-never target the default tmux server.
+Closing a browser tab leaves tmux running. A workspace tab's **X** only removes
+its navigation entry; **End** terminates the session after confirmation.
+**Fit active** can resize the shared tmux window; choose **Size protected** when
+observing a session used by another client.
 
 ## Documentation
 
-- [HTTP and WebSocket API reference](docs/API.md)
-- [Detailed behavior and complete configuration](docs/REFERENCE.md)
-- [Deployment, migration, validation, and rollback](AGENT_DEPLOYMENT_GUIDE.md)
-- [Vulnerability reporting and the security boundary](SECURITY.md)
+- [Usage, shortcuts, and configuration](docs/REFERENCE.md)
+- [Agent callback setup and posting reports](docs/AGENT_CALLBACKS.md)
+- [Agent orchestration and `muxdeckctl`](docs/AGENT_ORCHESTRATION.md)
+- [Agent transcripts](docs/AGENT_TRANSCRIPTS.md), [submitted messages](docs/SUBMITTED_MESSAGES.md), and [saved scrollback](docs/SCROLLBACK.md)
+- [HTTP and WebSocket API](docs/API.md)
+- [Deployment, migration, and rollback](AGENT_DEPLOYMENT_GUIDE.md)
+- [Security and vulnerability reporting](SECURITY.md)
+
+## Development
+
+Activate `.venv`, then run `npm run dev`. It serves
+<http://127.0.0.1:5173/mux/> and starts the backend on port 7683.
+Install Python development tools with
+`.venv/bin/python -m pip install -e '.[dev]'`.
+
+Use the affected frontend test files and explicit pytest files first; run
+`npm run typecheck` for TypeScript changes and the relevant
+`npm run test:e2e -- e2e/callback-list-view.spec.ts` for browser behavior.
+See [the repository guidelines](AGENTS.md). CI runs the full Python and
+frontend suites. Python and browser tests use disposable tmux sockets.
