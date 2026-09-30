@@ -123,6 +123,7 @@ observing a session used by another client.
 - [Usage, shortcuts, and configuration](docs/REFERENCE.md)
 - [Agent callback setup and posting reports](docs/AGENT_CALLBACKS.md)
 - [Agent orchestration and `muxdeckctl`](docs/AGENT_ORCHESTRATION.md)
+- [Muxpilot project coordination proposal and implementation plan](docs/muxpilot/README.md)
 - [Agent transcripts](docs/AGENT_TRANSCRIPTS.md), [submitted messages](docs/SUBMITTED_MESSAGES.md), and [saved scrollback](docs/SCROLLBACK.md)
 - [HTTP and WebSocket API](docs/API.md)
 - [Deployment, migration, and rollback](AGENT_DEPLOYMENT_GUIDE.md)
