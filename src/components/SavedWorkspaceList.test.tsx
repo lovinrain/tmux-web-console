@@ -60,6 +60,13 @@ beforeEach(() => {
 });
 
 describe("saved workspace activity labels", () => {
+  it("uses the selected zone's date and year when falling back from elapsed time", () => {
+    const timestamp = Date.parse("2025-12-20T00:30:00Z");
+    const now = Date.parse("2026-01-01T01:00:00Z");
+    expect(approximateWorkspaceActivity(timestamp, now, "America/Los_Angeles")).toBe("Active Dec 19");
+    expect(approximateWorkspaceActivity(timestamp, now, "UTC")).toBe("Active Dec 20, 2025");
+  });
+
   it("uses rough relative time before falling back to a date", () => {
     const now = new Date("2026-08-16T12:00:00Z").getTime();
     expect(approximateWorkspaceActivity(now - 25_000, now)).toBe("Active just now");

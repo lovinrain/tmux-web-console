@@ -400,6 +400,7 @@ test("mobile End terminates only the confirmed tmux session and selects its neig
       name: "Terminate tmux session",
     });
     await expect(endSession).toBeVisible();
+    await endSession.scrollIntoViewIfNeeded();
     await expect(endSession).toBeInViewport();
     const endBox = await endSession.boundingBox();
     expect(endBox?.width).toBeGreaterThanOrEqual(44);
@@ -569,7 +570,7 @@ test("shareable dashboard URL restores ordered sorting and fits narrow screens",
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/mux/?view=list&group=state&sort=state-change,tmux-name");
   await expect(page.locator(".session-card").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Group State / attention" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".sort-priority-chip")).toHaveText([
     /01State changednewest first/,
@@ -795,7 +796,7 @@ test("dashboard query survives new-window and same-window console navigation", a
     view: "list",
     sort: "title,tmux-name",
   });
-  await expect(page.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("new session creation preserves SPA tabs and isolates a new browser window", async ({ page }) => {
@@ -1019,7 +1020,7 @@ test("new session creation preserves SPA tabs and isolates a new browser window"
   }
 });
 
-test("desktop Copy New creates the next numbered session in the active directory", async ({ page }) => {
+test("desktop Copy sibling creates the next numbered session in the active directory", async ({ page }) => {
   const sourceSession = `${sessionName}-copy-source`;
   const tailSession = `${sourceSession}-tail`;
   const collisionSessions = [`${sourceSession}_1`, `${sourceSession}_2`];
@@ -1073,7 +1074,7 @@ test("desktop Copy New creates the next numbered session in the active directory
     await expect(page.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
     });
-    const copyNew = page.getByRole("button", { name: "Copy New" });
+    const copyNew = page.getByRole("button", { name: "Copy sibling session", exact: true });
     await expect(copyNew).toBeHidden();
     await page.keyboard.press("Control+Shift+M");
     await expectRoute(
@@ -3554,7 +3555,7 @@ test("bulk selection closes tabs safely and ends sessions only after confirmatio
   }
 });
 
-test("split workspace opens the multi-selected tabs in their source order", async ({ page, request, context }) => {
+test("Fork preserves the current view and split workspace opens the selected tabs in source order", async ({ page, request, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const first = `${sessionName}-split-first`;
   const second = `${sessionName}-split-second`;
@@ -3568,6 +3569,7 @@ test("split workspace opens the multi-selected tabs in their source order", asyn
   expect(created.ok()).toBe(true);
   const workspaceId = (await created.json()).workspace.id;
   let child: Page | undefined;
+  let forked: Page | undefined;
   try {
     await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}${tabs.map((name) => `&tab=${name}`).join("")}`);
     await expect(page.locator(".connection-badge")).toContainText("Live");
@@ -3575,8 +3577,19 @@ test("split workspace opens the multi-selected tabs in their source order", asyn
     await page.getByRole("tab", { name: new RegExp(`^${second},`) }).click({ modifiers: ["Control"] });
     await page.getByRole("tab", { name: new RegExp(`^${first},`) }).click({ modifiers: ["Control"] });
     const button = page.getByRole("button", { name: "Split 2 selected sessions into a new temporary workspace" });
-    await expect(button).toHaveText("Split workspace (2)");
+    await expect(button).toHaveText("Space (2)");
     const identities = tabs.map(workspaceTmuxIdentity);
+    const sourceUrl = page.url();
+    const forkPopup = context.waitForEvent("page");
+    await page.getByRole("link", { name: "Fork current view in a new browser tab" }).click();
+    forked = await forkPopup;
+    await expect(forked).toHaveURL(sourceUrl);
+    await expect(forked.locator(".connection-badge")).toContainText("Live");
+    await expectRoute(forked, `/mux/session/${sessionName}`, tabs, { workspace: workspaceId });
+    expect(await forked.evaluate(() => window.opener === null)).toBe(true);
+    await expect(page).toHaveURL(sourceUrl);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+    await forked.close();
     const popup = context.waitForEvent("page");
     await button.click();
     child = await popup;
@@ -3589,6 +3602,7 @@ test("split workspace opens the multi-selected tabs in their source order", asyn
     expect((await source.json()).workspace.tabs).toEqual(tabs);
     await page.screenshot({ path: "artifacts/multi-selection-split-workspace.png" });
   } finally {
+    if (forked && !forked.isClosed()) await forked.close();
     await child?.close();
     await request.delete(`/mux/api/workspaces/${workspaceId}`);
     for (const name of [first, second]) {
@@ -4357,7 +4371,7 @@ test("workspace tab groups persist in the URL and remain manageable on mobile", 
     await page.getByRole("button", { name: "Collapse Review lane tab group" }).click();
     await expect(page.getByRole("tab", {
       name: new RegExp(`^${firstGroupedSession}, Review lane group`),
-    })).toBeVisible();
+    })).toBeHidden();
     await expect(page.getByRole("tab", {
       name: new RegExp(`^${secondGroupedSession}, Review lane group`),
     })).toBeHidden();
@@ -6273,7 +6287,7 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
     await trayToggle.click();
     const tray = page.getByRole("group", { name: "All console controls" });
     await expect(tray).toBeVisible();
-    for (const control of ["Fit active", "Scrollback", "Agents"]) {
+    for (const control of ["Fit active", "Scrollback", "Metadata"]) {
       await expect(tray.getByRole("button", { name: control })).toBeVisible();
     }
     await expect(tray.getByRole("button", { name: "Edit common note" }))
@@ -6714,7 +6728,7 @@ test("snippet tree persists and stages exact input from cards and lists", async 
 
   await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await page.getByRole("button", { name: "Back to sessions" }).click();
-  await page.getByRole("button", { name: "List" }).click();
+  await page.getByRole("button", { name: "List", exact: true }).click();
   await page.setViewportSize({ width: 320, height: 700 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const rowSnippet = page.getByRole("button", { name: `Use snippet with ${sessionName}` });
@@ -6896,8 +6910,8 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(queuedCardMemoButton.locator("span")).toHaveText("Q1", { timeout: 10_000 });
   expect(workspaceTmuxSnapshot(sessionName)).toBe(memoOnlyTmuxBefore);
 
-  await page.getByRole("button", { name: "List" }).click();
-  await expect(page.getByRole("button", { name: "List" })).toHaveAttribute(
+  await page.getByRole("button", { name: "List", exact: true }).click();
+  await expect(page.getByRole("button", { name: "List", exact: true })).toHaveAttribute(
     "aria-pressed",
     "true",
   );

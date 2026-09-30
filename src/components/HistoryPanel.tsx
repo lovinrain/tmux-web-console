@@ -15,6 +15,7 @@ import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
 import { AgentTranscript } from "./AgentTranscript";
 import { paneCommandKind } from "../sessionDashboardModel";
+import { formatTimestamp, useDisplayTimeZone } from "../timeZone";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 
 export const DEFAULT_HISTORY_PANEL_WIDTH = 680;
@@ -65,6 +66,7 @@ export function HistoryPanel({
   const [view, selectView] = useState<"transcript" | "scrollback" | "recorded" | "submitted">(isAgent ? "transcript" : "scrollback");
   const views = sessionName ? ["transcript", "scrollback", "recorded", "submitted"] as const : ["transcript", "scrollback", "recorded"] as const;
   const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", recorded: "Recorded output", submitted: "Submitted messages" };
+  const { timeZone } = useDisplayTimeZone();
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -380,7 +382,9 @@ export function HistoryPanel({
         </> : <>
         <div className="history-meta">
           <span>{page ? `${page.totalLines.toLocaleString()} captured lines` : "Capturing pane"}</span>
-          <span>{page ? new Date(page.capturedAt * 1000).toLocaleTimeString() : "-"}</span>
+          <span>{page ? formatTimestamp(page.capturedAt * 1000, timeZone, {
+            hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+          }) : "-"}</span>
         </div>
 
         {page && ((page.alternateOn && page.historySize === 0) || lines.some((line) => line.includes("Earlier messages are available"))) && (

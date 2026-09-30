@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
 import { DEFAULT_CALLBACK_LIST_VIEW } from "../callbackListView";
 import { renderWithTheme } from "../test-utils";
+import { ThemeProvider } from "../theme";
 import type { Session } from "../types";
-import { CALLBACK_VIEW_STORAGE_PREFIX, WorkspaceCallbackList } from "./WorkspaceCallbackList";
+import { CALLBACK_VIEW_STORAGE_KEY, WorkspaceCallbackList } from "./WorkspaceCallbackList";
 
 function session(name: string, state: Session["agentState"] = "waiting_human"): Session {
   return {
@@ -63,47 +64,104 @@ beforeEach(() => {
 });
 
 describe("WorkspaceCallbackList sorting and filtering", () => {
-  it("restores separate global/workspace preferences without storing search text", () => {
-    const workspaceKey = `${CALLBACK_VIEW_STORAGE_PREFIX}workspace:one`;
-    const globalKey = `${CALLBACK_VIEW_STORAGE_PREFIX}global`;
+  it("edits custom groups using all scope callbacks even when search hides rows, without changing the queue", async () => {
+    const onSaveGroup = vi.fn(async () => undefined);
+    const props = baseProps({
+      globalCallbackSnapshot: snapshot({
+        callbackGroupRevision: 2,
+        callbackGroups: [
+          { id: "global", name: "Global group", workspaceId: null, sessions: ["current"] },
+          { id: "workspace", name: "Workspace group", workspaceId: "one", sessions: ["working"] },
+        ],
+      }), onSaveGroup, onDeleteGroup: vi.fn(async () => undefined),
+    });
+    renderWithTheme(<WorkspaceCallbackList {...props} />);
+    openList();
+    changeSelect("Group callbacks by", "custom");
+    expect(screen.getByRole("button", { name: "Global group callback group" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Workspace group callback group" })).not.toBeInTheDocument();
+    search("current");
+    fireEvent.click(screen.getByRole("button", { name: "New group" }));
+    expect(screen.getByRole("checkbox", { name: "Include working in group" })).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom callback group name" }), { target: { value: "Picked" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Include working in group" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save group" }));
+    await waitFor(() => expect(onSaveGroup).toHaveBeenCalledExactlyOnceWith({
+      id: undefined, workspaceId: null, name: "Picked", sessions: ["working"], expectedRevision: 2,
+    }));
+    expect(props.onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    expect(screen.getByRole("combobox", { name: "Group callbacks by" })).toHaveValue("custom");
+    search("");
+    expect(screen.getByRole("button", { name: "Workspace group callback group" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Global group callback group" })).not.toBeInTheDocument();
+  });
+
+  it("keeps shared group creation available globally while explaining unsaved workspace scope", () => {
+    renderWithTheme(<WorkspaceCallbackList {...baseProps({
+      workspaceId: null, globalCallbackSnapshot: snapshot({ callbackGroups: [], callbackGroupRevision: 0 }),
+      onSaveGroup: vi.fn(async () => undefined), onDeleteGroup: vi.fn(async () => undefined),
+    })} />);
+    openList();
+    changeSelect("Group callbacks by", "custom");
+    expect(screen.getByRole("button", { name: "New group" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    changeSelect("Group callbacks by", "custom");
+    expect(screen.getByText("Save this workspace to share custom groups, or create them in Global.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "New group" })).not.toBeInTheDocument();
+  });
+
+  it("shares view preferences and open filters across scopes without storing search text", () => {
+    const workspaceKey = "muxdeck.callback-list-view.v1:workspace:one";
     window.localStorage.setItem(workspaceKey, JSON.stringify({
       ...DEFAULT_CALLBACK_LIST_VIEW, sort: "name-asc", status: "ready",
+    }));
+    window.localStorage.setItem("muxdeck.callback-list-view.v1:global", JSON.stringify({
+      ...DEFAULT_CALLBACK_LIST_VIEW, sort: "callback-newest", group: "status",
     }));
     const props = baseProps({ globalCallbackSnapshot: snapshot(), onGlobalChange: vi.fn(async () => undefined) });
     const view = renderWithTheme(<WorkspaceCallbackList {...props} />);
     openList();
-    changeSelect("Sort callbacks", "callback-newest");
+    expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("callback-newest");
+    expect(screen.getByRole("combobox", { name: "Group callbacks by" })).toHaveValue("status");
     changeSelect("Filter callbacks by status", "working");
     fireEvent.click(screen.getByRole("button", { name: "More callback filters" }));
     changeSelect("Filter callbacks by agent", "claude");
     search("temporary-private-search");
-    expect(JSON.parse(window.localStorage.getItem(globalKey)!)).toEqual({
-      ...DEFAULT_CALLBACK_LIST_VIEW, sort: "callback-newest", status: "working", agent: "claude",
+    expect(JSON.parse(window.localStorage.getItem(CALLBACK_VIEW_STORAGE_KEY)!)).toEqual({
+      ...DEFAULT_CALLBACK_LIST_VIEW, sort: "callback-newest", group: "status", status: "working", agent: "claude",
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
-    expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("name-asc");
-    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("ready");
-    expect(screen.getByRole("searchbox", { name: "Search callbacks" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("callback-newest");
+    expect(screen.getByRole("combobox", { name: "Group callbacks by" })).toHaveValue("status");
+    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("working");
+    expect(screen.getByRole("searchbox", { name: "Search callbacks" })).toHaveValue("temporary-private-search");
+    expect(screen.getByRole("button", { name: "More callback filters" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("combobox", { name: "Filter callbacks by agent" })).toHaveValue("claude");
     changeSelect("Filter callbacks by status", "waiting");
-    expect(JSON.parse(window.localStorage.getItem(workspaceKey)!)).toEqual({
-      ...DEFAULT_CALLBACK_LIST_VIEW, sort: "name-asc", status: "waiting",
+    expect(JSON.parse(window.localStorage.getItem(CALLBACK_VIEW_STORAGE_KEY)!)).toEqual({
+      ...DEFAULT_CALLBACK_LIST_VIEW, sort: "callback-newest", group: "status", status: "waiting", agent: "claude",
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Global callback scope" }));
     expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("callback-newest");
-    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("working");
+    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("waiting");
     expect(screen.getByRole("button", { name: "More callback filters" })).toHaveTextContent("(1)");
+    fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
     view.unmount();
     renderWithTheme(<WorkspaceCallbackList {...props} />);
     expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("callback-newest");
+    expect(screen.getByRole("combobox", { name: "Group callbacks by" })).toHaveValue("status");
+    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("waiting");
     expect(screen.getByRole("searchbox", { name: "Search callbacks" })).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "More callback filters" }));
     expect(screen.getByRole("combobox", { name: "Filter callbacks by agent" })).toHaveValue("claude");
   });
 
-  it("does not copy one workspace's filters into another workspace during a prop change", () => {
-    window.localStorage.setItem(`${CALLBACK_VIEW_STORAGE_PREFIX}workspace:two`, JSON.stringify({
+  it("keeps the same view when switching between saved and temporary workspaces", () => {
+    const otherWorkspaceKey = "muxdeck.callback-list-view.v1:workspace:two";
+    window.localStorage.setItem(otherWorkspaceKey, JSON.stringify({
       ...DEFAULT_CALLBACK_LIST_VIEW, sort: "name-desc", status: "working",
     }));
     const props = baseProps();
@@ -112,14 +170,17 @@ describe("WorkspaceCallbackList sorting and filtering", () => {
     changeSelect("Sort callbacks", "ready-longest");
     changeSelect("Filter callbacks by status", "ready");
     search("private search");
-    view.rerender(<WorkspaceCallbackList {...props} workspaceId="two" />);
-    openList();
-    expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("name-desc");
-    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("working");
-    expect(screen.getByRole("searchbox", { name: "Search callbacks" })).toHaveValue("");
-    expect(JSON.parse(window.localStorage.getItem(`${CALLBACK_VIEW_STORAGE_PREFIX}workspace:one`)!))
+    view.rerender(<ThemeProvider><WorkspaceCallbackList {...props} workspaceId="two" /></ThemeProvider>);
+    expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("ready-longest");
+    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("ready");
+    expect(screen.getByRole("searchbox", { name: "Search callbacks" })).toHaveValue("private search");
+    view.rerender(<ThemeProvider><WorkspaceCallbackList {...props} workspaceId={null} temporaryKey="another" /></ThemeProvider>);
+    expect(screen.getByRole("combobox", { name: "Sort callbacks" })).toHaveValue("ready-longest");
+    expect(screen.getByRole("combobox", { name: "Filter callbacks by status" })).toHaveValue("ready");
+    expect(screen.getByRole("searchbox", { name: "Search callbacks" })).toHaveValue("private search");
+    expect(JSON.parse(window.localStorage.getItem(CALLBACK_VIEW_STORAGE_KEY)!))
       .toEqual({ ...DEFAULT_CALLBACK_LIST_VIEW, sort: "ready-longest", status: "ready" });
-    expect(JSON.parse(window.localStorage.getItem(`${CALLBACK_VIEW_STORAGE_PREFIX}workspace:two`)!))
+    expect(JSON.parse(window.localStorage.getItem(otherWorkspaceKey)!))
       .toEqual({ ...DEFAULT_CALLBACK_LIST_VIEW, sort: "name-desc", status: "working" });
   });
 

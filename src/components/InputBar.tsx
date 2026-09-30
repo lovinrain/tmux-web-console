@@ -454,9 +454,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   queuedMessageCount = 0,
 }, ref) {
   const { bindings: shortcutBindings } = useShortcutSettings();
-  const preferredLineScrollMode = applicationScrollProfile && preferredScrollMode === "application"
-    ? "application"
-    : "tmux";
+  const preferredLineScrollMode = preferredScrollMode ?? "tmux";
   const [initialDraftState] = useState(() => {
     const pendingHandoff = renamedSessionDraftHandoffs.get(sessionName);
     const handoff = pendingHandoff?.sessionId === sessionId ? pendingHandoff : undefined;
@@ -1458,14 +1456,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               className={preferredLineScrollMode === "application"
                 ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}
               data-scroll-preferred={preferredLineScrollMode === "application" ? "true" : undefined}
-              disabled={!enabled || !applicationScrollProfile || !onScrollApplication}
+              disabled={!enabled || !onScrollApplication}
               busy={applicationScrollPending}
               aria-label={`Application Scroll ${direction === "up" ? "Up" : "Down"}`}
               aria-controls={terminalControlId}
               title={applicationScrollProfile === "codex"
                 ? `Scroll Codex's current page ${direction} by three rows; continues from PgUp/PgDn`
-                : !applicationScrollProfile
-                ? `Application fine scrolling is not supported for ${preferredScrollLabel || "this session"}. Use the highlighted tmux controls.`
                 : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
                 preferredLineScrollMode === "application"
                   ? `. Recommended for ${preferredScrollLabel || "this agent"}` : ""

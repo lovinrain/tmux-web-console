@@ -1,6 +1,6 @@
 import type { GlobalCallbackSnapshot } from "./api";
 
-/** Session membership and agent messages change independently. */
+/** Session membership, agent messages, and custom groups change independently. */
 export function mergeCallbackSnapshot(
   current: GlobalCallbackSnapshot,
   incoming: GlobalCallbackSnapshot,
@@ -10,7 +10,10 @@ export function mergeCallbackSnapshot(
     && incoming.callbackMessageRevision >= (current.callbackMessageRevision ?? -1)
     ? incoming : current;
   const callbackMessages = messages.callbackMessages ?? [];
-  const merged = messages.callbackMessageRevision === undefined ? sessions : {
+  const groups = incoming.callbackGroupRevision !== undefined
+    && incoming.callbackGroupRevision >= (current.callbackGroupRevision ?? -1)
+    ? incoming : current;
+  let merged = messages.callbackMessageRevision === undefined ? sessions : {
     ...sessions,
     callbackMessages,
     callbackMessageRevision: messages.callbackMessageRevision,
@@ -21,6 +24,9 @@ export function mergeCallbackSnapshot(
         .map((message) => message.sessionName),
     ])],
   };
+  if (groups.callbackGroupRevision !== undefined) {
+    merged = { ...merged, callbackGroups: groups.callbackGroups, callbackGroupRevision: groups.callbackGroupRevision };
+  }
 
   // Receipt times are monotonic history, independent of either revision. A stale
   // response can still contain history for a newly watched session, while an

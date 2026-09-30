@@ -17,6 +17,32 @@ beforeEach(() => {
 });
 
 describe("SessionHistoryDialog", () => {
+  it("shows native start, copy lineage and browser activity alongside agent history", async () => {
+    vi.mocked(listSessionHistory).mockResolvedValue({ entries: [{ ...entry, createdAt: 90,
+      origin: { kind: "copy", recordedAt: 95, sourceHistoryId: "parent", sourceName: "source-session", placement: "child" },
+      viewEvents: [{ id: 1, kind: "split-workspace", recordedAt: 200 }, { id: 2, kind: "fork", recordedAt: 210 }],
+    }], nextOffset: null });
+    render(<SessionHistoryDialog sessionName={entry.name} onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Metadata for named-agent" });
+    await within(dialog).findByText("source-session");
+    expect(dialog).toHaveTextContent("Started");
+    expect(dialog).toHaveTextContent("Copied session");
+    expect(dialog).toHaveTextContent("Child session");
+    expect(dialog).toHaveTextContent("Agent history");
+    expect(dialog).toHaveTextContent("reference-id");
+    fireEvent.click(screen.getByText("Browser view activity (2)"));
+    expect(screen.getByText("Split workspace opened")).toBeVisible();
+    expect(screen.getByText("Fork requested")).toBeVisible();
+    expect(restoreSessionHistory).not.toHaveBeenCalled();
+  });
+
+  it("leaves unknown start dates and origins explicit for older records", async () => {
+    render(<SessionHistoryDialog sessionName={entry.name} onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    await screen.findByText("Not recorded for this session");
+    expect(screen.getByText("Started").nextElementSibling).toHaveTextContent("Not recorded");
+    expect(screen.queryByText(/Browser view activity/)).not.toBeInTheDocument();
+  });
+
   it("opens saved output for an ended session without recreating its shell", async () => {
     vi.mocked(loadAgentTranscript).mockResolvedValue({ sources: [], selectedSource: null, status: "available", messages: [{ id: "first", role: "user", text: "Original request", timestamp: null, truncated: false }], nextCursor: null, partial: false, notice: null });
     vi.mocked(loadSavedScrollback).mockResolvedValue({
@@ -78,7 +104,7 @@ describe("SessionHistoryDialog", () => {
     }], nextOffset: null });
     render(<SessionHistoryDialog sessionName="named-agent" showWorkspaceMembership={false}
       onClose={vi.fn()} onOpenSession={vi.fn()} />);
-    const dialog = screen.getByRole("dialog", { name: "Agents in named-agent" });
+    const dialog = screen.getByRole("dialog", { name: "Metadata for named-agent" });
     await within(dialog).findByText("named-agent");
     expect(listSessionHistory).toHaveBeenCalledWith(null, "", false, 0, expect.any(AbortSignal), "named-agent");
     expect(dialog).toHaveTextContent("reference-id");

@@ -12,6 +12,8 @@ import {
 import {
   BASE_PATH,
   copySession,
+  recordSessionView,
+  type SessionViewKind,
   createQueuedMessage,
   deleteQueuedMessage,
   listSessions,
@@ -115,6 +117,7 @@ import {
   type WorkspaceTabOrientation,
 } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
+import { TimeZoneSelect } from "./TimeZoneSelect";
 
 interface ConsoleScreenProps {
   sessionName: string;
@@ -705,7 +708,8 @@ export function ConsoleScreen({
     return () => window.cancelAnimationFrame(frame);
   }, [terminalFocusRequest]);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [viewMetadataError, setViewMetadataError] = useState<{ sessionName: string; message: string } | null>(null);
   const [filesOpen, setFilesOpen] = useState(false);
   const [fileBrowserTarget, setFileBrowserTarget] = useState<{
     sessionName: string; sessionId: string; paneId: string; panePath: string;
@@ -826,9 +830,7 @@ export function ConsoleScreen({
   const scrollAgentKind = paneCommandKind(pane?.command || "", pane?.title || "");
   const preferredScrollMode = preferredAgentScrollMode(scrollAgentKind);
   const nativeScrollProfile = applicationScrollProfile(scrollAgentKind);
-  const preferredLineScrollMode = nativeScrollProfile && preferredScrollMode === "application"
-    ? "application"
-    : "tmux";
+  const preferredLineScrollMode = preferredScrollMode;
   // Track actual scrolling separately from the agent recommendation so Live
   // can leave an outstanding tmux request before returning to the application.
   const scrollTargetKey = JSON.stringify([sessionName, session?.id, pane?.id]);
@@ -895,7 +897,7 @@ export function ConsoleScreen({
     setCopySessionError(null);
     let created;
     try {
-      created = await copySession(sourceName, session.id, theme);
+      created = await copySession(sourceName, session.id, theme, placement);
     } catch (error) {
       copyingSessionRef.current = false;
       setCopyingSource(null);
@@ -915,6 +917,18 @@ export function ConsoleScreen({
     else onSessionCopied(sourceName, created.name, created.id);
   }, [copySessionDisabled, onSessionCopied, session, theme]);
 
+  const recordViewActivity = useCallback((kind: SessionViewKind) => {
+    if (!session) return;
+    const sourceName = session.name;
+    setViewMetadataError(null);
+    void recordSessionView(session, kind).catch((error: unknown) => {
+      if (sessionNameRef.current === sourceName) setViewMetadataError({
+        sessionName: sourceName,
+        message: `View activity could not be saved: ${error instanceof Error ? error.message : "metadata is unavailable"}`,
+      });
+    });
+  }, [session]);
+
   const splitIntoNewWorkspace = useCallback(() => {
     if (ephemeral || !session || mobileLayout || !onSplitWorkspace) return;
     const sourceName = session.name;
@@ -925,14 +939,14 @@ export function ConsoleScreen({
     } catch {
       result = "failed";
     }
-    if (result === "opened") return;
+    if (result === "opened") { recordViewActivity("split-workspace"); return; }
     const message = result === "blocked"
       ? "The browser blocked the new workspace window. Allow pop-ups and try again."
       : result === "workspace-sync-pending"
         ? "Wait for the current workspace to finish syncing, then try again."
         : "Muxdeck could not open the temporary workspace. The current workspace is unchanged.";
     setSplitWorkspaceError({ sessionName: sourceName, message });
-  }, [ephemeral, mobileLayout, onSplitWorkspace, session]);
+  }, [ephemeral, mobileLayout, onSplitWorkspace, recordViewActivity, session]);
 
   const splitIntoEphemeralTab = useCallback(() => {
     if (ephemeral || !session || mobileLayout || !onSplitEphemeralTab) return;
@@ -944,12 +958,12 @@ export function ConsoleScreen({
     } catch {
       result = "failed";
     }
-    if (result === "opened") return;
+    if (result === "opened") { recordViewActivity("split-tab"); return; }
     const message = result === "blocked"
       ? "The browser blocked the ephemeral tab. Allow pop-ups and try again."
       : "Muxdeck could not open the ephemeral tab. Try again.";
     setSplitEphemeralError({ sessionName: sourceName, message });
-  }, [ephemeral, mobileLayout, onSplitEphemeralTab, session]);
+  }, [ephemeral, mobileLayout, onSplitEphemeralTab, recordViewActivity, session]);
 
   const toggleWorkspacePin = useCallback(async () => {
     if (workspacePinSource !== null || !session) return;
@@ -1285,7 +1299,7 @@ export function ConsoleScreen({
       // The row scrolls once the header runs short, so it - not the header -
       // is what cuts its buttons off.
       const clip = boxOf(actions);
-      actions.querySelectorAll("button, a")
+      actions.querySelectorAll("button, a, select")
         .forEach((control) => collect(control, clip));
     }
     const widgets = header.querySelector(".workspace-header-widgets");
@@ -1662,7 +1676,7 @@ export function ConsoleScreen({
   }, [scrollTargetKey, updatePendingTmuxScroll]);
   const scrollApplication = useCallback(async (direction: "up" | "down"): Promise<boolean> => {
     if (
-      !nativeScrollProfile || connection !== "live"
+      connection !== "live"
       || applicationScrollRequestsRef.current.has(scrollTargetKey)
     ) return false;
     const version = ++scrollActionVersionRef.current;
@@ -2456,12 +2470,12 @@ export function ConsoleScreen({
               <button
                 type="button"
                 className="history-button"
-                onClick={() => setAgentHistoryOpen(true)}
+                onClick={() => setMetadataOpen(true)}
                 aria-haspopup="dialog"
-                aria-label={`Coding agents recorded in ${sessionName}`}
-                title={`Every Claude, Codex, Cursor or Grok session recorded in ${sessionName}`}
+                aria-label={`Metadata for ${sessionName}`}
+                title="Session start, creation origin, browser view activity and agent history"
               >
-                <ClockIcon /><span>Agents</span>
+                <ClockIcon /><span>Metadata</span>
               </button>
               {!ephemeral && onSessionCopied && (
                 <CopySessionControl
@@ -2508,6 +2522,22 @@ export function ConsoleScreen({
                         <span>Tab</span>
                       </button>
                     )}
+                    <a
+                      className="split-workspace-button fork-view-button"
+                      href={window.location.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Fork current view in a new browser tab"
+                      title="Fork: open this exact URL in a new browser tab"
+                      onClick={(event) => { event.currentTarget.href = window.location.href; recordViewActivity("fork"); }}
+                      onAuxClick={(event) => {
+                        event.currentTarget.href = window.location.href;
+                        if (event.button === 1) recordViewActivity("fork");
+                      }}
+                    >
+                      <WindowCopyIcon />
+                      <span>Fork</span>
+                    </a>
                   </div>
                 </div>
               )}
@@ -2590,6 +2620,7 @@ export function ConsoleScreen({
               <span className="console-tray-section-title">Preferences</span>
               <AccountLink />
               <ThemeToggle />
+              <TimeZoneSelect />
               {pane?.command === "grok" && !pane.dead && (
                 <button
                   type="button"
@@ -2640,6 +2671,13 @@ export function ConsoleScreen({
         <aside className="copy-new-error" role="alert">
           <span>Copy New failed: {copySessionError.message}</span>
           <button type="button" onClick={() => setCopySessionError(null)}>Dismiss</button>
+        </aside>
+      )}
+
+      {viewMetadataError?.sessionName === sessionName && (
+        <aside className="copy-new-error" role="alert">
+          <span>{viewMetadataError.message}</span>
+          <button type="button" onClick={() => setViewMetadataError(null)}>Dismiss</button>
         </aside>
       )}
 
@@ -2782,12 +2820,10 @@ export function ConsoleScreen({
               aria-controls={activeConsoleId}
               title={nativeScrollProfile === "codex"
                 ? `Scroll Codex's current page ${direction} by three rows; continues from PgUp/PgDn`
-                : !nativeScrollProfile
-                ? `Application fine scrolling is not supported for ${classification.label}. Use the highlighted tmux controls.`
                 : `Scroll the application's transcript ${direction} in small steps using its wheel settings${
                 preferredLineScrollMode === "application" ? `; recommended for ${classification.label}` : ""
               }`}
-              disabled={!nativeScrollProfile || connection !== "live"}
+              disabled={connection !== "live"}
               busy={applicationScrollPendingTargets.has(scrollTargetKey)}
               onActivate={() => scrollApplication(direction)}
             >
@@ -3172,11 +3208,11 @@ export function ConsoleScreen({
           onPreferredWidthChange={setHistoryPanelWidth}
         />
       )}
-      {!workspaceOverlayOpen && agentHistoryOpen && (
+      {!workspaceOverlayOpen && metadataOpen && (
         <SessionHistoryDialog
           sessionName={sessionName}
           showWorkspaceMembership={!ephemeral}
-          onClose={() => setAgentHistoryOpen(false)}
+          onClose={() => setMetadataOpen(false)}
           onOpenSession={(name) => {
             window.location.href = `${BASE_PATH}/session/${encodeURIComponent(name)}${ephemeral ? "?ephemeral=1" : ""}`;
           }}

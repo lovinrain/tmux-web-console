@@ -113,7 +113,11 @@ another shell. `Close tab` only detaches this browser; explicit `End` still
 requires confirmation to terminate the session. Blocked pop-ups show an error
 in the source page.
 
-Both buttons share one bordered control with an always-visible `Split` caption.
+`Fork`, beside `Space` and `Tab`, opens the exact current URL in a new browser
+tab, preserving its session, workspace, query parameters, and fragment. The
+original page stays open. A saved workspace remains the same shared workspace.
+
+All three actions share one bordered control with an always-visible `Split` caption.
 They use distinct icons when the header is narrow; hover reveals the full action
 and explanation. Their complete accessible labels remain available.
 
@@ -164,8 +168,8 @@ copy mode one page back; `Tmux PgDn` pages down once that mode is active. `^C`
 returns to the live pane. The tmux controls assume the default `Ctrl+B` prefix.
 
 Muxdeck highlights the paging pair preferred for the detected foreground agent
-in both the phone terminal rail and desktop shortcut strip. Claude, Codex, Copilot,
-and Grok start with application `PgUp` / `PgDn`; Cursor, shells, and
+in both the phone terminal rail and desktop shortcut strip. Claude, Codex,
+Copilot, and Grok start with application `PgUp` / `PgDn`; Cursor, shells, and
 unrecognized processes use the tmux pair. The highlight follows the detected
 agent across sessions, workspaces, and reloads; clicking an alternative control
 does not move it. Older browser preferences learned from clicks are ignored.
@@ -201,16 +205,17 @@ copy mode after using them, including for agents that prefer application paging.
 Desktop shortcut rows wrap to fit the available width, keeping each scrolling
 set together. The phone control rail scrolls horizontally when its buttons
 exceed the width. All eight scrolling buttons remain visible in every session.
-Application fine-scroll buttons are enabled for Claude, Codex, Copilot, and Grok;
-elsewhere they remain visible but disabled with an explanation. Cursor retains
-its highlighted tmux controls.
+Both application and tmux page/fine-scroll buttons are enabled for every agent
+while connected. The highlighted recommendation never disables the other
+family. Native fine scrolling pauses its own buttons only while awaiting a
+reply; the page and tmux controls stay available.
 Tmux paging and line scrolling can be interleaved: use `Tmux PgUp` to move back,
 then `Tmux Line↑` / `Tmux Line↓` to adjust the same position by one row. `Tmux
 PgDn` can then resume paging. Plain `PgUp` / `PgDn` used inside an agent's own
 scroll view navigate that application; switching to the tmux line controls
 does not continue its internal scroll position. This distinction particularly
 affects Claude Code, whose default paging preference is application scrolling.
-For Claude Code, Codex, Copilot, and Grok, use the adjacent `App↑` / `App↓` controls
+Use the adjacent `App↑` / `App↓` controls
 after plain PgUp/PgDn to continue the application's current view. These send
 native wheel steps through the verified attachment and leave tmux copy mode
 when switching back to the application. Codex's full-screen view works even
@@ -223,10 +228,13 @@ these are small steps, not exact single-row movements. Its controls target the
 transcript column even on wide terminals. For Codex started with
 `--no-alt-screen`, use the tmux Page/Line family for its inline output, or open
 Codex's Ctrl+T transcript before using App scrolling.
-The page and fine-scroll controls highlight together for the detected agent.
-They remain recommendations while either scrolling family is used.
-Cursor, shells, and unknown processes use the tmux fine-scroll pair. A rejected
-native request shows feedback. Live tracks the actual scrolling view separately
+Other applications use a plain native wheel step. Its distance
+depends on the application's current view and settings; tmux line controls
+always move one terminal row. The page and fine-scroll controls highlight
+together for the detected agent. Codex defaults to the application family;
+Cursor, shells, and unknown processes default to tmux, with both families
+available. A rejected native request shows feedback and lets the user retry.
+Live tracks the actual scrolling view separately
 so it can still exit tmux copy mode after an alternative control is used.
 The tmux controls read tmux's retained output; they cannot retrieve an application's
 internal transcript if the application has not written it to terminal history.
@@ -307,10 +315,22 @@ right now; the two carry different icons. Temporary workspaces see the global
 history; save a workspace to retain its own membership history across browsers
 and reloads.
 
-A session's own `Agents` control, beside `Scrollback` in the console header,
-opens the same history scoped to that session: every coding agent recorded in
-it, oldest first, following the session across renames and recreations under
-the same name.
+A session's `Metadata` control, beside `Scrollback` in the console header,
+shows its native tmux start date, origin, source session for copies/recreations,
+original sibling/child placement, working directory, and agent history. Start
+time is distinct from when Muxdeck first observed the session. Creation lineage
+is recorded for new sessions from this version onward; older sessions and shells
+created outside Muxdeck show an unknown origin rather than a guessed one.
+Each recreated shell has its own start time and links to its earlier identity.
+
+Browser view activity records successful `Space`/`Tab` splits and `Fork`
+requests made in that session's header. These open views of the same native
+session; they do not change its creation origin. The latest 100 actions per
+session identity are retained, with server timestamps. A native Fork link cannot
+confirm that the destination loaded, so its event is labeled `Fork requested`.
+Failed activity saves show a dismissible error without blocking the new view.
+The metadata panel includes earlier shells under the same name, follows renames,
+and retains the historical coding-agent references and transcript controls.
 
 Each observed tmux process identity has a separate history record, even when
 its native name is reused later. The record retains native and previous names,
@@ -320,7 +340,8 @@ agent type and conversation ID. Agent IDs are reference-only, may be absent,
 and do not imply a supported resume command. Terminal output/transcripts,
 environment variables, and running process state are not archived.
 
-Both views default to closed/ended history and also offer `All history`.
+Global and workspace history default to closed/ended sessions. Session Metadata
+defaults to `All history` so the running session is included.
 Search explicitly with Enter or Search by name, old name, title, directory,
 agent type, or agent ID. Results are newest activity first, 50 at a time with
 `Load older sessions`; records have no automatic expiry. `Reopen session`
@@ -944,6 +965,11 @@ server-generated creation, update, and last-active times in
 saved workspace refreshes its rough last-active time. Workspace names, tab
 membership, and workspace links are shared by every browser connected to the
 same Muxdeck instance, so a phone or another computer can resume the same group.
+The stream uses Server-Sent Events; WebSockets carry terminal traffic. Group
+folding and whole-group moves use the existing ordered tabs, groups, and parent
+relationships. No URL or storage schema change is needed: saved workspaces
+persist on the server, while temporary workspaces preserve their state in the URL.
+
 Open pages subscribe to a workspace event stream, so tab additions, closes,
 group changes, and other workspace updates propagate without a reload. Each
 page keeps its current selected session when that tab remains available. If it
@@ -983,7 +1009,10 @@ action returns to the most recently active open tab without changing their order
 
 ### Moving and nesting existing sessions (desktop)
 
-Open `Move / Nest` in the session controls or right-click any workspace tab.
+Nested tabs have a `Move / Nest` button beside their title, including when tab
+actions are hidden. Select a nested tab and use `Up one level` in the session
+controls to move it out of its current parent, keeping its children attached.
+You can also open `Move / Nest` in the session controls or right-click any workspace tab.
 Choose the destination workspace, then `Top level` or an existing parent session.
 The chooser searches session names and titles and previews the resulting
 location. `Up one level` moves out of the current parent; `Nest under previous`
@@ -1359,7 +1388,10 @@ the actions remain available on compact and touch layouts.
 name, one of nine colors, and one or more open tabs. A group stays contiguous and
 moves as one block; member-tab arrows only reorder within that group, while an
 ungrouped tab moves across a neighboring group atomically. The group chip can
-collapse its members, but the active member remains visible. Editing membership
+collapse every member, including an active parent or child. Folding keeps the
+current console open; the group header highlights its active session and names
+it in the tooltip. Drag the header to move the whole group with its nested
+sessions, or use its existing move arrows. Editing membership
 can move tabs between groups, while `Ungroup tabs` removes only the grouping and
 never closes a tmux session. Mobile Overview repeats New/Edit group access, and
 adds whole-group up/down controls. Tab groups are a multi-tab-view concern: the
@@ -1644,15 +1676,16 @@ ready-since time. Missing times sort after known times; equal values keep their
 original queue order. Name sorting uses the custom title when present.
 
 The filter bar shows `X of Y shown`; summary counts still describe the full
-scope. Sort and filter choices are remembered separately for Global and each
-saved or temporary workspace in that browser. Search text is not saved and
-clears on a scope/workspace change. `Reset` clears filters while retaining the
+scope. Sort and filter choices are shared across Global and all saved or
+temporary workspaces in that browser. Switching scopes keeps the search text
+and expanded filter controls in place. Search text is not saved across page
+reloads. `Reset` clears filters while retaining the
 chosen sort. With filters active, bulk actions become `Clear shown` and
 `Clear ended shown`, affecting only matching session rows. Global clearing
 still preserves workspace-owned markers. Sorting and filtering never reorder
 or rewrite the shared callback queue.
 
-`Group by` offers None (the default), Status, Agent, and Workspace. Filters apply
+`Group by` offers None (the default), Status, Agent, Workspace, and Custom. Filters apply
 first, and the selected sort orders entries within each group. Status groups put
 Ready first, followed by Working, Waiting, Unknown, and Ended; running commands
 belong to Working. Agent groups include both session and pending-message origins.
@@ -1661,10 +1694,33 @@ Each session appears once: shared origins use Multiple agents or Multiple
 workspaces instead of duplicating rows. Workspace identity keeps separate
 workspaces distinct even when they have the same name.
 
+Choose `Group by → Custom`, then `New group` to name a group and check the
+callbacks you want together. The checklist includes every callback in the
+selected scope, regardless of the main list's filters. Its own search and
+`Select shown` / `Deselect shown` controls help with longer lists; hidden
+selections stay selected. `Save group` creates the group, and remaining
+callbacks appear under `Ungrouped`.
+
+Use the `Edit` chooser to rename a custom group, change its members, or delete
+it. Selecting a callback that belongs to another group moves it into the edited
+group. A callback belongs to at most one custom group in each scope. Deleting a
+group returns its callbacks to Ungrouped without reviewing or removing them.
+Empty groups remain available in the Edit chooser. Reviewing a callback retains
+its assignment for when that session appears in the queue again; dormant members
+are labeled `Not currently queued` in the editor. Assignments use session names
+and follow renames made through Muxdeck.
+
+Custom group names and memberships are saved on the server and update across
+browsers and devices. Global and each saved workspace have separate groups.
+Save a temporary workspace before creating shared workspace groups, or use
+Global. The grouping mode, sort, filters, and collapsed sections remain browser
+preferences. If another browser edits groups while an editor is open, the draft
+stays visible and `Reload groups` loads the current values before saving.
+
 Click a group header to collapse or expand its rows; the badge counts all matching
 entries in that group. `Expand all` and `Collapse all` operate on the matching
-groups. Grouping and collapsed sections are remembered per Global/workspace view
-and grouping mode. Search or filter changes reveal matching groups, and Reset
+groups. The grouping mode is shared across scopes, and each grouping mode
+remembers its collapsed sections in that browser. Search or filter changes reveal matching groups, and Reset
 preserves the chosen sort and grouping. The result count reports expanded rows
 and separately shows how many are collapsed. Collapsed callbacks are excluded
 from `Clear shown` and `Clear ended shown`, just like filtered-out rows.
@@ -1674,9 +1730,21 @@ recent receipt time, including reviewed messages for sessions still in the
 saved callback queue. Reviewing a newer message does not move that time back to
 an older pending message. A watched agent without a recorded callback instead
 shows `Ready since` while it needs input, using the server's observed state-change
-time (which resets after a server restart). Times use the browser's local zone;
-hover for the full date, seconds, and time zone. Working or unavailable entries
-without a callback message have no time to show.
+time (which resets after a server restart). Timestamps remain UTC-based Unix
+values; display conversion never changes receipt times, ordering, or elapsed
+time. Working or unavailable entries without a callback message have no time to
+show.
+
+`Time zone` in the callback controls, dashboard header, or console Preferences
+sets the display zone for every workspace in that browser, including callback
+messages, session history, saved-workspace activity, queued messages, scrollback
+capture times, and file times. The default is Pacific (`America/Los_Angeles`):
+PST (UTC−8) in winter and PDT (UTC−7) during daylight saving time. Choose UTC,
+Browser to follow the device's zone, another region, or Fixed PST for UTC−8
+year-round. Clock times include their zone abbreviation or UTC offset; hover a
+callback time for the full date and seconds. The choice persists across reloads
+and updates other open tabs in the same browser profile; it does not change the
+server's clock or other browsers' preferences.
 
 The global queue is the higher-level union of explicitly global entries and all
 workspace callback entries. A session registered in any workspace therefore
@@ -1695,8 +1763,9 @@ workspace callback entry with it; copying a session does not silently create a
 second callback. An
 unsaved temporary workspace keeps its queue in browser-local storage until it is
 explicitly saved. The list opens in a movable, resizable floating window;
-pinning keeps it visible when switching session tabs, and its open, pin,
-position, and size preferences are namespaced by callback scope in that browser.
+pinning keeps it visible when switching session tabs. Its open, pin,
+position, and size preferences are shared across scopes and workspaces in that
+browser, so switching Global/Workspace keeps the window in place.
 The selected scope is remembered in browser storage and a fresh browser starts
 at `Global`.
 
@@ -1736,7 +1805,7 @@ It reads user and assistant messages from local Codex, Claude Code, Copilot,
 Cursor, or Grok storage, using the conversation ID rather than terminal rows.
 Messages start at the beginning, with **Load later messages**, optional tool
 activity, Markdown formatting, a plain-text view, copying, and refresh. Escape
-closes pane history and restores its opener's focus. **Session history / Agents → Transcript** offers
+closes pane history and restores its opener's focus. **Session history / Metadata → Transcript** offers
 the recorded conversations even after a shell ends. Missing files and unknown
 IDs have explicit notices and terminal-history alternatives. See
 [Agent transcripts](AGENT_TRANSCRIPTS.md) for availability and source formats.

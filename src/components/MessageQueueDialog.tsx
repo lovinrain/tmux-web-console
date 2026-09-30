@@ -17,6 +17,7 @@ import { CloseIcon, RefreshIcon, SnippetIcon } from "../icons";
 import type { QueuedMessage, SnippetLeaf } from "../types";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import "./MessageQueueDialog.css";
+import { formatTimestamp, useDisplayTimeZone } from "../timeZone";
 
 export const MAX_QUEUED_MESSAGE_LENGTH = 65_536;
 
@@ -52,12 +53,9 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function formatMessageTime(message: QueuedMessage): string {
+function formatMessageTime(message: QueuedMessage, timeZone: string): string {
   const timestamp = message.updatedAt || message.createdAt;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(timestamp);
+  return formatTimestamp(timestamp, timeZone);
 }
 
 export function MessageQueueDialog({
@@ -68,6 +66,7 @@ export function MessageQueueDialog({
   onSend,
   onCountsChange,
 }: MessageQueueDialogProps) {
+  const { timeZone } = useDisplayTimeZone();
   const [messages, setMessages] = useState<QueuedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -634,7 +633,7 @@ export function MessageQueueDialog({
                           : "Note"}
                       </span>
                       <time dateTime={new Date(message.updatedAt || message.createdAt).toISOString()}>
-                        Updated {formatMessageTime(message)}
+                        Updated {formatMessageTime(message, timeZone)}
                       </time>
                     </div>
 

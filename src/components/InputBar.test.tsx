@@ -270,7 +270,6 @@ describe("InputBar", () => {
         onScrollLine={onScrollLine}
         onScrollUsed={onScrollUsed}
         preferredScrollMode="application"
-        applicationScrollProfile="claude"
       />,
     );
     const up = screen.getByRole("button", { name: "Tmux Line Up" });
@@ -307,7 +306,7 @@ describe("InputBar", () => {
   it("groups native fine controls with raw pages and highlights the recommended family", () => {
     const onScrollApplication = vi.fn();
     const view = render(
-      <InputBar {...props} preferredScrollMode="application" applicationScrollProfile="claude"
+      <InputBar {...props} preferredScrollMode="application"
         onScrollApplication={onScrollApplication} />,
     );
     const up = screen.getByRole("button", { name: "Application Scroll Up" });
@@ -328,7 +327,7 @@ describe("InputBar", () => {
     expect(onScrollApplication.mock.calls).toEqual([["up"], ["down"]]);
     expect(props.onSend).not.toHaveBeenCalled();
     view.rerender(
-      <InputBar {...props} preferredScrollMode="tmux" applicationScrollProfile="claude"
+      <InputBar {...props} preferredScrollMode="tmux"
         onScrollApplication={onScrollApplication} applicationScrollPending />,
     );
     expect(up).toBeDisabled();
@@ -345,6 +344,7 @@ describe("InputBar", () => {
     for (const button of [up, down]) {
       expect(button).toBeVisible();
       expect(button).toBeEnabled();
+      expect(button).toHaveAttribute("data-scroll-preferred", "true");
       expect(button).toHaveAttribute("title", expect.stringContaining("three rows"));
       fireEvent.click(button);
     }
@@ -356,6 +356,9 @@ describe("InputBar", () => {
       .toBe(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }));
     expect(screen.getByRole("button", { name: "Tmux Line Up" }))
       .not.toHaveAttribute("data-scroll-preferred");
+    view.rerender(<InputBar {...props} enabled={false} onScrollApplication={onScrollApplication} />);
+    expect(up).toBeDisabled();
+    expect(down).toBeDisabled();
   });
 
   it("keeps session termination separate from terminal key delivery", () => {

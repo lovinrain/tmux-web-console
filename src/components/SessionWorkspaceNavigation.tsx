@@ -902,6 +902,7 @@ interface WorkspaceTabDragTarget {
 }
 
 interface WorkspaceTabDragState {
+  groupId?: string;
   sessionNames: string[];
   target: WorkspaceTabDragTarget | null;
 }
@@ -2150,6 +2151,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const groupDialogTriggerRef = useRef<HTMLElement | null>(null);
   const workspaceTabSelectionAnchorRef = useRef<string | null>(activeSession);
   const workspaceTabDragSessionsRef = useRef<string[]>([]);
+  const workspaceTabDragGroupRef = useRef<string | null>(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
@@ -2221,6 +2223,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && tabsVisible,
   );
   const desktopTabMultiSelectEnabled = desktopTabDragEnabled && Boolean(onMoveTabs);
+  const groupDragEnabled = desktopTabDragEnabled && Boolean(onMoveTabs)
+    && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error"
+    && !separatorsBusy;
   const separatorDragEnabled = Boolean(props.onCrossSeparator && orientation === "vertical"
     && !compactViewport && tabsVisible && !separatorsBusy
     && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error");
@@ -2228,6 +2233,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && workspacePersistenceState !== "error" && !separatorsBusy);
   const placementSession = newSessionActive ? null : activeSession ?? activePaneSession;
   const placementSessionAvailable = Boolean(placementSession && openSessions.includes(placementSession));
+  const placementParent = placementSessionAvailable
+    ? workspaceSessionParent(placementSession!, sessionParents) : undefined;
   const placementHint = !placementSessionAvailable
     ? "Select a session to move or nest"
     : !nestingEnabled
@@ -2355,9 +2362,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, [activeSession, openSessions, selectedWorkspaceTabs.length]);
 
   const finishWorkspaceTabDrag = useCallback(() => {
+    workspaceTabDragGroupRef.current = null;
     workspaceTabDragSessionsRef.current = [];
     setWorkspaceTabDrag(null);
   }, []);
+
+  useEffect(() => {
+    if (workspaceTabDragGroupRef.current) finishWorkspaceTabDrag();
+  }, [activeWorkspaceId, finishWorkspaceTabDrag]);
 
   const clearWorkspaceTabDropTarget = useCallback(() => {
     setWorkspaceTabDrag((current) => (
@@ -2377,7 +2389,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         && current.target.edge === target.edge
         && current.target.targetIndex === target.targetIndex
       ) return current;
-      return { sessionNames, target };
+      return { sessionNames, target, groupId: workspaceTabDragGroupRef.current ?? undefined };
     });
   }, []);
 
@@ -2398,6 +2410,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     if (selectedDrag.length === 0 && selectedWorkspaceTabs.length > 0) {
       setSelectedWorkspaceTabs([]);
     }
+    workspaceTabDragGroupRef.current = null;
     workspaceTabDragSessionsRef.current = sessionNames;
     setWorkspaceTabDrag({ sessionNames, target: null });
     event.dataTransfer.effectAllowed = "move";
@@ -2414,6 +2427,20 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     selectedWorkspaceTabs,
   ]);
 
+  const startWorkspaceGroupDrag = (
+    event: ReactDragEvent<HTMLButtonElement>, group: WorkspaceTabGroup,
+  ) => {
+    if (!groupDragEnabled) { event.preventDefault(); return; }
+    event.stopPropagation();
+    clearWorkspaceTabSelection(false);
+    workspaceTabDragGroupRef.current = group.id;
+    workspaceTabDragSessionsRef.current = [...group.tabs];
+    setWorkspaceTabDrag({ sessionNames: [...group.tabs], target: null, groupId: group.id });
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-muxdeck-tabs", JSON.stringify(group.tabs));
+    event.dataTransfer.setData("text/plain", group.tabs.join("\n"));
+  };
+
   const tabDragTarget = useCallback((
     targetSessionName: string,
     element: HTMLElement,
@@ -2427,7 +2454,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const targetIndex = openSessions.indexOf(targetSessionName);
     if (sourceIndex < 0 || targetIndex < 0) return null;
 
-    if (nestingEnabled && sourceSessionNames.length === 1) {
+    if (nestingEnabled && sourceSessionNames.length === 1 && !workspaceTabDragGroupRef.current) {
       const bounds = element.getBoundingClientRect();
       const length = orientation === "vertical" ? bounds.height : bounds.width;
       const offset = orientation === "vertical" ? clientY - bounds.top : clientX - bounds.left;
@@ -2437,7 +2464,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       }
     }
 
-    if (sourceSessionNames.length > 1) {
+    if (sourceSessionNames.length > 1 || workspaceTabDragGroupRef.current) {
       const selected = new Set(sourceSessionNames);
       if (selected.has(targetSessionName)) return null;
       const targetGroup = groupsBySession.get(targetSessionName);
@@ -2493,7 +2520,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
 
     const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
     const boundaryIndex = edge === "before" ? groupStart : groupEnd + 1;
-    if (sourceSessionNames.length > 1) {
+    if (sourceSessionNames.length > 1 || workspaceTabDragGroupRef.current) {
       const selected = new Set(sourceSessionNames);
       if (group.tabs.some((sessionName) => selected.has(sessionName))) return null;
       return {
@@ -2586,6 +2613,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, [groupDragTarget, nudgeWorkspaceTabViewport, previewWorkspaceTabDrop]);
 
   const commitWorkspaceTabDrop = useCallback((target: WorkspaceTabDragTarget) => {
+    const sourceGroupId = workspaceTabDragGroupRef.current;
     const sourceSessionNames = workspaceTabDragSessionsRef.current;
     const sourceSessionName = sourceSessionNames[0];
     const sourceIndex = sourceSessionName
@@ -2593,7 +2621,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       : -1;
     finishWorkspaceTabDrag();
     if (target.kind === "nest" || target.kind === "root") {
-      if (!nestingEnabled || !sourceSessionName || sourceSessionNames.length !== 1 || !onReparentSession) return;
+      if (sourceGroupId || !nestingEnabled || !sourceSessionName || sourceSessionNames.length !== 1 || !onReparentSession) return;
       try {
         onReparentSession(sourceSessionName, target.kind === "root" ? null : target.id);
         setReorderAnnouncement(target.kind === "root"
@@ -2604,7 +2632,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       }
       return;
     }
-    if (sourceSessionNames.length > 1) {
+    if (sourceSessionNames.length > 1 || sourceGroupId) {
       if (!onMoveTabs) return;
       const preview = moveWorkspaceSessions({
         openSessions: [...openSessions],
@@ -2619,7 +2647,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       )));
       const lastIndex = firstIndex + sourceSessionNames.length - 1;
       setReorderAnnouncement(
-        `${sourceSessionNames.length} selected tabs moved to positions ${firstIndex + 1} through ${lastIndex + 1} of ${openSessions.length}. Their relative order was preserved.`,
+        sourceGroupId
+          ? `${groups.find((group) => group.id === sourceGroupId)?.name ?? "Session"} group moved with all ${sourceSessionNames.length} sessions. Their nesting was preserved.`
+          : `${sourceSessionNames.length} selected tabs moved to positions ${firstIndex + 1} through ${lastIndex + 1} of ${openSessions.length}. Their relative order was preserved.`,
       );
       return;
     }
@@ -2690,6 +2720,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const draggedGroup = draggedSession
       ? groupsBySession.get(draggedSession)
       : undefined;
+    if (workspaceTabDragGroupRef.current) {
+      if (groupDragEnabled && draggedGroup?.id === workspaceTabDragGroupRef.current
+        && sameSessionNames(draggedGroup.tabs, draggedSessions)) return;
+      finishWorkspaceTabDrag();
+      return;
+    }
     if (
       desktopTabDragEnabled
       && (!draggedSession || openSessions.includes(draggedSession))
@@ -2704,6 +2740,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     desktopTabMultiSelectEnabled,
     finishWorkspaceTabDrag,
     groupsBySession,
+    groupDragEnabled,
     openSessions,
   ]);
 
@@ -3402,6 +3439,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           <span className="workspace-tab-title">{title}</span>
           <SessionAgentIcon session={session} />
         </button>
+        {tree && onReparentSession && props.onTransferSelectedSessions && (
+          <button
+            type="button"
+            className="workspace-tab-move workspace-tab-placement"
+            disabled={!nestingEnabled}
+            aria-label={`Move / Nest ${title}`}
+            aria-haspopup="dialog"
+            title={`Move ${title} up a level or under another session`}
+            onClick={() => props.onTransferSelectedSessions?.([sessionName])}
+          >
+            <WindowMoveIcon />
+          </button>
+        )}
         {workspaceTabDrag?.target?.kind === "nest" && workspaceTabDrag.target.id === sessionName && (
           <span className="workspace-tab-nest-hint" aria-hidden="true">↳ Nest under this session</span>
         )}
@@ -3664,6 +3714,28 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               {addableSessionCount > 0 && <strong>{addableSessionCount}</strong>}
             </button>
           )}
+          {onReparentSession && placementParent && (
+            <button
+              type="button"
+              className="workspace-session-placement-button"
+              disabled={!nestingEnabled}
+              aria-label="Up one level"
+              title={`Move ${tabTitle(placementSession!, sessionsByName)} out of ${tabTitle(placementParent, sessionsByName)}; its nested sessions come with it`}
+              onClick={() => {
+                if (!placementSession) return;
+                try {
+                  onReparentSession(placementSession, workspaceSessionParent(placementParent, sessionParents) ?? null);
+                  setReorderAnnouncement(`${tabTitle(placementSession, sessionsByName)} moved up one level.`);
+                  window.requestAnimationFrame(() => activeTabRef.current?.focus());
+                } catch (error) {
+                  setReorderAnnouncement(error instanceof Error ? error.message : "Unable to move this session.");
+                }
+              }}
+            >
+              <ArrowLeftIcon />
+              <span>Up one level</span>
+            </button>
+          )}
           {onReparentSession && props.onTransferSelectedSessions && (
             <button
               type="button"
@@ -3743,7 +3815,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           )}
-          {nestingEnabled && workspaceTabDrag?.sessionNames.length === 1 && (
+          {nestingEnabled && workspaceTabDrag?.sessionNames.length === 1 && !workspaceTabDrag.groupId && (
             <div className="workspace-tab-root-drop" role="group" aria-label="Top level drop target"
               data-drop-active={workspaceTabDrag.target?.kind === "root" ? "true" : undefined}
               onDragOver={(event) => {
@@ -3788,9 +3860,12 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 const { group } = item;
                 const groupStart = openSessions.indexOf(group.tabs[0]);
                 const groupEnd = groupStart + group.tabs.length - 1;
-                const visibleTabs = group.collapsed
-                  ? group.tabs.filter((sessionName) => sessionName === activeSession)
-                  : group.tabs;
+                const visibleTabs = group.collapsed ? [] : group.tabs;
+                const groupActive = !newSessionActive && Boolean(activeSession && group.tabs.includes(activeSession));
+                const groupHint = [
+                  groupActive ? `Active session: ${tabTitle(activeSession!, sessionsByName)}.` : "",
+                  groupDragEnabled ? "Drag this header to move the whole group, including nested sessions." : "",
+                ].filter(Boolean).join(" ");
                 const dropEdge = workspaceTabDrag?.target?.kind === "group"
                   && workspaceTabDrag.target.id === group.id
                   ? workspaceTabDrag.target.edge
@@ -3804,6 +3879,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       ? "workspace-tab-group collapsed"
                       : "workspace-tab-group"}
                     data-workspace-tab-group-id={group.id}
+                    data-active-group={groupActive ? "true" : undefined}
+                    data-tab-dragging={workspaceTabDrag?.groupId === group.id ? "true" : undefined}
                     data-tab-group-color={group.color}
                     data-tab-move-selected={selectedForMove ? "true" : undefined}
                     data-tab-drop-edge={dropEdge}
@@ -3820,11 +3897,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                         <button
                           type="button"
                           className="workspace-tab-group-toggle"
+                          ref={groupActive && group.collapsed ? activeTabRef : undefined}
+                          draggable={groupDragEnabled || undefined}
+                          onDragStart={groupDragEnabled ? (event) => startWorkspaceGroupDrag(event, group) : undefined}
+                          onDragEnd={groupDragEnabled ? finishWorkspaceTabDrag : undefined}
+                          aria-description={groupHint || undefined}
                           onClick={() => onToggleTabGroup(group.id, !group.collapsed)}
                           aria-expanded={!group.collapsed}
                           aria-controls={`workspace-tab-group-tabs-${group.id}`}
                           aria-label={`${group.collapsed ? "Expand" : "Collapse"} ${group.name} tab group`}
-                          title={`${group.collapsed ? "Expand" : "Collapse"} ${group.name}`}
+                          title={`${group.collapsed ? "Expand" : "Collapse"} ${group.name}${groupHint ? ` · ${groupHint}` : ""}`}
                         >
                           <span className="workspace-tab-group-color" aria-hidden="true" />
                           <FolderIcon />

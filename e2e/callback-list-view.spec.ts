@@ -25,8 +25,7 @@ test.beforeEach(async ({ context }) => {
 });
 
 /** Deterministic API and stream fixtures: never create or control live sessions. */
-async function installCallbacks(page: Page): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
+async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000)): Promise<void> {
   const session = (name: string, customTitle: string, agentState: Session["agentState"],
     agentType: Session["agentType"], age = 0): Session => ({
     name, customTitle, agentState, agentType, agentStateChangedAt: now - age,
@@ -147,6 +146,86 @@ async function expandFilters(panel: Locator): Promise<void> {
   if (await more.getAttribute("aria-expanded") !== "true") await more.click();
 }
 
+test.describe("callback display time zones", () => {
+  test.use({ timezoneId: "Asia/Tokyo", locale: "en-US" });
+
+  test("defaults to Pacific across date boundaries and shares changes across scopes, reloads, and browser tabs", async ({ page, context }, testInfo) => {
+    const now = Date.parse("2026-01-01T00:30:30Z") / 1000;
+    await installCallbacks(page, now);
+    const panel = await openPanel(page);
+    const selector = panel.getByRole("combobox", { name: "Display time zone", exact: true });
+    const headerSelector = page.locator(".dashboard-header").getByRole("combobox", { name: "Display time zone" });
+    const row = panel.locator(".workspace-callback-item").filter({ hasText: "Alpha review" });
+    const timestamp = row.locator(".workspace-callback-timing time");
+    const receipt = row.locator(".workspace-callback-message-meta time");
+    await expect(selector).toHaveValue("America/Los_Angeles");
+    await expect(timestamp).toHaveText("Dec 31, 4:30 PM PST");
+    await expect(timestamp).toHaveAttribute("datetime", "2026-01-01T00:30:00.000Z");
+    await expect(receipt).toHaveText("Dec 31, 2025, 4:30 PM PST");
+    await selector.selectOption("UTC");
+    await expect(headerSelector).toHaveValue("UTC");
+    await expect(timestamp).toHaveText("Jan 1, 12:30 AM UTC");
+    await expect(receipt).toHaveText("Jan 1, 2026, 12:30 AM UTC");
+    await expect(timestamp).toHaveAttribute("datetime", "2026-01-01T00:30:00.000Z");
+    await expect(rowTitles(panel)).toHaveText(titles);
+    await page.reload();
+    await expect(selector).toHaveValue("UTC");
+    await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
+    await expect(selector).toHaveValue("UTC");
+    await expect(timestamp).toHaveText("Jan 1, 12:30 AM UTC");
+
+    const other = await context.newPage();
+    await installCallbacks(other, now);
+    const otherPanel = await openPanel(other);
+    await otherPanel.getByRole("combobox", { name: "Display time zone", exact: true }).selectOption("system");
+    await expect(selector).toHaveValue("system");
+    await expect(timestamp).toHaveText("Jan 1, 9:30 AM GMT+9");
+    await headerSelector.selectOption("America/Los_Angeles");
+    await expect(otherPanel.getByRole("combobox", { name: "Display time zone", exact: true })).toHaveValue("America/Los_Angeles");
+    await expect(timestamp).toHaveText("Dec 31, 4:30 PM PST");
+    await panel.screenshot({ path: testInfo.outputPath("callback-pacific-dark.png") });
+    await other.close();
+  });
+
+  test("distinguishes daylight-saving Pacific time from fixed PST", async ({ page }, testInfo) => {
+    await installCallbacks(page, Date.parse("2026-07-15T03:04:35Z") / 1000);
+    const panel = await openPanel(page);
+    const selector = panel.getByRole("combobox", { name: "Display time zone", exact: true });
+    const timestamp = panel.locator(".workspace-callback-item").filter({ hasText: "Alpha review" })
+      .locator(".workspace-callback-timing time");
+    await expect(timestamp).toHaveText("Jul 14, 8:04 PM PDT");
+    await selector.selectOption("Etc/GMT+8");
+    await expect(timestamp).toHaveText("Jul 14, 7:04 PM GMT-8");
+    await expect(timestamp).toHaveAttribute("datetime", "2026-07-15T03:04:05.000Z");
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await panel.screenshot({ path: testInfo.outputPath("callback-fixed-pst-light.png") });
+    await selector.selectOption("Asia/Tokyo");
+    await expect(timestamp).toHaveText("Jul 15, 12:04 PM GMT+9");
+  });
+
+  test("keeps the display setting accessible in desktop and phone headers", async ({ page }, testInfo) => {
+    await installCallbacks(page);
+    await page.goto("/mux/");
+    const header = page.locator(".dashboard-header");
+    const selector = header.getByRole("combobox", { name: "Display time zone", exact: true });
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(selector).toBeVisible();
+      const controls = await header.locator("button, a, select").evaluateAll((elements) => elements
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0)
+        .map((rect) => ({ left: rect.left, right: rect.right })));
+      for (const control of controls) {
+        expect(control.left).toBeGreaterThanOrEqual(0);
+        expect(control.right).toBeLessThanOrEqual(width);
+      }
+      await selector.selectOption("UTC");
+      await expect(selector).toHaveValue("UTC");
+      await header.screenshot({ path: testInfo.outputPath(`time-zone-header-${width}.png`) });
+    }
+  });
+});
+
 test("sorts callback rows and combines search, status, agent, message, and location filters", async ({ page }) => {
   await installCallbacks(page);
   const panel = await openPanel(page);
@@ -186,30 +265,83 @@ test("sorts callback rows and combines search, status, agent, message, and locat
   await expect(panel.getByRole("searchbox", { name: "Search callbacks", exact: true })).toHaveValue("");
 });
 
-test("remembers view choices per scope and workspace while keeping search temporary", async ({ page }) => {
+test("keeps one moved and resized window and view across scopes, reloads, and workspaces", async ({ page }) => {
   await installCallbacks(page);
+  await page.addInitScript((workspaceId) => {
+    localStorage.setItem("muxdeck.workspace-callback-panel.v1:global", JSON.stringify({
+      open: false, pinned: false, position: { x: 100, y: 80 }, size: { width: 600, height: 650 },
+    }));
+    localStorage.setItem(`muxdeck.workspace-callback-panel.v1:workspace:${workspaceId}`, JSON.stringify({
+      open: false, pinned: false, position: { x: 820, y: 80 }, size: { width: 390, height: 520 },
+    }));
+  }, currentWorkspaceId);
   let panel = await openPanel(page);
+  const header = panel.getByLabel("Move callback list window");
+  await header.focus();
+  await header.press("ArrowRight");
+  const headerBounds = (await header.boundingBox())!;
+  await page.mouse.move(headerBounds.x + 80, headerBounds.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(headerBounds.x + 188, headerBounds.y + 50, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => panel.boundingBox()).toEqual({ x: 220, y: 110, width: 600, height: 650 });
+
+  // Use the browser's native resize grip so ResizeObserver must retain the new size.
+  await page.mouse.move(817, 757);
+  await page.mouse.down();
+  await page.mouse.move(877, 797, { steps: 5 });
+  await page.mouse.up();
+  const layout = { x: 220, y: 110, width: 660, height: 690 };
+  await expect.poll(() => panel.boundingBox()).toEqual(layout);
+  await panel.getByRole("button", { name: "Pin callback list", exact: true }).click();
   await panel.getByRole("combobox", { name: "Sort callbacks", exact: true }).selectOption("callback-newest");
   await panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true }).selectOption("working");
+  await panel.getByRole("combobox", { name: "Group callbacks by", exact: true }).selectOption("status");
+  await expandFilters(panel);
+  await panel.getByRole("searchbox", { name: "Search callbacks", exact: true }).fill("bravo");
   await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
-  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("queue");
+  await expect(panel).toHaveAttribute("data-scope", "workspace");
+  await expect(panel).toHaveAttribute("data-pinned", "true");
+  await expect.poll(() => panel.boundingBox()).toEqual(layout);
+  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("callback-newest");
+  await expect(panel.getByRole("combobox", { name: "Group callbacks by", exact: true })).toHaveValue("status");
+  await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("working");
+  await expect(panel.getByRole("button", { name: "More callback filters", exact: true })).toHaveAttribute("aria-expanded", "true");
+  await expect(panel.getByRole("searchbox", { name: "Search callbacks", exact: true })).toHaveValue("bravo");
+  await expect(rowTitles(panel)).toHaveText([titles[0]]);
   await panel.getByRole("combobox", { name: "Sort callbacks", exact: true }).selectOption("name-desc");
   await panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true }).selectOption("ready");
   await panel.getByRole("searchbox", { name: "Search callbacks", exact: true }).fill("alpha");
+  await panel.getByRole("button", { name: "Global callback scope", exact: true }).click();
+  await expect.poll(() => panel.boundingBox()).toEqual(layout);
+  await expect(panel).toHaveAttribute("data-pinned", "true");
+  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("name-desc");
+  await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("ready");
+  await expect(panel.getByRole("button", { name: "More callback filters", exact: true })).toHaveAttribute("aria-expanded", "true");
+  await expect(panel.getByRole("searchbox", { name: "Search callbacks", exact: true })).toHaveValue("alpha");
+  await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
   await page.reload();
   await expect(panel).toBeVisible();
+  await expect.poll(() => panel.boundingBox()).toEqual(layout);
+  await expect(panel).toHaveAttribute("data-pinned", "true");
   await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("name-desc");
   await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("ready");
   await expect(panel.getByRole("searchbox", { name: "Search callbacks", exact: true })).toHaveValue("");
   await expect(rowTitles(panel)).toHaveText([titles[1]]);
   panel = await openPanel(page, otherWorkspaceId);
-  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("queue");
-  await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("all");
+  await expect.poll(() => panel.boundingBox()).toEqual(layout);
+  await expect(panel).toHaveAttribute("data-pinned", "true");
+  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("name-desc");
+  await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("ready");
   await expect(rowTitles(panel)).toHaveText([titles[2]]);
   await panel.getByRole("button", { name: "Global callback scope", exact: true }).click();
-  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("callback-newest");
-  await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("working");
-  await expect(rowTitles(panel)).toHaveText([titles[0]]);
+  await expect(panel.getByRole("combobox", { name: "Sort callbacks", exact: true })).toHaveValue("name-desc");
+  await expect(panel.getByRole("combobox", { name: "Filter callbacks by status", exact: true })).toHaveValue("ready");
+  await expect(rowTitles(panel)).toHaveText([titles[6], titles[2], titles[1]]);
+  await panel.getByRole("button", { name: "Unpin callback list", exact: true }).click();
+  await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
+  await expect(panel).toHaveAttribute("data-pinned", "false");
+  await expect.poll(() => panel.boundingBox()).toEqual(layout);
 });
 
 test("clearing filtered ended callbacks preserves all hidden rows and messages", async ({ page }) => {
@@ -264,7 +396,7 @@ test("groups callbacks by status, agent, or workspace with counts and sorting wi
   await expect(panel.getByText("7 of 7 shown", { exact: true })).toBeVisible();
 });
 
-test("group collapse supports keyboard, scope persistence, revealing search results, and expand all", async ({ page }, testInfo) => {
+test("group collapse supports keyboard, shared preferences, revealing search results, and expand all", async ({ page }, testInfo) => {
   await installCallbacks(page);
   let panel = await openPanel(page);
   let grouping = panel.getByRole("combobox", { name: "Group callbacks by", exact: true });
@@ -307,21 +439,22 @@ test("group collapse supports keyboard, scope persistence, revealing search resu
   await panel.getByRole("button", { name: "Expand all callback groups", exact: true }).click();
   await expect(rowTitles(panel)).toHaveCount(7);
 
-  // The saved workspace has its own grouping and collapse state.
+  // The same grouping and collapsed sections follow the selected callback scope.
   await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
-  await expect(grouping).toHaveValue("none");
+  await expect(grouping).toHaveValue("agent");
   await grouping.selectOption("status");
   await panel.getByRole("button", { name: "Working callback group", exact: true }).click();
   await expect(rowTitles(panel)).toHaveText([titles[1]]);
   await panel.getByRole("button", { name: "Global callback scope", exact: true }).click();
-  await expect(grouping).toHaveValue("agent");
-  await expect(rowTitles(panel)).toHaveCount(7);
+  await expect(grouping).toHaveValue("status");
+  await expect(panel.getByRole("button", { name: "Working callback group", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await expect(rowTitles(panel)).toHaveCount(6);
   await panel.getByRole("button", { name: "Workspace callback scope", exact: true }).click();
   await expect(grouping).toHaveValue("status");
   await expect(panel.getByRole("button", { name: "Working callback group", exact: true })).toHaveAttribute("aria-expanded", "false");
   panel = await openPanel(page, otherWorkspaceId);
   grouping = panel.getByRole("combobox", { name: "Group callbacks by", exact: true });
-  await expect(grouping).toHaveValue("none");
+  await expect(grouping).toHaveValue("status");
   await expect(rowTitles(panel)).toHaveText([titles[2]]);
 });
 

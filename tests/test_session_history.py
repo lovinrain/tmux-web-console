@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from pathlib import Path
 
 from tmux_console.agent_reference import AgentReference
 from tmux_console.session_registry import (
@@ -9,7 +10,7 @@ from tmux_console.session_registry import (
     SESSION_REGISTRY_SCHEMA_VERSION,
     SessionRegistry,
 )
-from tmux_console.tmux import Session
+from tmux_console.tmux import CreatedSession, Session
 
 
 def session(name="named-work", session_id="$1", created=100):
@@ -142,3 +143,89 @@ def test_session_scope_follows_a_renamed_session_through_its_old_names(tmp_path:
         scoped = registry.list_history(recycled=False, session_name=name)["entries"]
         assert [entry["name"] for entry in scoped] == ["after"], name
         assert [a["agentType"] for a in scoped[0]["agents"]] == ["claude", "codex"]
+
+
+def test_creation_lineage_and_view_history_survive_rename_reuse_and_restart(tmp_path):
+    path = tmp_path / "sessions.sqlite3"
+    registry = SessionRegistry(path, clock=lambda: 300)
+    parent = session("parent", "$1", 100)
+    parent_id = registry.observe_history(parent)
+    registry.record_created(CreatedSession("copy", "$2"), str(tmp_path),
+                            origin="copy", source=parent, placement="child")
+    child = session("copy", "$2", 250)
+    registry.observe_history(child, AgentReference("codex", "child-agent"))
+    registry.record_view_event(child, "split-tab")
+    registry.record_view_event(child, "fork")
+    registry.rename_identity("$1", 100, 90, 42, "renamed-parent")
+    registry.rename_identity("$2", 250, 90, 42, "renamed-copy")
+    replacement = session("copy", "$3", 280)
+    registry.observe_history(replacement)
+    registry.close()
+    registry = SessionRegistry(path)
+    entries = registry.list_history()["entries"]
+    copied = next(entry for entry in entries if entry["name"] == "renamed-copy")
+    assert copied["createdAt"] == 250
+    assert copied["firstSeenAt"] == 300
+    assert copied["origin"] == {"kind": "copy", "recordedAt": 300,
+                                "sourceHistoryId": parent_id, "sourceName": "parent", "placement": "child"}
+    assert [event["kind"] for event in copied["viewEvents"]] == ["fork", "split-tab"]
+    assert copied["agents"][0]["agentSessionId"] == "child-agent"
+    reused = next(entry for entry in entries if entry["name"] == "copy")
+    assert reused["createdAt"] == 280
+    assert reused["origin"] is None
+    assert reused["viewEvents"] == []
+    registry.close()
+
+
+def test_recreation_links_previous_identity_and_waits_for_actual_start_time(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 300)
+    previous = session()
+    records = registry.reconcile([previous])
+    assert records == []
+    old_id = registry.list_history()["entries"][0]["id"]
+    recovery = registry.reconcile([])[0]
+    registry.record_created(CreatedSession(previous.name, "$2"), str(tmp_path),
+                            registry_id=recovery.id, origin="recreate")
+    created = next(entry for entry in registry.list_history()["entries"] if entry["id"] != old_id)
+    assert created["createdAt"] is None
+    assert created["origin"]["sourceHistoryId"] == old_id
+    registry.observe_history(session(session_id="$2", created=290))
+    assert next(entry for entry in registry.list_history()["entries"] if entry["id"] == created["id"])["createdAt"] == 290
+    registry.close()
+
+
+def test_version_three_metadata_migration_preserves_history_and_unknown_origins(tmp_path):
+    path = tmp_path / "sessions.sqlite3"
+    registry = SessionRegistry(path, clock=lambda: 300)
+    history_id = registry.observe_history(session(), AgentReference("codex", "known-agent"))
+    registry.close()
+    with sqlite3.connect(path) as connection:
+        before = connection.execute("SELECT * FROM session_history").fetchall()
+        connection.execute("DROP TABLE session_origins")
+        connection.execute("DROP TABLE session_view_events")
+        connection.execute("PRAGMA user_version=3")
+    registry = SessionRegistry(path)
+    entry = registry.list_history()["entries"][0]
+    assert entry["id"] == history_id
+    assert entry["createdAt"] == 100
+    assert entry["origin"] is None
+    assert entry["viewEvents"] == []
+    assert entry["agents"][0]["agentSessionId"] == "known-agent"
+    registry.close()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT * FROM session_history").fetchall() == before
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SESSION_REGISTRY_SCHEMA_VERSION
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_browser_events_are_bounded_and_do_not_replace_creation_origin(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 300)
+    registry.record_created(CreatedSession("new", "$1"), str(tmp_path))
+    live = session("new", "$1", 200)
+    for _ in range(105):
+        registry.record_view_event(live, "split-workspace")
+    entry = registry.list_history()["entries"][0]
+    assert entry["origin"]["kind"] == "new"
+    assert len(entry["viewEvents"]) == 100
+    assert entry["viewEvents"][0]["id"] > entry["viewEvents"][-1]["id"]
+    registry.close()

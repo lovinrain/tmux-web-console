@@ -37,6 +37,13 @@ from .auth_views import (
     render_login_page,
 )
 from .callback_auth import CallbackTokenVerifier, callback_token_allows
+from .callback_groups import (
+    MAX_CALLBACK_GROUP_MEMBERS,
+    MAX_CALLBACK_GROUP_NAME_LENGTH,
+    MAX_CALLBACK_GROUPS_PER_SCOPE,
+    CallbackGroupConflict,
+    CallbackGroupNotFound,
+)
 from .callback_messages import (
     MAX_CALLBACK_MESSAGE_LENGTH,
     MAX_PENDING_CALLBACK_MESSAGES,
@@ -167,6 +174,7 @@ from .tmux import (
     TERMINAL_HISTORY_ACTIONS,
     TMUX_INPUT_KEYS,
     TMUX_LAUNCH_MODES,
+    Session,
     TmuxClient,
     TmuxError,
     TmuxPaneInputUnavailableError,
@@ -1249,6 +1257,7 @@ def create_app(
     def callback_snapshot(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         result = dict(snapshot if snapshot is not None else app[WORKSPACES_KEY].get_global_callback_sessions())
         result.update(app[CALLBACK_MESSAGES_KEY].pending_snapshot(result["callbackSessions"]))
+        result.update(app[CALLBACK_MESSAGES_KEY].groups_snapshot())
         result["callbackSessions"] = list(dict.fromkeys([
             *result["callbackSessions"],
             *(message["sessionName"] for message in result["callbackMessages"]),
@@ -1289,6 +1298,7 @@ def create_app(
         callback_write = request.method not in SAFE_HTTP_METHODS and (
             workspace_write or "/api/callback-sessions" in request.path
             or "/api/callback-messages" in request.path
+            or "/api/callback-groups" in request.path
         )
         if not callback_write:
             return await handler(request)
@@ -1763,6 +1773,15 @@ def create_app(
                         "pageSize": 200,
                     },
                 },
+                "callbackGroups": {
+                    "persistent": True,
+                    "scopes": ["global", "workspace"],
+                    "limits": {
+                        "groupsPerScope": MAX_CALLBACK_GROUPS_PER_SCOPE,
+                        "nameCharacters": MAX_CALLBACK_GROUP_NAME_LENGTH,
+                        "membersPerGroup": MAX_CALLBACK_GROUP_MEMBERS,
+                    },
+                },
                 "resources": {
                     "sessions": [
                         "create",
@@ -1828,6 +1847,11 @@ def create_app(
         requested_directory: str | None,
         *,
         registry_id: str | None = None,
+        origin: str = "new",
+        source: Session | None = None,
+        source_history_id: str | None = None,
+        source_name: str | None = None,
+        placement: str | None = None,
     ) -> list[str]:
         # Capture a new session promptly, even when no browser has opened it yet.
         history_capture_wake.set()
@@ -1841,6 +1865,8 @@ def create_app(
                 created_session,
                 directory,
                 registry_id=registry_id,
+                origin=origin, source=source, source_history_id=source_history_id,
+                source_name=source_name, placement=placement,
             )
         except (SessionRegistryUnavailable, RecoveryRecordNotFoundError) as error:
             LOGGER.exception(
@@ -2174,7 +2200,7 @@ def create_app(
             return json_error("request body must be JSON", 400)
         if not isinstance(payload, dict):
             return json_error("request body must be an object", 400)
-        unknown_fields = sorted(set(payload) - {"sessionId", "theme"})
+        unknown_fields = sorted(set(payload) - {"sessionId", "theme", "placement"})
         if unknown_fields:
             return json_error(f"unknown field: {unknown_fields[0]}", 400)
         if "sessionId" not in payload:
@@ -2187,6 +2213,10 @@ def create_app(
             source_id = validate_tmux_session_id(source_id)
         except ValueError as error:
             return json_error(str(error), 400)
+
+        placement = payload.get("placement")
+        if placement is not None and (not isinstance(placement, str) or placement not in {"sibling", "child"}):
+            return json_error("placement must be sibling or child", 400)
 
         requested_theme = payload.get("theme")
         if "theme" in payload:
@@ -2211,7 +2241,8 @@ def create_app(
             return json_error(str(error), 503)
         return created_session_response(
             created_session,
-            record_created_session(created_session, created_session.directory),
+            record_created_session(created_session, created_session.directory, origin="copy",
+                                   source=created_session.source, source_name=source_name, placement=placement),
         )
 
     async def recreate_session(request: web.Request) -> web.Response:
@@ -2273,6 +2304,7 @@ def create_app(
                 created_session,
                 directory,
                 registry_id=record.id,
+                origin="recreate", source_name=record.name,
             )
         return created_session_response(created_session, warnings)
 
@@ -2324,6 +2356,36 @@ def create_app(
         except (TmuxError, SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
             return json_error(str(error), 503)
 
+    async def record_session_view(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            fields = {"sessionId", "sessionCreated", "serverStarted", "serverPid", "kind"}
+            if not isinstance(payload, dict) or set(payload) != fields:
+                raise ValueError("session identity and view kind are required")
+            kind = payload["kind"]
+            if not isinstance(kind, str) or kind not in {"split-workspace", "split-tab", "fork"}:
+                raise ValueError("invalid view activity")
+            if not isinstance(payload["sessionId"], str):
+                raise TypeError("sessionId must be a string")
+            validate_tmux_session_id(payload["sessionId"])
+            for field in ("sessionCreated", "serverStarted", "serverPid"):
+                if type(payload[field]) is not int or payload[field] < 0:
+                    raise ValueError(f"{field} must be a non-negative integer")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                target = await app[TMUX_KEY].get_session(validate_tmux_session_name(request.match_info["session"]))
+                if (target.id, target.created, target.server_started, target.server_pid) != (
+                    payload["sessionId"], payload["sessionCreated"], payload["serverStarted"], payload["serverPid"],
+                ):
+                    return json_error("session identity changed", 409)
+                app[SESSION_REGISTRY_KEY].record_view_event(target, kind)
+            return web.Response(status=204)
+        except (ValueError, TypeError, RecursionError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TmuxError, SessionRegistryUnavailable) as error:
+            return json_error(str(error), 503)
+
     async def restore_history_session(request: web.Request) -> web.Response:
         try:
             payload = await request.json()
@@ -2346,7 +2408,7 @@ def create_app(
                     return json_error("a different live session already uses this name; it will not be replaced", 409)
                 directory = validate_tmux_start_directory(record["directory"])
                 created = await app[TMUX_KEY].create_shell_session(record["name"], directory)
-                warnings = record_created_session(created, directory)
+                warnings = record_created_session(created, directory, origin="recreate", source_history_id=record["id"], source_name=record["name"])
                 return web.json_response({"session": created.name, "sessionId": created.id, "created": True, "warnings": warnings}, status=201)
         except RecoveryRecordNotFoundError:
             return json_error("session history record not found", 404)
@@ -3680,6 +3742,11 @@ def create_app(
                     "unable to migrate workspace, session-link, and note state"
                 )
             try:
+                app[CALLBACK_MESSAGES_KEY].rename_group_session(current_name, renamed_session)
+            except CallbackMessageStoreUnavailable:
+                LOGGER.exception("Unable to migrate custom callback groups after session rename")
+                warnings.append("unable to migrate custom callback groups")
+            try:
                 app[SESSION_REGISTRY_KEY].rename_identity(
                     source_session.id,
                     source_session.created,
@@ -4902,9 +4969,61 @@ def create_app(
             return json_error(str(error), 503)
         if isinstance(error, CallbackMessageNotFound):
             return json_error("callback message was not found", 404)
-        if isinstance(error, CallbackMessageConflict):
+        if isinstance(error, (CallbackGroupNotFound, WorkspaceNotFoundError)):
+            return json_error(str(error), 404)
+        if isinstance(error, (CallbackMessageConflict, CallbackGroupConflict)):
             return json_error(str(error), 409)
         return json_error(str(error), 400)
+
+    async def list_callback_groups(_: web.Request) -> web.Response:
+        try:
+            return web.json_response(app[CALLBACK_MESSAGES_KEY].groups_snapshot())
+        except CallbackMessageStoreUnavailable as error:
+            return callback_message_error(error)
+
+    async def save_callback_group(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request, required={"workspaceId", "name", "sessions", "expectedRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            if payload["workspaceId"] is not None:
+                app[WORKSPACES_KEY].get_workspace(payload["workspaceId"])
+            group_id = app[CALLBACK_MESSAGES_KEY].save_group(
+                group_id=request.match_info.get("group_id"),
+                workspace_id=payload["workspaceId"], name=payload["name"],
+                sessions=payload["sessions"], expected_revision=payload["expectedRevision"],
+            )
+            snapshot = callback_snapshot()
+        except (CallbackMessageStoreUnavailable, WorkspaceStoreUnavailable, WorkspaceNotFoundError,
+                CallbackGroupConflict, CallbackGroupNotFound, TypeError, ValueError) as error:
+            return callback_message_error(error)
+        return web.json_response({
+            "group": next(group for group in snapshot["callbackGroups"] if group["id"] == group_id),
+            "callbacks": snapshot,
+        }, status=201 if request.method == "POST" else 200)
+
+    async def delete_callback_group(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request, required={"workspaceId", "expectedRevision"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            if payload["workspaceId"] is not None:
+                app[WORKSPACES_KEY].get_workspace(payload["workspaceId"])
+            app[CALLBACK_MESSAGES_KEY].delete_group(
+                request.match_info["group_id"], workspace_id=payload["workspaceId"],
+                expected_revision=payload["expectedRevision"],
+            )
+            snapshot = callback_snapshot()
+        except (CallbackMessageStoreUnavailable, WorkspaceStoreUnavailable, WorkspaceNotFoundError,
+                CallbackGroupConflict, CallbackGroupNotFound, TypeError, ValueError) as error:
+            return callback_message_error(error)
+        return web.json_response({"callbacks": snapshot})
 
     async def post_callback_message(request: web.Request) -> web.Response:
         try:
@@ -5798,7 +5917,8 @@ def create_app(
     async def delete_workspace(request: web.Request) -> web.Response:
         try:
             app[WORKSPACES_KEY].delete_workspace(request.match_info["workspace_id"])
-        except WorkspaceStoreUnavailable as error:
+            app[CALLBACK_MESSAGES_KEY].delete_workspace_groups(request.match_info["workspace_id"])
+        except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
         except WorkspaceNotFoundError as error:
             return json_error(str(error), 404)
@@ -6102,7 +6222,7 @@ def create_app(
                             continue
                         direction = payload.get("direction")
                         profile = payload.get("profile")
-                        profiles = {"claude": "claude", "codex": "codex", "copilot": "alt-wheel", "grok": "wheel"}
+                        profiles = {"claude": "claude", "codex": "codex", "copilot": "alt-wheel", "grok": "wheel", "wheel": "wheel"}
                         result: dict[str, object] = {
                             "type": "applicationScrollNack",
                             "id": scroll_id,
@@ -6236,6 +6356,7 @@ def create_app(
         undo_forget_recoverable_session,
     )
     app.router.add_post(f"{prefix}/api/sessions/{session_segment}/copy", copy_session)
+    app.router.add_post(f"{prefix}/api/sessions/{session_segment}/view-events", record_session_view)
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/attachments",
         upload_session_attachment,
@@ -6386,6 +6507,10 @@ def create_app(
         f"{prefix}/api/callback-sessions",
         list_global_callback_sessions,
     )
+    app.router.add_get(f"{prefix}/api/callback-groups", list_callback_groups)
+    app.router.add_post(f"{prefix}/api/callback-groups", save_callback_group)
+    app.router.add_put(f"{prefix}/api/callback-groups/{{group_id}}", save_callback_group)
+    app.router.add_delete(f"{prefix}/api/callback-groups/{{group_id}}", delete_callback_group)
     app.router.add_put(
         f"{prefix}/api/callback-sessions",
         replace_global_callback_sessions,

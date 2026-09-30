@@ -19,12 +19,13 @@ import {
   updateSessionTitle,
   uploadSessionAttachment,
   listSessionHistory,
+  recordSessionView,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import { dispatchShortcutAction } from "../shortcutSettings";
 import type { TerminalSubmissionTerminator } from "../terminalInput";
 import { ThemeProvider, type Theme } from "../theme";
-import type { Pane, Session } from "../types";
+import type { ConnectionState, Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
 import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
 import type { ApplicationScrollResult, TerminalHistoryAction, TerminalHistoryResult } from "./LiveTerminal";
@@ -36,11 +37,11 @@ const liveTerminalHandle = vi.hoisted(() => ({
   focus: vi.fn(),
   redraw: vi.fn(() => true),
   navigateHistory: vi.fn((_action: "page-up" | "page-down" | "line-up" | "line-down" | "exit") => true),
-  scrollApplication: vi.fn(async (_direction: "up" | "down", _profile: "claude" | "codex" | "copilot" | "grok"): Promise<ApplicationScrollResult> => ({ status: "accepted", paneId: "%1" })),
+  scrollApplication: vi.fn(async (_direction: "up" | "down", _profile: "claude" | "codex" | "copilot" | "grok" | "wheel"): Promise<ApplicationScrollResult> => ({ status: "accepted", paneId: "%1" })),
   jumpToLive: vi.fn(),
 }));
 const liveTerminalState = vi.hoisted(() => ({
-  onStateChange: null as null | ((state: "live") => void),
+  onStateChange: null as null | ((state: ConnectionState) => void),
   onOpenFilePath: null as null | ((path: string) => void),
   onHistoryNavigation: null as null | ((action: TerminalHistoryAction, result: TerminalHistoryResult) => void),
 }));
@@ -51,6 +52,7 @@ vi.mock("../api", () => ({
   copySession: vi.fn(),
   listSessions: vi.fn(),
   listSessionHistory: vi.fn(),
+  recordSessionView: vi.fn(),
   restoreSessionHistory: vi.fn(),
   listQueuedMessages: vi.fn(),
   createQueuedMessage: vi.fn(),
@@ -92,7 +94,7 @@ vi.mock("./LiveTerminal", async () => {
         layoutSuspended?: boolean;
         layoutRefreshToken?: string;
         theme: Theme;
-        onStateChange: (state: "live") => void;
+        onStateChange: (state: ConnectionState) => void;
         onOpenFilePath?: (path: string) => void;
         onHistoryNavigation?: (action: TerminalHistoryAction, result: TerminalHistoryResult) => void;
       },
@@ -195,6 +197,7 @@ beforeEach(() => {
     absolutePath: path,
     entry: null,
   }));
+  vi.mocked(recordSessionView).mockResolvedValue(undefined);
   document.title = "Muxdeck";
 });
 
@@ -224,15 +227,13 @@ function layOutHeader(container: HTMLElement, offscreen: HTMLElement[]) {
   const actions = container.querySelector(".console-actions") as HTMLElement;
   vi.spyOn(header, "getBoundingClientRect").mockReturnValue(layoutRect(0, 1_000));
   vi.spyOn(actions, "getBoundingClientRect").mockReturnValue(layoutRect(0, 1_000));
-  let left = 0;
-  container
-    .querySelectorAll<HTMLElement>(".console-actions button, .console-actions a")
-    .forEach((control) => {
-      const parked = offscreen.includes(control);
-      vi.spyOn(control, "getBoundingClientRect")
-        .mockReturnValue(parked ? layoutRect(1_200, 100) : layoutRect(left, 60));
-      left += 60;
-    });
+  const controls = container.querySelectorAll<HTMLElement>(".console-actions :is(button, a, select)");
+  const width = 900 / controls.length;
+  controls.forEach((control, index) => {
+    const parked = offscreen.includes(control);
+    vi.spyOn(control, "getBoundingClientRect")
+      .mockReturnValue(parked ? layoutRect(1_200, 100) : layoutRect(index * width, width));
+  });
   act(() => {
     window.dispatchEvent(new Event("resize"));
   });
@@ -434,7 +435,7 @@ describe("ConsoleScreen session identity", () => {
     expect(notes.parentElement?.nextElementSibling).toBe(view.container.querySelector(".console-actions"));
   });
 
-  it("offers header controls the window cannot show in a tray", async () => {
+  it.each(["scrollback", "time zone"])("offers the %s control in a tray when the header cannot show it", async (hiddenControl) => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     const view = renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
@@ -445,7 +446,8 @@ describe("ConsoleScreen session identity", () => {
       .not.toBeInTheDocument();
 
     const scrollback = screen.getByRole("button", { name: "Pane scrollback" });
-    layOutHeader(view.container, [scrollback]);
+    const timeZone = screen.getByRole("combobox", { name: "Display time zone" });
+    layOutHeader(view.container, [hiddenControl === "scrollback" ? scrollback : timeZone]);
 
     const toggle = await screen.findByRole("button", {
       name: "Show all console controls, 1 without room in the header",
@@ -466,7 +468,8 @@ describe("ConsoleScreen session identity", () => {
     expect(toggle).toHaveAttribute("aria-controls", tray.id);
     // The controls move into the tray; they are not copies with their own state.
     expect(within(tray).getByRole("button", { name: "Pane scrollback" })).toBe(scrollback);
-    expect(within(tray).getByRole("button", { name: /Coding agents recorded/ }))
+    expect(within(tray).getByRole("combobox", { name: "Display time zone" })).toBe(timeZone);
+    expect(within(tray).getByRole("button", { name: /Metadata for/ }))
       .toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
@@ -865,18 +868,16 @@ describe("ConsoleScreen session identity", () => {
     }
   });
 
+  // Classification and recommendation matrices have unit coverage; exercise
+  // both recommended families here, including a plain shell.
   it.each([
-    ["claude", "Claude Code", "claude"],
-    ["codex", "Codex", "codex"],
-    ["copilot", "Copilot CLI", "copilot"],
-    ["cursor-agent", "Cursor Agent", "cursor"],
-    ["grok", "Grok", "grok"],
-    ["bash", "shell", "shells"],
-    ["unknown-program", "custom app", "other"],
+    ["codex", "Codex", "codex", "application"],
+    ["bash", "shell", "shells", "tmux"],
   ])("scrolls tmux one line for %s without moving its recommended controls after acknowledgment", async (
     command,
     title,
     kind,
+    recommendedMode,
   ) => {
     const currentSession = {
       ...session(),
@@ -891,7 +892,6 @@ describe("ConsoleScreen session identity", () => {
       screen.getByRole("group", { name: "Terminal input shortcuts" }),
       screen.getByRole("navigation", { name: "Terminal view controls" }),
     ];
-    const recommendedMode = ["claude", "codex", "copilot", "grok"].includes(kind) ? "application" : "tmux";
     const controls = groups.flatMap((group) => [
       within(group).getByRole("button", { name: "Tmux Line Up" }),
       within(group).getByRole("button", { name: "Tmux Line Down" }),
@@ -939,15 +939,13 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
   });
 
+  // Cover Codex, a tmux-recommended agent, and an unrecognized application.
+  // The separate native-scroll scenarios below exercise each tuned profile.
   it.each([
-    ["claude", "claude", "application"],
-    ["codex", "codex", "application"],
-    ["copilot", "copilot", "application"],
-    ["cursor-agent", "cursor", "tmux"],
-    ["grok", "grok", "application"],
-    ["bash", "shells", "tmux"],
-    ["custom-agent", "other", "tmux"],
-  ] as const)("shows all eight controls for %s and keeps recommendations fixed after using either paging family", (command, kind, recommended) => {
+    ["codex", "codex", "application", "codex"],
+    ["cursor-agent", "cursor", "tmux", "wheel"],
+    ["custom-agent", "other", "tmux", "wheel"],
+  ] as const)("enables all eight controls for %s and keeps recommendations fixed while either family is used", async (command, kind, recommended, profile) => {
     const storageKey = "muxdeck-agent-scroll-preferences";
     const legacyValue = JSON.stringify({ [kind]: recommended === "tmux" ? "application" : "tmux" });
     window.localStorage.setItem(storageKey, legacyValue);
@@ -969,7 +967,10 @@ describe("ConsoleScreen session identity", () => {
           name: /^(Tmux (Page|Line) (Up|Down)|PgUp|PgDn|Raw terminal Page (Up|Down)|Application Scroll (Up|Down))$/,
         });
         expect(scrollingButtons).toHaveLength(8);
-        for (const button of scrollingButtons) expect(button).toBeVisible();
+        for (const button of scrollingButtons) {
+          expect(button).toBeVisible();
+          expect(button).toBeEnabled();
+        }
         for (const [direction, key] of [["Up", "U"], ["Down", "D"]] as const) {
           const tmuxPage = within(group).getByRole("button", { name: `Tmux Page ${direction}` });
           const rawPage = within(group).getByRole("button", {
@@ -989,8 +990,7 @@ describe("ConsoleScreen session identity", () => {
             expect(appLine).toHaveAttribute("data-scroll-preferred", "true");
             expect(tmuxLine).not.toHaveAttribute("data-scroll-preferred");
           } else {
-            expect(appLine).toBeDisabled();
-            expect(appLine).toHaveAttribute("title", expect.stringContaining("not supported"));
+            expect(appLine).toBeEnabled();
             expect(appLine).not.toHaveAttribute("data-scroll-preferred");
             expect(tmuxLine).toHaveAttribute("data-scroll-preferred", "true");
           }
@@ -1004,17 +1004,19 @@ describe("ConsoleScreen session identity", () => {
       newValue: legacyValue,
     })));
     expectRecommendation();
-    if (recommended === "tmux") {
-      for (const group of groups) {
-        for (const direction of ["Up", "Down"]) {
+    for (const group of groups) {
+      for (const direction of ["Up", "Down"]) {
+        await act(async () => {
           fireEvent.click(within(group).getByRole("button", { name: `Application Scroll ${direction}` }));
-        }
+        });
+        expectRecommendation();
       }
-      expect(liveTerminalHandle.scrollApplication).not.toHaveBeenCalled();
-      expect(liveTerminalHandle.send).not.toHaveBeenCalled();
-      expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
-      expectRecommendation();
     }
+    expect(liveTerminalHandle.scrollApplication.mock.calls).toEqual([
+      ["up", profile], ["down", profile], ["up", profile], ["down", profile],
+    ]);
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
     for (const [index, group] of groups.entries()) {
       for (const name of ["Tmux Page Up", "Tmux Page Down", index === 0 ? "PgUp" : "Raw terminal Page Up", index === 0 ? "PgDn" : "Raw terminal Page Down"]) {
         fireEvent.click(within(group).getByRole("button", { name }));
@@ -1067,7 +1069,7 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.navigateHistory).toHaveBeenLastCalledWith("exit");
   });
 
-  it("tracks a manually used raw page for Live without changing Codex recommendations", () => {
+  it("uses raw paging and the application Live action by default for Codex", () => {
     const agentSession = { ...session(), panes: [{ ...pane(), command: "codex", title: "Codex" }] };
     renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={agentSession} onBack={vi.fn()} />);
     act(() => liveTerminalState.onStateChange?.("live"));
@@ -1363,6 +1365,17 @@ describe("ConsoleScreen session identity", () => {
     for (const button of screen.getAllByRole("button", { name: "Tmux Line Up" })) {
       expect(button).not.toHaveAttribute("data-scroll-preferred");
       expect(button).not.toHaveAttribute("aria-keyshortcuts");
+    }
+    const scrollingButtons = screen.getAllByRole("button", {
+      name: /^(Tmux (Page|Line) (Up|Down)|PgUp|PgDn|Raw terminal Page (Up|Down)|Application Scroll (Up|Down))$/,
+    });
+    expect(scrollingButtons).toHaveLength(16);
+    for (const state of ["live", "reconnecting", "live"] as const) {
+      act(() => liveTerminalState.onStateChange?.(state));
+      for (const button of scrollingButtons) {
+        if (state === "live") expect(button).toBeEnabled();
+        else expect(button).toBeDisabled();
+      }
     }
   });
 
@@ -2352,10 +2365,10 @@ describe("ConsoleScreen session identity", () => {
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "Coding agents recorded in test",
+      name: "Metadata for test",
     }));
 
-    expect(await screen.findByRole("dialog", { name: "Agents in test" })).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "Metadata for test" })).toBeVisible();
     // Scoped to this session, and not limited to closed sessions, so the agent
     // running right now is included.
     await waitFor(() => expect(listSessionHistory).toHaveBeenLastCalledWith(
@@ -2774,6 +2787,7 @@ describe("ConsoleScreen session identity", () => {
 
     fireEvent.click(split);
     expect(onSplitWorkspace).toHaveBeenCalledTimes(2);
+    expect(recordSessionView).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: "test", id: "$1" }), "split-workspace");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -2831,8 +2845,51 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("new workspace window");
     fireEvent.click(splitEphemeral);
     expect(onSplitEphemeralTab).toHaveBeenCalledTimes(3);
+    expect(recordSessionView).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: "test", id: "$1" }), "split-tab");
     expect(onSplitWorkspace).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("alert")).toHaveTextContent("new workspace window");
+  });
+
+  it("forks the exact current URL beside Space and Tab without invoking a split", async () => {
+    const originalUrl = window.location.href;
+    const originalState = window.history.state;
+    const onSplitWorkspace = vi.fn();
+    const onSplitEphemeralTab = vi.fn();
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    try {
+      window.history.replaceState(null, "", "/mux/session/test?workspace=saved&tab=test&tab=other#view");
+      renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
+        onSplitWorkspace={onSplitWorkspace} onSplitEphemeralTab={onSplitEphemeralTab} />);
+      const fork = await screen.findByRole("link", { name: "Fork current view in a new browser tab" });
+      expect(fork).toHaveTextContent("Fork");
+      expect(fork).toHaveAttribute("href", window.location.href);
+      expect(fork).toHaveAttribute("target", "_blank");
+      expect(fork).toHaveAttribute("rel", "noopener noreferrer");
+      expect(screen.getByRole("button", { name: "Split to ephemeral tab" }).nextElementSibling).toBe(fork);
+      // URL edits can occur between renders; activation must use the latest URL.
+      const next = new URL("/mux/session/test?tab=test&tab=other&parent=other%3Atest#new-view", originalUrl).href;
+      window.history.replaceState(null, "", next);
+      fireEvent.click(fork);
+      expect(fork).toHaveAttribute("href", next);
+      expect(recordSessionView).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: "test", id: "$1" }), "fork");
+      expect(window.location.href).toBe(next);
+      expect(onSplitWorkspace).not.toHaveBeenCalled();
+      expect(onSplitEphemeralTab).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState(originalState, "", originalUrl);
+    }
+  });
+
+  it("reports metadata-save failures without blocking an opened view", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(recordSessionView).mockRejectedValue(new Error("Registry unavailable"));
+    const split = vi.fn().mockReturnValue("opened");
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onSplitEphemeralTab={split} />);
+    const button = await screen.findByRole("button", { name: "Split to ephemeral tab" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    expect(split).toHaveBeenCalledOnce();
+    expect(await screen.findByRole("alert")).toHaveTextContent("View activity could not be saved: Registry unavailable");
   });
 
   it("keeps ephemeral sessions usable without workspace controls or hidden workspace shortcuts", async () => {
@@ -2866,7 +2923,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByTestId("live-terminal")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Browse files in /work" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Coding agents recorded in test" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Metadata for test" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Raw terminal Page Up" })).toBeVisible();
     expect(screen.queryByText(/Workspace sidebar|Workspace links|Workspace notes/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy sibling session|Copy child session|Split to ephemeral tab/i })).not.toBeInTheDocument();
@@ -2944,7 +3001,7 @@ describe("ConsoleScreen session identity", () => {
     );
 
     fireEvent.click(copyNew);
-    expect(copySession).toHaveBeenCalledWith("test", "$1", "dark");
+    expect(copySession).toHaveBeenCalledWith("test", "$1", "dark", "sibling");
     expect(screen.getByRole("button", { name: "Copy sibling session" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Copy child session" })).toBeDisabled();
     expect(screen.getByRole("group", { name: "Copy" })).toHaveTextContent("Creating...");
@@ -3009,7 +3066,7 @@ describe("ConsoleScreen session identity", () => {
     expect(sibling.nextElementSibling).toBe(child);
     fireEvent.click(child);
 
-    expect(copySession).toHaveBeenCalledExactlyOnceWith("test", "$1", "dark");
+    expect(copySession).toHaveBeenCalledExactlyOnceWith("test", "$1", "dark", "child");
     expect(child).toBeDisabled();
     expect(sibling).toBeDisabled();
     expect(group).toHaveTextContent("Creating...");

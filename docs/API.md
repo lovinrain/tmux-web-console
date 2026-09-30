@@ -420,7 +420,7 @@ retry after a partial storage failure is safe.
 
 | Method and route | Request | Result |
 | --- | --- | --- |
-| `GET /api/callback-sessions` | None | Effective `callbackSessions`, explicit `globalCallbackSessions`, contributing `workspaceCallbacks`, `sessionRevision`, pending `callbackMessages`, and `callbackMessageRevision`. |
+| `GET /api/callback-sessions` | None | Effective `callbackSessions`, explicit `globalCallbackSessions`, contributing `workspaceCallbacks`, `sessionRevision`, pending `callbackMessages`, `callbackMessageRevision`, shared `callbackGroups`, and `callbackGroupRevision`. |
 | `GET /api/callback-sessions/stream` | None | Authenticated `text/event-stream`; emits `callbacks` records whenever the callback snapshot changes. |
 | `PUT /api/callback-sessions` | `sessions`, `sessionRevision` | Replaces explicitly global entries and returns the refreshed snapshot. |
 | `POST /api/callback-sessions` | `sessions`, `sessionRevision` | Idempotently appends explicitly global entries and returns `added` plus the refreshed snapshot. |
@@ -429,6 +429,36 @@ retry after a partial storage failure is safe.
 | `GET /api/workspaces/{workspaceId}/callback-sessions` | None | `callbackSessions` and `sessionRevision`. |
 | `POST /api/workspaces/{workspaceId}/callback-sessions` | `sessions`, `sessionRevision` | Idempotently appends missing entries and returns `added`. |
 | `DELETE /api/workspaces/{workspaceId}/callback-sessions` | `sessions`, `sessionRevision` | Removes present entries and returns `removed`. |
+
+### Custom callback groups
+
+Groups organize callback rows without changing queues, workspace tabs, or message
+review state. They are shared across browsers through the global callback and
+saved-workspace streams. Each group is `{id, name, workspaceId, sessions}`;
+`workspaceId: null` selects Global, and a workspace ID selects that saved
+workspace. Temporary browser workspaces have no shared group scope.
+
+| Method and route | Required JSON fields | Result |
+| --- | --- | --- |
+| `GET /api/callback-groups` | None | `{callbackGroups, callbackGroupRevision}` for every scope. |
+| `POST /api/callback-groups` | `workspaceId`, `name`, `sessions`, `expectedRevision` | Creates a group; `{group, callbacks}` with `201`. |
+| `PUT /api/callback-groups/{id}` | `workspaceId`, `name`, `sessions`, `expectedRevision` | Renames/replaces membership; `{group, callbacks}`. |
+| `DELETE /api/callback-groups/{id}` | `workspaceId`, `expectedRevision` | Deletes only the group; `{callbacks}`. |
+
+Send the last observed `callbackGroupRevision` as `expectedRevision`. Stale
+edits return `409`; reload groups before retrying. The group revision is durable
+and independent of session/message revisions. Clients must merge all three
+independently, including responses that arrive out of order. A no-op save does
+not advance it. Group writes require ordinary browser/API authentication; the
+callback-only agent token cannot write groups.
+
+Names are trimmed, case-insensitively unique within a scope, and limited to 40
+characters. `Ungrouped` is reserved. A scope permits 32 groups, each with up to
+1,024 session names. Selecting a member already assigned in that scope atomically
+moves it to the saved group; other scopes are unaffected. Empty groups persist.
+Assignments may refer to currently unqueued sessions so reviewing a callback
+does not discard its group. Deleting a saved workspace removes its groups;
+Muxdeck session renames update their memberships.
 
 ### Posted callback messages
 
@@ -454,8 +484,10 @@ session and does not prove that a session with a reused name is the same process
 
 Each returned record includes those fields (omitted optional fields become
 `null`) and a server-assigned `id`, increasing integer `sequence`, Unix-second
-`createdAt`, and nullable `reviewedAt`. Reuse the same `requestId` and identical
-body when retrying delivery; a different body under that ID returns `409`.
+`createdAt`, and nullable `reviewedAt`. Both times are UTC-based Unix seconds;
+the browser's display-zone preference does not alter API values. Reuse the same
+`requestId` and identical body when retrying delivery; a different body under that
+ID returns `409`.
 Idempotency survives review and server restart. At most 256 messages may be
 pending; further new messages return `409` until some are reviewed. Reviewed
 history is retained.
@@ -726,11 +758,30 @@ These routes require a live session and return the saved value:
 | Method and route | Request | Purpose |
 | --- | --- | --- |
 | `GET /api/session-history?workspace=ID&q=TEXT&recycled=0&offset=0` | Optional query fields | Lists observed/current or recycled session history. |
+| `POST /api/sessions/{session}/view-events` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid`, `kind` | Records browser view activity for the exact live identity; returns `204`. |
 | `POST /api/session-history/close-tab` | `session`, `sessionId` | Records that a live session tab was closed without ending tmux. |
 | `POST /api/session-history/{historyId}/restore` | `create` boolean | Finds the original live identity or explicitly recreates a shell from saved name/PWD. |
 | `POST /api/recoverable-sessions/{recoveryId}/recreate` | Optional `theme` | Recreates a saved recoverable shell. |
 | `DELETE /api/recoverable-sessions/{recoveryId}` | None | Immediately forgets an ended recovery record and removes its saved-workspace references; returns `{undoToken, expiresAt}` with a 30-second undo deadline in Unix milliseconds. Refuses a live session. |
 | `POST /api/recoverable-sessions/{recoveryId}/undo-forget` | `undoToken` | Restores the forgotten record and its saved-workspace references, preserving later edits; returns `{recovery, workspaces}` with canonical workspace snapshots. |
+
+History entries include `createdAt` (native start time in Unix seconds, or null),
+`origin` (null when not recorded), and `viewEvents` (newest first, at most 100).
+An origin has `kind` (`new`, `copy`, or `recreate`), `recordedAt`, optional
+`sourceHistoryId`/`sourceName`, and optional `placement` (`sibling` or `child`).
+The source name is a snapshot at creation; its history ID survives renames.
+These fields supplement first/last observation times and the `agents` array.
+
+The copy endpoint accepts optional `placement` (`sibling` or `child`) to record
+placement at creation. The source identity comes from the validated tmux copy
+operation. This field is metadata; workspace nesting remains managed by the
+workspace state.
+
+View kinds are `split-workspace`, `split-tab`, and `fork`. Only the server assigns
+the event timestamp. Invalid fields return `400`, a vanished session returns
+`404`, a different native identity returns `409`, and unavailable storage returns
+`503`. Splits are recorded after a successful browser open; Fork records the
+link activation request. These events never create or mutate tmux sessions.
 
 Undo tokens are single-use and the server enforces the deadline. An expired
 token returns `410`; an unknown, used, or mismatched token returns `404`.
@@ -977,7 +1028,8 @@ the verified attachment's active pane and do not inject application input.
 
 Native fine scrolling uses `{type:"applicationScroll",id,direction,profile}`,
 with a nonempty ID of at most 128 characters, direction `up`/`down`, and profile
-`claude`, `codex`, `copilot`, or `grok`. The reply is
+`claude`, `codex`, `copilot`, `grok`, or `wheel`. The generic `wheel` profile sends a
+plain native wheel step without requiring a recognized agent. The reply is
 `{type:"applicationScrollAck",id,paneId}` or
 `{type:"applicationScrollNack",id,message}`. This explicitly sends application
 mouse input and requires enabled input in the verified attachment's active pane.

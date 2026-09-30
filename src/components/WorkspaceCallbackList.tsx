@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useId,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -20,7 +19,10 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "../icons";
-import type { CallbackMessage, GlobalCallbackSnapshot } from "../api";
+import type { CallbackCustomGroup, CallbackMessage, GlobalCallbackSnapshot, SaveCallbackGroupInput } from "../api";
+import { CallbackGroupEditor } from "./CallbackGroupEditor";
+import { TimeZoneSelect } from "./TimeZoneSelect";
+import { formatTimestamp, FULL_TIMESTAMP_FORMAT, SHORT_TIMESTAMP_FORMAT, useDisplayTimeZone } from "../timeZone";
 import "./WorkspaceCallbackMessages.css";
 import "./WorkspaceCallbackFilters.css";
 import "./WorkspaceCallbackStatus.css";
@@ -62,8 +64,10 @@ import {
 
 const DESKTOP_CALLBACK_QUERY = "(min-width: 1025px), (min-width: 641px) and (min-height: 501px) and (pointer: fine)";
 const CALLBACK_STORAGE_PREFIX = "muxdeck.workspace-callback-panel.v1:";
+export const CALLBACK_PANEL_STORAGE_KEY = `${CALLBACK_STORAGE_PREFIX}shared`;
 export const CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY = `${CALLBACK_STORAGE_PREFIX}scope`;
-export const CALLBACK_VIEW_STORAGE_PREFIX = "muxdeck.callback-list-view.v1:";
+const CALLBACK_VIEW_STORAGE_PREFIX = "muxdeck.callback-list-view.v1:";
+export const CALLBACK_VIEW_STORAGE_KEY = `${CALLBACK_VIEW_STORAGE_PREFIX}shared`;
 const CALLBACK_PANEL_MARGIN = 12;
 const CALLBACK_PANEL_WIDTH = 390;
 const CALLBACK_PANEL_HEIGHT = 520;
@@ -106,6 +110,8 @@ interface WorkspaceCallbackListProps {
   onGlobalChange?: (sessions: string[]) => Promise<void>;
   globalCallbackBusy?: boolean;
   onGlobalRefresh?: () => void;
+  onSaveGroup?: (input: SaveCallbackGroupInput) => Promise<void>;
+  onDeleteGroup?: (group: CallbackCustomGroup, expectedRevision: number) => Promise<void>;
   /** Mark a callback reviewed across all global/workspace queues. */
   onReviewSession?: (sessionName: string) => Promise<void>;
   onReviewMessage?: (id: string) => Promise<void>;
@@ -121,13 +127,7 @@ interface CallbackPanelState {
   size: CallbackPanelSize;
 }
 
-interface CallbackPanelStore {
-  identity: string;
-  panel: CallbackPanelState;
-}
-
-interface CallbackViewStore {
-  identity: string;
+interface CallbackListViewState {
   preferences: CallbackListViewPreferences;
   query: string;
   moreFiltersOpen: boolean;
@@ -135,7 +135,9 @@ interface CallbackViewStore {
 
 function readViewPreference(identity: string): CallbackListViewPreferences {
   try {
-    return parseCallbackListViewPreferences(window.localStorage.getItem(`${CALLBACK_VIEW_STORAGE_PREFIX}${identity}`));
+    // Adopt the initially selected scope's old settings once, then share all view changes.
+    return parseCallbackListViewPreferences(window.localStorage.getItem(CALLBACK_VIEW_STORAGE_KEY)
+      ?? window.localStorage.getItem(`${CALLBACK_VIEW_STORAGE_PREFIX}${identity}`));
   } catch {
     return { ...DEFAULT_CALLBACK_LIST_VIEW };
   }
@@ -217,7 +219,8 @@ function readPreference(identity: string): CallbackPanelState {
     size: defaultSize(),
   };
   try {
-    const raw = window.localStorage.getItem(`${CALLBACK_STORAGE_PREFIX}${identity}`);
+    const raw = window.localStorage.getItem(CALLBACK_PANEL_STORAGE_KEY)
+      ?? window.localStorage.getItem(`${CALLBACK_STORAGE_PREFIX}${identity}`);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<CallbackPanelPreference>;
     const position = validPosition(parsed.position) ? parsed.position : fallback.position;
@@ -235,7 +238,7 @@ function readPreference(identity: string): CallbackPanelState {
   }
 }
 
-function writePreference(identity: string, panel: CallbackPanelState): void {
+function writePreference(panel: CallbackPanelState): void {
   try {
     const preference: CallbackPanelPreference = {
       open: panel.open,
@@ -244,7 +247,7 @@ function writePreference(identity: string, panel: CallbackPanelState): void {
       size: panel.size,
     };
     window.localStorage.setItem(
-      `${CALLBACK_STORAGE_PREFIX}${identity}`,
+      CALLBACK_PANEL_STORAGE_KEY,
       JSON.stringify(preference),
     );
   } catch {
@@ -305,10 +308,13 @@ export function WorkspaceCallbackList({
   onGlobalChange,
   globalCallbackBusy = false,
   onGlobalRefresh,
+  onSaveGroup,
+  onDeleteGroup,
   onReviewSession,
   onReviewMessage,
   onSelectSession,
 }: WorkspaceCallbackListProps) {
+  const { timeZone } = useDisplayTimeZone();
   const { bindings: shortcutBindings } = useShortcutSettings();
   const [desktop, setDesktop] = useState(desktopCallbackViewport);
   const headingId = useId();
@@ -325,37 +331,28 @@ export function WorkspaceCallbackList({
   const activeScope: CallbackScope = globalEnabled ? scope : "workspace";
   const workspaceIdentity = workspaceId ? `workspace:${workspaceId}` : `temporary:${temporaryKey}`;
   const identity = activeScope === "global" ? "global" : workspaceIdentity;
-  const savedViewPreferences = useMemo(() => readViewPreference(identity), [identity]);
-  const [viewStore, setViewStore] = useState<CallbackViewStore>(() => ({
-    identity, preferences: savedViewPreferences, query: "", moreFiltersOpen: false,
+  const [groupEditor, setGroupEditor] = useState<{ identity: string; groupId: string | null } | null>(null);
+  const [listView, setListView] = useState<CallbackListViewState>(() => ({
+    preferences: readViewPreference(identity), query: "", moreFiltersOpen: false,
   }));
-  const listView: CallbackViewStore = viewStore.identity === identity ? viewStore : {
-    identity, preferences: savedViewPreferences, query: "", moreFiltersOpen: false,
-  };
   useEffect(() => {
-    if (viewStore.identity !== identity) {
-      setViewStore({ identity, preferences: savedViewPreferences, query: "", moreFiltersOpen: false });
-    }
-  }, [identity, savedViewPreferences, viewStore.identity]);
-  useEffect(() => {
-    if (viewStore.identity !== identity) return;
     try {
-      window.localStorage.setItem(`${CALLBACK_VIEW_STORAGE_PREFIX}${identity}`, JSON.stringify(viewStore.preferences));
+      window.localStorage.setItem(CALLBACK_VIEW_STORAGE_KEY, JSON.stringify(listView.preferences));
     } catch {
       // Sorting and filtering still work without optional browser persistence.
     }
-  }, [identity, viewStore.identity, viewStore.preferences]);
+  }, [listView.preferences]);
   const changeViewPreference = (key: keyof CallbackListViewPreferences, value: string) => {
     const preferences = validateCallbackListViewPreferences({ ...listView.preferences, [key]: value });
     if (key !== "sort" && key !== "group") {
       preferences.collapsedGroups = preferences.collapsedGroups.filter((groupKey) => !groupKey.startsWith(`${preferences.group}:`));
     }
-    setViewStore({
+    setListView({
       ...listView,
       preferences,
     });
   };
-  const changeQuery = (query: string) => setViewStore({
+  const changeQuery = (query: string) => setListView({
     ...listView,
     query,
     preferences: {
@@ -363,7 +360,7 @@ export function WorkspaceCallbackList({
       collapsedGroups: listView.preferences.collapsedGroups.filter((key) => !key.startsWith(`${listView.preferences.group}:`)),
     },
   });
-  const resetFilters = () => setViewStore({
+  const resetFilters = () => setListView({
     ...listView,
     query: "",
     preferences: {
@@ -379,13 +376,9 @@ export function WorkspaceCallbackList({
       if (collapsed) next.add(key);
       else next.delete(key);
     }
-    setViewStore({ ...listView, preferences: { ...listView.preferences, collapsedGroups: [...next] } });
+    setListView({ ...listView, preferences: { ...listView.preferences, collapsedGroups: [...next] } });
   };
-  const initialStoreRef = useRef<CallbackPanelStore | null>(null);
-  if (initialStoreRef.current === null) {
-    initialStoreRef.current = { identity, panel: readPreference(identity) };
-  }
-  const [store, setStore] = useState<CallbackPanelStore>(initialStoreRef.current);
+  const [panel, updatePanel] = useState<CallbackPanelState>(() => readPreference(identity));
   const [busy, setBusy] = useState(false);
   const isBusy = busy || globalCallbackBusy;
   const [error, setError] = useState("");
@@ -412,24 +405,14 @@ export function WorkspaceCallbackList({
   }, []);
 
   useEffect(() => {
-    if (store.identity === identity) return;
-    setStore({ identity, panel: readPreference(identity) });
     setSelectedSession("");
     setError("");
-  }, [identity, store.identity]);
+  }, [identity]);
 
   useEffect(() => {
-    if (store.identity !== identity) return;
-    writePreference(identity, store.panel);
-  }, [identity, store]);
-
-  const active = store.identity === identity;
-  const panel = active ? store.panel : {
-    open: false,
-    pinned: false,
-    position: defaultPosition(),
-    size: defaultSize(),
-  };
+    writePreference(panel);
+  }, [panel]);
+  useEffect(() => setGroupEditor(null), [identity, panel.open]);
 
   useEffect(() => {
     if (!panel.open) setAppearanceOpen(false);
@@ -497,9 +480,7 @@ export function WorkspaceCallbackList({
       && !panel.pinned
       && panel.open
     ) {
-      setStore((current) => current.identity === identity
-        ? { ...current, panel: { ...current.panel, open: false, pinned: false } }
-        : current);
+      updatePanel((current) => ({ ...current, open: false, pinned: false }));
     }
     previousSessionRef.current = { identity, sessionName };
   }, [activeScope, identity, panel.open, panel.pinned, sessionName]);
@@ -510,19 +491,18 @@ export function WorkspaceCallbackList({
   }, []);
 
   useEffect(() => {
-    if (!active || !panel.open) return;
+    if (!panel.open) return;
     const keepVisible = () => {
-      setStore((current) => {
-        if (current.identity !== identity) return current;
-        const size = clampSize(current.panel.size, current.panel.position);
-        const position = clampPosition(current.panel.position, size);
+      updatePanel((current) => {
+        const size = clampSize(current.size, current.position);
+        const position = clampPosition(current.position, size);
         if (
-          size.width === current.panel.size.width
-          && size.height === current.panel.size.height
-          && position.x === current.panel.position.x
-          && position.y === current.panel.position.y
+          size.width === current.size.width
+          && size.height === current.size.height
+          && position.x === current.position.x
+          && position.y === current.position.y
         ) return current;
-        return { ...current, panel: { ...current.panel, position, size } };
+        return { ...current, position, size };
       });
     };
     window.addEventListener("resize", keepVisible);
@@ -531,13 +511,7 @@ export function WorkspaceCallbackList({
       window.removeEventListener("resize", keepVisible);
       window.visualViewport?.removeEventListener?.("resize", keepVisible);
     };
-  }, [active, identity, panel.open]);
-
-  const updatePanel = useCallback((updater: (current: CallbackPanelState) => CallbackPanelState) => {
-    setStore((current) => current.identity === identity
-      ? { ...current, panel: updater(current.panel) }
-      : current);
-  }, [identity]);
+  }, [panel.open]);
 
   useEffect(() => {
     if (desktop && panel.open) panelRef.current?.focus({ preventScroll: true });
@@ -549,7 +523,7 @@ export function WorkspaceCallbackList({
   };
 
   useEffect(() => {
-    if (!active || !desktop || !panel.open || typeof ResizeObserver !== "function") return;
+    if (!desktop || !panel.open || typeof ResizeObserver !== "function") return;
     const element = panelRef.current;
     if (!element) return;
     const observer = new ResizeObserver(() => {
@@ -572,7 +546,7 @@ export function WorkspaceCallbackList({
     });
     observer.observe(element, { box: "border-box" });
     return () => observer.disconnect();
-  }, [active, desktop, panel.open, updatePanel]);
+  }, [desktop, panel.open]);
 
   const persistCallbacks = useCallback(async (
     targetScope: CallbackScope,
@@ -760,16 +734,11 @@ export function WorkspaceCallbackList({
   const selectScope = useCallback((nextScope: CallbackScope) => {
     if (nextScope === activeScope || (nextScope === "global" && !globalEnabled)) return;
     writePreferredCallbackScope(nextScope);
-    const nextIdentity = nextScope === "global" ? "global" : workspaceIdentity;
     setScope(nextScope);
-    setStore({
-      identity: nextIdentity,
-      panel: { ...readPreference(nextIdentity), open: true },
-    });
     setSelectedSession("");
     setError("");
     if (nextScope === "global") onGlobalRefresh?.();
-  }, [activeScope, globalEnabled, onGlobalRefresh, workspaceIdentity]);
+  }, [activeScope, globalEnabled, onGlobalRefresh]);
 
   if (!desktop) return null;
 
@@ -800,7 +769,14 @@ export function WorkspaceCallbackList({
     };
   });
   const matchingEntries = filterAndSortCallbacks(entries, listView.preferences, listView.query);
-  const groups = groupCallbacks(matchingEntries, listView.preferences.group);
+  const groupWorkspaceId = activeScope === "global" ? null : workspaceId ?? null;
+  const customGroups = (globalCallbackSnapshot?.callbackGroups ?? [])
+    .filter((group) => group.workspaceId === groupWorkspaceId && (activeScope === "global" || Boolean(workspaceId)));
+  const customGroupRevision = globalCallbackSnapshot?.callbackGroupRevision;
+  const canEditGroups = customGroupRevision !== undefined && Boolean(onSaveGroup && onDeleteGroup)
+    && (activeScope === "global" || Boolean(workspaceId));
+  const editingGroup = canEditGroups && groupEditor?.identity === identity ? groupEditor : null;
+  const groups = groupCallbacks(matchingEntries, listView.preferences.group, customGroups);
   const grouped = listView.preferences.group !== "none";
   const collapsedGroups = new Set(listView.preferences.collapsedGroups);
   const expandedGroups = groups.filter((group) => !grouped || !collapsedGroups.has(group.key));
@@ -948,14 +924,9 @@ export function WorkspaceCallbackList({
             <span>{timingLabel}</span>
             <time
               dateTime={timingDate.toISOString()}
-              title={`${timingLabel === "Ready since" ? "Ready observed" : timingLabel}: ${timingDate.toLocaleString(undefined, {
-                year: "numeric", month: "long", day: "numeric",
-                hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
-              })}`}
+              title={`${timingLabel === "Ready since" ? "Ready observed" : timingLabel}: ${formatTimestamp(timingDate, timeZone, FULL_TIMESTAMP_FORMAT)}`}
             >
-              {timingDate.toLocaleString(undefined, {
-                month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-              })}
+              {formatTimestamp(timingDate, timeZone, SHORT_TIMESTAMP_FORMAT)}
             </time>
           </div>
         )}
@@ -965,8 +936,11 @@ export function WorkspaceCallbackList({
               <article className="workspace-callback-message" key={message.id}>
                 <div className="workspace-callback-message-meta">
                   <strong>{message.agentType}</strong>
-                  <time dateTime={new Date(message.createdAt * 1000).toISOString()}>
-                    {new Date(message.createdAt * 1000).toLocaleString()}
+                  <time
+                    dateTime={new Date(message.createdAt * 1000).toISOString()}
+                    title={formatTimestamp(message.createdAt * 1000, timeZone, FULL_TIMESTAMP_FORMAT)}
+                  >
+                    {formatTimestamp(message.createdAt * 1000, timeZone)}
                   </time>
                   <button
                     type="button"
@@ -1125,6 +1099,13 @@ export function WorkspaceCallbackList({
             ))}
           </div>
         )}
+        {editingGroup && onSaveGroup && onDeleteGroup && customGroupRevision !== undefined ? (
+          <CallbackGroupEditor key={`${identity}:${editingGroup.groupId ?? "new"}`}
+            groupId={editingGroup.groupId} workspaceId={groupWorkspaceId}
+            groups={customGroups} revision={customGroupRevision} entries={entries}
+            onSave={onSaveGroup} onDelete={onDeleteGroup}
+            onClose={() => setGroupEditor((current) => current === editingGroup ? null : current)} />
+        ) : <>
         <p className="workspace-callback-scope-description">{scopeDescription}</p>
         <div className="workspace-callback-add" role="group" aria-label="Add a session to the callback list">
           <select
@@ -1168,6 +1149,7 @@ export function WorkspaceCallbackList({
           </div>
         )}
         <div className="workspace-callback-view-controls" role="group" aria-label="Callback sorting and filters">
+          <TimeZoneSelect compact />
           <div className="workspace-callback-view-search-row">
             <input
               type="search"
@@ -1202,12 +1184,29 @@ export function WorkspaceCallbackList({
               </select>
             </label>
           </div>
+          {listView.preferences.group === "custom" && (
+            canEditGroups ? <div className="workspace-callback-custom-tools">
+              <button type="button" onClick={() => setGroupEditor({ identity, groupId: null })}>New group</button>
+              {customGroups.length > 0 && <label className="workspace-callback-view-field">
+                <span>Edit</span>
+                <select aria-label="Edit custom callback group" value=""
+                  onChange={(event) => { if (event.target.value) setGroupEditor({ identity, groupId: event.target.value }); }}>
+                  <option value="">Choose group…</option>
+                  {customGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+              </label>}
+            </div> : <p className="workspace-callback-custom-hint">
+              {activeScope === "workspace" && !workspaceId
+                ? "Save this workspace to share custom groups, or create them in Global."
+                : "Custom groups are unavailable until the server supports them and finishes loading."}
+            </p>
+          )}
           <div className="workspace-callback-view-meta">
             <span role="status">{displayedEntries.length} of {entries.length} shown</span>
             {collapsedCount > 0 && <span>{collapsedCount} collapsed</span>}
             <button type="button" aria-label="More callback filters" aria-expanded={listView.moreFiltersOpen}
               aria-controls={`${panelId}-filters`}
-              onClick={() => setViewStore({ ...listView, moreFiltersOpen: !listView.moreFiltersOpen })}>
+              onClick={() => setListView({ ...listView, moreFiltersOpen: !listView.moreFiltersOpen })}>
               {listView.moreFiltersOpen ? "Fewer filters" : "More filters"}{extraFilterCount > 0 ? ` (${extraFilterCount})` : ""}
             </button>
             {filtersActive && <button type="button" aria-label="Reset callback filters" onClick={resetFilters}>Reset</button>}
@@ -1318,6 +1317,7 @@ export function WorkspaceCallbackList({
             )}
           </div>
         </footer>
+        </>}
       </div>
     </section>
   ) : null;

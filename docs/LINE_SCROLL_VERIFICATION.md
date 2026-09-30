@@ -16,9 +16,11 @@ Desktop and mobile highlight the matching page and fine-scroll family. Recommend
 are application scrolling for Claude, Codex, Copilot, and Grok; tmux for Cursor,
 shells, and other programs. Clicks do not change the highlight or the recommended
 paging shortcuts, and older browser preferences learned from clicks are ignored.
-All eight controls are always shown. App fine controls are enabled for Claude,
-Codex, Copilot, and Grok; for other agents they remain visible but disabled with an
-explanation. Tmux line controls remain available for every kind.
+All eight controls are shown and enabled for every kind while connected. The
+recommendation never disables the other family. App fine controls use the
+verified agent-specific profiles below or a generic plain-wheel profile for
+Cursor, shells, and other programs. Generic wheel delivery requires
+mouse reporting; a rejected request shows feedback and allows another attempt.
 
 Switching from tmux to App scrolling exits tmux copy mode and resumes the
 application's own position. It does not translate a tmux offset into an
@@ -37,8 +39,8 @@ editor shortcut precedes the wheel event.
 | GitHub Copilot CLI 1.0.80 | Alt+SGR wheel: buttons `72` up and `73` down. Wheel and PgUp/PgDn call the same transcript offset callback. | Alt selects exactly one row; ordinary wheel selects three. The callback checks transcript horizontal bounds, including its left sidebar. |
 | Grok CLI 1.0.40 | Plain SGR wheel: buttons `64` up and `65` down. Continues from native PgUp/PgDn while leaving the draft intact. | Default tmux profile is one row per event. `scroll_lines`, `scroll_speed`, and `invert_scroll` apply. Alt does not override those settings. |
 | Codex CLI 0.157.1 | Plain SGR wheel at column 1, row 2, delivered directly to its verified full-screen pane. Continues the same PgUp/PgDn position even with tmux mouse reporting off. | Each wheel step moves three rows. Inline output rejects App requests: use tmux Page/Line or open Codex's Ctrl+T transcript. Inline mode's Ctrl+T pager supports exact one-row Up/k and Down/j; main-view arrows can edit the prompt. |
-| Cursor Agent 2026.08.31-4057e58 | Keep the tmux family for the main conversation, which uses Ink Static output. | No native main-conversation wheel/page handler was found. PgUp/PgDn are no-ops in the main input handler. Native line navigation exists in separate diff/list pagers; main-input arrows and control keys edit drafts or recall history. |
-| Shells and other applications | Keep the tmux family. | No application-specific scroll binding is assumed. |
+| Cursor Agent 2026.08.31-4057e58 | Tmux is recommended for the main conversation, which uses Ink Static output; native controls remain enabled. | No native main-conversation wheel/page handler was found. PgUp/PgDn are no-ops in the main input handler. Native line navigation exists in separate diff/list pagers; main-input arrows and control keys edit drafts or recall history. |
+| Shells and other applications | Tmux is recommended; native page and plain-wheel controls remain enabled. | Wheel delivery requires mouse reporting. No application-specific keyboard binding is assumed. |
 
 Native wheel input follows the application's current view. A modal, expanded
 input, or another scrollable view can consume or suppress it, just as it can
@@ -54,8 +56,8 @@ Line Down runs `send-keys -X scroll-down` only in copy mode; at live output it
 is a no-op. These mode commands avoid an initial page jump, work with vi/emacs
 key bindings, and do not send bytes to application stdin.
 
-App actions use an acknowledged WebSocket request with an allowed agent
-profile. The backend resolves the attached client's actual active pane,
+App actions use an acknowledged WebSocket request with an allowed delivery
+profile, including generic `wheel`. The backend resolves the attached client's actual active pane,
 including clients with an independent active pane. Before dispatch it checks
 client/session identity, pane liveness, input permission, mouse reporting
 (`mouse_any_flag`), SGR encoding (`mouse_sgr_flag`), and an empty or copy-mode

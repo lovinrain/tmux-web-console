@@ -234,6 +234,26 @@ describe("callback list view", () => {
 });
 
 describe("callback list grouping", () => {
+  it("groups hand-picked callbacks once, leaving the rest ungrouped and keeping the chosen sort", () => {
+    const entries = [entry("a"), entry("b"), entry("c"), entry("outside")];
+    const custom = [
+      { id: "release", name: "Release", workspaceId: null, sessions: ["c", "a"] },
+      { id: "second", name: "Second", workspaceId: null, sessions: ["a", "b"] },
+      { id: "empty", name: "Later", workspaceId: null, sessions: ["not-queued"] },
+    ];
+    const groups = groupCallbacks(entries, "custom", custom);
+    expect(groups.map((group) => [group.key, group.label, group.entries.map((item) => item.name)]))
+      .toEqual([
+        ["custom:id:release", "Release", ["a", "c"]],
+        ["custom:id:second", "Second", ["b"]],
+        ["custom:ungrouped", "Ungrouped", ["outside"]],
+      ]);
+    expect(groupCallbacks([entries[1]], "custom", custom).map((group) => group.key)).toEqual(["custom:id:second"]);
+    expect(groupCallbacks(entries, "custom")).toEqual([{ key: "custom:ungrouped", label: "Ungrouped", entries }]);
+    expect(custom[0].sessions).toEqual(["c", "a"]);
+    const renamed = custom.map((group) => ({ ...group, name: `Renamed ${group.name}` }));
+    expect(groupCallbacks(entries, "custom", renamed).map((group) => group.key)).toEqual(groups.map((group) => group.key));
+  });
   it("keeps an ungrouped list in order and emits no empty groups", () => {
     const entries = Object.freeze([entry("z"), entry("a")]);
     const groups = groupCallbacks(entries, "none");
@@ -396,6 +416,13 @@ describe("callback list view preferences", () => {
     expect(parseCallbackListViewPreferences(JSON.stringify(preferences))).toEqual(preferences);
     expect(validateCallbackListViewPreferences({ group: "future-group" }))
       .toEqual(DEFAULT_CALLBACK_LIST_VIEW);
+  });
+
+  it("keeps custom collapse state locally while excluding shared group definitions from browser preferences", () => {
+    expect(validateCallbackListViewPreferences({
+      group: "custom", collapsedGroups: ["custom:id:release", "custom:ungrouped", "custom:id:", "custom:bad"],
+      customGroups: [{ id: "private", sessions: ["a"] }],
+    })).toEqual({ ...DEFAULT_CALLBACK_LIST_VIEW, group: "custom", collapsedGroups: ["custom:id:release", "custom:ungrouped"] });
   });
 
   it("drops invalid collapse values and deduplicates keys without retaining the stored array", () => {

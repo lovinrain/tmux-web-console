@@ -228,6 +228,8 @@ async def test_application_scroll_validates_profiles_and_reports_guard_rejection
             ("codex", "down", "applicationScrollNack"),
             ("grok", "up", "applicationScrollAck"),
             ("grok", "down", "applicationScrollNack"),
+            ("wheel", "up", "applicationScrollAck"),
+            ("wheel", "down", "applicationScrollNack"),
             ("shell", "up", "applicationScrollNack"),
             (["claude"], "up", "applicationScrollNack"),
             ("claude", ["up"], "applicationScrollNack"),
@@ -252,6 +254,8 @@ async def test_application_scroll_validates_profiles_and_reports_guard_rejection
             (4321, "$1", "up", "claude"),
             (4321, "$1", "up", "codex"),
             (4321, "$1", "down", "codex"),
+            (4321, "$1", "up", "wheel"),
+            (4321, "$1", "down", "wheel"),
             (4321, "$1", "up", "wheel"),
             (4321, "$1", "down", "wheel"),
         ]

@@ -1,0 +1,60 @@
+.time-zone-select {
+  display: grid;
+  min-width: 0;
+  width: 180px;
+  max-width: 100%;
+  flex-shrink: 0;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.time-zone-select select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 6px;
+  color: var(--paper);
+  background: var(--ink-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.time-zone-select select:focus-visible {
+  outline: 2px solid var(--acid);
+  outline-offset: 1px;
+}
+
+.time-zone-select-compact {
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.time-zone-select-compact select {
+  min-height: 28px;
+}
+
+.dashboard-header-tools:has(.time-zone-select) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .dashboard-header:has(.time-zone-select) {
+    flex-wrap: wrap;
+  }
+
+  .dashboard-header-tools:has(.time-zone-select) {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .time-zone-select select {
+    min-height: 40px;
+  }
+}

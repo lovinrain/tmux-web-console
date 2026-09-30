@@ -48,6 +48,8 @@ def callback_snapshot(store):
         "callbackMessages": [],
         "latestCallbackAtBySession": {},
         "callbackMessageRevision": 0,
+        "callbackGroups": [],
+        "callbackGroupRevision": 0,
     }
 
 

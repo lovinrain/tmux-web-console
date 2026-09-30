@@ -1,4 +1,4 @@
-import type { CallbackMessage } from "./api";
+import type { CallbackCustomGroup, CallbackMessage } from "./api";
 import { paneCommandKind, type SessionKind } from "./sessionDashboardModel";
 import type { Session } from "./types";
 
@@ -38,6 +38,7 @@ export const CALLBACK_GROUP_OPTIONS = [
   { value: "status", label: "Status" },
   { value: "agent", label: "Agent" },
   { value: "workspace", label: "Workspace" },
+  { value: "custom", label: "Custom" },
 ] as const;
 
 export const CALLBACK_STATUS_OPTIONS = [
@@ -173,7 +174,7 @@ function optionValue<T extends string>(
 
 function validCollapsedGroupKey(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 2048 || /[\u0000-\u001f\u007f]/u.test(value)) return false;
-  return /^(status:(ready|working|waiting|unknown|ended)|agent:(claude|codex|copilot|cursor|grok|shells|multiple|other)|workspace:(multiple|global|(id|name):.+))$/u.test(value);
+  return /^(status:(ready|working|waiting|unknown|ended)|agent:(claude|codex|copilot|cursor|grok|shells|multiple|other)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
 }
 
 export function validateCallbackListViewPreferences(value: unknown): CallbackListViewPreferences {
@@ -275,9 +276,24 @@ function workspaceGroup(entry: CallbackListEntry): Omit<CallbackListGroup, "entr
 export function groupCallbacks(
   entries: readonly CallbackListEntry[],
   group: CallbackListGroupBy,
+  customGroups: readonly CallbackCustomGroup[] = [],
 ): CallbackListGroup[] {
   if (entries.length === 0) return [];
   if (group === "none") return [{ key: "none", label: "All callbacks", entries: [...entries] }];
+  if (group === "custom") {
+    const assigned = new Set<string>();
+    const result: CallbackListGroup[] = [];
+    for (const custom of customGroups) {
+      const names = new Set(custom.sessions);
+      const members = entries.filter((entry) => names.has(entry.name) && !assigned.has(entry.name));
+      if (members.length === 0) continue;
+      members.forEach((entry) => assigned.add(entry.name));
+      result.push({ key: `custom:id:${custom.id}`, label: custom.name, entries: members });
+    }
+    const ungrouped = entries.filter((entry) => !assigned.has(entry.name));
+    if (ungrouped.length > 0) result.push({ key: "custom:ungrouped", label: "Ungrouped", entries: ungrouped });
+    return result;
+  }
 
   const definitions = group === "status" ? STATUS_GROUPS : group === "agent" ? AGENT_GROUPS : [];
   const groups = new Map<string, CallbackListGroup>();

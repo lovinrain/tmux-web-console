@@ -1,10 +1,12 @@
 import type { SessionKind } from "./sessionDashboardModel";
 
 export type AgentScrollMode = "application" | "tmux";
-export type ApplicationScrollProfile = "claude" | "codex" | "copilot" | "grok";
+export type ApplicationScrollProfile = "claude" | "codex" | "copilot" | "grok" | "wheel";
 
-export function applicationScrollProfile(kind: SessionKind): ApplicationScrollProfile | null {
-  return kind === "claude" || kind === "codex" || kind === "copilot" || kind === "grok" ? kind : null;
+export function applicationScrollProfile(kind: SessionKind): ApplicationScrollProfile {
+  // Agent-specific tuning is optional; every other application can receive a
+  // plain wheel step when its active pane has enabled mouse reporting.
+  return kind === "claude" || kind === "codex" || kind === "copilot" || kind === "grok" ? kind : "wheel";
 }
 
 const AGENT_SCROLL_MODE: Readonly<Record<SessionKind, AgentScrollMode>> = {

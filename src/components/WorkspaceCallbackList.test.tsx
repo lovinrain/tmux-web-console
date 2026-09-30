@@ -1,9 +1,14 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithTheme } from "../test-utils";
+import { ThemeProvider } from "../theme";
 import type { CallbackMessage } from "../api";
 import type { Session } from "../types";
-import { WorkspaceCallbackList } from "./WorkspaceCallbackList";
+import {
+  CALLBACK_PANEL_STORAGE_KEY,
+  CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY,
+  WorkspaceCallbackList,
+} from "./WorkspaceCallbackList";
 
 function desktopMediaQuery(matches = true) {
   return vi.fn(() => ({
@@ -262,49 +267,59 @@ describe("WorkspaceCallbackList", () => {
     expect(screen.getByRole("button", { name: "Hide callback list" })).toHaveTextContent("PIN");
   });
 
-  it("restores panel state by workspace without writing the previous workspace state", async () => {
-    window.localStorage.setItem(
-      "muxdeck.workspace-callback-panel.v1:workspace:workspace-one",
-      JSON.stringify({
-        open: true,
-        pinned: true,
-        position: { x: 100, y: 110 },
-        size: { width: 350, height: 360 },
-      }),
-    );
-    const workspaceTwoPreference = {
+  it("adopts the selected scope's old layout and shares changes across scopes, workspaces, and remounts", () => {
+    const workspaceKey = "muxdeck.workspace-callback-panel.v1:workspace:workspace-one";
+    const preference = {
+      open: true,
+      pinned: true,
+      position: { x: 100, y: 110 },
+      size: { width: 350, height: 360 },
+    };
+    window.localStorage.setItem(workspaceKey, JSON.stringify(preference));
+    window.localStorage.setItem("muxdeck.workspace-callback-panel.v1:global", JSON.stringify({
       open: true,
       pinned: false,
       position: { x: 40, y: 50 },
       size: { width: 330, height: 340 },
+    }));
+    window.localStorage.setItem(CALLBACK_SCOPE_PREFERENCE_STORAGE_KEY, "workspace");
+    const props = {
+      sessionName: "agent-one",
+      workspaceId: "workspace-one",
+      sessions: [session("agent-one"), session("agent-two")],
+      callbackSessions: ["agent-one"],
+      onChange: vi.fn(async () => undefined),
+      onGlobalChange: vi.fn(async () => undefined),
+      onSelectSession: vi.fn(),
     };
-    window.localStorage.setItem(
-      "muxdeck.workspace-callback-panel.v1:workspace:workspace-two",
-      JSON.stringify(workspaceTwoPreference),
-    );
-    const view = renderList(["agent-one"]);
-    expect(screen.getByRole("dialog", { name: "Callback list" })).toHaveStyle({
-      left: "100px",
-      top: "110px",
-    });
+    const view = renderWithTheme(<WorkspaceCallbackList {...props} />);
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    expect(panel).toHaveAttribute("data-scope", "workspace");
+    expect(panel).toHaveStyle({ left: "100px", top: "110px", width: "350px", height: "360px" });
+    fireEvent.keyDown(screen.getByLabelText("Move callback list window"), { key: "ArrowDown", shiftKey: true });
+    const movedStyle = { left: "100px", top: "142px", width: "350px", height: "360px" };
 
-    view.rerender(
-      <WorkspaceCallbackList
-        sessionName="agent-two"
-        workspaceId="workspace-two"
-        workspaceName="Second room"
-        sessions={[session("agent-one"), session("agent-two")]}
-        callbackSessions={["agent-two"]}
-        onChange={vi.fn(async () => undefined)}
-        onSelectSession={vi.fn()}
-      />,
-    );
+    fireEvent.click(within(panel).getByRole("button", { name: "Global callback scope" }));
+    expect(screen.getByRole("dialog", { name: "Callback list" })).toBe(panel);
+    expect(panel).toHaveAttribute("data-scope", "global");
+    expect(panel).toHaveAttribute("data-pinned", "true");
+    expect(panel).toHaveStyle(movedStyle);
+    fireEvent.click(within(panel).getByRole("button", { name: "Workspace callback scope" }));
+    expect(panel).toHaveStyle(movedStyle);
 
-    await waitFor(() => expect(screen.getByRole("dialog", { name: "Callback list" }))
-      .toHaveStyle({ left: "40px", top: "50px" }));
-    expect(JSON.parse(window.localStorage.getItem(
-      "muxdeck.workspace-callback-panel.v1:workspace:workspace-two",
-    ) || "null")).toEqual(workspaceTwoPreference);
+    const nextProps = { ...props, sessionName: "agent-two", workspaceId: "workspace-two" };
+    view.rerender(<ThemeProvider><WorkspaceCallbackList {...nextProps} /></ThemeProvider>);
+    expect(screen.getByRole("dialog", { name: "Callback list" })).toBe(panel);
+    expect(panel).toHaveStyle(movedStyle);
+    expect(JSON.parse(window.localStorage.getItem(CALLBACK_PANEL_STORAGE_KEY)!))
+      .toEqual({ ...preference, position: { x: 100, y: 142 } });
+    expect(JSON.parse(window.localStorage.getItem(workspaceKey)!)).toEqual(preference);
+
+    view.unmount();
+    renderWithTheme(<WorkspaceCallbackList {...nextProps} />);
+    const restored = screen.getByRole("dialog", { name: "Callback list" });
+    expect(restored).toHaveAttribute("data-pinned", "true");
+    expect(restored).toHaveStyle(movedStyle);
   });
 
   it("persists the border-box size after native panel resizing", async () => {
@@ -331,9 +346,7 @@ describe("WorkspaceCallbackList", () => {
     });
 
     await waitFor(() => {
-      const stored = JSON.parse(window.localStorage.getItem(
-        "muxdeck.workspace-callback-panel.v1:workspace:workspace-one",
-      ) || "null");
+      const stored = JSON.parse(window.localStorage.getItem(CALLBACK_PANEL_STORAGE_KEY) || "null");
       expect(stored?.size).toEqual({ width: 342, height: 378 });
     });
     expect(disconnect).not.toHaveBeenCalled();
@@ -614,11 +627,13 @@ describe("WorkspaceCallbackList", () => {
     const date = new Date(latest.createdAt * 1000);
     expect(timing()).toHaveAttribute("datetime", date.toISOString());
     expect(timing()).toHaveTextContent(date.toLocaleString(undefined, {
-      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+      timeZone: "America/Los_Angeles",
     }));
     expect(timing().title).toContain(date.toLocaleString(undefined, {
       year: "numeric", month: "long", day: "numeric",
       hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+      timeZone: "America/Los_Angeles",
     }));
     for (const remainingMessages of [[older], []]) {
       view.rerender(<WorkspaceCallbackList {...props} globalCallbackSnapshot={{
@@ -653,6 +668,47 @@ describe("WorkspaceCallbackList", () => {
       session("agent-one", "working"), ...otherSessions,
     ]} />);
     expect(screen.queryByText("Ready since")).not.toBeInTheDocument();
+  });
+
+  it("changes callback and ready displays together without changing timestamps, ordering, or the queue", () => {
+    const createdAt = Date.parse("2026-01-01T00:30:00Z") / 1000;
+    const message = { ...callbackMessage("time-zone", "agent-one", "Review this callback"), createdAt };
+    const onChange = vi.fn(async () => undefined);
+    const onGlobalChange = vi.fn(async () => undefined);
+    renderWithTheme(<WorkspaceCallbackList
+      sessionName="agent-one" workspaceId="workspace-one"
+      sessions={[session("agent-one"), { ...session("agent-two"), agentStateChangedAt: createdAt + 60 }]}
+      callbackSessions={["agent-one", "agent-two"]}
+      globalCallbackSnapshot={{
+        callbackSessions: ["agent-one", "agent-two"], globalCallbackSessions: ["agent-one", "agent-two"],
+        workspaceCallbacks: [], sessionRevision: 0, callbackMessageRevision: 1, callbackMessages: [message],
+      }}
+      onChange={onChange} onGlobalChange={onGlobalChange} onSelectSession={vi.fn()}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort callbacks" }), { target: { value: "callback-newest" } });
+    const panel = screen.getByRole("dialog", { name: "Callback list" });
+    const callback = panel.querySelector(".workspace-callback-timing time")!;
+    const receipt = panel.querySelector(".workspace-callback-message-meta time")!;
+    const ready = screen.getByText("Ready since").parentElement!.querySelector("time")!;
+    const utcAttributes = [...panel.querySelectorAll("time")].map((time) => time.dateTime);
+    const rowOrder = () => [...panel.querySelectorAll(".workspace-callback-session strong")].map((row) => row.textContent);
+    const order = rowOrder();
+    expect(callback).toHaveTextContent("Dec 31, 4:30 PM PST");
+    expect(receipt).toHaveTextContent("Dec 31, 2025, 4:30 PM PST");
+    expect(ready).toHaveTextContent("Dec 31, 4:31 PM PST");
+    fireEvent.change(screen.getByRole("combobox", { name: "Display time zone" }), { target: { value: "UTC" } });
+    expect(callback).toHaveTextContent("Jan 1, 12:30 AM UTC");
+    expect(receipt).toHaveTextContent("Jan 1, 2026, 12:30 AM UTC");
+    expect(ready).toHaveTextContent("Jan 1, 12:31 AM UTC");
+    expect(callback).toHaveAttribute("title", "Latest callback: January 1, 2026 at 12:30:00 AM UTC");
+    expect([...panel.querySelectorAll("time")].map((time) => time.dateTime)).toEqual(utcAttributes);
+    expect(rowOrder()).toEqual(order);
+    fireEvent.click(screen.getByRole("button", { name: "Workspace callback scope" }));
+    expect(screen.getByRole("combobox", { name: "Display time zone" })).toHaveValue("UTC");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onGlobalChange).not.toHaveBeenCalled();
+    expect(message.createdAt).toBe(createdAt);
   });
 
   it("lets the reader expand a long message without losing the full text or line breaks", () => {

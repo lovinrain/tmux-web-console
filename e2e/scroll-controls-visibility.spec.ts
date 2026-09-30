@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, expect } from "@playwright/test";
@@ -13,22 +13,42 @@ const tmux = ["-L", socket];
 const session = `muxdeck-visible-controls-${process.pid}`;
 const codexSession = `${session}-codex`;
 const directory = mkdtempSync(join(tmpdir(), "muxdeck-controls-"));
+const codexInputPath = join(directory, "codex-input.bin");
 let paneId = "";
+let codexPaneId = "";
 
 test.beforeAll(() => {
-  const script = join(directory, "claude_layout_fixture.py");
-  writeFileSync(script, `import ctypes, sys, time
+  const script = join(directory, "scroll_controls_fixture.py");
+  writeFileSync(codexInputPath, "");
+  // The Codex-named fixture records native input; it is not a real agent.
+  writeFileSync(script, `import ctypes, os, select, sys, time, tty
 assert ctypes.CDLL(None).prctl(15, sys.argv[1].encode(), 0, 0, 0) == 0
 print("Passive " + sys.argv[1] + " layout fixture", flush=True)
-time.sleep(180)
+if sys.argv[1] == "codex":
+    for row in range(100):
+        print("Disposable scroll fixture row " + str(row))
+    print("DRAFT_SENTINEL_12345", flush=True)
+    tty.setraw(0)
+    os.write(1, b"\\x1b[?1049h")
+    deadline = time.monotonic() + 180
+    with open(sys.argv[2], "ab", buffering=0) as recorded:
+        while time.monotonic() < deadline:
+            if select.select([0], [], [], 0.5)[0]:
+                data = os.read(0, 4096)
+                if not data:
+                    break
+                recorded.write(data)
+else:
+    time.sleep(180)
 `);
   for (const [kind, name] of [["claude", session], ["codex", codexSession]]) {
     execFileSync("tmux", [
       ...tmux, "new-session", "-d", "-s", name,
-      "bash", "--noprofile", "--norc", "-c", 'exec -a "$1" python3 "$2" "$1"', "fixture", kind, script,
+      "bash", "--noprofile", "--norc", "-c", 'exec -a "$1" python3 "$2" "$1" "$3"', "fixture", kind, script, codexInputPath,
     ]);
   }
   paneId = execFileSync("tmux", [...tmux, "list-panes", "-t", `=${session}`, "-F", "#{pane_id}"], { encoding: "utf8" }).trim();
+  codexPaneId = execFileSync("tmux", [...tmux, "list-panes", "-t", `=${codexSession}`, "-F", "#{pane_id}"], { encoding: "utf8" }).trim();
 });
 
 test.afterAll(() => {
@@ -110,7 +130,13 @@ for (const viewport of [
 }
 
 for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
-  test(`all eight scrolling buttons stay visible in Codex at ${viewport.width}px`, async ({ context, page }) => {
+  test(`all eight scrolling buttons stay enabled and deliver native input in Codex at ${viewport.width}px`, async ({ context, page }) => {
+    const frames: { type?: string; profile?: string; direction?: string }[] = [];
+    page.on("websocket", (websocket) => websocket.on("framesent", ({ payload }) => {
+      try { frames.push(JSON.parse(payload.toString())); } catch { /* raw terminal input */ }
+    }));
+    const input = () => readFileSync(codexInputPath, "utf8");
+    const mode = () => execFileSync("tmux", [...tmux, "display-message", "-p", "-t", codexPaneId, "#{pane_in_mode}"], { encoding: "utf8" }).trim();
     expect((await context.request.post("/mux/api/auth/login", {
       data: { username: E2E_AUTH_USERNAME, password: E2E_AUTH_PASSWORD },
     })).ok()).toBe(true);
@@ -118,6 +144,7 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
     await page.setViewportSize(viewport);
     await page.goto(`/mux/session/${codexSession}?tab=${codexSession}`);
     await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "codex");
+    await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-mode", "application");
     await expect(page.locator(".connection-badge")).toContainText("Live");
     const mobile = viewport.width <= 640;
     const strip = mobile
@@ -126,14 +153,44 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
     await expect(strip.locator(".scroll-control-icons")).toHaveCount(8);
     for (const name of ["Tmux Page Up", "Tmux Page Down", "Tmux Line Up", "Tmux Line Down", mobile ? "Raw terminal Page Up" : "PgUp", mobile ? "Raw terminal Page Down" : "PgDn", "Application Scroll Up", "Application Scroll Down"]) {
       await expect(strip.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+      await expect(strip.getByRole("button", { name, exact: true })).toBeEnabled();
     }
     for (const name of ["Application Scroll Up", "Application Scroll Down"]) {
       const button = strip.getByRole("button", { name });
-      await expect(button).toBeEnabled();
       await expect(button).toHaveAttribute("title", /three rows/);
       await expect(button).toHaveAttribute("data-scroll-preferred", "true");
     }
     await expect(strip.getByRole("button", { name: "Tmux Line Up" })).not.toHaveAttribute("data-scroll-preferred", "true");
+    for (const [name, sequence] of [
+      [mobile ? "Raw terminal Page Up" : "PgUp", "\x1b[5~"],
+      [mobile ? "Raw terminal Page Down" : "PgDn", "\x1b[6~"],
+    ]) {
+      const before = input().length;
+      await strip.getByRole("button", { name, exact: true }).click();
+      await expect.poll(() => input().slice(before)).toContain(sequence);
+      expect(mode()).toBe("0");
+    }
+    if (!mobile) {
+      const before = input().length;
+      await page.keyboard.press("Control+Shift+U");
+      await expect.poll(() => input().slice(before)).toContain("\x1b[5~");
+      expect(mode()).toBe("0");
+    }
+    for (const [direction, buttonCode] of [["Up", 64], ["Down", 65]] as const) {
+      const before = input().length;
+      const button = strip.getByRole("button", { name: `Application Scroll ${direction}` });
+      await button.click();
+      await expect.poll(() => input().slice(before)).toMatch(new RegExp(`\\x1b\\[<${buttonCode};[0-9]+;[0-9]+M`));
+      await expect(button).toBeEnabled();
+      expect(mode()).toBe("0");
+    }
+    await strip.getByRole("button", { name: "Tmux Line Up" }).click();
+    await expect.poll(mode).toBe("1");
+    await strip.getByRole("button", { name: "Application Scroll Up" }).click();
+    await expect.poll(mode).toBe("0");
+    await expect(strip.getByRole("button", { name: "Application Scroll Up" })).toBeEnabled();
+    expect(frames.filter((frame) => frame.type === "applicationScroll").map(({ profile, direction }) => ({ profile, direction })))
+      .toEqual([{ profile: "codex", direction: "up" }, { profile: "codex", direction: "down" }, { profile: "codex", direction: "up" }]);
     await page.screenshot({ path: `artifacts/all-eight-controls-codex-${viewport.width}.png`, animations: "disabled" });
   });
 }

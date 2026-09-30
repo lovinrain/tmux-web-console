@@ -4,6 +4,7 @@ import {
   ApiRequestError,
   createQueuedMessage,
   copySession,
+  recordSessionView,
   createSession,
   createWorkspace,
   deleteQueuedMessage,
@@ -466,7 +467,7 @@ describe("session creation API", () => {
     }), { status: 201, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(copySession("work/name #1", "$7", "light")).resolves.toEqual({
+    await expect(copySession("work/name #1", "$7", "light", "child")).resolves.toEqual({
       name: "work/name #1_2",
       id: "$18",
     });
@@ -474,10 +475,19 @@ describe("session creation API", () => {
       `${BASE_PATH}/api/sessions/work%2Fname%20%231/copy`,
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ sessionId: "$7", theme: "light" }),
+        body: JSON.stringify({ sessionId: "$7", placement: "child", theme: "light" }),
       }),
     );
   });
+});
+
+it("records browser-view activity against the full native session identity", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetchMock);
+  await recordSessionView({ name: "work/name", id: "$7", created: 100, serverStarted: 90, serverPid: 42 } as Parameters<typeof recordSessionView>[0], "fork");
+  expect(fetchMock).toHaveBeenCalledWith(`${BASE_PATH}/api/sessions/work%2Fname/view-events`, expect.objectContaining({
+    method: "POST", body: JSON.stringify({ sessionId: "$7", sessionCreated: 100, serverStarted: 90, serverPid: 42, kind: "fork" }),
+  }));
 });
 
 describe("session attachment upload API", () => {

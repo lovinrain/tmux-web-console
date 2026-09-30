@@ -16,6 +16,23 @@ function snapshot(overrides: Partial<GlobalCallbackSnapshot> = {}): GlobalCallba
 }
 
 describe("mergeCallbackSnapshot", () => {
+  it("merges shared groups independently and never resurrects a group deleted by a newer revision", () => {
+    const group = { id: "release", name: "Release", workspaceId: null, sessions: ["agent"] };
+    const current = snapshot({ callbackGroupRevision: 3, callbackGroups: [], callbackMessageRevision: 2 });
+    const incoming = snapshot({ sessionRevision: 11, callbackGroupRevision: 2, callbackGroups: [group] });
+    const merged = mergeCallbackSnapshot(current, incoming);
+    expect(merged.callbackGroups).toEqual([]);
+    expect(merged.callbackGroupRevision).toBe(3);
+    expect(merged.sessionRevision).toBe(11);
+    expect(merged.callbackMessageRevision).toBe(2);
+    const newerGroup = mergeCallbackSnapshot(merged, snapshot({
+      sessionRevision: 9, callbackGroupRevision: 4, callbackGroups: [group], callbackMessageRevision: 1,
+    }));
+    expect(newerGroup.callbackGroups).toEqual([group]);
+    expect(newerGroup.callbackGroupRevision).toBe(4);
+    expect(newerGroup.sessionRevision).toBe(11);
+    expect(mergeCallbackSnapshot(newerGroup, snapshot()).callbackGroups).toEqual([group]);
+  });
   it("accepts new messages from a response with older session membership", () => {
     const result = mergeCallbackSnapshot(
       snapshot({ globalCallbackSessions: ["manual"], callbackSessions: ["manual"] }),

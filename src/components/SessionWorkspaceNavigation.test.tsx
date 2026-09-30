@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps } from "react";
 import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
-import { moveWorkspaceSession, moveWorkspaceSessions } from "../workspaceState";
+import { moveWorkspaceSession, moveWorkspaceSessions, reparentWorkspaceSession, type SessionWorkspaceState } from "../workspaceState";
 import { WORKSPACE_SESSION_DRAG_TYPE } from "../workspaceSessionDrag";
 import {
   PANE_NAVIGATION_ACTION,
@@ -550,30 +550,30 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.getByRole("dialog", { name: "Edit Review lane" })).toBeInTheDocument();
   });
 
-  it("keeps only the active member visible when a group is collapsed", () => {
-    render(
-      <SessionWorkspaceNavigation
-        {...navigationProps({
-          activeSession: "beta",
-          openSessions: ["alpha", "beta", "zulu"],
-          groups: [{
-            id: "review",
-            name: "Review lane",
-            color: "orange",
-            collapsed: true,
-            tabs: ["beta", "zulu"],
-          }],
-          onToggleTabGroup: vi.fn(),
-        })}
-      />,
-    );
-
-    expect(screen.getByRole("button", { name: "Expand Review lane tab group" }))
-      .toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("tab", { name: /beta, Review lane group/i }))
-      .toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: /Zulu shell/i })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+  it.each(["alpha", "beta"])("folds every member including the active root or child %s", (activeSession) => {
+    const props = navigationProps({ activeSession, openSessions: ["alpha", "beta", "zulu", "archive"],
+      sessionParents: { beta: "alpha", zulu: "beta" }, onToggleTabGroup: vi.fn() });
+    function GroupNavigation() {
+      const [collapsed, setCollapsed] = useState(false);
+      return <SessionWorkspaceNavigation {...props} groups={[{
+        id: "family", name: "Family", color: "orange", collapsed, tabs: ["alpha", "beta", "zulu"],
+      }]} onToggleTabGroup={(_, next) => setCollapsed(next)} />;
+    }
+    render(<GroupNavigation />);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Family tab group" }));
+    const header = screen.getByRole("button", { name: "Expand Family tab group" });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveAccessibleDescription(/Active session:/);
+    expect(header.closest("[data-workspace-tab-group-id]"))
+      .toHaveAttribute("data-active-group", "true");
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByRole("tab", { name: "Archived deploy, Background work" })).toBeVisible();
+    fireEvent.click(header);
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+    expect(screen.getAllByRole("tab").filter((tab) => tab.getAttribute("aria-selected") === "true"))
+      .toHaveLength(1);
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onCloseTab).not.toHaveBeenCalled();
   });
 
   it("layers group management over Overview and returns without another history change", () => {
@@ -2004,13 +2004,78 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onReparentSession).toHaveBeenLastCalledWith("zulu", "beta");
   });
 
+  it("promotes the selected branch one level at a time without switching or closing sessions", async () => {
+    const props = navigationProps({ activeSession: "zulu", tabActionsVisible: false });
+    function NestedNavigation() {
+      const [workspace, setWorkspace] = useState<SessionWorkspaceState>({
+        openSessions: ["alpha", "beta", "zulu", "archive"], recentSessions: [], groups: [],
+        parents: { beta: "alpha", zulu: "beta", archive: "zulu" },
+      });
+      return <SessionWorkspaceNavigation {...props} {...workspace} sessionParents={workspace.parents}
+        onReparentSession={(name, parent) => setWorkspace((current) => reparentWorkspaceSession(current, name, parent))} />;
+    }
+    render(<NestedNavigation />);
+    const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" });
+    const child = screen.getByRole("tab", { name: "Archived deploy, Background work" });
+    const button = screen.getByRole("button", { name: "Up one level" });
+    fireEvent.click(button);
+    expect(zulu.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "alpha");
+    expect(child.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "zulu");
+    expect(zulu).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(button);
+    expect(zulu.closest(".workspace-tab")).not.toHaveAttribute("data-session-parent");
+    expect(child.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "zulu");
+    expect(screen.queryByRole("button", { name: "Up one level" })).not.toBeInTheDocument();
+    await waitFor(() => expect(zulu).toHaveFocus());
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onCloseTab).not.toHaveBeenCalled();
+  });
+
+  it.each<Partial<NavigationProps>>([
+    { workspacePersistenceState: "loading" },
+    { workspacePersistenceState: "error" },
+    { separatorsBusy: true },
+  ])("disables nested-tab moves while syncing: %j", (overrides) => {
+    const props = navigationProps({
+      activeSession: "beta", sessionParents: { beta: "alpha" },
+      onReparentSession: vi.fn(), onTransferSelectedSessions: vi.fn(), ...overrides,
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const promote = screen.getByRole("button", { name: "Up one level" });
+    const placement = screen.getByRole("button", { name: "Move / Nest beta" });
+    expect(promote).toBeDisabled();
+    expect(placement).toBeDisabled();
+    fireEvent.click(promote);
+    fireEvent.click(placement);
+    expect(props.onReparentSession).not.toHaveBeenCalled();
+    expect(props.onTransferSelectedSessions).not.toHaveBeenCalled();
+  });
+
+  it("announces a rejected promotion and leaves the tab nested", () => {
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      activeSession: "beta", sessionParents: { beta: "alpha" },
+      onReparentSession: () => { throw new Error("Wait for the workspace to finish opening."); },
+    })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Up one level" }));
+    expect(screen.getByText("Wait for the workspace to finish opening.")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "beta, Working" }).closest(".workspace-tab"))
+      .toHaveAttribute("data-session-parent", "alpha");
+  });
+
   it("opens placement for the current session even when tab actions are hidden", () => {
     const props = navigationProps({
       tabActionsVisible: false,
+      sessionParents: { beta: "alpha" },
       onReparentSession: vi.fn(),
       onTransferSelectedSessions: vi.fn(),
     });
     const { rerender } = render(<SessionWorkspaceNavigation {...props} />);
+    // The per-tab control targets an inactive nested tab without changing selection.
+    const nestedPlacement = screen.getByRole("button", { name: "Move / Nest beta" });
+    expect(nestedPlacement).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(nestedPlacement);
+    expect(props.onTransferSelectedSessions).toHaveBeenLastCalledWith(["beta"]);
+    expect(screen.queryByRole("button", { name: "Move / Nest Alpha control" })).not.toBeInTheDocument();
     const button = screen.getByRole("button", { name: "Move / Nest" });
     expect(button).toHaveAttribute("aria-haspopup", "dialog");
     expect(button).toHaveAccessibleDescription(/Organize Alpha control/);
@@ -2355,57 +2420,76 @@ describe("SessionWorkspaceNavigation", () => {
     )).toBeInTheDocument();
   });
 
-  it("expands a selected group atomically and multi-drags it from a collapsed group", () => {
+  it.each(["horizontal", "vertical"] as const)("drags a folded group header and its nested members in %s tabs", (orientation) => {
     const onMoveTabs = vi.fn();
-    render(
-      <SessionWorkspaceNavigation
-        {...navigationProps({
-          activeSession: "beta",
-          openSessions: ["alpha", "beta", "zulu", "archive"],
-          groups: [{
-            id: "workers",
-            name: "Workers",
-            color: "green",
-            collapsed: true,
-            tabs: ["beta", "zulu"],
-          }],
-          onMoveTab: vi.fn(),
-          onMoveTabs,
-        })}
-        orientation="vertical"
-      />,
-    );
-
-    const beta = screen.getByRole("tab", { name: /beta, Workers group/i });
-    const group = document.querySelector<HTMLElement>(
-      '[data-workspace-tab-group-id="workers"]',
-    )!;
-    const archiveContainer = screen.getByRole("tab", {
-      name: "Archived deploy, Background work",
-    }).closest<HTMLElement>(".workspace-tab")!;
-
-    expect(beta).not.toHaveAttribute("draggable");
-    fireEvent.click(beta, { ctrlKey: true });
-    expect(group).toHaveAttribute("data-tab-move-selected", "true");
-    expect(screen.getByRole("group", { name: "2 tabs selected for moving" }))
-      .toBeInTheDocument();
-    expect(beta).toHaveAttribute("draggable", "true");
-
+    const props = navigationProps({
+      activeSession: "beta", openSessions: ["alpha", "beta", "zulu", "archive"],
+      sessionParents: { zulu: "beta" },
+      groups: [{ id: "workers", name: "Workers", color: "green", collapsed: true, tabs: ["beta", "zulu"] }],
+      onMoveTab: vi.fn(), onMoveTabs, onToggleTabGroup: vi.fn(), onReparentSession: vi.fn(), orientation,
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const header = screen.getByRole("button", { name: "Expand Workers tab group" });
+    const group = header.closest<HTMLElement>("[data-workspace-tab-group-id]")!;
+    const archive = screen.getByRole("tab", { name: "Archived deploy, Background work" }).closest<HTMLElement>(".workspace-tab")!;
+    expect(header).toHaveAttribute("draggable", "true");
+    expect(within(group).queryByRole("tab")).not.toBeInTheDocument();
+    mockElementBounds(archive, { left: 100, top: 100, width: 100, height: 40 });
     const dataTransfer = dragDataTransfer();
-    mockElementBounds(archiveContainer, { top: 100, height: 40 });
-    fireEvent.dragStart(beta, { dataTransfer });
-    fireEvent.dragOver(archiveContainer, {
-      clientX: 999,
-      clientY: 135,
-      dataTransfer,
-    });
-    fireEvent.drop(archiveContainer, {
-      clientX: 999,
-      clientY: 135,
-      dataTransfer,
-    });
-
+    fireEvent.dragStart(header, { dataTransfer });
+    expect(group).toHaveAttribute("data-tab-dragging", "true");
+    expect(dataTransfer.setData).not.toHaveBeenCalledWith(WORKSPACE_SESSION_DRAG_TYPE, expect.any(String));
+    fireEvent.dragOver(archive, { clientX: 190, clientY: 135, dataTransfer });
+    expect(archive).toHaveAttribute("data-tab-drop-edge", "after");
+    fireEvent.drop(archive, { clientX: 190, clientY: 135, dataTransfer });
     expect(onMoveTabs).toHaveBeenCalledWith(["beta", "zulu"], 2);
+    expect(props.onReparentSession).not.toHaveBeenCalled();
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onToggleTabGroup).not.toHaveBeenCalled();
+    expect(group).not.toHaveAttribute("data-tab-dragging");
+  });
+
+  it("moves a one-session group as a block without nesting or promoting it", () => {
+    const props = navigationProps({ activeSession: "beta", openSessions: ["beta", "alpha"],
+      groups: [{ id: "one", name: "One", color: "green", collapsed: true, tabs: ["beta"] }],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onToggleTabGroup: vi.fn(), onReparentSession: vi.fn() });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const target = screen.getByRole("tab", { name: "Alpha control, Needs input" }).closest<HTMLElement>(".workspace-tab")!;
+    mockElementBounds(target, { left: 100, width: 100 });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(screen.getByRole("button", { name: "Expand One tab group" }), { dataTransfer });
+    expect(screen.queryByRole("group", { name: "Top level drop target" })).not.toBeInTheDocument();
+    fireEvent.dragOver(target, { clientX: 160, clientY: 20, dataTransfer });
+    expect(target).not.toHaveAttribute("data-tab-drop-nest");
+    fireEvent.drop(target, { clientX: 160, clientY: 20, dataTransfer });
+    expect(props.onMoveTabs).toHaveBeenCalledWith(["beta"], 1);
+    expect(props.onReparentSession).not.toHaveBeenCalled();
+    expect(props.onMoveTab).not.toHaveBeenCalled();
+  });
+
+  it.each<Partial<NavigationProps>>([
+    { workspacePersistenceState: "loading" }, { workspacePersistenceState: "error" }, { separatorsBusy: true },
+  ])("disables group dragging while synchronization is unavailable: %j", (overrides) => {
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      groups: [{ id: "one", name: "One", color: "green", collapsed: true, tabs: ["beta"] }],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onToggleTabGroup: vi.fn(), ...overrides,
+    })} />);
+    expect(screen.getByRole("button", { name: "Expand One tab group" })).not.toHaveAttribute("draggable");
+  });
+
+  it("cancels a group drag when another workspace opens", () => {
+    const props = navigationProps({ activeWorkspaceId: "first",
+      groups: [{ id: "one", name: "One", color: "green", collapsed: true, tabs: ["beta"] }],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onToggleTabGroup: vi.fn() });
+    const { rerender } = render(<SessionWorkspaceNavigation {...props} />);
+    const header = screen.getByRole("button", { name: "Expand One tab group" });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(header, { dataTransfer });
+    expect(header.closest("[data-workspace-tab-group-id]")).toHaveAttribute("data-tab-dragging", "true");
+    rerender(<SessionWorkspaceNavigation {...props} activeWorkspaceId="second" />);
+    expect(header.closest("[data-workspace-tab-group-id]")).not.toHaveAttribute("data-tab-dragging");
+    fireEvent.drop(screen.getByRole("tab", { name: "Alpha control, Needs input" }).closest(".workspace-tab")!, { dataTransfer });
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
   });
 
   it("uses the vertical midpoint when dragging tabs in the desktop side rail", () => {
@@ -2546,7 +2630,7 @@ describe("SessionWorkspaceNavigation", () => {
     )).toBeInTheDocument();
   });
 
-  it("does not make a visible member of a collapsed group draggable", () => {
+  it("requires the atomic move handler before a collapsed group can be dragged", () => {
     render(
       <SessionWorkspaceNavigation
         {...navigationProps({
@@ -2560,12 +2644,13 @@ describe("SessionWorkspaceNavigation", () => {
             tabs: ["beta", "zulu"],
           }],
           onMoveTab: vi.fn(),
+          onToggleTabGroup: vi.fn(),
         })}
       />,
     );
 
-    expect(screen.getByRole("tab", { name: /beta, Workers group/i }))
-      .not.toHaveAttribute("draggable");
+    expect(screen.queryByRole("tab", { name: /beta, Workers group/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand Workers tab group" })).not.toHaveAttribute("draggable");
     expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
       .toHaveAttribute("draggable", "true");
   });

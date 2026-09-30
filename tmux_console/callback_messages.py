@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from . import callback_groups
 from .messages import validate_session_name
 from .tmux import validate_tmux_pane_id, validate_tmux_session_id
 
@@ -125,7 +126,7 @@ class CallbackMessageStore:
             self._connection.row_factory = sqlite3.Row
             with self._transaction(write=True) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1):
+                if version not in (0, 1, 2):
                     raise sqlite3.DatabaseError("unsupported callback message schema")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS callback_messages (
@@ -156,7 +157,8 @@ class CallbackMessageStore:
                 connection.execute(
                     "INSERT OR IGNORE INTO callback_message_metadata VALUES (1, 0)"
                 )
-                connection.execute("PRAGMA user_version = 1")
+                callback_groups.initialize(connection)
+                connection.execute("PRAGMA user_version = 2")
             os.chmod(self.path, 0o600)
         except (OSError, sqlite3.Error) as error:
             self.close()
@@ -339,6 +341,32 @@ class CallbackMessageStore:
             if removed:
                 self._changed(connection)
             return removed
+
+    def groups_snapshot(self) -> dict[str, Any]:
+        with self._transaction() as connection:
+            return callback_groups.snapshot(connection)
+
+    def save_group(
+        self, *, group_id: str | None = None, workspace_id: object,
+        name: object, sessions: object, expected_revision: object,
+    ) -> str:
+        with self._transaction(write=True) as connection:
+            return callback_groups.save(
+                connection, group_id=group_id, workspace_id=workspace_id,
+                name=name, sessions=sessions, expected_revision=expected_revision,
+            )
+
+    def delete_group(self, group_id: str, *, workspace_id: object, expected_revision: object) -> None:
+        with self._transaction(write=True) as connection:
+            callback_groups.delete(connection, group_id=group_id, workspace_id=workspace_id, expected_revision=expected_revision)
+
+    def delete_workspace_groups(self, workspace_id: str) -> None:
+        with self._transaction(write=True) as connection:
+            callback_groups.delete_workspace(connection, workspace_id)
+
+    def rename_group_session(self, old: str, new: str) -> None:
+        with self._transaction(write=True) as connection:
+            callback_groups.rename_session(connection, old, new)
 
     def close(self) -> None:
         with self._lock:

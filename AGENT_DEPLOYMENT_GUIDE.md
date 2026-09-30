@@ -440,8 +440,14 @@ See [Saved scrollback](docs/SCROLLBACK.md) for sampling, bounds, and limitations
 
 The separate `callbacks.sqlite3` file stores agent-posted callback messages,
 reported session/agent/CWD metadata, receipt times, idempotency keys, and review
-history. It uses schema version 1 and does not alter workspace or recovery
-schemas. `MUXDECK_CALLBACKS_FILE` overrides its path; otherwise it lives beside
+history, plus shared custom callback group names and memberships. It uses schema
+version 2 and does not alter workspace or recovery schemas. Version 1 upgrades
+transactionally at startup by adding group and membership tables and an independent
+group revision, preserving all reports and review history. Keep a consistent
+pre-upgrade backup: older releases reject version 2. To roll back, stop only
+Muxdeck, retain the upgraded database separately, and restore the pre-upgrade
+database alongside the older code. Never downgrade `user_version` in place.
+`MUXDECK_CALLBACKS_FILE` overrides its path; otherwise it lives beside
 the configured workspace file. Back it up using SQLite's backup API alongside
 the recovery registry, migrate it as a private `0600` file, and retain it during
 rollback even when the older release does not display messages. The callback
@@ -471,16 +477,20 @@ archived or migrated. A bridge invocation is owned by its controller and is
 cancelled if that controller disconnects; detached interactive sessions retain
 their normal tmux lifetime.
 
-The SQLite registry uses `PRAGMA user_version = 2`. Version 1 upgrades in a
+The SQLite registry uses `PRAGMA user_version = 4`. Version 1 upgrades in a
 transaction by adding `session_history` and `history_workspaces` and importing
 the existing recovery records; the original `sessions` table remains intact.
-History includes native/previous names, display titles, last CWD, lifecycle
-timestamps, workspace membership, and captured reference-only agent IDs.
-It contains no terminal transcripts. Keep the database private and retain a
-consistent pre-upgrade SQLite backup. Previous releases reject version 2;
-rollback requires stopping only Muxdeck, preserving the upgraded database, and
-restoring the pre-upgrade database alongside the previous application code.
-Never downgrade `user_version` in place or discard the upgraded history.
+Version 3 adds the history of observed coding agents. Version 4 adds
+`session_origins` and bounded `session_view_events` tables, preserving all
+existing records and agent references. Existing origins remain unknown; do not
+infer them from names. Native session start times come from tmux's existing
+`created` identity field, separately from first-observed timestamps.
+
+Back up `sessions.sqlite3` consistently before a backend upgrade, retain the
+private backup, and deploy backend and frontend together. Older releases reject
+version 4. Rollback requires stopping only Muxdeck, retaining the upgraded
+database separately, and restoring the pre-upgrade database with the old code.
+Never downgrade `user_version` in place. Keep the registry private (`0600`).
 
 The workspace file uses schema version 14. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1

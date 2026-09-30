@@ -40,3 +40,25 @@ again. Preserve unrelated work and follow the deployment safety checks above.
 - Build frontend releases in a staging directory. The live `dist/` is served
   immediately, so building in the running checkout deploys before validation.
   Documentation and tooling changes need no frontend build or service restart.
+
+## Testing
+
+- Start with the test files or cases that exercise the changed behavior. Use
+  `npm run test:related -- src/path.ts` for frontend import dependents,
+  `npm run test:changed` for Git changes, and explicit pytest files for Python.
+  Import-based selection does not cover backend contracts or every runtime
+  dependency; select those checks explicitly. Full frontend/Python suites remain
+  in CI and are appropriate locally for broad changes or uncertain impact.
+- Add coverage for a distinct behavior, regression, or failure mode. Prefer
+  extending an existing test. Copy, spacing, or icon-only edits generally need
+  inspection rather than new automated tests.
+- Keep exhaustive mappings and input combinations in inexpensive unit tests.
+  Use representative component/browser scenarios for wiring and interaction;
+  an additional test layer should cover a distinct integration risk.
+- Consolidate duplicate scenarios as the affected tests are touched. Identify
+  the retained coverage before removing a case, especially for authentication,
+  terminal input, persistence, concurrency, and time-zone boundaries.
+- Run affected browser specs for browser behavior, then stop once appropriate
+  checks pass. Repeat or broaden a run only for new changes, failures, or an
+  unresolved concern. Evaluate runtime, reliability, and useful coverage rather
+  than targeting a test count.

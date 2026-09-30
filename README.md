@@ -21,7 +21,8 @@ when you disconnect.
   resizable windows can stay pinned while you switch sessions.
 - **A callback list for parallel agents.** Watch working, ready, and ended
   sessions across one workspace or your global queue. Read agent-posted reports,
-  filter and sort the list, open a session, and mark it reviewed.
+  filter and sort the list, open a session, and mark it reviewed. The panel
+  shares one browser-local layout across scopes and workspaces.
 - **Workspaces for many sessions.** Save ordered tabs, colored groups, nested
   sessions, quick links, and multi-pane layouts. Resume on another device and
   receive workspace changes live across open browser tabs.
@@ -129,13 +130,43 @@ observing a session used by another client.
 
 ## Development
 
-Activate `.venv`, then run `npm run dev`. It serves
-<http://127.0.0.1:5173/mux/> and starts the backend on port 7683.
-Install Python development tools with
-`.venv/bin/python -m pip install -e '.[dev]'`.
+~~~bash
+.venv/bin/python -m pip install -e '.[dev]'
+~~~
 
-Use the affected frontend test files and explicit pytest files first; run
-`npm run typecheck` for TypeScript changes and the relevant
-`npm run test:e2e -- e2e/callback-list-view.spec.ts` for browser behavior.
-See [the repository guidelines](AGENTS.md). CI runs the full Python and
-frontend suites. Python and browser tests use disposable tmux sockets.
+During development, choose the narrowest useful test selection:
+
+| Scope | Command |
+| --- | --- |
+| One frontend test file | `npm test -- src/agentScrollPreferences.test.ts` |
+| Frontend tests related to a source file | `npm run test:related -- src/agentScrollPreferences.ts` |
+| Frontend tests affected by Git changes | `npm run test:changed` |
+| One backend area | `.venv/bin/python -m pytest -q tests/test_terminal_input_api.py` |
+
+Run `npm run typecheck` when TypeScript code changes.
+
+`test:related` follows frontend imports from the supplied source files.
+`test:changed` selects tests using Git changes and succeeds when none are
+selected; that result does not establish coverage. A checkout with unrelated
+edits can select many tests, so explicit files are useful during a focused fix.
+Backend contracts and runtime dependencies still need their own relevant checks.
+
+CI runs the complete Python and frontend suites. Use those locally for broad
+changes or uncertain impact, rather than repeating them after every edit:
+
+~~~bash
+.venv/bin/python -m pytest -q
+npm test
+npm run build
+~~~
+
+For browser behavior, run the relevant spec, for example
+`npm run test:e2e -- e2e/scroll-controls-visibility.spec.ts`. Browser tests require
+a frontend built from the current source; use the deployment guide for staging
+on a running installation. `npm run test:e2e` runs the complete browser suite.
+Python and Playwright end-to-end tests use isolated disposable tmux sockets and
+never target the default tmux server.
+
+Keep exhaustive data cases in unit tests and representative interactions in
+component/browser tests. Extend existing coverage when possible; consolidate
+duplicate scenarios as their features change. See [the testing guidelines](AGENTS.md#testing).

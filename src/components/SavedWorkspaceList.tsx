@@ -34,6 +34,7 @@ import {
   type WorkspaceTabGroup,
 } from "../workspaceState";
 import "./SavedWorkspaceList.css";
+import { DEFAULT_TIME_ZONE, formatTimestamp, useDisplayTimeZone } from "../timeZone";
 
 export interface SavedWorkspaceListProps {
   currentTabs?: readonly string[];
@@ -55,7 +56,7 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-export function approximateWorkspaceActivity(timestamp: number, now = Date.now()): string {
+export function approximateWorkspaceActivity(timestamp: number, now = Date.now(), timeZone = DEFAULT_TIME_ZONE): string {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return "Activity time unavailable";
   const elapsedSeconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
   if (elapsedSeconds < 60) return "Active just now";
@@ -68,19 +69,17 @@ export function approximateWorkspaceActivity(timestamp: number, now = Date.now()
   if (elapsedSeconds < 604_800) {
     return `Active ${Math.floor(elapsedSeconds / 86_400)}d ago`;
   }
-  const date = new Date(timestamp);
-  const options: Intl.DateTimeFormatOptions = date.getFullYear() === new Date(now).getFullYear()
+  const sameYear = formatTimestamp(timestamp, timeZone, { year: "numeric" })
+    === formatTimestamp(now, timeZone, { year: "numeric" });
+  const options: Intl.DateTimeFormatOptions = sameYear
     ? { month: "short", day: "numeric" }
     : { month: "short", day: "numeric", year: "numeric" };
-  return `Active ${new Intl.DateTimeFormat(undefined, options).format(date)}`;
+  return `Active ${formatTimestamp(timestamp, timeZone, options)}`;
 }
 
-function exactActivityTime(timestamp: number): string | undefined {
+function exactActivityTime(timestamp: number, timeZone: string): string | undefined {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return undefined;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp));
+  return formatTimestamp(timestamp, timeZone);
 }
 
 export function SavedWorkspaceList({
@@ -96,6 +95,7 @@ export function SavedWorkspaceList({
   refreshKey = 0,
   onWorkspacesChange,
 }: SavedWorkspaceListProps) {
+  const { timeZone } = useDisplayTimeZone();
   const [workspaces, setWorkspaces] = useState<SavedWorkspace[]>([]);
   const [workspacesKnown, setWorkspacesKnown] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -441,7 +441,7 @@ export function SavedWorkspaceList({
             const editing = workspace.id === editingId;
             const confirmingDelete = workspace.id === confirmingDeleteId;
             const renameError = editing ? workspaceNameError(renameDraft) : null;
-            const exactTime = exactActivityTime(workspace.lastActiveAt);
+            const exactTime = exactActivityTime(workspace.lastActiveAt, timeZone);
             return (
               <li
                 key={workspace.id}
@@ -454,7 +454,7 @@ export function SavedWorkspaceList({
                 <div className="saved-workspace-card-body">
                   <div className="saved-workspace-card-topline">
                     <span className="saved-workspace-activity" title={exactTime}>
-                      {approximateWorkspaceActivity(workspace.lastActiveAt, now)}
+                      {approximateWorkspaceActivity(workspace.lastActiveAt, now, timeZone)}
                     </span>
                     {active && <span className="saved-workspace-current">Current</span>}
                   </div>

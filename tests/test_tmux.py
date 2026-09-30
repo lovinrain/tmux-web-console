@@ -549,6 +549,10 @@ async def test_copy_session_uses_the_active_pane_directory_and_next_name():
     created = await tmux.copy_session("work", "$7")
 
     assert created == CreatedSession(name="work_2", id="$10")
+    assert created.source is not None
+    assert created.source.name == "work"
+    assert created.source.id == "$7"
+    assert created.source.active_pane.path == "/srv/current project"
     assert tmux.calls == [
         ["list-panes", "-a", "-F", PANE_FORMAT],
         [

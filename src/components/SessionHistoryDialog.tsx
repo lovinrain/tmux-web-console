@@ -8,6 +8,7 @@ import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
 import { AgentTranscript } from "./AgentTranscript";
 import "./SessionHistoryDialog.css";
+import { formatTimestamp, FULL_TIMESTAMP_FORMAT, useDisplayTimeZone } from "../timeZone";
 
 interface Props {
   workspaceId?: string | null;
@@ -19,11 +20,10 @@ interface Props {
   onOpenSession: (name: string) => void;
 }
 
-function date(value: number | null): string {
-  return value ? new Date(value * 1000).toLocaleString() : "Not recorded";
-}
-
 export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessionName = null, showWorkspaceMembership = true, onClose, onOpenSession }: Props) {
+  const { timeZone } = useDisplayTimeZone();
+  const date = (value: number | null) => value === null
+    ? "Not recorded" : formatTimestamp(value * 1000, timeZone, FULL_TIMESTAMP_FORMAT);
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   const [recycled, setRecycled] = useState(!sessionName);
@@ -46,7 +46,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
   actionRef.current = { busy, confirm };
   const cancel = useRef<HTMLButtonElement>(null);
   const title = sessionName
-    ? `Agents in ${sessionName}`
+    ? `Metadata for ${sessionName}`
     : "Session history";
 
   useEffect(() => {
@@ -97,7 +97,7 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Unable to load history");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [offset, recycled, revision, search, workspaceId]);
+  }, [offset, recycled, revision, search, sessionName, workspaceId]);
 
   const restore = async (entry: SessionHistoryEntry, create: boolean) => {
     if (busy) return;
@@ -121,11 +121,11 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
     <section ref={dialog} className="session-history-dialog" role="dialog" aria-modal="true" aria-label={title}>
       <header>
         <HistoryIcon />
-        <div><p className="eyebrow">PERSISTENT SESSION HISTORY</p><h2>{title}</h2></div>
-        <button type="button" aria-label="Close session history" disabled={Boolean(busy)} onClick={onClose}><CloseIcon /></button>
+        <div><p className="eyebrow">{sessionName ? "SESSION METADATA" : "PERSISTENT SESSION HISTORY"}</p><h2>{title}</h2></div>
+        <button type="button" aria-label={sessionName ? "Close session metadata" : "Close session history"} disabled={Boolean(busy)} onClick={onClose}><CloseIcon /></button>
       </header>
       <p className="session-history-explainer">{sessionName
-        ? `Every coding agent recorded in ${sessionName}, including earlier shells under this name. `
+        ? `Session start, creation origin and coding agents recorded in ${sessionName}, including earlier shells under this name. `
         : workspaceId ? `Previously associated with ${workspaceName || "this workspace"}. ` : "Closed tabs and ended or missing sessions. "}
         Browse local agent transcripts, saved output and submitted messages, reopen a running session, or explicitly create a fresh shell. Recreating a shell does not restore its running processes.</p>
       <form className="session-history-search" onSubmit={(event) => { event.preventDefault(); setOffset(0); setSearch(query.trim()); setRevision((current) => current + 1); }}>
@@ -151,9 +151,19 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
         {entries.map((entry) => <article key={entry.id} className="session-history-entry" aria-label={`History for ${entry.name}`}>
           <div className="session-history-entry-heading"><strong>{entry.name}</strong><span data-state={entry.state}>{entry.state === "live" ? "Still running" : entry.state === "ended" ? "Ended" : "Missing"}</span></div>
           {entry.title && <p>{entry.title}</p>}
-          <code>{entry.directory}</code>
+          <dl className="session-metadata-facts" aria-label={`Session facts for ${entry.name}`}>
+            <div><dt>Started</dt><dd>{date(entry.createdAt ?? null)}</dd></div>
+            <div><dt>Origin</dt><dd>{entry.origin
+              ? { new: "Created in Muxdeck", copy: "Copied session", recreate: "Recreated shell" }[entry.origin.kind]
+              : "Not recorded for this session"}</dd></div>
+            {entry.origin && <div><dt>Creation recorded</dt><dd>{date(entry.origin.recordedAt)}</dd></div>}
+            {entry.origin?.sourceName && <div><dt>{entry.origin.kind === "copy" ? "Copied from" : "Recreated from"}</dt><dd>{entry.origin.sourceName}</dd></div>}
+            {entry.origin?.placement && <div><dt>Placement at creation</dt><dd>{entry.origin.placement === "child" ? "Child session" : "Sibling session"}</dd></div>}
+            <div><dt>Working directory</dt><dd><code>{entry.directory}</code></dd></div>
+          </dl>
           {entry.names.length > 1 && <p>Previous names: {entry.names.filter((name) => name !== entry.name).join(", ")}</p>}
           {showWorkspaceMembership && <div className="session-history-memberships">{entry.workspaces.length ? entry.workspaces.map((workspace) => <span key={workspace.id} title={`Last associated: ${date(workspace.lastSeenAt)}${workspace.closedAt ? ` / Tab removed: ${date(workspace.closedAt)}` : ""}`}>{workspace.name}{workspace.present ? "" : " (previous)"}</span>) : <span>No saved workspace recorded</span>}</div>}
+          <h3 className="session-metadata-heading">Agent history</h3>
           {entry.agents?.length
             ? <div className="session-history-agents" aria-label={`Agents that ran in ${entry.name}`}>
                 {entry.agents.map((agent) => <span key={`${agent.agentType}:${agent.agentSessionId ?? ""}`}
@@ -167,6 +177,14 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
                 </span>)}
               </div>
             : <p className="session-history-agent">{entry.agentType || "Agent not detected"}{entry.agentSessionId && <> / Reference ID: <code>{entry.agentSessionId}</code></>}</p>}
+          {Boolean(entry.viewEvents?.length) && <details className="session-metadata-views">
+            <summary>Browser view activity ({entry.viewEvents!.length})</summary>
+            <p>Split and Fork open another view of the same session. Latest 100 actions are retained.</p>
+            <ol>{entry.viewEvents!.map((event) => <li key={event.id}>
+              <span>{{ "split-workspace": "Split workspace opened", "split-tab": "Session-only tab opened", fork: "Fork requested" }[event.kind]}</span>
+              <time dateTime={new Date(event.recordedAt * 1000).toISOString()}>{date(event.recordedAt)}</time>
+            </li>)}</ol>
+          </details>}
           <footer><div><span>First seen {date(entry.firstSeenAt)}</span><span>Last seen {date(entry.lastSeenAt)}</span>{(entry.endedAt || entry.tabClosedAt) && <span>{entry.endedAt ? "End/disappearance recorded" : "Tab closed"} {date(entry.endedAt || entry.tabClosedAt)}</span>}</div>
             <button type="button" aria-label={`Transcript for ${entry.name}`} aria-expanded={transcriptFor === entry.id}
               onClick={() => { setTranscriptFor((current) => current === entry.id ? null : entry.id); setOutputFor(null); setMessagesFor(null); }}>Transcript</button>

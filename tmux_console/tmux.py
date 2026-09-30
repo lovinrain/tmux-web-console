@@ -12,7 +12,7 @@ import shlex
 import stat
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TypedDict
 from weakref import WeakValueDictionary
@@ -149,6 +149,7 @@ class CreatedSession:
     name: str
     id: str
     directory: str | None = field(default=None, compare=False)
+    source: Session | None = field(default=None, compare=False, repr=False)
     pane_id: str | None = field(default=None, compare=False)
     pane_pid: int = field(default=0, compare=False)
     session_created: int = field(default=0, compare=False)
@@ -739,11 +740,12 @@ class TmuxClient:
                     continue
 
                 try:
-                    return await self._create_session(
+                    created = await self._create_session(
                         candidate,
                         theme=theme,
                         start_directory=source.active_pane.path,
                     )
+                    return replace(created, source=source)
                 except TmuxError as error:
                     if "duplicate session" not in str(error).lower():
                         raise

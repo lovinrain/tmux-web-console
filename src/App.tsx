@@ -11,6 +11,8 @@ import {
   BASE_PATH,
   createSession,
   createWorkspace,
+  saveCallbackGroup,
+  deleteCallbackGroup,
   forgetRecoverableSession,
   undoForgetRecoverableSession,
   getGlobalCallbackSessions,
@@ -31,6 +33,8 @@ import {
   updateWorkspace,
   updateWorkspaceActivity,
   type GlobalCallbackSnapshot,
+  type CallbackCustomGroup,
+  type SaveCallbackGroupInput,
   type RecoverableSession,
   type SavedWorkspace,
   type WorkspacePaneLayout,
@@ -1666,6 +1670,26 @@ function AppRoutes() {
       throw error;
     } finally {
       if (appMounted.current) setGlobalCallbackBusy(false);
+    }
+  }, [applyGlobalCallbackSnapshot, refreshGlobalCallbackSnapshot]);
+
+  const saveCustomCallbackGroup = useCallback(async (input: SaveCallbackGroupInput) => {
+    try {
+      const result = await saveCallbackGroup(input);
+      if (appMounted.current) applyGlobalCallbackSnapshot(result.callbacks);
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) void refreshGlobalCallbackSnapshot();
+      throw error;
+    }
+  }, [applyGlobalCallbackSnapshot, refreshGlobalCallbackSnapshot]);
+
+  const deleteCustomCallbackGroup = useCallback(async (group: CallbackCustomGroup, expectedRevision: number) => {
+    try {
+      const result = await deleteCallbackGroup(group, expectedRevision);
+      if (appMounted.current) applyGlobalCallbackSnapshot(result.callbacks);
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) void refreshGlobalCallbackSnapshot();
+      throw error;
     }
   }, [applyGlobalCallbackSnapshot, refreshGlobalCallbackSnapshot]);
 
@@ -4445,6 +4469,8 @@ function AppRoutes() {
       onChange={updateWorkspaceCallbackSessions}
       globalCallbackSnapshot={globalCallbackSnapshot}
       onGlobalChange={updateGlobalCallbackSessions}
+      onSaveGroup={saveCustomCallbackGroup}
+      onDeleteGroup={deleteCustomCallbackGroup}
       globalCallbackBusy={globalCallbackBusy}
       onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
       onReviewSession={reviewCallbackSession}
@@ -4514,6 +4540,8 @@ function AppRoutes() {
           onChange={updateWorkspaceCallbackSessions}
           globalCallbackSnapshot={globalCallbackSnapshot}
           onGlobalChange={updateGlobalCallbackSessions}
+          onSaveGroup={saveCustomCallbackGroup}
+          onDeleteGroup={deleteCustomCallbackGroup}
           globalCallbackBusy={globalCallbackBusy}
           onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
           onReviewSession={reviewCallbackSession}

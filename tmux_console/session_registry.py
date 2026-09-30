@@ -14,7 +14,7 @@ from typing import Any
 from .agent_reference import AgentReference
 from .tmux import CreatedSession, Session
 
-SESSION_REGISTRY_SCHEMA_VERSION = 3
+SESSION_REGISTRY_SCHEMA_VERSION = 4
 LAST_SEEN_WRITE_INTERVAL_SECONDS = 60
 SESSION_REGISTRY_UNAVAILABLE_MESSAGE = (
     "session recovery registry is unavailable; repair the configured SQLite "
@@ -145,7 +145,7 @@ class SessionRegistry:
     def _initialize(self) -> None:
         connection = self._require_connection()
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {0, 1, 2, SESSION_REGISTRY_SCHEMA_VERSION}:
+        if version not in {0, 1, 2, 3, SESSION_REGISTRY_SCHEMA_VERSION}:
             raise sqlite3.DatabaseError(
                 f"unsupported session registry schema version: {version}"
             )
@@ -207,6 +207,22 @@ class SessionRegistry:
                     PRIMARY KEY(history_id, agent_type, agent_id)
                 )
             """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS session_origins (
+                    history_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL CHECK(kind IN ('new', 'copy', 'recreate')),
+                    recorded_at INTEGER NOT NULL,
+                    source_history_id TEXT, source_name TEXT, placement TEXT
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS session_view_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, history_id TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('split-workspace', 'split-tab', 'fork')),
+                    recorded_at INTEGER NOT NULL
+                )
+            """)
+            connection.execute("CREATE INDEX IF NOT EXISTS session_view_history_idx ON session_view_events(history_id, id)")
             connection.execute("CREATE INDEX IF NOT EXISTS session_agents_idx ON session_agents(history_id, first_seen)")
             connection.execute("CREATE INDEX IF NOT EXISTS history_workspace_idx ON history_workspaces(workspace_id, last_seen)")
             connection.execute("CREATE INDEX IF NOT EXISTS history_name_idx ON session_history(name, last_seen)")
@@ -402,16 +418,42 @@ class SessionRegistry:
         directory: str,
         *,
         registry_id: str | None = None,
+        origin: str = "new",
+        source: Session | None = None,
+        source_history_id: str | None = None,
+        source_name: str | None = None,
+        placement: str | None = None,
     ) -> RecoveryRecord:
+        if origin not in {"new", "copy", "recreate"}:
+            raise ValueError("invalid session origin")
+        if placement not in {None, "sibling", "child"}:
+            raise ValueError("invalid copy placement")
         timestamp = int(self._clock())
         with self._lock:
             try:
                 connection = self._require_connection()
                 with connection:
-                    self._observe_history(connection, Session(
+                    if source is not None:
+                        source_history_id = self._observe_history(connection, source, None, timestamp)
+                        source_name = source.name
+                    elif origin == "recreate" and registry_id is not None:
+                        previous = connection.execute("""
+                            SELECT h.id, h.name FROM session_history h JOIN sessions s
+                            ON h.tmux_id = s.tmux_session_id AND h.created = s.session_created
+                            AND h.server_started = s.server_started AND h.server_pid = s.server_pid
+                            WHERE s.registry_id = ?
+                        """, (registry_id,)).fetchone()
+                        if previous is not None:
+                            source_history_id, source_name = previous["id"], previous["name"]
+                    history_id = self._observe_history(connection, Session(
                         name=created.name, id=created.id, windows=1, attached=0,
                         created=0,
                     ), None, timestamp, directory=directory)
+                    connection.execute("""
+                        INSERT OR IGNORE INTO session_origins
+                        (history_id, kind, recorded_at, source_history_id, source_name, placement)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (history_id, origin, timestamp, source_history_id, source_name, placement))
                     row = None
                     if registry_id is not None:
                         row = connection.execute(
@@ -695,6 +737,28 @@ class SessionRegistry:
             except sqlite3.Error as error:
                 raise self._database_error(error) from error
 
+    def record_view_event(self, session: Session, kind: str) -> None:
+        """Record browser actions separately from the native session's origin."""
+        if kind not in {"split-workspace", "split-tab", "fork"}:
+            raise ValueError("invalid view activity")
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                timestamp = int(self._clock())
+                with connection:
+                    history_id = self._observe_history(connection, session, None, timestamp)
+                    connection.execute(
+                        "INSERT INTO session_view_events (history_id, kind, recorded_at) VALUES (?, ?, ?)",
+                        (history_id, kind, timestamp),
+                    )
+                    connection.execute("""
+                        DELETE FROM session_view_events WHERE history_id = ? AND id NOT IN (
+                            SELECT id FROM session_view_events WHERE history_id = ? ORDER BY id DESC LIMIT 100
+                        )
+                    """, (history_id, history_id))
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
     def sync_history_workspaces(self, workspaces: list[dict[str, Any]]) -> None:
         """Keep past membership even after a tab, workspace, or native session is gone."""
         timestamp = int(self._clock())
@@ -793,7 +857,16 @@ class SessionRegistry:
                         "SELECT agent_type, agent_id, first_seen, last_seen FROM session_agents "
                         "WHERE history_id = ? ORDER BY first_seen, agent_type", (row["id"],),
                     ).fetchall()
+                    origin = connection.execute("SELECT * FROM session_origins WHERE history_id = ?", (row["id"],)).fetchone()
+                    views = connection.execute(
+                        "SELECT id, kind, recorded_at FROM session_view_events WHERE history_id = ? ORDER BY id DESC", (row["id"],),
+                    ).fetchall()
                     entries.append({
+                        "createdAt": row["created"] or None,
+                        "origin": {"kind": origin["kind"], "recordedAt": origin["recorded_at"],
+                                   "sourceHistoryId": origin["source_history_id"], "sourceName": origin["source_name"],
+                                   "placement": origin["placement"]} if origin else None,
+                        "viewEvents": [{"id": view["id"], "kind": view["kind"], "recordedAt": view["recorded_at"]} for view in views],
                         "id": row["id"], "name": row["name"], "names": json.loads(row["names"]), "title": row["title"],
                         "directory": row["directory"], "directoryAvailable": Path(row["directory"]).is_dir(),
                         "agentType": row["agent_type"], "agentSessionId": row["agent_id"],

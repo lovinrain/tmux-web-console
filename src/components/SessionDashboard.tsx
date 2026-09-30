@@ -84,6 +84,7 @@ import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
 import { ThemeToggle } from "./ThemeToggle";
+import { TimeZoneSelect } from "./TimeZoneSelect";
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import "./SessionWorkspaceMembership.css";
@@ -1136,6 +1137,7 @@ export function SessionDashboard({
             onSnippets={() => onOpenSnippets?.()}
           />
           <ThemeToggle />
+          <TimeZoneSelect />
           <button type="button" className="secondary-button" onClick={() => setSessionHistoryOpen(true)} aria-haspopup="dialog">
             <HistoryIcon /> Session history
           </button>

@@ -7,7 +7,10 @@
   "scripts": {
     "dev": "concurrently -k -n api,web -c yellow,cyan \"python3 -m tmux_console.app\" \"vite --host 127.0.0.1\"",
     "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:changed": "vitest run --changed --passWithNoTests",
+    "test:related": "vitest related --run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "preview": "vite preview --host 127.0.0.1"

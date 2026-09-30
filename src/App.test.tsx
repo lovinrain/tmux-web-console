@@ -5409,6 +5409,9 @@ describe("App routing", () => {
         name: "Expand Core work tab group",
       })).toBeVisible();
 
+      expect(screen.queryByRole("tab", { name: /alpha, Core work group/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: /beta, Core work group/ })).not.toBeInTheDocument();
+
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400);
       });

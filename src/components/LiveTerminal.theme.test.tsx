@@ -1004,17 +1004,17 @@ describe("LiveTerminal themes", () => {
     expect(terminalMocks.instances[0].options.theme).toBe(LIGHT_TERMINAL_THEME);
   });
 
-  it("correlates native application scroll acknowledgements without sending raw input", async () => {
+  it.each(["copilot", "wheel"] as const)("correlates %s scroll acknowledgements without sending raw input", async (profile) => {
     const ref = createRef<LiveTerminalHandle>();
     render(<LiveTerminal ref={ref} session="agent" ignoreSize={false} theme="dark" {...callbacks} />);
     const socket = socketMocks.instances[0];
-    expect((await ref.current!.scrollApplication("up", "copilot")).status).toBe("disconnected");
+    expect((await ref.current!.scrollApplication("up", profile)).status).toBe("disconnected");
     expect(socket.send).not.toHaveBeenCalled();
     act(() => socket.emit("open"));
     socket.send.mockClear();
-    const pending = ref.current!.scrollApplication("up", "copilot");
+    const pending = ref.current!.scrollApplication("up", profile);
     const request = JSON.parse(socket.send.mock.calls[0][0]);
-    expect(request).toEqual({ type: "applicationScroll", id: expect.any(String), direction: "up", profile: "copilot" });
+    expect(request).toEqual({ type: "applicationScroll", id: expect.any(String), direction: "up", profile });
     const settled = vi.fn();
     void pending.then(settled);
     act(() => socket.emitMessage(JSON.stringify({ type: "applicationScrollAck", id: "unrelated", paneId: "%2" })));

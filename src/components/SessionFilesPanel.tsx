@@ -66,6 +66,7 @@ import {
   WindowCopyIcon,
 } from "../icons";
 import "./SessionFilesPanel.css";
+import { formatTimestamp, FULL_TIMESTAMP_FORMAT, useDisplayTimeZone } from "../timeZone";
 
 const MarkdownPreview = lazy(() => import("./MarkdownPreview"));
 
@@ -461,12 +462,9 @@ function formatBytes(value: number | null): string {
   return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
 }
 
-function formatModified(value: number | null): string {
+function formatModified(value: number | null, timeZone: string): string {
   if (value === null) return "Unknown time";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value * 1_000));
+  return formatTimestamp(value * 1_000, timeZone);
 }
 
 function fileNameBadge(name: string): string {
@@ -481,7 +479,7 @@ function fileBadge(entry: SessionFileEntry): string {
   return fileNameBadge(entry.name);
 }
 
-function formatRecentAge(visitedAt: number): string {
+function formatRecentAge(visitedAt: number, timeZone: string): string {
   const elapsed = Math.max(0, Date.now() - visitedAt);
   if (elapsed < 60_000) return "just now";
   if (elapsed < 60 * 60_000) return `${Math.floor(elapsed / 60_000)}m ago`;
@@ -489,10 +487,10 @@ function formatRecentAge(visitedAt: number): string {
   if (elapsed < 7 * 24 * 60 * 60_000) {
     return `${Math.floor(elapsed / (24 * 60 * 60_000))}d ago`;
   }
-  return new Intl.DateTimeFormat(undefined, {
+  return formatTimestamp(visitedAt, timeZone, {
     month: "short",
     day: "numeric",
-  }).format(new Date(visitedAt));
+  });
 }
 
 function compareNames(left: string, right: string): number {
@@ -560,6 +558,7 @@ export function SessionFilesPanel({
   onClose,
   onInsertPath,
 }: SessionFilesPanelProps) {
+  const { timeZone } = useDisplayTimeZone();
   const titleId = `${panelId}-title`;
   const panelRef = useRef<HTMLElement>(null);
   const backgroundedRef = useRef(backgrounded);
@@ -3354,9 +3353,9 @@ export function SessionFilesPanel({
                               </span>
                               <time
                                 dateTime={new Date(entry.visitedAt).toISOString()}
-                                title={new Date(entry.visitedAt).toLocaleString()}
+                                title={formatTimestamp(entry.visitedAt, timeZone, FULL_TIMESTAMP_FORMAT)}
                               >
-                                {formatRecentAge(entry.visitedAt)}
+                                {formatRecentAge(entry.visitedAt, timeZone)}
                               </time>
                               <ChevronRightIcon />
                             </button>
@@ -3783,7 +3782,7 @@ export function SessionFilesPanel({
                 <strong>{preview.name}</strong>
                 <span>{formatBytes(preview.size)}</span>
                 <span>{preview.mediaType}</span>
-                <span>{formatModified(preview.modified)}</span>
+                <span>{formatModified(preview.modified, timeZone)}</span>
                 {canRenderMarkdown && !editing && (
                   <button
                     type="button"

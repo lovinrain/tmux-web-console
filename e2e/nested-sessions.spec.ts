@@ -190,6 +190,16 @@ test("copies preserve sibling or child placement through save, reload, and anoth
   }
   await page.screenshot({ path: join(reviewDirectory, "nested-copies-saved.png") });
 
+  await selectTab(page, syncedChild);
+  await page.getByRole("button", { name: `Metadata for ${syncedChild}`, exact: true }).click();
+  const metadata = page.getByRole("dialog", { name: `Metadata for ${syncedChild}`, exact: true });
+  await expect(metadata.getByText("Copied session", { exact: true })).toBeVisible();
+  await expect(metadata.getByText("Child session", { exact: true })).toBeVisible();
+  await expect(metadata.locator("dt", { hasText: "Copied from" }).locator("+ dd")).toHaveText(sibling);
+  await expect(metadata.locator("dt", { hasText: /^Started$/ }).locator("+ dd")).not.toHaveText("Not recorded");
+  await page.screenshot({ path: join(reviewDirectory, "copied-session-metadata.png") });
+  await metadata.getByRole("button", { name: "Close session metadata", exact: true }).click();
+
   const allSessions = [...tabs];
   const identities = allSessions.map(sessionIdentity);
   await tabRow(page, child).getByRole("button", { name: `Close ${child} quick tab`, exact: true }).click();
@@ -248,6 +258,11 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
       const row = tabRow(page, name);
       const rowBox = (await row.boundingBox())!;
       const markerBox = (await row.locator(".workspace-tab-child-marker").boundingBox())!;
+      const placement = row.getByRole("button", { name: `Move / Nest ${name}`, exact: true });
+      await expect(placement).toBeVisible();
+      const placementBox = (await placement.boundingBox())!;
+      expect(placementBox.x).toBeGreaterThanOrEqual(rowBox.x);
+      expect(placementBox.x + placementBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
       expect(markerBox.x).toBeGreaterThanOrEqual(rowBox.x);
       expect(markerBox.x + markerBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
     }
@@ -298,10 +313,14 @@ test("existing branches move through the placement button, drag to nest, and tra
   await expect(dialog.getByRole("searchbox", { name: "Find a parent session" })).toBeFocused();
   await expect(dialog.getByRole("radio", { name: "Nest under API tests", exact: true })).toHaveCount(0);
   await page.screenshot({ path: join(reviewDirectory, "placement-button-dialog.png") });
-  await dialog.getByRole("button", { name: "Up one level", exact: true }).click();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(placementButton).toBeFocused();
+  await page.getByRole("button", { name: "Up one level", exact: true }).click();
   await expectTree(page, source.tabs, { [child]: branch });
   await expectTree(second, source.tabs, { [child]: branch });
-  await expect(placementButton).toBeFocused();
+  await expect(tabRow(page, branch).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: "Up one level", exact: true })).toHaveCount(0);
+  await expect(tabRow(page, branch).getByRole("tab")).toBeFocused();
 
   // Reveal the complete target before dragging so auto-scroll cannot
   // move its nesting zone out from under the pointer just before the drop.
@@ -318,6 +337,22 @@ test("existing branches move through the placement button, drag to nest, and tra
   await expectTree(page, nestedTabs, { [branch]: target, [child]: branch });
   await expectTree(second, nestedTabs, { [branch]: target, [child]: branch });
   await expect(tabRow(second, sourceName).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+
+  // A nested tab can choose a different parent while another session stays active.
+  await selectTab(page, sourceName);
+  await tabRow(page, branch).getByRole("button", { name: "Move / Nest API implementation", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
+  await expect(dialog.locator(".session-placement-source > strong")).toHaveText("API implementation");
+  await dialog.getByRole("radio", { name: "Nest under Product", exact: true }).check();
+  await dialog.getByRole("button", { name: "Nest session", exact: true }).click();
+  await expectTree(page, source.tabs, source.parents!);
+  await expectTree(second, source.tabs, source.parents!);
+  await expect(tabRow(page, sourceName).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect.poll(async () => (await readWorkspace(context.request, source.id)).parents).toEqual(source.parents);
+  await page.reload();
+  await expectTree(page, source.tabs, source.parents!);
+  await selectTab(page, branch);
+  await page.screenshot({ path: join(reviewDirectory, "nested-tab-move-controls.png") });
 
   await page.getByRole("button", { name: "Show callback list", exact: true }).click();
   await page.getByRole("button", { name: "Pin callback list", exact: true }).click();
@@ -364,4 +399,73 @@ test("existing branches move through the placement button, drag to nest, and tra
   await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
   await page.screenshot({ path: join(reviewDirectory, "session-placement-footer-light.png") });
   expect(names.map(sessionIdentity)).toEqual(identities);
+});
+
+
+test("folded groups hide the active tree and move together across synchronized saved views", async ({ page, context }) => {
+  const child = `${sourceName}_group-child`;
+  const leaf = `${sourceName}_group-leaf`;
+  const other = `${sourceName}_group-other`;
+  const tabs = [sourceName, child, leaf, other];
+  for (const name of tabs.slice(1)) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const identities = tabs.map(sessionIdentity);
+  const parents = { [child]: sourceName, [leaf]: child };
+  const groups = [
+    { id: "family", name: "Family", color: "cyan", collapsed: false, tabs: tabs.slice(0, 3) },
+    { id: "other", name: "Other", color: "orange", collapsed: false, tabs: [other] },
+  ];
+  const created = await context.request.post("/mux/api/workspaces", {
+    data: { name: "Grouped tree movement", tabs, parents, groups, activeSession: child },
+  });
+  expect(created.ok()).toBe(true);
+  const workspace = (await created.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  await page.goto(`/mux/session/${child}?workspace=${workspace.id}`);
+  await expectTree(page, tabs, parents);
+  const second = await context.newPage();
+  await second.goto(`/mux/session/${other}?workspace=${workspace.id}`);
+  await expectTree(second, tabs, parents);
+  await page.getByRole("button", { name: "Collapse Family tab group", exact: true }).click();
+  await page.getByRole("button", { name: "Collapse Other tab group", exact: true }).click();
+  const family = page.locator('[data-workspace-tab-group-id="family"]');
+  await expect(family.getByRole("tab")).toHaveCount(0);
+  await expect(family).toHaveAttribute("data-active-group", "true");
+  await expect(second.getByRole("tab")).toHaveCount(0);
+  const header = family.getByRole("button", { name: "Expand Family tab group", exact: true });
+  await header.hover();
+  const start = (await header.boundingBox())!;
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2 + 12, { steps: 5 });
+  await expect(family).toHaveAttribute("data-tab-dragging", "true");
+  const destination = page.locator('[data-workspace-tab-group-id="other"]');
+  const end = (await destination.boundingBox())!;
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height - 3, { steps: 5 });
+  await page.mouse.move(end.x + end.width / 2 + 1, end.y + end.height - 3);
+  await expect(destination).toHaveAttribute("data-tab-drop-edge", "after");
+  await page.mouse.up();
+  const movedTabs = [other, sourceName, child, leaf];
+  await expect.poll(async () => {
+    const saved = await readWorkspace(context.request, workspace.id);
+    return { tabs: saved.tabs, parents: saved.parents, groups: saved.groups.map((group) => [group.id, group.collapsed]) };
+  }).toEqual({ tabs: movedTabs, parents, groups: [["other", true], ["family", true]] });
+  for (const browserPage of [page, second]) {
+    await expect.poll(() => browserPage.locator("[data-workspace-tab-group-id]").evaluateAll((items) => (
+      items.map((item) => item.getAttribute("data-workspace-tab-group-id"))
+    ))).toEqual(["other", "family"]);
+    await expect(browserPage.getByRole("tab")).toHaveCount(0);
+  }
+  expect(new URL(page.url()).pathname).toBe(`/mux/session/${child}`);
+  expect(new URL(second.url()).pathname).toBe(`/mux/session/${other}`);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Expand Family tab group", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await page.screenshot({ path: join(reviewDirectory, "fully-folded-moved-groups.png") });
+  await page.getByRole("button", { name: "Expand Family tab group", exact: true }).click();
+  await expect(family.getByRole("tab")).toHaveCount(3);
+  await expect(tabRow(page, child)).toHaveAttribute("data-session-parent", sourceName);
+  await expect(tabRow(page, leaf)).toHaveAttribute("data-session-parent", child);
+  await expect(tabRow(page, child).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  expect(tabs.map(sessionIdentity)).toEqual(identities);
 });

@@ -17,13 +17,13 @@ describe("agent scroll recommendations", () => {
     expect(preferredAgentScrollMode(kind)).toBe(expected);
   });
 
-  it("only enables application wheel scrolling for verified agent profiles", () => {
+  it("uses agent-specific tuning when known and plain wheel scrolling for every other kind", () => {
     expect(applicationScrollProfile("claude")).toBe("claude");
     expect(applicationScrollProfile("codex")).toBe("codex");
     expect(applicationScrollProfile("copilot")).toBe("copilot");
     expect(applicationScrollProfile("grok")).toBe("grok");
     for (const kind of ["cursor", "shells", "other"] as const) {
-      expect(applicationScrollProfile(kind)).toBeNull();
+      expect(applicationScrollProfile(kind)).toBe("wheel");
     }
   });
 });

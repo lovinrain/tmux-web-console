@@ -47,6 +47,16 @@ export interface SessionHistoryEntry {
   state: "live" | "ended" | "missing";
   endedAt: number | null;
   tabClosedAt: number | null;
+  /** Native tmux start time; never substituted with the first observation. */
+  createdAt?: number | null;
+  origin?: {
+    kind: "new" | "copy" | "recreate";
+    recordedAt: number;
+    sourceHistoryId: string | null;
+    sourceName: string | null;
+    placement: "sibling" | "child" | null;
+  } | null;
+  viewEvents?: Array<{ id: number; kind: SessionViewKind; recordedAt: number }>;
   workspaces: Array<{ id: string; name: string; present: boolean; lastSeenAt: number; closedAt: number | null }>;
   /** Every agent seen in this session, oldest first. Optional: an older server omits it. */
   agents?: Array<{
@@ -62,6 +72,16 @@ export function listSessionHistory(workspaceId: string | null, query: string, re
   if (workspaceId) search.set("workspace", workspaceId);
   if (sessionName) search.set("session", sessionName);
   return jsonRequest(`/api/session-history?${search}`, { signal });
+}
+
+export type SessionViewKind = "split-workspace" | "split-tab" | "fork";
+
+export function recordSessionView(session: Session, kind: SessionViewKind): Promise<void> {
+  return jsonRequest(`/api/sessions/${encodeURIComponent(session.name)}/view-events`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: session.id, sessionCreated: session.created,
+      serverStarted: session.serverStarted, serverPid: session.serverPid, kind }),
+  });
 }
 
 export function recordClosedSessionTab(session: string, sessionId: string): Promise<void> {
@@ -303,9 +323,11 @@ export async function copySession(
   sourceSession: string,
   sourceSessionId: string,
   theme?: Theme,
+  placement?: "sibling" | "child",
 ): Promise<CreatedSession> {
   return requestSessionCreation({
     sessionId: sourceSessionId,
+    ...(placement === undefined ? {} : { placement }),
     ...(theme === undefined ? {} : { theme }),
   }, `/api/sessions/${encodeURIComponent(sourceSession)}/copy`);
 }
@@ -906,6 +928,10 @@ function isGlobalCallbackSnapshot(value: unknown): value is GlobalCallbackSnapsh
       && isStringArray(source.sessions)
     ))
     && isNonnegativeSafeInteger(value.sessionRevision)
+    && (value.callbackGroups === undefined && value.callbackGroupRevision === undefined
+      || Array.isArray(value.callbackGroups)
+        && value.callbackGroups.every(isCallbackCustomGroup)
+        && isNonnegativeSafeInteger(value.callbackGroupRevision))
     && (value.latestCallbackAtBySession === undefined
       || isRecord(value.latestCallbackAtBySession)
         && Object.values(value.latestCallbackAtBySession).every((timestamp) => (
@@ -915,6 +941,12 @@ function isGlobalCallbackSnapshot(value: unknown): value is GlobalCallbackSnapsh
       || Array.isArray(value.callbackMessages)
         && value.callbackMessages.every(isCallbackMessage)
         && isNonnegativeSafeInteger(value.callbackMessageRevision));
+}
+
+function isCallbackCustomGroup(value: unknown): value is CallbackCustomGroup {
+  return isRecord(value) && typeof value.id === "string" && typeof value.name === "string"
+    && (value.workspaceId === null || typeof value.workspaceId === "string")
+    && isStringArray(value.sessions);
 }
 
 function isCallbackMessage(value: unknown): value is CallbackMessage {
@@ -1108,6 +1140,22 @@ export interface WorkspaceCallbackSource {
   sessions: string[];
 }
 
+export interface CallbackCustomGroup {
+  id: string;
+  name: string;
+  /** Null for the global callback view; otherwise a saved workspace ID. */
+  workspaceId: string | null;
+  sessions: string[];
+}
+
+export interface SaveCallbackGroupInput {
+  id?: string;
+  workspaceId: string | null;
+  name: string;
+  sessions: string[];
+  expectedRevision: number;
+}
+
 export interface CallbackMessage {
   id: string;
   sequence: number;
@@ -1138,6 +1186,9 @@ export interface GlobalCallbackSnapshot {
   latestCallbackAtBySession?: Record<string, number>;
   /** Independent fence: posting a message does not change workspace sessions. */
   callbackMessageRevision?: number;
+  /** Shared custom groups and their independent concurrency revision. */
+  callbackGroups?: CallbackCustomGroup[];
+  callbackGroupRevision?: number;
 }
 
 export interface WorkspaceSessionPane {
@@ -1714,6 +1765,27 @@ export async function replaceGlobalCallbackSessions(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessions, sessionRevision }),
+  });
+}
+
+export async function saveCallbackGroup(
+  input: SaveCallbackGroupInput,
+): Promise<{ group: CallbackCustomGroup; callbacks: GlobalCallbackSnapshot }> {
+  const { id, ...payload } = input;
+  return jsonRequest(`/api/callback-groups${id ? `/${encodeURIComponent(id)}` : ""}`, {
+    method: id ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCallbackGroup(
+  group: CallbackCustomGroup, expectedRevision: number,
+): Promise<{ callbacks: GlobalCallbackSnapshot }> {
+  return jsonRequest(`/api/callback-groups/${encodeURIComponent(group.id)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId: group.workspaceId, expectedRevision }),
   });
 }
 

@@ -1062,6 +1062,22 @@ describe("nested workspace sessions", () => {
     expect(moveWorkspaceTabGroup(grouped, "family", 1).parents).toEqual(workspace.parents);
   });
 
+  it("round-trips a folded group move with complete trees through the existing URL format", () => {
+    const group = { id: "family", name: "Family", color: "cyan" as const, collapsed: true,
+      tabs: ["parent", "child", "grandchild", "sibling"] };
+    const source = { ...workspace, groups: [group] };
+    const moved = moveWorkspaceSessions(source, group.tabs, 2);
+    expect(moved.openSessions).toEqual(["other", "other-child", ...group.tabs]);
+    expect(moved.groups).toEqual([group]);
+    expect(moved.parents).toEqual(source.parents);
+    expect(moved.recentSessions).toEqual(source.recentSessions);
+    const url = searchWithWorkspaceState("?workspace=example", moved.openSessions, moved.groups, moved.parents);
+    expect(workspaceTabsFromSearch(url)).toEqual(moved.openSessions);
+    expect(workspaceGroupsFromSearch(url, moved.openSessions)).toEqual(moved.groups);
+    expect(workspaceParentsFromSearch(url, moved.openSessions)).toEqual(moved.parents);
+    expect(savedWorkspaceIdFromSearch(url)).toBe("example");
+  });
+
   it("keeps named groups contiguous and gives root group membership to children", () => {
     const group = { id: "work", name: "Work", color: "cyan" as const, collapsed: false, tabs: ["parent", "other"] };
     const normalized = normalizeWorkspaceHierarchy(["parent", "middle", "child", "other", "other-child"], [group], {
