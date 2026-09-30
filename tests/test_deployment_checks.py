@@ -113,6 +113,135 @@ def test_changed_deployment_identity_is_rejected(key):
     checks.compare(before, after)
 
 
+@pytest.mark.parametrize("added,commands", [(True, False), (False, True), (True, True)])
+def test_reviewed_pane_activity_requires_each_explicit_flag(added, commands):
+    before = baseline()
+    after = deepcopy(before)
+    if commands:
+        after["panes"][0] = "$1\t%1\t100\tbash\t0"
+    if added:
+        after["panes"].append("$2\t%2\t200\tcodex\t0")
+    with pytest.raises(checks.CheckError, match="panes changed") as error:
+        checks.compare(before, after)
+    assert error.value.comparison["addedCount"] == int(added)
+    assert error.value.comparison["commandChangedCount"] == int(commands)
+    for allow_added, allow_commands in (
+        (False, False),
+        (True, False),
+        (False, True),
+        (True, True),
+    ):
+        options = {
+            "allow_added_panes": allow_added,
+            "allow_command_changes": allow_commands,
+        }
+        if (added and not allow_added) or (commands and not allow_commands):
+            with pytest.raises(checks.CheckError):
+                checks.compare(before, after, **options)
+        else:
+            result = checks.compare(before, after, **options)
+            assert result["preservedCount"] == 1
+            assert result["currentCount"] == 1 + int(added)
+            assert result["addedPanes"] == (
+                [
+                    {
+                        "sessionId": "$2",
+                        "paneId": "%2",
+                        "panePid": 200,
+                        "command": "codex",
+                        "dead": False,
+                    }
+                ]
+                if added
+                else []
+            )
+            assert result["commandChanges"] == (
+                [
+                    {
+                        "sessionId": "$1",
+                        "paneId": "%1",
+                        "beforeCommand": "codex",
+                        "afterCommand": "bash",
+                    }
+                ]
+                if commands
+                else []
+            )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        ["$1\t%1\t101\tcodex\t0"],
+        ["$1\t%1\t100\tcodex\t1"],
+        ["$2\t%1\t100\tcodex\t0"],
+        ["$1\t%2\t100\tcodex\t0"],
+    ],
+)
+def test_reviewed_activity_never_allows_original_pane_identity_loss(rows):
+    with pytest.raises(checks.CheckError, match="panes changed") as error:
+        checks.compare(
+            baseline(),
+            {**baseline(), "panes": rows},
+            allow_added_panes=True,
+            allow_command_changes=True,
+        )
+    result = error.value.comparison
+    assert result["preservedCount"] == 0
+    assert result["removedCount"] + result["identityChangedCount"] == 1
+
+
+@pytest.mark.parametrize(
+    "key", ["bootId", "service", "origin", "basePath", "authMode", "tmux"]
+)
+def test_reviewed_pane_activity_does_not_relax_service_identity(key):
+    with pytest.raises(checks.CheckError, match=key):
+        checks.compare(
+            baseline(),
+            {**baseline(), key: "changed"},
+            allow_added_panes=True,
+            allow_command_changes=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        "not-a-list",
+        [None],
+        ["$1\t%1\t100\tcodex"],
+        ["1\t%1\t100\tcodex\t0"],
+        ["$1\t1\t100\tcodex\t0"],
+        ["$1\t%1\t-100\tcodex\t0"],
+        ["$1\t%1\t0\tcodex\t0"],
+        ["$1\t%1\t١٠٠\tcodex\t0"],
+        ["$1\t%1\t100\t\t0"],
+        ["$1\t%1\t100\tcodex\t2"],
+        ["$1\t%1\t100\tcodex\t0"] * 2,
+        ["$1\t%1\t100\tcodex\t0", "$1\t%1\t200\tbash\t1"],
+        ["$1\t%1\t100\tcodex\t0", "$2\t%1\t200\tbash\t0"],
+    ],
+)
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_malformed_or_duplicate_panes_fail_closed_under_activity_flags(rows, side):
+    before, after = baseline(), baseline()
+    (before if side == "before" else after)["panes"] = rows
+    with pytest.raises(checks.CheckError, match="panes"):
+        checks.compare(
+            before, after, allow_added_panes=True, allow_command_changes=True
+        )
+
+
+def test_empty_baseline_fails_closed_but_linked_window_identities_are_supported():
+    with pytest.raises(checks.CheckError, match="baseline panes"):
+        checks.compare({**baseline(), "panes": []}, baseline(), allow_added_panes=True)
+    before = baseline()
+    before["panes"].append("$2\t%1\t100\tcodex\t0")
+    result = checks.compare(before, deepcopy(before))
+    assert result["preservedCount"] == 2
+
+
 @pytest.mark.parametrize("mode", ["server", "basic", "none"])
 def test_http_checks_use_the_configured_authentication_contract(monkeypatch, mode):
     current = {**baseline(), "authMode": mode}
@@ -282,6 +411,34 @@ def test_failure_is_reported_without_credentials_or_fake_success(monkeypatch, tm
     assert not result["phases"][0]["passed"]
     assert "panes changed" in result["error"]
     assert "Result: FAIL" in (tmp_path / "report/report.md").read_text()
+
+
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_verifier_reports_activity_details_on_strict_failure_and_reviewed_success(
+    monkeypatch,
+    tmp_path,
+    reviewed,
+):
+    args = setup_verifier(monkeypatch, tmp_path)
+    current = baseline()
+    current["panes"] = ["$1\t%1\t100\tbash\t0", "$2\t%2\t200\tcodex\t0"]
+    monkeypatch.setattr(checks, "snapshot", lambda service: current)
+    if reviewed:
+        args.extend(["--allow-added-panes", "--allow-command-changes"])
+    assert checks.main(args) == (0 if reviewed else 1)
+    result = json.loads((tmp_path / "report/verification.json").read_text())
+    assert result["passed"] is reviewed
+    comparison = result["checks"]["paneComparison"]
+    assert comparison["preservedCount"] == 1
+    assert comparison["currentCount"] == 2
+    assert comparison["addedCount"] == comparison["commandChangedCount"] == 1
+    assert comparison["addedPanes"][0]["paneId"] == "%2"
+    assert comparison["commandChanges"][0]["paneId"] == "%1"
+    assert comparison["allowAddedPanes"] is reviewed
+    assert comparison["allowCommandChanges"] is reviewed
+    assert baseline()["panes"] == ["$1\t%1\t100\tcodex\t0"]
+    if reviewed:
+        assert result["checks"]["panesPreserved"] == 1
 
 
 def test_snapshot_refuses_to_overwrite_existing_file_or_symlink(tmp_path):

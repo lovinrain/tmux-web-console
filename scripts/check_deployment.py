@@ -25,6 +25,10 @@ HTTP_TIMEOUT = 5
 class CheckError(Exception):
     """A failure description that contains no credentials or terminal output."""
 
+    def __init__(self, message, *, comparison=None):
+        super().__init__(message)
+        self.comparison = comparison
+
 
 def require(condition, message):
     if not condition:
@@ -121,10 +125,7 @@ def snapshot(service):
         ).splitlines()
     )
     require(bool(panes), "No tmux panes found; verify the intended owner and socket")
-    require(
-        all(len(pane.split("\t")) == 5 for pane in panes),
-        "Incomplete tmux pane identities",
-    )
+    pane_records(panes, "snapshot")
     mode = env.get("MUXDECK_AUTH_MODE")
     require(mode in {"server", "basic", "none"}, "Set an explicit MUXDECK_AUTH_MODE")
     host = env.get("MUXDECK_HOST", "127.0.0.1")
@@ -151,12 +152,116 @@ def snapshot(service):
     }
 
 
-def compare(before, after):
-    for key in ("bootId", "service", "origin", "basePath", "authMode", "tmux", "panes"):
+def pane_records(panes, label):
+    require(
+        isinstance(panes, list) and (bool(panes) or label == "current"),
+        f"Invalid {label} panes",
+    )
+    records = {}
+    linked_identities = {}
+    for row in panes:
+        require(isinstance(row, str), f"Malformed {label} panes")
+        fields = row.split("\t")
+        require(len(fields) == 5, f"Incomplete {label} panes")
+        session, pane, pid, foreground, dead = fields
         require(
-            before[key] == after[key],
-            f"{key} changed since the baseline; review before accepting deployment",
+            bool(re.fullmatch(r"\$[0-9]+", session))
+            and bool(re.fullmatch(r"%[0-9]+", pane))
+            and bool(re.fullmatch(r"[0-9]+", pid))
+            and int(pid) > 0
+            and bool(foreground)
+            and not any(ord(char) < 32 or ord(char) == 127 for char in foreground)
+            and dead in {"0", "1"},
+            f"Malformed {label} panes",
         )
+        key = (session, pane)
+        # Linked windows can share one pane across sessions, but each pair must
+        # occur only once. Never let duplicate rows overwrite an identity.
+        require(key not in records, f"Duplicate {label} panes")
+        identity = (int(pid), dead)
+        require(
+            pane not in linked_identities or linked_identities[pane] == identity,
+            f"Inconsistent linked {label} panes",
+        )
+        linked_identities[pane] = identity
+        records[key] = {
+            "sessionId": session,
+            "paneId": pane,
+            "panePid": int(pid),
+            "command": foreground,
+            "dead": dead == "1",
+        }
+    return records
+
+
+def compare(before, after, *, allow_added_panes=False, allow_command_changes=False):
+    original = pane_records(before["panes"], "baseline")
+    current = pane_records(after["panes"], "current")
+    added = [current[key] for key in sorted(current.keys() - original.keys())]
+    removed = [original[key] for key in sorted(original.keys() - current.keys())]
+    changed = []
+    commands = []
+    for key in sorted(original.keys() & current.keys()):
+        old, new = original[key], current[key]
+        identity = {"sessionId": key[0], "paneId": key[1]}
+        if (old["panePid"], old["dead"]) != (new["panePid"], new["dead"]):
+            changed.append(
+                {
+                    **identity,
+                    "beforePanePid": old["panePid"],
+                    "afterPanePid": new["panePid"],
+                    "beforeDead": old["dead"],
+                    "afterDead": new["dead"],
+                }
+            )
+        if old["command"] != new["command"]:
+            commands.append(
+                {
+                    **identity,
+                    "beforeCommand": old["command"],
+                    "afterCommand": new["command"],
+                }
+            )
+    identity_changes = [
+        key
+        for key in ("bootId", "service", "origin", "basePath", "authMode", "tmux")
+        if before[key] != after[key]
+    ]
+    comparison = {
+        "baselineCount": len(original),
+        "currentCount": len(current),
+        "preservedCount": len(original) - len(removed) - len(changed),
+        "addedCount": len(added),
+        "removedCount": len(removed),
+        "identityChangedCount": len(changed),
+        "commandChangedCount": len(commands),
+        "addedPanes": added,
+        "removedPanes": removed,
+        "identityChangedPanes": changed,
+        "commandChanges": commands,
+        "identityFieldsChanged": identity_changes,
+        "allowAddedPanes": allow_added_panes,
+        "allowCommandChanges": allow_command_changes,
+    }
+    failures = [f"{key} changed since the baseline" for key in identity_changes]
+    if removed or changed:
+        failures.append(
+            "panes changed: original panes were removed, moved, respawned, or changed dead/alive state"
+        )
+    if added and not allow_added_panes:
+        failures.append(
+            "panes changed: added panes require reviewed --allow-added-panes"
+        )
+    if commands and not allow_command_changes:
+        failures.append(
+            "panes changed: foreground commands require reviewed --allow-command-changes"
+        )
+    if failures:
+        raise CheckError(
+            "; ".join(failures) + "; review before accepting deployment",
+            comparison=comparison,
+        )
+    return comparison
 
 
 class NoRedirects(HTTPRedirectHandler):
@@ -353,6 +458,16 @@ def main(argv=None):
     after.add_argument("--output-dir", type=Path, required=True)
     after.add_argument("--public-origin", action="append", default=[])
     after.add_argument("--expected-dist", type=Path)
+    after.add_argument(
+        "--allow-added-panes",
+        action="store_true",
+        help="Accept added panes after reviewing user activity; all original pane identities must remain unchanged",
+    )
+    after.add_argument(
+        "--allow-command-changes",
+        action="store_true",
+        help="Accept foreground command changes after reviewing user activity; original pane PIDs and dead/alive flags must remain unchanged",
+    )
     args = parser.parse_args(argv)
     report = Report()
     directory = None
@@ -370,8 +485,14 @@ def main(argv=None):
             require(isinstance(baseline, dict), "Baseline must contain an object")
             require(baseline.get("version") == 1, "Unsupported baseline version")
             current = snapshot(baseline["service"])
-            compare(baseline, current)
-            report.data["checks"]["panesPreserved"] = len(current["panes"])
+            comparison = compare(
+                baseline,
+                current,
+                allow_added_panes=args.allow_added_panes,
+                allow_command_changes=args.allow_command_changes,
+            )
+            report.data["checks"]["paneComparison"] = comparison
+            report.data["checks"]["panesPreserved"] = comparison["preservedCount"]
             report.data["checks"]["mainPid"] = current["mainPid"]
         with report.phase("Check installed frontend"):
             asset = frontend(current, args.expected_dist)
@@ -416,6 +537,8 @@ def main(argv=None):
             )
         report.data["passed"] = True
     except (CheckError, OSError, ValueError, KeyError, TypeError) as error:
+        if isinstance(error, CheckError) and error.comparison is not None:
+            report.data["checks"]["paneComparison"] = error.comparison
         message = (
             str(error)
             if isinstance(error, CheckError)

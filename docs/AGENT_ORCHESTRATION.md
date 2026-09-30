@@ -453,6 +453,18 @@ controller's parent session and group as well. Do not guess that mapping from
 provider output. Static wrapper placement demonstrates the transport; an
 adapter can use the same CLI/API with its own run/task metadata.
 
+Deployment evidence should retain the original private snapshot from
+`scripts/check_deployment.py`. Its pane comparison is strict by default; after
+reviewing independent user activity, `verify --allow-added-panes` permits added
+session/pane identity pairs and `--allow-command-changes` permits foreground
+command changes.
+Both still reject missing, moved or respawned original panes and changed dead
+flags; tmux-server, service and authentication checks remain strict. The report's
+`checks.paneComparison` records counts and pane/command differences for valid
+identity rows, including rejected comparisons. Review that evidence instead of
+replacing the baseline to hide changes. Documentation/tooling updates need neither a frontend build
+nor a service restart.
+
 The bridge is tested with synthetic protocol programs and isolated tmux
 sessions. The actual Multica daemon, authenticated provider runs, provider
 discovery variants and account-specific permissions require an integration
