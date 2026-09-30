@@ -197,17 +197,17 @@ describe("InputBar", () => {
         fireEvent(button, Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), {
           pointerId: 1, isPrimary: true,
         }));
-        await act(() => vi.advanceTimersByTimeAsync(550));
+        await act(() => vi.advanceTimersByTimeAsync(name === "PgUp" ? 550 : 48));
         expect(callback).toHaveBeenCalledTimes(4);
         fireEvent(window, Object.assign(new Event("pointerup"), { pointerId: 1 }));
       }
-      const pageUp = screen.getByRole("button", { name: "PgUp" });
-      fireEvent(pageUp, Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), {
+      const lineUp = screen.getByRole("button", { name: "Tmux Line Up" });
+      fireEvent(lineUp, Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), {
         pointerId: 1, isPrimary: true,
       }));
       view.rerender(<InputBar {...props} shortcutsVisible={false} />);
       await act(() => vi.advanceTimersByTimeAsync(1000));
-      expect(props.onSend).toHaveBeenCalledTimes(5);
+      expect(onScrollLine).toHaveBeenCalledTimes(5);
     } finally { vi.useRealTimers(); }
   });
 

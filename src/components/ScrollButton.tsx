@@ -5,7 +5,7 @@ const REPEAT_DELAY_MS = 100;
 
 interface ScrollButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> {
   onActivate: () => boolean | void | Promise<boolean | void>;
-  repeat?: boolean;
+  repeat?: boolean | "continuous";
   repeatContext?: string;
   busy?: boolean;
 }
@@ -15,6 +15,7 @@ interface HeldPress {
   element: HTMLButtonElement;
   context: string;
   timer?: number;
+  frame?: number;
   cleanup: () => void;
 }
 
@@ -33,6 +34,7 @@ export function ScrollButton({
     press.current = null;
     if (!current) return;
     window.clearTimeout(current.timer);
+    if (current.frame !== undefined) window.cancelAnimationFrame(current.frame);
     current.cleanup();
   }, []);
 
@@ -53,7 +55,13 @@ export function ScrollButton({
     }
     const schedule = (nextDelay: number) => {
       if (press.current === current) {
-        current.timer = window.setTimeout(() => step(current, REPEAT_DELAY_MS), nextDelay);
+        // Fine scrolling follows paint cadence without a hold threshold or an
+        // added pause after a terminal acknowledgment. Page keys keep their delay.
+        if (options.repeat === "continuous") {
+          current.frame = window.requestAnimationFrame(() => step(current, 0));
+        } else {
+          current.timer = window.setTimeout(() => step(current, REPEAT_DELAY_MS), nextDelay);
+        }
       }
     };
     if (options.busy) {

@@ -765,6 +765,7 @@ export function ConsoleScreen({
   const lineScrollRequestsRef = useRef(new Map<string, Array<{
     action: TerminalHistoryAction;
     version: number;
+    resolve: (accepted: boolean) => void;
   }>>());
   const applicationScrollRequestsRef = useRef(new Map<string, number>());
   const [applicationScrollPendingTargets, setApplicationScrollPendingTargets] = useState(
@@ -1583,6 +1584,7 @@ export function ConsoleScreen({
     const requestIndex = lineRequests?.findIndex((request) => request.action === action) ?? -1;
     const lineRequest = requestIndex >= 0 ? lineRequests?.splice(requestIndex, 1)[0] : undefined;
     if (lineRequests?.length === 0) lineScrollRequestsRef.current.delete(scrollTargetKey);
+    lineRequest?.resolve(result === "accepted");
     if (result === "accepted") {
       if (action === "exit") forgetTmuxScrollTarget();
       // Other paging/line clicks do not prove copy mode was exited. Discard
@@ -1639,7 +1641,9 @@ export function ConsoleScreen({
     const version = ++scrollActionVersionRef.current;
     setApplicationScrollMessage(null);
     const requests = lineScrollRequestsRef.current.get(scrollTargetKey) ?? [];
-    requests.push({ action, version });
+    let complete!: (accepted: boolean) => void;
+    const completion = new Promise<boolean>((resolve) => { complete = resolve; });
+    requests.push({ action, version, resolve: complete });
     lineScrollRequestsRef.current.set(scrollTargetKey, requests);
     // Until an upward request is acknowledged, Live must still cancel it in
     // order. A downward request cannot enter copy mode and needs no such wait.
@@ -1650,8 +1654,11 @@ export function ConsoleScreen({
       if (index >= 0) requests.splice(index, 1);
       if (!requests.length) lineScrollRequestsRef.current.delete(scrollTargetKey);
       if (direction === "up") updatePendingTmuxScroll(-1);
+      complete(false);
     }
-    return accepted;
+    // A held button waits for this line's ACK instead of queuing more lines
+    // than the terminal can handle, including when the connection is slow.
+    return completion;
   }, [scrollTargetKey, updatePendingTmuxScroll]);
   const scrollApplication = useCallback(async (direction: "up" | "down"): Promise<boolean> => {
     if (
@@ -2766,6 +2773,7 @@ export function ConsoleScreen({
             <ScrollButton
               key={`application-scroll-${direction}`}
               type="button"
+              repeat="continuous"
               repeatContext={scrollRepeatContext}
               className={preferredLineScrollMode === "application"
                 ? "terminal-view-control preferred-scroll-control" : "terminal-view-control"}
@@ -2834,6 +2842,7 @@ export function ConsoleScreen({
             <ScrollButton
               key={`tmux-line-${direction}`}
               type="button"
+              repeat="continuous"
               repeatContext={scrollRepeatContext}
               className={preferredLineScrollMode === "tmux"
                 ? "terminal-view-control tmux-history preferred-scroll-control"

@@ -47,13 +47,20 @@ for (const width of [1440, 390]) {
     const sent: string[] = [];
     const nativePending = new Set<string>();
     let maximumPending = 0;
+    let pendingLines = 0;
+    let maximumPendingLines = 0;
     page.on("websocket", (websocket) => {
       websocket.on("framesent", ({ payload }) => {
         const data = payload.toString();
         try {
           const message = JSON.parse(data);
           if (message.type === "resize") return;
-          if (message.type === "history") sent.push(`history:${message.action}`);
+          if (message.type === "history") {
+            sent.push(`history:${message.action}`);
+            if (message.action === "line-up" || message.action === "line-down") {
+              maximumPendingLines = Math.max(maximumPendingLines, ++pendingLines);
+            }
+          }
           if (message.type === "applicationScroll") {
             sent.push(`application:${message.direction}`);
             nativePending.add(message.id);
@@ -65,6 +72,8 @@ for (const width of [1440, 390]) {
         try {
           const message = JSON.parse(payload.toString());
           if (message.type === "applicationScrollAck" || message.type === "applicationScrollNack") nativePending.delete(message.id);
+          if ((message.type === "historyAck" || message.type === "historyNack")
+            && (message.action === "line-up" || message.action === "line-down")) pendingLines -= 1;
         } catch { /* terminal output */ }
       });
     });
@@ -93,7 +102,17 @@ for (const width of [1440, 390]) {
       await button.hover();
       const start = sent.length;
       await page.mouse.down();
-      await expect.poll(() => sent.slice(start).filter((value) => value === expected).length).toBeGreaterThanOrEqual(3);
+      const continuous = expected.startsWith("history:line-") || expected.startsWith("application:");
+      // Fine scrolling must repeat before the old 350 ms hold threshold.
+      if (continuous) {
+        await expect.poll(() => sent.slice(start).filter((value) => value === expected).length, {
+          message: `${name} repeats without a hold delay`, timeout: 300, intervals: [20],
+        }).toBeGreaterThanOrEqual(2);
+      }
+      // Native requests can take longer to acknowledge than tmux line requests.
+      await expect.poll(() => sent.slice(start).filter((value) => value === expected).length, {
+        message: `${name} keeps scrolling while held`, intervals: [20],
+      }).toBeGreaterThanOrEqual(3);
       await page.mouse.up();
       const stoppedAt = sent.length;
       // An observation window is necessary to prove that release stops repeats.
@@ -102,6 +121,7 @@ for (const width of [1440, 390]) {
       expect(sent.slice(start).every((value) => value === expected)).toBe(true);
     }
     expect(maximumPending).toBe(1);
+    expect(maximumPendingLines).toBe(1);
     const pageUp = controls.getByRole("button", { name: mobile ? "Raw terminal Page Up" : "PgUp", exact: true });
     await pageUp.hover();
     await page.mouse.down();

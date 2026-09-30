@@ -1111,6 +1111,30 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[8^"]]);
   });
 
+  it.each(["line-up", "line-down"] as const)("waits for each held %s acknowledgment and stops on rejection", async (action) => {
+    vi.useFakeTimers();
+    try {
+      renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={session()} onBack={vi.fn()} />);
+      act(() => liveTerminalState.onStateChange?.("live"));
+      const controls = screen.getByRole("group", { name: "Terminal input shortcuts" });
+      const button = within(controls).getByRole("button", {
+        name: action === "line-up" ? "Tmux Line Up" : "Tmux Line Down",
+      });
+      fireEvent(button, Object.assign(new MouseEvent("pointerdown", { bubbles: true, button: 0 }), {
+        pointerId: 1, isPrimary: true,
+      }));
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([[action]]);
+      await act(async () => liveTerminalState.onHistoryNavigation?.(action, "accepted"));
+      await act(async () => vi.advanceTimersToNextFrame());
+      expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([[action], [action]]);
+      await act(async () => liveTerminalState.onHistoryNavigation?.(action, "rejected"));
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledTimes(2);
+      fireEvent(window, Object.assign(new Event("pointerup"), { pointerId: 1 }));
+    } finally { vi.useRealTimers(); }
+  });
+
   it("cancels a pending line-up before Live and recovers from a copy-mode exit rejection", async () => {
     const claudeSession = {
       ...session(),

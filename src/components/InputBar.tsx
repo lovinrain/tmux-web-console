@@ -56,7 +56,7 @@ interface InputBarProps {
   preferredScrollMode?: AgentScrollMode;
   preferredScrollLabel?: string;
   onScrollUsed?: (mode: AgentScrollMode) => void;
-  onScrollLine?: (direction: "up" | "down") => boolean;
+  onScrollLine?: (direction: "up" | "down") => boolean | Promise<boolean>;
   applicationScrollProfile?: ApplicationScrollProfile | null;
   onScrollApplication?: (direction: "up" | "down") => boolean | void | Promise<boolean | void>;
   applicationScrollPending?: boolean;
@@ -1417,7 +1417,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             <ScrollButton
               key={`tmux-line-${direction}`}
               type="button"
-              repeat={shortcutsVisible}
+              repeat={shortcutsVisible && "continuous"}
               repeatContext={scrollContext}
               className={preferredLineScrollMode === "tmux"
                 ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}
@@ -1453,7 +1453,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             <ScrollButton
               key={`application-scroll-${direction}`}
               type="button"
-              repeat={shortcutsVisible}
+              repeat={shortcutsVisible && "continuous"}
               repeatContext={scrollContext}
               className={preferredLineScrollMode === "application"
                 ? "key-button scroll-icon-button preferred-scroll-key" : "key-button scroll-icon-button"}

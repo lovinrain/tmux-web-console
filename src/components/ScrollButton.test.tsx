@@ -34,10 +34,26 @@ describe("ScrollButton", () => {
     expect(onActivate).toHaveBeenCalledTimes(7);
   });
 
+  it("scrolls continuously on each frame without a hold delay or an extra release step", () => {
+    const onActivate = vi.fn();
+    render(<ScrollButton onActivate={onActivate} repeat="continuous">Up</ScrollButton>);
+    const button = screen.getByRole("button");
+    pointer(button, "pointerdown");
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    act(() => vi.advanceTimersToNextFrame());
+    expect(onActivate).toHaveBeenCalledTimes(2);
+    act(() => vi.advanceTimersToNextFrame());
+    expect(onActivate).toHaveBeenCalledTimes(3);
+    pointer(window, "pointerup");
+    fireEvent.click(button, { detail: 1 });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onActivate).toHaveBeenCalledTimes(3);
+  });
+
   it.each(["release outside", "cancel", "leave", "capture loss", "blur", "hidden page", "keyboard", "outside move"])(
     "stops on %s and does not resume without a new press", (reason) => {
       const onActivate = vi.fn();
-      render(<ScrollButton onActivate={onActivate}>Up</ScrollButton>);
+      render(<ScrollButton onActivate={onActivate} repeat="continuous">Up</ScrollButton>);
       const button = screen.getByRole("button");
       pointer(button, "pointerdown");
       act(() => vi.advanceTimersByTime(450));
@@ -63,10 +79,10 @@ describe("ScrollButton", () => {
 
   it.each(["disabled", "context", "hidden", "unmount"])("cancels a held control when %s changes", (change) => {
     const onActivate = vi.fn();
-    const view = render(<ScrollButton onActivate={onActivate} repeatContext="one">Up</ScrollButton>);
+    const view = render(<ScrollButton onActivate={onActivate} repeat="continuous" repeatContext="one">Up</ScrollButton>);
     pointer(screen.getByRole("button"), "pointerdown");
     if (change === "unmount") view.unmount();
-    else view.rerender(<ScrollButton onActivate={onActivate} disabled={change === "disabled"}
+    else view.rerender(<ScrollButton onActivate={onActivate} repeat="continuous" disabled={change === "disabled"}
       repeatContext={change === "context" ? "two" : "one"} hidden={change === "hidden"}>Up</ScrollButton>);
     act(() => vi.advanceTimersByTime(1000));
     expect(onActivate).toHaveBeenCalledTimes(1);
@@ -75,16 +91,18 @@ describe("ScrollButton", () => {
   it("waits for pending native requests and never queues work after release", async () => {
     let resolve!: (value: boolean) => void;
     const onActivate = vi.fn(() => new Promise<boolean>((done) => { resolve = done; }));
-    const view = render(<ScrollButton onActivate={onActivate}>Up</ScrollButton>);
+    const view = render(<ScrollButton onActivate={onActivate} repeat="continuous">Up</ScrollButton>);
     const button = screen.getByRole("button");
     pointer(button, "pointerdown");
-    view.rerender(<ScrollButton onActivate={onActivate} busy>Up</ScrollButton>);
+    view.rerender(<ScrollButton onActivate={onActivate} repeat="continuous" busy>Up</ScrollButton>);
     expect(button).toBeDisabled();
     await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(onActivate).toHaveBeenCalledTimes(1);
     await act(async () => resolve(true));
-    view.rerender(<ScrollButton onActivate={onActivate}>Up</ScrollButton>);
-    await act(() => vi.advanceTimersByTimeAsync(350));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    view.rerender(<ScrollButton onActivate={onActivate} repeat="continuous">Up</ScrollButton>);
+    await act(async () => vi.advanceTimersToNextFrame());
     expect(onActivate).toHaveBeenCalledTimes(2);
     pointer(window, "pointerup");
     await act(async () => resolve(true));
@@ -94,7 +112,7 @@ describe("ScrollButton", () => {
 
   it("stops after a rejected action and leaves non-scroll keys as single clicks", async () => {
     const onActivate = vi.fn(async () => false);
-    const view = render(<ScrollButton onActivate={onActivate}>Up</ScrollButton>);
+    const view = render(<ScrollButton onActivate={onActivate} repeat="continuous">Up</ScrollButton>);
     pointer(screen.getByRole("button"), "pointerdown");
     await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(onActivate).toHaveBeenCalledTimes(1);
