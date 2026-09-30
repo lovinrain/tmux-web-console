@@ -2,11 +2,24 @@ import type { IBuffer, IBufferCell, IDisposable, IMarker, Terminal } from "@xter
 import type { TerminalThemeMode } from "./terminalTheme";
 
 // Codex blends its startup terminal background with white (12%) or black (4%)
-// and caches that color. These are the same blends for Muxdeck's two palettes.
+// and caches that color. Preserve the existing defaults for mode-only callers.
 const COMPOSER_BACKGROUNDS: Record<TerminalThemeMode, string> = {
   dark: "#282a29",
   light: "#f0f0eb",
 };
+
+function composerBackground(theme: TerminalThemeMode, terminalBackground?: string): string {
+  if (!terminalBackground || !/^#[0-9a-f]{6}$/i.test(terminalBackground)) {
+    return COMPOSER_BACKGROUNDS[theme];
+  }
+  const color = Number.parseInt(terminalBackground.slice(1), 16);
+  const channels = [color >>> 16, (color >>> 8) & 255, color & 255];
+  const amount = theme === "dark" ? 0.12 : 0.04;
+  const blend = theme === "dark" ? 255 : 0;
+  return `#${channels.map((channel) => (
+    Math.floor(channel * (1 - amount) + blend * amount).toString(16).padStart(2, "0")
+  )).join("")}`;
+}
 
 interface Background {
   mode: number;
@@ -97,11 +110,16 @@ function composerRows(terminal: Terminal): ComposerRow[] {
 }
 
 /** Recolors only the active Codex composer, without changing terminal data. */
-export function attachCodexComposerTheme(terminal: Terminal, initialTheme: TerminalThemeMode): {
-  setTheme: (theme: TerminalThemeMode) => void;
+export function attachCodexComposerTheme(
+  terminal: Terminal,
+  initialTheme: TerminalThemeMode,
+  terminalBackground?: string,
+): {
+  setTheme: (theme: TerminalThemeMode, terminalBackground?: string) => void;
   dispose: () => void;
 } {
   let theme = initialTheme;
+  let backgroundColor = composerBackground(theme, terminalBackground);
   let disposed = false;
   let frame: number | undefined;
   let signature = "";
@@ -124,7 +142,7 @@ export function attachCodexComposerTheme(terminal: Terminal, initialTheme: Termi
     }
     const rows = composerRows(terminal);
     const decoratedRows = rows.filter((row) => row.spans.length > 0);
-    const nextSignature = JSON.stringify([theme, rows]);
+    const nextSignature = JSON.stringify([theme, backgroundColor, rows]);
     if (
       signature === nextSignature
       && markers.every((marker, index) => !marker.isDisposed && marker.line === decoratedRows[index]?.y)
@@ -138,7 +156,7 @@ export function attachCodexComposerTheme(terminal: Terminal, initialTheme: Termi
         const decoration = terminal.registerDecoration({
           marker,
           ...span,
-          backgroundColor: COMPOSER_BACKGROUNDS[theme],
+          backgroundColor,
           layer: "bottom",
         });
         if (decoration) decorations.push(decoration);
@@ -166,8 +184,9 @@ export function attachCodexComposerTheme(terminal: Terminal, initialTheme: Termi
   update();
 
   return {
-    setTheme(nextTheme) {
+    setTheme(nextTheme, nextTerminalBackground) {
       theme = nextTheme;
+      backgroundColor = composerBackground(theme, nextTerminalBackground);
       update();
     },
     dispose() {

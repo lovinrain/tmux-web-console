@@ -123,6 +123,27 @@ describe("Codex composer theme adapter", () => {
     adapter.dispose();
   });
 
+  it.each([
+    ["dark", "#2e3440", "#474c56"],
+    ["dark", "#282a36", "#41434e"],
+    ["dark", "#1a1b26", "#353640"],
+    ["light", "#fdf6e3", "#f2ecd9"],
+    ["light", "#ffffff", "#f4f4f4"],
+    ["light", "#faf4ed", "#f0eae3"],
+  ] as const)("blends the %s composer with palette background %s", (mode, background, expected) => {
+    const view = fixture();
+    const original = JSON.stringify(view.cells);
+    const adapter = attachCodexComposerTheme(view.terminal, mode);
+    adapter.setTheme(mode, background);
+    expect(view.active()).toHaveLength(4);
+    expect(view.active().every(({ options }) => options.backgroundColor === expected)).toBe(true);
+    expect(JSON.stringify(view.cells)).toBe(original);
+    const count = view.registrations.length;
+    adapter.setTheme(mode, background);
+    expect(view.registrations).toHaveLength(count);
+    adapter.dispose();
+  });
+
   it("preserves reverse-video selections and leaves foreground/accent styling alone", () => {
     const view = fixture();
     view.cells[5][5].inverse = true;

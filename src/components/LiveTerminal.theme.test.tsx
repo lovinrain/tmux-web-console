@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DARK_TERMINAL_THEME, LIGHT_TERMINAL_THEME } from "../terminalTheme";
+import { DARK_TERMINAL_THEME, LIGHT_TERMINAL_THEME, TERMINAL_PALETTE_THEMES } from "../terminalTheme";
+import type { ThemePaletteId } from "../themePresets";
 import { LiveTerminal, type LiveTerminalHandle } from "./LiveTerminal";
 
 interface MockTerminalInstance {
@@ -60,9 +61,17 @@ const codexThemeMocks = vi.hoisted(() => ({
   attach: vi.fn(),
 }));
 
+const themeMocks = vi.hoisted(() => ({
+  context: null as { theme: "dark" | "light"; palette: ThemePaletteId } | null,
+}));
+
+vi.mock("../theme", () => ({
+  useOptionalTheme: () => themeMocks.context,
+}));
+
 vi.mock("../codexComposerTheme", () => ({
-  attachCodexComposerTheme: (terminal: unknown, theme: string) => {
-    codexThemeMocks.attach(terminal, theme);
+  attachCodexComposerTheme: (terminal: unknown, theme: string, background?: string) => {
+    codexThemeMocks.attach(terminal, theme, background);
     return { setTheme: codexThemeMocks.setTheme, dispose: codexThemeMocks.dispose };
   },
 }));
@@ -246,6 +255,7 @@ function LayoutPhaseProbe({
 }
 
 beforeEach(() => {
+  themeMocks.context = null;
   terminalMocks.instances.length = 0;
   terminalMocks.fit.mockClear();
   codexThemeMocks.attach.mockClear();
@@ -1072,6 +1082,49 @@ describe("LiveTerminal themes", () => {
     expect(socket.send).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["dark", "nord", "dracula"],
+    ["light", "solarized-light", "github-light"],
+  ] as const)("applies selected %s palettes and updates the Codex composer without reconnecting", (mode, initial, next) => {
+    themeMocks.context = { theme: mode, palette: initial };
+    const terminalView = (
+      <LiveTerminal session="agent" ignoreSize={false} theme={mode} agentKind="codex" {...callbacks} />
+    );
+    const view = render(terminalView);
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    act(() => socket.emit("open"));
+    expect(terminal.options.theme).toBe(TERMINAL_PALETTE_THEMES[initial]);
+    expect(codexThemeMocks.attach).toHaveBeenCalledWith(
+      terminal, mode, TERMINAL_PALETTE_THEMES[initial].background,
+    );
+    const fitCount = terminalMocks.fit.mock.calls.length;
+    const sentCount = socket.send.mock.calls.length;
+
+    themeMocks.context = { theme: mode, palette: next };
+    view.rerender(
+      <LiveTerminal session="agent" ignoreSize={false} theme={mode} agentKind="codex" {...callbacks} />,
+    );
+
+    expect(terminal.options.theme).toBe(TERMINAL_PALETTE_THEMES[next]);
+    expect(codexThemeMocks.setTheme).toHaveBeenLastCalledWith(
+      mode, TERMINAL_PALETTE_THEMES[next].background,
+    );
+    expect(codexThemeMocks.attach).toHaveBeenCalledTimes(1);
+    expect(codexThemeMocks.dispose).not.toHaveBeenCalled();
+    expect(terminalMocks.instances).toHaveLength(1);
+    expect(socketMocks.instances).toHaveLength(1);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(terminalMocks.fit).toHaveBeenCalledTimes(fitCount);
+    expect(socket.send).toHaveBeenCalledTimes(sentCount);
+  });
+
+  it("honors an explicit terminal mode when it differs from the surrounding palette", () => {
+    themeMocks.context = { theme: "dark", palette: "nord" };
+    render(<LiveTerminal session="agent" ignoreSize={false} theme="light" {...callbacks} />);
+    expect(terminalMocks.instances[0].options.theme).toBe(LIGHT_TERMINAL_THEME);
+  });
+
   it("adapts a detected Codex composer across theme changes without reconnecting or sending input", () => {
     const view = render(
       <LiveTerminal session="agent" ignoreSize={false} theme="dark" agentKind="shells" {...callbacks} />,
@@ -1084,12 +1137,12 @@ describe("LiveTerminal themes", () => {
     view.rerender(
       <LiveTerminal session="agent" ignoreSize={false} theme="dark" agentKind="codex" {...callbacks} />,
     );
-    expect(codexThemeMocks.attach).toHaveBeenCalledWith(terminal, "dark");
+    expect(codexThemeMocks.attach).toHaveBeenCalledWith(terminal, "dark", DARK_TERMINAL_THEME.background);
     view.rerender(
       <LiveTerminal session="agent" ignoreSize={false} theme="light" agentKind="codex" {...callbacks} />,
     );
     expect(codexThemeMocks.attach).toHaveBeenCalledTimes(1);
-    expect(codexThemeMocks.setTheme).toHaveBeenLastCalledWith("light");
+    expect(codexThemeMocks.setTheme).toHaveBeenLastCalledWith("light", LIGHT_TERMINAL_THEME.background);
     expect(terminalMocks.instances).toHaveLength(1);
     expect(socketMocks.instances).toHaveLength(1);
     expect(socket.send).toHaveBeenCalledTimes(1);

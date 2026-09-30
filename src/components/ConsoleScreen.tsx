@@ -1369,7 +1369,7 @@ export function ConsoleScreen({
     const closeFromOutside = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && consoleHeaderRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest(".copy-session-menu")) return;
+      if (target instanceof Element && target.closest('[aria-modal="true"], .copy-session-menu')) return;
       closeHeaderTray();
     };
     const closeFromKey = (event: KeyboardEvent) => {

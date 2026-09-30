@@ -25,7 +25,8 @@ import {
   type TerminalSubmissionTerminator,
 } from "../terminalInput";
 import { TerminalFileLinkProvider } from "../terminalFileLinks";
-import { TERMINAL_THEMES, type TerminalThemeMode } from "../terminalTheme";
+import { TERMINAL_PALETTE_THEMES, type TerminalThemeMode } from "../terminalTheme";
+import { useOptionalTheme } from "../theme";
 import type { ConnectionState } from "../types";
 import type { ApplicationScrollProfile } from "../agentScrollPreferences";
 import type { SessionKind } from "../sessionDashboardModel";
@@ -140,6 +141,11 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     onPaneChange,
     onHistoryNavigation,
   }, ref) {
+    const themeContext = useOptionalTheme();
+    const palette = themeContext?.theme === theme
+      ? themeContext.palette
+      : theme === "dark" ? "muxdeck" : "paper";
+    const terminalTheme = TERMINAL_PALETTE_THEMES[palette];
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const codexThemeRef = useRef<ReturnType<typeof attachCodexComposerTheme> | null>(null);
@@ -609,7 +615,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           hover: hoverTerminalLink,
           leave: leaveTerminalLink,
         },
-        theme: TERMINAL_THEMES[theme],
+        theme: terminalTheme,
       });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
@@ -970,7 +976,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     useEffect(() => {
       const terminal = terminalRef.current;
       if (!terminal || agentKind !== "codex") return;
-      const adapter = attachCodexComposerTheme(terminal, theme);
+      const adapter = attachCodexComposerTheme(terminal, theme, terminalTheme.background);
       codexThemeRef.current = adapter;
       return () => {
         adapter.dispose();
@@ -981,10 +987,10 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
 
     useEffect(() => {
       if (terminalRef.current) {
-        terminalRef.current.options.theme = TERMINAL_THEMES[theme];
-        codexThemeRef.current?.setTheme(theme);
+        terminalRef.current.options.theme = terminalTheme;
+        codexThemeRef.current?.setTheme(theme, terminalTheme.background);
       }
-    }, [theme]);
+    }, [theme, terminalTheme]);
 
     return (
       <div

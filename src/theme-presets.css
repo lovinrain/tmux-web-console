@@ -1,0 +1,669 @@
+/* The original Muxdeck and Paper styles remain the default presentation. */
+:root {
+  --preset-canvas: var(--ink);
+  --preset-raised: var(--ink-raised);
+  --preset-soft: var(--ink-soft);
+  --preset-text: var(--paper);
+  --preset-muted: var(--muted);
+  --preset-line: var(--line);
+  --preset-accent: var(--acid);
+  --preset-on-accent: #111410;
+  --preset-terminal: #0b0e0c;
+  --preset-shadow: rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme="light"] {
+  --preset-on-accent: #ffffff;
+  --preset-terminal: #fbfaf5;
+  --preset-shadow: rgba(65, 55, 38, 0.14);
+}
+
+html[data-palette="nord"] {
+  --preset-canvas: #2e3440;
+  --preset-raised: #3b4252;
+  --preset-soft: #434c5e;
+  --preset-text: #eceff4;
+  --preset-muted: #b2bdce;
+  --preset-line: #596579;
+  --preset-accent: #88c0d0;
+  --preset-on-accent: #242933;
+  --preset-terminal: #2e3440;
+  --preset-green: #a3be8c;
+  --preset-amber: #ebcb8b;
+  --preset-red: #e5989b;
+  --preset-cyan: #8fbcbb;
+  --preset-violet: #c9a5c3;
+  --preset-blue: #91b7df;
+}
+
+html[data-palette="dracula"] {
+  --preset-canvas: #282a36;
+  --preset-raised: #323442;
+  --preset-soft: #3b3e50;
+  --preset-text: #f8f8f2;
+  --preset-muted: #b4b6ce;
+  --preset-line: #5b5e77;
+  --preset-accent: #bd93f9;
+  --preset-on-accent: #282a36;
+  --preset-terminal: #282a36;
+  --preset-green: #50fa7b;
+  --preset-amber: #ffb86c;
+  --preset-red: #ff797d;
+  --preset-cyan: #8be9fd;
+  --preset-violet: #bd93f9;
+  --preset-blue: #92b6ff;
+}
+
+html[data-palette="tokyo-night"] {
+  --preset-canvas: #1a1b26;
+  --preset-raised: #242635;
+  --preset-soft: #2c3044;
+  --preset-text: #c0caf5;
+  --preset-muted: #9ba9d4;
+  --preset-line: #485370;
+  --preset-accent: #7aa2f7;
+  --preset-on-accent: #151722;
+  --preset-terminal: #1a1b26;
+  --preset-green: #9ece6a;
+  --preset-amber: #e0af68;
+  --preset-red: #f7768e;
+  --preset-cyan: #7dcfff;
+  --preset-violet: #bb9af7;
+  --preset-blue: #7aa2f7;
+}
+
+html[data-palette="solarized-light"] {
+  --preset-canvas: #fdf6e3;
+  --preset-raised: #fffbef;
+  --preset-soft: #eee8d5;
+  --preset-text: #354d54;
+  --preset-muted: #637575;
+  --preset-line: #c8c2ad;
+  --preset-accent: #007d94;
+  --preset-terminal: #fdf6e3;
+  --preset-green: #587400;
+  --preset-amber: #916400;
+  --preset-red: #bc302c;
+  --preset-cyan: #007b73;
+  --preset-violet: #6658af;
+  --preset-blue: #176eab;
+}
+
+html[data-palette="github-light"] {
+  --preset-canvas: #ffffff;
+  --preset-raised: #f6f8fa;
+  --preset-soft: #eaeef2;
+  --preset-text: #1f2328;
+  --preset-muted: #59636e;
+  --preset-line: #c5cdd5;
+  --preset-accent: #0969da;
+  --preset-terminal: #ffffff;
+  --preset-green: #1a7f37;
+  --preset-amber: #9a6700;
+  --preset-red: #cf222e;
+  --preset-cyan: #087e8b;
+  --preset-violet: #8250df;
+  --preset-blue: #0969da;
+  --preset-shadow: rgba(31, 35, 40, 0.12);
+}
+
+html[data-palette="rose-pine-dawn"] {
+  --preset-canvas: #faf4ed;
+  --preset-raised: #fffaf3;
+  --preset-soft: #f2e9e1;
+  --preset-text: #575279;
+  --preset-muted: #736c85;
+  --preset-line: #d5c9cd;
+  --preset-accent: #856593;
+  --preset-terminal: #faf4ed;
+  --preset-green: #477a59;
+  --preset-amber: #96611c;
+  --preset-red: #b43d59;
+  --preset-cyan: #286983;
+  --preset-violet: #90719f;
+  --preset-blue: #286983;
+  --preset-shadow: rgba(87, 82, 121, 0.14);
+}
+
+/* Scope the surface layer to the six additional palettes. The mode attribute
+   still controls all layout, semantic state styling, and browser color scheme. */
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) {
+  color: var(--preset-text);
+  background: var(--preset-canvas);
+  --ink: var(--preset-canvas);
+  --ink-raised: var(--preset-raised);
+  --ink-soft: var(--preset-soft);
+  --paper: var(--preset-text);
+  --muted: var(--preset-muted);
+  --line: var(--preset-line);
+  --acid: var(--preset-green);
+  --amber: var(--preset-amber);
+  --red: var(--preset-red);
+  --cyan: var(--preset-cyan);
+  --violet: var(--preset-violet);
+  --blue: var(--preset-blue);
+  --light-canvas: var(--preset-canvas);
+  --light-raised: var(--preset-raised);
+  --light-subtle: var(--preset-soft);
+  --light-sunken: var(--preset-soft);
+  --light-text: var(--preset-text);
+  --light-muted: var(--preset-muted);
+  --light-faint: var(--preset-muted);
+  --light-line: var(--preset-line);
+  --light-line-strong: color-mix(in srgb, var(--preset-line) 65%, var(--preset-text));
+  --light-green-wash: color-mix(in srgb, var(--preset-green) 12%, var(--preset-raised));
+  --light-cyan-wash: color-mix(in srgb, var(--preset-cyan) 12%, var(--preset-raised));
+  --light-amber-wash: color-mix(in srgb, var(--preset-amber) 12%, var(--preset-raised));
+  --light-red-wash: color-mix(in srgb, var(--preset-red) 12%, var(--preset-raised));
+  --light-shadow: var(--preset-shadow);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) body {
+  color: var(--preset-text);
+  background: var(--preset-canvas);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) ::selection {
+  color: var(--preset-text);
+  background: color-mix(in srgb, var(--preset-accent) 28%, var(--preset-canvas));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .dashboard-shell, .snippet-library-shell, .new-session-screen, .console-shell,
+  .workspace-pane-screen, .workspace-pane-canvas, .workspace-pane-loading,
+  .missing-session
+) {
+  color: var(--preset-text);
+  background:
+    radial-gradient(circle at 85% 5%, color-mix(in srgb, var(--preset-accent) 9%, transparent), transparent 30rem),
+    var(--preset-canvas);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .session-card, .recovery-card, .sort-builder, .tag-filter-panel, .new-session-card,
+  .new-session-saved-directories, .snippet-workspace, .snippet-node-row,
+  .snippet-search-results li, .workspace-callback-card, .workspace-callback-panel,
+  .floating-terminal-panel, .floating-staged-input-panel, .session-files-panel,
+  .workspace-settings-attributes > div, .mq-item, .saved-workspaces-empty,
+  .saved-workspaces-loading, .saved-workspaces-load-error,
+  .saved-workspace-create-form, .saved-workspace-card
+) {
+  color: var(--preset-text);
+  background: var(--preset-raised);
+  border-color: var(--preset-line);
+  box-shadow: 0 8px 24px var(--preset-shadow);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .session-card:hover, .snippet-node-row:hover, .saved-workspace-card:hover
+) {
+  background: color-mix(in srgb, var(--preset-raised) 90%, var(--preset-accent));
+  border-color: color-mix(in srgb, var(--preset-accent) 60%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .console-header, .workspace-pane-top-strip, .workspace-pane-header,
+  .workspace-pane-leaf-toolbar, .workspace-navigation, .workspace-tab-strip,
+  .workspace-tab-rail, .snippet-outline, .snippet-browser-header,
+  .input-dock, .staged-composer, .input-bar, .floating-staged-input-header,
+  .mq-header, .mq-toolbar, .sp-header, .history-header, .title-sheet header,
+  .title-actions, .session-files-header, .session-files-toolbar,
+  .saved-workspace-card-rail
+) {
+  color: var(--preset-text);
+  background: var(--preset-soft);
+  border-color: var(--preset-line);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .snippet-browser, .snippet-preview, .snippet-preview pre, .history-scroll,
+  .history-scroll pre, .mq-list-region, .mq-message-text, .sp-tree, .sp-preview,
+  .sp-preview pre, .new-session-default, .workspace-settings-attributes,
+  .session-tag-picker, .session-history-entry, .composer-attachment-card,
+  .saved-workspace-create-modes > label, .saved-workspace-tab-summary > ol > li
+) {
+  color: var(--preset-text);
+  background: var(--preset-canvas);
+  border-color: var(--preset-line);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .history-panel, .title-sheet:not(.scoped-note-sheet), .mq-dialog, .sp-dialog,
+  .session-history-dialog, .snippet-editor-sheet, .snippet-delete-backdrop section,
+  .workspace-tab-search-dialog, .workspace-session-add-dialog,
+  .workspace-command-palette-dialog, .workspace-shortcut-dialog,
+  .shortcut-settings-dialog, .workspace-recents-sheet
+) {
+  color: var(--preset-text);
+  background: var(--preset-raised);
+  border-color: var(--preset-line);
+  box-shadow: 0 24px 70px var(--preset-shadow);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  input:not([type="radio"]):not([type="checkbox"]):not([type="range"]),
+  textarea:not(.xterm-helper-textarea), select
+) {
+  color: var(--preset-text);
+  background: var(--preset-canvas);
+  border-color: var(--preset-line);
+  caret-color: var(--preset-accent);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(input, textarea)::placeholder {
+  color: var(--preset-muted);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(input, textarea, select):focus {
+  border-color: var(--preset-accent);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(input, textarea)[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .search-field, .snippet-search-field, .filter-chip, .refresh-button,
+  .theme-toggle, .account-link, .secondary-button, .app-tabs,
+  .grok-theme-stage, .sort-add-criterion, .group-state-toggle, .view-switch,
+  .sort-priority-chip, .workspace-pane-back, .workspace-pane-navigation-control,
+  .snippet-create-actions button:not(.primary), .snippet-icon-button,
+  .sp-button:not(.sp-button-primary):not(.sp-button-danger), .mq-button:not(.mq-button-danger):not(.mq-button-send),
+  .saved-workspace-management-actions > button,
+  .saved-workspace-rename-form button:not([type="submit"]),
+  .saved-workspace-delete-confirm button:not(.danger)
+) {
+  color: var(--preset-text);
+  background: var(--preset-raised);
+  border-color: var(--preset-line);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .theme-toggle, .account-link, .secondary-button, .refresh-button,
+  .filter-chip, .snippet-icon-button, .saved-workspace-management-actions > button
+):hover:not(:disabled) {
+  color: var(--preset-text);
+  background: color-mix(in srgb, var(--preset-accent) 12%, var(--preset-raised));
+  border-color: var(--preset-accent);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .theme-toggle[aria-pressed="true"], .filter-chip.active, .view-switch button.active,
+  .group-state-toggle.active, .app-tabs button.active, .snippet-root-button.active,
+  .snippet-outline-list button.active, .workspace-command-palette-result.highlighted:not(.danger),
+  .sp-snippet-row.active, .saved-workspace-open, .saved-workspace-open-window,
+  .saved-workspace-create-modes > label.selected
+) {
+  color: var(--preset-accent);
+  background: color-mix(in srgb, var(--preset-accent) 14%, var(--preset-raised));
+  border-color: color-mix(in srgb, var(--preset-accent) 55%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .primary-button, .snippet-primary-button, .snippet-create-actions button.primary,
+  .saved-workspace-create-trigger, .saved-workspace-submit,
+  .saved-workspace-rename-form button[type="submit"], .saved-workspace-current
+) {
+  color: var(--preset-on-accent);
+  background: var(--preset-accent);
+  border-color: var(--preset-accent);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .primary-button, .snippet-primary-button, .snippet-create-actions button.primary,
+  .saved-workspace-create-trigger, .saved-workspace-submit
+):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--preset-accent) 86%, var(--preset-text));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .brand-mark {
+  color: var(--preset-on-accent);
+  background: var(--preset-accent);
+  box-shadow: 0 8px 24px var(--preset-shadow);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .app-tabs :is(button, .account-link):not(.active) {
+  color: var(--preset-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .workspace-tab:not([data-tab-move-selected="true"]) {
+  background: var(--preset-raised);
+  border-color: color-mix(in srgb, var(--tab-group-color, var(--preset-line)) 35%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .workspace-tab:not([data-tab-move-selected="true"]).active {
+  background: color-mix(in srgb, var(--tab-group-color, var(--preset-accent)) 16%, var(--preset-raised));
+  border-color: color-mix(in srgb, var(--tab-group-color, var(--preset-accent)) 60%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .workspace-tab:not(.active) > [role="tab"] {
+  color: var(--preset-muted);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(.workspace-tab-group, .workspace-tab-group-chip):not([data-tab-move-selected="true"]) {
+  background: color-mix(in srgb, var(--tab-group-color) 12%, var(--preset-raised));
+  border-color: color-mix(in srgb, var(--tab-group-color) 40%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .workspace-tab-group-toggle {
+  color: color-mix(in srgb, var(--tab-group-color) 65%, var(--preset-text));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .saved-workspaces-empty-mark {
+  color: var(--preset-accent);
+  background: color-mix(in srgb, var(--preset-accent) 10%, var(--preset-raised));
+  border-color: color-mix(in srgb, var(--preset-accent) 40%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .saved-workspace-card.active {
+  border-color: var(--preset-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--preset-accent) 18%, transparent), 0 8px 24px var(--preset-shadow);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .saved-workspace-card-actions {
+  border-color: var(--preset-line);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .saved-workspace-delete-confirm {
+  color: var(--preset-text);
+  background: color-mix(in srgb, var(--red) 10%, var(--preset-raised));
+  border-color: color-mix(in srgb, var(--red) 55%, var(--preset-line));
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .brand-lockup h1, .dashboard-intro h2, .sort-builder-header h3,
+  .session-card-main, .session-name-row h3, .session-title, .new-session-card-header h1,
+  .snippet-library-intro h2, .snippet-outline h2, .snippet-browser-header h2,
+  .snippet-node-copy strong, .snippet-preview h2, .composer-heading label,
+  .history-panel h2, .title-sheet h2, .mq-dialog h2, .sp-dialog h2,
+  .mq-state-empty strong, .sp-state strong, .workspace-pane-title,
+  .workspace-pane-header-summary, .workspace-callback-panel-header h2,
+  .workspace-callback-session, .workspace-callback-empty strong,
+  .floating-staged-input-header h2, .saved-workspaces-empty h3,
+  .saved-workspace-card h3, .saved-workspace-create-copy label,
+  .saved-workspace-rename-form label, .saved-workspace-create-modes strong
+) {
+  color: var(--preset-text);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .brand-lockup p, .intro-copy, .results-summary, .sort-order-summary,
+  .activity-time, .session-tmux-name, .session-path, .session-meta,
+  .snippet-library-intro > p, .snippet-node-copy small, .snippet-node-copy > span,
+  .snippet-outline > header > span, .snippet-field-help, .snippet-preview-meta,
+  .new-session-card-header > div > p:last-child, .new-session-default p,
+  .new-session-name-field small, .new-session-directory-field > small,
+  .composer-heading > span, .composer-meta,
+  .workspace-pane-save-state:not(.saved):not(.limited),
+  .workspace-pane-title span, .workspace-pane-header-summary small,
+  .workspace-pane-leaf-toolbar label > span, .workspace-pane-empty,
+  .workspace-callback-summary, .workspace-callback-panel-header span,
+  .workspace-callback-session small, .floating-staged-input-meta,
+  .mq-explainer, .mq-state:not(.mq-state-error), .sp-state:not(.sp-state-error),
+  .sp-search-help, .title-form-body > p, .saved-workspaces-lede,
+  .saved-workspaces-empty p, .saved-workspaces-loading, .saved-workspace-activity,
+  .saved-workspace-tab-heading, .saved-workspace-resume-target,
+  .saved-workspace-tab-summary > p, .saved-workspace-tab-summary > ol > li > span,
+  .saved-workspace-create-copy p, .saved-workspace-create-modes legend,
+  .saved-workspace-create-modes small, .saved-workspace-field-hint
+) {
+  color: var(--preset-muted);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  .mq-state-error, .sp-state-error, .sp-state-error strong,
+  .saved-workspaces-load-error, .saved-workspaces-load-error strong,
+  .saved-workspace-field-error, .saved-workspace-rename-form > p
+) {
+  color: var(--red);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .workspace-callback-card.has-working {
+  border-color: var(--acid);
+}
+
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) :is(
+  button, input, textarea, select, a
+):focus-visible {
+  outline-color: var(--preset-accent);
+}
+
+/* Xterm owns cell/ANSI colors; only the surrounding terminal surface changes. */
+html[data-palette]:not([data-palette="muxdeck"]):not([data-palette="paper"]) .terminal-stage {
+  background: var(--preset-terminal);
+  border-color: var(--preset-line);
+}
+
+.theme-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.theme-chooser-button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: var(--preset-text);
+  background: var(--preset-raised);
+  border: 1px solid var(--preset-line);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.theme-chooser-button svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.theme-chooser-button:hover,
+.theme-chooser-button:focus-visible {
+  color: var(--preset-accent);
+  background: color-mix(in srgb, var(--preset-accent) 10%, var(--preset-raised));
+  border-color: var(--preset-accent);
+}
+
+.theme-picker-dialog {
+  width: min(580px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  margin: auto;
+  padding: 24px;
+  overflow-y: auto;
+  color: var(--preset-text);
+  background: var(--preset-raised);
+  border: 1px solid var(--preset-line);
+  border-top: 3px solid var(--preset-accent);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px var(--preset-shadow);
+}
+
+.theme-picker-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(4px);
+}
+
+.theme-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.theme-picker-dialog h2 {
+  margin: 0;
+  color: var(--preset-text);
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+
+.theme-picker-close {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--preset-muted);
+  background: var(--preset-soft);
+  border: 1px solid var(--preset-line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.theme-picker-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.theme-picker-close:hover,
+.theme-picker-close:focus-visible {
+  color: var(--preset-text);
+  border-color: var(--preset-accent);
+}
+
+.theme-picker-intro {
+  margin: 12px 0 22px;
+  color: var(--preset-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.theme-picker-dialog fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.theme-picker-dialog fieldset + fieldset {
+  margin-top: 22px;
+}
+
+.theme-picker-dialog legend {
+  margin-bottom: 10px;
+  padding: 0;
+  color: var(--preset-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.theme-picker-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.theme-picker-option {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 13px 36px 13px 13px;
+  color: var(--preset-text);
+  background: var(--preset-canvas);
+  border: 1px solid var(--preset-line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.theme-picker-option:hover {
+  border-color: var(--preset-accent);
+}
+
+.theme-picker-option:has(input:checked) {
+  background: color-mix(in srgb, var(--preset-accent) 9%, var(--preset-canvas));
+  border-color: var(--preset-accent);
+  box-shadow: inset 0 0 0 1px var(--preset-accent);
+}
+
+.theme-picker-option:has(input:focus-visible) {
+  outline: 2px solid var(--preset-accent);
+  outline-offset: 3px;
+}
+
+.theme-picker-option input {
+  position: absolute;
+  top: 13px;
+  right: 12px;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--preset-accent);
+  cursor: pointer;
+}
+
+.theme-picker-swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.theme-picker-swatches span {
+  display: block;
+  width: 23px;
+  height: 18px;
+  border: 1px solid rgba(128, 128, 128, 0.2);
+  border-radius: 3px;
+}
+
+.theme-picker-name {
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+@media (max-width: 800px) {
+  .theme-controls {
+    gap: 5px;
+  }
+
+  .theme-chooser-button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+  }
+
+  .theme-chooser-button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .theme-picker-dialog {
+    padding: 18px;
+  }
+
+  .theme-picker-option {
+    padding-left: 10px;
+    padding-right: 30px;
+  }
+
+  .theme-picker-swatches {
+    gap: 3px;
+  }
+
+  .theme-picker-swatches span {
+    width: 20px;
+  }
+}

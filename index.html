@@ -8,15 +8,24 @@
     <script>
       (() => {
         let theme = "dark";
+        let preferences = {};
         try {
           if (window.localStorage.getItem("muxdeck-theme") === "light") theme = "light";
+          preferences = JSON.parse(window.localStorage.getItem("muxdeck-theme-palettes") || "null") || {};
         } catch {
           // The app keeps working with its dark default when storage is blocked.
         }
+        const palettes = {
+          dark: { muxdeck: "#151914", nord: "#2e3440", dracula: "#282a36", "tokyo-night": "#1a1b26" },
+          light: { paper: "#f4f0e7", "solarized-light": "#fdf6e3", "github-light": "#ffffff", "rose-pine-dawn": "#faf4ed" },
+        };
+        const requested = preferences[theme];
+        const palette = Object.hasOwn(palettes[theme], requested) ? requested : (theme === "dark" ? "muxdeck" : "paper");
         document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.palette = palette;
         document.documentElement.style.colorScheme = theme;
         document.querySelector('meta[name="theme-color"]').content =
-          theme === "light" ? "#f4f0e7" : "#151914";
+          palettes[theme][palette];
       })();
     </script>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23bbf451'/%3E%3Cpath d='m16 20 12 12-12 12M32 44h16' fill='none' stroke='%23111410' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />

@@ -5,6 +5,7 @@ import "@fontsource-variable/space-grotesk";
 import { App } from "./App";
 import "./styles.css";
 import "./light-theme.css";
+import "./theme-presets.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
