@@ -788,6 +788,14 @@ def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, m
         {"method": "item/agentMessage/delta", "params": {"itemId": "visible", "delta": "Checking API " + secret.decode() + " 雪\n"}},
         {"method": "turn/completed", "params": {"turn": {"status": "interrupted"}}},
     ]
+    # Real Codex notifications identify the lifecycle boundary that releases
+    # withheld same-item text before the outcome is displayed.
+    for record in records:
+        record["params"]["threadId"] = "mirror-thread"
+        if record["method"].startswith("item/"):
+            record["params"]["turnId"] = "mirror-turn"
+        elif record["method"] in {"turn/started", "turn/completed"}:
+            record["params"]["turn"] = {"id": "mirror-turn", **record["params"].get("turn", {})}
     wire = b"".join((json.dumps(record, ensure_ascii=False) + "\n").encode() for record in records)
     output, observed = io.BytesIO(), bytearray()
     mirror_path = tmp_path / "terminal-mirror.txt"
@@ -795,7 +803,8 @@ def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, m
         api = LocalLaunchAPI(terminal_output=terminal)
         try:
             status = run([sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); [sys.stdout.buffer.write(data[i:i+31]) for i in range(0,len(data),31)]"],
-                api=api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(wire),
+                # Ambient credentials must not change the retention window.
+                api=api, cwd=str(tmp_path), environment={}, stdin=io.BytesIO(wire),
                 stdout=output, stderr=io.BytesIO(), mirror_secrets=(secret,), mirror_format=mirror_format,
                 output_observer=lambda kind, content: observed.extend(content) if kind == "stdout" else None)
             assert status == 0
@@ -807,8 +816,9 @@ def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, m
     assert secret not in visible
     assert b"[REDACTED]" in visible
     if mirror_format:
-        assert "[Agent] Checking API [REDACTED] 雪".encode() in visible
-        assert b"[Turn] Interrupted." in visible
+        agent_text = "[Agent] Checking API [REDACTED] 雪".encode()
+        assert agent_text in visible
+        assert visible.index(agent_text) < visible.index(b"[Turn] Interrupted.")
         assert b"opaque-reasoning-correlation" not in visible
         assert b"tokenUsage" not in visible
     else:

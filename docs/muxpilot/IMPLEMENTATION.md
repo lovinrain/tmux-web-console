@@ -35,3 +35,7 @@ and attributing independent user activity explicitly.
 Real-provider qualification remains separately gated by Multica's repository
 instructions. Synthetic tests cannot establish account-specific provider
 compatibility. The final evidence ledger must distinguish those results.
+
+Candidate evidence: the actual three-worker paired fake-provider scenario, native API/daemon fault drill, native privacy checks, Multica CI and isolated restore/rollback rehearsals pass within their recorded scope. The bounded natural-main real Codex qualification now passes (E21), including three completed workers, verified goal closure and the requested private draft PR. Final source CI, release binding and live deployment remain pending. See [EVIDENCE.md](EVIDENCE.md).
+
+The planned [durable delivery report](/root/.local/state/muxdeck/deployments/20261001T015644Z-muxpilot/DELIVERY.md) retains the final source/artifact pair, acceptance evidence and operational gate results. G1, G3 and G4 close there only when their checks actually pass; this candidate document does not claim an installation.

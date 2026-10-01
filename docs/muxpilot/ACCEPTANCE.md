@@ -2,6 +2,8 @@
 
 Status: implementation candidate under validation; complete v1 acceptance and production readiness remain pending. Actual passing checks, failed/skipped checks and remaining gaps are tracked in [EVIDENCE.md](EVIDENCE.md). Baseline: Muxdeck `96769f6`, Multica `e31da86`. Requirement references F01–F12 and N01–N04 follow the product specification. Scenario IDs below are stable references for implementation tasks and release reports.
 
+Candidate evidence: the actual three-worker paired fake-provider scenario, native API/daemon fault drill, native privacy checks, Multica CI and isolated restore/rollback rehearsals pass within their recorded scope. The bounded natural-main real Codex qualification now passes (E21), including three completed workers, verified goal closure and the requested private draft PR. Final source CI, release binding and live deployment remain pending. See [EVIDENCE.md](EVIDENCE.md).
+
 ## Scope and test discipline
 
 The acceptance target is a configured supported interactive main agent session that can receive “Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a PR when tested.” One-time installation loads the Muxpilot tools/instructions through the provider's supported mechanism; activation resolves project context and coordinates Multica work while people observe and steer in Muxdeck. An unconfigured session reports the missing setup without pretending tools were injected. No per-project CLI, configuration file, or mandatory structured brief is part of the happy path.
@@ -117,3 +119,5 @@ The release bundle contains:
 - A private task timeline via `scripts/task_timeline.py` that wraps commands, tests, staging, push, CI waits and deployment; records phase changes and GitHub timestamps; and includes its generated report. Report command runtime separately from total task elapsed time and intervals between commands.
 
 Release may not expose the unauthenticated console publicly, restart tmux, kill an unscoped server, or destroy live sessions without explicit human direction. Test and release evidence must demonstrate preservation of unrelated work. Routine push/deploy authorization does not widen those safety boundaries.
+
+The planned [durable delivery report](/root/.local/state/muxdeck/deployments/20261001T015644Z-muxpilot/DELIVERY.md) retains the final source/artifact pair, acceptance evidence and operational gate results. G1, G3 and G4 close there only when their checks actually pass; this candidate document does not claim an installation.

@@ -2,7 +2,7 @@
 
 Status: implementation and paired release validation are in progress on
 `feat/muxpilot`. The runtime, project commands, coordinator skill, and UI
-integration now have code and focused tests. Provider qualification and the
+integration now have code and focused tests. The bounded real-provider qualification passes; final CI/source binding and the
 complete release gate remain required before deployment.
 
 Muxpilot lets a person give a main coding agent a project-level goal in natural
@@ -16,6 +16,8 @@ and keeps a private local history that supports audit and recovery.
 The user chooses **Multica's existing board and UI**. A new board inside Muxdeck
 is outside this plan. The user supplies a repository and goal, not a required
 brief file, project CLI invocation, or manually maintained agent roster.
+
+Candidate evidence: the actual three-worker paired fake-provider scenario, native API/daemon fault drill, native privacy checks, Multica CI and isolated restore/rollback rehearsals pass within their recorded scope. The bounded natural-main real Codex qualification now passes (E21), including three completed workers, verified goal closure and the requested private draft PR. Final source CI, release binding and live deployment remain pending. See [EVIDENCE.md](EVIDENCE.md).
 
 ## Read the plan
 
@@ -90,3 +92,5 @@ matrix or design before dependent work proceeds; it cannot be called a pass.
 - [Agent transcripts](../AGENT_TRANSCRIPTS.md)
 - [Task timing evidence](../TASK_TIMELINES.md)
 - [Deployment runbook](../../AGENT_DEPLOYMENT_GUIDE.md)
+
+The planned [durable delivery report](/root/.local/state/muxdeck/deployments/20261001T015644Z-muxpilot/DELIVERY.md) retains the final source/artifact pair, acceptance evidence and operational gate results. G1, G3 and G4 close there only when their checks actually pass; this candidate document does not claim an installation.

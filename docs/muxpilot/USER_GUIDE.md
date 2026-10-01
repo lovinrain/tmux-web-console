@@ -1,24 +1,17 @@
 # Using Muxpilot
 
-Status: implementation candidate; the paired live demo is still pending.
+After the one-time [installation](OPERATIONS.md):
 
-Muxpilot lets your main coding agent organize a goal on the existing
-[Multica](https://github.com/multica-ai/multica) board and delegate substantial
-work to visible Muxdeck workers. Your main agent handles planning, integration,
-tests, and delivery.
-
-1. After the one-time [setup](OPERATIONS.md), open a fresh configured Codex main
-   in Muxdeck.
+1. Open [Muxdeck](https://la.99818888.xyz/mux/), sign in, and open a fresh configured Codex main terminal. This is an ordinary visible main agent with the Muxpilot skill installed.
 2. Say:
 
-   > Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a
-   > PR when it is tested.
+   > Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a PR when it is tested.
 
-   “Use Muxpilot for this repository” also works when the main is in the intended
-   checkout. You do not need to write a brief or create the board yourself.
-3. Follow the board and workspace links the main gives you. It creates tasks,
-   starts eligible workers, reviews their results, and checks the integrated
-   change. Open a worker's run link to see its terminal output or history.
+   You can say “Use Muxpilot for this repository” when the main is in the intended checkout. No brief, project form, or per-project command is required.
+3. Follow the project and task links the main gives you on the existing [Multica board](https://la.99818888.xyz:8443). Open worker run links in Muxdeck to watch output or retained history. The main plans, delegates, integrates, tests, and reports the actual deliverable.
+
+Multica's browser password and application sign-in details are stored privately
+on the host in `~/.config/muxpilot/private-access.json`.
 
 Continue in the same conversation:
 
@@ -27,22 +20,12 @@ Continue in the same conversation:
 - “Show me the authentication agent.”
 - “Stop starting tasks; let current work finish.”
 - “Resume the shop password-reset project.”
-- “Show each agent's contribution.”
+- “Audit the result and show each agent’s contribution.”
 
-Send worker instructions through the main or supported task controls. The
-worker's terminal shows output; typing there does not steer it.
+Send steering through the main or supported task controls. The daemon owns worker processes; their terminals mirror output read-only. Typing there does not steer a worker.
 
-If there is no main terminal yet, the installed launcher opens one and returns
-its link:
+The final report names the commit or requested PR, actual checks, remaining limitations, and private audit directory under `~/.local/state/muxdeck/projects/<project-UUID>`. Missing setup or an unsupported capability is reported explicitly. [Operations](OPERATIONS.md) covers installation and recovery.
 
-```bash
-muxpilot main --repo ~/git_farm/shop --goal 'Add password reset end to end, and open a PR when it is tested.'
-```
+Muxpilot reuses [Multica](https://github.com/multica-ai/multica), preserving its existing board and attribution.
 
-The final report gives the actual commit or requested PR, test outcomes,
-remaining limitations, and audit location. If setup is missing, the main names
-what needs fixing. [Operations](OPERATIONS.md) covers authentication, supported
-capabilities, controls, and recovery.
-
-Muxpilot is built on [Multica](https://github.com/multica-ai/multica), preserving
-its existing board and product attribution.
+Installation and qualified pairing details are recorded in the [durable delivery report](/root/.local/state/muxdeck/deployments/20261001T015644Z-muxpilot/DELIVERY.md).

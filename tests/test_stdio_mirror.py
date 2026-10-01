@@ -296,3 +296,57 @@ def test_semantic_flush_releases_safe_item_text_and_omission_notice_is_truthful(
     )
     assert "Completed" not in rendered
     assert "muxpilot/capture" not in rendered
+
+
+@pytest.mark.parametrize("chunk_size", [1, 31, 65536])
+@pytest.mark.parametrize("long_secret", [False, True])
+def test_semantic_turn_completion_releases_agent_tail_before_outcome(
+    chunk_size, long_secret
+):
+    from tmux_console.stdio_capture import CodexCaptureSanitizer
+    from tmux_console.stdio_runner import StreamingRedactor
+
+    secret = b"synthetic-private-mirror-token"
+    secrets = (secret, b"unused-long-secret-" * 16) if long_secret else (secret,)
+    sanitizer = CodexCaptureSanitizer(secrets, redactor_factory=StreamingRedactor)
+    mirror = CodexProgressMirror()
+    display = StreamingRedactor(secrets)
+    source = event(
+        "item/agentMessage/delta",
+        {
+            "threadId": "mirror-thread",
+            "turnId": "mirror-turn",
+            "itemId": "visible",
+            "delta": "Checking API " + secret.decode() + " 雪\n",
+        },
+    )
+    source += event(
+        "turn/completed",
+        {
+            "threadId": "mirror-thread",
+            "turn": {"id": "mirror-turn", "status": "interrupted"},
+        },
+    )
+    visible = bytearray()
+    for position in range(0, len(source), chunk_size):
+        visible.extend(
+            display.feed(
+                mirror.feed(sanitizer.feed(source[position : position + chunk_size]))
+            )
+        )
+    # Completion must flush its own item state rather than depend on EOF or a
+    # larger unrelated credential retaining all the display text until EOF.
+    assert not sanitizer.items
+    visible.extend(
+        display.feed(
+            mirror.feed(sanitizer.feed(b"", final=True), final=True), final=True
+        )
+    )
+    agent_text = "[Agent] Checking API [REDACTED] 雪\n".encode()
+    assert agent_text in visible
+    assert visible.index(agent_text) < visible.index(b"[Turn] Interrupted.")
+    assert secret not in visible
+    assert (
+        sanitizer.redacted
+        and sanitizer.omitted_records == sanitizer.omitted_deltas == 0
+    )
