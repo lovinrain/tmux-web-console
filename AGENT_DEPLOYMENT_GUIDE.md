@@ -1168,6 +1168,18 @@ omit it for a loopback-only deployment. Repeat `--public-origin` for multiple
 routes. Use `--expected-dist` to compare the installed frontend with the separate
 tested build; omit it for a change that does not replace frontend assets.
 
+For a systemd user unit (`systemctl --user`, normally with `loginctl
+enable-linger` so it survives logout and starts at boot), pass `--user` to
+`snapshot`; the baseline records that scope and `verify` reuses it. When the
+service account cannot read its journal, direct the unit's output to a private
+file (`StandardOutput=append:PATH` with `UMask=0077`) and also pass
+`--log-file PATH` to `snapshot`. `verify` then counts application errors only in
+the bytes appended after the baseline; a stop timeout is not observable there.
+Do not run `systemd-analyze --user verify` against a live user manager: on
+systemd 250 it can replace the manager's private socket, after which
+`systemctl --user` fails until the manager re-executes (`kill -s RTMIN+25
+<user-manager-pid>`).
+
 Every phase prints its start, result, and elapsed time immediately. Commands
 have an eight-second timeout; HTTP requests have a five-second timeout. There
 are no automatic retry loops. `verification.json` and `report.md` are written

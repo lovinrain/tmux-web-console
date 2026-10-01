@@ -584,7 +584,9 @@ def ensure_service(
         else:
             status = _check_health(status, config_path)
             return {**status, "reused": True}
-        command = [sys.executable, "-m", "muxpilot.service", "--socket", str(path)]
+        # -P: the caller's working directory (often a repository) must not
+        # shadow the installed package on sys.path.
+        command = [sys.executable, "-P", "-m", "muxpilot.service", "--socket", str(path)]
         if config_path is not None:
             command.extend(["--config", str(Path(config_path).absolute())])
         log_fd = _private_file(path.with_name(path.name + ".log"))

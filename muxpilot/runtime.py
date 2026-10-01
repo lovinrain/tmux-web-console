@@ -35,7 +35,31 @@ from tmux_console.control_cli import (
 from tmux_console.stdio_bridge import is_lightweight_probe
 from tmux_console.stdio_bridge import run as bridge_run
 from tmux_console.stdio_capture import CodexCaptureSanitizer
+from tmux_console.stdio_mirror import CODEX_MIRROR_FORMAT, COPILOT_MIRROR_FORMAT
 from tmux_console.stdio_runner import StreamingRedactor
+
+# Provider-native helper delegation is disabled by the qualified flag for each
+# supported worker CLI, so substantial delegation uses visible managed workers.
+HELPER_POLICIES = {"codex": "disable_multi_agent", "copilot": "exclude_subagent_tools"}
+COPILOT_SUBAGENT_TOOLS = ("task", "read_agent", "write_agent", "list_agents")
+COPILOT_FORBIDDEN_OPTIONS = frozenset({"--fleet", "--available-tools", "--acp"})
+
+
+def worker_helper_policy(provider: str) -> str:
+    """The enforced helper policy for a supported worker provider."""
+    try:
+        return HELPER_POLICIES[provider]
+    except KeyError:
+        raise CapabilityError(f"unsupported worker provider: {provider}") from None
+
+
+def _copilot_json_output(command: list[str]) -> bool:
+    arguments = command[1:]
+    return any(
+        (argument == "--output-format" and index + 1 < len(arguments) and arguments[index + 1] == "json")
+        or argument == "--output-format=json"
+        for index, argument in enumerate(arguments)
+    )
 
 
 class RuntimeErrorBase(RuntimeError):
@@ -295,10 +319,12 @@ class ExecutionContext:
             raise ValueError("generation must be positive")
         if isinstance(self.output_limit, bool) or not isinstance(self.output_limit, int) or self.output_limit < 0:
             raise ValueError("output_limit must be a nonnegative byte count")
-        if self.helper_policy not in {"unavailable", "disable_multi_agent"}:
+        if self.helper_policy not in {"unavailable", *HELPER_POLICIES.values()}:
             raise ValueError("unsupported provider helper policy")
         if self.helper_policy == "disable_multi_agent" and self.provider != "codex":
             raise CapabilityError("multi_agent feature control is only qualified for the Codex CLI")
+        if self.helper_policy == "exclude_subagent_tools" and self.provider != "copilot":
+            raise CapabilityError("subagent tool exclusion is only qualified for the GitHub Copilot CLI")
 
     @property
     def directory(self) -> Path:
@@ -417,6 +443,13 @@ class ProviderBridge:
             # The qualified Codex CLI/app-server exposes this global feature
             # option. Original daemon arguments retain their order and values.
             command = [*command, "--disable", "multi_agent"]
+        elif self.context.helper_policy == "exclude_subagent_tools":
+            for argument in command[1:]:
+                if argument.split("=", 1)[0] in COPILOT_FORBIDDEN_OPTIONS:
+                    raise CapabilityError("worker cannot enable hidden Copilot subagents or replace its tool policy")
+            # Copilot's subagent tools are removed from the model's tool set.
+            # The variadic option is last, so it cannot absorb daemon arguments.
+            command = [*command, "--excluded-tools", *COPILOT_SUBAGENT_TOOLS]
         directory = self.context.directory
         _private_directory(directory)
         try:
@@ -441,7 +474,7 @@ class ProviderBridge:
                     "epic_id": self.context.epic_id,
                     "worktree": self.context.worktree, "provider": self.context.provider,
                     "helper_control": {"policy": self.context.helper_policy,
-                                       "enforced": self.context.helper_policy == "disable_multi_agent",
+                                       "enforced": self.context.helper_policy in HELPER_POLICIES.values(),
                                        "provider_native_history": "unavailable",
                                        "boundary": "supported provider feature control; not a Unix process sandbox"},
                     "command_hash": request_hash, "started_at": time.time()}
@@ -512,7 +545,14 @@ class ProviderBridge:
 
         transcript_descriptor = os.open(directory / "transcript.jsonl", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         transcript_lock = threading.Lock()
-        structured = self.context.provider == "codex" and "app-server" in command[1:]
+        mirror_format = None
+        if self.context.provider == "codex" and "app-server" in command[1:]:
+            mirror_format = CODEX_MIRROR_FORMAT
+        elif self.context.provider == "copilot" and _copilot_json_output(command):
+            mirror_format = COPILOT_MIRROR_FORMAT
+        # Only Codex app-server output has a semantic capture representation;
+        # other providers retain redacted wire bytes.
+        structured = mirror_format == CODEX_MIRROR_FORMAT
         with os.fdopen(transcript_descriptor, "wb") as transcript:
             output = _Capture(directory / "stdout.bin", transcript, "stdout", self.context.output_limit, transcript_lock, secrets,
                               structured=structured)
@@ -528,7 +568,7 @@ class ProviderBridge:
                                                                  "operationId": self.context.execution_id}},
                                     stdin=stdin, stdout=stdout, stderr=stderr,
                                     mirror_secrets=secrets,
-                                    mirror_format="codex-app-server-v1" if structured else None,
+                                    mirror_format=mirror_format,
                                     output_observer=lambda kind, content: (output if kind == "stdout" else errors).observe(content))
                 return status
             except BaseException as error:
@@ -759,6 +799,8 @@ def ensure_project_workspace(config: Any, store: Any, owner: str, generation: in
     outside that group. An uncertain workspace create cannot be retried blindly.
     """
     public_url = _public_url(getattr(config, "muxdeck_public_url", None) or config.muxdeck_url)
+    provider = getattr(config, "worker_provider", "codex")
+    worker_helper_policy(provider)
     client = client or ControlClient(config.muxdeck_url, config.muxdeck_token_file)
     store.assert_lease(owner, generation)
     mapping = store.get_mapping("muxdeck_workspace", "project")
@@ -808,7 +850,7 @@ def ensure_project_workspace(config: Any, store: Any, owner: str, generation: in
                       "muxdeck_public_url": getattr(config, "muxdeck_public_url", None),
                       "workspace_id": workspace_id, "group_id": group_id,
                       "epic_id": epic_id, "group_name": name,
-                      "provider": "codex", "helper_policy": "disable_multi_agent"}
+                      "provider": provider, "helper_policy": worker_helper_policy(provider)}
     backend_mapping = store.get_mapping("project", "multica")
     if backend_mapping and backend_mapping["payload"].get("backend_generation") is not None:
         runtime_config["backend_generation"] = backend_mapping["payload"]["backend_generation"]

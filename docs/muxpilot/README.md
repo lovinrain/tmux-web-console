@@ -20,6 +20,13 @@ and goal. If it is missing after installation, start a fresh Codex session.
 See [the user guide](USER_GUIDE.md) and
 [official Codex skill discovery documentation](https://developers.openai.com/codex/skills/).
 
+GitHub Copilot CLI is also supported as both the main coordinator and the
+Multica worker provider (decision D14 in [DECISIONS.md](DECISIONS.md)). Its
+skill installs to `~/.copilot/skills/muxpilot/`, workers run through Multica's
+existing Copilot backend behind the `muxpilot-worker` wrapper, and steering
+uses an explicit cancel-and-resume because Copilot runs have no live input
+channel. See [operations](OPERATIONS.md#github-copilot-cli-installations).
+
 The user chooses **Multica's existing board and UI**. A new board inside Muxdeck
 is outside this plan. The user supplies a repository and goal, not a required
 brief file, project CLI invocation, or manually maintained agent roster.

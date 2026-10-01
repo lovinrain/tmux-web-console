@@ -37,7 +37,9 @@ def parser() -> argparse.ArgumentParser:
     main_parser.add_argument("--repo", required=True)
     main_parser.add_argument("--goal", required=True)
     main_parser.add_argument("--owner")
-    main_parser.add_argument("--model", default="gpt-6.1-sol")
+    main_parser.add_argument(
+        "--model", help="main model request; defaults to the installed main model"
+    )
     main_parser.add_argument("--command-json", type=json.loads)
     for command in (
         "status",
@@ -200,6 +202,12 @@ def main(argv: list[str] | None = None) -> int:
                 payload["receipt"] = json.loads(Path(payload["receipt"]).read_text())
         if action == "start":
             payload["main_pane"] = os.environ.get("TMUX_PANE")
+            # Copilot CLI exposes its own session ID to the shell tools of that
+            # conversation; binding it lets recovery name this exact main.
+            if not payload.get("main_conversation") and os.environ.get(
+                "COPILOT_AGENT_SESSION_ID"
+            ):
+                payload["main_conversation"] = os.environ["COPILOT_AGENT_SESSION_ID"]
         from .service import ensure_service, request
 
         ensure_service(config.socket_path, args.config)

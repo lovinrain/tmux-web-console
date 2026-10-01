@@ -38,8 +38,9 @@ below for evidence files. Keep the original start goal for idempotent retries.
    Installed binaries and a passing synthetic test do not qualify a live model.
 3. Run `muxpilot start --repo ABSOLUTE_PATH --goal VERBATIM_GOAL`, supplying
    `--main-conversation` when the actual conversation identity is available.
-   The CLI verifies the main's tmux incarnation. Do not invent a session or
-   conversation ID. If the current main has no usable tmux terminal, use the
+   In GitHub Copilot CLI, the shell's `COPILOT_AGENT_SESSION_ID` is that
+   identity and `start` binds it automatically. The CLI verifies the main's
+   tmux incarnation. Do not invent a session or conversation ID. If the current main has no usable tmux terminal, use the
    `muxpilot main --repo ABSOLUTE_PATH --goal VERBATIM_GOAL --model MODEL` with
    the bound main-model preference for an explicit handoff and
    stop coordinating in the old conversation. Never silently create two leads.
@@ -73,15 +74,21 @@ criteria, for example:
 ```
 
 Discover the approved configured roster with `muxpilot agents PROJECT`;
-the sample values are explanatory. Each assignment must include acceptance,
+the sample values are explanatory. Multica adds runtime context to each
+worker checkout (for Copilot: a runtime block in `AGENTS.md`, plus
+`.github/skills/multica-platform/` and `.multica/`). Tell workers to leave those
+files untouched and uncommitted; judge cleanliness by the commit's diff from the
+stage base, not by a fully clean `git status`. Each assignment must include acceptance,
 base revision, worktree/allowed-path ownership, handoff format, and constraints.
 Open-ended implementation, investigation, and review each get a visible
 Multica task and independent root worker execution. Only deterministic helpers
 with a fixed input/output and narrow scope may remain internal. Record their
 use and available capture coverage; instructions alone are not a sandbox.
-The supported Codex worker profile enforces `--disable multi_agent` and rejects
-attempts to enable it. Its recorded control evidence does not claim that all
-provider-native history is available, or isolate hostile same-user processes.
+Supported worker profiles disable provider-native helper delegation: Codex runs
+with `--disable multi_agent`; GitHub Copilot runs with its `task`, `read_agent`,
+`write_agent` and `list_agents` tools excluded and refuses `--fleet`. The
+recorded control evidence does not claim that all provider-native history is
+available, or isolate hostile same-user processes.
 
 New projects begin with dispatch held. When the recorded plan is ready, run
 `muxpilot hold PROJECT --off`, then activate the eligible batch with
@@ -98,20 +105,28 @@ Native parent wakeups must reach this main's inbox, never a hidden second lead.
 While work remains, call `muxpilot events PROJECT --after CURSOR --wait 30`.
 After evaluating returned worker/human events, record your decision with
 `muxpilot decision PROJECT --message SUMMARY --ack LAST_PROCESSED_CURSOR`.
-Advance only the cursor whose events informed that recorded decision. Keep
+Advance only the cursor whose events informed that recorded decision. Use the
+returned `cursor` as the next `--after`; it also skips your own lease
+heartbeats, which are journaled but not returned as inbox events. Keep
 awaits bounded and interruptible so the human can steer the interactive main.
 Renew with `muxpilot renew PROJECT` before the returned lease expires; schedule
 renewal during the active loop, allowing at least half the lease duration for
 failures. Expired or revoked authority requires explicit resume/reconciliation.
 Idle wakeup is provider-dependent: retain pending events and expose an idle
 main explicitly; never inject raw terminal keystrokes as an assumed wakeup.
+Every authorized project command also renews the local lease, so the bounded
+`events --wait` call keeps it current. Run waits and renewals in the foreground
+of your own turn, one bounded call at a time. Never leave detached background
+loops (renewal, polling or watchers): they outlive a lost main, keep its lease
+alive, and flood the journal with renewal events.
 
 Use `muxpilot status PROJECT` for “Where are we?” Include completion criteria,
 actual task/run states, blockers, live links, and last confirmed activity.
 
 | Human intent | Tool operation and interpretation |
 | --- | --- |
-| “Tell the API agent to reuse our email service” | `control PROJECT --task TASK --run RUN --action supplement --message TEXT`; report queued/delivered/acknowledged status exactly as returned |
+| “Tell the API agent to reuse our email service” | `control PROJECT --task TASK --run RUN --action supplement --message TEXT`; report queued/delivered/acknowledged status exactly as returned. If it fails with `task_supplement_unsupported` (GitHub Copilot workers have no live input channel), use cancel-and-resume below |
+| Steering without live input (cancel-and-resume) | `control ... --action cancel` for the exact run; poll `status` until that run is `cancelled`; then `control PROJECT --task TASK --run SAME_RUN --action continue --message TEXT`. The new attempt resumes the same provider session and worktree when resume-safe and receives TEXT as a coordinator follow-up. Track the returned new run ID; report this as cancel-and-resume, not live steering |
 | “Show me that agent” | Status plus `control ... --action inspect`; show the exact run's terminal/history link |
 | “Stop starting tasks; let current work finish” | `hold PROJECT`; active runs continue |
 | “Start tasks again” | `hold PROJECT --off`, then evaluate stage eligibility |
@@ -135,6 +150,9 @@ the fence. Replacing the old main requires explicit human takeover authority.
 After verifying the replacement main's actual current session and conversation,
 use `muxpilot resume PROJECT --owner ACTUAL_NEW_OWNER --takeover
 --main-session ACTUAL_CURRENT_MAIN_SESSION --main-conversation ACTUAL_CONVERSATION_ID`.
+In GitHub Copilot CLI, use `"$COPILOT_AGENT_SESSION_ID"` for both the new owner
+and conversation and `"$(tmux display-message -p '#S')"` for the session; a
+Copilot main bound by `start` uses its conversation ID as its owner.
 A new owner must supply that verified session; a reused name is insufficient.
 Ordinary resume does not authorize takeover. Reconcile existing workers and
 uncertain operations before any dispatch.

@@ -126,6 +126,70 @@ reload/restart. This is not a claim that an arbitrary active conversation can
 hot-load tools. The CLI's model option is documented in the
 [official reference](https://developers.openai.com/codex/cli/reference/).
 
+### GitHub Copilot CLI installations
+
+Copilot can be both the main coordinator and the Multica worker provider
+(decision D14). Authenticate it with its supported flow (`copilot login`, or an
+existing login); an exported `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`
+takes precedence over stored credentials for any process that inherits it.
+Install with the Copilot provider so the skill lands in Copilot's personal
+discovery root, `~/.copilot/skills/muxpilot/SKILL.md`:
+
+```bash
+python3 scripts/install_muxpilot.py --provider copilot \
+  --main-model ACTUAL_ACCOUNT_MODEL \
+  --main-executable /absolute/path/to/copilot \
+  --runtime-profile-id ACTUAL_RUNTIME_PROFILE_ID ...   # remaining flags as above
+copilot skill list | grep muxpilot
+```
+
+`--main-model` defaults to `auto`. `--main-executable` makes the visible
+launcher independent of the Muxdeck service's `PATH`. Any `--main-arg` (for
+example `--main-arg=--yolo`) is the operator's explicit approval-policy choice;
+none is added implicitly. Multica already runs Copilot workers with
+`--allow-all --no-ask-user`; a main without an allow-all flag asks the human to
+approve its shell commands in its terminal.
+
+The installer also writes `~/.local/bin/muxpilot-worker`, a managed launcher for
+this release. Point the Multica custom runtime profile at it so release upgrades
+need no profile edit:
+
+```json
+{
+  "display_name": "Copilot worker in Muxdeck",
+  "runtime_type": "copilot",
+  "command_name": "muxpilot-worker",
+  "fixed_args": ["--provider", "/absolute/path/to/copilot", "--"],
+  "enabled": true
+}
+```
+
+Create it with `POST /api/workspaces/{multicaWorkspaceId}/runtime-profiles`, then
+`multica runtime profile set-path PROFILE_ID --path ~/.local/bin/muxpilot-worker`
+on the daemon host. Bind worker agents to the resulting runtime with models from
+the account; the wrapper passes Multica's ACP model discovery (`copilot --acp`
+without a task identity) straight through. Each task invocation appends
+`--excluded-tools task read_agent write_agent list_agents`, refuses `--fleet`,
+`--available-tools` and `--acp`, and mirrors Copilot's JSONL events as readable
+`copilot-jsonl-v1` progress in its tmux pane while the retained capture keeps
+the redacted wire bytes.
+
+Copilot workers have no live input channel: `supplement` is refused with
+`task_supplement_unsupported`. Steer them by cancel-and-resume: `control
+--action cancel` for the exact run, then `control --action continue --message
+TEXT` once it has ended. Multica attaches `TEXT` to the new attempt as a
+run-scoped coordinator follow-up (`continue-instruction-v1`) and resumes the
+cancelled run's Copilot session in its workdir when that is resume-safe. The
+CLI refuses a message-bearing continue against a backend without that capability.
+
+Start the main in a visible tmux terminal, for example
+`copilot --model ACTUAL_ACCOUNT_MODEL`, and use the prompt in
+[the user guide](USER_GUIDE.md). Its shell exposes `COPILOT_AGENT_SESSION_ID`;
+`muxpilot start` binds it as the main conversation, and a takeover passes the
+replacement's own value as `--owner` and `--main-conversation`. A record of an
+authorized real Copilot smoke for the configured profile is still required for
+`provider_qualified`.
+
 ## Diagnostic commands and lifetimes
 
 The human's normal interface is the main conversation. These commands are
@@ -195,7 +259,9 @@ or hostile-worker isolation boundary.
 
 The supported Codex worker bridge enforces `--disable multi_agent`, rejects
 flags/configuration enabling that feature, and records its helper-control
-evidence. Substantial delegation therefore uses visible managed workers. A
+evidence. The Copilot worker bridge likewise excludes Copilot's subagent tools
+and refuses `--fleet`, `--available-tools` and `--acp` in task invocations.
+Substantial delegation therefore uses visible managed workers. A
 deterministic helper still needs a bounded input/output and recorded coverage;
 unavailable native helper history remains explicit. Feature control is not an
 operating-system sandbox against a hostile process sharing the same Unix user.

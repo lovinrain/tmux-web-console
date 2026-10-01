@@ -22,6 +22,21 @@ from .runtime import ExecutionContext, ProviderBridge, RuntimeErrorBase
 from .store import JournalStore, StoreError
 
 
+def is_model_discovery(command: list[str], environment: dict[str, str]) -> bool:
+    """Copilot's model catalog is read through an ACP handshake, not a task.
+
+    Multica runs ``<profile command> --acp`` only to list account models. Task
+    executions never carry ``--acp`` (the daemon filters it) and always carry a
+    Muxpilot execution identity, so an identified invocation is never bypassed.
+    """
+    return (
+        len(command) == 2
+        and command[1] == "--acp"
+        and Path(command[0]).name == "copilot"
+        and not any(environment.get(key) for key in ("MUXPILOT_EXECUTION_ID", "MUXPILOT_TASK_ID", "MUXPILOT_PROJECT_ID"))
+    )
+
+
 def load_context(config_path: str | None = None, *, environment: dict[str, str] | None = None) -> ExecutionContext:
     environment = dict(os.environ if environment is None else environment)
     path = config_path or environment.get("MUXPILOT_CONFIG")
@@ -95,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     if not command:
         parser.error("a provider executable and literal argument vector are required")
     # Provider discovery is independent of task/execution configuration.
-    if is_lightweight_probe(command):
+    if is_lightweight_probe(command) or is_model_discovery(command, dict(os.environ)):
         environment = {key: value for key, value in os.environ.items()
                        if key not in {"MUXPILOT_CONFIG", "MUXDECK_CONTROL_TOKEN_FILE", "MUXPILOT_COORDINATOR_TOKEN_FILE"}}
         status = subprocess.call(command, env=environment)

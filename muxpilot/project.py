@@ -47,6 +47,47 @@ class AuthorizationError(ProjectError):
     code = "unauthorized"
 
 
+DEFAULT_MAIN_MODELS = {"codex": "gpt-6.1-sol", "copilot": "auto"}
+HEARTBEAT_EVENTS = frozenset({"coordinator.renewed"})
+
+
+def main_command(
+    config: Config, repo: Path, goal: str, model: str | None = None
+) -> list[str]:
+    """Argv for one visible interactive main with the configured provider.
+
+    The model is a request; account access is checked by the provider itself.
+    Configured extra arguments are the installation's explicit choice and are
+    never added implicitly (for example, approval policy flags).
+    """
+    provider = getattr(config, "main_provider", "codex")
+    selected = (
+        model
+        or getattr(config, "main_model", None)
+        or DEFAULT_MAIN_MODELS.get(provider, "auto")
+    )
+    executable = getattr(config, "main_executable", None) or provider
+    extra = list(getattr(config, "main_args", ()))
+    if provider == "copilot":
+        prompt = (
+            "Use Muxpilot for "
+            + str(repo)
+            + ". "
+            + goal
+            + " Load the installed muxpilot skill and use its project tools."
+        )
+        # -i starts the interactive TUI and submits the first prompt.
+        return [executable, "--model", selected, *extra, "-i", prompt]
+    prompt = (
+        "Use $muxpilot for "
+        + str(repo)
+        + ". "
+        + goal
+        + ". Load the installed muxpilot skill and use its project tools."
+    )
+    return [executable, *extra, "-m", selected, prompt]
+
+
 def _capture_gaps(execution: dict[str, Any]) -> list[str]:
     """Accept old byte-capture metadata, but never infer absent coverage.
 
@@ -1031,19 +1072,9 @@ class ProjectController:
                     )
                 owner = payload.get("owner") or "main-launch:" + record["project_id"]
                 lease = store.acquire_lease(owner, self.config.lease_seconds)
-                prompt = (
-                    "Use $muxpilot for "
-                    + str(repo)
-                    + ". "
-                    + payload["goal"]
-                    + ". Load the installed muxpilot skill and use its project tools."
+                command = payload.get("command_json") or main_command(
+                    self.config, repo, payload["goal"], payload.get("model")
                 )
-                command = payload.get("command_json") or [
-                    "codex",
-                    "-m",
-                    payload.get("model", "gpt-6.1-sol"),
-                    prompt,
-                ]
                 from .runtime import launch_main
 
                 return launch_main(
@@ -1106,6 +1137,7 @@ class ProjectController:
             if not 0 <= wait <= 30:
                 raise ProjectError("await timeout must be between zero and 30 seconds")
             deadline = time.monotonic() + wait
+            renewed = False
             while True:
                 with (
                     self.registry.lock(record["project_id"]),
@@ -1113,15 +1145,26 @@ class ProjectController:
                 ):
                     credentials = self._credentials(record)
                     self._authorize(action, payload, credentials)
-                    self._authority(store, credentials, payload)
+                    if renewed:
+                        # Fence every poll, but renew (and journal it) once per
+                        # call rather than on each iteration of the wait.
+                        store.assert_lease(credentials["owner"], credentials["generation"])
+                    else:
+                        self._authority(store, credentials, payload)
+                        renewed = True
                     try:
                         self._ingest(store, credentials)
                         degraded = None
                     except (MulticaError, ProjectError) as error:
                         degraded = str(error)
-                    events = store.events(after=int(payload.get("after", 0)), limit=100)
+                    scanned = store.events(after=int(payload.get("after", 0)), limit=100)
+                    # The coordinator's own lease heartbeats stay in the journal
+                    # and audit, but are not inbox events: they must not wake
+                    # the wait. The cursor still advances past them.
+                    events = [event for event in scanned if event["kind"] not in HEARTBEAT_EVENTS]
                     result = {
                         "events": events,
+                        "cursor": scanned[-1]["sequence"] if scanned else int(payload.get("after", 0)),
                         "degraded": degraded,
                         "project_id": record["project_id"],
                         "generation": credentials["generation"],
@@ -1130,6 +1173,9 @@ class ProjectController:
                         <= 60,
                     }
                 if events or degraded or time.monotonic() >= deadline:
+                    return result
+                if len(scanned) == 100:
+                    # A full page of heartbeats: return its cursor to page on.
                     return result
                 time.sleep(min(0.25, max(0, deadline - time.monotonic())))
         with self.registry.lock(record["project_id"]), self._store(record) as store:
@@ -1546,6 +1592,17 @@ class ProjectController:
                         "control target does not match the authoritative project issue/run association"
                     )
                 mapped = {"instruction": "supplement"}.get(control, control)
+                if (
+                    mapped == "continue"
+                    and str(payload.get("message", "")).strip()
+                    and "continue-instruction-v1"
+                    not in self._human().capabilities().get("capabilities", [])
+                ):
+                    # Older backends would queue the attempt and silently drop
+                    # the instruction; refuse before any external effect.
+                    raise ProjectError(
+                        "this Multica backend cannot attach a follow-up instruction to continue"
+                    )
                 return self._command(
                     store,
                     credentials,

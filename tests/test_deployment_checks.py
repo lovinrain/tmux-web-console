@@ -369,7 +369,7 @@ def test_systemd_timeout_is_separate_from_application_errors(monkeypatch):
 def setup_verifier(monkeypatch, tmp_path):
     before = tmp_path / "before.json"
     before.write_text(json.dumps(baseline()))
-    monkeypatch.setattr(checks, "snapshot", lambda service: baseline())
+    monkeypatch.setattr(checks, "snapshot", lambda service, scope="system": baseline())
     monkeypatch.setattr(checks, "frontend", lambda *args: "/mux/assets/app.js")
     monkeypatch.setattr(checks, "check_http", lambda *args: {"asset": 401})
     monkeypatch.setattr(checks, "http_status", lambda *args: (403, {}))
@@ -403,7 +403,7 @@ def test_verify_writes_private_timed_report_and_progress(monkeypatch, tmp_path, 
 
 def test_failure_is_reported_without_credentials_or_fake_success(monkeypatch, tmp_path):
     args = setup_verifier(monkeypatch, tmp_path)
-    monkeypatch.setattr(checks, "snapshot", lambda service: {**baseline(), "panes": []})
+    monkeypatch.setattr(checks, "snapshot", lambda service, scope="system": {**baseline(), "panes": []})
     assert checks.main(args) == 1
     result = json.loads((tmp_path / "report/verification.json").read_text())
     assert not result["passed"]
@@ -422,7 +422,7 @@ def test_verifier_reports_activity_details_on_strict_failure_and_reviewed_succes
     args = setup_verifier(monkeypatch, tmp_path)
     current = baseline()
     current["panes"] = ["$1\t%1\t100\tbash\t0", "$2\t%2\t200\tcodex\t0"]
-    monkeypatch.setattr(checks, "snapshot", lambda service: current)
+    monkeypatch.setattr(checks, "snapshot", lambda service, scope="system": current)
     if reviewed:
         args.extend(["--allow-added-panes", "--allow-command-changes"])
     assert checks.main(args) == (0 if reviewed else 1)
@@ -450,3 +450,49 @@ def test_snapshot_refuses_to_overwrite_existing_file_or_symlink(tmp_path):
         with pytest.raises(FileExistsError):
             checks.private_write(path, "overwrite")
     assert original.read_text() == "keep"
+
+
+def test_user_service_snapshot_uses_user_manager_and_records_scope(monkeypatch, tmp_path):
+    calls = fake_service(monkeypatch)
+    current = checks.snapshot("muxdeck.service", "user")
+    assert calls[0][0][:3] == ["systemctl", "--user", "show"]
+    assert current["scope"] == "user"
+    assert "scope" not in checks.snapshot("muxdeck.service")
+    with pytest.raises(checks.CheckError, match="scope"):
+        checks.snapshot("muxdeck.service", "global")
+
+
+def test_private_service_log_counts_only_output_after_the_baseline(tmp_path):
+    log = tmp_path / "muxdeck.log"
+    log.write_text("ERROR: before the deployment\n")
+    log.chmod(0o600)
+    offset = log.stat().st_size
+    with log.open("a") as stream:
+        stream.write("INFO: started\n")
+    assert checks.log_file_errors(log, offset)["applicationErrors"] == 0
+    with log.open("a") as stream:
+        stream.write("Traceback (most recent call last):\n  private-detail\n")
+    with pytest.raises(checks.CheckError, match="1 application") as error:
+        checks.log_file_errors(log, offset)
+    assert "private-detail" not in str(error.value)
+    with pytest.raises(checks.CheckError, match="truncated"):
+        checks.log_file_errors(log, log.stat().st_size + 1)
+    log.chmod(0o644)
+    with pytest.raises(checks.CheckError, match="private"):
+        checks.log_file_errors(log, offset)
+
+
+def test_verify_uses_the_baseline_scope_and_service_log(monkeypatch, tmp_path):
+    log = tmp_path / "muxdeck.log"
+    log.write_text("")
+    log.chmod(0o600)
+    args = setup_verifier(monkeypatch, tmp_path)
+    recorded = {**baseline(), "scope": "user", "logFile": str(log), "logOffset": 0}
+    Path(args[2]).write_text(json.dumps(recorded))
+    scopes = []
+    monkeypatch.setattr(checks, "snapshot", lambda service, scope="system": scopes.append(scope) or baseline())
+    monkeypatch.setattr(checks, "journal", lambda *args: pytest.fail("journal is unreadable here"))
+    assert checks.main(args) == 0
+    result = json.loads((tmp_path / "report" / "verification.json").read_text())
+    assert scopes == ["user"]
+    assert result["checks"]["journal"]["source"] == "service log file"

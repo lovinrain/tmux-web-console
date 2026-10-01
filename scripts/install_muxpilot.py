@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the local Muxpilot CLI binding and Codex skill without starting services."""
+"""Install the local Muxpilot CLI binding and coordinator skill without starting services."""
 from __future__ import annotations
 
 import argparse
@@ -16,6 +16,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 MARKER = "muxpilot-local-installation-v1"
+PROVIDERS = ("codex", "copilot")
+# Where each provider discovers personal skills, and the default main request.
+SKILL_ROOTS = {"codex": ".agents/skills", "copilot": ".copilot/skills"}
+MAIN_MODELS = {"codex": "gpt-6.1-sol", "copilot": "auto"}
+SKILL_LOADING = {
+    "codex": "Codex discovers installed user skills; if Muxpilot is absent from the current session, start a new session. Installation does not inject tools into a running conversation.",
+    "copilot": "GitHub Copilot CLI discovers personal skills in ~/.copilot/skills; check with `copilot skill list` or /skills. If Muxpilot is absent from a running session, start a new session. Installation does not inject tools into a running conversation.",
+}
 
 
 class InstallationError(ValueError):
@@ -100,7 +108,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--repo", default=str(Path(__file__).resolve().parents[1]), help="validated Muxdeck release directory")
     value.add_argument("--python", help="Python 3.11+ with this release's dependencies; defaults to its .venv/bin/python")
     value.add_argument("--bin-dir", default=str(Path.home() / ".local/bin"))
-    value.add_argument("--skills-dir", default=str(Path.home() / ".agents/skills"), help="Codex user skills directory")
+    value.add_argument("--provider", choices=PROVIDERS, help="coordinator and worker provider CLI; defaults to codex or the reused configuration")
+    value.add_argument("--worker-provider", choices=PROVIDERS, help="worker provider; defaults to --provider")
+    value.add_argument("--skills-dir", help="personal skills directory; defaults to the provider's discovery root")
     value.add_argument("--legacy-skills-dir", help="optional second skill directory for older local catalogs")
     value.add_argument("--config", default=str(Path.home() / ".config/muxpilot/config.json"))
     value.add_argument("--state-root", default=str(Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "muxdeck/projects"))
@@ -119,7 +129,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--muxdeck-token-file", help="existing private Muxdeck control token file")
     value.add_argument("--worker-limit", type=positive, default=3)
     value.add_argument("--lease-seconds", type=positive, default=300)
-    value.add_argument("--main-model", default="gpt-6.1-sol", help="explicit main launcher model; availability is checked separately")
+    value.add_argument("--main-model", help="explicit main launcher model; defaults per provider and availability is checked separately")
+    value.add_argument("--main-executable", help="absolute main provider executable for the visible launcher; defaults to the provider name on Muxdeck's PATH")
+    value.add_argument("--main-arg", action="append", default=[], help="extra literal launcher argument chosen by the operator (repeatable)")
     value.add_argument("--service-manager", choices=("system", "user"), help="systemd scope for configured Multica dependencies; defaults to system or the preserved installation scope")
     for dependency in ("api", "web", "daemon"):
         value.add_argument(f"--multica-{dependency}-service", type=service_unit, help=f"existing owned Multica {dependency} service; main may start it when inactive")
@@ -134,6 +146,21 @@ def install(args: argparse.Namespace) -> dict[str, object]:
     for source in ("skills/muxpilot/SKILL.md", "docs/muxpilot/USER_GUIDE.md", "docs/muxpilot/OPERATIONS.md", "AGENT_DEPLOYMENT_GUIDE.md", "muxpilot/__main__.py"):
         if not (repo / source).is_file():
             raise InstallationError(f"release is missing {source}")
+    reused: dict[str, object] = {}
+    if args.reuse_config:
+        reused = json.loads(read_regular(absolute(args.config), private=True))
+        if not isinstance(reused, dict):
+            raise InstallationError("existing configuration must be a JSON object")
+    provider = str(args.provider or reused.get("main_provider") or "codex")
+    worker_provider = str(args.worker_provider or reused.get("worker_provider") or provider)
+    if provider not in PROVIDERS or worker_provider not in PROVIDERS:
+        raise InstallationError("unsupported provider in existing configuration")
+    main_model = str(args.main_model or reused.get("main_model") or MAIN_MODELS[provider])
+    main_executable = absolute(args.main_executable) if args.main_executable else None
+    if main_executable is not None and (not main_executable.is_file() or not os.access(main_executable, os.X_OK)):
+        raise InstallationError("main provider executable must be an existing executable file")
+    if any(not argument or "\0" in argument for argument in args.main_arg):
+        raise InstallationError("main launcher arguments must be nonempty literals")
     configured_python = absolute(args.python) if args.python else repo / ".venv/bin/python"
     if not configured_python.is_file() or not os.access(configured_python, os.X_OK):
         raise InstallationError("provide --python for a working Python 3.11+ environment with the release dependencies")
@@ -143,7 +170,7 @@ def install(args: argparse.Namespace) -> dict[str, object]:
     config = absolute(args.config)
     state = absolute(args.state_root)
     bin_dir = absolute(args.bin_dir)
-    skill_roots = [absolute(args.skills_dir)]
+    skill_roots = [absolute(args.skills_dir) if args.skills_dir else Path.home() / SKILL_ROOTS[provider]]
     if args.legacy_skills_dir:
         legacy = absolute(args.legacy_skills_dir)
         if legacy not in skill_roots:
@@ -182,6 +209,11 @@ def install(args: argparse.Namespace) -> dict[str, object]:
         "muxdeck_token_file": str(absolute(args.muxdeck_token_file)) if args.muxdeck_token_file else None,
         "worker_limit": args.worker_limit,
         "lease_seconds": args.lease_seconds,
+        "worker_provider": worker_provider,
+        "main_provider": provider,
+        "main_model": main_model,
+        "main_executable": str(main_executable) if main_executable else None,
+        "main_args": list(args.main_arg),
     }
     if args.reuse_config:
         values = json.loads(read_regular(config, private=True))
@@ -192,7 +224,8 @@ def install(args: argparse.Namespace) -> dict[str, object]:
             "multica_workspace_id", "multica_project_id", "muxdeck_url",
             "muxdeck_token_file", "worker_limit", "lease_seconds", "multica_ui_url",
             "multica_workspace_slug", "runtime_profile_id", "daemon_id",
-            "qualification_file", "muxdeck_public_url",
+            "qualification_file", "muxdeck_public_url", "worker_provider",
+            "main_provider", "main_model", "main_executable", "main_args",
         }
         if set(values) - allowed:
             raise InstallationError("existing configuration contains unsupported fields")
@@ -216,13 +249,16 @@ def install(args: argparse.Namespace) -> dict[str, object]:
                 raise InstallationError(f"{field} must reference an existing nonempty private regular file")
 
     command = bin_dir / "muxpilot"
+    worker_command = bin_dir / "muxpilot-worker"
     binding = (
         "\n\n## Installation binding\n\n"
         f"Installed command: `{shlex.quote(str(command))}`. Its private configuration is\n"
         f"`{config}`; the wrapper passes it automatically. Use this absolute command\n"
         "when the shell PATH does not include its directory.\n\n"
-        f"Validated source release: `{repo}`. Main launcher model preference:\n"
-        f"`{args.main_model}`; this is a request, not proof of account/model support.\n\n"
+        f"Validated source release: `{repo}`. Main provider: `{provider}`; worker\n"
+        f"provider: `{worker_provider}`. Main launcher model preference:\n"
+        f"`{main_model}`; this is a request, not proof of account/model support.\n"
+        f"Multica worker runtime-profile executable: `{worker_command}`.\n\n"
         "Read [the user guide](references/USER_GUIDE.md) for human-facing usage,\n"
         "[operations](references/OPERATIONS.md) for setup/recovery, and\n"
         "[the full deployment runbook](references/AGENT_DEPLOYMENT_GUIDE.md) before\n"
@@ -262,13 +298,24 @@ def install(args: argparse.Namespace) -> dict[str, object]:
             start_command = f"{manager} start {shlex.quote(unit)}"
             binding += f"| Multica {dependency} | `{status_command}` | `{start_command}` |\n"
             startup_commands[dependency] = {"unit": unit, "status": status_command, "start": start_command}
+    # -P keeps the caller's working directory off sys.path, so running from a
+    # checkout that contains its own muxpilot package still uses this release.
     launcher = (
         "#!/bin/sh\n"
         f"# {MARKER}\n"
         f"export PYTHONPATH={shlex.quote(str(repo))}\n"
-        f"exec {shlex.quote(str(configured_python))} -m muxpilot --config {shlex.quote(str(config))} \"$@\"\n"
+        f"exec {shlex.quote(str(configured_python))} -P -m muxpilot --config {shlex.quote(str(config))} \"$@\"\n"
     )
-    files: dict[Path, tuple[bytes, int]] = {command: (launcher.encode(), 0o700)}
+    # Multica approves only a runtime wrapper named muxpilot-worker. A stable
+    # managed path survives release upgrades without editing the profile.
+    worker_launcher = (
+        "#!/bin/sh\n"
+        f"# {MARKER}\n"
+        f"export PYTHONPATH={shlex.quote(str(repo))}\n"
+        f"exec {shlex.quote(str(configured_python))} -P -m muxpilot.worker --config {shlex.quote(str(config))} \"$@\"\n"
+    )
+    files: dict[Path, tuple[bytes, int]] = {command: (launcher.encode(), 0o700),
+                                            worker_command: (worker_launcher.encode(), 0o700)}
     if not args.reuse_config:
         files[config] = ((json.dumps(values, indent=2) + "\n").encode(), 0o600)
     for root in skill_roots:
@@ -298,7 +345,9 @@ def install(args: argparse.Namespace) -> dict[str, object]:
         "repo": str(repo),
         "python": str(configured_python),
         "config": str(config),
-        "main_model": args.main_model,
+        "main_model": main_model,
+        "provider": provider,
+        "worker_provider": worker_provider,
         "receiver_environment_required": {"MUXPILOT_STATE_ROOT": str(effective_state)},
         "provider_qualification_record_configured": bool(values.get("qualification_file")),
         "managed_service_commands": startup_commands,
@@ -319,6 +368,7 @@ def install(args: argparse.Namespace) -> dict[str, object]:
     return {
         "dry_run": args.dry_run,
         "command": str(command),
+        "worker_command": str(worker_command),
         "config": str(config),
         "skills": [str(root / "muxpilot/SKILL.md") for root in skill_roots],
         "changed": changed,
@@ -326,12 +376,14 @@ def install(args: argparse.Namespace) -> dict[str, object]:
         "services_started": False,
         "provider_runs_started": False,
         "next_check": f"{shlex.quote(str(command))} doctor",
-        "main_model": args.main_model,
+        "main_model": main_model,
+        "provider": provider,
+        "worker_provider": worker_provider,
         "receiver_environment_required": {"MUXPILOT_STATE_ROOT": str(effective_state)},
         "provider_qualification_record_configured": bool(values.get("qualification_file")),
         "managed_service_commands": startup_commands,
         "next_prompt": "Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a PR when it is tested.",
-        "skill_loading": "Codex discovers installed user skills; if Muxpilot is absent from the current session, start a new session. Installation does not inject tools into a running conversation.",
+        "skill_loading": SKILL_LOADING[provider],
         "configuration_ready_for_check": bool(values.get("multica_token_file") and values.get("multica_workspace_id") and values.get("muxdeck_token_file") and values.get("runtime_profile_id") and values.get("daemon_id")),
     }
 

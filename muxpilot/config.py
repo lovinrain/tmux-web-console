@@ -14,6 +14,9 @@ class ConfigurationError(ValueError):
     pass
 
 
+PROVIDERS = frozenset({"codex", "copilot"})
+
+
 def private_directory(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     metadata = path.lstat()
@@ -83,6 +86,11 @@ class Config:
     muxdeck_token_file: Path | None = None
     worker_limit: int = 3
     lease_seconds: int = 300
+    worker_provider: str = "codex"
+    main_provider: str = "codex"
+    main_model: str | None = None
+    main_executable: str | None = None
+    main_args: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
@@ -124,4 +132,19 @@ class Config:
             value = values.get(name, getattr(cls, name))
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ConfigurationError(name + " must be a positive integer")
+        for name in ("worker_provider", "main_provider"):
+            if values.get(name, getattr(cls, name)) not in PROVIDERS:
+                raise ConfigurationError(name + " must be one of: " + ", ".join(sorted(PROVIDERS)))
+        model = values.get("main_model")
+        if model is not None and (not isinstance(model, str) or not model.strip() or "\0" in model):
+            raise ConfigurationError("main_model must be a nonempty model name")
+        executable = values.get("main_executable")
+        if executable is not None and (not isinstance(executable, str) or not Path(executable).is_absolute()):
+            raise ConfigurationError("main_executable must be an absolute path")
+        arguments = values.get("main_args", ())
+        if not isinstance(arguments, (list, tuple)) or not all(
+            isinstance(argument, str) and argument and "\0" not in argument for argument in arguments
+        ):
+            raise ConfigurationError("main_args must be a list of nonempty strings")
+        values["main_args"] = tuple(arguments)
         return cls(**values)

@@ -1,4 +1,4 @@
-"""A bounded display projection of qualified Codex app-server stdout.
+"""Bounded display projections of qualified structured provider stdout.
 
 Call only on already-redacted bytes. This never controls a provider, forwards
 input, changes protocol bytes, or replaces the authoritative execution capture.
@@ -16,9 +16,15 @@ MAX_RECORD_CHARS = 262144
 MAX_ITEM_CHARS = 16384
 MAX_ITEMS = 256
 
+CODEX_MIRROR_FORMAT = "codex-app-server-v1"
+COPILOT_MIRROR_FORMAT = "copilot-jsonl-v1"
+MIRROR_FORMATS = frozenset({CODEX_MIRROR_FORMAT, COPILOT_MIRROR_FORMAT})
 
-class CodexProgressMirror:
-    """JSONL notifications become progress text, with bounded display state."""
+
+class _ProgressMirror:
+    """JSONL records become progress text, with bounded display state."""
+
+    record_limit = MAX_RECORD_CHARS
 
     def __init__(self) -> None:
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -40,7 +46,7 @@ class CodexProgressMirror:
                     self.discarding = False
                 continue
             self.pending += part
-            if len(self.pending) > MAX_RECORD_CHARS:
+            if len(self.pending) > self.record_limit:
                 output.append(
                     self._line(
                         "View", "Structured record exceeds this view's size limit."
@@ -75,7 +81,7 @@ class CodexProgressMirror:
         if isinstance(value, str):
             return value[:limit] + ("…" if len(value) > limit else "")
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
-            return CodexProgressMirror._text(" ".join(value), limit)
+            return _ProgressMirror._text(" ".join(value), limit)
         return ""
 
     def _item(self, value: Any) -> tuple[str, dict[str, Any]]:
@@ -134,6 +140,10 @@ class CodexProgressMirror:
             )
 
     def _record(self, line: str) -> str:
+        raise NotImplementedError
+
+    def _event(self, line: str) -> dict[str, Any] | str:
+        """Return a decoded object, or the display text for a non-object line."""
         if not line.strip():
             return ""
         try:
@@ -145,6 +155,16 @@ class CodexProgressMirror:
             return self._once(
                 "invalid-record", "View", "Unrecognized structured provider record."
             )
+        return event
+
+
+class CodexProgressMirror(_ProgressMirror):
+    """Codex app-server JSONL notifications become progress text."""
+
+    def _record(self, line: str) -> str:
+        event = self._event(line)
+        if isinstance(event, str):
+            return event
         method = event.get("method")
         if method is None:
             error = event.get("error")
@@ -322,3 +342,177 @@ class CodexProgressMirror:
             "Provider",
             "Activity: " + self._text(kind, 120) + ".",
         )
+
+
+class CopilotProgressMirror(_ProgressMirror):
+    """GitHub Copilot CLI ``--output-format json`` events become progress text.
+
+    Partial tool output is cumulative upstream; only its unseen suffix is shown.
+    Records describing transport, usage accounting, MCP status, or opaque
+    reasoning state are silent. Unknown durable events are summarized once.
+    """
+
+    # Tool results and opaque reasoning payloads can legitimately be large.
+    record_limit = 4 * MAX_RECORD_CHARS
+    SHELL_TOOLS = frozenset({"bash", "shell", "powershell"})
+    QUIET = frozenset({
+        "assistant.idle",
+        "assistant.message_start",
+        "assistant.tool_call_delta",
+        "assistant.turn_end",
+        "assistant.usage",
+        "model.call_finished",
+        "model.call_final_result",
+        "model.call_start",
+        "session.background_tasks_changed",
+        "session.info",
+        "session.mcp_server_status_changed",
+        "session.mcp_servers_loaded",
+        "session.shutdown",
+        "session.tools_updated",
+        "session.usage_checkpoint",
+    })
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tools: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+    def _tool(self, value: Any) -> dict[str, Any]:
+        identity = value if isinstance(value, str) else "unidentified-tool"
+        key = hashlib.sha256(identity.encode()).hexdigest()
+        if key not in self.tools:
+            self.tools[key] = {"name": "", "seen": 0, "tail": "", "shell": False}
+        self.tools.move_to_end(key)
+        while len(self.tools) > MAX_ITEMS:
+            self.tools.popitem(last=False)
+        return self.tools[key]
+
+    def _record(self, line: str) -> str:
+        event = self._event(line)
+        if isinstance(event, str):
+            return event
+        kind = event.get("type")
+        data = event.get("data", {})
+        if not isinstance(kind, str) or not isinstance(data, dict):
+            return self._once(
+                "invalid-envelope", "View", "Malformed structured provider event."
+            )
+        if kind == "session.start":
+            model = self._text(data.get("selectedModel"), 120)
+            return self._line("Session", "Started" + (f" with {model}" if model else "") + ".")
+        if kind == "user.message":
+            prompt = self._text(data.get("content"), 1200)
+            return self._line("Task", prompt) if prompt else ""
+        if kind == "assistant.turn_start":
+            return self._line("Turn", "Working.")
+        if kind == "assistant.message_delta":
+            return self._delta("Agent", data.get("messageId"), data.get("deltaContent"))
+        if kind == "assistant.message":
+            _key, state = self._item(data.get("messageId"))
+            if not state["streamed"]:
+                return self._delta("Agent", data.get("messageId"), data.get("content"))
+            return ""
+        if kind == "assistant.reasoning_delta":
+            return self._delta("Progress", data.get("reasoningId"), data.get("deltaContent"))
+        if kind == "assistant.reasoning":
+            _key, state = self._item(data.get("reasoningId"))
+            if not state["streamed"]:
+                return self._delta("Progress", data.get("reasoningId"), data.get("content"))
+            return ""
+        if kind == "tool.execution_start":
+            return self._tool_start(data)
+        if kind == "tool.execution_partial_result":
+            return self._tool_output(data.get("toolCallId"), data.get("partialOutput"))
+        if kind == "tool.execution_complete":
+            return self._tool_complete(data)
+        if kind in {"session.warning", "session.error"}:
+            message = data.get("message")
+            error = data.get("error")
+            if not message and isinstance(error, dict):
+                message = error.get("message")
+            return self._line(
+                "Error" if kind == "session.error" else "Warning",
+                self._text(message) or "Provider reported a warning or error.",
+            )
+        if kind == "result":
+            return self._result(event)
+        if kind in self.QUIET or event.get("ephemeral") is True:
+            return ""
+        # Do not dump unknown opaque payloads, and do not invent their meaning.
+        return self._once(
+            "event:" + kind[:120], "Provider", "Event: " + self._text(kind, 120) + "."
+        )
+
+    def _tool_start(self, data: dict[str, Any]) -> str:
+        state = self._tool(data.get("toolCallId"))
+        name = self._text(data.get("toolName"), 120) or "tool"
+        arguments = data.get("arguments")
+        arguments = arguments if isinstance(arguments, dict) else {}
+        state["name"], state["shell"] = name, name in self.SHELL_TOOLS
+        if state["shell"]:
+            command = self._text(arguments.get("command"), 1000)
+            return self._line("Command", command or "Running a command.")
+        detail = (
+            self._text(arguments.get("path"), 300)
+            or self._text(arguments.get("pattern"), 300)
+            or self._text(data.get("toolTitle"), 300)
+            or self._text(arguments.get("description"), 300)
+        )
+        return self._line("Tool", name + (": " + detail if detail else "") + ".")
+
+    def _tool_output(self, identity: Any, output: Any) -> str:
+        if not isinstance(output, str) or not output:
+            return ""
+        state = self._tool(identity)
+        seen, tail = state["seen"], state["tail"]
+        if seen and len(output) >= seen and output[max(0, seen - len(tail)):seen] == tail:
+            fresh = output[seen:]
+        else:
+            # Not an extension of the text already shown: display it as new.
+            fresh = output
+        state["seen"], state["tail"] = len(output), output[-64:]
+        return self._delta("Output", identity, fresh)
+
+    def _tool_complete(self, data: dict[str, Any]) -> str:
+        identity = data.get("toolCallId")
+        state = self._tool(identity)
+        name = state["name"] or "tool"
+        result = data.get("result")
+        result = result if isinstance(result, dict) else {}
+        error = data.get("error")
+        output = ""
+        _key, item = self._item(identity)
+        if state["shell"] and not item["streamed"]:
+            output = self._delta("Output", identity, result.get("content"))
+        if data.get("success") is not True:
+            message = self._text(error.get("message")) if isinstance(error, dict) else ""
+            return output + self._line(
+                "Command" if state["shell"] else "Tool",
+                (name + ": " if not state["shell"] else "")
+                + "Failed"
+                + (": " + message if message else "")
+                + ".",
+            )
+        if state["shell"]:
+            shell = data.get("shellExecution")
+            code = shell.get("exitCode") if isinstance(shell, dict) else None
+            detail = (
+                f"Exit {code}"
+                if isinstance(code, int) and not isinstance(code, bool)
+                else "Completed"
+            )
+            return output + self._line("Command", detail + ".")
+        return output + self._line("Tool", name + ": completed.")
+
+    def _result(self, event: dict[str, Any]) -> str:
+        code = event.get("exitCode")
+        outcome = (
+            ("Completed" if code == 0 else f"Ended with exit {code}")
+            if isinstance(code, int) and not isinstance(code, bool)
+            else "Ended with unreported status"
+        )
+        usage = event.get("usage")
+        premium = usage.get("premiumRequests") if isinstance(usage, dict) else None
+        if isinstance(premium, (int, float)) and not isinstance(premium, bool):
+            outcome += f"; premium requests {premium:g}"
+        return self._line("Session", outcome + ".")

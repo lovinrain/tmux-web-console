@@ -143,6 +143,33 @@ Local event families include project registration, request accepted, coordinator
 
 Gate: contract fixtures reject missing scope/epoch, unknown schema versions, oversized or secret-bearing payloads; structured outputs remain stable for installed coordinator tooling. Covers F01, F05–F08, F11, N04.
 
+## D14 — GitHub Copilot CLI as a coordinator and worker provider (accepted; qualification per installation)
+
+Copilot support reuses Multica's existing `copilot` backend unchanged: workers run
+`copilot -p PROMPT --output-format json --allow-all --no-ask-user [--model]
+[--resume SESSION]` through the approved `muxpilot-worker` custom runtime profile
+(`runtime_type` `copilot`, fixed arguments `--provider /absolute/copilot --`).
+The wrapper appends `--excluded-tools task read_agent write_agent list_agents`
+and refuses `--fleet`, `--available-tools` and `--acp` in a task invocation, so
+open-ended delegation remains visible Multica work. An exact `copilot --acp` with
+no Muxpilot task identity is Multica's model discovery and passes through. The
+JSONL stream keeps its exact wire bytes and redacted retained capture; the pane
+receives the bounded `copilot-jsonl-v1` progress projection.
+
+Copilot's non-interactive mode has no live input channel, so Multica negotiates no
+task supplement for it and `supplement` fails with `task_supplement_unsupported`.
+Steering uses an explicit cancel-and-resume workflow: cancel the exact run, then
+`continue` it with a follow-up instruction. Multica stores the bounded
+instruction as the new attempt's run-scoped handoff note (`continue-instruction-v1`)
+and its rerun lineage resumes the source session in the source workdir when the
+cancellation is resume-safe. Reports call this cancel-and-resume, never live steering.
+The interactive main is an ordinary Copilot session; its shell exposes
+`COPILOT_AGENT_SESSION_ID`, which `muxpilot start` binds as the main conversation.
+Personal skills are discovered from `~/.copilot/skills`. Covers F01, F04, F05, F09, N04.
+
+Gate: an installation-specific real Copilot smoke with at least two workers,
+cancel-and-resume, integration, tests and main recovery before qualification.
+
 ## Shipping boundary
 
 The design is a proposed baseline for task breakdown and bounded spikes, not a claim of implemented capabilities or human sign-off. Required pre-release gates are provider/version qualification (D04/D11), scoped auth and execution fencing (D05/D06), replayable human/backend audit (D07), crash/artifact recovery (D08/D09), integrated epic verification (D10), and owned-service packaging/attribution (D12). Broader provider matrices, remote-host stdio, raw worker TUI takeover and stronger hardware durability claims are outside the initial guarantee until separately demonstrated.

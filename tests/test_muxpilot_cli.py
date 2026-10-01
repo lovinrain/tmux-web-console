@@ -15,7 +15,12 @@ import pytest
 from muxpilot.cli import main, parser
 from muxpilot.config import Config, private_write
 from muxpilot.multica import MulticaClient, MulticaError
-from muxpilot.project import AuthorizationError, ProjectController, ProjectError
+from muxpilot.project import (
+    AuthorizationError,
+    ProjectController,
+    ProjectError,
+    main_command,
+)
 from muxpilot.store import JournalStore
 
 
@@ -483,6 +488,44 @@ def test_control_requires_exact_run_and_closure_requires_evidence(
         scoped(tool, "close", project, evidence={})
 
 
+def test_continue_instruction_requires_backend_support(
+    controller: tuple[ProjectController, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool, repo = controller
+    project = start(tool, repo)["project"]["project_id"]
+    run, issue = str(uuid.uuid4()), str(uuid.uuid4())
+    monkeypatch.setattr(
+        FakeMultica,
+        "snapshot",
+        lambda self, project_id: {
+            "issues": [],
+            "runs": [{"id": run, "issue_id": issue, "status": "cancelled"}],
+            "cursor": 0,
+        },
+    )
+    before = len(FakeMultica.effects)
+    with pytest.raises(ProjectError, match="cannot attach a follow-up instruction"):
+        scoped(tool, "control", project, action="continue", task=issue, run=run,
+               message="Use the shared mailer")
+    assert len(FakeMultica.effects) == before
+    # A plain continue never depends on the instruction capability.
+    scoped(tool, "control", project, action="continue", task=issue, run=run)
+    assert FakeMultica.effects[-1]["content"] == ""
+    monkeypatch.setattr(
+        FakeMultica,
+        "capabilities",
+        lambda self: {"protocol": "muxpilot-v1", "capabilities": ["continue-instruction-v1"]},
+    )
+    scoped(tool, "control", project, action="continue", task=issue, run=run,
+           message="Use the shared mailer")
+    sent = FakeMultica.effects[-1]
+    assert (sent["action"], sent["task_id"], sent["content"]) == (
+        "continue",
+        run,
+        "Use the shared mailer",
+    )
+
+
 def test_worker_cli_does_not_load_operator_credentials(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -493,10 +536,75 @@ def test_worker_cli_does_not_load_operator_credentials(
 
 def test_cli_parser_documents_alias_and_bounded_await() -> None:
     assert parser().parse_args(["await", "project-name"]).wait == 30
+    # The main model is the installation's preference unless explicitly requested.
     assert (
         parser().parse_args(["main", "--repo", "/tmp/repo", "--goal", "goal"]).model
-        == "gpt-6.1-sol"
+        is None
     )
+
+
+def test_main_launcher_is_provider_specific(tmp_path: Path) -> None:
+    repo = tmp_path / "shop"
+    codex = Config(state_root=tmp_path, socket_path=tmp_path / "projectd.sock")
+    assert main_command(codex, repo, "Add reset") == [
+        "codex",
+        "-m",
+        "gpt-6.1-sol",
+        f"Use $muxpilot for {repo}. Add reset. Load the installed muxpilot skill and use its project tools.",
+    ]
+    copilot = replace(
+        codex,
+        main_provider="copilot",
+        worker_provider="copilot",
+        main_model="claude-opus-5.5",
+        main_executable="/opt/copilot/bin/copilot",
+        main_args=("--yolo",),
+    )
+    command = main_command(copilot, repo, "Add reset.")
+    assert command[:5] == [
+        "/opt/copilot/bin/copilot",
+        "--model",
+        "claude-opus-5.5",
+        "--yolo",
+        "-i",
+    ]
+    assert command[5].startswith(f"Use Muxpilot for {repo}. Add reset.")
+    assert len(command) == 6
+    assert main_command(copilot, repo, "Goal", "gpt-6.1-sol")[2] == "gpt-6.1-sol"
+    # Copilot's always-available router is the default when no model is chosen.
+    assert main_command(replace(codex, main_provider="copilot"), repo, "Goal")[:3] == [
+        "copilot",
+        "--model",
+        "auto",
+    ]
+
+
+def test_copilot_start_binds_its_own_conversation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import muxpilot.project as project_module
+    import muxpilot.service as service_module
+
+    sent: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(service_module, "ensure_service", lambda *args: None)
+    monkeypatch.setattr(
+        service_module,
+        "request",
+        lambda socket, action, payload, timeout: sent.append((action, payload)) or {},
+    )
+    monkeypatch.setattr(project_module, "credential_for", lambda *args: "credential")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("MUXPILOT_CONFIG", str(tmp_path / "absent.json"))
+    monkeypatch.setenv("TMUX_PANE", "%7")
+    monkeypatch.setenv("COPILOT_AGENT_SESSION_ID", "copilot-session-1")
+    assert main(["start", "--repo", str(tmp_path), "--goal", "goal"]) == 0
+    explicit = ["start", "--repo", str(tmp_path), "--goal", "goal"]
+    assert main([*explicit, "--main-conversation", "explicit"]) == 0
+    monkeypatch.delenv("COPILOT_AGENT_SESSION_ID")
+    assert main(explicit) == 0
+    conversations = [payload.get("main_conversation") for _action, payload in sent]
+    assert conversations == ["copilot-session-1", "explicit", None]
+    assert all(payload["main_pane"] == "%7" for _action, payload in sent)
 
 
 def test_incompatible_backend_capabilities_fail_closed() -> None:
@@ -606,6 +714,35 @@ def test_goal_amendment_versions_requested_delivery_endpoint(
             len([event for event in store.events() if event["kind"] == "input.amended"])
             == 1
         )
+
+
+def test_events_wait_is_not_woken_by_its_own_lease_heartbeat(
+    controller: tuple[ProjectController, Path],
+) -> None:
+    tool, repo = controller
+    project = start(tool, repo)["project"]["project_id"]
+    first = scoped(tool, "events", project, after=0)
+    assert first["events"] and all(
+        event["kind"] != "coordinator.renewed" for event in first["events"]
+    )
+    cursor = first["cursor"]
+
+    def renewals() -> int:
+        with tool._store(tool.registry.resolve(project)) as store:
+            return len(
+                [e for e in store.events(limit=10000) if e["kind"] == "coordinator.renewed"]
+            )
+
+    before = renewals()
+    began = time.monotonic()
+    waited = scoped(tool, "events", project, after=cursor, wait=1)
+    assert time.monotonic() - began >= 0.9
+    assert waited["events"] == []
+    # The call's own renewal advanced the journal; the cursor moves past it.
+    assert waited["cursor"] > cursor
+    assert renewals() == before + 1
+    again = scoped(tool, "events", project, after=waited["cursor"])
+    assert again["events"] == [] and again["cursor"] > waited["cursor"]
 
 
 def test_feed_adapter_preserves_sparse_project_cursor_and_event_identity(
