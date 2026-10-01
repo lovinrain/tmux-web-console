@@ -15,6 +15,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .stdio_mirror import MIRROR_FORMATS
 from .stdio_runner import (
     CHUNK,
     GRACE_SECONDS,
@@ -240,7 +241,7 @@ def run(
         isinstance(arg, str) and "\0" not in arg for arg in command
     ):
         raise BridgeError("a valid provider command is required")
-    if mirror_format not in {None, "codex-app-server-v1"}:
+    if mirror_format is not None and mirror_format not in MIRROR_FORMATS:
         raise BridgeError("unsupported terminal mirror format")
     stdin = _binary(sys.stdin if stdin is None else stdin)
     stdout = _binary(sys.stdout if stdout is None else stdout)

@@ -18,6 +18,22 @@ with `/skills` or type `$muxpilot` before your repository and goal. If it is
 missing from `/skills` after installation, start a fresh Codex session and
 check again. See the [official Codex skills documentation](https://developers.openai.com/codex/skills/).
 
+### With GitHub Copilot CLI
+
+When Muxpilot is installed with `--provider copilot`, open a Copilot main in a
+visible tmux terminal, for example `copilot --model claude-opus-5.5`, and say
+the same sentence. Copilot discovers the skill from
+`~/.copilot/skills/muxpilot/SKILL.md`; check with `/skills` or
+`copilot skill list`, and start a new session if a running one predates the
+installation. Workers are Copilot runs managed by Multica, each in its own
+tmux terminal grouped under the project's Muxdeck workspace.
+
+Copilot workers cannot receive live messages. “Tell the API agent to reuse our
+email service” therefore becomes an explicit cancel-and-resume: the main stops
+that exact run, then continues it with your instruction. The continued attempt
+resumes the same worker conversation and worktree when that is safe, and the
+main reports it as cancel-and-resume rather than live steering.
+
 Multica's browser password and application sign-in details are stored privately
 on the host in `~/.config/muxpilot/private-access.json`.
 

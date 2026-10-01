@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from tmux_console import stdio_runner
-from tmux_console.stdio_bridge import is_lightweight_probe, run
+from tmux_console.stdio_bridge import BridgeError, is_lightweight_probe, run
 
 
 def test_output_observer_retains_delivered_bytes_without_replacing_protocol(tmp_path, launch_api):
@@ -824,6 +824,52 @@ def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, m
     else:
         assert b"opaque-reasoning-correlation" in visible
         assert b"tokenUsage" in visible
+
+
+def test_copilot_mirror_changes_only_display_after_redaction(tmp_path):
+    secret = b"synthetic-private-copilot-token"
+    records = [
+        {"type": "assistant.turn_start", "data": {"turnId": "0"}},
+        {"type": "session.usage_checkpoint", "data": {"modelCacheState": "internal-cache"}},
+        {"type": "tool.execution_start", "data": {"toolCallId": "t", "toolName": "bash",
+                                                   "arguments": {"command": "echo " + secret.decode()}}},
+        {"type": "assistant.message_delta", "data": {"messageId": "m", "deltaContent": "Checking API " + secret.decode() + " 雪\n"}},
+        {"type": "result", "exitCode": 0},
+    ]
+    lines = [json.dumps(record, ensure_ascii=False) for record in records]
+    # JSON escaping hides the credential from wire-byte redaction; the
+    # rendered pass must still withhold it after decoding.
+    escaped = "".join(f"\\u{ord(character):04x}" for character in secret.decode())
+    lines.insert(-1, '{"type": "assistant.message_delta", "data": {"messageId": "m", "deltaContent": "escaped ' + escaped + '"}}')
+    wire = "".join(line + "\n" for line in lines).encode()
+    assert secret not in wire.split(b"escaped ")[1]
+    output, observed = io.BytesIO(), bytearray()
+    mirror_path = tmp_path / "terminal-mirror.txt"
+    with mirror_path.open("w+b") as terminal:
+        api = LocalLaunchAPI(terminal_output=terminal)
+        try:
+            status = run([sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); [sys.stdout.buffer.write(data[i:i+29]) for i in range(0,len(data),29)]"],
+                api=api, cwd=str(tmp_path), environment={}, stdin=io.BytesIO(wire),
+                stdout=output, stderr=io.BytesIO(), mirror_secrets=(secret,), mirror_format="copilot-jsonl-v1",
+                output_observer=lambda kind, content: observed.extend(content) if kind == "stdout" else None)
+            assert status == 0
+        finally:
+            api.close()
+        terminal.seek(0)
+        visible = terminal.read()
+    assert output.getvalue() == bytes(observed) == wire
+    assert secret not in visible
+    assert "[Agent] Checking API [REDACTED] 雪".encode() in visible
+    assert b"escaped [REDACTED]" in visible
+    assert b"[Command] echo [REDACTED]" in visible
+    assert visible.index(b"[Turn] Working.") < visible.index(b"[Session] Completed.")
+    assert b"internal-cache" not in visible and b"usage_checkpoint" not in visible
+
+
+def test_unknown_mirror_format_is_refused_before_launch(tmp_path):
+    with pytest.raises(BridgeError, match="unsupported terminal mirror format"):
+        run([sys.executable, "-c", "pass"], api=lambda *args: {}, cwd=str(tmp_path), environment={},
+            stdin=io.BytesIO(), stdout=io.BytesIO(), stderr=io.BytesIO(), mirror_format="future-format")
 
 
 @pytest.mark.parametrize(

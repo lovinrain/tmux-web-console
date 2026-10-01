@@ -27,13 +27,23 @@ import time
 # The runner is also launched by absolute filename outside an installed package.
 if __package__:
     from .stdio_capture import CodexCaptureSanitizer
-    from .stdio_mirror import CodexProgressMirror
+    from .stdio_mirror import (
+        CODEX_MIRROR_FORMAT,
+        COPILOT_MIRROR_FORMAT,
+        MIRROR_FORMATS,
+        CodexProgressMirror,
+        CopilotProgressMirror,
+    )
 else:
     from stdio_capture import (  # type: ignore[import-not-found,no-redef]
         CodexCaptureSanitizer,
     )
     from stdio_mirror import (  # type: ignore[import-not-found,no-redef]
+        CODEX_MIRROR_FORMAT,
+        COPILOT_MIRROR_FORMAT,
+        MIRROR_FORMATS,
         CodexProgressMirror,
+        CopilotProgressMirror,
     )
 
 CHUNK = 65536
@@ -390,7 +400,7 @@ def serve(connection: socket.socket) -> int:
     }
     redactors = {kind: StreamingRedactor(()) for kind in decoders}
     finished_mirrors: set[bytes] = set()
-    progress_mirror: CodexProgressMirror | None = None
+    progress_mirror: CodexProgressMirror | CopilotProgressMirror | None = None
     rendered_redactor: StreamingRedactor | None = None
     semantic_redactor: CodexCaptureSanitizer | None = None
     terminating_at = None
@@ -409,11 +419,16 @@ def serve(connection: socket.socket) -> int:
     def render_mirror(kind: bytes, payload: bytes, *, final: bool = False) -> None:
         # Wire frames and daemon observers retain their independent byte path.
         if kind == b"O" and progress_mirror is not None:
-            # Decode original JSON before sanitizing complete fields and each
-            # source item independently. Byte replacement before parsing could
-            # corrupt JSON when a credential also matches quoted delimiters.
-            assert semantic_redactor is not None
-            visible = semantic_redactor.feed(payload, final=final)
+            if semantic_redactor is not None:
+                # Decode original JSON before sanitizing complete fields and each
+                # source item independently. Byte replacement before parsing could
+                # corrupt JSON when a credential also matches quoted delimiters.
+                visible = semantic_redactor.feed(payload, final=final)
+            else:
+                # Copilot JSONL has no per-item delta protocol to reassemble;
+                # wire-byte redaction precedes parsing, and the rendered pass
+                # below catches values that only appear after JSON unescaping.
+                visible = redactors[kind].feed(payload, final=final)
             visible = progress_mirror.feed(visible, final=final)
             # JSON decoding can unescape a credential and adjacent item deltas
             # can reconstruct one. Redact the assembled display stream too,
@@ -516,11 +531,14 @@ def serve(connection: socket.socket) -> int:
                                 if kind == b"C" and process is None:
                                     secrets = _mirror_secret_values(payload)
                                     mirror_format = json.loads(payload).get("mirror_format")
-                                    if mirror_format not in {None, "codex-app-server-v1"}:
+                                    if mirror_format is not None and mirror_format not in MIRROR_FORMATS:
                                         raise BridgeError("unsupported terminal mirror format")
-                                    if mirror_format == "codex-app-server-v1":
+                                    if mirror_format == CODEX_MIRROR_FORMAT:
                                         progress_mirror = CodexProgressMirror()
                                         semantic_redactor = CodexCaptureSanitizer(secrets, redactor_factory=StreamingRedactor)
+                                        rendered_redactor = StreamingRedactor(secrets)
+                                    elif mirror_format == COPILOT_MIRROR_FORMAT:
+                                        progress_mirror = CopilotProgressMirror()
                                         rendered_redactor = StreamingRedactor(secrets)
                                     redactors = {stream: StreamingRedactor(secrets) for stream in decoders}
                                     _pane_ownership(True)

@@ -45,7 +45,7 @@ def test_private_idempotent_install_and_legacy_discovery(arguments: list[str], t
     assert first["services_started"] is False
     assert first["provider_runs_started"] is False
     for path in first["changed"]:
-        expected = 0o700 if path.endswith("/bin/muxpilot") else 0o600
+        expected = 0o700 if path.endswith(("/bin/muxpilot", "/bin/muxpilot-worker")) else 0o600
         assert stat.S_IMODE(Path(path).stat().st_mode) == expected
     for path in (tmp_path / "state", tmp_path / "config", tmp_path / "skills/muxpilot"):
         assert stat.S_IMODE(path.stat().st_mode) == 0o700
@@ -201,3 +201,46 @@ def test_exact_managed_dependency_commands_are_installed_without_running_them(ar
 def test_managed_service_names_reject_tmux_and_shell_or_path_injection(arguments: list[str], unit: str) -> None:
     with pytest.raises(SystemExit):
         installer.parser().parse_args([*arguments, "--multica-api-service", unit])
+
+
+def test_copilot_install_uses_copilot_discovery_and_worker_launcher(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from muxpilot.config import Config
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    provider = tmp_path / "copilot"
+    provider.write_text("#!/bin/sh\nexit 0\n")
+    provider.chmod(0o700)
+    arguments = [
+        "--repo", str(REPOSITORY), "--python", sys.executable,
+        "--bin-dir", str(tmp_path / "bin"),
+        "--config", str(tmp_path / "config/config.json"),
+        "--state-root", str(tmp_path / "state"),
+        "--provider", "copilot", "--main-model", "claude-opus-5.5",
+        "--main-executable", str(provider), "--main-arg=--yolo",
+    ]
+    result = install(arguments)
+    skill = home / ".copilot/skills/muxpilot/SKILL.md"
+    assert result["skills"] == [str(skill)]
+    assert not (home / ".agents").exists()
+    assert "copilot skill list" in result["skill_loading"]
+    assert (result["provider"], result["worker_provider"], result["main_model"]) == ("copilot", "copilot", "claude-opus-5.5")
+    text = skill.read_text()
+    assert "Main provider: `copilot`" in text and str(tmp_path / "bin/muxpilot-worker") in text
+    config = Config.load(tmp_path / "config/config.json")
+    assert (config.main_provider, config.worker_provider, config.main_model) == ("copilot", "copilot", "claude-opus-5.5")
+    assert config.main_executable == str(provider) and config.main_args == ("--yolo",)
+    worker = (tmp_path / "bin/muxpilot-worker").read_text()
+    assert "-m muxpilot.worker --config" in worker
+    assert stat.S_IMODE((tmp_path / "bin/muxpilot-worker").stat().st_mode) == 0o700
+    # A configuration-preserving upgrade keeps the Copilot discovery root.
+    arguments = [argument for argument in arguments if argument not in {"--provider", "copilot"}]
+    assert install(arguments, "--reuse-config", "--replace")["skills"] == [str(skill)]
+
+
+def test_copilot_launcher_options_are_validated(arguments: list[str], tmp_path: Path) -> None:
+    with pytest.raises(installer.InstallationError, match="existing executable"):
+        install(arguments, "--provider", "copilot", "--main-executable", str(tmp_path / "missing"))
+    with pytest.raises(installer.InstallationError, match="nonempty literals"):
+        install(arguments, "--provider", "copilot", "--main-arg=")

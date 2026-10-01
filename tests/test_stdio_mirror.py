@@ -9,6 +9,7 @@ from tmux_console.stdio_mirror import (
     MAX_ITEMS,
     MAX_RECORD_CHARS,
     CodexProgressMirror,
+    CopilotProgressMirror,
 )
 
 
@@ -350,3 +351,120 @@ def test_semantic_turn_completion_releases_agent_tail_before_outcome(
         sanitizer.redacted
         and sanitizer.omitted_records == sanitizer.omitted_deltas == 0
     )
+
+
+def copilot(kind, data=None, **envelope):
+    return (
+        json.dumps({"type": kind, "data": data or {}, **envelope}, ensure_ascii=False)
+        + "\n"
+    ).encode()
+
+
+def copilot_stream():
+    """Event shapes observed from Copilot CLI ``-p ... --output-format json``."""
+    call = "call_shell"
+    return b"".join(
+        [
+            copilot("session.mcp_server_status_changed", {"serverName": "x", "status": "pending"}, ephemeral=True),
+            copilot("session.tools_updated", {"model": "fixture-model"}, ephemeral=True),
+            copilot("user.message", {"content": "Your assigned issue ID is: 42", "transformedContent": "<private-context>"}),
+            copilot("assistant.turn_start", {"turnId": "0"}),
+            copilot("model.call_start", {"turnId": "0", "model": "fixture-model"}, ephemeral=True),
+            copilot("assistant.reasoning_delta", {"reasoningId": "r1", "deltaContent": "Planning 雪 "}, ephemeral=True),
+            copilot("assistant.reasoning_delta", {"reasoningId": "r1", "deltaContent": "the change"}, ephemeral=True),
+            copilot("assistant.tool_call_delta", {"toolCallId": call, "inputDelta": "{"}, ephemeral=True),
+            copilot("assistant.message", {"messageId": "m0", "content": "", "reasoningOpaque": "opaque-reasoning-blob",
+                                          "toolRequests": [{"toolCallId": call, "name": "bash", "arguments": {"command": "pytest -q"}}]}),
+            copilot("assistant.reasoning", {"reasoningId": "r1", "content": "Planning 雪 the change"}, ephemeral=True),
+            copilot("tool.execution_start", {"toolCallId": call, "toolName": "bash", "arguments": {"command": "pytest -q", "description": "Run tests"}}),
+            copilot("tool.execution_partial_result", {"toolCallId": call, "partialOutput": "collected 3\n"}, ephemeral=True),
+            copilot("tool.execution_partial_result", {"toolCallId": call, "partialOutput": "collected 3\n3 passed\n"}, ephemeral=True),
+            copilot("tool.execution_complete", {"toolCallId": call, "success": True, "shellExecution": {"exitCode": 0},
+                                                "result": {"content": "collected 3\n3 passed\n<shellId: 0 completed>"}}),
+            copilot("tool.execution_start", {"toolCallId": "call_view", "toolName": "view", "arguments": {"path": "/repo/src/api.py"}}),
+            copilot("tool.execution_complete", {"toolCallId": "call_view", "success": True, "result": {"content": "secret-free file body"}}),
+            copilot("assistant.turn_end", {"turnId": "0"}),
+            copilot("assistant.message_start", {"messageId": "m1", "phase": "final_answer"}, ephemeral=True),
+            copilot("assistant.message_delta", {"messageId": "m1", "deltaContent": "Implemented "}, ephemeral=True),
+            copilot("assistant.message_delta", {"messageId": "m1", "deltaContent": "reset.\n"}, ephemeral=True),
+            copilot("assistant.message", {"messageId": "m1", "content": "Implemented reset.\n", "toolRequests": []}),
+            copilot("session.usage_checkpoint", {"totalPremiumRequests": 1, "modelCacheState": "internal-cache"}),
+            copilot("assistant.idle", {}, ephemeral=True),
+        ]
+    ) + (json.dumps({"type": "result", "sessionId": "session-identity", "exitCode": 0,
+                     "usage": {"premiumRequests": 0.33}}) + "\n").encode()
+
+
+def test_copilot_progress_renders_work_without_duplicates_or_metadata():
+    output = CopilotProgressMirror().feed(copilot_stream(), final=True).decode()
+    assert "[Task] Your assigned issue ID is: 42" in output
+    assert "[Turn] Working." in output
+    assert output.count("Planning 雪 the change") == 1
+    assert "[Command] pytest -q" in output
+    # Partial output is cumulative upstream; each line is shown once.
+    assert output.count("collected 3") == 1 and output.count("3 passed") == 1
+    assert "[Command] Exit 0." in output
+    assert "[Tool] view: /repo/src/api.py." in output
+    assert "[Tool] view: completed." in output
+    assert output.count("Implemented reset.") == 1
+    assert "[Session] Completed; premium requests 0.33." in output
+    for noise in ("private-context", "opaque-reasoning-blob", "internal-cache", "session-identity",
+                  "secret-free file body", "toolCallId", "fixture-model", "mcp"):
+        assert noise not in output
+
+
+def test_copilot_projection_is_independent_of_utf8_and_record_chunk_boundaries():
+    source = copilot_stream()
+    expected = CopilotProgressMirror().feed(source, final=True)
+    mirror = CopilotProgressMirror()
+    actual = b"".join(
+        mirror.feed(source[index : index + 1]) for index in range(len(source))
+    ) + mirror.feed(b"", final=True)
+    assert actual == expected
+
+
+def test_copilot_failures_unknown_events_and_plain_text_remain_actionable():
+    records = b"".join([
+        b"plain startup diagnostic\n",
+        copilot("tool.execution_start", {"toolCallId": "a", "toolName": "bash", "arguments": {"command": "make test"}}),
+        copilot("tool.execution_complete", {"toolCallId": "a", "success": False, "error": {"message": "timed out"},
+                                            "result": {"content": "partial log"}}),
+        copilot("tool.execution_start", {"toolCallId": "b", "toolName": "edit", "arguments": {"path": "README.md"}}),
+        copilot("tool.execution_complete", {"toolCallId": "b", "success": False, "error": {"message": "no match"}}),
+        copilot("session.warning", {"message": "rate limited"}),
+        copilot("session.error", {"message": "model unavailable"}),
+        copilot("session.compaction_start", {}),
+        copilot("session.compaction_start", {}),
+        copilot("future.ephemeral", {"detail": "hidden"}, ephemeral=True),
+        b"[1, 2]\n",
+        b'{"type": 7}\n',
+    ]) + (json.dumps({"type": "result", "exitCode": 1}) + "\n").encode()
+    output = CopilotProgressMirror().feed(records, final=True).decode()
+    assert "[Provider] plain startup diagnostic" in output
+    assert "[Command] make test" in output
+    assert output.count("partial log") == 1
+    assert "[Command] Failed: timed out." in output
+    assert "[Tool] edit: Failed: no match." in output
+    assert "[Warning] rate limited" in output
+    assert "[Error] model unavailable" in output
+    assert output.count("[Provider] Event: session.compaction_start.") == 1
+    assert "hidden" not in output
+    assert "[View] Unrecognized structured provider record." in output
+    assert "[View] Malformed structured provider event." in output
+    assert "[Session] Ended with exit 1." in output
+
+
+def test_copilot_non_cumulative_and_unbounded_output_stays_bounded():
+    mirror = CopilotProgressMirror()
+    mirror.feed(copilot("tool.execution_start", {"toolCallId": "c", "toolName": "bash", "arguments": {"command": "yes"}}))
+    first = mirror.feed(copilot("tool.execution_partial_result", {"toolCallId": "c", "partialOutput": "alpha\n"})).decode()
+    # A replacement that does not extend the shown text is displayed as new.
+    second = mirror.feed(copilot("tool.execution_partial_result", {"toolCallId": "c", "partialOutput": "beta\n"})).decode()
+    assert "alpha" in first and "beta" in second and "alpha" not in second
+    huge = "x" * (MAX_ITEM_CHARS * 2)
+    shown = mirror.feed(copilot("tool.execution_partial_result", {"toolCallId": "c", "partialOutput": "beta\n" + huge})).decode()
+    assert shown.count("x") < MAX_ITEM_CHARS
+    assert "Output shortened in this view." in shown
+    for index in range(MAX_ITEMS + 5):
+        mirror.feed(copilot("tool.execution_start", {"toolCallId": f"tool-{index}", "toolName": "view", "arguments": {}}))
+    assert len(mirror.tools) <= MAX_ITEMS and len(mirror.items) <= MAX_ITEMS

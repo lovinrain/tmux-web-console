@@ -508,3 +508,96 @@ def test_readable_mirror_is_qualified_codex_opt_in_and_retains_redacted_audit(tm
     assert receipt["artifacts"]["stdout"]["representation"] == (
         "sanitized codex-app-server JSONL" if expected else "redacted provider bytes")
     assert receipt["artifacts"]["stderr"]["representation"] == "redacted provider bytes"
+
+
+def test_copilot_worker_excludes_subagent_tools_and_refuses_hidden_delegation(tmp_path, client):
+    instance = context(tmp_path, provider="copilot", helper_policy="exclude_subagent_tools")
+    output = io.BytesIO()
+    ProviderBridge(instance, client=client).run(
+        [sys.executable, "-c", "import sys,json; print(json.dumps(sys.argv[1:]))", "-p", "brief"],
+        stdin=io.BytesIO(), stdout=output, stderr=io.BytesIO())
+    assert json.loads(output.getvalue()) == ["-p", "brief", "--excluded-tools", "task", "read_agent",
+                                             "write_agent", "list_agents"]
+    helper = inspect_execution(instance)["helper_control"]
+    assert helper["policy"] == "exclude_subagent_tools" and helper["enforced"]
+    for forbidden in (["--fleet"], ["--available-tools", "view"], ["--available-tools=task"], ["--acp"]):
+        conflicting = replace(instance, execution_id=str(uuid.uuid4()))
+        with pytest.raises(CapabilityError, match="hidden Copilot subagents"):
+            ProviderBridge(conflicting, client=client).run(["copilot", "-p", "brief", *forbidden],
+                                                          stdin=io.BytesIO(), stdout=io.BytesIO(), stderr=io.BytesIO())
+        assert not conflicting.directory.exists()
+    with pytest.raises(CapabilityError, match="GitHub Copilot"):
+        context(tmp_path, provider="codex", helper_policy="exclude_subagent_tools")
+    with pytest.raises(CapabilityError, match="Codex"):
+        context(tmp_path, provider="copilot", helper_policy="disable_multi_agent")
+
+
+@pytest.mark.parametrize("arguments,expected", [(["--output-format", "json"], "copilot-jsonl-v1"),
+                                                (["--output-format=json"], "copilot-jsonl-v1"),
+                                                (["--output-format", "text"], None)])
+def test_copilot_json_output_selects_readable_mirror_and_retains_redacted_bytes(tmp_path, client, monkeypatch,
+                                                                                 arguments, expected):
+    from muxpilot import runtime
+    original = runtime.bridge_run
+    selected = []
+
+    def record_format(*args, **kwargs):
+        selected.append(kwargs.get("mirror_format"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "bridge_run", record_format)
+    instance = context(tmp_path, provider="copilot")
+    secret = "synthetic-copilot-audit-token"
+    wire = (json.dumps({"type": "assistant.message", "data": {"messageId": "m", "content": "Done " + secret}}) + "\n"
+            + json.dumps({"type": "result", "exitCode": 0, "usage": {"premiumRequests": 1}}) + "\n").encode()
+    command = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())", *arguments]
+    output = io.BytesIO()
+    assert ProviderBridge(instance, client=client, secret_values=(secret,)).run(
+        command, stdin=io.BytesIO(wire), stdout=output, stderr=io.BytesIO(), environment=dict(os.environ)) == 0
+    assert selected == [expected]
+    assert output.getvalue() == wire
+    captured = (instance.directory / "stdout.bin").read_bytes()
+    assert secret.encode() not in captured and b"[REDACTED]" in captured
+    receipt = inspect_execution(instance)
+    assert receipt["capture_complete"]
+    assert receipt["artifacts"]["stdout"]["representation"] == "redacted provider bytes"
+
+
+def test_project_worker_configuration_uses_the_configured_provider_policy(tmp_path, repository, client):
+    store = JournalStore(tmp_path / "state", str(uuid.uuid4()), repository)
+    lease = store.acquire_lease("coordinator:fixture")
+    config = SimpleNamespace(state_root=tmp_path / "state", muxdeck_url="http://127.0.0.1:7683/mux",
+                             muxdeck_public_url=None, muxdeck_token_file=None, worker_provider="copilot")
+    placement = ensure_project_workspace(config, store, lease["owner"], lease["generation"], "Project", "main", client=client)
+    written = json.loads(Path(placement["worker_config_path"]).read_text())
+    assert (written["provider"], written["helper_policy"]) == ("copilot", "exclude_subagent_tools")
+    loaded = load_context(environment={"MUXPILOT_PROJECT_ID": store.project_id, "MUXPILOT_STATE_ROOT": str(tmp_path / "state"),
+                                       "MUXPILOT_EXECUTION_ID": str(uuid.uuid4()), "MUXPILOT_TASK_ID": "task",
+                                       "MUXPILOT_WORKTREE": str(tmp_path)})
+    assert (loaded.provider, loaded.helper_policy) == ("copilot", "exclude_subagent_tools")
+    with pytest.raises(CapabilityError, match="unsupported worker provider"):
+        ensure_project_workspace(SimpleNamespace(**{**vars(config), "worker_provider": "other"}), store,
+                                 lease["owner"], lease["generation"], "Project", "main", client=client)
+
+
+def test_copilot_model_discovery_passes_through_only_without_task_identity(tmp_path, monkeypatch, capfd):
+    from muxpilot import worker
+
+    provider = tmp_path / "copilot"
+    provider.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+    provider.chmod(0o700)
+
+    def no_task_context(*args, **kwargs):
+        raise AssertionError("discovery cannot load a worker task")
+
+    monkeypatch.setattr(worker, "load_context", no_task_context)
+    for key in ("MUXPILOT_EXECUTION_ID", "MUXPILOT_TASK_ID", "MUXPILOT_PROJECT_ID"):
+        monkeypatch.delenv(key, raising=False)
+    assert worker.main(["--provider", str(provider), "--", "--acp"]) == 0
+    assert json.loads(capfd.readouterr().out) == ["--acp"]
+    assert not worker.is_model_discovery([str(tmp_path / "codex"), "--acp"], {})
+    assert not worker.is_model_discovery([str(provider), "--acp", "--yolo"], {})
+    # An identified daemon task is never treated as discovery.
+    monkeypatch.setenv("MUXPILOT_EXECUTION_ID", str(uuid.uuid4()))
+    with pytest.raises(AssertionError, match="discovery cannot load a worker task"):
+        worker.main(["--provider", str(provider), "--", "--acp"])
