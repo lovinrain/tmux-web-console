@@ -716,6 +716,35 @@ def test_goal_amendment_versions_requested_delivery_endpoint(
         )
 
 
+def test_events_wait_is_not_woken_by_its_own_lease_heartbeat(
+    controller: tuple[ProjectController, Path],
+) -> None:
+    tool, repo = controller
+    project = start(tool, repo)["project"]["project_id"]
+    first = scoped(tool, "events", project, after=0)
+    assert first["events"] and all(
+        event["kind"] != "coordinator.renewed" for event in first["events"]
+    )
+    cursor = first["cursor"]
+
+    def renewals() -> int:
+        with tool._store(tool.registry.resolve(project)) as store:
+            return len(
+                [e for e in store.events(limit=10000) if e["kind"] == "coordinator.renewed"]
+            )
+
+    before = renewals()
+    began = time.monotonic()
+    waited = scoped(tool, "events", project, after=cursor, wait=1)
+    assert time.monotonic() - began >= 0.9
+    assert waited["events"] == []
+    # The call's own renewal advanced the journal; the cursor moves past it.
+    assert waited["cursor"] > cursor
+    assert renewals() == before + 1
+    again = scoped(tool, "events", project, after=waited["cursor"])
+    assert again["events"] == [] and again["cursor"] > waited["cursor"]
+
+
 def test_feed_adapter_preserves_sparse_project_cursor_and_event_identity(
     controller: tuple[ProjectController, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:

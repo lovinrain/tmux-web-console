@@ -48,6 +48,7 @@ class AuthorizationError(ProjectError):
 
 
 DEFAULT_MAIN_MODELS = {"codex": "gpt-6.1-sol", "copilot": "auto"}
+HEARTBEAT_EVENTS = frozenset({"coordinator.renewed"})
 
 
 def main_command(
@@ -1136,6 +1137,7 @@ class ProjectController:
             if not 0 <= wait <= 30:
                 raise ProjectError("await timeout must be between zero and 30 seconds")
             deadline = time.monotonic() + wait
+            renewed = False
             while True:
                 with (
                     self.registry.lock(record["project_id"]),
@@ -1143,15 +1145,26 @@ class ProjectController:
                 ):
                     credentials = self._credentials(record)
                     self._authorize(action, payload, credentials)
-                    self._authority(store, credentials, payload)
+                    if renewed:
+                        # Fence every poll, but renew (and journal it) once per
+                        # call rather than on each iteration of the wait.
+                        store.assert_lease(credentials["owner"], credentials["generation"])
+                    else:
+                        self._authority(store, credentials, payload)
+                        renewed = True
                     try:
                         self._ingest(store, credentials)
                         degraded = None
                     except (MulticaError, ProjectError) as error:
                         degraded = str(error)
-                    events = store.events(after=int(payload.get("after", 0)), limit=100)
+                    scanned = store.events(after=int(payload.get("after", 0)), limit=100)
+                    # The coordinator's own lease heartbeats stay in the journal
+                    # and audit, but are not inbox events: they must not wake
+                    # the wait. The cursor still advances past them.
+                    events = [event for event in scanned if event["kind"] not in HEARTBEAT_EVENTS]
                     result = {
                         "events": events,
+                        "cursor": scanned[-1]["sequence"] if scanned else int(payload.get("after", 0)),
                         "degraded": degraded,
                         "project_id": record["project_id"],
                         "generation": credentials["generation"],
@@ -1160,6 +1173,9 @@ class ProjectController:
                         <= 60,
                     }
                 if events or degraded or time.monotonic() >= deadline:
+                    return result
+                if len(scanned) == 100:
+                    # A full page of heartbeats: return its cursor to page on.
                     return result
                 time.sleep(min(0.25, max(0, deadline - time.monotonic())))
         with self.registry.lock(record["project_id"]), self._store(record) as store:

@@ -74,7 +74,11 @@ criteria, for example:
 ```
 
 Discover the approved configured roster with `muxpilot agents PROJECT`;
-the sample values are explanatory. Each assignment must include acceptance,
+the sample values are explanatory. Multica adds runtime context to each
+worker checkout (for Copilot: a runtime block in `AGENTS.md`, plus
+`.github/skills/multica-platform/` and `.multica/`). Tell workers to leave those
+files untouched and uncommitted; judge cleanliness by the commit's diff from the
+stage base, not by a fully clean `git status`. Each assignment must include acceptance,
 base revision, worktree/allowed-path ownership, handoff format, and constraints.
 Open-ended implementation, investigation, and review each get a visible
 Multica task and independent root worker execution. Only deterministic helpers
@@ -101,13 +105,20 @@ Native parent wakeups must reach this main's inbox, never a hidden second lead.
 While work remains, call `muxpilot events PROJECT --after CURSOR --wait 30`.
 After evaluating returned worker/human events, record your decision with
 `muxpilot decision PROJECT --message SUMMARY --ack LAST_PROCESSED_CURSOR`.
-Advance only the cursor whose events informed that recorded decision. Keep
+Advance only the cursor whose events informed that recorded decision. Use the
+returned `cursor` as the next `--after`; it also skips your own lease
+heartbeats, which are journaled but not returned as inbox events. Keep
 awaits bounded and interruptible so the human can steer the interactive main.
 Renew with `muxpilot renew PROJECT` before the returned lease expires; schedule
 renewal during the active loop, allowing at least half the lease duration for
 failures. Expired or revoked authority requires explicit resume/reconciliation.
 Idle wakeup is provider-dependent: retain pending events and expose an idle
 main explicitly; never inject raw terminal keystrokes as an assumed wakeup.
+Every authorized project command also renews the local lease, so the bounded
+`events --wait` call keeps it current. Run waits and renewals in the foreground
+of your own turn, one bounded call at a time. Never leave detached background
+loops (renewal, polling or watchers): they outlive a lost main, keep its lease
+alive, and flood the journal with renewal events.
 
 Use `muxpilot status PROJECT` for “Where are we?” Include completion criteria,
 actual task/run states, blockers, live links, and last confirmed activity.
