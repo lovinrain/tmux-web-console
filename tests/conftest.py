@@ -24,6 +24,7 @@ def isolate_default_state_files(
     monkeypatch.setenv("MUXDECK_SUBMITTED_MESSAGES_FILE", str(state_dir / "submitted-messages.sqlite3"))
     monkeypatch.setenv("MUXDECK_SCROLLBACK_FILE", str(state_dir / "scrollback.sqlite3"))
     monkeypatch.setenv("MUXDECK_LAUNCH_REQUESTS_FILE", str(state_dir / "launch-requests.sqlite3"))
+    monkeypatch.setenv("MUXDECK_WORK_LINKS_FILE", str(state_dir / "work-links.sqlite3"))
     monkeypatch.setenv("MUXDECK_CODEX_HISTORY_FILE", str(state_dir / "codex-history.jsonl"))
     monkeypatch.setenv("MUXDECK_CLAUDE_HISTORY_FILE", str(state_dir / "claude-history.jsonl"))
     for agent in ("CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK"):

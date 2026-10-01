@@ -428,6 +428,7 @@ export function filterSessions(
       pane?.title,
       pane?.command,
       ...(session.tags ?? []),
+      ...(session.workLinks ?? []).flatMap((link) => [link.label, link.title, link.url, link.status?.state]),
     ].filter(Boolean).some((value) => value!.toLowerCase().includes(needle));
     const matchesKind = filters.kind === "all"
       || (filters.kind === "agents" && AGENT_KINDS.has(kind))

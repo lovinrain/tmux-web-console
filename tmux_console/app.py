@@ -20,7 +20,6 @@ from aiohttp import WSMsgType, web
 
 from muxpilot.fencing import receiver_middleware
 
-from .worker_link import resolve_worker_terminal
 from .agent_reference import AgentReferenceDetector
 from .agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from .auth import (
@@ -197,6 +196,14 @@ from .uploads import (
     AttachmentStorageFullError,
     AttachmentStore,
 )
+from .work_links import (
+    WorkLinkStore,
+    WorkLinksUnavailable,
+    default_work_links_path,
+    work_link_capabilities,
+)
+from .work_links_api import register_work_link_routes
+from .worker_link import resolve_worker_terminal
 from .workspaces import (
     WorkspaceForgetSnapshot,
     WorkspaceNotFoundError,
@@ -254,6 +261,7 @@ HTML_PREVIEW_GRANT_REQUEST_KEY = web.RequestKey("html_preview_grant", HtmlPrevie
 HTML_PREVIEW_ROUTE_NAME = "html-preview-asset"
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
+WORK_LINKS_KEY = web.AppKey("work_links", WorkLinkStore)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 AGENT_TRANSCRIPTS_KEY = web.AppKey("agent_transcripts", AgentTranscriptReader)
 TRANSCRIPT_READ_LIMIT_KEY = web.AppKey("transcript_read_limit", asyncio.Semaphore)
@@ -344,6 +352,7 @@ class SessionSnapshotBuilder:
         workspaces: WorkspaceStore | None = None,
         registry: SessionRegistry | None = None,
         agent_references: AgentReferenceDetector | None = None,
+        work_links: WorkLinkStore | None = None,
     ) -> None:
         self._tmux = tmux
         self._titles = titles
@@ -353,6 +362,7 @@ class SessionSnapshotBuilder:
         self._workspaces = workspaces
         self._registry = registry
         self._agent_references = agent_references
+        self._work_links = work_links
         self._clock = clock
         self._lock = asyncio.Lock()
         self._state_history: dict[str, tuple[str, str, int]] = {}
@@ -387,6 +397,13 @@ class SessionSnapshotBuilder:
             self._registry.record_history_titles({item.name: self._titles.get_title(item.name) for item in items})
         next_state_history: dict[str, tuple[str, str, int]] = {}
         payload: list[dict[str, Any]] = []
+        work_link_snapshot = None
+        if self._work_links is not None:
+            try:
+                work_link_snapshot = self._work_links.summary_snapshot()
+            except WorkLinksUnavailable:
+                # A damaged auxiliary store must not take terminals offline.
+                pass
         try:
             workspace_pins = (
                 set(self._workspaces.list_pinned_sessions())
@@ -434,6 +451,17 @@ class SessionSnapshotBuilder:
                     "agentSessionId": reference.session_id if reference else None,
                 }
             )
+            if self._work_links is not None:
+                record["workLinksAvailable"] = work_link_snapshot is not None
+            if work_link_snapshot is not None and self._registry is not None:
+                history = self._registry.history_for_identity(
+                    item.id, item.created, item.server_started, item.server_pid,
+                )
+                record.update({
+                    "workLinksEnabled": work_link_snapshot["enabled"],
+                    "workLinksRevision": work_link_snapshot["revision"],
+                    "workLinks": work_link_snapshot["sessions"].get(history["id"], []) if history else [],
+                })
             payload.append(record)
 
         # Dropping absent names makes a later reappearance a fresh observation.
@@ -1143,6 +1171,7 @@ def create_app(
     submitted_messages: SubmittedMessageStore | None = None,
     scrollback: ScrollbackStore | None = None,
     agent_transcripts: AgentTranscriptReader | None = None,
+    work_links: WorkLinkStore | None = None,
 ) -> web.Application:
     app = web.Application(
         client_max_size=MAX_INPUT_BYTES,
@@ -1216,6 +1245,7 @@ def create_app(
     app[AGENT_STATES_KEY] = agent_states or AgentStateDetector()
     app[HOST_METRICS_KEY] = host_metrics or HostMetricsSampler()
     app[SESSION_REGISTRY_KEY] = session_registry or SessionRegistry()
+    app[WORK_LINKS_KEY] = work_links or WorkLinkStore(default_work_links_path(app[SESSION_REGISTRY_KEY].path))
     launch_requests_path = Path(os.environ.get(
         "MUXDECK_LAUNCH_REQUESTS_FILE",
         str(app[SESSION_REGISTRY_KEY].path.with_name("launch-requests.sqlite3")),
@@ -1254,6 +1284,7 @@ def create_app(
         workspaces=app[WORKSPACES_KEY],
         registry=app[SESSION_REGISTRY_KEY],
         agent_references=app[AGENT_REFERENCES_KEY],
+        work_links=app[WORK_LINKS_KEY],
     )
     app[WORKSPACE_STREAM_BROKER_KEY] = WorkspaceStreamBroker()
 
@@ -1377,12 +1408,16 @@ def create_app(
     async def close_launch_requests(application: web.Application) -> None:
         application[LAUNCH_REQUESTS_KEY].close()
 
+    async def close_work_links(application: web.Application) -> None:
+        application[WORK_LINKS_KEY].close()
+
     app.on_cleanup.append(close_session_stream_broker)
     app.on_cleanup.append(close_callback_stream_broker)
     app.on_cleanup.append(close_workspace_stream_broker)
     app.on_cleanup.append(close_callback_messages)
     app.on_cleanup.append(close_session_registry)
     app.on_cleanup.append(close_launch_requests)
+    app.on_cleanup.append(close_work_links)
     app.on_response_prepare.append(add_browser_security_headers)
 
     async def utility_lifecycle(application: web.Application) -> AsyncIterator[None]:
@@ -1741,6 +1776,10 @@ def create_app(
             return web.json_response({"ok": False, "error": str(error)}, status=503)
 
     async def api_capabilities(_: web.Request) -> web.Response:
+        try:
+            work_links = work_link_capabilities(app[WORK_LINKS_KEY], prefix)
+        except WorkLinksUnavailable as error:
+            work_links = {"available": False, "error": str(error)}
         return web.json_response(
             {
                 "apiVersion": 1,
@@ -1772,6 +1811,7 @@ def create_app(
                     },
                 },
                 "workspace": workspace_api_capabilities(),
+                "workLinks": work_links,
                 "callbackMessages": {
                     "persistent": True,
                     "historyRetained": True,
@@ -1803,6 +1843,7 @@ def create_app(
                         "launch",
                         "input",
                         "capture",
+                        "workLinks",
                     ],
                     "workspaces": [
                         "create",
@@ -1818,7 +1859,7 @@ def create_app(
                     ],
                     "callback": ["global", "workspace", "messages"],
                     "callbackMessages": ["post", "list", "review", "history", "idempotency"],
-                    "configuration": ["shortcuts", "snippets"],
+                    "configuration": ["shortcuts", "snippets", "workLinks"],
                     "observability": ["sessionStream", "hostMetrics"],
                 },
                 "documentation": "docs/API.md",
@@ -6402,6 +6443,8 @@ def create_app(
     session_segment = "{session:[^/]+}"
 
     app.router.add_get(f"{prefix}/api/health", health)
+    register_work_link_routes(app, prefix, app[WORK_LINKS_KEY], app[TMUX_KEY],
+                              app[SESSION_REGISTRY_KEY], app[SESSION_RENAME_LOCK_KEY])
     app.router.add_get(f"{prefix}/api/capabilities", api_capabilities)
     app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)

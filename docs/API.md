@@ -553,6 +553,23 @@ contains the selected sessions. Families stay contiguous and inherit their
 root's destination tab group. Include descendants in `sessions` to transfer a
 complete branch; the single-session endpoint still transfers only its named tab.
 
+### Native work links
+
+GitHub PRs, Jira tickets, and Google Docs can be associated with a stable session
+identity, shown as chips/status cards, and updated programmatically. Discover
+configuration and API operations with `GET /api/work-links/context?paneId=%2542`
+or `GET /api/capabilities`. Each provider and agent status reporting can be enabled
+through `PATCH /api/work-links/config` using `expectedRevision`.
+
+`GET/POST /api/sessions/{session}/work-links` reads/adds links; creation requires
+the discovered `historyId`. `GET/PATCH/DELETE /api/work-links/{id}` reads, edits,
+or removes a link. Metadata and retained notes use `expectedRevision`;
+`PUT /api/work-links/{id}/status` uses `expectedStatusRevision` and leaves notes
+intact. `GET /api/session-history/{historyId}/work-links` reads retained records.
+Control-token and browser authentication apply; callback-only tokens are denied.
+Muxdeck never accesses providers itself. See [Work links](WORK_LINKS.md) for the
+full contract, Google Docs title chips, and agent access instructions.
+
 ### Quick links
 
 A link has `id`, `label`, and an absolute `http` or `https` `url`. Collection

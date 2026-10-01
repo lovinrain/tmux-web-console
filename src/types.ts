@@ -1,3 +1,5 @@
+import type { WorkLinkSummary } from "./workLinks";
+
 export interface Pane {
   id: string;
   index: number;
@@ -61,6 +63,10 @@ export interface Session {
   queuedMessageCount: number;
   memorandumCount?: number;
   panes: Pane[];
+  workLinksAvailable?: boolean;
+  workLinksEnabled?: boolean;
+  workLinksRevision?: number;
+  workLinks?: WorkLinkSummary[];
 }
 
 export type AgentState =

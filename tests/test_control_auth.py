@@ -116,6 +116,12 @@ def test_control_and_callback_secret_collision_detection_rereads_files(tmp_path:
 _ALLOWED_ROUTES = (
     ("/api/health", ("GET", "HEAD")),
     ("/api/capabilities", ("GET", "HEAD")),
+    ("/api/work-links/config", ("GET", "HEAD", "PATCH")),
+    ("/api/work-links/context", ("GET", "HEAD")),
+    ("/api/work-links/link-1", ("GET", "HEAD", "PATCH", "DELETE")),
+    ("/api/work-links/link-1/status", ("PUT",)),
+    ("/api/sessions/agent/work-links", ("GET", "HEAD", "POST")),
+    ("/api/session-history/archive-1/work-links", ("GET", "HEAD")),
     ("/api/sessions", ("GET", "HEAD", "POST")),
     ("/api/sessions/stream", ("GET", "HEAD")),
     ("/api/session-history", ("GET", "HEAD")),

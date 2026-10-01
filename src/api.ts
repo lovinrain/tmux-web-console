@@ -199,7 +199,7 @@ function isUnknownFieldError(error: unknown, field: string): error is ApiRequest
     && error.message === `unknown field: ${field}`;
 }
 
-async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
+export async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_PATH}${path}`, {
     ...init,
     headers: { Accept: "application/json", ...init?.headers },

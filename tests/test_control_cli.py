@@ -99,6 +99,23 @@ def test_transport_preserves_base_path_auth_and_literal_json(http_server):
     assert headers["Content-Type"] == "application/json"
 
 
+def test_work_link_context_discovers_current_pane_or_explicit_session(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%42")
+    status, client = run_fake(monkeypatch, ["work-links", "context"], [{"links": []}])
+    assert status == 0
+    assert client.calls == [("GET", "/api/work-links/context?paneId=%2542", None)]
+    status, client = run_fake(monkeypatch, ["work-links", "context", "--session", "agent/one #2"], [{"links": []}])
+    assert status == 0
+    assert client.calls == [("GET", "/api/work-links/context?session=agent%2Fone%20%232", None)]
+
+
+def test_work_link_configuration_preserves_revision_and_access_instructions(monkeypatch):
+    payload = {"expectedRevision": 3, "providers": {"google_docs": {"instructions": "Use work Docs MCP"}}}
+    status, client = run_fake(monkeypatch, ["work-links", "config", "--json", json.dumps(payload)], [{"config": {}}])
+    assert status == 0
+    assert client.calls == [("PATCH", "/api/work-links/config", payload)]
+
+
 def test_redirect_is_never_followed_or_response_body_disclosed(http_server):
     http_server.replies.append((302, {"error": "SECRET_BODY"}, {"Location": http_server.url + "/evil"}))
     client = cli.ControlClient(http_server.url, http_server.token)

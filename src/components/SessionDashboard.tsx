@@ -87,6 +87,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { TimeZoneSelect } from "./TimeZoneSelect";
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
+import { WorkLinkBadges } from "./WorkLinkBadges";
 import "./SessionWorkspaceMembership.css";
 
 interface SessionDashboardProps {
@@ -418,6 +419,7 @@ function SessionItem({
         </div>
         {session.customTitle && <p className="session-tmux-name">tmux / {session.name}</p>}
         <p className="session-title">{pane?.title || pane?.command || "Idle tmux pane"}</p>
+        <WorkLinkBadges links={session.workLinks} />
         {tags.length > 0 && (
           <span className="session-tag-list" aria-hidden="true">
             {tags.slice(0, 3).map((tag) => (

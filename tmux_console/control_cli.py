@@ -487,6 +487,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=10, help="HTTP timeout in seconds")
     commands = parser.add_subparsers(dest="resource", required=True)
     commands.add_parser("capabilities")
+    work_links = commands.add_parser("work-links", help="discover session links and agent refresh instructions")
+    work_link_commands = work_links.add_subparsers(dest="action", required=True)
+    context = work_link_commands.add_parser("context", help="discover links/config; defaults to this tmux pane")
+    target = context.add_mutually_exclusive_group()
+    target.add_argument("--session", help="native session name on the configured server")
+    target.add_argument("--pane", help="pane ID on the configured server")
+    config = work_link_commands.add_parser("config", help="read configuration or patch it using its revision")
+    config.add_argument("--json", dest="json_payload", help="JSON object, @file, or - for stdin")
     api = commands.add_parser("api", help="call any relative /api/ endpoint without retries")
     api.add_argument("method", choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     api.add_argument("path")
@@ -583,6 +591,15 @@ def main(argv: list[str] | None = None) -> int:
         status = 0
         if args.resource == "capabilities":
             result = client.request("GET", "/api/capabilities")
+        elif args.resource == "work-links":
+            if args.action == "config":
+                result = client.request("PATCH" if args.json_payload else "GET", "/api/work-links/config",
+                                        _json_object(args.json_payload) if args.json_payload else None)
+            else:
+                pane = args.pane or os.environ.get("TMUX_PANE")
+                query = ("?session=" + quote(args.session, safe="") if args.session else
+                         "?paneId=" + quote(pane, safe="") if pane else "")
+                result = client.request("GET", "/api/work-links/context" + query)
         elif args.resource == "api":
             result = client.request(args.method, args.path, _json_object(args.json_payload) if args.json_payload else None)
         elif args.resource == "sessions":

@@ -456,6 +456,15 @@ rollback even when the older release does not display messages. The callback
 token file described in section 13 is a separate secret: migrate it privately
 only when agent callback access should carry over.
 
+Native PR/Jira/Google Docs links use a separate private `work-links.sqlite3`
+beside the configured session registry, overridden by `MUXDECK_WORK_LINKS_FILE`.
+Schema version 1 contains provider settings/access instructions, session-history
+associations, retained notes, and agent-reported status. Include it in private
+SQLite backups and migrations; preserve it on rollback because older releases
+ignore it. It does not upgrade existing state schemas. No provider credentials,
+public routes, or polling jobs are required. Deploy backend and frontend together.
+See [Work links](docs/WORK_LINKS.md) for configuration and agent discovery.
+
 Programmatic launch idempotency uses a separate private
 `launch-requests.sqlite3`, overridden by `MUXDECK_LAUNCH_REQUESTS_FILE`, beside
 the configured recovery registry. Schema version 1 stores request fingerprints,

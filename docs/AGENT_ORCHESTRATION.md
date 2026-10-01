@@ -123,6 +123,15 @@ stderr. They return a nonzero status for HTTP errors and do not automatically
 retry mutations. `muxdeckctl api METHOD /api/... --json @request.json` exposes
 the documented JSON API for operations without a dedicated CLI command.
 
+## Session tickets, PRs, and documents
+
+Run `muxdeckctl work-links context` inside a running agent's tmux pane to discover
+its native Jira/GitHub/Google Docs links, configuration, access instructions, and
+API operations. Agents supply document titles, retained notes, and observed status
+through the authenticated API. Each provider and status refresh can be enabled
+programmatically. Muxdeck does not fetch providers or schedule those reads.
+See [Work links](WORK_LINKS.md) for enterprise access guidance and examples.
+
 ## Launching interactive agents
 
 Session creation supports three explicit modes:

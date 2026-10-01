@@ -61,6 +61,16 @@ function session(overrides: Partial<Session> = {}): Session {
 }
 
 describe("session dashboard URL state", () => {
+  it("finds linked tickets, PR URLs, document titles, and reported state", () => {
+    const linked = session({ workLinks: [{ id: "doc", provider: "google_docs", label: "Google Doc",
+      title: "Release design", url: "https://docs.google.com/document/d/long-id/edit", status: null, statusUpdatedAt: null },
+    { id: "pr", provider: "github", label: "ENG-42", title: "Implement release", url: "https://git.corp/o/r/pull/17",
+      status: { state: "Changes requested", tone: "warning" }, statusUpdatedAt: 100 }] });
+    for (const query of ["release design", "ENG-42", "git.corp/o/r/pull/17", "changes requested"]) {
+      expect(filterSessions([linked, session({ name: "unrelated" })], { ...createDefaultSessionDashboardRoute(), query }))
+        .toEqual([linked]);
+    }
+  });
   it("uses existing dashboard behavior for an empty URL", () => {
     const parsed = parseSessionDashboardSearch("");
     expect(parsed).toEqual(createDefaultSessionDashboardRoute());

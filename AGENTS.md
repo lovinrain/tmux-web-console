@@ -41,6 +41,16 @@ again. Preserve unrelated work and follow the deployment safety checks above.
   immediately, so building in the running checkout deploys before validation.
   Documentation and tooling changes need no frontend build or service restart.
 
+## Session work links
+
+When linking a ticket, PR, or Google Doc to the current coding session, run
+`muxdeckctl work-links context` to discover the session identity, enabled options,
+and provider/link access instructions. The equivalent authenticated API is
+`GET /api/work-links/context?paneId=<encoded TMUX_PANE>`. See
+`docs/WORK_LINKS.md` for adding links, title chips, retained notes, and status reports.
+Honor the configured provider and refresh switches. Provider reads belong to the
+agent using the user's configured tools/accounts; Muxdeck only stores reports.
+
 ## Testing
 
 - Start with the test files or cases that exercise the changed behavior. Use

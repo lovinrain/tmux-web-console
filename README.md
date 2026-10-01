@@ -32,6 +32,10 @@ when you disconnect.
 - **Context beyond scrollback.** Read local agent transcripts, search submitted
   Claude Code/Codex messages, and revisit saved output and session history.
   Launch and control agents through the authenticated API and `muxdeckctl`.
+- **Tickets, PRs, and documents beside the session.** Link Jira tickets, GitHub
+  PRs, and Google Docs with readable title chips, agent-reported status, and
+  retained notes. Configure providers and agent access instructions through the
+  UI or API; status refresh is off until enabled.
 
 Agent status detection supports Claude Code, Codex, GitHub Copilot CLI, Cursor
 Agent, and Grok Build. Ambiguous activity appears as **Unclear**.
@@ -133,6 +137,7 @@ observing a session used by another client.
 - [Usage, shortcuts, and configuration](docs/REFERENCE.md)
 - [Agent callback setup and posting reports](docs/AGENT_CALLBACKS.md)
 - [Agent orchestration and `muxdeckctl`](docs/AGENT_ORCHESTRATION.md)
+- [Session work links, status cards, and agent API](docs/WORK_LINKS.md)
 - [Muxpilot project coordination proposal and implementation plan](docs/muxpilot/README.md)
 - [Agent transcripts](docs/AGENT_TRANSCRIPTS.md), [submitted messages](docs/SUBMITTED_MESSAGES.md), and [saved scrollback](docs/SCROLLBACK.md)
 - [HTTP and WebSocket API](docs/API.md)

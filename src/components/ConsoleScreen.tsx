@@ -76,6 +76,7 @@ import { AccountLink } from "./AccountLink";
 import { CopySessionControl, type CopySessionPlacement } from "./CopySessionControl";
 import { DEFAULT_HISTORY_PANEL_WIDTH, HistoryPanel } from "./HistoryPanel";
 import { FloatingTerminal, type FloatingTerminalHandle } from "./FloatingTerminal";
+import { SessionWorkLinks } from "./SessionWorkLinks";
 import { newTemporaryTerminalKey } from "../floatingTerminalState";
 import {
   FloatingStagedInput,
@@ -2665,6 +2666,10 @@ export function ConsoleScreen({
             <span className="console-header-tray-count">{hiddenHeaderControlCount}</span>
           </button>
         )}
+        {session && !ephemeral && <SessionWorkLinks
+          key={`${session.id}:${session.created}:${session.serverStarted}:${session.serverPid}`}
+          session={session}
+        />}
       </header>
 
       {copySessionError?.sourceName === sessionName && (
