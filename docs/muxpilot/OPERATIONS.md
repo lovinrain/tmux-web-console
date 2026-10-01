@@ -33,7 +33,7 @@ python3 scripts/install_muxpilot.py \
   --multica-url http://127.0.0.1:7331 \
   --multica-workspace-id ACTUAL_WORKSPACE_ID \
   --multica-workspace-slug ACTUAL_WORKSPACE_SLUG \
-  --multica-ui-url https://multica.example.test \
+  --multica-ui-url https://console.example.test/multica/ \
   --multica-token-file /absolute/private/multica-pat \
   --runtime-profile-id ACTUAL_RUNTIME_PROFILE_ID \
   --daemon-id ACTUAL_DAEMON_ID \
@@ -68,7 +68,11 @@ The runtime profile and daemon must support the recorded local repository and
 worktree isolation. Browser URLs refer to existing protected routes, while
 `multica_url` and `muxdeck_url` select authenticated control endpoints. The
 workspace slug is required to form actual Multica board links; IDs alone are
-not interchangeable URL slugs. Installing these values creates no public route.
+not interchangeable URL slugs. Browser URLs may include a deployment path prefix, such as
+`https://console.example.test/multica/`; generated project links retain it.
+Keep `multica_url` pointed at the actual loopback API origin (this installation
+uses `http://127.0.0.1:18230`; `7331` above is an example port), independently of
+the public browser URL. Installing these values creates no public route.
 
 Muxdeck's same-host receiver journal root must match `config.state_root`.
 For a custom root, set the Muxdeck service's `MUXPILOT_STATE_ROOT` to that exact

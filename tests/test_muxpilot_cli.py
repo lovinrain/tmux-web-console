@@ -204,8 +204,18 @@ def test_start_reuses_uuid_board_and_rejects_second_main(
     controller: tuple[ProjectController, Path],
 ) -> None:
     tool, repo = controller
+    tool.config = replace(
+        tool.config,
+        multica_ui_url="https://example.test/multica/",
+        multica_workspace_slug="shop team",
+    )
     first = start(tool, repo)
     again = start(tool, repo)
+    assert first["multica_url"] == (
+        "https://example.test/multica/shop%20team/projects/"
+        + first["project"]["project_id"]
+    )
+    assert again["multica_url"] == first["multica_url"]
     assert first["project"]["project_id"] == again["project"]["project_id"]
     assert len(FakeMultica.effects) == 1
     with pytest.raises(ProjectError, match="different main incarnation"):
