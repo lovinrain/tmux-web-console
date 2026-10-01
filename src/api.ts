@@ -928,6 +928,8 @@ function isGlobalCallbackSnapshot(value: unknown): value is GlobalCallbackSnapsh
       && isStringArray(source.sessions)
     ))
     && isNonnegativeSafeInteger(value.sessionRevision)
+    && (value.onHoldSessions === undefined
+      || isStringArray(value.onHoldSessions) && isNonnegativeSafeInteger(value.callbackMessageRevision))
     && (value.callbackGroups === undefined && value.callbackGroupRevision === undefined
       || Array.isArray(value.callbackGroups)
         && value.callbackGroups.every(isCallbackCustomGroup)
@@ -1186,6 +1188,8 @@ export interface GlobalCallbackSnapshot {
   latestCallbackAtBySession?: Record<string, number>;
   /** Independent fence: posting a message does not change workspace sessions. */
   callbackMessageRevision?: number;
+  /** Manually held entries, shared across callback scopes and fenced with messages. */
+  onHoldSessions?: string[];
   /** Shared custom groups and their independent concurrency revision. */
   callbackGroups?: CallbackCustomGroup[];
   callbackGroupRevision?: number;
@@ -1829,6 +1833,17 @@ export async function reviewGlobalCallbackSession(
       body: JSON.stringify({ session, sessionRevision }),
     },
   );
+}
+
+export async function setCallbackSessionHold(
+  session: string,
+  onHold: boolean,
+): Promise<GlobalCallbackSnapshot> {
+  return jsonRequest("/api/callback-sessions/hold", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session, onHold }),
+  });
 }
 
 export async function listCallbackMessages(

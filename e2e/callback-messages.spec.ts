@@ -122,6 +122,19 @@ test("agent reports reach both tabs, review independently, and remain readable a
     await expect(panel.getByRole("button", { name: `Open ${sessionName}`, exact: true })).toBeDisabled();
   }
   const panel = page.getByRole("dialog", { name: "Callback list", exact: true });
+  await panel.getByRole("button", { name: `Put ${sessionName} on hold`, exact: true }).click();
+  for (const current of [page, secondPage]) {
+    const row = current.locator(".workspace-callback-item");
+    await expect(row).toHaveClass(/on-hold/);
+    await expect(row.locator(".workspace-callback-status")).toHaveText("On hold");
+    await expect(row).toHaveCSS("filter", "grayscale(1)");
+    await expect(row.locator(".workspace-callback-message")).toHaveCount(2);
+  }
+  await panel.getByRole("combobox", { name: "Filter callbacks by status" }).selectOption("on-hold");
+  await expect(panel.locator(".workspace-callback-item")).toHaveCount(1);
+  await panel.getByRole("combobox", { name: "Filter callbacks by status" }).selectOption("ready");
+  await expect(panel.getByText("No callbacks match these filters")).toBeVisible();
+  await panel.getByRole("combobox", { name: "Filter callbacks by status" }).selectOption("all");
   for (const theme of ["dark", "light"] as const) {
     if (theme === "light") {
       await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
@@ -137,10 +150,15 @@ test("agent reports reach both tabs, review independently, and remain readable a
       const dimensions = await panel.locator(".workspace-callback-timing").evaluate((element) => {
         const timing = element.getBoundingClientRect();
         const row = element.closest(".workspace-callback-item")!.getBoundingClientRect();
-        return { width: element.clientWidth, contentWidth: element.scrollWidth, right: timing.right, rowRight: row.right };
+        const buttons = [...element.closest(".workspace-callback-item")!.querySelectorAll<HTMLButtonElement>("button")];
+        return {
+          width: element.clientWidth, contentWidth: element.scrollWidth, right: timing.right, rowRight: row.right,
+          buttonRight: Math.max(...buttons.map((button) => button.getBoundingClientRect().right)),
+        };
       });
       expect(dimensions.contentWidth).toBeLessThanOrEqual(dimensions.width);
       expect(dimensions.right).toBeLessThanOrEqual(dimensions.rowRight);
+      expect(dimensions.buttonRight).toBeLessThanOrEqual(dimensions.rowRight);
       await panel.screenshot({ path: testInfo.outputPath(`callback-messages-${theme}-${width}.png`) });
     }
   }
@@ -161,6 +179,13 @@ test("agent reports reach both tabs, review independently, and remain readable a
   await expect(page.getByText(report.message, { exact: true })).toBeVisible();
   await expect(page.getByText(secondReport.message, { exact: true })).toHaveCount(0);
   await expect(page.locator(".workspace-callback-timing time")).toHaveAttribute("datetime", latestCallbackIso);
+  await expect(page.locator(".workspace-callback-item")).toHaveClass(/on-hold/);
+  await panel.getByRole("button", { name: `Take ${sessionName} off hold`, exact: true }).click();
+  for (const current of [page, secondPage]) {
+    await expect(current.locator(".workspace-callback-status")).toHaveText("Ended / unavailable");
+  }
+  await panel.getByRole("button", { name: `Put ${sessionName} on hold`, exact: true }).click();
+  await expect(page.locator(".workspace-callback-item")).toHaveClass(/on-hold/);
 
   const pending = await agentRequest.get(`/mux/api/callback-messages?status=pending&after=${first.sequence - 1}`);
   expect(pending.ok()).toBe(true);
@@ -182,6 +207,11 @@ test("agent reports reach both tabs, review independently, and remain readable a
   await expect(page.getByRole("dialog", { name: "Callback list", exact: true })
     .getByText(report.message, { exact: true })).toBeVisible();
   await expect(page.locator(".workspace-callback-timing time")).toHaveAttribute("datetime", latestCallbackIso);
+  await expect(page.locator(".workspace-callback-status")).toHaveText("On hold");
+  await page.getByRole("button", { name: `Mark ${sessionName} reviewed and remove from all callback lists`, exact: true }).click();
+  await expect(page.locator(".workspace-callback-item")).toHaveCount(0);
+  const cleared = await context.request.get("/mux/api/callback-sessions");
+  expect((await cleared.json()).onHoldSessions).not.toContain(sessionName);
 });
 
 test("a script credential can read callbacks but cannot inspect or control sessions", async ({ playwright, baseURL }) => {

@@ -17626,6 +17626,7 @@ html.history-resizing * {
   .workspace-callback-status.ready { color: var(--amber); }
   .workspace-callback-status.ended { color: var(--red); }
 
+  .workspace-callback-hold,
   .workspace-callback-open,
   .workspace-callback-remove {
     display: grid;
@@ -17640,6 +17641,8 @@ html.history-resizing * {
     cursor: pointer;
   }
 
+  .workspace-callback-hold:hover:not(:disabled),
+  .workspace-callback-hold:focus-visible,
   .workspace-callback-open:hover:not(:disabled),
   .workspace-callback-open:focus-visible,
   .workspace-callback-remove:hover:not(:disabled),
@@ -17649,9 +17652,11 @@ html.history-resizing * {
     outline: 0;
   }
 
+  .workspace-callback-hold:disabled,
   .workspace-callback-open:disabled,
   .workspace-callback-remove:disabled { cursor: not-allowed; opacity: 0.42; }
 
+  .workspace-callback-hold svg,
   .workspace-callback-open svg,
   .workspace-callback-remove svg { width: 13px; height: 13px; }
 

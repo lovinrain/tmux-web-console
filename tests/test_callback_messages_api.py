@@ -53,6 +53,93 @@ async def read_event(response, event):
 
 
 @pytest.mark.asyncio
+async def test_callback_hold_survives_restart_and_review_removes_it_without_losing_history(tmp_path):
+    async with TestClient(TestServer(make_app(tmp_path))) as client:
+        response = await client.post("/api/workspaces", json={
+            "name": "Project", "tabs": ["agent-one"], "activeSession": "agent-one",
+            "callbackSessions": ["agent-one"],
+        })
+        workspace = (await response.json())["workspace"]
+        response = await client.post("/api/callback-messages", json=callback_payload())
+        report = (await response.json())["callback"]
+        response = await client.put("/api/callback-sessions/hold", json={"session": "agent-one", "onHold": True})
+        assert response.status == 200
+        held = await response.json()
+        assert held["onHoldSessions"] == ["agent-one"]
+        assert held["callbackMessages"] == [report]
+        assert held["workspaceCallbacks"][0]["sessions"] == ["agent-one"]
+        assert held["sessionRevision"] == workspace["sessionRevision"]
+        response = await client.put("/api/callback-sessions/hold", json={"session": "agent-one", "onHold": True})
+        assert await response.json() == held
+
+    async with TestClient(TestServer(make_app(tmp_path))) as client:
+        response = await client.get("/api/callback-sessions")
+        assert await response.json() == held
+        response = await client.put("/api/callback-sessions/hold", json={"session": "agent-one", "onHold": False})
+        restored = await response.json()
+        assert restored["onHoldSessions"] == []
+        assert restored["callbackMessages"] == [report]
+        assert restored["callbackMessageRevision"] > held["callbackMessageRevision"]
+        await client.put("/api/callback-sessions/hold", json={"session": "agent-one", "onHold": True})
+        response = await client.post("/api/callback-sessions/review", json={
+            "session": "agent-one", "sessionRevision": restored["sessionRevision"],
+        })
+        assert response.status == 200
+        reviewed = await response.json()
+        assert reviewed["onHoldSessions"] == []
+        assert reviewed["callbackSessions"] == []
+        assert reviewed["callbackMessages"] == []
+        response = await client.get("/api/callback-messages?status=reviewed")
+        assert (await response.json())["messages"][0]["id"] == report["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("removal", ["global", "workspace", "workspace-api", "delete-workspace"])
+async def test_removing_last_manual_callback_clears_hold(tmp_path, removal):
+    async with TestClient(TestServer(make_app(tmp_path))) as client:
+        response = await client.post("/api/workspaces", json={
+            "name": "Project", "tabs": ["agent-one"], "activeSession": "agent-one",
+            "callbackSessions": [] if removal == "global" else ["agent-one"],
+        })
+        workspace = (await response.json())["workspace"]
+        if removal == "global":
+            await client.put("/api/callback-sessions", json={"sessions": ["agent-one"], "sessionRevision": 0})
+        await client.put("/api/callback-sessions/hold", json={"session": "agent-one", "onHold": True})
+        if removal == "global":
+            response = await client.put("/api/callback-sessions", json={"sessions": [], "sessionRevision": 0})
+        elif removal == "workspace":
+            response = await client.patch(f"/api/workspaces/{workspace['id']}", json={
+                "callbackSessions": [], "sessionRevision": 0,
+            })
+        elif removal == "workspace-api":
+            response = await client.delete(f"/api/workspaces/{workspace['id']}/callback-sessions", json={
+                "sessions": ["agent-one"], "sessionRevision": 0,
+            })
+        else:
+            response = await client.delete(f"/api/workspaces/{workspace['id']}")
+        assert response.status in (200, 204)
+        response = await client.get("/api/callback-sessions")
+        snapshot = await response.json()
+        assert snapshot["callbackSessions"] == []
+        assert snapshot["onHoldSessions"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {}, {"session": "agent-one"}, {"session": "agent-one", "onHold": "true"},
+    {"session": "agent-one", "onHold": True, "extra": 1}, {"session": [], "onHold": True},
+])
+async def test_callback_hold_rejects_invalid_requests(tmp_path, payload):
+    async with TestClient(TestServer(make_app(tmp_path))) as client:
+        response = await client.put("/api/callback-sessions/hold", json=payload)
+        assert response.status == 400
+        response = await client.get("/api/callback-sessions")
+        snapshot = await response.json()
+        assert snapshot["onHoldSessions"] == []
+        assert snapshot["callbackMessageRevision"] == 0
+
+
+@pytest.mark.asyncio
 async def test_callback_message_lifecycle_and_history_survive_restart(tmp_path):
     payload = callback_payload()
     async with TestClient(TestServer(make_app(tmp_path, base_path="/mux"))) as client:
@@ -347,6 +434,14 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             assert posted_workspace["callbacks"] == posted
             assert posted_workspace["workspace"] == workspace
 
+            response = await client.put("/api/callback-sessions/hold", json={"session": "agent-one", "onHold": True})
+            assert response.status == 200
+            held = await read_event(callbacks, "callbacks")
+            held_workspace = await read_event(workspaces, "workspace")
+            assert held["onHoldSessions"] == ["agent-one"]
+            assert held["callbackMessages"] == [callback]
+            assert held_workspace["callbacks"] == held
+
             now = 200
             response = await client.post("/api/callback-messages", json=callback_payload(
                 requestId="latest",
@@ -355,6 +450,7 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             second_post = await read_event(callbacks, "callbacks")
             second_workspace_post = await read_event(workspaces, "workspace")
             assert second_post["latestCallbackAtBySession"] == {"agent-one": 200}
+            assert second_post["onHoldSessions"] == ["agent-one"]
             assert second_workspace_post["callbacks"] == second_post
 
             now = 300
@@ -363,6 +459,7 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             latest_review = await read_event(callbacks, "callbacks")
             latest_workspace_review = await read_event(workspaces, "workspace")
             assert latest_review["callbackMessages"] == [callback]
+            assert latest_review["onHoldSessions"] == ["agent-one"]
             assert latest_review["latestCallbackAtBySession"] == {"agent-one": 200}
             assert latest_workspace_review["callbacks"] == latest_review
 
@@ -371,6 +468,7 @@ async def test_message_updates_reach_callback_and_workspace_streams(tmp_path, mo
             reviewed = await read_event(callbacks, "callbacks")
             reviewed_workspace = await read_event(workspaces, "workspace")
             assert reviewed["callbackMessages"] == []
+            assert reviewed["onHoldSessions"] == []
             assert reviewed["callbackSessions"] == []
             assert reviewed["latestCallbackAtBySession"] == {}
             assert reviewed["callbackMessageRevision"] > posted["callbackMessageRevision"]

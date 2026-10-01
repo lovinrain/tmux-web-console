@@ -23,6 +23,7 @@ import {
   replaceGlobalCallbackSessions,
   reviewGlobalCallbackSession,
   reviewCallbackMessage,
+  setCallbackSessionHold,
   releaseUtilityTerminal,
   subscribeToCallbackSessions,
   subscribeToWorkspace,
@@ -1563,6 +1564,11 @@ function AppRoutes() {
     setWorkspaceIdentity(updated);
   }, [setWorkspaceIdentity]);
 
+  const updateCallbackSessionHold = useCallback(async (name: string, onHold: boolean) => {
+    const updated = await setCallbackSessionHold(name, onHold);
+    if (appMounted.current) applyGlobalCallbackSnapshot(updated);
+  }, [applyGlobalCallbackSnapshot]);
+
   const updateWorkspaceCallbackSessions = useCallback(async (
     nextSessions: readonly string[],
   ) => {
@@ -1573,6 +1579,19 @@ function AppRoutes() {
 
     const workspaceId = savedWorkspaceIdFromSearch(currentLocation().search);
     if (!workspaceId || hydratedWorkspaceIdRef.current !== workspaceId) {
+      try {
+        for (const name of previous) {
+          const snapshot = globalCallbackSnapshotRef.current;
+          if (!normalized.includes(name) && snapshot.onHoldSessions?.includes(name)
+            && !snapshot.callbackSessions.includes(name)) {
+            await updateCallbackSessionHold(name, false);
+          }
+        }
+      } catch (error) {
+        workspaceCallbackSessionsRef.current = previous;
+        setWorkspaceCallbackSessions(previous);
+        throw error;
+      }
       writeTemporaryCallbackSessions(temporaryTerminalKeyRef.current, normalized);
       return;
     }
@@ -1632,7 +1651,7 @@ function AppRoutes() {
     } finally {
       if (appMounted.current) setWorkspaceCallbackBusy(false);
     }
-  }, [refreshGlobalCallbackSnapshot, setWorkspaceIdentity]);
+  }, [refreshGlobalCallbackSnapshot, setWorkspaceIdentity, updateCallbackSessionHold]);
 
   const toggleWorkspaceCallbackSession = useCallback(async (sessionName: string) => {
     const current = workspaceCallbackSessionsRef.current;
@@ -1713,9 +1732,7 @@ function AppRoutes() {
     // marker without requiring a workspace-store write.
     if (!serverOwnsEntry && !workspaceId) {
       if (localAfter.length !== localBefore.length) {
-        workspaceCallbackSessionsRef.current = localAfter;
-        setWorkspaceCallbackSessions(localAfter);
-        writeTemporaryCallbackSessions(temporaryTerminalKeyRef.current, localAfter);
+        await updateWorkspaceCallbackSessions(localAfter);
       }
       return;
     }
@@ -4475,6 +4492,7 @@ function AppRoutes() {
       globalCallbackBusy={globalCallbackBusy}
       onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
       onReviewSession={reviewCallbackSession}
+      onSetSessionHold={updateCallbackSessionHold}
       onReviewMessage={reviewAgentCallbackMessage}
       onSelectSession={dashboard ? openSession : switchSession}
     />
@@ -4546,6 +4564,7 @@ function AppRoutes() {
           globalCallbackBusy={globalCallbackBusy}
           onGlobalRefresh={() => { void refreshGlobalCallbackSnapshot(); }}
           onReviewSession={reviewCallbackSession}
+          onSetSessionHold={updateCallbackSessionHold}
           onReviewMessage={reviewAgentCallbackMessage}
           onSelectSession={switchSession}
         />

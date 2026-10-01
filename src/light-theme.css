@@ -5290,6 +5290,7 @@ html[data-theme="light"] .sp-action-error {
   html[data-theme="light"] .workspace-callback-session small { color: #71806d; }
   html[data-theme="light"] .workspace-callback-status { color: #71806d; }
   html[data-theme="light"] .workspace-callback-status.running_command { color: var(--blue); }
+  html[data-theme="light"] .workspace-callback-hold,
   html[data-theme="light"] .workspace-callback-open,
   html[data-theme="light"] .workspace-callback-remove {
     color: #63705d;

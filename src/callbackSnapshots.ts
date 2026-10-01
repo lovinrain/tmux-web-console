@@ -17,6 +17,7 @@ export function mergeCallbackSnapshot(
     ...sessions,
     callbackMessages,
     callbackMessageRevision: messages.callbackMessageRevision,
+    onHoldSessions: messages.onHoldSessions,
     callbackSessions: [...new Set([
       ...sessions.globalCallbackSessions,
       ...sessions.workspaceCallbacks.flatMap((source) => source.sessions),

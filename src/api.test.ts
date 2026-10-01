@@ -1898,6 +1898,7 @@ describe("subscribeToCallbackSessions", () => {
     const snapshot = {
       callbackSessions: ["agent"], globalCallbackSessions: [], workspaceCallbacks: [],
       sessionRevision: 2, callbackMessageRevision: 1, callbackMessages: [message],
+      onHoldSessions: ["agent"],
     };
     for (const invalid of [
       { ...snapshot, callbackMessageRevision: -1 },
@@ -1908,11 +1909,13 @@ describe("subscribeToCallbackSessions", () => {
       { ...snapshot, latestCallbackAtBySession: { agent: "today" } },
       { ...snapshot, latestCallbackAtBySession: { agent: -1 } },
       { ...snapshot, latestCallbackAtBySession: [] },
+      { ...snapshot, onHoldSessions: "agent" },
+      { ...snapshot, onHoldSessions: [123] },
     ]) {
       source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(invalid) }));
     }
     expect(onSnapshot).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledTimes(8);
+    expect(onError).toHaveBeenCalledTimes(10);
     source.emit("callbacks", new MessageEvent("callbacks", { data: JSON.stringify(snapshot) }));
     expect(onSnapshot).toHaveBeenCalledWith(snapshot);
     const withHistory = { ...snapshot, latestCallbackAtBySession: { agent: message.createdAt + 10 } };

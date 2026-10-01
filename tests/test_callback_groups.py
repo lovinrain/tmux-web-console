@@ -110,7 +110,7 @@ def test_workspace_deletion_and_session_rename_preserve_other_scopes(tmp_path):
     save(store, "Existing name", ["new"])
     save(store, sessions=["old"], workspace_id="one")
     other = save(store, sessions=["other"], workspace_id="two")
-    store.rename_group_session("old", "new")
+    store.rename_session("old", "new")
     groups = store.groups_snapshot()["callbackGroups"]
     assert groups[0]["id"] == first
     assert groups[0]["sessions"] == ["new", "keep"]
@@ -121,26 +121,34 @@ def test_workspace_deletion_and_session_rename_preserve_other_scopes(tmp_path):
     assert groups[3]["id"] == other
     snapshot = store.groups_snapshot()
     store.delete_workspace_groups("absent")
-    store.rename_group_session("absent", "new")
+    store.rename_session("absent", "new")
     assert store.groups_snapshot() == snapshot
     store.close()
 
 
-def test_schema_one_upgrade_preserves_reports_and_review_history(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_schema_upgrade_preserves_reports_review_history_and_groups(tmp_path, version):
     path = tmp_path / "callbacks.sqlite3"
     store = CallbackMessageStore(path)
     report, _ = store.add({"message": "Done", "agentType": "codex", "sessionName": "a", "cwd": "/tmp"})
     store.review(report["id"])
     history = store.list_messages(status="all")
+    if version == 2:
+        save(store, sessions=["a"])
+    groups = store.groups_snapshot()
     store.close()
     with sqlite3.connect(path) as connection:
-        for table in ("callback_group_members", "callback_groups", "callback_group_metadata"):
-            connection.execute(f"DROP TABLE {table}")
-        connection.execute("PRAGMA user_version = 1")
+        connection.execute("DROP TABLE callback_session_holds")
+        if version == 1:
+            for table in ("callback_group_members", "callback_groups", "callback_group_metadata"):
+                connection.execute(f"DROP TABLE {table}")
+        connection.execute(f"PRAGMA user_version = {version}")
     store = CallbackMessageStore(path)
     assert store.list_messages(status="all") == history
-    assert store.groups_snapshot() == {"callbackGroups": [], "callbackGroupRevision": 0}
-    save(store, sessions=["a"])
+    assert store.groups_snapshot() == groups
+    assert store.pending_snapshot()["onHoldSessions"] == []
+    store.set_session_hold("a", True)
+    save(store, name="After upgrade", sessions=["a"])
     store.close()
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3

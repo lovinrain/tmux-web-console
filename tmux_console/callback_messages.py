@@ -126,7 +126,7 @@ class CallbackMessageStore:
             self._connection.row_factory = sqlite3.Row
             with self._transaction(write=True) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1, 2):
+                if version not in (0, 1, 2, 3):
                     raise sqlite3.DatabaseError("unsupported callback message schema")
                 connection.execute("""
                     CREATE TABLE IF NOT EXISTS callback_messages (
@@ -158,7 +158,12 @@ class CallbackMessageStore:
                     "INSERT OR IGNORE INTO callback_message_metadata VALUES (1, 0)"
                 )
                 callback_groups.initialize(connection)
-                connection.execute("PRAGMA user_version = 2")
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS callback_session_holds (
+                        sessionName TEXT PRIMARY KEY
+                    )
+                """)
+                connection.execute("PRAGMA user_version = 3")
             os.chmod(self.path, 0o600)
         except (OSError, sqlite3.Error) as error:
             self.close()
@@ -303,9 +308,47 @@ class CallbackMessageStore:
                 )
             return {
                 "callbackMessages": messages,
+                "onHoldSessions": [
+                    row["sessionName"] for row in connection.execute(
+                        "SELECT sessionName FROM callback_session_holds ORDER BY sessionName"
+                    )
+                ],
                 "latestCallbackAtBySession": latest,
                 "callbackMessageRevision": self._revision(connection),
             }
+
+    def set_session_hold(self, session_name: object, on_hold: object) -> None:
+        name = validate_session_name(_text(session_name, "session", 256))
+        if not isinstance(on_hold, bool):
+            raise TypeError("onHold must be a boolean")
+        with self._transaction(write=True) as connection:
+            result = connection.execute(
+                "INSERT OR IGNORE INTO callback_session_holds (sessionName) VALUES (?)"
+                if on_hold else "DELETE FROM callback_session_holds WHERE sessionName = ?",
+                (name,),
+            )
+            if result.rowcount:
+                self._changed(connection)
+
+    def clear_unqueued_holds(
+        self, sessions: Sequence[str], watched_sessions: Sequence[str],
+    ) -> None:
+        """Drop removed entries' holds only after their last queue source is gone."""
+        candidates = set(sessions) - set(watched_sessions)
+        if not candidates:
+            return
+        with self._transaction(write=True) as connection:
+            changed = False
+            for name in candidates:
+                result = connection.execute(
+                    "DELETE FROM callback_session_holds WHERE sessionName = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM callback_messages "
+                    "WHERE sessionName = ? AND reviewedAt IS NULL)",
+                    (name, name),
+                )
+                changed = changed or bool(result.rowcount)
+            if changed:
+                self._changed(connection)
 
     def review(self, message_id: str) -> dict[str, Any]:
         with self._transaction(write=True) as connection:
@@ -364,9 +407,20 @@ class CallbackMessageStore:
         with self._transaction(write=True) as connection:
             callback_groups.delete_workspace(connection, workspace_id)
 
-    def rename_group_session(self, old: str, new: str) -> None:
+    def rename_session(self, old: str, new: str) -> None:
         with self._transaction(write=True) as connection:
             callback_groups.rename_session(connection, old, new)
+            if old == new:
+                return
+            removed = connection.execute(
+                "DELETE FROM callback_session_holds WHERE sessionName = ?", (old,),
+            )
+            if removed.rowcount:
+                connection.execute(
+                    "INSERT OR IGNORE INTO callback_session_holds (sessionName) VALUES (?)",
+                    (new,),
+                )
+                self._changed(connection)
 
     def close(self) -> None:
         with self._lock:

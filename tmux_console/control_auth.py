@@ -48,6 +48,7 @@ _EXACT_ROUTES: dict[str, frozenset[str]] = {
     "/api/workspaces": _READ | {"POST"},
     "/api/callback-sessions": _READ | {"POST", "PUT", "DELETE"},
     "/api/callback-sessions/review": frozenset({"POST"}),
+    "/api/callback-sessions/hold": frozenset({"PUT"}),
     "/api/callback-sessions/stream": _READ,
     "/api/callback-messages": _READ | {"POST"},
 }

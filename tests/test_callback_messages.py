@@ -36,6 +36,7 @@ def test_store_retains_report_and_review_state_after_reopening(tmp_path):
     store = CallbackMessageStore(path, clock=lambda: 200)
     assert store.pending_snapshot() == {
         "callbackMessages": [record],
+        "onHoldSessions": [],
         "latestCallbackAtBySession": {"251": 100},
         "callbackMessageRevision": 1,
     }
@@ -44,6 +45,7 @@ def test_store_retains_report_and_review_state_after_reopening(tmp_path):
     assert store.review(record["id"]) == reviewed
     assert store.pending_snapshot() == {
         "callbackMessages": [],
+        "onHoldSessions": [],
         "latestCallbackAtBySession": {},
         "callbackMessageRevision": 2,
     }
@@ -87,6 +89,58 @@ def test_latest_callback_time_includes_reviewed_history_for_watched_sessions(tmp
     assert store.pending_snapshot(["renamed-session"])["latestCallbackAtBySession"] == {}
     store.close()
 
+
+def test_holds_are_durable_reversible_and_do_not_review_messages(tmp_path):
+    path = tmp_path / "callbacks.sqlite3"
+    store = CallbackMessageStore(path)
+    message, _ = store.add(payload())
+    store.set_session_hold("251", True)
+    store.set_session_hold("manual", True)
+    held = store.pending_snapshot()
+    assert held["onHoldSessions"] == ["251", "manual"]
+    assert held["callbackMessages"] == [message]
+    store.set_session_hold("251", True)
+    assert store.pending_snapshot() == held
+    store.close()
+
+    store = CallbackMessageStore(path)
+    assert store.pending_snapshot() == held
+    store.set_session_hold("251", False)
+    restored = store.pending_snapshot()
+    assert restored["onHoldSessions"] == ["manual"]
+    assert restored["callbackMessages"] == [message]
+    assert restored["callbackMessageRevision"] > held["callbackMessageRevision"]
+    store.set_session_hold("251", False)
+    assert store.pending_snapshot() == restored
+    store.close()
+
+
+def test_hold_cleanup_waits_for_last_queue_source_and_rename_preserves_hold(tmp_path):
+    store = CallbackMessageStore(tmp_path / "callbacks.sqlite3")
+    message, _ = store.add(payload())
+    for name in ("251", "watched", "removed", "temporary"):
+        store.set_session_hold(name, True)
+    store.clear_unqueued_holds(["251", "watched", "removed"], ["watched"])
+    assert store.pending_snapshot()["onHoldSessions"] == ["251", "temporary", "watched"]
+    store.review(message["id"])
+    store.clear_unqueued_holds(["251", "watched"], [])
+    assert store.pending_snapshot()["onHoldSessions"] == ["temporary"]
+    store.rename_session("temporary", "renamed")
+    assert store.pending_snapshot()["onHoldSessions"] == ["renamed"]
+    store.set_session_hold("existing", True)
+    store.rename_session("renamed", "existing")
+    assert store.pending_snapshot()["onHoldSessions"] == ["existing"]
+    store.close()
+
+
+@pytest.mark.parametrize("name,on_hold", [("", True), ("bad\nname", True), (None, True), ("251", "true"), ("251", 1)])
+def test_invalid_hold_is_rejected_without_writing(tmp_path, name, on_hold):
+    store = CallbackMessageStore(tmp_path / "callbacks.sqlite3")
+    with pytest.raises((TypeError, ValueError)):
+        store.set_session_hold(name, on_hold)
+    assert store.pending_snapshot()["onHoldSessions"] == []
+    assert store.pending_snapshot()["callbackMessageRevision"] == 0
+    store.close()
 
 def test_latest_callback_time_supports_large_combined_workspace_queues(tmp_path):
     store = CallbackMessageStore(tmp_path / "callbacks.sqlite3", clock=lambda: 100)

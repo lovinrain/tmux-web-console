@@ -46,6 +46,7 @@ export const CALLBACK_STATUS_OPTIONS = [
   { value: "ready", label: "Ready" },
   { value: "working", label: "Working" },
   { value: "waiting", label: "Waiting" },
+  { value: "on-hold", label: "On hold" },
   { value: "ended", label: "Ended / unavailable" },
   { value: "unknown", label: "Status unknown" },
 ] as const;
@@ -104,6 +105,7 @@ export const DEFAULT_CALLBACK_LIST_VIEW: Readonly<CallbackListViewPreferences> =
 /** One complete row after the caller has resolved scope and session liveness. */
 export interface CallbackListEntry {
   name: string;
+  onHold?: boolean;
   session?: Session;
   messages: readonly CallbackMessage[];
   workspaceNames: readonly string[];
@@ -115,7 +117,7 @@ export interface CallbackListEntry {
 
 export interface CallbackStatus {
   label: string;
-  tone: "ended" | "working" | "running_command" | "ready" | "waiting" | "unknown";
+  tone: "ended" | "working" | "running_command" | "ready" | "waiting" | "unknown" | "on-hold";
   working: boolean;
 }
 
@@ -126,7 +128,8 @@ export interface CallbackListGroup {
   tone?: CallbackStatus["tone"];
 }
 
-export function callbackStatus(session: Session | undefined): CallbackStatus {
+export function callbackStatus(session: Session | undefined, onHold = false): CallbackStatus {
+  if (onHold) return { label: "On hold", tone: "on-hold", working: false };
   if (!session) return { label: "Ended / unavailable", tone: "ended", working: false };
   const state = session.agentState;
   if (state === "working") return { label: "Working", tone: "working", working: true };
@@ -147,7 +150,7 @@ function validTimestamp(value: number | undefined): number | undefined {
 }
 
 export function callbackEntryReadySince(entry: CallbackListEntry): number | undefined {
-  return entry.session?.agentState === "waiting_human"
+  return !entry.onHold && entry.session?.agentState === "waiting_human"
     ? validTimestamp(entry.session.agentStateChangedAt)
     : undefined;
 }
@@ -174,7 +177,7 @@ function optionValue<T extends string>(
 
 function validCollapsedGroupKey(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 2048 || /[\u0000-\u001f\u007f]/u.test(value)) return false;
-  return /^(status:(ready|working|waiting|unknown|ended)|agent:(claude|codex|copilot|cursor|grok|shells|multiple|other)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
+  return /^(status:(ready|working|waiting|unknown|ended|on-hold)|agent:(claude|codex|copilot|cursor|grok|shells|multiple|other)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
 }
 
 export function validateCallbackListViewPreferences(value: unknown): CallbackListViewPreferences {
@@ -249,6 +252,7 @@ const STATUS_GROUPS: readonly Omit<CallbackListGroup, "entries">[] = [
   { key: "status:waiting", label: "Waiting", tone: "waiting" },
   { key: "status:unknown", label: "Status unknown", tone: "unknown" },
   { key: "status:ended", label: "Ended / unavailable", tone: "ended" },
+  { key: "status:on-hold", label: "On hold", tone: "on-hold" },
 ];
 
 const AGENT_GROUPS: readonly Omit<CallbackListGroup, "entries">[] = [
@@ -300,7 +304,7 @@ export function groupCallbacks(
   for (const entry of entries) {
     let definition: Omit<CallbackListGroup, "entries">;
     if (group === "status") {
-      const status = callbackStatus(entry.session);
+      const status = callbackStatus(entry.session, entry.onHold);
       const key = `status:${status.working ? "working" : status.tone}`;
       definition = STATUS_GROUPS.find((candidate) => candidate.key === key)!;
     } else if (group === "agent") {
@@ -337,7 +341,7 @@ export function filterAndSortCallbacks(
 ): CallbackListEntry[] {
   const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const matching = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
-    const status = callbackStatus(entry.session);
+    const status = callbackStatus(entry.session, entry.onHold);
     if (preferences.status !== "all" && (preferences.status === "working"
       ? !status.working : status.tone !== preferences.status)) return false;
     if (preferences.messages === "with-messages" && entry.messages.length === 0) return false;
@@ -358,8 +362,8 @@ export function filterAndSortCallbacks(
     switch (preferences.sort) {
       case "ready-first":
       case "ready-longest": {
-        const leftReady = callbackStatus(left.entry.session).tone === "ready";
-        const rightReady = callbackStatus(right.entry.session).tone === "ready";
+        const leftReady = callbackStatus(left.entry.session, left.entry.onHold).tone === "ready";
+        const rightReady = callbackStatus(right.entry.session, right.entry.onHold).tone === "ready";
         comparison = Number(rightReady) - Number(leftReady);
         if (comparison === 0 && leftReady && preferences.sort === "ready-longest") {
           comparison = compareTimes(callbackEntryReadySince(left.entry), callbackEntryReadySince(right.entry), false);

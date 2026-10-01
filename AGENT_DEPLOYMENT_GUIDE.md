@@ -440,11 +440,13 @@ See [Saved scrollback](docs/SCROLLBACK.md) for sampling, bounds, and limitations
 
 The separate `callbacks.sqlite3` file stores agent-posted callback messages,
 reported session/agent/CWD metadata, receipt times, idempotency keys, and review
-history, plus shared custom callback group names and memberships. It uses schema
-version 2 and does not alter workspace or recovery schemas. Version 1 upgrades
-transactionally at startup by adding group and membership tables and an independent
-group revision, preserving all reports and review history. Keep a consistent
-pre-upgrade backup: older releases reject version 2. To roll back, stop only
+history, shared custom callback group names and memberships, and manual on-hold
+session markers. It uses schema version 3 and does not alter workspace or recovery
+schemas. Versions 1 and 2 upgrade transactionally at startup, preserving all
+reports, review history, and existing groups. Version 1 gains the group tables and
+their independent revision; version 3 adds the hold table, with changes fenced by
+the callback-message revision. Keep a consistent pre-upgrade backup: older
+releases reject version 3. To roll back, stop only
 Muxdeck, retain the upgraded database separately, and restore the pre-upgrade
 database alongside the older code. Never downgrade `user_version` in place.
 `MUXDECK_CALLBACKS_FILE` overrides its path; otherwise it lives beside
@@ -913,7 +915,10 @@ merely to test that the application itself has no login.
 9. On desktop, open the `Callback` card, add the current and another workspace
    session, and confirm the list deduplicates entries, shows Working/Ready/
    Ended status, opens a live session from its row, and removes an item with the
-   reviewed check button. Confirm `Clear ended` and `Clear all`, reload the
+   reviewed check button. Put an entry On hold with the pause button: its row
+   should turn gray, keep its messages, and leave the Ready count. Confirm the
+   hold survives reload and appears in another browser, then take it off hold
+   or remove it. Confirm `Clear ended` and `Clear all`, reload the
    saved workspace, and verify entries persist. Drag and resize the floating
    panel, pin it, switch sessions, and confirm it stays visible; unpinned panels
    close on a session switch. A temporary workspace should keep its list only

@@ -46,6 +46,7 @@ def callback_snapshot(store):
     return {
         **store.get_global_callback_sessions(),
         "callbackMessages": [],
+        "onHoldSessions": [],
         "latestCallbackAtBySession": {},
         "callbackMessageRevision": 0,
         "callbackGroups": [],

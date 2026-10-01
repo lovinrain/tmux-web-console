@@ -14,8 +14,10 @@ import {
   ChevronRightIcon,
   CloseIcon,
   HistoryIcon,
+  PauseIcon,
   PinIcon,
   PlusIcon,
+  RefreshIcon,
   TerminalIcon,
   TrashIcon,
 } from "../icons";
@@ -114,6 +116,7 @@ interface WorkspaceCallbackListProps {
   onDeleteGroup?: (group: CallbackCustomGroup, expectedRevision: number) => Promise<void>;
   /** Mark a callback reviewed across all global/workspace queues. */
   onReviewSession?: (sessionName: string) => Promise<void>;
+  onSetSessionHold?: (sessionName: string, onHold: boolean) => Promise<void>;
   onReviewMessage?: (id: string) => Promise<void>;
   onSelectSession: (sessionName: string) => void;
 }
@@ -311,6 +314,7 @@ export function WorkspaceCallbackList({
   onSaveGroup,
   onDeleteGroup,
   onReviewSession,
+  onSetSessionHold,
   onReviewMessage,
   onSelectSession,
 }: WorkspaceCallbackListProps) {
@@ -626,6 +630,19 @@ export function WorkspaceCallbackList({
     }
   };
 
+  const setSessionHold = async (name: string, onHold: boolean) => {
+    if (!onSetSessionHold) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onSetSessionHold(name, onHold);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to update callback hold status");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const clearCallbacks = async (names: readonly string[]) => {
     const selected = new Set(names);
     setBusy(true);
@@ -747,17 +764,19 @@ export function WorkspaceCallbackList({
   ]);
   const localSessionMap = callbackSessionsForScope(sessions, workspaceMessages, workspaceSessionList);
   const sessionMap = activeScope === "global" ? globalSessionMap : localSessionMap;
-  const globalReadyCount = globalSessionList.filter((name) => callbackStatus(globalSessionMap.get(name)).tone === "ready").length;
-  const localReadyCount = localSessionList.filter((name) => callbackStatus(localSessionMap.get(name)).tone === "ready").length;
+  const onHoldSessions = new Set(globalCallbackSnapshot?.onHoldSessions ?? []);
+  const globalReadyCount = globalSessionList.filter((name) => callbackStatus(globalSessionMap.get(name), onHoldSessions.has(name)).tone === "ready").length;
+  const localReadyCount = localSessionList.filter((name) => callbackStatus(localSessionMap.get(name), onHoldSessions.has(name)).tone === "ready").length;
   const availableSessions = sessions.filter((item) => !visibleCallbackSessions.includes(item.name));
-  const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).working).length;
-  const readyCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name)).tone === "ready").length;
-  const unavailableCount = visibleCallbackSessions.filter((name) => !sessionMap.has(name)).length;
+  const workingCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name), onHoldSessions.has(name)).working).length;
+  const readyCount = visibleCallbackSessions.filter((name) => callbackStatus(sessionMap.get(name), onHoldSessions.has(name)).tone === "ready").length;
+  const unavailableCount = visibleCallbackSessions.filter((name) => !sessionMap.has(name) && !onHoldSessions.has(name)).length;
   const entries: CallbackListEntry[] = visibleCallbackSessions.map((name) => {
     const sources = globalWorkspaceSources.get(name) ?? [];
     const times = globalCallbackSnapshot?.latestCallbackAtBySession;
     return {
       name,
+      onHold: onHoldSessions.has(name),
       session: sessionMap.get(name),
       messages: messagesBySession.get(name) ?? [],
       workspaceNames: sources.map((source) => source.workspaceName),
@@ -785,7 +804,7 @@ export function WorkspaceCallbackList({
   const displayedNames = displayedEntries.map((entry) => entry.name);
   const clearableEntries = displayedEntries.filter((entry) => activeScope !== "global"
     || explicitGlobalSessions.includes(entry.name) || entry.messages.length > 0);
-  const removableUnavailableCount = clearableEntries.filter((entry) => !entry.session).length;
+  const removableUnavailableCount = clearableEntries.filter((entry) => !entry.session && !entry.onHold).length;
   const extraFilterCount = [listView.preferences.agent, listView.preferences.messages, listView.preferences.location]
     .filter((value) => value !== "all").length;
   const filtersActive = Boolean(listView.query.trim()) || listView.preferences.status !== "all" || extraFilterCount > 0;
@@ -811,8 +830,8 @@ export function WorkspaceCallbackList({
   } as CSSProperties;
 
   const renderEntry = (entry: CallbackListEntry, index: number) => {
-    const { name, session, messages } = entry;
-    const status = callbackStatus(session);
+    const { name, session, messages, onHold = false } = entry;
+    const status = callbackStatus(session, onHold);
     const latestCallbackAt = callbackEntryLatestCallbackAt(entry);
     const readySince = callbackEntryReadySince(entry);
     const timingLabel = latestCallbackAt === undefined ? "Ready since" : "Latest callback";
@@ -883,6 +902,17 @@ export function WorkspaceCallbackList({
           </span>
         </button>
         <span className={`workspace-callback-status ${status.tone}`}>{status.label}</span>
+        <button
+          type="button"
+          className="workspace-callback-hold"
+          disabled={isBusy || !onSetSessionHold || globalCallbackSnapshot?.onHoldSessions === undefined}
+          onClick={() => void setSessionHold(name, !onHold)}
+          aria-label={onHold ? `Take ${name} off hold` : `Put ${name} on hold`}
+          aria-pressed={onHold}
+          title={onHold ? "Take off hold" : "On hold — keep this callback for later"}
+        >
+          {onHold ? <RefreshIcon /> : <PauseIcon />}
+        </button>
         <button
           type="button"
           className="workspace-callback-open"
@@ -1297,7 +1327,7 @@ export function WorkspaceCallbackList({
           <div>
             {removableUnavailableCount > 0 && (
               <button type="button" disabled={isBusy} onClick={() => void clearCallbacks(
-                displayedNames.filter((name) => !sessionMap.has(name)),
+                displayedNames.filter((name) => !sessionMap.has(name) && !onHoldSessions.has(name)),
               )}>
                 <TrashIcon />
                 <span>{viewRestricted ? "Clear ended shown" : "Clear ended"}</span>

@@ -150,6 +150,7 @@ _ALLOWED_ROUTES = (
     ("/api/callback-sessions", ("GET", "HEAD", "POST", "PUT", "DELETE")),
     ("/api/callback-sessions/stream", ("GET", "HEAD")),
     ("/api/callback-sessions/review", ("POST",)),
+    ("/api/callback-sessions/hold", ("PUT",)),
     ("/api/callback-messages", ("GET", "HEAD", "POST")),
     ("/api/callback-messages/message-1/review", ("POST",)),
     ("/api/panes/%251/saved-scrollback", ("GET", "HEAD")),

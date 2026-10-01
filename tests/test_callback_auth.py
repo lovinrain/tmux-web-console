@@ -56,6 +56,7 @@ def test_callback_scope_is_an_exact_method_and_path_allowlist(prefix: str) -> No
     for path, method in (
         ("/api/callback-sessions", "POST"),
         ("/api/callback-sessions/review", "POST"),
+        ("/api/callback-sessions/hold", "PUT"),
         ("/api/callback-groups", "POST"),
         ("/api/callback-groups/group-1", "PUT"),
         ("/api/callback-groups/group-1", "DELETE"),
@@ -111,6 +112,7 @@ async def test_bearer_is_scoped_and_keeps_host_origin_and_cookie_boundaries(tmp_
             ("/mux/ws/terminal", "GET"),
             ("/mux/api/callback-sessions", "POST"),
             ("/mux/api/callback-sessions/review", "POST"),
+            ("/mux/api/callback-sessions/hold", "PUT"),
             ("/mux/api/callback-groups", "POST"),
             ("/mux/api/callback-groups/group-1", "PUT"),
             ("/mux/api/callback-groups/group-1", "DELETE"),

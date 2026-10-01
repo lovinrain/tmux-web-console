@@ -92,6 +92,54 @@ beforeEach(() => {
 });
 
 describe("WorkspaceCallbackList", () => {
+  it.each([false, true])("toggles hold independently of review and excludes held rows from ready counts (held=%s)", async (onHold) => {
+    const onSetSessionHold = vi.fn(async () => undefined);
+    const onReviewSession = vi.fn(async () => undefined);
+    const onChange = vi.fn(async () => undefined);
+    renderWithTheme(<WorkspaceCallbackList
+      sessionName="agent-one" sessions={[session("agent-one")]}
+      callbackSessions={["agent-one"]} onChange={onChange} onSelectSession={vi.fn()}
+      onSetSessionHold={onSetSessionHold} onReviewSession={onReviewSession}
+      globalCallbackSnapshot={{
+        callbackSessions: ["agent-one"], globalCallbackSessions: ["agent-one"],
+        workspaceCallbacks: [], sessionRevision: 0, callbackMessageRevision: 1,
+        onHoldSessions: onHold ? ["agent-one"] : [],
+        callbackMessages: [callbackMessage("done", "agent-one", "Keep this report")],
+      }}
+    />);
+    const toggle = screen.getByRole("button", { name: "Show callback list" });
+    expect(toggle).toHaveTextContent(`Global ${onHold ? 0 : 1}/1`);
+    expect(toggle).toHaveTextContent(`Local ${onHold ? 0 : 1}/1`);
+    fireEvent.click(toggle);
+    const hold = screen.getByRole("button", { name: onHold ? "Take agent-one off hold" : "Put agent-one on hold" });
+    expect(hold).toHaveAttribute("aria-pressed", String(onHold));
+    expect(hold.closest("li")).toHaveClass(onHold ? "on-hold" : "ready");
+    expect(screen.getByText("Keep this report")).toBeVisible();
+    fireEvent.click(hold);
+    await waitFor(() => expect(onSetSessionHold).toHaveBeenCalledWith("agent-one", !onHold));
+    await waitFor(() => expect(hold).toBeEnabled());
+    expect(onReviewSession).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the callback active and shows an error when putting it on hold fails", async () => {
+    renderWithTheme(<WorkspaceCallbackList
+      sessionName="agent-one" sessions={[session("agent-one")]}
+      callbackSessions={["agent-one"]} onChange={vi.fn()} onSelectSession={vi.fn()}
+      onSetSessionHold={vi.fn().mockRejectedValue(new Error("Unable to save hold"))}
+      globalCallbackSnapshot={{
+        callbackSessions: ["agent-one"], globalCallbackSessions: ["agent-one"],
+        workspaceCallbacks: [], sessionRevision: 0, callbackMessageRevision: 0, onHoldSessions: [],
+      }}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "Show callback list" }));
+    const hold = screen.getByRole("button", { name: "Put agent-one on hold" });
+    fireEvent.click(hold);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to save hold");
+    expect(hold.closest("li")).toHaveClass("ready");
+    expect(hold).toBeEnabled();
+  });
+
   it("adjusts text and window presets from one control and remembers them after reopening", () => {
     vi.stubGlobal("innerWidth", 1440);
     vi.stubGlobal("innerHeight", 1000);

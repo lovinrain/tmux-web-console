@@ -57,6 +57,12 @@ separate scopes.
 
 ### Callback list
 
+Use a row's pause button to put a callback **On hold** before removing it.
+Held entries stay visible in gray with their messages intact, are excluded from
+Ready counts, and can be filtered or grouped by status. Take an entry off hold to
+restore its live status, or use the review button to remove it. Holds are shared
+across callback scopes and browsers and survive reloads and service restarts.
+
 See which agents are ready, read their reports, and review them from one queue.
 
 ![Global callback list with agent reports, readiness, search, sorting, and review controls](docs/images/muxdeck-callback-list.png)

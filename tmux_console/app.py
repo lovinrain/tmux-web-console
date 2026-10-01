@@ -10,7 +10,7 @@ import math
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1266,6 +1266,10 @@ def create_app(
             *(message["sessionName"] for message in result["callbackMessages"]),
         ]))
         return result
+
+    def clear_unqueued_callback_holds(sessions: Sequence[str]) -> None:
+        watched = app[WORKSPACES_KEY].get_global_callback_sessions()["callbackSessions"]
+        app[CALLBACK_MESSAGES_KEY].clear_unqueued_holds(sessions, watched)
 
     @web.middleware
     async def workspace_stream_middleware(
@@ -3777,10 +3781,10 @@ def create_app(
                     "unable to migrate workspace, session-link, and note state"
                 )
             try:
-                app[CALLBACK_MESSAGES_KEY].rename_group_session(current_name, renamed_session)
+                app[CALLBACK_MESSAGES_KEY].rename_session(current_name, renamed_session)
             except CallbackMessageStoreUnavailable:
-                LOGGER.exception("Unable to migrate custom callback groups after session rename")
-                warnings.append("unable to migrate custom callback groups")
+                LOGGER.exception("Unable to migrate callback groups and holds after session rename")
+                warnings.append("unable to migrate callback groups and holds")
             try:
                 app[SESSION_REGISTRY_KEY].rename_identity(
                     source_session.id,
@@ -5091,10 +5095,25 @@ def create_app(
     async def review_callback_message(request: web.Request) -> web.Response:
         try:
             callback = app[CALLBACK_MESSAGES_KEY].review(request.match_info["message_id"])
+            clear_unqueued_callback_holds([callback["sessionName"]])
             snapshot = callback_snapshot()
         except (CallbackMessageStoreUnavailable, WorkspaceStoreUnavailable, CallbackMessageNotFound) as error:
             return callback_message_error(error)
         return web.json_response({"callback": callback, "callbacks": snapshot})
+
+    async def set_callback_session_hold(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request, required={"session", "onHold"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            app[CALLBACK_MESSAGES_KEY].set_session_hold(payload["session"], payload["onHold"])
+            snapshot = callback_snapshot()
+        except (CallbackMessageStoreUnavailable, WorkspaceStoreUnavailable, TypeError, ValueError) as error:
+            return callback_message_error(error)
+        return web.json_response(snapshot)
 
     async def replace_global_callback_sessions(request: web.Request) -> web.Response:
         payload, error_response = await workspace_resource_payload(
@@ -5105,10 +5124,12 @@ def create_app(
             return error_response
         assert payload is not None
         try:
+            previous = app[WORKSPACES_KEY].get_global_callback_sessions()["globalCallbackSessions"]
             snapshot = app[WORKSPACES_KEY].replace_global_callback_sessions(
                 payload["sessions"],
                 session_revision=payload["sessionRevision"],
             )
+            clear_unqueued_callback_holds(previous)
             snapshot = callback_snapshot(snapshot)
         except (
             WorkspaceStoreUnavailable,
@@ -5166,6 +5187,7 @@ def create_app(
                 session_revision=payload["sessionRevision"],
             )
             reviewed = app[CALLBACK_MESSAGES_KEY].review_sessions(payload["sessions"])
+            clear_unqueued_callback_holds(payload["sessions"])
             result["removed"] = list(dict.fromkeys([*result["removed"], *reviewed]))
             result = callback_snapshot(result)
         except (
@@ -5196,6 +5218,7 @@ def create_app(
                 session_revision=payload["sessionRevision"],
             )
             reviewed = app[CALLBACK_MESSAGES_KEY].review_sessions([payload["session"]])
+            clear_unqueued_callback_holds([payload["session"]])
             result["removed"] = list(dict.fromkeys([*result["removed"], *reviewed]))
             result = callback_snapshot(result)
         except (
@@ -5256,8 +5279,10 @@ def create_app(
                 sessions=payload["sessions"],
                 session_revision=payload["sessionRevision"],
             )
+            clear_unqueued_callback_holds(payload["sessions"])
         except (
             WorkspaceStoreUnavailable,
+            CallbackMessageStoreUnavailable,
             WorkspaceNotFoundError,
             WorkspaceSessionRevisionConflict,
             TypeError,
@@ -5859,6 +5884,10 @@ def create_app(
             return json_error("sessionRevision is required", 400)
 
         try:
+            previous_callbacks = (
+                app[WORKSPACES_KEY].get_workspace(request.match_info["workspace_id"]).get("callbackSessions", [])
+                if "callbackSessions" in payload else []
+            )
             workspace = app[WORKSPACES_KEY].update_workspace(
                 request.match_info["workspace_id"],
                 name=payload.get("name"),
@@ -5885,7 +5914,9 @@ def create_app(
                     if "expectedUpdatedAt" in payload else {}
                 ),
             )
-        except WorkspaceStoreUnavailable as error:
+            if previous_callbacks:
+                clear_unqueued_callback_holds(previous_callbacks)
+        except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
         except WorkspaceNotFoundError as error:
             return json_error(str(error), 404)
@@ -5951,8 +5982,12 @@ def create_app(
 
     async def delete_workspace(request: web.Request) -> web.Response:
         try:
+            previous_callbacks = app[WORKSPACES_KEY].get_workspace(
+                request.match_info["workspace_id"],
+            ).get("callbackSessions", [])
             app[WORKSPACES_KEY].delete_workspace(request.match_info["workspace_id"])
             app[CALLBACK_MESSAGES_KEY].delete_workspace_groups(request.match_info["workspace_id"])
+            clear_unqueued_callback_holds(previous_callbacks)
         except (WorkspaceStoreUnavailable, CallbackMessageStoreUnavailable) as error:
             return json_error(str(error), 503)
         except WorkspaceNotFoundError as error:
@@ -6477,6 +6512,7 @@ def create_app(
     app.router.add_get(f"{prefix}/api/callback-messages", list_callback_messages)
     app.router.add_post(f"{prefix}/api/callback-messages", post_callback_message)
     app.router.add_post(f"{prefix}/api/callback-messages/{{message_id}}/review", review_callback_message)
+    app.router.add_put(f"{prefix}/api/callback-sessions/hold", set_callback_session_hold)
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/messages", list_session_messages
     )

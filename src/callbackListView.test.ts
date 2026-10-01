@@ -72,6 +72,30 @@ function view(
 }
 
 describe("callback list view", () => {
+  it("treats held callbacks as a manual status without losing their messages or queue order", () => {
+    const heldEntries = [
+      entry("held-ready", { onHold: true, messages: [message()] }),
+      entry("held-working", { onHold: true, session: session("held-working", { agentState: "working" }) }),
+      entry("held-ended", { onHold: true, session: undefined }),
+    ];
+    const entries = [...heldEntries, entry("ready")];
+    for (const held of heldEntries) {
+      expect(callbackStatus(held.session, held.onHold)).toEqual({ label: "On hold", tone: "on-hold", working: false });
+      expect(callbackEntryReadySince(held)).toBeUndefined();
+    }
+    expect(view(entries)).toEqual(["held-ready", "held-working", "held-ended", "ready"]);
+    expect(view(entries, { status: "on-hold" })).toEqual(["held-ready", "held-working", "held-ended"]);
+    expect(view(entries, { status: "ready" })).toEqual(["ready"]);
+    expect(view(entries, { status: "working" })).toEqual([]);
+    expect(view(entries, { status: "ended" })).toEqual([]);
+    expect(view(entries, { sort: "ready-first" })).toEqual(["ready", "held-ready", "held-working", "held-ended"]);
+    expect(groupCallbacks(entries, "status").map((group) => [group.key, group.entries.length]))
+      .toEqual([["status:ready", 1], ["status:on-hold", 3]]);
+    expect(validateCallbackListViewPreferences({ status: "on-hold", collapsedGroups: ["status:on-hold"] }))
+      .toMatchObject({ status: "on-hold", collapsedGroups: ["status:on-hold"] });
+    expect(heldEntries[0].messages).toEqual([message()]);
+  });
+
   it("preserves queue order and input rows without mutating the source", () => {
     const entries = [entry("z"), entry("a"), entry("m")];
     const result = filterAndSortCallbacks(entries, DEFAULT_CALLBACK_LIST_VIEW);

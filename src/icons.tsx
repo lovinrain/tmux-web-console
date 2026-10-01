@@ -43,6 +43,14 @@ export function ArrowLeftIcon(props: IconProps) {
   );
 }
 
+export function PauseIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M8 5v14M16 5v14" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
 export function HistoryIcon(props: IconProps) {
   return (
     <IconBase {...props}>
