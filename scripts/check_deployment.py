@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import subprocess
 import time
 from contextlib import contextmanager
@@ -54,14 +55,19 @@ def command(args, *, env=None):
         ) from error
 
 
-def snapshot(service):
+def systemctl(scope):
+    require(scope in {"system", "user"}, "Invalid service manager scope")
+    return ["systemctl", "--user"] if scope == "user" else ["systemctl"]
+
+
+def snapshot(service, scope="system", log_file=None):
     require(
         bool(re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", service)),
         "Invalid service name",
     )
     properties = command(
-        [
-            "systemctl",
+        systemctl(scope)
+        + [
             "show",
             service,
             "--no-pager",
@@ -136,7 +142,13 @@ def snapshot(service):
     require(
         not base or bool(re.fullmatch(r"/[A-Za-z0-9_/-]+", base)), "Invalid base path"
     )
+    extra = {"scope": "user"} if scope == "user" else {}
+    if log_file is not None:
+        # A service whose output goes to a private file instead of a readable
+        # journal is checked from the bytes appended after this baseline.
+        extra.update(logFile=str(log_file), logOffset=private_log(log_file).st_size)
     return {
+        **extra,
         "version": 1,
         "capturedAt": datetime.now(UTC).isoformat(),
         "bootId": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
@@ -355,20 +367,49 @@ def frontend(current, expected_dist=None):
     return assets[0]
 
 
-def journal(service, since):
+APPLICATION_ERROR = re.compile(
+    r"Traceback \(most recent call last\)|\bERROR[: ]|WARNING:muxdeck"
+)
+LOG_LIMIT = 16 * 1024 * 1024
+
+
+def private_log(path):
+    path = Path(path)
+    metadata = path.lstat()
+    require(
+        stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.geteuid(),
+        "Service log must be a regular file owned by the service user",
+    )
+    require(not metadata.st_mode & 0o077, "Service log must be private (0600)")
+    return metadata
+
+
+def log_file_errors(path, offset):
+    # Report counts only, never log text or terminal content.
+    size = private_log(path).st_size
+    require(isinstance(offset, int) and 0 <= offset <= size, "Service log was truncated or replaced")
+    with Path(path).open("rb") as stream:
+        stream.seek(max(offset, size - LOG_LIMIT))
+        logs = stream.read().decode("utf-8", errors="replace")
+    errors = sum(bool(APPLICATION_ERROR.search(line)) for line in logs.splitlines())
+    require(
+        errors == 0,
+        f"{errors} application error/warning lines; inspect the service log privately",
+    )
+    # A stop timeout is reported by systemd, not in the service's own output.
+    return {"applicationErrors": errors, "oldProcessStopReachedTimeout": None,
+            "source": "service log file", "inspectedBytes": size - offset}
+
+
+def journal(service, since, scope="system"):
     # Validate the timestamp; report counts only, never journal text or terminal content.
     datetime.fromisoformat(since)
     logs = command(
-        ["journalctl", "--unit", service, "--since", since, "--no-pager", "-o", "cat"]
+        ["journalctl"]
+        + (["--user"] if scope == "user" else [])
+        + ["--unit", service, "--since", since, "--no-pager", "-o", "cat"]
     )
-    errors = sum(
-        bool(
-            re.search(
-                r"Traceback \(most recent call last\)|\bERROR[: ]|WARNING:muxdeck", line
-            )
-        )
-        for line in logs.splitlines()
-    )
+    errors = sum(bool(APPLICATION_ERROR.search(line)) for line in logs.splitlines())
     timeout = "stop-sigterm" in logs and "timed out" in logs
     require(
         errors == 0,
@@ -450,6 +491,14 @@ def main(argv=None):
         "snapshot", help="Record service and pane identities before deployment"
     )
     before.add_argument("--service", default="muxdeck.service")
+    before.add_argument(
+        "--user", action="store_true", help="the service is a systemd --user unit"
+    )
+    before.add_argument(
+        "--log-file",
+        type=Path,
+        help="private file receiving the service output when its journal is unreadable",
+    )
     before.add_argument("--output", type=Path, required=True)
     after = sub.add_parser(
         "verify", help="Compare a baseline and check the deployed service"
@@ -474,7 +523,9 @@ def main(argv=None):
     try:
         if args.action == "snapshot":
             with report.phase("Record service and tmux identities"):
-                current = snapshot(args.service)
+                current = snapshot(
+                    args.service, "user" if args.user else "system", args.log_file
+                )
                 private_write(args.output, json.dumps(current, indent=2) + "\n")
             print(f"Baseline saved: {len(current['panes'])} panes", flush=True)
             return 0
@@ -484,7 +535,8 @@ def main(argv=None):
             baseline = json.loads(args.baseline.read_text())
             require(isinstance(baseline, dict), "Baseline must contain an object")
             require(baseline.get("version") == 1, "Unsupported baseline version")
-            current = snapshot(baseline["service"])
+            scope = baseline.get("scope", "system")
+            current = snapshot(baseline["service"], scope)
             comparison = compare(
                 baseline,
                 current,
@@ -532,8 +584,10 @@ def main(argv=None):
                     current, origin, asset
                 )
         with report.phase("Check application journal"):
-            report.data["checks"]["journal"] = journal(
-                current["service"], baseline["capturedAt"]
+            report.data["checks"]["journal"] = (
+                log_file_errors(baseline["logFile"], baseline["logOffset"])
+                if baseline.get("logFile")
+                else journal(current["service"], baseline["capturedAt"], scope)
             )
         report.data["passed"] = True
     except (CheckError, OSError, ValueError, KeyError, TypeError) as error:
