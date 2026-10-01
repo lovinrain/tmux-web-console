@@ -29,6 +29,11 @@ from typing import Any, Self
 SCHEMA_VERSION = 1
 MAX_PAYLOAD_BYTES = 1_048_576
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+# Existing SQLite files must never be opened by the permission checker: closing
+# any descriptor for an inode drops this process's POSIX locks on that inode.
+# Serialize first creation so another constructor cannot open the new database
+# through SQLite before the creator closes its exclusive creation descriptor.
+_FILE_CREATION_LOCK = threading.RLock()
 _SECRET_KEY = re.compile(
     r"(?:authorization|password|passwd|secret|credential|token|(?:access|refresh|api|auth|bearer)[_-]?token|api[_-]?key|environment|headers)",
     re.IGNORECASE,
@@ -148,18 +153,38 @@ def _private_directory(path: Path) -> None:
 
 
 def _private_file(path: Path, *, create: bool = False) -> None:
-    flags = os.O_RDWR | os.O_NOFOLLOW | (os.O_CREAT if create else 0)
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        metadata = os.fstat(descriptor)
+    """Validate with lstat, preserving active SQLite/POSIX lock ownership.
+
+    The caller confines the path to an owner-controlled private directory; this
+    is not isolation from hostile processes sharing the Unix identity. Existing
+    files, including WAL/shared-memory files, are never opened here. A missing
+    file is securely created with O_EXCL and O_NOFOLLOW before SQLite opens it.
+    """
+    with _FILE_CREATION_LOCK:
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            if not create:
+                raise
+            try:
+                descriptor = os.open(
+                    path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+                )
+            except FileExistsError:
+                # Another process won initial creation; validation must still
+                # avoid opening its now-active SQLite inode.
+                metadata = path.lstat()
+            else:
+                try:
+                    metadata = os.fstat(descriptor)
+                finally:
+                    os.close(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.geteuid()
             or stat.S_IMODE(metadata.st_mode) != 0o600
         ):
             raise IntegrityError("state file must be owned by this user with mode 0600")
-    finally:
-        os.close(descriptor)
 
 
 def _atomic_file(path: Path, data: bytes) -> None:

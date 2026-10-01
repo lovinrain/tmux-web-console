@@ -1532,14 +1532,16 @@ describe("ConsoleScreen session identity", () => {
   });
 
   it("recovers End and Rename when the browser consumes keydown or reports the typed key", async () => {
-    vi.mocked(listSessions).mockResolvedValue([session()]);
     const consumeEndShortcut = (event: KeyboardEvent) => {
       if (event.code === "KeyE") event.preventDefault();
     };
     window.addEventListener("keydown", consumeEndShortcut, true);
+    // Exercise keyboard recovery with the native identity already loaded.
+    // Inventory loading is covered separately and must not race this listener.
     renderWithTheme(
       <ConsoleScreen
         sessionName="test"
+        sessionSnapshot={session()}
         onBack={vi.fn()}
         onSessionRenamed={vi.fn()}
         onSessionTerminated={vi.fn(async () => {})}

@@ -37,7 +37,7 @@ FAKE_CODEX_PROGRAM = r'''
 """Synthetic Codex app-server RPC fixture, with no provider/account access."""
 import base64, json, os, pathlib, re, subprocess, sys, threading, time, uuid
 if sys.argv[1:] in (['--version'], ['-V']):
-    print('codex-cli 0.1.0 (muxpilot deterministic fake)')
+    print('codex-cli 0.110.0 (muxpilot deterministic fake)')
     raise SystemExit(0)
 if sys.argv[1:] in (['--help'], ['-h']):
     print('Synthetic Codex fixture: app-server')
@@ -214,7 +214,7 @@ class LocalStack:
         for finalizer in reversed(self.finalizers):
             try:
                 finalizer()
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - teardown all owned resources before reporting
                 errors.append(type(error).__name__)
         for name, identity in self.inventory().items():
             captured = subprocess.run([*self.tmux, "capture-pane", "-p", "-t", identity + ":0", "-S", "-150"],
@@ -296,6 +296,8 @@ def test_real_worktree_result_handoff_and_goal_integration_preserve_dirty_source
     tmp_path: Path, repository: Path,
 ) -> None:
     project = str(uuid.uuid4())
+    (tmp_path / "projects").mkdir(mode=0o700)
+    (tmp_path / "projects" / project).mkdir(mode=0o700)
     before = (repository / "unrelated.txt").read_bytes()
     baseline = git(repository, "rev-parse", "HEAD")
     allocation = WorkerAllocator(tmp_path / "projects").allocate(project, "api-task", "api-run", repository)
@@ -326,6 +328,8 @@ def test_real_git_conflicting_workers_leave_explicit_unresolved_integration(
     tmp_path: Path, repository: Path,
 ) -> None:
     project = str(uuid.uuid4())
+    (tmp_path / "projects").mkdir(mode=0o700)
+    (tmp_path / "projects" / project).mkdir(mode=0o700)
     base = git(repository, "rev-parse", "HEAD")
     allocator = WorkerAllocator(tmp_path / "projects")
     first = allocator.allocate(project, "first", "run-first", repository, base_sha=base)
@@ -594,6 +598,8 @@ signal.pause()
     stack.finalizers.append(paired_cleanup)
 
     def ready_workers() -> list[dict[str, Any]]:
+        assert stack.processes[0].poll() is None, "isolated Muxdeck exited before worker checkpoint; inspect process-0.log"
+        assert service.poll() is None, "isolated projectd exited before worker checkpoint"
         found = []
         for path in checkpoints.glob("*.ready.json"):
             item = json.loads(path.read_text())
@@ -656,14 +662,15 @@ signal.pause()
         wait_until(result_path.exists, timeout=30)
         result = json.loads(result_path.read_text())
         assert result["status"] == "completed" and result["commit"]
+        wait_until(lambda worker=worker: next((run for run in tool("status")["backend"]["runs"] if run["id"] == worker["run_id"] and run["status"] in {"completed", "succeeded"}), None), timeout=30)
         unit_command = [sys.executable, "-B", "-c", "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())", result["file"]]
         unit_check = subprocess.run(unit_command, cwd=worker["cwd"], capture_output=True, check=False)
         assert unit_check.returncode == 0, unit_check.stderr
         # The native worktree and source must share this verified commit identity.
         assert git(repository, "cat-file", "-t", result["commit"]) == "commit"
-        integration = tool("integrate", commit=result["commit"])
-        assert integration["status"] == "integrated"
         tool("accept", issue=worker["task_id"], evidence={"run_id": worker["run_id"], "revision": result["commit"], "checks": [{"command": "python -B parse committed worker fixture file", "passed": True, "revision": result["commit"]}]})
+        integration = tool("integrate", commit=result["commit"], base=stage1["base_sha"])
+        assert integration["status"] == "integrated"
     assert integration is not None
     stage2 = tool("activate", stage=2)
     assert len(stage2["task_ids"]) == 1
@@ -673,12 +680,13 @@ signal.pause()
     third_result_path = checkpoints / (third["execution_id"] + ".result.json")
     wait_until(third_result_path.exists, timeout=30)
     third_result = json.loads(third_result_path.read_text())
-    final = tool("integrate", commit=third_result["commit"])
-    check = subprocess.run([sys.executable, "-B", "goal_check.py"], cwd=final["path"], capture_output=True, check=False)
-    assert check.returncode == 0, check.stderr
+    wait_until(lambda: next((run for run in tool("status")["backend"]["runs"] if run["id"] == third["run_id"] and run["status"] in {"completed", "succeeded"}), None), timeout=30)
     third_check = subprocess.run([sys.executable, "-B", "goal_check.py"], cwd=third["cwd"], capture_output=True, check=False)
     assert third_check.returncode == 0, third_check.stderr
     tool("accept", issue=third["task_id"], evidence={"run_id": third["run_id"], "revision": third_result["commit"], "checks": [{"command": "python -B goal_check.py", "passed": True, "revision": third_result["commit"]}]})
+    final = tool("integrate", commit=third_result["commit"], base=stage2["base_sha"])
+    check = subprocess.run([sys.executable, "-B", "goal_check.py"], cwd=final["path"], capture_output=True, check=False)
+    assert check.returncode == 0, check.stderr
     with pytest.raises(ServiceError):
         tool("close", evidence={"revision": final["integration_sha"]})
     evidence = {"revision": final["integration_sha"], "checks": [{"command": "python -B goal_check.py", "passed": True, "revision": final["integration_sha"]}],

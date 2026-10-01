@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,6 +54,23 @@ def test_mirror_secret_redactor_covers_every_chunk_boundary_with_bounded_pending
         captured += redactor.feed(b"", final=True)
         assert captured == b"before [REDACTED] after\n"
         assert redactor.redacted and redactor.pending == b""
+
+
+@pytest.mark.parametrize("secrets", [(b"abcabc",), (b"abab",), (b"aba", b"abab"), (b"abc", b"abcabc")])
+def test_mirror_redactor_preserves_whole_stream_semantics_for_overlapping_secrets(secrets):
+    streams = [b"prefix " + secret * 3 + b" suffix" for secret in secrets]
+    streams.extend(bytes(values) for size in range(7) for values in product(b"abc", repeat=size))
+    for stream in streams:
+        for boundary in range(len(stream) + 1):
+            redactor = stdio_runner.StreamingRedactor(secrets)
+            assert redactor.pattern is not None
+            expected = redactor.pattern.sub(b"[REDACTED]", stream)
+            captured = redactor.feed(stream[:boundary]) + redactor.feed(stream[boundary:]) + redactor.feed(b"", final=True)
+            assert captured == expected, (stream, boundary)
+            assert not any(secret in captured for secret in secrets), (stream, boundary)
+        redactor = stdio_runner.StreamingRedactor(secrets)
+        byte_chunks = b"".join(redactor.feed(bytes([value])) for value in stream) + redactor.feed(b"", final=True)
+        assert byte_chunks == expected
 
 
 def test_private_mirror_redaction_values_never_replace_provider_protocol(tmp_path, launch_api):

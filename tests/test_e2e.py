@@ -50,6 +50,7 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(
             "-t",
             pane_id,
             (
+                "PS1='MUXDECK_TEST_READY> '; "
                 "printf 'HISTORY_MARKER\\n'; "
                 "for i in $(seq 1 80); do printf 'HISTORY_LINE_%03d\\n' \"$i\"; done"
             ),
@@ -197,9 +198,29 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(
         original_bindings = await asyncio.to_thread(
             subprocess.check_output, [*tmux, "list-keys", "-a"]
         )
-        original_screen = await asyncio.to_thread(
-            subprocess.check_output, [*tmux, "capture-pane", "-p", "-t", pane_id]
-        )
+        # Input acknowledgments and websocket marker substrings can arrive from
+        # command echo before bash has produced the requested output. Wait for
+        # the exact output line and the next idle prompt before taking the
+        # screen that all history actions must preserve byte for byte.
+        original_screen = b""
+        nonempty_lines: list[bytes] = []
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            original_screen = await asyncio.to_thread(
+                subprocess.check_output, [*tmux, "capture-pane", "-p", "-t", pane_id]
+            )
+            screen_lines = original_screen.splitlines()
+            nonempty_lines = [line for line in screen_lines if line.strip()]
+            if (
+                b"ACK_MARKER staged-input-ok" in screen_lines
+                and nonempty_lines
+                and nonempty_lines[-1].rstrip() == b"MUXDECK_TEST_READY>"
+            ):
+                break
+            await asyncio.sleep(0.05)
+        assert b"ACK_MARKER staged-input-ok" in original_screen.splitlines()
+        assert nonempty_lines
+        assert nonempty_lines[-1].rstrip() == b"MUXDECK_TEST_READY>"
         assert await request_history("line-down") == {
             "type": "historyNack",
             "action": "line-down",

@@ -532,3 +532,133 @@ def test_scoped_tokens_newly_issued_secrets_and_json_artifacts_are_redacted(stor
     )
     with pytest.raises(ValueError, match="credential"):
         store.write_artifact("artifacts/binary.dat", b"binary:" + opaque.encode())
+
+
+def test_existing_sqlite_permission_validation_preserves_process_posix_locks(tmp_path):
+    """Closing an auxiliary descriptor must not release a SQLite inode lock."""
+    import fcntl
+    import os
+
+    from muxpilot.store import _private_file
+
+    path = tmp_path / "journal.sqlite3-shm"
+    path.write_bytes(b"synthetic SQLite shared-memory lock inode")
+    path.chmod(0o600)
+    descriptor = os.open(path, os.O_RDWR)
+    probe = """
+import errno, fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR)
+try:
+    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError as error:
+    raise SystemExit(23 if error.errno in (errno.EACCES, errno.EAGAIN) else 24)
+else:
+    raise SystemExit(0)
+finally:
+    os.close(fd)
+"""
+    try:
+        fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        before = subprocess.run([sys.executable, "-c", probe, str(path)], check=False)
+        assert before.returncode == 23
+        _private_file(path)
+        after = subprocess.run([sys.executable, "-c", probe, str(path)], check=False)
+        assert after.returncode == 23, (
+            "permission inspection released the process inode lock"
+        )
+    finally:
+        os.close(descriptor)
+
+
+def test_concurrent_controller_and_fenced_receivers_keep_wal_integrity(tmp_path):
+    """Actual consumer concurrency runs in a child so SIGBUS is a test failure."""
+    import json
+
+    program = """
+import asyncio, json, pathlib, sys, threading, uuid
+from muxpilot.config import Config
+from muxpilot.fencing import FencedReceiver, ReceiverContext
+from muxpilot.project import ProjectController
+from muxpilot.store import JournalStore
+
+root = pathlib.Path(sys.argv[1])
+project = str(uuid.uuid4())
+config = Config(root, root / 'projectd.sock')
+controller = ProjectController(config)
+store = JournalStore(root, project)
+lease = store.acquire_lease('concurrent-main', 300)
+credentials = {'owner': 'concurrent-main', 'generation': lease['generation']}
+started = threading.Event()
+controller_effects = []
+receiver_effects = []
+workers, repetitions = 8, 12
+
+def coordinate():
+    assert started.wait(10)
+    for index in range(workers * repetitions):
+        operation = str(uuid.uuid4())
+        # Reopening transient controller handles reproduces the permission and
+        # SQLite connection lifetime boundary alongside active receiver handles.
+        with JournalStore(root, project) as transient:
+            def effect():
+                controller_effects.append(operation)
+                return {'operation_id': operation, 'accepted': True}
+            result = controller._effect(transient, credentials, operation,
+                'fixture.control', {'index': index}, effect)
+            assert result['operation_id'] == operation
+
+async def receive(worker):
+    receiver = FencedReceiver(root)
+    for index in range(repetitions):
+        operation = str(uuid.uuid4())
+        context = ReceiverContext(project, credentials['owner'], lease['generation'], operation)
+        async def effect():
+            # Yield deliberately with the receiver's SQLite fence still held.
+            await asyncio.sleep(0)
+            receiver_effects.append(operation)
+            return {'operation_id': operation, 'worker': worker, 'index': index}
+        result = await receiver.execute(context, 'fixture.launch',
+            {'worker': worker, 'index': index}, effect)
+        assert result['operation_id'] == operation
+
+async def main():
+    coordinating = asyncio.create_task(asyncio.to_thread(coordinate))
+    receiving = [asyncio.create_task(receive(worker)) for worker in range(workers)]
+    started.set()
+    await asyncio.gather(coordinating, *receiving)
+
+asyncio.run(main())
+with store.transaction() as db:
+    assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+    assert db.execute('PRAGMA foreign_key_check').fetchone() is None
+    confirmed_controls = db.execute("SELECT COUNT(*) FROM operations WHERE state='confirmed'").fetchone()[0]
+    confirmed_receivers = db.execute("SELECT COUNT(*) FROM receiver_operations WHERE state='confirmed'").fetchone()[0]
+    watermark = db.execute('SELECT MAX(sequence) FROM events').fetchone()[0]
+assert confirmed_controls == workers * repetitions == len(set(controller_effects))
+assert confirmed_receivers == workers * repetitions == len(set(receiver_effects))
+assert store.checkpoint()['sequence'] == watermark
+store.close()
+with JournalStore(root, project) as reopened:
+    assert reopened.status()['event_watermark'] == watermark
+print(json.dumps({'controller_effects': confirmed_controls,
+    'receiver_effects': confirmed_receivers, 'event_watermark': watermark,
+    'integrity_check': 'ok', 'foreign_key_check': 'ok'}))
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "faulthandler",
+            "-c",
+            program,
+            str(tmp_path / "projects"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["controller_effects"] == report["receiver_effects"] == 96
+    assert report["integrity_check"] == report["foreign_key_check"] == "ok"
