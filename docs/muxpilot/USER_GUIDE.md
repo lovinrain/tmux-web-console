@@ -8,7 +8,15 @@ After the one-time [installation](OPERATIONS.md):
    > Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a PR when it is tested.
 
    You can say “Use Muxpilot for this repository” when the main is in the intended checkout. No brief, project form, or per-project command is required.
-3. Follow the project and task links the main gives you on the existing [Multica board](https://la.99818888.xyz:8443). Open worker run links in Muxdeck to watch output or retained history. The main plans, delegates, integrates, tests, and reports the actual deliverable.
+3. Follow the project and task links the main gives you on the existing [Multica board](https://la.99818888.xyz/multica/). Open worker run links in Muxdeck to watch output or retained history. The main plans, delegates, integrates, tests, and reports the actual deliverable.
+
+Codex discovers the installed `muxpilot` skill from
+`~/.agents/skills/muxpilot/SKILL.md`. Its name and description tell the main
+when to load the full workflow: “Use Muxpilot” opts the repository into it, and
+follow-up requests continue the bound project. You can explicitly select it
+with `/skills` or type `$muxpilot` before your repository and goal. If it is
+missing from `/skills` after installation, start a fresh Codex session and
+check again. See the [official Codex skills documentation](https://developers.openai.com/codex/skills/).
 
 Multica's browser password and application sign-in details are stored privately
 on the host in `~/.config/muxpilot/private-access.json`.

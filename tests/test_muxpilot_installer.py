@@ -160,7 +160,7 @@ def test_final_runtime_and_link_configuration_matches_service_schema(arguments: 
     qualification.chmod(0o600)
     result = install(
         arguments, "--runtime-profile-id", "profile-id", "--daemon-id", "daemon-id",
-        "--multica-ui-url", "https://board.example.test",
+        "--multica-ui-url", "https://board.example.test/multica/",
         "--multica-workspace-slug", "shop-team",
         "--muxdeck-public-url", "https://console.example.test/mux",
         "--qualification-file", str(qualification),
@@ -168,7 +168,7 @@ def test_final_runtime_and_link_configuration_matches_service_schema(arguments: 
     config = Config.load(tmp_path / "config/config.json")
     assert config.runtime_profile_id == "profile-id"
     assert config.daemon_id == "daemon-id"
-    assert config.multica_ui_url == "https://board.example.test"
+    assert config.multica_ui_url == "https://board.example.test/multica"
     assert config.multica_workspace_slug == "shop-team"
     assert config.muxdeck_public_url == "https://console.example.test/mux"
     assert config.qualification_file == qualification

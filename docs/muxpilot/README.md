@@ -13,6 +13,13 @@ and keeps a private local history that supports audit and recovery.
 > Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a PR
 > when it is tested.
 
+The installed `muxpilot` skill's name and description let Codex recognize
+“Use Muxpilot” and load its full coordinator workflow. Use `/skills` to check
+that it is available, or explicitly mention `$muxpilot` with your repository
+and goal. If it is missing after installation, start a fresh Codex session.
+See [the user guide](USER_GUIDE.md) and
+[official Codex skill discovery documentation](https://developers.openai.com/codex/skills/).
+
 The user chooses **Multica's existing board and UI**. A new board inside Muxdeck
 is outside this plan. The user supplies a repository and goal, not a required
 brief file, project CLI invocation, or manually maintained agent roster.
