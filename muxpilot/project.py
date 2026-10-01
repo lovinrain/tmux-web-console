@@ -47,6 +47,29 @@ class AuthorizationError(ProjectError):
     code = "unauthorized"
 
 
+def _capture_gaps(execution: dict[str, Any]) -> list[str]:
+    """Accept old byte-capture metadata, but never infer absent coverage.
+
+    Older captures report ``truncated`` without the new ``complete`` flag.
+    They remain complete only when both stream records explicitly rule out
+    truncation and none of the optional new omission flags reports a gap.
+    """
+    artifacts = execution.get("artifacts")
+    gaps = []
+    for kind in ("stdout", "stderr"):
+        metadata = artifacts.get(kind) if isinstance(artifacts, dict) else None
+        if not isinstance(metadata, dict) or (
+            metadata.get("truncated") is not False
+            or ("complete" in metadata and metadata["complete"] is not True)
+            or metadata.get("omitted_records", 0) != 0
+            or metadata.get("omitted_deltas", 0) != 0
+        ):
+            gaps.append(kind)
+    if "capture_complete" in execution and execution["capture_complete"] is not True:
+        gaps.append("execution")
+    return gaps
+
+
 class ProjectRegistry:
     """Private canonical-checkout registry; UUIDs survive editable project names."""
 
@@ -653,7 +676,8 @@ class ProjectController:
                         )
                     else:
                         missing.append(filename)
-                if missing:
+                capture_gaps = _capture_gaps(execution)
+                if missing or capture_gaps:
                     store.append_event(
                         "audit.gap",
                         {
@@ -661,6 +685,7 @@ class ProjectController:
                             "run_id": run_id,
                             "execution_id": execution_id,
                             "missing": missing,
+                            "incomplete_capture": capture_gaps,
                             "coverage": "capture evidence is incomplete",
                         },
                         run_id=run_id,
@@ -671,7 +696,7 @@ class ProjectController:
                     {
                         "execution": execution,
                         "artifacts": artifacts,
-                        "capture_complete": not missing,
+                        "capture_complete": not missing and not capture_gaps,
                     },
                     credentials["owner"],
                     credentials["generation"],
@@ -1388,6 +1413,7 @@ class ProjectController:
                     ]
                     if not results or any(
                         not mapping["payload"].get("capture_complete")
+                        or _capture_gaps(mapping["payload"]["execution"])
                         for mapping in results
                     ):
                         raise ProjectError(

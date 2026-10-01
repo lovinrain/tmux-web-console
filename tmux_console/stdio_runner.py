@@ -26,8 +26,12 @@ import time
 
 # The runner is also launched by absolute filename outside an installed package.
 if __package__:
+    from .stdio_capture import CodexCaptureSanitizer
     from .stdio_mirror import CodexProgressMirror
 else:
+    from stdio_capture import (  # type: ignore[import-not-found,no-redef]
+        CodexCaptureSanitizer,
+    )
     from stdio_mirror import (  # type: ignore[import-not-found,no-redef]
         CodexProgressMirror,
     )
@@ -387,6 +391,8 @@ def serve(connection: socket.socket) -> int:
     redactors = {kind: StreamingRedactor(()) for kind in decoders}
     finished_mirrors: set[bytes] = set()
     progress_mirror: CodexProgressMirror | None = None
+    rendered_redactor: StreamingRedactor | None = None
+    semantic_redactor: CodexCaptureSanitizer | None = None
     terminating_at = None
     escalation_sent = False
     child_exited_at = None
@@ -401,11 +407,21 @@ def serve(connection: socket.socket) -> int:
         caught_signal = number
 
     def render_mirror(kind: bytes, payload: bytes, *, final: bool = False) -> None:
-        # Credential redaction must precede parsing/rendering. Wire frames and
-        # daemon observers retain their original independent byte path.
-        visible = redactors[kind].feed(payload, final=final)
+        # Wire frames and daemon observers retain their independent byte path.
         if kind == b"O" and progress_mirror is not None:
+            # Decode original JSON before sanitizing complete fields and each
+            # source item independently. Byte replacement before parsing could
+            # corrupt JSON when a credential also matches quoted delimiters.
+            assert semantic_redactor is not None
+            visible = semantic_redactor.feed(payload, final=final)
             visible = progress_mirror.feed(visible, final=final)
+            # JSON decoding can unescape a credential and adjacent item deltas
+            # can reconstruct one. Redact the assembled display stream too,
+            # retaining its suffix across notifications and read boundaries.
+            assert rendered_redactor is not None
+            visible = rendered_redactor.feed(visible, final=final)
+        else:
+            visible = redactors[kind].feed(payload, final=final)
         _mirror(visible, decoders[kind], final=final)
 
     def finish_mirror(kind: bytes) -> None:
@@ -504,6 +520,8 @@ def serve(connection: socket.socket) -> int:
                                         raise BridgeError("unsupported terminal mirror format")
                                     if mirror_format == "codex-app-server-v1":
                                         progress_mirror = CodexProgressMirror()
+                                        semantic_redactor = CodexCaptureSanitizer(secrets, redactor_factory=StreamingRedactor)
+                                        rendered_redactor = StreamingRedactor(secrets)
                                     redactors = {stream: StreamingRedactor(secrets) for stream in decoders}
                                     _pane_ownership(True)
                                     process = _launch(payload)

@@ -503,3 +503,8 @@ def test_readable_mirror_is_qualified_codex_opt_in_and_retains_redacted_audit(tm
     captured = (instance.directory / "stdout.bin").read_bytes()
     assert secret.encode() not in captured and b"[REDACTED]" in captured
     assert b"thread/tokenUsage/updated" in captured and b"321" in captured
+    receipt = inspect_execution(instance)
+    assert receipt["capture_complete"]
+    assert receipt["artifacts"]["stdout"]["representation"] == (
+        "sanitized codex-app-server JSONL" if expected else "redacted provider bytes")
+    assert receipt["artifacts"]["stderr"]["representation"] == "redacted provider bytes"

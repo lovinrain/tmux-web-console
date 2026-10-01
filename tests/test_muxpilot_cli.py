@@ -883,3 +883,61 @@ def test_existing_main_session_link_uses_public_origin_and_encodes_name(
         tool._main_identity("main & # room")["terminal_url"]
         == "https://example.test/mux/session/main%20%26%20%23%20room"
     )
+
+
+@pytest.mark.parametrize("coverage", ["legacy_complete", "redacted_complete", "omitted", "truncated", "missing_metadata", "execution_gap"])
+def test_runtime_capture_gaps_propagate_and_prevent_worker_acceptance(
+    controller: tuple[ProjectController, Path], monkeypatch: pytest.MonkeyPatch, coverage: str
+) -> None:
+    tool, repo = controller
+    project = start(tool, repo)["project"]["project_id"]
+    run_id, issue_id, execution_id = (str(uuid.uuid4()) for _ in range(3))
+    directory = tool.config.state_root / project / "runs" / run_id / "executions" / execution_id
+    binding = {
+        "project_id": project, "run_id": run_id, "issue_id": issue_id,
+        "execution_id": execution_id, "placement": "confirmed",
+        "terminal_url": "https://example.test/mux/worker",
+        "identity": {"sessionId": "$3", "sessionCreated": 100, "serverStarted": 50,
+                     "serverPid": 1, "paneId": "%3", "panePid": 103},
+    }
+    metadata: dict[str, Any] = {"stdout": {"truncated": False}, "stderr": {"truncated": False}}
+    execution: dict[str, Any] = {"state": "completed", "run_id": run_id, "artifacts": metadata}
+    if coverage == "redacted_complete":
+        metadata["stdout"].update(complete=True, redacted=True, omitted_records=0, omitted_deltas=0)
+        execution["capture_complete"] = True
+    elif coverage == "omitted":
+        metadata["stdout"].update(complete=False, omitted_records=1)
+    elif coverage == "truncated":
+        metadata["stdout"]["truncated"] = True
+    elif coverage == "missing_metadata":
+        del execution["artifacts"]
+    elif coverage == "execution_gap":
+        execution["capture_complete"] = False
+    private_write(directory / "session.json", json.dumps(binding))
+    private_write(directory / "execution.json", json.dumps(execution))
+    for filename in ("stdout.bin", "stderr.bin", "transcript.jsonl"):
+        private_write(directory / filename, "")
+    snapshot = {
+        "issues": [{"id": issue_id, "stage": 1}],
+        "runs": [{"id": run_id, "issue_id": issue_id, "status": "completed"}],
+    }
+    monkeypatch.setattr(FakeMultica, "snapshot", lambda self, project_id: snapshot)
+    scoped(tool, "status", project)
+    complete = coverage in {"legacy_complete", "redacted_complete"}
+    with tool._store(tool.registry.resolve(project)) as store:
+        mapping = store.get_mapping("execution_result", execution_id)
+        assert mapping and mapping["payload"]["capture_complete"] is complete
+        gaps = [event for event in store.events(limit=100) if event["kind"] == "audit.gap"]
+        assert bool(gaps) is not complete
+        if gaps:
+            assert gaps[0]["payload"]["incomplete_capture"]
+    revision = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+    evidence = {"run_id": run_id, "revision": revision, "checks": [
+        {"command": "synthetic verification", "revision": revision, "passed": True}]}
+    if complete:
+        assert scoped(tool, "accept", project, issue=issue_id, evidence=evidence)["accepted"]
+    else:
+        effect_count = len(FakeMultica.effects)
+        with pytest.raises(ProjectError, match="complete captured execution evidence"):
+            scoped(tool, "accept", project, issue=issue_id, evidence=evidence)
+        assert len(FakeMultica.effects) == effect_count

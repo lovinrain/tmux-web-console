@@ -34,6 +34,7 @@ from tmux_console.control_cli import (
 )
 from tmux_console.stdio_bridge import is_lightweight_probe
 from tmux_console.stdio_bridge import run as bridge_run
+from tmux_console.stdio_capture import CodexCaptureSanitizer
 from tmux_console.stdio_runner import StreamingRedactor
 
 
@@ -316,13 +317,16 @@ class _Capture:
     """Retain bounded, redacted evidence after bytes reach the daemon."""
 
     def __init__(self, artifact: Path, transcript: BinaryIO,
-                 kind: str, limit: int, transcript_lock: threading.Lock, secrets: tuple[bytes, ...]):
+                 kind: str, limit: int, transcript_lock: threading.Lock, secrets: tuple[bytes, ...],
+                 *, structured: bool = False):
         self.artifact = artifact
         self.kind, self.limit, self.transcript = kind, limit, transcript
         self.transcript_lock = transcript_lock
         self.total = self.retained = 0
         self.sanitized_total = 0
-        self.redactor = StreamingRedactor(secrets)
+        self.structured = structured
+        self.redactor = CodexCaptureSanitizer(secrets, redactor_factory=StreamingRedactor) if structured else StreamingRedactor(secrets)
+        self.representation = "sanitized codex-app-server JSONL" if structured else "redacted provider bytes"
         descriptor = os.open(artifact, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         self.file = os.fdopen(descriptor, "wb")
 
@@ -337,7 +341,8 @@ class _Capture:
             self.file.write(retained)
             self.file.flush()
             self.retained += len(retained)
-            row = {"stream": self.kind, "observed_at": time.time(), "bytes_base64": base64.b64encode(retained).decode()}
+            row = {"stream": self.kind, "observed_at": time.time(), "bytes_base64": base64.b64encode(retained).decode(),
+                   "representation": self.representation}
             with self.transcript_lock:
                 self.transcript.write((json.dumps(row, sort_keys=True) + "\n").encode())
                 self.transcript.flush()
@@ -347,10 +352,17 @@ class _Capture:
         self.file.flush()
         os.fsync(self.file.fileno())
         self.file.close()
+        structured = self.redactor if isinstance(self.redactor, CodexCaptureSanitizer) else None
+        omitted_records = structured.omitted_records if structured else 0
+        omitted_deltas = structured.omitted_deltas if structured else 0
+        truncated = self.sanitized_total > self.retained
         return {"path": str(self.artifact), "sha256": hashlib.sha256(self.artifact.read_bytes()).hexdigest(),
                 "byte_count": self.retained, "observed_byte_count": self.total,
-                "truncated": self.sanitized_total > self.retained,
-                "redacted": self.redactor.redacted, "coverage": "delivered provider bytes with known credential values redacted"}
+                "truncated": truncated, "complete": not (truncated or omitted_records or omitted_deltas),
+                "redacted": self.redactor.redacted, "representation": self.representation,
+                "omitted_records": omitted_records, "omitted_deltas": omitted_deltas,
+                "coverage": "decoded complete strings and per-item delta text sanitized; synthetic tail flushes; malformed/oversize records omitted"
+                            if self.structured else "delivered provider bytes with known credential values redacted"}
 
 
 class ProviderBridge:
@@ -500,8 +512,10 @@ class ProviderBridge:
 
         transcript_descriptor = os.open(directory / "transcript.jsonl", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         transcript_lock = threading.Lock()
+        structured = self.context.provider == "codex" and "app-server" in command[1:]
         with os.fdopen(transcript_descriptor, "wb") as transcript:
-            output = _Capture(directory / "stdout.bin", transcript, "stdout", self.context.output_limit, transcript_lock, secrets)
+            output = _Capture(directory / "stdout.bin", transcript, "stdout", self.context.output_limit, transcript_lock, secrets,
+                              structured=structured)
             errors = _Capture(directory / "stderr.bin", transcript, "stderr", self.context.output_limit, transcript_lock, secrets)
             status, failure = None, None
             try:
@@ -514,7 +528,7 @@ class ProviderBridge:
                                                                  "operationId": self.context.execution_id}},
                                     stdin=stdin, stdout=stdout, stderr=stderr,
                                     mirror_secrets=secrets,
-                                    mirror_format="codex-app-server-v1" if self.context.provider == "codex" and "app-server" in command[1:] else None,
+                                    mirror_format="codex-app-server-v1" if structured else None,
                                     output_observer=lambda kind, content: (output if kind == "stdout" else errors).observe(content))
                 return status
             except BaseException as error:
@@ -529,7 +543,8 @@ class ProviderBridge:
                 state = "completed" if status is not None else "outcome_unknown"
                 result = {**identity, "state": state, "exit_status": status, "error_type": failure,
                           "finished_at": time.time(), "artifacts": evidence,
-                          "coverage": "provider stdout/stderr bytes; process exit is not task acceptance"}
+                          "capture_complete": all(item["complete"] for item in evidence.values()),
+                          "coverage": "sanitized provider capture; structured stdout is transformed JSONL; process exit is not task acceptance"}
                 _json_write(execution_file, result)
                 self._event("execution.observed", result)
 

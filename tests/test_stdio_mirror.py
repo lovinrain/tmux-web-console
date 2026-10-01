@@ -149,10 +149,12 @@ def test_errors_warnings_unknown_and_invalid_records_remain_actionable():
         event("future/method", {"opaque": "private-opaque-value"}),
         event("future/method", {"opaque": "second-private-opaque-value"}),
         event("turn/completed", {"turn": {"status": ["malformed"]}}),
+        b'{"method":"item/agentMessage/delta","params":{"itemId":"unicode","delta":"\\ud800"}}\n',
         b"ordinary startup diagnostic\n",
         b'{"not_a_protocol_envelope":true}\n',
     ]
     rendered = CodexProgressMirror().feed(b"".join(records), final=True).decode()
+    assert "[Agent] ?" in rendered
     assert "A configured feature is unavailable" in rendered
     assert "Command needs attention" in rendered and "Request denied" in rendered
     assert rendered.count("Event: future/method.") == 1
@@ -233,3 +235,64 @@ def test_unrecognized_notifications_are_bounded_and_known_progress_continues():
     )
     mirror.feed(event("turn/started"))
     assert b"future/new-turn" in mirror.feed(event("future/new-turn"))
+
+
+def test_rendered_secret_prefix_is_withheld_until_same_item_delta_can_be_redacted():
+    from tmux_console.stdio_runner import StreamingRedactor
+
+    secret = b"synthetic-joined-credential"
+    first_part, second_part = secret[:13], secret[13:]
+    raw = StreamingRedactor((secret,))
+    view = CodexProgressMirror()
+    rendered = StreamingRedactor((secret,))
+
+    def project(data, *, final=False):
+        return rendered.feed(
+            view.feed(raw.feed(data, final=final), final=final), final=final
+        )
+
+    first_event = event(
+        "item/agentMessage/delta",
+        {
+            "itemId": "same-message",
+            "delta": "A review message long enough to reach the first output checkpoint: "
+            + first_part.decode(),
+        },
+    )
+    # Suppressed metadata flushes the previous JSONL record through the raw
+    # redactor without adding visible text between same-item deltas.
+    noise = event("thread/tokenUsage/updated", {"padding": "x" * 200})
+    first_visible = project(first_event + noise)
+    assert b"review message" in first_visible
+    assert first_part not in first_visible
+    second_event = event(
+        "item/agentMessage/delta",
+        {"itemId": "same-message", "delta": second_part.decode()},
+    )
+    visible = first_visible + project(second_event + noise) + project(b"", final=True)
+    assert secret not in visible
+    assert b"[REDACTED]" in visible
+    assert b"review message" in visible
+
+
+def test_semantic_flush_releases_safe_item_text_and_omission_notice_is_truthful():
+    source = event(
+        "muxpilot/capture/textFlush",
+        {
+            "itemId": "safe-item",
+            "sourceMethod": "item/agentMessage/delta",
+            "delta": "Retained nonsecret result",
+            "reason": "capture EOF",
+        },
+    )
+    source += event(
+        "muxpilot/capture/omitted", {"reason": "JSON record exceeds capture line limit"}
+    )
+    rendered = CodexProgressMirror().feed(source, final=True).decode()
+    assert "[Agent] Retained nonsecret result" in rendered
+    assert (
+        "Output omitted by credential filtering: JSON record exceeds capture line limit"
+        in rendered
+    )
+    assert "Completed" not in rendered
+    assert "muxpilot/capture" not in rendered

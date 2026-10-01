@@ -57,7 +57,9 @@ class CodexProgressMirror:
                 self.pending = ""
             if not self.line_start:
                 output.append(self._emit("\n"))
-        return "".join(output).encode("utf-8")
+        # JSON may decode escaped, unpaired surrogates; malformed display text
+        # must not stop the provider relay or its independent wire capture.
+        return "".join(output).encode("utf-8", errors="replace")
 
     def _emit(self, text: str) -> str:
         if text:
@@ -183,6 +185,26 @@ class CodexProgressMirror:
             if isinstance(error, dict) and error.get("message"):
                 result += self._line("Error", self._text(error["message"]))
             return result
+        if method == "muxpilot/capture/textFlush":
+            source_method = params.get("sourceMethod")
+            if not isinstance(source_method, str):
+                raise TypeError("malformed capture source method")
+            label = {
+                "item/agentMessage/delta": "Agent",
+                "item/reasoning/summaryTextDelta": "Progress",
+                "item/commandExecution/outputDelta": "Output",
+            }.get(source_method, "")
+            if label:
+                return self._delta(label, params.get("itemId"), params.get("delta"))
+            return ""
+        if method == "muxpilot/capture/omitted":
+            reason = self._text(params.get("reason"))
+            return self._line(
+                "View",
+                "Output omitted by credential filtering"
+                + (": " + reason if reason else "")
+                + ".",
+            )
         if method == "item/agentMessage/delta":
             return self._delta("Agent", params.get("itemId"), params.get("delta"))
         if method == "item/reasoning/summaryTextDelta":

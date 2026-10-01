@@ -814,3 +814,109 @@ def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, m
     else:
         assert b"opaque-reasoning-correlation" in visible
         assert b"tokenUsage" in visible
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unicode-escaped",
+        "ascii-escaped",
+        "joined-deltas",
+        "interleaved-items",
+        "json-delimiters",
+        "escaped-surrogate",
+    ],
+)
+def test_codex_rendered_credentials_are_redacted_after_unescaping_and_delta_join(
+    tmp_path, case
+):
+    secret = {
+        "unicode-escaped": "føø-private-🔒",
+        "json-delimiters": '", "delta": "',
+    }.get(case, "synthetic-joined-credential")
+    parts = (
+        [secret[:13], secret[13:]]
+        if case in {"joined-deltas", "interleaved-items"}
+        else [secret]
+    )
+    records = [
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"itemId": "same-message", "delta": part},
+        }
+        for part in parts
+    ]
+    if case == "escaped-surrogate":
+        records[0]["params"]["delta"] += chr(0xD800)
+    if case == "interleaved-items":
+        records.insert(
+            1,
+            {
+                "method": "warning",
+                "params": {"message": "Checking second contribution"},
+            },
+        )
+        records.insert(
+            2,
+            {
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "itemId": "other-message",
+                    "delta": "Other visible contribution",
+                },
+            },
+        )
+    wire = b"".join(
+        (json.dumps(record, ensure_ascii=True) + "\n").encode() for record in records
+    )
+    if case in {"ascii-escaped", "escaped-surrogate"}:
+        escaped = "".join(
+            "\\u" + format(ord(character), "04x") for character in secret
+        ).encode()
+        wire = wire.replace(secret.encode(), escaped)
+    if case == "json-delimiters":
+        # A byte filter before JSON parsing would replace real quoted delimiters
+        # and discard the whole record, even though its text was safely escaped.
+        assert secret.encode() in wire
+    else:
+        # Only decoding/joining notifications reconstructs the credential.
+        assert secret.encode() not in wire
+    output, observed = io.BytesIO(), bytearray()
+    path = tmp_path / "private-readable-mirror.txt"
+    with path.open("w+b") as terminal:
+        api = LocalLaunchAPI(terminal_output=terminal)
+        try:
+            assert (
+                run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys; data=sys.stdin.buffer.read(); [sys.stdout.buffer.write(data[i:i+17]) for i in range(0,len(data),17)]",
+                    ],
+                    api=api,
+                    cwd=str(tmp_path),
+                    environment=dict(os.environ),
+                    stdin=io.BytesIO(wire),
+                    stdout=output,
+                    stderr=io.BytesIO(),
+                    mirror_secrets=(secret.encode(),),
+                    mirror_format="codex-app-server-v1",
+                    output_observer=lambda kind, content: (
+                        observed.extend(content) if kind == "stdout" else None
+                    ),
+                )
+                == 0
+            )
+        finally:
+            api.close()
+        terminal.seek(0)
+        visible = terminal.read()
+    assert output.getvalue() == bytes(observed) == wire
+    assert secret.encode() not in visible
+    assert b"[Agent] [REDACTED]" in visible
+    if case == "escaped-surrogate":
+        assert b"[Agent] [REDACTED]?" in visible
+    if case == "interleaved-items":
+        assert parts[0].encode() not in visible and parts[1].encode() not in visible
+        assert b"Checking second contribution" in visible
+        assert b"Other visible contribution" in visible
