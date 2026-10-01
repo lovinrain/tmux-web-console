@@ -36,6 +36,10 @@ when you disconnect.
 Agent status detection supports Claude Code, Codex, GitHub Copilot CLI, Cursor
 Agent, and Grok Build. Ambiguous activity appears as **Unclear**.
 
+[Muxpilot](docs/muxpilot/README.md) adds a main-agent workflow using Multica's
+existing board, visible workers, and durable local recovery records. See its
+[short user guide](docs/muxpilot/USER_GUIDE.md) and current release status.
+
 ## See it in action
 
 ### File browser

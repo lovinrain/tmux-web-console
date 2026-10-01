@@ -237,7 +237,9 @@ def resolve_browse_root(value: str, boundary: Path) -> Path:
         )
     try:
         resolved = candidate.resolve(strict=True)
-    except RuntimeError as error:
+    except (RuntimeError, OSError) as error:
+        if isinstance(error, OSError) and error.errno != errno.ELOOP:
+            raise
         raise FileBrowserPathOutsideRootError(
             "root cannot be resolved safely"
         ) from error
@@ -271,7 +273,9 @@ def resolve_browse_target(value: str, boundary: Path) -> dict[str, object]:
         )
     try:
         resolved = candidate.resolve(strict=True)
-    except RuntimeError as error:
+    except (RuntimeError, OSError) as error:
+        if isinstance(error, OSError) and error.errno != errno.ELOOP:
+            raise
         raise FileBrowserPathOutsideRootError(
             "path cannot be resolved safely"
         ) from error
@@ -366,7 +370,9 @@ def _resolve_root(
         raise ValueError("the directory being browsed must be absolute")
     try:
         resolved_root = display_root.resolve(strict=True)
-    except RuntimeError as error:
+    except (RuntimeError, OSError) as error:
+        if isinstance(error, OSError) and error.errno != errno.ELOOP:
+            raise
         raise FileBrowserPathOutsideRootError(
             "the directory being browsed cannot be resolved safely"
         ) from error
@@ -393,7 +399,9 @@ def _resolve_target(
     parts = _relative_parts(relative_path)
     try:
         resolved_target = resolved_root.joinpath(*parts).resolve(strict=True)
-    except RuntimeError as error:
+    except (RuntimeError, OSError) as error:
+        if isinstance(error, OSError) and error.errno != errno.ELOOP:
+            raise
         raise FileBrowserPathOutsideRootError(
             "path cannot be resolved safely"
         ) from error
@@ -422,7 +430,9 @@ def _resolve_parent(
     display_root, resolved_root = _resolve_root(root_path, boundary)
     try:
         resolved_parent = resolved_root.joinpath(*parts[:-1]).resolve(strict=True)
-    except RuntimeError as error:
+    except (RuntimeError, OSError) as error:
+        if isinstance(error, OSError) and error.errno != errno.ELOOP:
+            raise
         raise FileBrowserPathOutsideRootError(
             "path cannot be resolved safely"
         ) from error

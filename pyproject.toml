@@ -21,9 +21,12 @@ dev = [
 [project.scripts]
 muxdeck = "tmux_console.app:main"
 muxdeckctl = "tmux_console.control_cli:main"
+muxpilot = "muxpilot.cli:main"
+muxdeck-projectd = "muxpilot.service:main"
+muxpilot-worker = "muxpilot.worker:main"
 
 [tool.setuptools]
-packages = ["tmux_console"]
+packages = ["tmux_console", "muxpilot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

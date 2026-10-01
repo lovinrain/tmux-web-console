@@ -1,0 +1,7 @@
+.worker-terminal-screen { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
+.worker-terminal-header { display: flex; align-items: center; gap: 1rem; }
+.worker-terminal-header a { color: var(--acid); }
+.worker-terminal-header h1 { flex: 1; font-size: 1.35rem; }
+.worker-terminal-notice { line-height: 1.6; opacity: .8; }
+.worker-terminal-identity { overflow-wrap: anywhere; font-family: monospace; }
+.worker-terminal-output { min-height: 16rem; max-height: 65vh; overflow: auto; padding: 1rem; border: 1px solid var(--line); background: var(--ink-raised); border-radius: .5rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "JetBrains Mono Variable", monospace; font-size: .85rem; line-height: 1.5; }

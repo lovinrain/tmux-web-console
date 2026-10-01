@@ -6,6 +6,7 @@ The tmux pane receives a best-effort readable mirror, not the wire protocol.
 
 from __future__ import annotations
 
+import base64
 import codecs
 import contextlib
 import ctypes
@@ -30,10 +31,67 @@ FRAME_LIMIT = 8388608
 HEADER = struct.Struct("!cI")
 INTEGER = struct.Struct("!i")
 GRACE_SECONDS = 2.0
+MAX_MIRROR_SECRETS = 256
+MAX_MIRROR_SECRET_BYTES = 16384
+MAX_MIRROR_SECRET_TOTAL = 262144
 
 
 class BridgeError(RuntimeError):
     pass
+
+
+class StreamingRedactor:
+    """Bounded byte redaction before any terminal/artifact persistence.
+
+    Protocol bytes never pass through this filter. Retaining a suffix prevents
+    credential values split across read boundaries from leaking into the pane.
+    """
+
+    def __init__(self, secrets):
+        values = tuple(sorted({value for value in secrets if value}, key=len, reverse=True))
+        if len(values) > MAX_MIRROR_SECRETS or any(len(value) > MAX_MIRROR_SECRET_BYTES for value in values) or sum(map(len, values)) > MAX_MIRROR_SECRET_TOTAL:
+            raise BridgeError("known credential redaction exceeds supported bounds")
+        self.values = values
+        self.pattern = re.compile(b"|".join(re.escape(value) for value in values)) if values else None
+        self.keep = max((len(value) for value in values), default=1) - 1
+        self.pending = b""
+        self.redacted = False
+
+    def feed(self, payload: bytes, *, final: bool = False) -> bytes:
+        self.pending += payload
+        safe_end = len(self.pending) if final else max(0, len(self.pending) - self.keep)
+        position = 0
+        parts: list[bytes] = []
+        if self.pattern is not None:
+            for match in self.pattern.finditer(self.pending):
+                if match.start() >= safe_end:
+                    break
+                parts.extend((self.pending[position:match.start()], b"[REDACTED]"))
+                position = match.end()
+                self.redacted = True
+        if position < safe_end:
+            parts.append(self.pending[position:safe_end])
+            position = safe_end
+        self.pending = self.pending[position:]
+        return b"".join(parts)
+
+
+def _mirror_secret_values(payload: bytes) -> tuple[bytes, ...]:
+    try:
+        configuration = json.loads(payload)
+        environment = configuration["environment"]
+        if not isinstance(environment, dict):
+            raise TypeError
+        values = [value.encode() for key, value in environment.items()
+                  if isinstance(key, str) and isinstance(value, str) and len(value) >= 4 and
+                  re.search(r"(?:TOKEN|SECRET|PASSWORD|API_KEY)$", key, re.IGNORECASE)]
+        explicit = configuration.get("mirror_secrets_base64", [])
+        if not isinstance(explicit, list) or len(explicit) > MAX_MIRROR_SECRETS or any(not isinstance(value, str) for value in explicit):
+            raise ValueError
+        values.extend(base64.b64decode(value, validate=True) for value in explicit)
+        return tuple(values)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise BridgeError("invalid mirror credential redaction configuration") from None
 
 
 class Wire:
@@ -262,8 +320,8 @@ def _launch(payload: bytes) -> subprocess.Popen:
     )
 
 
-def _mirror(payload: bytes, decoder) -> None:
-    text = decoder.decode(payload)
+def _mirror(payload: bytes, decoder, *, final: bool = False) -> None:
+    text = decoder.decode(payload, final=final)
     # Protocol bytes stay untouched on the wire. Keep the terminal mirror readable
     # and prevent escape/control sequences from becoming terminal instructions.
     text = "".join(
@@ -318,6 +376,8 @@ def serve(connection: socket.socket) -> int:
         b"O": codecs.getincrementaldecoder("utf-8")("replace"),
         b"D": codecs.getincrementaldecoder("utf-8")("replace"),
     }
+    redactors = {kind: StreamingRedactor(()) for kind in decoders}
+    finished_mirrors: set[bytes] = set()
     terminating_at = None
     escalation_sent = False
     child_exited_at = None
@@ -330,6 +390,11 @@ def serve(connection: socket.socket) -> int:
     def interrupt(number, _frame):
         nonlocal caught_signal
         caught_signal = number
+
+    def finish_mirror(kind: bytes) -> None:
+        if kind not in finished_mirrors:
+            _mirror(redactors[kind].feed(b"", final=True), decoders[kind], final=True)
+            finished_mirrors.add(kind)
 
     try:
         if sys.platform.startswith("linux") and not _subreaper():
@@ -384,7 +449,7 @@ def serve(connection: socket.socket) -> int:
                             available = CHUNK
                         drain_budget[descriptor] = available
                         if not available:
-                            outputs.pop(descriptor)
+                            finish_mirror(outputs.pop(descriptor))
                 if status is not None and not outputs and not result_queued:
                     wire.queue(b"X", INTEGER.pack(status))
                     result_queued = True
@@ -416,6 +481,8 @@ def serve(connection: socket.socket) -> int:
                         if mask & selectors.EVENT_READ:
                             for kind, payload in wire.read():
                                 if kind == b"C" and process is None:
+                                    secrets = _mirror_secret_values(payload)
+                                    redactors = {stream: StreamingRedactor(secrets) for stream in decoders}
                                     _pane_ownership(True)
                                     process = _launch(payload)
                                     assert process.stdin is not None
@@ -485,13 +552,15 @@ def serve(connection: socket.socket) -> int:
                             continue
                         if payload:
                             wire.queue(key.data, payload)
-                            _mirror(payload, decoders[key.data])
+                            _mirror(redactors[key.data].feed(payload), decoders[key.data])
                             if drain_budget is not None:
                                 drain_budget[key.fd] -= len(payload)
                                 if not drain_budget[key.fd]:
                                     outputs.pop(key.fd, None)
+                                    finish_mirror(key.data)
                         else:
                             outputs.pop(key.fd, None)
+                            finish_mirror(key.data)
             if process is not None and input_open and input_eof and not pending_input:
                 assert process.stdin is not None
                 process.stdin.close()
@@ -508,6 +577,8 @@ def serve(connection: socket.socket) -> int:
                 time.sleep(0.01)
         return 1
     finally:
+        for kind in decoders:
+            finish_mirror(kind)
         if process is not None:
             _cleanup(process)
         _pane_ownership(False)

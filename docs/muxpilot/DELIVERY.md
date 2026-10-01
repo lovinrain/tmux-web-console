@@ -3,10 +3,10 @@
 This is the feature-specific delivery policy requested by the user. It supplements
 [AGENTS.md](../../AGENTS.md) and the [deployment runbook](../../AGENT_DEPLOYMENT_GUIDE.md).
 
-## Planning change
+## Implementation candidate
 
-The current change writes the specification, decisions, task plan, and definition
-of done. Commit and push these documents on **feat/muxpilot** after validation.
+The planning baseline was published on **feat/muxpilot**. Runtime implementation
+and paired validation are now in progress; see [EVIDENCE.md](EVIDENCE.md).
 Keep the feature on that branch for implementation; do not merge planning alone
 to the default branch or deploy an incomplete feature. Documentation needs no
 frontend build or service restart.
@@ -141,7 +141,7 @@ deployment verification. The latter closes the delivered-release gate; requiring
 it before merging would contradict this branch-first workflow. A failed live
 verification triggers the rehearsed rollback and leaves delivery incomplete.
 
-The current planning turn does not execute these release steps. The user's
+The implementation candidate has not yet closed these release steps. The user's
 branch-first request overrides routine immediate deployment for this feature;
 it does not add repeated approval questions for already authorized task pushes.
 

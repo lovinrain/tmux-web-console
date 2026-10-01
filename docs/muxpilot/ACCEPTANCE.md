@@ -1,6 +1,6 @@
 # Muxpilot acceptance and release evidence
 
-Status: implementation contract for planning review; no implementation, provider support, or production readiness is implied. Baseline: Muxdeck `96769f6`, Multica `e31da86`. Requirement references F01–F12 and N01–N04 follow the product specification. Scenario IDs below are stable references for implementation tasks and release reports.
+Status: implementation candidate under validation; complete v1 acceptance and production readiness remain pending. Actual passing checks, failed/skipped checks and remaining gaps are tracked in [EVIDENCE.md](EVIDENCE.md). Baseline: Muxdeck `96769f6`, Multica `e31da86`. Requirement references F01–F12 and N01–N04 follow the product specification. Scenario IDs below are stable references for implementation tasks and release reports.
 
 ## Scope and test discipline
 

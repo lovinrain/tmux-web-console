@@ -20,6 +20,56 @@ from tmux_console import stdio_runner
 from tmux_console.stdio_bridge import is_lightweight_probe, run
 
 
+def test_output_observer_retains_delivered_bytes_without_replacing_protocol(tmp_path, launch_api):
+    observed = {"stdout": bytearray(), "stderr": bytearray()}
+    output, errors = io.BytesIO(), io.BytesIO()
+    status = run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(bytes(range(256))); sys.stderr.buffer.write(b'problem')"],
+                 api=launch_api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(),
+                 stdout=output, stderr=errors,
+                 output_observer=lambda kind, content: observed[kind].extend(content))
+    assert status == 0
+    assert output.getvalue() == bytes(observed["stdout"]) == bytes(range(256))
+    assert errors.getvalue() == bytes(observed["stderr"]) == b"problem"
+
+
+def test_output_observer_failure_is_explicit_and_disconnects_owned_runner(tmp_path, launch_api):
+    def observe(kind, content):
+        raise OSError("required evidence unavailable")
+
+    with pytest.raises(OSError, match="evidence unavailable"):
+        run([sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(30)"],
+            api=launch_api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(),
+            stdout=io.BytesIO(), stderr=io.BytesIO(), output_observer=observe)
+    launch_api.processes[0].wait(timeout=5)
+
+
+def test_mirror_secret_redactor_covers_every_chunk_boundary_with_bounded_pending():
+    secret = b"known-credential-sentinel"
+    for boundary in range(len(secret) + 1):
+        redactor = stdio_runner.StreamingRedactor((secret,))
+        captured = redactor.feed(b"before " + secret[:boundary])
+        assert len(redactor.pending) < len(secret)
+        captured += redactor.feed(secret[boundary:] + b" after\n")
+        captured += redactor.feed(b"", final=True)
+        assert captured == b"before [REDACTED] after\n"
+        assert redactor.redacted and redactor.pending == b""
+
+
+def test_private_mirror_redaction_values_never_replace_provider_protocol(tmp_path, launch_api):
+    secret = b"private-mirror-credential"
+    output = io.BytesIO()
+    assert run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+               api=launch_api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(secret),
+               stdout=output, stderr=io.BytesIO(), mirror_secrets=(secret,)) == 0
+    assert output.getvalue() == secret
+    assert secret not in json.dumps(launch_api.requests).encode()
+
+
+def test_mirror_redactor_refuses_unbounded_secret_configuration():
+    with pytest.raises(stdio_runner.BridgeError, match="supported bounds"):
+        stdio_runner.StreamingRedactor((b"x" * (stdio_runner.MAX_MIRROR_SECRET_BYTES + 1),))
+
+
 class LocalLaunchAPI:
     """Exercise the real rendezvous/runner without contacting a tmux server."""
 

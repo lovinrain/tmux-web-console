@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -42,7 +43,7 @@ def _descriptor(stream):
         return None
 
 
-def _relay(connection, stdin, stdout, stderr) -> int:
+def _relay(connection, stdin, stdout, stderr, output_observer=None) -> int:
     wire = Wire(connection)
     input_descriptor = _descriptor(stdin)
     output_streams = {b"O": stdout, b"D": stderr}
@@ -86,8 +87,11 @@ def _relay(connection, stdin, stdout, stderr) -> int:
                 return 128 + caught_signal
             for kind, descriptor in output_descriptors.items():
                 if descriptor is None and pending_outputs[kind]:
-                    output_streams[kind].write(bytes(pending_outputs[kind]))
+                    delivered = bytes(pending_outputs[kind])
+                    output_streams[kind].write(delivered)
                     output_streams[kind].flush()
+                    if output_observer is not None:
+                        output_observer("stdout" if kind == b"O" else "stderr", delivered)
                     pending_outputs[kind].clear()
             if result is not None and not any(pending_outputs.values()):
                 return result if result >= 0 else 128 - result
@@ -179,6 +183,8 @@ def _relay(connection, stdin, stdout, stderr) -> int:
                             count = os.write(key.fd, pending_outputs[key.data])
                         except BlockingIOError:
                             continue
+                        if output_observer is not None:
+                            output_observer("stdout" if key.data == b"O" else "stderr", bytes(pending_outputs[key.data][:count]))
                         del pending_outputs[key.data][:count]
     finally:
         for descriptor, blocking in previous_blocking.items():
@@ -198,6 +204,8 @@ def run(
     stdin=None,
     stdout=None,
     stderr=None,
+    output_observer=None,
+    mirror_secrets: tuple[bytes, ...] = (),
 ) -> int:
     """Run a provider with unmodified binary stdio and caller argv/env/cwd.
 
@@ -256,7 +264,8 @@ def run(
                         "Muxdeck stdio runner belongs to a different OS user"
                     )
                 config = json.dumps(
-                    {"command": command, "cwd": cwd, "environment": environment},
+                    {"command": command, "cwd": cwd, "environment": environment,
+                     "mirror_secrets_base64": [base64.b64encode(value).decode() for value in mirror_secrets]},
                     ensure_ascii=True,
                 ).encode()
                 # Send the private launch config before switching to the data
@@ -267,4 +276,4 @@ def run(
                 if len(config) > FRAME_LIMIT:
                     raise BridgeError("Muxdeck stdio launch configuration is too large")
                 connection.sendall(HEADER.pack(b"C", len(config)) + config)
-                return _relay(connection, stdin, stdout, stderr)
+                return _relay(connection, stdin, stdout, stderr, output_observer)

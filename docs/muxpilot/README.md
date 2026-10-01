@@ -1,9 +1,9 @@
-# Muxpilot implementation proposal
+# Muxpilot
 
-Status: planning baseline, 2026-09-30. The Muxpilot runtime, project commands,
-coordinator tools, and UI additions described here are proposed, not installed
-features. Existing Muxdeck orchestration and Multica functionality are identified
-separately in [the specification](SPEC.md#existing-foundation).
+Status: implementation and paired release validation are in progress on
+`feat/muxpilot`. The runtime, project commands, coordinator skill, and UI
+integration now have code and focused tests. Provider qualification and the
+complete release gate remain required before deployment.
 
 Muxpilot lets a person give a main coding agent a project-level goal in natural
 language. The main agent organizes the work in Multica, delegates substantial
@@ -21,6 +21,9 @@ brief file, project CLI invocation, or manually maintained agent roster.
 
 | Document | Purpose |
 | --- | --- |
+| [USER_GUIDE.md](USER_GUIDE.md) | Three-step human workflow and ordinary-language examples |
+| [OPERATIONS.md](OPERATIONS.md) | One-time installation, service lifecycle, diagnostics, audit and recovery |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | Implementation ownership and validation evidence |
 | [SPEC.md](SPEC.md) | User journeys, scope, requirements, task/run semantics, and end deliverables |
 | [DECISIONS.md](DECISIONS.md) | Architecture decisions, local storage, APIs, authorization, and failure boundaries |
 | [TASKS.md](TASKS.md) | Dependency-ordered implementation tasks with acceptance and validation evidence |
@@ -34,20 +37,19 @@ only with the linked evidence required by ACCEPTANCE.md.
 ## Working branch and scope of this change
 
 - Muxdeck integration branch: **feat/muxpilot**.
-- Planning worktree: **/root/tmux-web-console-worktrees/muxpilot**.
+- Feature worktree: **/root/tmux-web-console-worktrees/muxpilot**.
 - Muxdeck default branch: **master**, the branch meant by "main" in the user's
   delivery request. There is no planned default-branch rename.
 - Planning base: **96769f6d7603df8a237ebca220883bed39a82d1d**.
 - Multica inspected base: **e31da86c90794b5c488279a3ead13ac2f31ac269**, branch main.
-- This change publishes planning documents on the feature branch. It neither
-  merges the feature nor changes the running installation.
-- Subsequent implementation uses an agent team and task worktrees based on the
-  feature branch. Team agents use **gpt-6.1-sol**, as requested by the user.
+- Implementation and paired validation use isolated feature worktrees; defaults
+  and the existing installation change only after the complete acceptance gate.
+- Team agents use **gpt-6.1-sol**, as requested by the user.
   This development-team choice does not impose a model on Muxpilot end users.
 
-Multica currently points to the upstream multica-ai/multica repository. The
-paired implementation task must establish an authorized writable fork/remote;
-upstream write access and permission to merge upstream main are not assumed.
+The paired Multica implementation uses the writable fork `lovinrain/multica`,
+preserving `multica-ai/multica` as upstream. Upstream merge authority is not
+assumed.
 
 ## Milestones and bounded gates
 

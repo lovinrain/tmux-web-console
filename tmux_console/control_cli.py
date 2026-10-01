@@ -554,7 +554,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "project":
+        from muxpilot.cli import main as project_main
+        return project_main(arguments[1:])
+    args = build_parser().parse_args(arguments)
     try:
         if args.resource == "exec":
             from . import stdio_bridge

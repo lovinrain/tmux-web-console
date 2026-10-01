@@ -823,6 +823,21 @@ class SessionRegistry:
                 raise RecoveryRecordNotFoundError(history_id)
             return dict(row)
 
+    def history_for_identity(
+        self, session_id: str, session_created: int, server_started: int, server_pid: int,
+    ) -> dict[str, Any] | None:
+        """Resolve an incarnation without following its editable session name."""
+        with self._lock:
+            try:
+                row = self._require_connection().execute(
+                    "SELECT * FROM session_history WHERE tmux_id = ? AND created = ? "
+                    "AND server_started = ? AND server_pid = ?",
+                    (session_id, session_created, server_started, server_pid),
+                ).fetchone()
+                return dict(row) if row else None
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
     def list_history(
         self, *, workspace_id: str | None = None, query: str = "",
         recycled: bool = False, offset: int = 0, session_name: str | None = None,

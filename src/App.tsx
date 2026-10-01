@@ -52,6 +52,7 @@ import {
 } from "./components/ConsoleScreen";
 import { SessionDashboard } from "./components/SessionDashboard";
 import { EphemeralSessionScreen } from "./components/EphemeralSessionScreen";
+import { WorkerTerminalScreen } from "./components/WorkerTerminalScreen";
 import { ephemeralSessionHref, openEphemeralSessionTab } from "./ephemeralSession";
 import { ForgetUndoNotifications, type ForgetUndoNotification } from "./components/ForgetUndoNotifications";
 import { restoreForgottenWorkspaceSession, restoreForgottenPaneLayouts } from "./forgottenWorkspace";
@@ -5038,6 +5039,10 @@ function AppView() {
     window.history.replaceState(null, "", ephemeralSessionHref(name));
     setLocation(currentLocation());
   }, []);
+
+  if (location.path === "/worker" || location.path === "/worker/") {
+    return <WorkerTerminalScreen search={location.search} />;
+  }
 
   return ephemeralSession === null ? <AppRoutes /> : (
     <EphemeralSessionScreen sessionName={ephemeralSession} onSessionRenamed={renameEphemeralSession} />

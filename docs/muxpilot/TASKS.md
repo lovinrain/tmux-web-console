@@ -1,6 +1,6 @@
 # Muxpilot implementation tasks
 
-This is an executable backlog, not a record of completed implementation. All code tasks are **planned**. Requirement IDs refer to [SPEC.md](SPEC.md); technical contracts belong to [DECISIONS.md](DECISIONS.md); global release criteria belong to [ACCEPTANCE.md](ACCEPTANCE.md). If filenames change during planning, update these references before publishing.
+Status: implementation candidate with validation and release gates pending. MXP-001 is the delivered planning baseline; implementation tasks are in progress, with evidence and remaining gaps in [EVIDENCE.md](EVIDENCE.md). Requirement IDs refer to [SPEC.md](SPEC.md); technical contracts belong to [DECISIONS.md](DECISIONS.md); global release criteria belong to [ACCEPTANCE.md](ACCEPTANCE.md). If filenames change during planning, update these references before publishing.
 
 ## Delivery boundaries and working rules
 
@@ -66,7 +66,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** six planning documents; GPT-6.1-sol architecture/task/acceptance authors and cross-review; 30 local links and pinned source paths validated; all 26 task records and 27 scenarios checked; the 89-edge task dependency graph is acyclic. The feature commit and remote branch identify the published document snapshot; implementation tasks remain planned.
 
 ### MXP-002 — Freeze cross-repository interfaces (M)
-- **Status:** planned. **Requirements:** F04–F09, F11, N01–N04. **Dependencies:** 001.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F04–F09, F11, N01–N04. **Dependencies:** 001.
 - **Acceptance scenarios:** A02, A08, A18–A20, A26.
 - **Deliverable/owner:** Muxdeck `muxpilot/contracts` and paired Multica API/schema contract fixtures; exact file paths assigned before work.
 - **Acceptance:** versioned project/epic/task/run/worker/session identities; distinguish Multica run ID from provider execution UUID and full terminal binding. One run may legitimately invoke multiple provider subprocesses; each execution has its own launch ID, retries preserve that ID, and discovery probes bypass worker launch; scoped coordinator identity; operation IDs and receipts; event cursor/inbox; worker assignment/result envelopes; human supplements; task-terminal link; terminal observation and cancellation contracts; v1 stage/batch eligibility, parked backlog, dispatch hold, and no-start ownership updates. Backend must enforce stage/hold eligibility against every launch trigger, including mentions, comments, wakeups and reruns. Define authoritative versus derived fields, stale-version conflicts, retry/idempotency semantics, redaction, and error behavior. Existing `mat` run token is not assumed to authorize project coordination.
@@ -74,7 +74,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** contract version manifest, compatibility table, test results; both repository consumers review before parallel writers start.
 
 ### MXP-003 — Prove one provider transport/capability pairing (M)
-- **Status:** planned. **Requirements:** F01, F03, F11, N04. **Dependencies:** 002,004.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F01, F03, F11, N04. **Dependencies:** 002,004.
 - **Acceptance scenarios:** A02 and transport/lifetime prerequisites of A07, A16, A17, A22; full product scenarios close in their later implementation tasks.
 - **Deliverable/owner:** Muxdeck disposable fixture driver/probe using the existing provider wrapper; documented exact main/worker provider/model/CLI/auth pairing and sanitized protocol fixture.
 - **Acceptance:** obtain explicit user authorization for the real-agent smoke before invoking a paid/live provider; default checks use synthetic fixtures. With MXP-004 disposable services/resources, prove existing wrapper transport, byte-preserving protocol, output mirror, exit/error reporting, supported messaging/cancel and disconnect behavior. Probe the selected main provider’s interruptible bounded await-tool/event-wake behavior; prove what happens after an active main turn returns idle without claiming arbitrary idle TUI injection. Prove minimal main tool registration with a fixture-only tool, not complete Muxpilot activation/worktrees. Existing authorized human supplement may be probed in the fixture; this does not certify coordinator steering/scope, implemented and accepted in 005/016. This spike requires neither 010 activation nor 012 worktree integration. Unsupported combinations remain unavailable; a currently unvalidated wrapper remains unvalidated until actual evidence succeeds.
@@ -82,7 +82,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** sanitized live protocol/transcript/receipts, tool-registration probe and exact versions; blocks downstream provider-dependent task completion only for capabilities actually demonstrated.
 
 ### MXP-004 — Establish paired development fixtures (S)
-- **Status:** planned. **Requirements:** N02–N04, F12. **Dependencies:** 002.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** N02–N04, F12. **Dependencies:** 002.
 - **Acceptance scenarios:** A02, A24, A27.
 - **Deliverable/owner:** both repositories' feature branches/worktrees and synthetic local project fixture tooling.
 - **Acceptance:** authorized writable Multica remote identified; pinned paired commits; isolated Multica/backend/daemon and Muxdeck fixture endpoints/ports; tools detect already configured applications and never alter unrelated services/sessions. Fixture teardown removes only owned resources.
@@ -90,7 +90,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** pairing manifest, resource ownership inventory, fixture commands and outcomes.
 
 ### MXP-005 — Add scoped Multica coordinator identity (M)
-- **Status:** planned. **Requirements:** F04, F05, F11, N02. **Dependencies:** 002,004.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F04, F05, F11, N02. **Dependencies:** 002,004.
 - **Acceptance scenarios:** A08, A18, A26.
 - **Deliverable/owner:** Multica backend auth and coordinator API, separately owned from event-feed and frontend files.
 - **Acceptance:** a project/epic scoped coordinator can operate assigned tasks/runs without borrowing unrestricted user credentials or a worker's `mat` run token. Worker credentials cannot coordinate siblings; wrong project, revoked/expired credentials, and forbidden actions fail closed; renewal/revocation semantics are explicit.
@@ -98,7 +98,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** sanitized authorization matrix and paired API version.
 
 ### MXP-006 — Implement transactional local journal and checkpoints (M)
-- **Status:** planned. **Requirements:** F08, F09, N01, N02. **Dependencies:** 002,004.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F08, F09, N01, N02. **Dependencies:** 002,004.
 - **Acceptance scenarios:** A13–A15, A23.
 - **Deliverable/owner:** Muxdeck new Python `muxpilot` storage/schema/migrations module.
 - **Acceptance:** per-project UUID directory outside repo; SQLite transactional events, operation IDs, receipts, checkpoint versions, worker/session/worktree associations, and durable cursor. Multica remains authoritative for task/run truth; journal contains coordination intent, observations, and recoverable local state. SQLite WAL with synchronous=FULL, directories 0700/files 0600, stable repo association, migration and corruption/error behavior are defined. Events include schema/local/source IDs, actor, occurrence/observation timestamps, correlation, coordinator generation, and coverage. Durability claims remain bounded by tested storage/process behavior.
@@ -106,7 +106,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** synthetic DB fixtures, schema version, targeted Python results.
 
 ### MXP-007 — Implement project daemon and durable wakeup inbox (M)
-- **Status:** planned. **Requirements:** F02, F06, F07, F09, F12, N01. **Dependencies:** 005,006.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F02, F06, F07, F09, F12, N01. **Dependencies:** 005,006.
 - **Acceptance scenarios:** A09, A16, A17, A19.
 - **Deliverable/owner:** Muxdeck `muxdeck-projectd` entry point, local IPC and inbox modules.
 - **Acceptance:** one daemon ownership lease per project; authenticated/local-only IPC; durable inbox and acknowledged cursor; external-main inbox events reach the running ordinary main through an interruptible bounded await tool, with cursor acknowledged only after its decision is durably recorded. Use supported native parent wakeups for that conversation where qualified; do not create a second hidden squad leader. Worker/backend/human events remain available for resume. Retry and ordering semantics survive daemon/main restart; an idle main receives only qualified provider wakeups or explicit resume; never silently inject raw keystrokes. Bounded await duration keeps human steering responsive, and lack of a supported idle wake is an explicit capability boundary. Health/status expose actionable failure.
@@ -114,7 +114,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** process-level inbox/restart test report.
 
 ### MXP-008 — Implement fenced operations and reconciliation outbox (M)
-- **Status:** planned. **Requirements:** F03, F05, F09, N01, N03. **Dependencies:** 006,007.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F03, F05, F09, N01, N03. **Dependencies:** 006,007.
 - **Acceptance scenarios:** A18, A20; operation fault matrix.
 - **Deliverable/owner:** Muxdeck operation/reconciliation modules and narrow paired Multica idempotency handling if contract requires it.
 - **Acceptance:** durable intent precedes external side effects; stable operation IDs, ownership generation/fencing, unique receipts, and reconcile queries make task creation and worker launch safe across uncertain replies. Stale mains cannot issue actions; timeout means unknown pending state until reconciled, not a new launch. Explicit failure states retain evidence.
@@ -122,7 +122,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** operation state transition table and no-duplicate test traces.
 
 ### MXP-009 — Implement bootstrap and diagnostic tools (M)
-- **Status:** planned. **Requirements:** F02, F11, F12, N02, N03. **Dependencies:** 003,005,007,008.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F02, F11, F12, N02, N03. **Dependencies:** 003,005,007,008.
 - **Acceptance scenarios:** A02, A03, A24, A26.
 - **Deliverable/owner:** Muxdeck Python start/resume/status/audit diagnostic CLI and agent-facing tool entry points.
 - **Acceptance:** discover/reuse configured local Multica and Muxdeck; inspect repository/branch/dirty state and project association; create durable project identity once, including XDG_STATE_HOME override and UUID-scoped private state. Tools report missing configuration/auth precisely, with safe resumable setup. CLI is diagnostic plumbing behind agent tools, not required user ceremony or a public network service.
@@ -130,7 +130,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** sanitized tool outputs and bootstrap integration results.
 
 ### MXP-010 — Install natural-language main-agent activation (M)
-- **Status:** planned. **Requirements:** F01, F02, F06, N04. **Dependencies:** 009.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F01, F02, F06, N04. **Dependencies:** 009.
 - **Acceptance scenarios:** A01, A03.
 - **Deliverable/owner:** Muxdeck installed agent instruction/tool package and provider adapter configuration.
 - **Acceptance:** an ordinary visible interactive agent handles “Use Muxpilot for ~/git_farm/shop. Add password reset end to end, and open a PR when tested.” by invoking tools, collecting repository context, and carrying the requested goal forward. No mandatory CLI/form/brief per project. The package must be installed/loaded through the tested provider mechanism; unsupported hot tool reload is not assumed. Bind one main conversation and full tmux identity; if a launcher handoff is needed it must not silently create two leads. Keep main TUI interactive and human-accessible; ambiguity that materially changes scope gets focused clarification without losing the original goal.
@@ -138,7 +138,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** sanitized main-session transcript and activation/tool receipts.
 
 ### MXP-011 — Create epics and verified stage-batch plans (M)
-- **Status:** planned. **Requirements:** F03, F04, F07. **Dependencies:** 010,012,013.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F03, F04, F07. **Dependencies:** 010,012,013.
 - **Acceptance scenarios:** A04, A10, A11.
 - **Deliverable/owner:** Muxdeck planning/dispatch tools and agent instructions, consuming frozen Multica contracts.
 - **Acceptance:** goal/context produce an epic and bounded stage-batch task plan with prerequisite acceptance checks, ownership, and delegation of substantial independent work. This is v1 stage gating, not an arbitrary runtime task DAG. Future-stage tasks stay in fixed parked backlog; ownership-only mutations cannot start them. Main activates the next batch only after verified acceptance of prerequisites; canceled members are not success unless an explicit logged scope removal changes the plan. Backend eligibility enforcement rejects bypass launches from mentions/comments/wakeups/reruns during parked stages or project dispatch hold. Tasks within the current accepted stage may run independently under authoritative Multica eligibility/concurrency. Terminal/session/project/epic/task/run IDs are linked. Main revises the plan and reconciles existing work rather than re-creating it. Open-ended investigation/implementation/review uses visible root runs; bounded helpers require fixed input/output, restricted scope and recorded or explicitly unavailable provider evidence. Prove provider helper controls rather than treating instructions as a sandbox.
@@ -146,7 +146,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** Multica records and correlated launch receipts from live demo fixture.
 
 ### MXP-012 — Create owned worktrees and worker metadata (M)
-- **Status:** planned. **Requirements:** F03, F04, F12, N02, N03. **Dependencies:** 003,004,008.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F03, F04, F12, N02, N03. **Dependencies:** 003,004,008.
 - **Acceptance scenarios:** A05, A06, A12, A24.
 - **Deliverable/owner:** Muxdeck worker workspace/resource allocator modules.
 - **Acceptance:** task branches/worktrees derive from chosen project baseline; dirty baseline is preserved/snapshotted where required; project/epic grouping and task/run metadata attach to independently owned tmux workers. The Multica daemon assigns provider execution UUID/launch ID before the wrapper invokes a worker; map run → execution → full session identity, accepting multiple legitimate executions per run. Branch/session name collisions reconcile or refuse safely. Record full tmux/server/pane identity and history reference; keep main at project level and workers in disjoint epic groups, using another explicit workspace when capability limits require it. Cleanup is ownership scoped and never kills tmux server or unrelated sessions.
@@ -154,7 +154,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** resource inventory with preservation assertions.
 
 ### MXP-013 — Wire structured terminal execution and observation (M)
-- **Status:** planned. **Requirements:** F03–F05, F07, N04. **Dependencies:** 003,012.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F03–F05, F07, N04. **Dependencies:** 003,012.
 - **Acceptance scenarios:** A02, A05, A17, A21, A22.
 - **Deliverable/owner:** Muxdeck provider worker wrapper and existing `muxdeckctl exec` observation bridge adapters.
 - **Acceptance:** real paired worker runs in independent terminal, structured command/observation envelopes carry identity/operation receipts, output and completion reach coordinator, and main can inspect bounded context. Each actual provider execution uses its daemon-assigned execution/launch ID; retry of that execution reconciles the same launch rather than launching again. Discovery probes bypass terminal allocation; legitimate distinct subprocess invocations within one run receive distinct identities. v1 uses implemented structured bridge; native direct worker-TUI takeover remains deferred. Terminal disconnect is distinguishable from worker completion; command errors and output truncation are visible.
@@ -162,7 +162,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** versioned real-provider run plus synthetic edge-case tests; reference existing [../AGENT_ORCHESTRATION.md](../AGENT_ORCHESTRATION.md), [../AGENT_TRANSCRIPTS.md](../AGENT_TRANSCRIPTS.md), and [../API.md](../API.md).
 
 ### MXP-014 — Record worker result and artifact handoff (M)
-- **Status:** planned. **Requirements:** F04, F07, F08, N01. **Dependencies:** 013,008.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F04, F07, F08, N01. **Dependencies:** 013,008.
 - **Acceptance scenarios:** A10, A11, A15.
 - **Deliverable/owner:** Muxdeck result receipt/artifact validator modules and paired Multica result endpoint adapter.
 - **Acceptance:** completed worker supplies commit/branch identity, artifact pointers, validation commands/outcomes, blockers, and explicit result status; coordinator validates association and stores receipt durably. Artifacts carry hash, byte count and base SHA; write/fsync/rename/fsync parent before committing their references. Missing/corrupt artifacts and orphan files have explicit incomplete-evidence/cleanup policy. Repeated or late results are deduplicated, stale run results do not replace current results, and absent evidence prevents a successful-task claim.
@@ -170,7 +170,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** correlated run/result/artifact records and focused tests.
 
 ### MXP-015 — Recover main interruption for the foundation demo (M)
-- **Status:** planned. **Requirements:** F03, F09, N01, N03. **Dependencies:** 008,011,014.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F03, F09, N01, N03. **Dependencies:** 008,011,014.
 - **Acceptance scenarios:** A16, A18, A20; M1a foundation gate.
 - **Deliverable/owner:** Muxdeck resume/reconcile workflow and M1a scripted scenario.
 - **Acceptance:** terminate/restart main during an in-flight worker; resume finds existing tasks, terminal ownership, and receipts, retains goal/context, and processes completion without duplicate workers or lost task associations. Demonstrate natural-language activation, parallel independent work, dependency release, and a main interruption. Report remaining v1 gates explicitly.
@@ -178,7 +178,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** foundation demo report with before/after identity inventory; first usable coordination demo also requires 016–020 and does not close full recovery or audit requirements.
 
 ### MXP-016 — Add live human supplements and event delivery (M)
-- **Status:** planned. **Requirements:** F06, F08, N01, N02. **Dependencies:** 005,007,011.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F06, F08, N01, N02. **Dependencies:** 005,007,011.
 - **Acceptance scenarios:** A07–A09, A19.
 - **Deliverable/owner:** Multica backend human-supplement API and minimal existing-board interaction; Muxdeck inbox adapter.
 - **Acceptance:** extend current human-only supplement capability with a deliberate scoped coordinator-write route/principal policy for exact-run live supplements. Validate project/workspace scope, target run, expected version, coordinator generation and stable message/operation ID; issue queued/delivered/acknowledged receipts and deduplicate retries. Preserve original human routes and their guards. Scoped coordinator also reads live additions and responds through supported task context; preserve actor attribution, revision, authorization and ordering. Human additions while workers/main are running survive reconnect/restart and reach appropriate coordinator/task. Conflicting scope changes become visible decisions.
@@ -186,7 +186,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** durable supplement events and main acknowledgment trace.
 
 ### MXP-017 — Implement scoped steer, pause and cancel (M)
-- **Status:** planned. **Requirements:** F05, F06, F09, N03. **Dependencies:** 013,014,016.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F05, F06, F09, N03. **Dependencies:** 013,014,016.
 - **Acceptance scenarios:** A07, A08, A10, A24, A26.
 - **Deliverable/owner:** Muxdeck control tools/worker adapter and Multica control state integration.
 - **Acceptance:** main and authorized human can inspect/steer/cancel selected task/run or epic; controls record who/why and acknowledgment. Distinguish pending, accepted, effected, and failed/unknown controls. Cancellation stops only owned work; late completion cannot falsely revive canceled work. Provider-supported pause semantics are documented precisely; unsupported actions return a clear capability error.
@@ -194,7 +194,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** correlated control receipts and terminal ownership checks.
 
 ### MXP-018 — Implement durable Multica backend event feed (M)
-- **Status:** planned. **Requirements:** F06–F09, N01, N02. **Dependencies:** 002,005,016.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F06–F09, N01, N02. **Dependencies:** 002,005,016.
 - **Acceptance scenarios:** A09, A13, A19.
 - **Deliverable/owner:** Multica append-only event persistence, scoped cursor API, migration/retention policy; Muxdeck feed adapter.
 - **Acceptance:** task/run transitions, human additions, coordinator actions, worker results and controls have stable ordered event identities and actor/correlation metadata. Reconnect/replay is gap detectable; retention gaps trigger authoritative resync with explicit audit-gap marker. Transport wakeups supplement durable feed rather than serving as the only history. Define transaction boundary between state mutation and event append.
@@ -202,7 +202,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** backend migration/check results and replay report.
 
 ### MXP-019 — Add task-to-terminal navigation in Multica (S)
-- **Status:** planned. **Requirements:** F04, F10, N02. **Dependencies:** 011,013,018.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F04, F10, N02. **Dependencies:** 011,013,018.
 - **Acceptance scenarios:** A05, A06, A21, A22.
 - **Deliverable/owner:** Multica existing task detail/board link component and terminal-link backend field; Muxdeck deep-link adapter.
 - **Acceptance:** task opens correct Muxdeck project/epic worker terminal or retained history, shows useful live/ended association and control feedback, and handles missing/stale full session identity even after name reuse. Main and worker terminals remain ordinary accessible Muxdeck terminals. Preserve existing board; no rewrite. Do not put credentials into URLs or expose unauthenticated console publicly.
@@ -210,7 +210,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** paired browser recording/screenshot and exact test results.
 
 ### MXP-020 — Integrate results and verify goal closure (M)
-- **Status:** planned. **Requirements:** F03, F07, N03, N04. **Dependencies:** 014,016,017.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F03, F07, N03, N04. **Dependencies:** 014,016,017.
 - **Acceptance scenarios:** A04, A10–A12; first demo gate.
 - **Deliverable/owner:** Muxdeck integration tools/main-agent instructions and acceptance evidence summarizer.
 - **Acceptance:** main reviews result evidence, integrates accepted worker commits into owned integration branch/worktree, handles merge conflicts deliberately, runs goal-level verification, and updates task/epic status accurately. Failed/blocked tasks cannot produce a completion claim. Open PR only when requested and tests/evidence satisfy the goal; retain PR/commit references and unresolved risks. Worker unit success is distinct from integrated success.
@@ -218,7 +218,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** integration commit, checks, final Multica statuses, requested PR receipt.
 
 ### MXP-021 — Implement reconstructable audit export (M)
-- **Status:** planned. **Requirements:** F08, F09, N01, N02. **Dependencies:** 006,014,017,018,020.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F08, F09, N01, N02. **Dependencies:** 006,014,017,018,020.
 - **Acceptance scenarios:** A13–A15, A19, A25.
 - **Deliverable/owner:** Muxdeck audit/query/export module and diagnostic tool.
 - **Acceptance:** reconstruct goal, plan revisions, actor decisions, delegated work, terminal/run identities, human messages, controls, results/artifacts, integration and closure from durable local/backend records. Export at an explicit event watermark with manifest/source hashes and capture coverage; stable machine-readable events plus readable chronology with source IDs, timestamps, correlation, gaps, and redaction. Export is restart safe and excludes secrets/private unrelated context.
@@ -226,7 +226,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** sanitized complete-demo export validated against known event inventory.
 
 ### MXP-022 — Implement project lifecycle, backup and safe cleanup (M)
-- **Status:** planned. **Requirements:** F12, F09, N01–N03. **Dependencies:** 009,012,015,021.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F12, F09, N01–N03. **Dependencies:** 009,012,015,021.
 - **Acceptance scenarios:** A23, A24, A26.
 - **Deliverable/owner:** Muxdeck lifecycle/backup/restore commands and operator documentation.
 - **Acceptance:** start/resume/status/close/archive/restore retain associations and useful diagnostics. Consistent SQLite backup plus manifest covers needed local state without secret export; restore validates versions and reconciles against Multica rather than overwriting task truth. Cleanup requires scoped ownership, reports resources first, preserves live sessions/working trees by default, and handles moved repository roots.
@@ -234,7 +234,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** backup/restore inventory and preservation checks.
 
 ### MXP-023 — Complete recovery and fault-injection drills (M)
-- **Status:** planned. **Requirements:** F09, F12, N01, N03, N04. **Dependencies:** 015,017,018,021,022.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F09, F12, N01, N03, N04. **Dependencies:** 015,017,018,021,022.
 - **Acceptance scenarios:** A15–A20, A23, A24; full fault matrix.
 - **Deliverable/owner:** Muxdeck/Multica fault harness and focused cross-process regression tests.
 - **Acceptance:** exercise main crash, daemon crash, backend outage/restart, worker crash, network lost reply, duplicate/reordered events, stale coordinator, simultaneous resume, unknown process state and checkpoint failure. Assert no duplicate live worker, no accepted action lost, explicit audit gaps, correct blocked/failed status, and preserved unrelated sessions. Document irrecoverable conditions and operator recovery.
@@ -242,7 +242,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** fault matrix mapping injection→expected/observed states and receipts; all unresolved failures block v1.
 
 ### MXP-024 — Verify complete paired end-to-end and UI behavior (M)
-- **Status:** planned. **Requirements:** F01–F12, N01–N04. **Dependencies:** 019,020,021,023.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F01–F12, N01–N04. **Dependencies:** 019,020,021,023.
 - **Acceptance scenarios:** A01–A26 and A27 premerge test/CI inputs; release ledger without future deployment assertions.
 - **Deliverable/owner:** both repositories' integration/browser scenario and requirements evidence index.
 - **Acceptance:** this task closes product scenarios A01–A26 and supplies test/CI inputs for A27; staging rehearsal belongs to 025 and live deployment checks to 026, so neither is a prerequisite here. Exact supported provider pairing completes password-reset-style synthetic goal from natural language through bootstrap, epic/tasks, independent terminal workers, human supplement/control, crash/resume, integration checks, requested PR, terminal navigation and audit export. Test existing Multica/Muxdeck behavior affected by changes; assert preservation and auth boundaries. This is a requirement-complete scenario, not permission to claim all providers work.
@@ -250,7 +250,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** exact paired commits/provider versions, CI job timestamps, live scenario report and requirement links to evidence.
 
 ### MXP-025 — Rehearse version-paired deployment and rollback (M)
-- **Status:** planned. **Requirements:** F11, F12, N01–N04. **Dependencies:** 024.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F11, F12, N01–N04. **Dependencies:** 024.
 - **Acceptance scenarios:** A23, A24, A26, A27.
 - **Deliverable/owner:** paired release manifest, install/upgrade compatibility checks, deployment runbook updates and isolated rehearsal.
 - **Acceptance:** pin Muxdeck/Multica API/schema/tool/provider versions; refuse incompatible pairing; backup DB/state before migrations; define migration rollback limits and restore path. Rehearse install/upgrade/rollback in isolated staging without touching live installation. Use shared `scripts/check_deployment.py`, task-specific tests/backups, staging frontend builds, scoped resources and runbook safety. State default-branch mapping and final rollout steps explicitly.
@@ -258,7 +258,7 @@ Parallel lanes after contracts: **A** Multica scoped identity/human API/event fe
 - **Evidence:** release manifest, backup inventory, staging deployment/rollback reports; no early live feature deployment.
 
 ### MXP-026 — Pass global v1 gate, merge and deliver (S)
-- **Status:** planned. **Requirements:** F01–F12, N01–N04. **Dependencies:** 001–025.
+- **Status:** in_progress; implementation candidate, acceptance evidence pending ([ledger](EVIDENCE.md)). **Requirements:** F01–F12, N01–N04. **Dependencies:** 001–025.
 - **Acceptance scenarios:** Planning and first demo gates; complete v1 premerge gate, then postmerge release completion; A01–A27 split by release phase.
 - **Deliverable/owner:** release owner in both repositories; final acceptance matrix, default-branch merges, paired release and user report.
 - **Acceptance:** every premerge criterion in [ACCEPTANCE.md](ACCEPTANCE.md) has passing evidence before merge; postmerge/live deployment criteria close release afterward, never acting as a circular prerequisite to the merge that enables deployment; all critical defects resolved, demo shortcuts removed, actual provider limitations stated, feature commits reviewed, paired defaults checked. With the premerge gate accepted, merge Muxdeck feature to configured `master` and Multica feature to configured `main`, push routine authorized changes and deploy the paired release to existing installation under root safety instructions. Never restart tmux, kill server/sessions, or expose unauthenticated console publicly. If deployment would require one of those excluded actions, stop that action and present the concrete need.
