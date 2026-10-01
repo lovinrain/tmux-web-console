@@ -43,6 +43,10 @@ COVERAGE: dict[str, dict[str, Any]] = {
         "scenarios": ["A09", "A13", "A18", "A19", "A26"],
         "claim": "Unix service/controller and fake HTTP Multica cross-process replay, restart, receiver fence and authorization boundary.",
     },
+    "test_native_api_outage_replay_and_daemon_sigkill_reconcile_exact_worker": {
+        "scenarios": ["A13", "A17", "A18", "A19", "A20", "A25"],
+        "claim": "Opt-in isolated native API outage/restart preserves receipt/event identity and active fake provider; actual daemon SIGKILL/restart confirms old process stopped and failure with distinct queued retry lineage while dispatch hold persists. Retention expiry remains synthetic coverage.",
+    },
     "test_paired_multica_daemon_three_workers_stage_steering_resume_integration": {
         "scenarios": ["A01", "A04", "A05", "A07", "A09", "A10", "A11", "A12", "A13", "A16", "A18", "A20", "A24", "A25"],
         "claim": "Opt-in actual Multica backend/daemon, projectd, Muxdeck and tmux: three staged synthetic RPC workers, human supplement, main loss/resume, exact integration baseline, terminal bindings and commit closure. Scripted coordinator; no real provider or browser proof.",
@@ -57,9 +61,10 @@ FAULT_CHECKS = {
     "local stale ownership after lease expiry": ["test_real_journal_replay_fencing_artifact_integrity_and_wal_restore"],
     "artifact corruption/missing file and incomplete export": ["test_real_journal_replay_fencing_artifact_integrity_and_wal_restore"],
     "conflicting accepted worker commits": ["test_real_git_conflicting_workers_leave_explicit_unresolved_integration"],
-    "real daemon crash with active provider": [],
+    "real daemon crash with active provider": ["test_native_api_outage_replay_and_daemon_sigkill_reconcile_exact_worker"],
     "actual Muxdeck receiver delay across takeover": [],
-    "native Multica backend outage/restart and retention-gap recovery": [],
+    "native Multica backend outage/restart": ["test_native_api_outage_replay_and_daemon_sigkill_reconcile_exact_worker"],
+    "native retention expiry/recovery": [],
     "host/storage power-loss durability": [],
     "before intent commit": ["test_fault_before_intent_commit_has_no_remote_effect_or_phantom_intent"],
     "intent committed before send": ["test_fault_after_intent_before_send_replays_same_operation_identity"],
@@ -123,9 +128,8 @@ def source_hashes() -> dict[str, str]:
     paths = list((REPOSITORY / "muxpilot").glob("*.py"))
     paths.extend(REPOSITORY / "tmux_console" / name for name in
                  ("app.py", "control_cli.py", "stdio_bridge.py", "stdio_runner.py", "tmux.py", "workspaces.py"))
-    paths.extend((REPOSITORY / "tests/test_muxpilot_e2e.py", Path(__file__).resolve()))
-    if (REPOSITORY / "tests/test_muxpilot_faults.py").is_file():
-        paths.append(REPOSITORY / "tests/test_muxpilot_faults.py")
+    paths.extend((REPOSITORY / "tests").glob("test_muxpilot*.py"))
+    paths.append(Path(__file__).resolve())
     return {str(path.relative_to(REPOSITORY)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(paths)}
 

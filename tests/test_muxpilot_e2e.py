@@ -57,6 +57,10 @@ def emit(value):
         print(json.dumps({'jsonrpc': '2.0', **value}), flush=True)
 def finish(turn, stop, inputs):
     emit({'method': 'item/agentMessage/delta', 'params': {'threadId': thread_id, 'turnId': turn, 'itemId': 'fake-progress-' + turn, 'delta': 'Deterministic fixture reached its explicit execution checkpoint. '}})
+    privacy = os.environ.get('FAKE_API_KEY')
+    if privacy:
+        emit({'method': 'item/completed', 'params': {'threadId': thread_id, 'turnId': turn, 'item': {'id': 'fake-private-agent-' + turn, 'type': 'agentMessage', 'text': 'Synthetic privacy checkpoint message ' + privacy}}})
+        emit({'method': 'item/completed', 'params': {'threadId': thread_id, 'turnId': turn, 'item': {'id': 'fake-private-tool-' + turn, 'type': 'commandExecution', 'command': 'synthetic privacy fixture', 'aggregatedOutput': 'Synthetic privacy checkpoint tool ' + privacy, 'status': 'completed', 'exitCode': 0}}})
     base = os.environ.get('MUXPILOT_FAKE_CHECKPOINT_DIR')
     if base:
         root = pathlib.Path(base)
@@ -642,15 +646,15 @@ signal.pause()
                              {"client_request_id": supplement_id, "content": "Reuse our existing email service."})
     assert repeated["id"] == supplement["id"]
     def delivered() -> Any:
-        comments = human.request("GET", "/api/issues/" + workers[0]["task_id"] + "/comments")
-        comments = comments.get("comments", []) if isinstance(comments, dict) else comments
-        return next((item for item in comments if item.get("id") == supplement["id"] and item.get("supplement_status") == "delivered"), None)
+        timeline = human.request("GET", "/api/issues/" + workers[0]["task_id"] + "/timeline")
+        return next((item for item in timeline if item.get("id") == supplement["id"] and any(receipt.get("task_id") == workers[0]["run_id"] and receipt.get("status") == "delivered" for receipt in item.get("supplements", []))), None)
     assert wait_until(delivered, timeout=30)
     old_credential = credential_for(config, "hold", project)
     os.kill(main["pid"], signal.SIGKILL)
     for worker in workers:
         os.kill(worker["pid"], 0)
-    resumed = tool("resume", owner="paired-main-replacement", takeover=True)
+    subprocess.run([*stack.tmux, "new-session", "-d", "-s", "main-replacement", "bash", "--noprofile", "--norc"], check=True)
+    resumed = tool("resume", owner="paired-main-replacement", takeover=True, main_session="main-replacement")
     assert resumed["generation"] > started["generation"]
     assert resumed["duplicate_dispatch"] is False
     with pytest.raises(ServiceError, match="credential|authority|expired"):
@@ -697,6 +701,15 @@ signal.pause()
     assert any(supplement["id"] in json.dumps(event["payload"]) for event in events)
     status = tool("status")
     assert len(status["backend"]["runs"]) == 3
+    native_privacy = []
+    if operator.get("privacy_sentinel"):
+        for run in status["backend"]["runs"]:
+            messages = human.request("GET", "/api/tasks/" + run["id"] + "/messages")
+            encoded = json.dumps(messages)
+            assert operator["privacy_sentinel"] not in encoded
+            assert "Synthetic privacy checkpoint message" in encoded and "Synthetic privacy checkpoint tool" in encoded
+            assert "[REDACTED" in encoded
+            native_privacy.append({"run_id": run["id"], "native_stored_projection_sanitized": True, "message_count": len(messages)})
     for run in status["backend"]["runs"]:
         assert run["terminal_url"] and run["session_id"]
     with JournalStore(state, project) as journal:
@@ -710,6 +723,7 @@ signal.pause()
     report = {"passed": True, "mode": "actual Multica backend/daemon; deterministic fake Codex RPC provider; scripted coordinator tools",
               "project_id": project, "start": started, "resume": resumed, "runs": status["backend"]["runs"],
               "human_supplement_id": supplement["id"], "integration": final, "closure": closed, "audit": audit,
+              "native_privacy_checks": native_privacy,
               "limitations": ["No authenticated real provider or natural-language autonomous reasoning", "No browser UI assertion or external PR created"]}
     (stack.root / "paired-report.json").write_text(json.dumps(report, indent=2))
     (stack.root / "paired-report.json").chmod(0o600)

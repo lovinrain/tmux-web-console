@@ -260,6 +260,80 @@ def test_credential_required_project_scoped_expired_and_revoked(
     assert len(FakeMultica.effects) == 1
 
 
+def test_active_run_renewal_extends_expiry_without_replacing_authority_or_worker(
+    controller: tuple[ProjectController, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool, repo = controller
+    project = start(tool, repo)["project"]["project_id"]
+    record = tool.registry.resolve(project)
+    credentials = tool._credentials(record)
+    run_id, issue_id, execution_id = (str(uuid.uuid4()) for _ in range(3))
+    worker = {
+        "project_id": project,
+        "run_id": run_id,
+        "issue_id": issue_id,
+        "execution_id": execution_id,
+        "identity": {"sessionId": "$3", "paneId": "%3", "panePid": 103},
+        "terminal_state": "live",
+    }
+    snapshot = {
+        "issues": [{"id": issue_id, "status": "in_progress"}],
+        "runs": [{"id": run_id, "issue_id": issue_id, "status": "running"}],
+        "cursor": 0,
+    }
+
+    def active_snapshot(self: FakeMultica, project_id: str) -> dict[str, Any]:
+        assert project_id == credentials["multica_project_id"]
+        return json.loads(json.dumps(snapshot))
+
+    monkeypatch.setattr(FakeMultica, "snapshot", active_snapshot)
+    prior_deadline = time.time() + 10
+    credentials["local_expires_at"] = prior_deadline
+    private_write(tool._credentials_path(record), json.dumps(credentials))
+    with tool._store(record) as store:
+        worker_mapping = store.put_mapping(
+            "provider_execution",
+            execution_id,
+            worker,
+            credentials["owner"],
+            credentials["generation"],
+        )
+        with store.transaction() as db:
+            db.execute("UPDATE lease SET expires_at=?", (prior_deadline,))
+        before_lease = store.status()["lease"]
+        before_mappings = store.list_mappings()
+    before_status = scoped(tool, "status", project)
+    before_workspace = json.loads(json.dumps(FakeMuxdeck.workspace))
+    effect_count = len(FakeMultica.effects)
+
+    result = scoped(tool, "renew", project)
+
+    assert result["generation"] == credentials["generation"]
+    assert result["expires_at"] > prior_deadline
+    assert result["backend"]["accepted"] is True
+    assert tool._credentials(record) == {
+        **credentials,
+        "local_expires_at": result["expires_at"],
+    }
+    assert FakeMultica.generations[credentials["multica_project_id"]] == credentials[
+        "remote_generation"
+    ]
+    after_status = scoped(tool, "status", project)
+    assert before_status["backend"] == after_status["backend"] == snapshot
+    with tool._store(record) as store:
+        after_lease = store.status()["lease"]
+        assert store.status()["lease_active"] is True
+        assert after_lease["expires_at"] > before_lease["expires_at"]
+        assert after_lease == {**before_lease, "expires_at": after_lease["expires_at"]}
+        assert store.get_mapping("provider_execution", execution_id) == worker_mapping
+        assert store.list_mappings() == before_mappings
+    assert tool.registry.resolve(project) == record
+    assert FakeMuxdeck.workspace == before_workspace
+    assert [effect["action"] for effect in FakeMultica.effects[effect_count:]] == [
+        "renew"
+    ]
+
+
 def test_plan_preflight_replay_and_literal_acceptance_array(
     controller: tuple[ProjectController, Path],
 ) -> None:

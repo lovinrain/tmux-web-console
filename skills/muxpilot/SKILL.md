@@ -112,7 +112,7 @@ actual task/run states, blockers, live links, and last confirmed activity.
 | “Stop starting tasks; let current work finish” | `hold PROJECT`; active runs continue |
 | “Start tasks again” | `hold PROJECT --off`, then evaluate stage eligibility |
 | “Stop the frontend task” | Exact-run `control ... --action cancel`; inspect the resulting authoritative outcome |
-| “Resume this project” | `resume PROJECT --owner ACTUAL_OWNER`; reconcile existing workers before any dispatch |
+| “Resume this project” | Inspect `recovery PROJECT`; use `resume PROJECT --owner ACTUAL_BOUND_OWNER` for the same main, then reconcile existing workers before dispatch |
 | “Show each agent's contribution” | `audit PROJECT --destination PRIVATE_NEW_DIRECTORY`; explain evidence and coverage gaps |
 
 Request only supported control actions. Delivery is not acknowledgement or
@@ -123,9 +123,17 @@ Human-only routes stay human-only; never impersonate a human for steering.
 
 Lost receipts or timeouts require reconciliation using the original operation
 identity. Do not create another worker or another operation ID to hide an
-uncertain result. A stale ownership generation requires resume/reconciliation,
-not bypassing the fence. `--takeover` needs authority to replace the prior main;
-ordinary resume does not imply that authority.
+uncertain result. Inspect `muxpilot recovery PROJECT` for read-only ownership,
+main/session, run, and operation evidence even when authority expired or resume
+is blocked; `--export PRIVATE_NEW_DIRECTORY` retains a private recovery bundle.
+A stale ownership generation requires resume/reconciliation, never bypassing
+the fence. Replacing the old main requires explicit human takeover authority.
+After verifying the replacement main's actual current session and conversation,
+use `muxpilot resume PROJECT --owner ACTUAL_NEW_OWNER --takeover
+--main-session ACTUAL_CURRENT_MAIN_SESSION --main-conversation ACTUAL_CONVERSATION_ID`.
+A new owner must supply that verified session; a reused name is insufficient.
+Ordinary resume does not authorize takeover. Reconcile existing workers and
+uncertain operations before any dispatch.
 
 ## Integrate and finish the goal
 
