@@ -24,6 +24,14 @@ import sys
 import termios
 import time
 
+# The runner is also launched by absolute filename outside an installed package.
+if __package__:
+    from .stdio_mirror import CodexProgressMirror
+else:
+    from stdio_mirror import (  # type: ignore[import-not-found,no-redef]
+        CodexProgressMirror,
+    )
+
 CHUNK = 65536
 INPUT_WINDOW = 262144
 QUEUE_LIMIT = 1048576
@@ -378,6 +386,7 @@ def serve(connection: socket.socket) -> int:
     }
     redactors = {kind: StreamingRedactor(()) for kind in decoders}
     finished_mirrors: set[bytes] = set()
+    progress_mirror: CodexProgressMirror | None = None
     terminating_at = None
     escalation_sent = False
     child_exited_at = None
@@ -391,9 +400,17 @@ def serve(connection: socket.socket) -> int:
         nonlocal caught_signal
         caught_signal = number
 
+    def render_mirror(kind: bytes, payload: bytes, *, final: bool = False) -> None:
+        # Credential redaction must precede parsing/rendering. Wire frames and
+        # daemon observers retain their original independent byte path.
+        visible = redactors[kind].feed(payload, final=final)
+        if kind == b"O" and progress_mirror is not None:
+            visible = progress_mirror.feed(visible, final=final)
+        _mirror(visible, decoders[kind], final=final)
+
     def finish_mirror(kind: bytes) -> None:
         if kind not in finished_mirrors:
-            _mirror(redactors[kind].feed(b"", final=True), decoders[kind], final=True)
+            render_mirror(kind, b"", final=True)
             finished_mirrors.add(kind)
 
     try:
@@ -482,6 +499,11 @@ def serve(connection: socket.socket) -> int:
                             for kind, payload in wire.read():
                                 if kind == b"C" and process is None:
                                     secrets = _mirror_secret_values(payload)
+                                    mirror_format = json.loads(payload).get("mirror_format")
+                                    if mirror_format not in {None, "codex-app-server-v1"}:
+                                        raise BridgeError("unsupported terminal mirror format")
+                                    if mirror_format == "codex-app-server-v1":
+                                        progress_mirror = CodexProgressMirror()
                                     redactors = {stream: StreamingRedactor(secrets) for stream in decoders}
                                     _pane_ownership(True)
                                     process = _launch(payload)
@@ -552,7 +574,7 @@ def serve(connection: socket.socket) -> int:
                             continue
                         if payload:
                             wire.queue(key.data, payload)
-                            _mirror(redactors[key.data].feed(payload), decoders[key.data])
+                            render_mirror(key.data, payload)
                             if drain_budget is not None:
                                 drain_budget[key.fd] -= len(payload)
                                 if not drain_budget[key.fd]:

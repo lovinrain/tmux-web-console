@@ -478,3 +478,28 @@ def test_lost_main_launch_reply_adopts_exact_receiver_identity_without_second_la
     assert store.get_mapping("main_session", "main")["payload"] == recovered
     assert not store.pending_operations()
     assert len([call for call in client.calls if call[:2] == ("POST", "/api/sessions")]) == 1
+
+
+@pytest.mark.parametrize("provider,app_server,expected", [("stdio", True, None), ("codex", False, None), ("codex", True, "codex-app-server-v1")])
+def test_readable_mirror_is_qualified_codex_opt_in_and_retains_redacted_audit(tmp_path, client, monkeypatch, provider, app_server, expected):
+    from muxpilot import runtime
+    original = runtime.bridge_run
+    selected = []
+    def record_format(*args, **kwargs):
+        selected.append(kwargs.get("mirror_format"))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(runtime, "bridge_run", record_format)
+    instance = context(tmp_path, provider=provider)
+    secret = "synthetic-audit-token"
+    wire = (json.dumps({"method": "item/agentMessage/delta", "params": {"itemId": "audit-item", "delta": "Agent result " + secret}}) + "\n" + json.dumps({"method": "thread/tokenUsage/updated", "params": {"tokenUsage": {"count": 321}}}) + "\n").encode()
+    command = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"]
+    if app_server:
+        command.append("app-server")
+    output = io.BytesIO()
+    assert ProviderBridge(instance, client=client, secret_values=(secret,)).run(command,
+        stdin=io.BytesIO(wire), stdout=output, stderr=io.BytesIO(), environment=dict(os.environ)) == 0
+    assert selected == [expected]
+    assert output.getvalue() == wire
+    captured = (instance.directory / "stdout.bin").read_bytes()
+    assert secret.encode() not in captured and b"[REDACTED]" in captured
+    assert b"thread/tokenUsage/updated" in captured and b"321" in captured

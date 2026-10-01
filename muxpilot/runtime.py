@@ -514,6 +514,7 @@ class ProviderBridge:
                                                                  "operationId": self.context.execution_id}},
                                     stdin=stdin, stdout=stdout, stderr=stderr,
                                     mirror_secrets=secrets,
+                                    mirror_format="codex-app-server-v1" if self.context.provider == "codex" and "app-server" in command[1:] else None,
                                     output_observer=lambda kind, content: (output if kind == "stdout" else errors).observe(content))
                 return status
             except BaseException as error:

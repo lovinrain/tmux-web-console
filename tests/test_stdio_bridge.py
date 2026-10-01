@@ -91,7 +91,8 @@ def test_mirror_redactor_refuses_unbounded_secret_configuration():
 class LocalLaunchAPI:
     """Exercise the real rendezvous/runner without contacting a tmux server."""
 
-    def __init__(self) -> None:
+    def __init__(self, terminal_output=subprocess.DEVNULL) -> None:
+        self.terminal_output = terminal_output
         self.requests: list[tuple[str, str, dict]] = []
         self.processes: list[subprocess.Popen] = []
         self.stderr: list[bytearray] = []
@@ -122,7 +123,7 @@ class LocalLaunchAPI:
         process = subprocess.Popen(
             command,
             cwd=payload["directory"],
-            stdout=subprocess.DEVNULL,
+            stdout=self.terminal_output,
             stderr=subprocess.PIPE,
             start_new_session=True,
             env=self.runner_environment,
@@ -774,3 +775,42 @@ def test_signal_group_skips_already_reaped_process(monkeypatch):
     monkeypatch.setattr(stdio_runner.os, "killpg", unexpected_signal)
 
     stdio_runner._signal_group(process, signal.SIGTERM)
+
+
+@pytest.mark.parametrize("mirror_format", [None, "codex-app-server-v1"])
+def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, mirror_format):
+    secret = b"synthetic-private-mirror-token"
+    opaque = "opaque-reasoning-correlation-" * 200
+    records = [
+        {"method": "turn/started", "params": {}},
+        {"method": "item/started", "params": {"item": {"type": "reasoning", "id": opaque}}},
+        {"method": "thread/tokenUsage/updated", "params": {"tokenUsage": {"count": 9999}}},
+        {"method": "item/agentMessage/delta", "params": {"itemId": "visible", "delta": "Checking API " + secret.decode() + " 雪\n"}},
+        {"method": "turn/completed", "params": {"turn": {"status": "interrupted"}}},
+    ]
+    wire = b"".join((json.dumps(record, ensure_ascii=False) + "\n").encode() for record in records)
+    output, observed = io.BytesIO(), bytearray()
+    mirror_path = tmp_path / "terminal-mirror.txt"
+    with mirror_path.open("w+b") as terminal:
+        api = LocalLaunchAPI(terminal_output=terminal)
+        try:
+            status = run([sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); [sys.stdout.buffer.write(data[i:i+31]) for i in range(0,len(data),31)]"],
+                api=api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(wire),
+                stdout=output, stderr=io.BytesIO(), mirror_secrets=(secret,), mirror_format=mirror_format,
+                output_observer=lambda kind, content: observed.extend(content) if kind == "stdout" else None)
+            assert status == 0
+        finally:
+            api.close()
+        terminal.seek(0)
+        visible = terminal.read()
+    assert output.getvalue() == bytes(observed) == wire
+    assert secret not in visible
+    assert b"[REDACTED]" in visible
+    if mirror_format:
+        assert "[Agent] Checking API [REDACTED] 雪".encode() in visible
+        assert b"[Turn] Interrupted." in visible
+        assert b"opaque-reasoning-correlation" not in visible
+        assert b"tokenUsage" not in visible
+    else:
+        assert b"opaque-reasoning-correlation" in visible
+        assert b"tokenUsage" in visible

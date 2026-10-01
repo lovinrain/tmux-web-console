@@ -228,6 +228,7 @@ def run(
     stderr=None,
     output_observer=None,
     mirror_secrets: tuple[bytes, ...] = (),
+    mirror_format: str | None = None,
 ) -> int:
     """Run a provider with unmodified binary stdio and caller argv/env/cwd.
 
@@ -239,6 +240,8 @@ def run(
         isinstance(arg, str) and "\0" not in arg for arg in command
     ):
         raise BridgeError("a valid provider command is required")
+    if mirror_format not in {None, "codex-app-server-v1"}:
+        raise BridgeError("unsupported terminal mirror format")
     stdin = _binary(sys.stdin if stdin is None else stdin)
     stdout = _binary(sys.stdout if stdout is None else stdout)
     stderr = _binary(sys.stderr if stderr is None else stderr)
@@ -287,7 +290,8 @@ def run(
                     )
                 config = json.dumps(
                     {"command": command, "cwd": cwd, "environment": environment,
-                     "mirror_secrets_base64": [base64.b64encode(value).decode() for value in mirror_secrets]},
+                     "mirror_secrets_base64": [base64.b64encode(value).decode() for value in mirror_secrets],
+                     "mirror_format": mirror_format},
                     ensure_ascii=True,
                 ).encode()
                 # Send the private launch config before switching to the data

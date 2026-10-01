@@ -14,6 +14,8 @@ visible tmux terminals; Muxpilot records project identity, decisions, receipts,
 and recovery evidence. Use the installed command and configuration in the
 installation binding below. Without that binding, use `muxpilot --help` and
 read [the operator guide](../../docs/muxpilot/OPERATIONS.md) from this repository.
+Commands return JSON. Use `muxpilot COMMAND --help` for flags and the examples
+below for evidence files. Keep the original start goal for idempotent retries.
 
 ## Activate and retain context
 
@@ -81,7 +83,9 @@ The supported Codex worker profile enforces `--disable multi_agent` and rejects
 attempts to enable it. Its recorded control evidence does not claim that all
 provider-native history is available, or isolate hostile same-user processes.
 
-Activate the eligible batch with `muxpilot activate PROJECT --stage NUMBER`.
+New projects begin with dispatch held. When the recorded plan is ready, run
+`muxpilot hold PROJECT --off`, then activate the eligible batch with
+`muxpilot activate PROJECT --stage NUMBER`.
 For dependent verification, pass `--base EXACT_ACCEPTED_INTEGRATION_SHA`.
 Future stages remain in fixed Backlog with no-start ownership writes. Verify
 the current stage's accepted results before activating the next. A cancelled
@@ -138,12 +142,25 @@ uncertain operations before any dispatch.
 ## Integrate and finish the goal
 
 Inspect worker commits/patches and checks against their task/run/base identities.
+Native Multica may remove a worker's temporary checkout after its run ends.
+Its committed objects remain in the registered repository. For independent
+checks, create your own disposable review checkout with
+`git -C REPO worktree add --detach PRIVATE_REVIEW_PATH WORKER_SHA`; run checks
+there and retain the resulting evidence. Do not assume an ended worker's `cwd`
+still exists, and do not use an unrelated checkout's revision as its evidence.
 Missing, corrupt, stale, or failing evidence blocks acceptance. First record each
 verified task with `muxpilot accept PROJECT --issue ACTUAL_TASK_ID
 --evidence FILE`. Its private JSON evidence names the latest actual successful
 `run_id`, `revision`, the recorded stage `base_sha`, and nonempty
 `checks` containing `command`, `revision`, and `passed: true`. Write factual
 outcomes from executed checks; do not turn a worker's assertion into a pass.
+For example, an acceptance file has this shape (replace every identity and
+record only a check that you actually ran on that revision):
+
+```json
+{"run_id":"ACTUAL_RUN_ID","revision":"WORKER_SHA","base_sha":"STAGE_BASE_SHA","checks":[{"command":"ACTUAL_CHECK_COMMAND","revision":"WORKER_SHA","passed":true}]}
+```
+
 For an explicitly coordinator-owned task without a worker run, the evidence
 declares `coordinator_owned: true`; never use that to hide delegated work.
 
@@ -153,6 +170,10 @@ The base identifies the full source change range, including multiple worker
 commits; do not guess it from the integration checkout's later HEAD. Surface
 conflicts and preserve unrelated work. Before releasing a verification stage,
 give it the exact integrated revision and relevant results.
+The integration response supplies `path`, `branch`, and `integration_sha`.
+Use that returned path for combined checks and publication. A verification-only
+worker can return the unchanged verified revision; accept its completed run and
+checks without inventing a commit or integrating an empty change range.
 
 Run the checks appropriate to the complete goal on that revision. Record check
 commands, outcomes, artifact references, final commit, and requested delivery
@@ -170,6 +191,21 @@ reconciliation; do not repeat publication after a lost reply. Retain the actual
 URL/revision and receipt.
 For a PR, closure's `deliverable.operation_id` identifies that confirmed
 publication, whose receipt includes the matching `url` and `revision`.
+The publication payload describes your intended repository, head branch, base
+branch, and revision; retain the same payload and operation UUID for confirmation.
+For example, use `{"repo":"ABSOLUTE_REPO","head":"INTEGRATION_BRANCH",
+"base":"main","revision":"INTEGRATION_SHA"}` as the intent and
+`{"url":"ACTUAL_PR_URL","revision":"INTEGRATION_SHA"}` as its verified receipt.
+After admission, push the integration branch and create the requested PR with
+the repository's normal Git/GitHub tools, then query the PR to verify its actual
+head revision and target before confirming that receipt.
+For example, a PR closure file is:
+
+```json
+{"revision":"INTEGRATION_SHA","completion_criteria":["EXACT_CRITERION_FROM_PLAN"],"checks":[{"command":"ACTUAL_GOAL_CHECK","revision":"INTEGRATION_SHA","passed":true}],"deliverable":{"kind":"pr","revision":"INTEGRATION_SHA","url":"ACTUAL_PR_URL","operation_id":"CONFIRMED_PUBLICATION_UUID"}}
+```
+
+Use every criterion from the recorded plan and only actual final check results.
 Failed, blocked, cancelled, or uncertain work cannot produce a completion claim.
 
 Finish with the delivered revision/PR, checks and outcomes, material limitations,
