@@ -223,6 +223,24 @@ def test_probe_bypasses_context_and_terminal_allocation(tmp_path, capfd):
     assert not (tmp_path / "state").exists()
 
 
+@pytest.mark.parametrize("arguments", [["--disable", "multi_agent", "--version"], ["--help", "--disable", "multi_agent"]])
+def test_decorated_profile_probe_preserves_fake_provider_argv_and_skips_task_loading(tmp_path, monkeypatch, capfd, arguments):
+    from muxpilot import worker
+
+    provider = tmp_path / "fake-provider"
+    provider.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\nprint('fake discovery warning',file=sys.stderr)\nsys.exit(7)\n")
+    provider.chmod(0o700)
+
+    def no_task_context(*args, **kwargs):
+        raise AssertionError("discovery cannot allocate/load a worker task")
+
+    monkeypatch.setattr(worker, "load_context", no_task_context)
+    assert worker.main(["--provider", str(provider), "--", *arguments]) == 7
+    captured = capfd.readouterr()
+    assert json.loads(captured.out) == arguments
+    assert captured.err == "fake discovery warning\n"
+
+
 def test_worker_entrypoint_persists_deduplicable_lifecycle_with_secret_redaction(tmp_path, monkeypatch):
     from muxpilot import worker
 

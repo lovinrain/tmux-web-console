@@ -73,6 +73,16 @@ def finish(turn, stop, inputs):
     result = {'mode': 'deterministic-fake', 'status': status, 'thread_id': thread_id, 'turn_id': turn}
     if status == 'completed':
         text = json.dumps(inputs)
+        instruction_source = 'initial RPC input'
+        if base:
+            instruction_file = root / (os.environ.get('MUXPILOT_ISSUE_ID', '') + '.fixture.json')
+            if instruction_file.is_file():
+                instructions = json.loads(instruction_file.read_text())
+                if instructions['project_id'] != os.environ.get('MUXPILOT_PROJECT_ID') or instructions['issue_id'] != os.environ.get('MUXPILOT_ISSUE_ID'):
+                    raise RuntimeError('synthetic instruction sidecar identity mismatch')
+                text += '\n' + instructions['description']
+                instruction_source = 'authoritative native issue response supplied to deterministic fixture'
+        result['instruction_source'] = instruction_source
         target = re.search(r'MUXPILOT_FIXTURE_FILE=([a-zA-Z0-9_.-]+)', text)
         content = re.search(r'MUXPILOT_FIXTURE_BASE64=([A-Za-z0-9+/=]+)', text)
         if target and content:
@@ -80,10 +90,19 @@ def finish(turn, stop, inputs):
             subprocess.run(['git', 'add', '--', target.group(1)], check=True, stdout=subprocess.DEVNULL)
             subprocess.run(['git', '-c', 'user.name=Muxpilot synthetic worker', '-c', 'user.email=muxpilot@example.invalid', 'commit', '-m', 'synthetic task result ' + target.group(1)], check=True, stdout=subprocess.DEVNULL)
             result['commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-            result['branch'] = subprocess.check_output(['git', 'symbolic-ref', '--short', 'HEAD'], text=True).strip()
+            branch = subprocess.run(['git', 'symbolic-ref', '--short', 'HEAD'], capture_output=True, text=True)
+            result['branch'] = branch.stdout.strip() if branch.returncode == 0 else None
             result['file'] = target.group(1)
         if base:
+            if not result.get('commit'):
+                result['status'] = 'failed'
+                result['error'] = 'assigned synthetic fixture file/content were not available; no Git effect occurred'
+                status = 'failed'
             checkpoint(root / (execution + '.result.json'), result)
+            while result.get('commit') and not (root / (execution + '.complete')).exists() and not stop.is_set():
+                time.sleep(0.025)
+            if stop.is_set():
+                status = 'interrupted'
         emit({'method': 'item/completed', 'params': {'threadId': thread_id, 'turnId': turn, 'item': {'id': 'fake-result-' + turn, 'type': 'agentMessage', 'text': 'Synthetic protocol turn completed; this is not goal acceptance or a real-provider proof.'}}})
     emit({'method': 'turn/completed', 'params': {'threadId': thread_id, 'turn': {'id': turn, 'status': status}}})
 for line in sys.stdin:
@@ -624,6 +643,15 @@ signal.pause()
     ]}
     planned = tool("plan", plan=plan)
     assert len(planned["tasks"]) == 3
+    # The native provider fetches its issue through its delegated CLI context. This
+    # deterministic provider has no reasoning/tool loop: supply the authoritative
+    # issue response as explicit fixture input, never fabricated commit evidence.
+    for assigned in planned["tasks"]:
+        issue = human.request("GET", "/api/issues/" + assigned["issue_id"])
+        issue = issue.get("issue", issue)
+        path = checkpoints / (assigned["issue_id"] + ".fixture.json")
+        path.write_text(json.dumps({"project_id": project, "issue_id": assigned["issue_id"], "description": issue["description"]}))
+        path.chmod(0o600)
     snapshot = tool("status")["backend"]
     assert snapshot["runs"] == []
     assert all(issue["status"] == "backlog" and issue["eligible"] is False for issue in snapshot["issues"])
@@ -666,12 +694,14 @@ signal.pause()
         wait_until(result_path.exists, timeout=30)
         result = json.loads(result_path.read_text())
         assert result["status"] == "completed" and result["commit"]
-        wait_until(lambda worker=worker: next((run for run in tool("status")["backend"]["runs"] if run["id"] == worker["run_id"] and run["status"] in {"completed", "succeeded"}), None), timeout=30)
         unit_command = [sys.executable, "-B", "-c", "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())", result["file"]]
         unit_check = subprocess.run(unit_command, cwd=worker["cwd"], capture_output=True, check=False)
         assert unit_check.returncode == 0, unit_check.stderr
         # The native worktree and source must share this verified commit identity.
         assert git(repository, "cat-file", "-t", result["commit"]) == "commit"
+        assert git(Path(worker["cwd"]), "rev-parse", "HEAD") == result["commit"]
+        (checkpoints / (worker["execution_id"] + ".complete")).touch()
+        wait_until(lambda worker=worker: next((run for run in tool("status")["backend"]["runs"] if run["id"] == worker["run_id"] and run["status"] in {"completed", "succeeded"}), None), timeout=30)
         tool("accept", issue=worker["task_id"], evidence={"run_id": worker["run_id"], "revision": result["commit"], "checks": [{"command": "python -B parse committed worker fixture file", "passed": True, "revision": result["commit"]}]})
         integration = tool("integrate", commit=result["commit"], base=stage1["base_sha"])
         assert integration["status"] == "integrated"
@@ -684,9 +714,11 @@ signal.pause()
     third_result_path = checkpoints / (third["execution_id"] + ".result.json")
     wait_until(third_result_path.exists, timeout=30)
     third_result = json.loads(third_result_path.read_text())
-    wait_until(lambda: next((run for run in tool("status")["backend"]["runs"] if run["id"] == third["run_id"] and run["status"] in {"completed", "succeeded"}), None), timeout=30)
     third_check = subprocess.run([sys.executable, "-B", "goal_check.py"], cwd=third["cwd"], capture_output=True, check=False)
     assert third_check.returncode == 0, third_check.stderr
+    assert git(Path(third["cwd"]), "rev-parse", "HEAD") == third_result["commit"]
+    (checkpoints / (third["execution_id"] + ".complete")).touch()
+    wait_until(lambda: next((run for run in tool("status")["backend"]["runs"] if run["id"] == third["run_id"] and run["status"] in {"completed", "succeeded"}), None), timeout=30)
     tool("accept", issue=third["task_id"], evidence={"run_id": third["run_id"], "revision": third_result["commit"], "checks": [{"command": "python -B goal_check.py", "passed": True, "revision": third_result["commit"]}]})
     final = tool("integrate", commit=third_result["commit"], base=stage2["base_sha"])
     check = subprocess.run([sys.executable, "-B", "goal_check.py"], cwd=final["path"], capture_output=True, check=False)
@@ -724,7 +756,7 @@ signal.pause()
               "project_id": project, "start": started, "resume": resumed, "runs": status["backend"]["runs"],
               "human_supplement_id": supplement["id"], "integration": final, "closure": closed, "audit": audit,
               "native_privacy_checks": native_privacy,
-              "limitations": ["No authenticated real provider or natural-language autonomous reasoning", "No browser UI assertion or external PR created"]}
+              "limitations": ["No authenticated real provider or natural-language autonomous reasoning", "No browser UI assertion or external PR created", "Synthetic provider consumes an authoritative issue-response fixture input; native model/delegated CLI context retrieval is not exercised"]}
     (stack.root / "paired-report.json").write_text(json.dumps(report, indent=2))
     (stack.root / "paired-report.json").chmod(0o600)
     assert service.poll() is None

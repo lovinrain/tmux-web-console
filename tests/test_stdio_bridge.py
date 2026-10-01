@@ -533,6 +533,19 @@ def test_lightweight_probe_requires_exactly_one_probe_argument(flag):
     assert not is_lightweight_probe(["provider"])
 
 
+@pytest.mark.parametrize("flag", ["--version", "-V", "--help", "-h"])
+def test_lightweight_probe_allows_only_qualified_helper_gate_around_probe(flag):
+    assert is_lightweight_probe(["provider", "--disable", "multi_agent", flag])
+    assert is_lightweight_probe(["provider", flag, "--disable", "multi_agent"])
+    assert is_lightweight_probe(["provider", "--disable=multi_agent", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", "app-server", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", "exec", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "other_feature", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", flag, "--model", "example"])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", flag, "--version"])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent"])
+
+
 def test_version_probe_bypasses_api_and_preserves_exit_code_and_streams(tmp_path):
     provider = tmp_path / "provider"
     provider.write_text(

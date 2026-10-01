@@ -28,8 +28,30 @@ from .stdio_runner import (
 
 
 def is_lightweight_probe(command: list[str]) -> bool:
-    """Exact help/version probes delegate locally without creating a tmux pane."""
-    return len(command) == 2 and command[1] in {"--version", "-V", "--help", "-h"}
+    """One help/version flag, optionally decorated by the qualified helper gate.
+
+    Runtime profile fixed arguments must not turn provider discovery into an
+    execution. Only ``--disable multi_agent`` is qualified here; subcommands,
+    model/config flags, and arbitrary provider options still require task scope.
+    """
+    if not command or not command[0]:
+        return False
+    probe_seen = False
+    index = 1
+    while index < len(command):
+        argument = command[index]
+        if argument in {"--version", "-V", "--help", "-h"}:
+            if probe_seen:
+                return False
+            probe_seen = True
+            index += 1
+        elif argument == "--disable=multi_agent":
+            index += 1
+        elif argument == "--disable" and index + 1 < len(command) and command[index + 1] == "multi_agent":
+            index += 2
+        else:
+            return False
+    return probe_seen
 
 
 def _binary(stream):
