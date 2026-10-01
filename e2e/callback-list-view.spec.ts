@@ -386,7 +386,7 @@ test("groups callbacks by status, agent, or workspace with counts and sorting wi
   await expect(rowTitles(codex)).toHaveText([titles[5], titles[0]]);
   await grouping.selectOption("workspace");
   await expect(panel.locator(".workspace-callback-group-title")).toHaveText([
-    "Another review workspace", "Callback view review", "Global queue",
+    "Callback view review", "Another review workspace", "Global queue",
   ]);
   await expect(rowTitles(callbackGroup(panel, `workspace:id:${currentWorkspaceId}`))).toHaveText([titles[0], titles[1]]);
   await expect(callbackGroup(panel, `workspace:id:${otherWorkspaceId}`).locator(".workspace-callback-group-count")).toHaveText("1");
@@ -394,6 +394,14 @@ test("groups callbacks by status, agent, or workspace with counts and sorting wi
   await expect(rowTitles(callbackGroup(panel, "workspace:global"))).toHaveText([titles[6], titles[5], titles[4], titles[3]]);
   await expect(rowTitles(panel)).toHaveCount(7);
   await expect(panel.getByText("7 of 7 shown", { exact: true })).toBeVisible();
+  const otherPanel = await openPanel(page, otherWorkspaceId);
+  await expect(otherPanel.getByRole("combobox", { name: "Group callbacks by", exact: true })).toHaveValue("workspace");
+  await expect(otherPanel.locator(".workspace-callback-group-title")).toHaveText([
+    "Another review workspace", "Callback view review", "Global queue",
+  ]);
+  const currentPanel = await openPanel(page);
+  await expect(currentPanel.locator(".workspace-callback-group").first())
+    .toHaveAttribute("data-group-key", `workspace:id:${currentWorkspaceId}`);
 });
 
 test("group collapse supports keyboard, shared preferences, revealing search results, and expand all", async ({ page }, testInfo) => {

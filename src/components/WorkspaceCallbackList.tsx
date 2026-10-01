@@ -795,7 +795,7 @@ export function WorkspaceCallbackList({
   const canEditGroups = customGroupRevision !== undefined && Boolean(onSaveGroup && onDeleteGroup)
     && (activeScope === "global" || Boolean(workspaceId));
   const editingGroup = canEditGroups && groupEditor?.identity === identity ? groupEditor : null;
-  const groups = groupCallbacks(matchingEntries, listView.preferences.group, customGroups);
+  const groups = groupCallbacks(matchingEntries, listView.preferences.group, customGroups, currentSourceId);
   const grouped = listView.preferences.group !== "none";
   const collapsedGroups = new Set(listView.preferences.collapsedGroups);
   const expandedGroups = groups.filter((group) => !grouped || !collapsedGroups.has(group.key));

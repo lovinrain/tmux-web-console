@@ -64,6 +64,37 @@ beforeEach(() => {
 });
 
 describe("WorkspaceCallbackList sorting and filtering", () => {
+  it("puts the current workspace group first when switching saved or temporary workspaces", () => {
+    const props = baseProps({
+      workspaceName: "Z review",
+      globalCallbackSnapshot: snapshot({
+        workspaceCallbacks: [
+          { workspaceId: "one", workspaceName: "Z review", sessions: ["current", "working"] },
+          { workspaceId: "two", workspaceName: "A review", sessions: ["elsewhere"] },
+        ],
+      }),
+    });
+    const view = renderWithTheme(<WorkspaceCallbackList {...props} />);
+    const panel = openList();
+    changeSelect("Group callbacks by", "workspace");
+    const groupKeys = () => [...panel.querySelectorAll(".workspace-callback-group")]
+      .map((group) => group.getAttribute("data-group-key"));
+    expect(groupKeys()).toEqual(["workspace:id:one", "workspace:id:two"]);
+
+    view.rerender(<ThemeProvider><WorkspaceCallbackList {...props}
+      workspaceId="two" workspaceName="A review" sessionName="elsewhere"
+      callbackSessions={["elsewhere"]} workspaceSessionNames={["elsewhere"]}
+    /></ThemeProvider>);
+    expect(groupKeys()).toEqual(["workspace:id:two", "workspace:id:one"]);
+
+    view.rerender(<ThemeProvider><WorkspaceCallbackList {...props}
+      workspaceId={null} temporaryKey="scratch" workspaceName="Temporary workspace"
+      sessionName="temporary" callbackSessions={["temporary"]} workspaceSessionNames={["temporary"]}
+    /></ThemeProvider>);
+    expect(groupKeys()).toEqual(["workspace:id:temporary:scratch", "workspace:id:two", "workspace:id:one"]);
+    expect(props.onChange).not.toHaveBeenCalled();
+  });
+
   it("edits custom groups using all scope callbacks even when search hides rows, without changing the queue", async () => {
     const onSaveGroup = vi.fn(async () => undefined);
     const props = baseProps({

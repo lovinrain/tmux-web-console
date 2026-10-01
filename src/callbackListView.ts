@@ -281,6 +281,7 @@ export function groupCallbacks(
   entries: readonly CallbackListEntry[],
   group: CallbackListGroupBy,
   customGroups: readonly CallbackCustomGroup[] = [],
+  currentWorkspaceId: string | null = null,
 ): CallbackListGroup[] {
   if (entries.length === 0) return [];
   if (group === "none") return [{ key: "none", label: "All callbacks", entries: [...entries] }];
@@ -328,8 +329,10 @@ export function groupCallbacks(
       return result ? [result] : [];
     });
   }
+  const currentWorkspaceKey = currentWorkspaceId === null ? null : `workspace:id:${currentWorkspaceId}`;
   const workspaceRank = (key: string) => key === "workspace:multiple" ? 1 : key === "workspace:global" ? 2 : 0;
-  return [...groups.values()].sort((left, right) => workspaceRank(left.key) - workspaceRank(right.key)
+  return [...groups.values()].sort((left, right) => Number(right.key === currentWorkspaceKey) - Number(left.key === currentWorkspaceKey)
+    || workspaceRank(left.key) - workspaceRank(right.key)
     || NAME_COLLATOR.compare(left.label, right.label)
     || (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
 }

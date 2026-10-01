@@ -379,6 +379,8 @@ describe("callback list grouping", () => {
     expect(new Set(groups.flatMap((group) => group.entries))).toEqual(new Set(entries));
     expect(groups.flatMap((group) => group.entries)).toHaveLength(entries.length);
     expect(entries[0].workspaceSources).toBe(sources);
+    expect(groupCallbacks(entries, "workspace", [], "room-b"))
+      .toEqual([groups[1], groups[0], groups[2], groups[3]]);
   });
 
   it("naturally orders workspace groups independently of callback order and preserves IDs after renaming", () => {
@@ -392,6 +394,11 @@ describe("callback list grouping", () => {
       .toEqual(["workspace:id:one", "workspace:id:multiple", "workspace:id:global"]);
     expect(groupCallbacks([...entries].reverse(), "workspace").map((group) => group.key))
       .toEqual(groups.map((group) => group.key));
+    expect(groupCallbacks(entries, "workspace", [], "global").map((group) => group.key))
+      .toEqual(["workspace:id:global", "workspace:id:one", "workspace:id:multiple"]);
+    expect(groupCallbacks(entries, "workspace", [], "multiple").map((group) => group.key))
+      .toEqual(["workspace:id:multiple", "workspace:id:one", "workspace:id:global"]);
+    expect(groupCallbacks(entries, "workspace", [], "missing")).toEqual(groups);
     expect(groupCallbacks([entry("renamed", { workspaceSources: [{ id: "one", name: "New name" }] })], "workspace"))
       .toMatchObject([{ key: "workspace:id:one", label: "New name" }]);
   });
