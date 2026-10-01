@@ -298,11 +298,13 @@ def install(args: argparse.Namespace) -> dict[str, object]:
             start_command = f"{manager} start {shlex.quote(unit)}"
             binding += f"| Multica {dependency} | `{status_command}` | `{start_command}` |\n"
             startup_commands[dependency] = {"unit": unit, "status": status_command, "start": start_command}
+    # -P keeps the caller's working directory off sys.path, so running from a
+    # checkout that contains its own muxpilot package still uses this release.
     launcher = (
         "#!/bin/sh\n"
         f"# {MARKER}\n"
         f"export PYTHONPATH={shlex.quote(str(repo))}\n"
-        f"exec {shlex.quote(str(configured_python))} -m muxpilot --config {shlex.quote(str(config))} \"$@\"\n"
+        f"exec {shlex.quote(str(configured_python))} -P -m muxpilot --config {shlex.quote(str(config))} \"$@\"\n"
     )
     # Multica approves only a runtime wrapper named muxpilot-worker. A stable
     # managed path survives release upgrades without editing the profile.
@@ -310,7 +312,7 @@ def install(args: argparse.Namespace) -> dict[str, object]:
         "#!/bin/sh\n"
         f"# {MARKER}\n"
         f"export PYTHONPATH={shlex.quote(str(repo))}\n"
-        f"exec {shlex.quote(str(configured_python))} -m muxpilot.worker --config {shlex.quote(str(config))} \"$@\"\n"
+        f"exec {shlex.quote(str(configured_python))} -P -m muxpilot.worker --config {shlex.quote(str(config))} \"$@\"\n"
     )
     files: dict[Path, tuple[bytes, int]] = {command: (launcher.encode(), 0o700),
                                             worker_command: (worker_launcher.encode(), 0o700)}

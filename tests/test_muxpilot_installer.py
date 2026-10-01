@@ -134,7 +134,7 @@ def test_wrapper_preserves_literal_paths_and_original_arguments(arguments: list[
         [str(tmp_path / "bin/muxpilot"), *supplied], cwd=tmp_path,
         capture_output=True, text=True, check=True,
     )
-    assert json.loads(result.stdout) == ["-m", "muxpilot", "--config", str(config), *supplied]
+    assert json.loads(result.stdout) == ["-P", "-m", "muxpilot", "--config", str(config), *supplied]
     assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
 
 
@@ -244,3 +244,16 @@ def test_copilot_launcher_options_are_validated(arguments: list[str], tmp_path: 
         install(arguments, "--provider", "copilot", "--main-executable", str(tmp_path / "missing"))
     with pytest.raises(installer.InstallationError, match="nonempty literals"):
         install(arguments, "--provider", "copilot", "--main-arg=")
+
+
+def test_installed_commands_ignore_a_shadowing_package_in_the_working_directory(arguments: list[str], tmp_path: Path) -> None:
+    install(arguments)
+    shadow = tmp_path / "repository"
+    (shadow / "muxpilot").mkdir(parents=True)
+    (shadow / "muxpilot/__init__.py").write_text("raise SystemExit('shadowed release package')\n")
+    (shadow / "muxpilot/__main__.py").write_text("raise SystemExit('shadowed release package')\n")
+    result = subprocess.run([str(tmp_path / "bin/muxpilot"), "--help"], cwd=shadow,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "shadowed" not in result.stdout + result.stderr
+    assert "Private project tools" in result.stdout
