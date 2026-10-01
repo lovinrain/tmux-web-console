@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,10 +21,78 @@ from tmux_console import stdio_runner
 from tmux_console.stdio_bridge import is_lightweight_probe, run
 
 
+def test_output_observer_retains_delivered_bytes_without_replacing_protocol(tmp_path, launch_api):
+    observed = {"stdout": bytearray(), "stderr": bytearray()}
+    output, errors = io.BytesIO(), io.BytesIO()
+    status = run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(bytes(range(256))); sys.stderr.buffer.write(b'problem')"],
+                 api=launch_api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(),
+                 stdout=output, stderr=errors,
+                 output_observer=lambda kind, content: observed[kind].extend(content))
+    assert status == 0
+    assert output.getvalue() == bytes(observed["stdout"]) == bytes(range(256))
+    assert errors.getvalue() == bytes(observed["stderr"]) == b"problem"
+
+
+def test_output_observer_failure_is_explicit_and_disconnects_owned_runner(tmp_path, launch_api):
+    def observe(kind, content):
+        raise OSError("required evidence unavailable")
+
+    with pytest.raises(OSError, match="evidence unavailable"):
+        run([sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(30)"],
+            api=launch_api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(),
+            stdout=io.BytesIO(), stderr=io.BytesIO(), output_observer=observe)
+    launch_api.processes[0].wait(timeout=5)
+
+
+def test_mirror_secret_redactor_covers_every_chunk_boundary_with_bounded_pending():
+    secret = b"known-credential-sentinel"
+    for boundary in range(len(secret) + 1):
+        redactor = stdio_runner.StreamingRedactor((secret,))
+        captured = redactor.feed(b"before " + secret[:boundary])
+        assert len(redactor.pending) < len(secret)
+        captured += redactor.feed(secret[boundary:] + b" after\n")
+        captured += redactor.feed(b"", final=True)
+        assert captured == b"before [REDACTED] after\n"
+        assert redactor.redacted and redactor.pending == b""
+
+
+@pytest.mark.parametrize("secrets", [(b"abcabc",), (b"abab",), (b"aba", b"abab"), (b"abc", b"abcabc")])
+def test_mirror_redactor_preserves_whole_stream_semantics_for_overlapping_secrets(secrets):
+    streams = [b"prefix " + secret * 3 + b" suffix" for secret in secrets]
+    streams.extend(bytes(values) for size in range(7) for values in product(b"abc", repeat=size))
+    for stream in streams:
+        for boundary in range(len(stream) + 1):
+            redactor = stdio_runner.StreamingRedactor(secrets)
+            assert redactor.pattern is not None
+            expected = redactor.pattern.sub(b"[REDACTED]", stream)
+            captured = redactor.feed(stream[:boundary]) + redactor.feed(stream[boundary:]) + redactor.feed(b"", final=True)
+            assert captured == expected, (stream, boundary)
+            assert not any(secret in captured for secret in secrets), (stream, boundary)
+        redactor = stdio_runner.StreamingRedactor(secrets)
+        byte_chunks = b"".join(redactor.feed(bytes([value])) for value in stream) + redactor.feed(b"", final=True)
+        assert byte_chunks == expected
+
+
+def test_private_mirror_redaction_values_never_replace_provider_protocol(tmp_path, launch_api):
+    secret = b"private-mirror-credential"
+    output = io.BytesIO()
+    assert run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+               api=launch_api, cwd=str(tmp_path), environment=dict(os.environ), stdin=io.BytesIO(secret),
+               stdout=output, stderr=io.BytesIO(), mirror_secrets=(secret,)) == 0
+    assert output.getvalue() == secret
+    assert secret not in json.dumps(launch_api.requests).encode()
+
+
+def test_mirror_redactor_refuses_unbounded_secret_configuration():
+    with pytest.raises(stdio_runner.BridgeError, match="supported bounds"):
+        stdio_runner.StreamingRedactor((b"x" * (stdio_runner.MAX_MIRROR_SECRET_BYTES + 1),))
+
+
 class LocalLaunchAPI:
     """Exercise the real rendezvous/runner without contacting a tmux server."""
 
-    def __init__(self) -> None:
+    def __init__(self, terminal_output=subprocess.DEVNULL) -> None:
+        self.terminal_output = terminal_output
         self.requests: list[tuple[str, str, dict]] = []
         self.processes: list[subprocess.Popen] = []
         self.stderr: list[bytearray] = []
@@ -54,7 +123,7 @@ class LocalLaunchAPI:
         process = subprocess.Popen(
             command,
             cwd=payload["directory"],
-            stdout=subprocess.DEVNULL,
+            stdout=self.terminal_output,
             stderr=subprocess.PIPE,
             start_new_session=True,
             env=self.runner_environment,
@@ -465,6 +534,19 @@ def test_lightweight_probe_requires_exactly_one_probe_argument(flag):
     assert not is_lightweight_probe(["provider"])
 
 
+@pytest.mark.parametrize("flag", ["--version", "-V", "--help", "-h"])
+def test_lightweight_probe_allows_only_qualified_helper_gate_around_probe(flag):
+    assert is_lightweight_probe(["provider", "--disable", "multi_agent", flag])
+    assert is_lightweight_probe(["provider", flag, "--disable", "multi_agent"])
+    assert is_lightweight_probe(["provider", "--disable=multi_agent", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", "app-server", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", "exec", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "other_feature", flag])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", flag, "--model", "example"])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent", flag, "--version"])
+    assert not is_lightweight_probe(["provider", "--disable", "multi_agent"])
+
+
 def test_version_probe_bypasses_api_and_preserves_exit_code_and_streams(tmp_path):
     provider = tmp_path / "provider"
     provider.write_text(
@@ -693,3 +775,158 @@ def test_signal_group_skips_already_reaped_process(monkeypatch):
     monkeypatch.setattr(stdio_runner.os, "killpg", unexpected_signal)
 
     stdio_runner._signal_group(process, signal.SIGTERM)
+
+
+@pytest.mark.parametrize("mirror_format", [None, "codex-app-server-v1"])
+def test_qualified_codex_mirror_changes_only_display_after_redaction(tmp_path, mirror_format):
+    secret = b"synthetic-private-mirror-token"
+    opaque = "opaque-reasoning-correlation-" * 200
+    records = [
+        {"method": "turn/started", "params": {}},
+        {"method": "item/started", "params": {"item": {"type": "reasoning", "id": opaque}}},
+        {"method": "thread/tokenUsage/updated", "params": {"tokenUsage": {"count": 9999}}},
+        {"method": "item/agentMessage/delta", "params": {"itemId": "visible", "delta": "Checking API " + secret.decode() + " 雪\n"}},
+        {"method": "turn/completed", "params": {"turn": {"status": "interrupted"}}},
+    ]
+    # Real Codex notifications identify the lifecycle boundary that releases
+    # withheld same-item text before the outcome is displayed.
+    for record in records:
+        record["params"]["threadId"] = "mirror-thread"
+        if record["method"].startswith("item/"):
+            record["params"]["turnId"] = "mirror-turn"
+        elif record["method"] in {"turn/started", "turn/completed"}:
+            record["params"]["turn"] = {"id": "mirror-turn", **record["params"].get("turn", {})}
+    wire = b"".join((json.dumps(record, ensure_ascii=False) + "\n").encode() for record in records)
+    output, observed = io.BytesIO(), bytearray()
+    mirror_path = tmp_path / "terminal-mirror.txt"
+    with mirror_path.open("w+b") as terminal:
+        api = LocalLaunchAPI(terminal_output=terminal)
+        try:
+            status = run([sys.executable, "-c", "import sys; data=sys.stdin.buffer.read(); [sys.stdout.buffer.write(data[i:i+31]) for i in range(0,len(data),31)]"],
+                # Ambient credentials must not change the retention window.
+                api=api, cwd=str(tmp_path), environment={}, stdin=io.BytesIO(wire),
+                stdout=output, stderr=io.BytesIO(), mirror_secrets=(secret,), mirror_format=mirror_format,
+                output_observer=lambda kind, content: observed.extend(content) if kind == "stdout" else None)
+            assert status == 0
+        finally:
+            api.close()
+        terminal.seek(0)
+        visible = terminal.read()
+    assert output.getvalue() == bytes(observed) == wire
+    assert secret not in visible
+    assert b"[REDACTED]" in visible
+    if mirror_format:
+        agent_text = "[Agent] Checking API [REDACTED] 雪".encode()
+        assert agent_text in visible
+        assert visible.index(agent_text) < visible.index(b"[Turn] Interrupted.")
+        assert b"opaque-reasoning-correlation" not in visible
+        assert b"tokenUsage" not in visible
+    else:
+        assert b"opaque-reasoning-correlation" in visible
+        assert b"tokenUsage" in visible
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unicode-escaped",
+        "ascii-escaped",
+        "joined-deltas",
+        "interleaved-items",
+        "json-delimiters",
+        "escaped-surrogate",
+    ],
+)
+def test_codex_rendered_credentials_are_redacted_after_unescaping_and_delta_join(
+    tmp_path, case
+):
+    secret = {
+        "unicode-escaped": "føø-private-🔒",
+        "json-delimiters": '", "delta": "',
+    }.get(case, "synthetic-joined-credential")
+    parts = (
+        [secret[:13], secret[13:]]
+        if case in {"joined-deltas", "interleaved-items"}
+        else [secret]
+    )
+    records = [
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"itemId": "same-message", "delta": part},
+        }
+        for part in parts
+    ]
+    if case == "escaped-surrogate":
+        records[0]["params"]["delta"] += chr(0xD800)
+    if case == "interleaved-items":
+        records.insert(
+            1,
+            {
+                "method": "warning",
+                "params": {"message": "Checking second contribution"},
+            },
+        )
+        records.insert(
+            2,
+            {
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "itemId": "other-message",
+                    "delta": "Other visible contribution",
+                },
+            },
+        )
+    wire = b"".join(
+        (json.dumps(record, ensure_ascii=True) + "\n").encode() for record in records
+    )
+    if case in {"ascii-escaped", "escaped-surrogate"}:
+        escaped = "".join(
+            "\\u" + format(ord(character), "04x") for character in secret
+        ).encode()
+        wire = wire.replace(secret.encode(), escaped)
+    if case == "json-delimiters":
+        # A byte filter before JSON parsing would replace real quoted delimiters
+        # and discard the whole record, even though its text was safely escaped.
+        assert secret.encode() in wire
+    else:
+        # Only decoding/joining notifications reconstructs the credential.
+        assert secret.encode() not in wire
+    output, observed = io.BytesIO(), bytearray()
+    path = tmp_path / "private-readable-mirror.txt"
+    with path.open("w+b") as terminal:
+        api = LocalLaunchAPI(terminal_output=terminal)
+        try:
+            assert (
+                run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import sys; data=sys.stdin.buffer.read(); [sys.stdout.buffer.write(data[i:i+17]) for i in range(0,len(data),17)]",
+                    ],
+                    api=api,
+                    cwd=str(tmp_path),
+                    environment=dict(os.environ),
+                    stdin=io.BytesIO(wire),
+                    stdout=output,
+                    stderr=io.BytesIO(),
+                    mirror_secrets=(secret.encode(),),
+                    mirror_format="codex-app-server-v1",
+                    output_observer=lambda kind, content: (
+                        observed.extend(content) if kind == "stdout" else None
+                    ),
+                )
+                == 0
+            )
+        finally:
+            api.close()
+        terminal.seek(0)
+        visible = terminal.read()
+    assert output.getvalue() == bytes(observed) == wire
+    assert secret.encode() not in visible
+    assert b"[Agent] [REDACTED]" in visible
+    if case == "escaped-surrogate":
+        assert b"[Agent] [REDACTED]?" in visible
+    if case == "interleaved-items":
+        assert parts[0].encode() not in visible and parts[1].encode() not in visible
+        assert b"Checking second contribution" in visible
+        assert b"Other visible contribution" in visible

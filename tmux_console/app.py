@@ -18,6 +18,9 @@ from urllib.parse import SplitResult, quote, urlsplit
 
 from aiohttp import WSMsgType, web
 
+from muxpilot.fencing import receiver_middleware
+
+from .worker_link import resolve_worker_terminal
 from .agent_reference import AgentReferenceDetector
 from .agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from .auth import (
@@ -1348,6 +1351,7 @@ def create_app(
         else os.environ.get("MUXDECK_BASE_PATH", "/mux")
     )
     prefix = app[BASE_PATH_KEY]
+    app.middlewares.append(receiver_middleware(prefix))
 
     async def close_session_stream_broker(application: web.Application) -> None:
         await application[SESSION_STREAM_BROKER_KEY].close()
@@ -2082,6 +2086,37 @@ def create_app(
         response = web.json_response(result)
         response.headers["Cache-Control"] = "no-store"
         return response
+
+    async def worker_terminal(request: web.Request) -> web.Response:
+        try:
+            allowed = pane_identity_fields | {"historyId", "runId", "providerExecutionId"}
+            if set(request.query) - allowed:
+                raise ValueError("unknown worker-terminal query field")
+            if any(len(request.query.getall(field)) != 1 for field in request.query):
+                raise ValueError("query fields must appear exactly once")
+            identity = pane_control_identity(dict(request.query), query=True)
+            for field in ("historyId", "runId", "providerExecutionId"):
+                value = request.query.get(field)
+                if value is not None and (not value or len(value) > 128 or any(
+                    not (char.isascii() and (char.isalnum() or char in "_-")) for char in value
+                )):
+                    raise ValueError(f"invalid {field}")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                result = await resolve_worker_terminal(
+                    app[TMUX_KEY], app[SESSION_REGISTRY_KEY], app[SCROLLBACK_RECORDER_KEY],
+                    app[SCROLLBACK_KEY], identity, history_id=request.query.get("historyId"),
+                )
+            result.update({"runId": request.query.get("runId"),
+                           "providerExecutionId": request.query.get("providerExecutionId")})
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except RecoveryRecordNotFoundError:
+            return json_error("worker session history not found", 404)
+        except TmuxSessionIdentityChangedError as error:
+            return json_error(str(error), 409)
+        except (TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable) as error:
+            return json_error(str(error), 503)
 
     async def input_session_pane(request: web.Request) -> web.Response:
         try:
@@ -6340,6 +6375,7 @@ def create_app(
     app.router.add_get(f"{prefix}/api/sessions/{session_segment}/capture", capture_session_pane)
     app.router.add_post(f"{prefix}/api/utility-terminal", utility_terminal)
     app.router.add_post(f"{prefix}/api/utility-terminal/release", release_utility_terminal)
+    app.router.add_get(f"{prefix}/api/worker-terminal", worker_terminal)
     app.router.add_get(f"{prefix}/api/session-history", list_session_history)
     app.router.add_post(f"{prefix}/api/session-history/close-tab", close_history_tab)
     app.router.add_post(f"{prefix}/api/session-history/{{history_id}}/restore", restore_history_session)

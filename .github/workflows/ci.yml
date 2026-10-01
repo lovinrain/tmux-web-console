@@ -38,7 +38,7 @@ jobs:
       - name: Test
         run: python -m pytest -q
       - name: Type-check
-        run: python -m mypy tmux_console
+        run: python -m mypy tmux_console muxpilot
 
   frontend:
     name: Frontend

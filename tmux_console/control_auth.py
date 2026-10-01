@@ -35,6 +35,7 @@ _EXACT_ROUTES: dict[str, frozenset[str]] = {
     "/api/sessions": _READ | {"POST"},
     "/api/sessions/stream": _READ,
     "/api/session-history": _READ,
+    "/api/worker-terminal": _READ,
     "/api/session-name": frozenset({"PUT"}),
     "/api/session-title": frozenset({"PUT"}),
     "/api/session-star": frozenset({"PUT"}),

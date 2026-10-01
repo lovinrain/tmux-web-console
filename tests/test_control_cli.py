@@ -403,3 +403,10 @@ def test_invalid_request_id_is_not_reflected_or_sent(monkeypatch, capsys):
     assert status == 1 and client.calls == []
     output = capsys.readouterr()
     assert "secret" not in output.err and "request ID must contain" in output.err
+def test_project_namespace_forwards_without_loading_global_control_token(monkeypatch):
+    from muxpilot import cli as project_cli
+
+    received = []
+    monkeypatch.setattr(project_cli, "main", lambda argv: received.append(argv) or 7)
+    assert cli.main(["project", "status", "project-id"]) == 7
+    assert received == [["status", "project-id"]]

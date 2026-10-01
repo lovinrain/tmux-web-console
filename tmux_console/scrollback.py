@@ -159,7 +159,7 @@ class ScrollbackStore:
 
     def read(
         self, history_id: str, *, part: str = "beginning", record_id: str | None = None,
-        pane: Pane | None = None,
+        pane: Pane | None = None, pane_identity: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         if part not in {"beginning", "recent"}:
             raise ValueError("part must be beginning or recent")
@@ -173,8 +173,9 @@ class ScrollbackStore:
                     "WHERE history_id = ? ORDER BY first_captured, id",
                     (history_id,),
                 ).fetchall()
-                if pane is not None:
-                    rows = [row for row in rows if row["pane_id"] == pane.id and row["pane_pid"] == pane.process_pid]
+                identity = (pane.id, pane.process_pid) if pane is not None else pane_identity
+                if identity is not None:
+                    rows = [row for row in rows if (row["pane_id"], row["pane_pid"]) == identity]
                 selected = next((row for row in rows if row["id"] == record_id), None) if record_id else (rows[0] if rows else None)
                 if record_id and selected is None:
                     raise ValueError("saved pane does not belong to this session")

@@ -1,0 +1,22 @@
+# Render every token before installing. This service never owns tmux/workers.
+[Unit]
+Description=Muxpilot private project operation service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@RUN_USER@@
+Group=@@RUN_GROUP@@
+WorkingDirectory=@@APP_DIR@@
+ExecStart=@@APP_DIR@@/.venv/bin/python -m muxpilot.service --config @@CONFIG_FILE@@
+Restart=on-failure
+RestartSec=2
+KillMode=process
+KillSignal=SIGINT
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

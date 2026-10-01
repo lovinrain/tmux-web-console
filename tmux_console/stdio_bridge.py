@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -27,8 +28,30 @@ from .stdio_runner import (
 
 
 def is_lightweight_probe(command: list[str]) -> bool:
-    """Exact help/version probes delegate locally without creating a tmux pane."""
-    return len(command) == 2 and command[1] in {"--version", "-V", "--help", "-h"}
+    """One help/version flag, optionally decorated by the qualified helper gate.
+
+    Runtime profile fixed arguments must not turn provider discovery into an
+    execution. Only ``--disable multi_agent`` is qualified here; subcommands,
+    model/config flags, and arbitrary provider options still require task scope.
+    """
+    if not command or not command[0]:
+        return False
+    probe_seen = False
+    index = 1
+    while index < len(command):
+        argument = command[index]
+        if argument in {"--version", "-V", "--help", "-h"}:
+            if probe_seen:
+                return False
+            probe_seen = True
+            index += 1
+        elif argument == "--disable=multi_agent":
+            index += 1
+        elif argument == "--disable" and index + 1 < len(command) and command[index + 1] == "multi_agent":
+            index += 2
+        else:
+            return False
+    return probe_seen
 
 
 def _binary(stream):
@@ -42,7 +65,7 @@ def _descriptor(stream):
         return None
 
 
-def _relay(connection, stdin, stdout, stderr) -> int:
+def _relay(connection, stdin, stdout, stderr, output_observer=None) -> int:
     wire = Wire(connection)
     input_descriptor = _descriptor(stdin)
     output_streams = {b"O": stdout, b"D": stderr}
@@ -86,8 +109,11 @@ def _relay(connection, stdin, stdout, stderr) -> int:
                 return 128 + caught_signal
             for kind, descriptor in output_descriptors.items():
                 if descriptor is None and pending_outputs[kind]:
-                    output_streams[kind].write(bytes(pending_outputs[kind]))
+                    delivered = bytes(pending_outputs[kind])
+                    output_streams[kind].write(delivered)
                     output_streams[kind].flush()
+                    if output_observer is not None:
+                        output_observer("stdout" if kind == b"O" else "stderr", delivered)
                     pending_outputs[kind].clear()
             if result is not None and not any(pending_outputs.values()):
                 return result if result >= 0 else 128 - result
@@ -179,6 +205,8 @@ def _relay(connection, stdin, stdout, stderr) -> int:
                             count = os.write(key.fd, pending_outputs[key.data])
                         except BlockingIOError:
                             continue
+                        if output_observer is not None:
+                            output_observer("stdout" if key.data == b"O" else "stderr", bytes(pending_outputs[key.data][:count]))
                         del pending_outputs[key.data][:count]
     finally:
         for descriptor, blocking in previous_blocking.items():
@@ -198,6 +226,9 @@ def run(
     stdin=None,
     stdout=None,
     stderr=None,
+    output_observer=None,
+    mirror_secrets: tuple[bytes, ...] = (),
+    mirror_format: str | None = None,
 ) -> int:
     """Run a provider with unmodified binary stdio and caller argv/env/cwd.
 
@@ -209,6 +240,8 @@ def run(
         isinstance(arg, str) and "\0" not in arg for arg in command
     ):
         raise BridgeError("a valid provider command is required")
+    if mirror_format not in {None, "codex-app-server-v1"}:
+        raise BridgeError("unsupported terminal mirror format")
     stdin = _binary(sys.stdin if stdin is None else stdin)
     stdout = _binary(sys.stdout if stdout is None else stdout)
     stderr = _binary(sys.stderr if stderr is None else stderr)
@@ -256,7 +289,9 @@ def run(
                         "Muxdeck stdio runner belongs to a different OS user"
                     )
                 config = json.dumps(
-                    {"command": command, "cwd": cwd, "environment": environment},
+                    {"command": command, "cwd": cwd, "environment": environment,
+                     "mirror_secrets_base64": [base64.b64encode(value).decode() for value in mirror_secrets],
+                     "mirror_format": mirror_format},
                     ensure_ascii=True,
                 ).encode()
                 # Send the private launch config before switching to the data
@@ -267,4 +302,4 @@ def run(
                 if len(config) > FRAME_LIMIT:
                     raise BridgeError("Muxdeck stdio launch configuration is too large")
                 connection.sendall(HEADER.pack(b"C", len(config)) + config)
-                return _relay(connection, stdin, stdout, stderr)
+                return _relay(connection, stdin, stdout, stderr, output_observer)

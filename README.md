@@ -36,6 +36,10 @@ when you disconnect.
 Agent status detection supports Claude Code, Codex, GitHub Copilot CLI, Cursor
 Agent, and Grok Build. Ambiguous activity appears as **Unclear**.
 
+[Muxpilot](docs/muxpilot/README.md) adds a main-agent workflow using Multica's
+existing board, visible workers, and durable local recovery records. See its
+[short user guide](docs/muxpilot/USER_GUIDE.md) and current release status.
+
 ## See it in action
 
 ### File browser
@@ -123,6 +127,7 @@ observing a session used by another client.
 - [Usage, shortcuts, and configuration](docs/REFERENCE.md)
 - [Agent callback setup and posting reports](docs/AGENT_CALLBACKS.md)
 - [Agent orchestration and `muxdeckctl`](docs/AGENT_ORCHESTRATION.md)
+- [Muxpilot project coordination proposal and implementation plan](docs/muxpilot/README.md)
 - [Agent transcripts](docs/AGENT_TRANSCRIPTS.md), [submitted messages](docs/SUBMITTED_MESSAGES.md), and [saved scrollback](docs/SCROLLBACK.md)
 - [HTTP and WebSocket API](docs/API.md)
 - [Deployment, migration, and rollback](AGENT_DEPLOYMENT_GUIDE.md)
