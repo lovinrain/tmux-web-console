@@ -1392,6 +1392,34 @@ describe("App routing", () => {
     );
   });
 
+  it("keeps the active session's ready event unchecked until a fresh visit, then marks the next cycle", () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+    const working = { ...session("alpha", "$alpha"), agentState: "working" as const, agentStateChangedAt: 10 };
+    const ready = { ...working, agentState: "waiting_human" as const, agentStateChangedAt: 20 };
+    const beta = session("beta", "$beta");
+    act(() => reportKnownSessions?.([working, beta]));
+    fireEvent.click(screen.getByRole("tab", { name: /alpha/ }));
+    act(() => reportKnownSessions?.([ready, beta]));
+    const tab = screen.getByRole("tab", { name: /alpha/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAccessibleName(/ready, unchecked/);
+    expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
+    act(() => reportKnownSessions?.([ready, beta]));
+    expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
+
+    fireEvent.click(tab);
+    expect(tab.closest(".workspace-tab")).not.toHaveAttribute("data-ready-unchecked");
+    expect(reviewGlobalCallbackSessionMock).not.toHaveBeenCalled();
+    act(() => reportKnownSessions?.([{ ...working, agentStateChangedAt: 30 }, beta]));
+    act(() => reportKnownSessions?.([{ ...ready, agentStateChangedAt: 40 }, beta]));
+    expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
+    fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
+    act(() => navigateConsoleSessionHistory?.("back"));
+    expect(screen.getByRole("tab", { name: /alpha/ }).closest(".workspace-tab"))
+      .not.toHaveAttribute("data-ready-unchecked");
+  });
+
   it("rewrites an active renamed session and its exact ordered URL tabs", () => {
     const renamed = "renamed/name #1";
     replaceUrl(sessionUrl(

@@ -751,13 +751,18 @@ a live turn, so Muxdeck
 also reads its input controls and nearby running status. Its expandable agent
 list is excluded from those controls: long or wrapped task lists do not hide
 the interrupt hint, and a task description quoting that hint does not make an
-idle turn appear active. Other recognized static titles indicate that the
+idle turn appear active. Codex's recognized static titles indicate that the
 agent needs human input.
 Dead, stale, or unfamiliar signals are marked Unclear instead of being guessed.
 Grok Build is recognized when the active pane command is `grok`, which is also
 the command used to launch it normally. Its working title begins with an animated
-braille frame; its idle title is `grok` or ends in `- grok` after the conversation
-receives a title.
+braille frame, but the title can settle while a background terminal task is
+still running. Muxdeck also captures settled-title Grok panes and reads their
+current input controls, activity footer, and attached Tasks panel. An animated
+`Run` row means `Command running`; other active task rows keep the session
+`Working`. Completed task rows and historical transcript text do not count as
+live work. A captured idle input prompt is required for Ready; an unavailable
+or unrecognized screen remains Unclear.
 
 GitHub Copilot CLI is recognized by the standalone `copilot` command. The
 official npm launcher keeps `node` as tmux's foreground command while it runs the

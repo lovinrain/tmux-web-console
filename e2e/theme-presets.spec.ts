@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
+import { THEME_PALETTES } from "../src/themePresets";
+import type { Session } from "../src/types";
 
 const socket = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
 if (!socket?.startsWith("muxdeck-playwright-")) {
@@ -9,12 +11,18 @@ if (!socket?.startsWith("muxdeck-playwright-")) {
 const tmux = ["-L", socket];
 const sessionName = `muxdeck-theme-presets-${process.pid}`;
 const sessionUrl = `/mux/session/${sessionName}?tab=${sessionName}`;
+const createdSessions: string[] = [];
 
 async function choosePreset(page: Page, name: string): Promise<void> {
-  await page.getByRole("button", { name: "Choose themes", exact: true }).click();
+  const opener = page.getByRole("button", { name: "Choose themes", exact: true });
+  if (!await opener.isVisible()) {
+    await page.getByRole("button", { name: /Show all console controls/ }).click();
+  }
+  await opener.click();
   const dialog = page.getByRole("dialog", { name: "Themes", exact: true });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("radio", { name, exact: true }).check();
+  // A selected palette still needs a click to preview its dark/light mode.
+  await dialog.getByRole("radio", { name, exact: true }).click();
   await expect(dialog.getByRole("radio", { name, exact: true })).toBeChecked();
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
@@ -42,6 +50,7 @@ test.beforeAll(() => {
     ...tmux, "new-session", "-d", "-s", sessionName,
     "bash", "--noprofile", "--norc",
   ]);
+  createdSessions.push(sessionName);
 });
 
 test.beforeEach(async ({ context }) => {
@@ -51,10 +60,12 @@ test.beforeEach(async ({ context }) => {
 });
 
 test.afterAll(() => {
-  try {
-    execFileSync("tmux", [...tmux, "kill-session", "-t", `=${sessionName}`]);
-  } catch {
-    // Only this exact fixture session on the required disposable socket is eligible.
+  for (const name of createdSessions) {
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+    } catch {
+      // Only exact fixture sessions on the required disposable socket are eligible.
+    }
   }
 });
 
@@ -145,6 +156,93 @@ test("narrow theme chooser has accessible groups, keyboard selection, and Escape
   await expect(opener).toBeFocused();
 });
 
+test("unchecked ready tabs survive refresh, remain readable in every palette, and clear on a new visit", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical"));
+  const idleName = `${sessionName}-idle`;
+  execFileSync("tmux", [...tmux, "new-session", "-d", "-s", idleName, "bash", "--noprofile", "--norc"]);
+  createdSessions.push(idleName);
+  const inventory = await (await page.request.get("/mux/api/sessions")).json() as { sessions: Session[] };
+  const live = inventory.sessions.find((session) => session.name === sessionName)!;
+  expect(live).toBeDefined();
+  let snapshot: Session = { ...live, agentState: "working" };
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: { ...inventory, sessions: inventory.sessions.map((session) => session.name === sessionName ? snapshot : session) },
+  }));
+  await page.goto(`${sessionUrl}&tab=${idleName}`);
+  const tab = page.locator(`.workspace-tab[data-workspace-session-name="${sessionName}"]`);
+  await expect(tab.locator(".workspace-state-dot")).toHaveClass(/working/);
+  await tab.getByRole("tab").click();
+  snapshot = { ...snapshot, agentState: "waiting_human", agentStateChangedAt: live.agentStateChangedAt + 1 };
+  await expect(tab).toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
+  await expect(tab.getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(tab.getByRole("tab")).toHaveAccessibleName(/ready, unchecked/);
+  await page.reload();
+  await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await page.addStyleTag({ content: ".workspace-tab { transition: none !important; }" });
+
+  const colors: unknown[] = [];
+  for (const palette of THEME_PALETTES) {
+    await choosePreset(page, palette.name);
+    await expect(page.locator("html")).toHaveAttribute("data-palette", palette.id);
+    for (const selected of [true, false]) {
+      const presentation = await tab.evaluate((element, selected) => {
+        const wasActive = element.classList.contains("active");
+        element.classList.toggle("active", selected);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true })!;
+        const luminance = (color: string) => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          const channels = Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).map((channel) => {
+            const value = channel / 255;
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+          });
+          return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+        };
+        const ratio = (left: string, right: string) => {
+          const first = luminance(left), second = luminance(right);
+          return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+        };
+        const style = getComputedStyle(element);
+        const background = style.backgroundColor, border = style.borderTopColor;
+        const text = getComputedStyle(element.querySelector('[role="tab"]')!).color;
+        const marker = getComputedStyle(element.querySelector(".workspace-tab-ready-mark")!).backgroundColor;
+        element.removeAttribute("data-ready-unchecked");
+        const normalBackground = getComputedStyle(element).backgroundColor;
+        element.setAttribute("data-ready-unchecked", "true");
+        element.classList.toggle("active", wasActive);
+        return { background, normalBackground, border, text, textContrast: ratio(text, background), markerContrast: ratio(marker, background) };
+      }, selected);
+      expect(presentation.background, palette.name).not.toBe(presentation.normalBackground);
+      expect(presentation.textContrast, palette.name).toBeGreaterThanOrEqual(4.5);
+      expect(presentation.markerContrast, palette.name).toBeGreaterThanOrEqual(3);
+      colors.push({ palette: palette.id, active: selected, ...presentation });
+    }
+  }
+  await testInfo.attach("ready-tab-palette-colors", { body: JSON.stringify(colors, null, 2), contentType: "application/json" });
+  await page.screenshot({ path: testInfo.outputPath("ready-unchecked-rose-pine-dawn.png"), animations: "disabled" });
+
+  await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
+  await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "horizontal");
+  await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await expect(tab.locator(".workspace-tab-ready-mark")).toBeVisible();
+  await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
+  await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "vertical");
+  await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await page.screenshot({ path: testInfo.outputPath("ready-unchecked-side-tabs.png"), animations: "disabled" });
+
+  await tab.getByRole("tab").click({ modifiers: ["Control"] });
+  await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await tab.getByRole("tab").click();
+  await expect(tab).not.toHaveAttribute("data-ready-unchecked");
+  await page.reload();
+  await expect(tab.locator(".workspace-state-dot")).toHaveClass(/waiting_human/);
+  await expect(tab).not.toHaveAttribute("data-ready-unchecked");
+});
+
 test("live console applies presets without reconnecting, input, or tmux resizing", async ({ page }, testInfo) => {
   let terminalSocketCount = 0;
   let terminalSocketCloses = 0;
@@ -188,7 +286,7 @@ test("live console applies presets without reconnecting, input, or tmux resizing
 
   // On narrower desktops the chooser lives in the control tray. Its portal
   // must own clicks/Escape and return focus without hiding that opener.
-  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 900, height: 900 });
   const trayToggle = page.getByRole("button", { name: /Show all console controls/ });
   await trayToggle.click();
   const tray = page.getByRole("group", { name: "All console controls", exact: true });

@@ -1,0 +1,41 @@
+/* Loaded after the palette layer: every theme supplies its own amber, raised
+   surface, and text colors. Move selection keeps its existing treatment. */
+html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"]:not([data-tab-move-selected="true"]) {
+  background: color-mix(in srgb, var(--amber) 16%, var(--preset-raised));
+  border-color: var(--amber);
+}
+
+html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"]:not([data-tab-move-selected="true"]):is(.active, :hover) {
+  background: color-mix(in srgb, var(--amber) 22%, var(--preset-raised));
+  border-color: var(--amber);
+}
+
+html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] {
+  color: var(--preset-text);
+}
+
+.workspace-tab-ready-mark {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  background: var(--amber);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.workspace-tab-group-ready-count {
+  display: inline-flex;
+  min-width: 19px;
+  min-height: 19px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, var(--preset-raised));
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+}

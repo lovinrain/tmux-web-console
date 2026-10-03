@@ -44,6 +44,7 @@ import {
 } from "./api";
 import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
 import { useSessionNavigationHistory } from "./useSessionNavigationHistory";
+import { useSessionReadyAttention } from "./useSessionReadyAttention";
 import {
   ConsoleScreen,
   DEFAULT_CONSOLE_BAR_VISIBILITY,
@@ -946,6 +947,7 @@ function AppRoutes() {
   const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
     useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
+  const { uncheckedReadySessions, checkSessionReady } = useSessionReadyAttention(knownSessions);
   const [recoverableSessions, setRecoverableSessions] = useState<RecoverableSession[]>([]);
   const [pendingForgets, setPendingForgets] = useState<PendingForget[]>([]);
   const pendingForgetsRef = useRef<PendingForget[]>([]);
@@ -2519,6 +2521,7 @@ function AppRoutes() {
   ]);
 
   const openSession = useCallback((sessionName: string) => {
+    checkSessionReady(sessionName);
     const nextWorkspace = visitWorkspaceSession(workspace, sessionName);
     workspaceRef.current = nextWorkspace;
     setWorkspace(nextWorkspace);
@@ -2548,7 +2551,7 @@ function AppRoutes() {
       overrides,
     );
     syncLocation();
-  }, [pushLocation, replaceLocation, syncLocation, workspace]);
+  }, [checkSessionReady, pushLocation, replaceLocation, syncLocation, workspace]);
 
   const openSessionInput = useCallback((sessionName: string) => {
     setMobileConsoleMode("input");
@@ -2794,6 +2797,7 @@ function AppRoutes() {
     sessionName: string,
     nextWorkspace: SessionWorkspaceState,
   ) => {
+    checkSessionReady(sessionName);
     workspaceRef.current = nextWorkspace;
     const current = currentLocation();
     const route = parseSessionRoute(current.path);
@@ -2868,7 +2872,7 @@ function AppRoutes() {
       overrides,
     );
     syncLocation();
-  }, [replaceLocation, syncLocation]);
+  }, [checkSessionReady, replaceLocation, syncLocation]);
 
   const switchSession = useCallback((sessionName: string) => {
     const nextWorkspace = visitWorkspaceSession(workspaceRef.current, sessionName);
@@ -4593,6 +4597,7 @@ function AppRoutes() {
         groups={workspace.groups}
         sessionParents={workspace.parents}
         sessions={knownSessions}
+        uncheckedReadySessions={uncheckedReadySessions}
         recentsOpen={false}
         tabsVisible={consoleBars.sessionTabs}
         tabActionsVisible={desktopTabActionsVisible}
@@ -4842,6 +4847,7 @@ function AppRoutes() {
             groups={workspace.groups}
             sessionParents={workspace.parents}
             sessions={knownSessions}
+            uncheckedReadySessions={uncheckedReadySessions}
             recentsOpen={recentsOpen}
             tabsVisible={consoleBars.sessionTabs}
             tabActionsVisible={desktopTabActionsVisible}
@@ -4925,6 +4931,7 @@ function AppRoutes() {
             groups={workspace.groups}
             sessionParents={workspace.parents}
             sessions={knownSessions}
+            uncheckedReadySessions={uncheckedReadySessions}
             recentsOpen={newSessionRoute.recentsOpen}
             newSessionActive
             tabActionsVisible={desktopTabActionsVisible}

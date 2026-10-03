@@ -69,6 +69,14 @@ across callback scopes and browsers and survive reloads and service restarts.
 
 See which agents are ready, read their reports, and review them from one queue.
 
+Session tabs also show an amber background and a small diamond when observed
+work becomes ready and you have not checked the session since. Open the tab by
+clicking it or using session navigation to clear that indicator; a tab that was
+already selected needs a fresh visit. Collapsed groups show an unchecked count.
+The indicator uses the selected theme's colors and survives refreshes in that
+browser profile, independently of callback-message review. It tracks observed
+work episodes; a ready prompt can also mean the agent needs your approval.
+
 ![Global callback list with agent reports, readiness, search, sorting, and review controls](docs/images/muxdeck-callback-list.png)
 
 ### Dashboard and multi-pane workspaces

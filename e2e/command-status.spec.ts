@@ -18,10 +18,11 @@ const sessions = {
   working: `muxdeck-thinking-${process.pid}`,
   ready: `muxdeck-ready-${process.pid}`,
 };
+const grokSession = `muxdeck-grok-command-${process.pid}`;
 const createdSessions: string[] = [];
 const workspaceIds: string[] = [];
 
-// A passive rendered Claude fixture exercises the real tmux capture, detector,
+// Passive rendered agent fixtures exercise the real tmux capture, detector,
 // API, and SSE path. A state file changes the screen; no terminal input is sent.
 const fixtureScript = `
 import ctypes
@@ -29,19 +30,31 @@ import pathlib
 import sys
 import time
 
-assert ctypes.CDLL(None).prctl(15, b"claude", 0, 0, 0) == 0
+provider = sys.argv[2] if len(sys.argv) > 2 else "claude"
+assert ctypes.CDLL(None).prctl(15, provider.encode(), 0, 0, 0) == 0
 state_file = pathlib.Path(sys.argv[1])
 previous = None
 last_render = 0
 while True:
     state = state_file.read_text().strip()
     now = time.monotonic()
-    if state != previous or (state == "working" and now - last_render >= 1):
-        title = "◐ Fixture thinking" if state == "working" else "✳ Fixture ready"
-        footer = "⏵⏵ bypass permissions on (shift+tab to cycle)"
-        if state == "command":
-            footer += " · 1 shell · ↓ to manage"
-        screen = "● Command started.\\n\\n❯ \\n" + footer
+    if state != previous or (state in {"working", "command"} and now - last_render >= 1):
+        if provider == "grok":
+            title = "⠸ - Waiting for response… - grok" if state == "working" else "Fixture task - grok"
+            footer = "Shift+Tab:mode │ Ctrl+.:shortcuts"
+            activity = "◆ Finished the task\\n"
+            if state == "working":
+                activity = "⠸ Waiting for response… 2s      5m ⇣192k [stop]\\n"
+                footer = "Shift+Tab:mode │ Ctrl+c:cancel │ Ctrl+.:shortcuts"
+            elif state == "command":
+                activity = "⠸ Deploy fixture service… 37s      5m ⇣192k [stop]\\n▾ Tasks 1\\n⁙ Run Deploy fixture service 39s\\n"
+            screen = activity + "╭────────────────────────╮\\n│ ❯                     │\\n╰─── Grok 4.7 Fast ───────╯\\n" + footer
+        else:
+            title = "◐ Fixture thinking" if state == "working" else "✳ Fixture ready"
+            footer = "⏵⏵ bypass permissions on (shift+tab to cycle)"
+            if state == "command":
+                footer += " · 1 shell · ↓ to manage"
+            screen = "● Command started.\\n\\n❯ \\n" + footer
         sys.stdout.write("\\033]2;" + title + "\\007\\033[2J\\033[H" + screen + "\\n")
         sys.stdout.flush()
         previous = state
@@ -64,6 +77,13 @@ test.beforeAll(() => {
     ]);
     createdSessions.push(name);
   }
+  const grokStateFile = join(fixtureDirectory, `${grokSession}.state`);
+  writeFileSync(grokStateFile, "working");
+  execFileSync("tmux", [
+    ...tmux, "new-session", "-d", "-s", grokSession, "-x", "160", "-y", "30",
+    "bash", "--noprofile", "--norc", "-c", 'exec -a grok python3 "$@"', "grok", script, grokStateFile, "grok",
+  ]);
+  createdSessions.push(grokSession);
 });
 
 test.beforeEach(async ({ context }) => {
@@ -204,4 +224,49 @@ test("a real command status stays blue and busy until its shell finishes, includ
   await expect(callbackRow(workspacePage, sessions.command).locator(".workspace-callback-status"))
     .toHaveText("Ready for review");
   await expect(workspacePage.locator(".workspace-callback-card small")).toHaveText(["Global 2/3", "Local 2/3"]);
+});
+
+test("Grok background commands with settled titles stay busy and highlight only after finishing", async ({
+  page, context,
+}, testInfo) => {
+  test.setTimeout(60_000);
+  const readState = async () => {
+    const body = await (await context.request.get("/mux/api/sessions")).json();
+    return body.sessions.find((session: { name: string }) => session.name === grokSession)?.agentState;
+  };
+  await expect.poll(readState).toBe("working");
+  const response = await context.request.post("/mux/api/workspaces", {
+    data: { name: "Grok command readiness", tabs: [grokSession, sessions.ready], activeSession: grokSession },
+  });
+  expect(response.ok()).toBe(true);
+  const workspace = (await response.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  expect((await context.request.post(`/mux/api/workspaces/${workspace.id}/callback-sessions`, {
+    data: { sessions: [grokSession], sessionRevision: workspace.sessionRevision },
+  })).ok()).toBe(true);
+  await page.goto(`/mux/session/${grokSession}?workspace=${workspace.id}`);
+  const grokTab = tab(page, grokSession);
+  await expect(grokTab.locator(".workspace-state-dot")).toHaveClass(/working/);
+  // Visiting while it works must not acknowledge the later Ready event.
+  await grokTab.getByRole("tab").click();
+  const show = page.getByRole("button", { name: "Show callback list", exact: true });
+  if (await show.count()) await show.click();
+  await page.getByRole("button", { name: "Global callback scope", exact: true }).click();
+
+  writeFileSync(join(fixtureDirectory, `${grokSession}.state`), "command");
+  await expect.poll(readState).toBe("running_command");
+  await expect(grokTab.locator(".workspace-state-dot")).toHaveClass(/running_command/, { timeout: 10_000 });
+  await expect(callbackRow(page, grokSession).locator(".workspace-callback-status")).toHaveText("Command running");
+  await expect(page.locator(".workspace-callback-card small")).toHaveText(["Global 0/1", "Local 0/1"]);
+  await expect(grokTab).not.toHaveAttribute("data-ready-unchecked");
+
+  writeFileSync(join(fixtureDirectory, `${grokSession}.state`), "ready");
+  await expect.poll(readState).toBe("waiting_human");
+  await expect(grokTab).toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
+  await expect(callbackRow(page, grokSession).locator(".workspace-callback-status")).toHaveText("Ready for review");
+  await expect(page.locator(".workspace-callback-card small")).toHaveText(["Global 1/1", "Local 1/1"]);
+  await page.screenshot({ path: testInfo.outputPath("grok-task-finished-unchecked.png"), animations: "disabled" });
+  await grokTab.getByRole("tab").click();
+  await expect(grokTab).not.toHaveAttribute("data-ready-unchecked");
+  await expect(callbackRow(page, grokSession).locator(".workspace-callback-status")).toHaveText("Ready for review");
 });

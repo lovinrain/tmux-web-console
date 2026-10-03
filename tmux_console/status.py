@@ -129,6 +129,24 @@ CURSOR_DECISION_PATTERN = re.compile(
     r"waiting for decision|approve mode switch", re.IGNORECASE
 )
 CURSOR_FOOTER_LINES = 12
+# Grok can settle its title while a background Run task is still executing.
+# Inspect the input controls and the task panel attached immediately above them
+# rather than interpreting that title change as a completed turn.
+GROK_PROMPT_PATTERN = re.compile(r"^\s*│\s*❯(?:\s|$)")
+GROK_INPUT_FOOTER_PATTERN = re.compile(
+    r"\bShift\+Tab:mode\b.*\bCtrl\+\.:shortcuts\b", re.IGNORECASE
+)
+GROK_RUNNING_CONTROL_PATTERN = re.compile(
+    r"\b(?:Ctrl\+c:cancel|Enter:queue)\b", re.IGNORECASE
+)
+GROK_LIVE_STATUS_PATTERN = re.compile(
+    r"^\s*[\u2801-\u28ff]\s+\S[^\n]*\[stop\]\s*$"
+)
+GROK_TASK_HEADER_PATTERN = re.compile(r"^\s*[▾▸]\s+Tasks\s+\d+\s*$")
+GROK_WORKING_TASK_FRAMES = frozenset("⋅:⸬⁙")
+GROK_TASK_ROW_PATTERN = re.compile(
+    r"^\s*(?P<frame>[⋅:⸬⁙●✓√])\s+(?P<kind>\S+)\s+\S.*$"
+)
 SCREEN_TAIL_LINES = 20
 ACTIVITY_STALE_SECONDS = 15
 
@@ -466,6 +484,84 @@ def _classify_cursor_state(
     return AgentState("working", "Cursor is running a turn")
 
 
+def _grok_screen_state(screen: str) -> AgentState | None:
+    lines = _rendered_lines(screen)
+    prompt = next(
+        (index for index in reversed(range(len(lines)))
+         if GROK_PROMPT_PATTERN.match(lines[index])),
+        -1,
+    )
+    if prompt < 0:
+        return None
+    bottom = next(
+        (index for index in reversed(range(prompt + 1, len(lines)))
+         if lines[index].lstrip().startswith("╰")),
+        -1,
+    )
+    if bottom < 0:
+        return None
+    top = prompt - 1 if prompt and lines[prompt - 1].lstrip().startswith("╭") else prompt
+    controls = " ".join(lines[bottom + 1 :])
+
+    # Read only a contiguous task panel attached to this input box. Completed
+    # rows use settled glyphs; the four working glyphs animate during a task.
+    # Scan all its rows so a long panel cannot hide a running command.
+    tasks: list[re.Match[str]] = []
+    for index in reversed(range(top)):
+        line = lines[index]
+        if not line.strip():
+            continue
+        if GROK_TASK_HEADER_PATTERN.fullmatch(line):
+            running = [task for task in tasks
+                       if task.group("frame") in GROK_WORKING_TASK_FRAMES]
+            if any(task.group("kind").casefold() == "run" for task in running):
+                return AgentState("running_command", "Grok has a running terminal task")
+            if running:
+                return AgentState("working", "Grok has active background tasks")
+            break
+        match = GROK_TASK_ROW_PATTERN.fullmatch(line)
+        if not match:
+            break
+        tasks.append(match)
+
+    if GROK_RUNNING_CONTROL_PATTERN.search(controls):
+        return AgentState("working", "Grok is running a turn")
+    for line in reversed(lines[:top]):
+        if GROK_LIVE_STATUS_PATTERN.fullmatch(line):
+            return AgentState("working", "Grok has a live activity footer")
+        # A new transcript block separates historical status text from the
+        # current footer, including when the transcript quotes an old spinner.
+        if line.lstrip().startswith(("◆", "┃", "│ ❯")):
+            break
+    if GROK_INPUT_FOOTER_PATTERN.search(controls):
+        return AgentState("waiting_human", "Grok is paused at its input prompt")
+    return None
+
+
+def _classify_grok_state(
+    pane: Pane, visible_screen: str | None, now: float | None
+) -> AgentState:
+    screen_state = _grok_screen_state(visible_screen) if visible_screen is not None else None
+    live_title = _title_has_live_activity("grok", pane.title)
+    if live_title or (screen_state and screen_state.name != "waiting_human"):
+        if _activity_is_stale(pane, now):
+            return AgentState("unknown", "Agent activity indicator is stale")
+        if screen_state and screen_state.name == "running_command":
+            return screen_state
+        if visible_screen:
+            command_wait = _command_wait_state(visible_screen)
+            if command_wait:
+                return command_wait
+        return screen_state if screen_state and screen_state.name == "working" else AgentState(
+            "working", "Live agent activity indicator"
+        )
+    if screen_state:
+        return screen_state
+    if visible_screen is None:
+        return AgentState("unknown", "Grok screen capture is unavailable")
+    return AgentState("unknown", "Grok footer state signal is not recognized")
+
+
 def classify_agent_state(
     pane: Pane | None,
     visible_screen: str | None = None,
@@ -486,6 +582,8 @@ def classify_agent_state(
         return _classify_cursor_state(pane, visible_screen, now)
     if copilot_pane:
         return _classify_copilot_state(pane, visible_screen, now)
+    if command == "grok":
+        return _classify_grok_state(pane, visible_screen, now)
 
     if command == "claude" and visible_screen:
         if _claude_has_background_shell(visible_screen):
@@ -545,11 +643,6 @@ def classify_agent_state(
             return AgentState("waiting_human", "Claude is paused at its input prompt")
     if command == "codex" and title:
         return AgentState("waiting_human", "Codex is paused at its input prompt")
-    normalized_title = title.casefold()
-    if command == "grok" and (
-        normalized_title == "grok" or normalized_title.endswith(" - grok")
-    ):
-        return AgentState("waiting_human", "Grok is paused at its input prompt")
     return AgentState("unknown", "Agent state signal is not recognized")
 
 
@@ -561,6 +654,7 @@ def _needs_screen_capture(pane: Pane, state: AgentState) -> bool:
         state.name in {"working", "running_command"}
         or _is_copilot_pane(command, pane.title)
         or command in CURSOR_COMMANDS
+        or command == "grok"
         or (command == "claude" and _title_has_live_activity(command, pane.title))
         or (
             command == "claude"

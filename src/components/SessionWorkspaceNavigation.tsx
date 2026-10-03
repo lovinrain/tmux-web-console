@@ -97,6 +97,7 @@ export interface SessionWorkspaceNavigationProps {
   onChangeSeparator?: (sessionName: string, add: boolean, side?: "before" | "after") => void;
   onCrossSeparator?: (crossing: SeparatorCrossing) => void;
   sessions: Session[];
+  uncheckedReadySessions?: ReadonlySet<string>;
   recentsOpen: boolean;
   orientation?: WorkspaceTabOrientation;
   desktopTabRailWidth?: number;
@@ -3322,6 +3323,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const agentLabel = sessionAgentInfo(session).label;
     const tree = sessionTreeContext(sessionName, sessionParents, sessionsByName);
     const active = !newSessionActive && sessionName === activeSession;
+    const readyUnchecked = props.uncheckedReadySessions?.has(sessionName) ?? false;
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
     const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
     const previousMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, -1);
@@ -3352,6 +3354,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       <div
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
+        data-ready-unchecked={readyUnchecked ? "true" : undefined}
         data-session-parent={tree?.parentName}
         data-session-depth={tree?.depth}
         style={sessionTreeStyle(tree)}
@@ -3381,9 +3384,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           role="tab"
           aria-selected={active}
           aria-controls={active ? "muxdeck-active-console" : undefined}
-          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${selectedForMove ? ", selected for moving" : ""}`}
+          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${readyUnchecked ? ", ready, unchecked" : ""}${selectedForMove ? ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
-          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
+          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${readyUnchecked ? " · Ready, unchecked — open this session to check it" : ""}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
           aria-description={`${agentLabel}. ${tree ? `${tree.description} ` : ""}${canDragTab
@@ -3438,6 +3441,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           />
           <span className="workspace-tab-title">{title}</span>
           <SessionAgentIcon session={session} />
+          {readyUnchecked && <span className="workspace-tab-ready-mark" aria-hidden="true" />}
         </button>
         {tree && onReparentSession && props.onTransferSelectedSessions && (
           <button
@@ -3862,8 +3866,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 const groupEnd = groupStart + group.tabs.length - 1;
                 const visibleTabs = group.collapsed ? [] : group.tabs;
                 const groupActive = !newSessionActive && Boolean(activeSession && group.tabs.includes(activeSession));
+                const uncheckedCount = group.tabs.filter((name) => props.uncheckedReadySessions?.has(name)).length;
                 const groupHint = [
                   groupActive ? `Active session: ${tabTitle(activeSession!, sessionsByName)}.` : "",
+                  uncheckedCount ? `${uncheckedCount} ready, unchecked ${uncheckedCount === 1 ? "session" : "sessions"}.` : "",
                   groupDragEnabled ? "Drag this header to move the whole group, including nested sessions." : "",
                 ].filter(Boolean).join(" ");
                 const dropEdge = workspaceTabDrag?.target?.kind === "group"
@@ -3912,6 +3918,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                           <FolderIcon />
                           <strong>{group.name}</strong>
                           <small>{group.tabs.length}</small>
+                          {uncheckedCount > 0 && <span className="workspace-tab-group-ready-count"
+                            aria-label={`${uncheckedCount} ready, unchecked ${uncheckedCount === 1 ? "session" : "sessions"}`}>{uncheckedCount}</span>}
                           <ArrowDownIcon aria-hidden="true" />
                         </button>
                       ) : (
@@ -3920,6 +3928,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                           <FolderIcon />
                           <strong>{group.name}</strong>
                           <small>{group.tabs.length}</small>
+                          {uncheckedCount > 0 && <span className="workspace-tab-group-ready-count"
+                            aria-label={`${uncheckedCount} ready, unchecked ${uncheckedCount === 1 ? "session" : "sessions"}`}>{uncheckedCount}</span>}
                         </span>
                       )}
                       {onMoveTabGroup && (

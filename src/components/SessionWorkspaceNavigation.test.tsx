@@ -170,6 +170,29 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it("exposes unchecked status on tabs and collapsed groups without acknowledging move selection or expansion", () => {
+    const props = navigationProps({
+      orientation: "vertical", uncheckedReadySessions: new Set(["alpha", "beta"]),
+      groups: [{ id: "review", name: "Review", color: "blue", collapsed: true, tabs: ["alpha", "beta"] }],
+      onToggleTabGroup: vi.fn(), onMoveTab: vi.fn(), onMoveTabs: vi.fn(),
+    });
+    const { rerender } = render(<SessionWorkspaceNavigation {...props} />);
+    const group = screen.getByRole("button", { name: "Expand Review tab group" });
+    expect(within(group).getByLabelText("2 ready, unchecked sessions")).toBeVisible();
+    fireEvent.click(group);
+    expect(props.onToggleTabGroup).toHaveBeenCalledWith("review", false);
+    expect(props.onSelect).not.toHaveBeenCalled();
+
+    rerender(<SessionWorkspaceNavigation {...props} groups={[{ ...props.groups![0], collapsed: false }]} />);
+    const tab = screen.getByRole("tab", { name: /Alpha control.*ready, unchecked/ });
+    expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
+    expect(tab.querySelector(".workspace-tab-ready-mark")).toBeInTheDocument();
+    fireEvent.click(tab, { ctrlKey: true });
+    expect(props.onSelect).not.toHaveBeenCalled();
+    fireEvent.click(tab);
+    expect(props.onSelect).toHaveBeenCalledWith("alpha");
+  });
+
   it("quickly finds and adds a running session without leaving the workspace", () => {
     const onAddSession = vi.fn();
     render(

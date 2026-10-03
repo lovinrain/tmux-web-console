@@ -1640,7 +1640,25 @@ def test_agent_state_is_conservative_for_stale_or_unknown_signals():
     assert classify_agent_state(agent_pane(command="bash"), now=1000).name == "other"
 
 
-def test_grok_agent_state_follows_its_tmux_title_signals():
+GROK_IDLE_SCREEN = (
+    "  ╭─────────────────────────╮\n"
+    "  │ ❯                      │\n"
+    "  ╰──── Grok 4.7 Fast ──────╯\n"
+    "  Shift+Tab:mode  │  Ctrl+.:shortcuts\n"
+)
+GROK_COMMAND_SCREEN = (
+    "  ◆ Task started: Deploy sample service\n\n"
+    "  ⠸ Deploy sample service… 37s       5m13s ⇣192k [stop]\n"
+    "  Help improve Grok                 [Opt out] [Opt in]\n"
+    "  Off by default. Change anytime via settings.\n"
+    "  Read Terms and Privacy Policy.\n"
+    "  ▾ Tasks 1\n"
+    "  ⁙ Run Deploy sample service 39s\n"
+    + GROK_IDLE_SCREEN
+)
+
+
+def test_grok_agent_state_uses_live_titles_and_captured_idle_prompts():
     working = agent_pane(
         command="grok", title="\u2839 - Waiting for response\u2026 - grok"
     )
@@ -1660,7 +1678,9 @@ def test_grok_agent_state_follows_its_tmux_title_signals():
     for idle_title in ("grok", "Review Grok support - grok"):
         assert (
             classify_agent_state(
-                agent_pane(command="grok", title=idle_title), now=1000
+                agent_pane(command="grok", title=idle_title),
+                visible_screen=GROK_IDLE_SCREEN,
+                now=1000,
             ).name
             == "waiting_human"
         )
@@ -1674,6 +1694,104 @@ def test_grok_agent_state_follows_its_tmux_title_signals():
         classify_agent_state(agent_pane(command="grok", title=""), now=1000).name
         == "unknown"
     )
+
+
+@pytest.mark.parametrize("frame", ["⋅", ":", "⸬", "⁙"])
+def test_grok_running_terminal_tasks_outrank_a_settled_title(frame: str):
+    # Observed live: Grok settles its title and removes Ctrl+C while the Run
+    # task, its elapsed counter, and the current [stop] spinner remain active.
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Deploy sample service - grok"),
+        visible_screen=GROK_COMMAND_SCREEN.replace("⁙ Run", f"{frame} Run"),
+        now=1000,
+    )
+
+    assert state.name == "running_command"
+    assert state.reason == "Grok has a running terminal task"
+
+
+def test_grok_dense_task_panel_does_not_hide_a_running_command():
+    tasks = "  ▾ Tasks 41\n  ⁙ Run Deploy sample service 39s\n" + "".join(
+        f"  ● Run Completed task {index} 1s\n" for index in range(40)
+    )
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Deploy sample service - grok"),
+        visible_screen=tasks + GROK_IDLE_SCREEN + "\n" * 40,
+        now=1000,
+    )
+
+    assert state.name == "running_command"
+
+
+def test_grok_background_agent_tasks_remain_working():
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Review sample service - grok"),
+        visible_screen="  ▾ Tasks 1\n  ⁙ Agent Review sample service 39s\n" + GROK_IDLE_SCREEN,
+        now=1000,
+    )
+
+    assert state.name == "working"
+
+
+def test_grok_activity_footer_keeps_a_collapsed_task_panel_working():
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Deploy sample service - grok"),
+        visible_screen=GROK_COMMAND_SCREEN.replace(
+            "  ▾ Tasks 1\n  ⁙ Run Deploy sample service 39s\n", "  ▸ Tasks 1\n"
+        ),
+        now=1000,
+    )
+
+    assert state.name == "working"
+
+
+@pytest.mark.parametrize("control", ["Ctrl+c:cancel", "Enter:queue"])
+def test_grok_running_input_controls_outrank_a_settled_title(control: str):
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Review sample service - grok"),
+        visible_screen=GROK_IDLE_SCREEN.replace("Shift+Tab:mode", f"{control} │ Shift+Tab:mode"),
+        now=1000,
+    )
+
+    assert state.name == "working"
+
+
+def test_grok_completed_tasks_and_quoted_activity_do_not_hide_an_idle_prompt():
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Review sample service - grok"),
+        visible_screen=(
+            "  ◆ Older transcript quotes the UI\n"
+            "  ⠸ Deploy sample service… 37s       5m13s ⇣192k [stop]\n"
+            "  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+.:shortcuts\n"
+            "  ◆ Finished the review\n"
+            "  ▾ Tasks 1\n  ● Run Deploy sample service 40s\n"
+            + GROK_IDLE_SCREEN
+        ),
+        now=1000,
+    )
+
+    assert state.name == "waiting_human"
+
+
+@pytest.mark.parametrize("screen", [None, "", "Task complete"])
+def test_grok_requires_a_recognized_screen_before_reporting_ready(screen: str | None):
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Review sample service - grok"),
+        visible_screen=screen,
+        now=1000,
+    )
+
+    assert state.name == "unknown"
+
+
+def test_grok_stale_command_activity_stays_unclear_instead_of_ready():
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Deploy sample service - grok", activity=900),
+        visible_screen=GROK_COMMAND_SCREEN,
+        now=1000,
+    )
+
+    assert state.name == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -2068,7 +2186,7 @@ async def test_detect_sessions_captures_plain_title_claude_panes():
     assert tmux.captured == [claude.id]
 
 
-async def test_detect_sessions_captures_only_working_grok_panes():
+async def test_detect_sessions_captures_grok_panes_even_after_their_titles_settle():
     working = agent_pane(
         id="%45",
         command="grok",
@@ -2076,7 +2194,15 @@ async def test_detect_sessions_captures_only_working_grok_panes():
         activity=int(time.time()),
     )
     idle = agent_pane(id="%46", command="grok", title="Grok task - grok")
-    tmux = RecordingTmux({working.id: "Waiting for background terminal"})
+    command = agent_pane(
+        id="%50", command="grok", title="Deploy sample service - grok",
+        activity=int(time.time()),
+    )
+    tmux = RecordingTmux({
+        working.id: "Waiting for background terminal",
+        idle.id: GROK_IDLE_SCREEN,
+        command.id: GROK_COMMAND_SCREEN,
+    })
     sessions = [
         Session(
             name="grok-working",
@@ -2094,6 +2220,14 @@ async def test_detect_sessions_captures_only_working_grok_panes():
             created=1,
             panes=[idle],
         ),
+        Session(
+            name="grok-command",
+            id="$8",
+            windows=1,
+            attached=0,
+            created=1,
+            panes=[command],
+        ),
     ]
 
     states = await AgentStateDetector().detect_sessions(
@@ -2102,7 +2236,23 @@ async def test_detect_sessions_captures_only_working_grok_panes():
 
     assert states["grok-working"].name == "running_command"
     assert states["grok-idle"].name == "waiting_human"
-    assert tmux.captured == [working.id]
+    assert states["grok-command"].name == "running_command"
+    assert tmux.captured == [working.id, idle.id, command.id]
+
+
+async def test_detect_sessions_grok_capture_failure_does_not_report_ready():
+    class UnavailableTmux:
+        async def capture_visible(self, pane_id: str) -> str:
+            raise TmuxError("capture unavailable")
+
+    sessions = [Session(
+        name="grok-command", id="$8", windows=1, attached=0, created=1,
+        panes=[agent_pane(command="grok", title="Deploy sample service - grok")],
+    )]
+
+    states = await AgentStateDetector().detect_sessions(cast(TmuxClient, UnavailableTmux()), sessions)
+
+    assert states["grok-command"].name == "unknown"
 
 
 @pytest.mark.parametrize(
