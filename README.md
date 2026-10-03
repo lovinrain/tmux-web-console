@@ -69,7 +69,7 @@ across callback scopes and browsers and survive reloads and service restarts.
 
 See which agents are ready, read their reports, and review them from one queue.
 
-Session tabs also show an amber background when observed work becomes ready
+Session tabs also show a blue background when observed work becomes ready
 and you have not checked the session since. Open the tab by
 clicking it or using session navigation to clear that indicator; a tab that was
 already selected needs a fresh visit. Collapsed groups show an unchecked count.

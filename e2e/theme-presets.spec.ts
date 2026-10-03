@@ -156,7 +156,7 @@ test("narrow theme chooser has accessible groups, keyboard selection, and Escape
   await expect(opener).toBeFocused();
 });
 
-test("unchecked ready tabs survive refresh, remain readable in every palette, and clear on a new visit", async ({ page }, testInfo) => {
+test("unchecked ready tabs survive refresh, contrast with selection in every palette, and clear on a new visit", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   await page.addInitScript(() => localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical"));
   const idleName = `${sessionName}-idle`;
@@ -211,12 +211,20 @@ test("unchecked ready tabs survive refresh, remain readable in every palette, an
         const text = getComputedStyle(element.querySelector('[role="tab"]')!).color;
         element.removeAttribute("data-ready-unchecked");
         const normalBackground = getComputedStyle(element).backgroundColor;
+        element.classList.add("active");
+        const selectedBackground = getComputedStyle(element).backgroundColor;
+        element.classList.toggle("active", selected);
         element.setAttribute("data-ready-unchecked", "true");
         element.classList.toggle("active", wasActive);
-        return { background, normalBackground, border, text, textContrast: ratio(text, background) };
+        return {
+          background, normalBackground, selectedBackground, border, text,
+          textContrast: ratio(text, background),
+          selectedContrast: ratio(background, selectedBackground),
+        };
       }, selected);
       expect(presentation.background, palette.name).not.toBe(presentation.normalBackground);
       expect(presentation.textContrast, palette.name).toBeGreaterThanOrEqual(4.5);
+      expect(presentation.selectedContrast, palette.name).toBeGreaterThanOrEqual(1.25);
       colors.push({ palette: palette.id, active: selected, ...presentation });
     }
   }

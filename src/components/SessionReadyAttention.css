@@ -1,17 +1,22 @@
-/* Loaded after the palette layer: every theme supplies its own amber, raised
-   surface, and text colors. Move selection keeps its existing treatment. */
+/* Loaded after the palette layer. A stronger blue fill separates unchecked
+   readiness from the lighter selected-tab fill in every palette. */
 html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"]:not([data-tab-move-selected="true"]) {
-  background: color-mix(in srgb, var(--amber) 16%, var(--preset-raised));
-  border-color: var(--amber);
+  background: color-mix(in srgb, var(--blue) 32%, var(--preset-raised));
+  border-color: var(--blue);
 }
 
 html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"]:not([data-tab-move-selected="true"]):is(.active, :hover) {
-  background: color-mix(in srgb, var(--amber) 22%, var(--preset-raised));
-  border-color: var(--amber);
+  background: color-mix(in srgb, var(--blue) 36%, var(--preset-raised));
+  border-color: var(--blue);
 }
 
 html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] {
   color: var(--preset-text);
+}
+
+/* Darken light-palette labels slightly to preserve contrast on the blue fill. */
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] {
+  color: color-mix(in srgb, var(--preset-text) 85%, #000);
 }
 
 .workspace-tab-group-ready-count {
@@ -22,9 +27,9 @@ html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-u
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 12%, var(--preset-raised));
-  border: 1px solid var(--amber);
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 12%, var(--preset-raised));
+  border: 1px solid var(--blue);
   border-radius: 999px;
   font-size: 10px;
   line-height: 1;
