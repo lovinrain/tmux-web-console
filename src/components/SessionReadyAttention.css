@@ -1,7 +1,10 @@
-/* Emphasize only the session name so readiness preserves the selected row's
+/* Emphasize and outline the session name so readiness preserves the selected row's
    background, border, and marker. Adjust palette blue for text contrast. */
 html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] > .workspace-tab-title {
+  padding: 1px 4px;
   color: color-mix(in srgb, var(--blue) 60%, #fff);
+  border: 1px solid currentColor;
+  border-radius: 2px;
   font-weight: 700;
 }
 
