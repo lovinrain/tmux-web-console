@@ -186,7 +186,7 @@ describe("SessionWorkspaceNavigation", () => {
     rerender(<SessionWorkspaceNavigation {...props} groups={[{ ...props.groups![0], collapsed: false }]} />);
     const tab = screen.getByRole("tab", { name: /Alpha control.*ready, unchecked/ });
     expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
-    expect(tab.querySelector(".workspace-tab-ready-mark")).toBeInTheDocument();
+    expect(tab.querySelector(".workspace-tab-ready-mark")).not.toBeInTheDocument();
     fireEvent.click(tab, { ctrlKey: true });
     expect(props.onSelect).not.toHaveBeenCalled();
     fireEvent.click(tab);

@@ -14,16 +14,6 @@ html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-u
   color: var(--preset-text);
 }
 
-.workspace-tab-ready-mark {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  margin-left: auto;
-  background: var(--amber);
-  border-radius: 2px;
-  transform: rotate(45deg);
-}
-
 .workspace-tab-group-ready-count {
   display: inline-flex;
   min-width: 19px;

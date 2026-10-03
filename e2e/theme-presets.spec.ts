@@ -209,16 +209,14 @@ test("unchecked ready tabs survive refresh, remain readable in every palette, an
         const style = getComputedStyle(element);
         const background = style.backgroundColor, border = style.borderTopColor;
         const text = getComputedStyle(element.querySelector('[role="tab"]')!).color;
-        const marker = getComputedStyle(element.querySelector(".workspace-tab-ready-mark")!).backgroundColor;
         element.removeAttribute("data-ready-unchecked");
         const normalBackground = getComputedStyle(element).backgroundColor;
         element.setAttribute("data-ready-unchecked", "true");
         element.classList.toggle("active", wasActive);
-        return { background, normalBackground, border, text, textContrast: ratio(text, background), markerContrast: ratio(marker, background) };
+        return { background, normalBackground, border, text, textContrast: ratio(text, background) };
       }, selected);
       expect(presentation.background, palette.name).not.toBe(presentation.normalBackground);
       expect(presentation.textContrast, palette.name).toBeGreaterThanOrEqual(4.5);
-      expect(presentation.markerContrast, palette.name).toBeGreaterThanOrEqual(3);
       colors.push({ palette: palette.id, active: selected, ...presentation });
     }
   }
@@ -228,7 +226,6 @@ test("unchecked ready tabs survive refresh, remain readable in every palette, an
   await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "horizontal");
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
-  await expect(tab.locator(".workspace-tab-ready-mark")).toBeVisible();
   await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "vertical");
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");

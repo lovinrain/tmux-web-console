@@ -3441,7 +3441,6 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           />
           <span className="workspace-tab-title">{title}</span>
           <SessionAgentIcon session={session} />
-          {readyUnchecked && <span className="workspace-tab-ready-mark" aria-hidden="true" />}
         </button>
         {tree && onReparentSession && props.onTransferSelectedSessions && (
           <button
