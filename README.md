@@ -26,6 +26,9 @@ when you disconnect.
 - **Workspaces for many sessions.** Save ordered tabs, colored groups, nested
   sessions, quick links, and multi-pane layouts. Resume on another device and
   receive workspace changes live across open browser tabs.
+- **Linked views with separate controls.** [Fork-sync](docs/FORK_SYNC.md) keeps
+  session and Pane-view selection in step across browser tabs while each tab
+  keeps its own theme, toolbar layout, and staged input.
 - **Real terminals, comfortable input.** Use direct keyboard input or compose
   a prompt before sending it. Reuse snippets, keep session memos, attach files on
   desktop, and switch between terminal and input focus on mobile.

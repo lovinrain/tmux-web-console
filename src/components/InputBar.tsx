@@ -26,6 +26,12 @@ import {
 import type { AgentScrollMode, ApplicationScrollProfile } from "../agentScrollPreferences";
 import type { UploadedSessionAttachment } from "../api";
 import {
+  LOCAL_VIEW_PREFERENCES_EVENT,
+  localViewPreferencesEnabled,
+  readViewPreference,
+  viewPreferenceStorage,
+} from "../viewPreferences";
+import {
   desktopAttachmentsAvailable,
   MAX_ATTACHMENT_UPLOAD_BATCH,
   transferHasFiles,
@@ -320,7 +326,7 @@ function draftKey(sessionName: string): string {
 
 function readDraft(sessionName: string): string {
   try {
-    return window.localStorage.getItem(draftKey(sessionName)) || "";
+    return readViewPreference(draftKey(sessionName)) || "";
   } catch {
     return "";
   }
@@ -328,8 +334,11 @@ function readDraft(sessionName: string): string {
 
 function writeDraft(sessionName: string, value: string): boolean {
   try {
-    if (value) window.localStorage.setItem(draftKey(sessionName), value);
-    else window.localStorage.removeItem(draftKey(sessionName));
+    const storage = viewPreferenceStorage();
+    // A local empty marker prevents a cleared draft falling back to the old
+    // browser-wide draft when this linked tab reloads.
+    if (value || localViewPreferencesEnabled()) storage.setItem(draftKey(sessionName), value);
+    else storage.removeItem(draftKey(sessionName));
     return true;
   } catch {
     // The textarea remains the source of truth when storage is unavailable.
@@ -357,25 +366,26 @@ export function renameSessionDraft(
 ): RenameSessionDraftResult {
   if (!previousName || !nextName || previousName === nextName) return "unchanged";
   try {
+    const storage = viewPreferenceStorage();
     const previousKey = draftKey(previousName);
     const nextKey = draftKey(nextName);
-    const storedPreviousDraft = window.localStorage.getItem(previousKey);
+    const storedPreviousDraft = readViewPreference(previousKey);
     const previousDraft = visibleDraft ?? storedPreviousDraft;
     if (previousDraft === null) return "unchanged";
-    const nextDraft = window.localStorage.getItem(nextKey);
+    const nextDraft = readViewPreference(nextKey);
 
     if (nextDraft && nextDraft !== previousDraft) {
       // The destination can have a stale draft even though tmux rejects live name collisions.
-      window.localStorage.setItem(previousKey, nextDraft);
+      storage.setItem(previousKey, nextDraft);
       try {
-        if (previousDraft) window.localStorage.setItem(nextKey, previousDraft);
-        else window.localStorage.removeItem(nextKey);
+        if (previousDraft || localViewPreferencesEnabled()) storage.setItem(nextKey, previousDraft);
+        else storage.removeItem(nextKey);
       } catch {
         try {
           if (storedPreviousDraft) {
-            window.localStorage.setItem(previousKey, storedPreviousDraft);
+            storage.setItem(previousKey, storedPreviousDraft);
           } else {
-            window.localStorage.removeItem(previousKey);
+            storage.removeItem(previousKey);
           }
         } catch {
           // The in-memory handoff remains authoritative when rollback also fails.
@@ -385,9 +395,10 @@ export function renameSessionDraft(
       return "swapped";
     }
 
-    if (previousDraft) window.localStorage.setItem(nextKey, previousDraft);
-    else window.localStorage.removeItem(nextKey);
-    window.localStorage.removeItem(previousKey);
+    if (previousDraft || localViewPreferencesEnabled()) storage.setItem(nextKey, previousDraft);
+    else storage.removeItem(nextKey);
+    if (localViewPreferencesEnabled()) storage.setItem(previousKey, "");
+    else storage.removeItem(previousKey);
     return "migrated";
   } catch {
     return "storage-error";
@@ -493,6 +504,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [stagedAttachments, setStagedAttachments] = useState<StagedAttachmentUpload[]>([]);
   const [attachmentUploadMessage, setAttachmentUploadMessage] = useState<string | null>(null);
   const [attachmentUploadError, setAttachmentUploadError] = useState(false);
+
+  useEffect(() => {
+    const preserveLocalDraft = () => writeDraft(sessionName, textareaRef.current?.value ?? initialDraft);
+    window.addEventListener(LOCAL_VIEW_PREFERENCES_EVENT, preserveLocalDraft);
+    return () => window.removeEventListener(LOCAL_VIEW_PREFERENCES_EVENT, preserveLocalDraft);
+  }, [sessionName, initialDraft]);
 
   const recordDraft = (value: string, nextStatus: DraftStatus = "saved") => {
     const persisted = writeDraft(sessionName, value);

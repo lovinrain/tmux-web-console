@@ -106,6 +106,26 @@ function renderDropBoard(overrides: Partial<ComponentProps<typeof WorkspacePaneB
 }
 
 describe("WorkspacePaneBoard", () => {
+  it("follows a shared pane selection while preserving focus in the receiving view", () => {
+    const changed = vi.fn();
+    const props: ComponentProps<typeof WorkspacePaneBoard> = {
+      layout: pairLayout, openSessions: ["alpha", "beta"], sessions: [session("alpha"), session("beta")],
+      sessionNavigation: <nav />, desktopTabOrientation: "horizontal", desktopTabRailWidth: 288,
+      workspacePersistenceState: "saved", onChange: vi.fn(), onDelete: vi.fn(), onExit: vi.fn(),
+      renderSession: (name, id) => <button type="button" data-testid={`terminal-${id}`}>{name}</button>,
+      selectedPaneId: "left", onActivePaneChange: changed,
+    };
+    const view = render(<WorkspacePaneBoard {...props} />);
+    const left = screen.getByTestId("terminal-left");
+    left.focus();
+    view.rerender(<WorkspacePaneBoard {...props} selectedPaneId="right" />);
+    expect(screen.getByTestId("terminal-right").closest(".workspace-pane-leaf")).toHaveClass("active");
+    expect(left).toHaveFocus();
+    expect(changed).not.toHaveBeenCalled();
+    fireEvent.pointerDown(left);
+    expect(changed).toHaveBeenLastCalledWith("left");
+  });
+
   it("moves a dropped workspace session and intercepts the terminal drop", async () => {
     const { onChange, terminalDrop } = renderDropBoard();
     const target = screen.getByTestId("terminal-right");

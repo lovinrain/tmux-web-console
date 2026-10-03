@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -49,6 +50,7 @@ import {
   ConsoleScreen,
   DEFAULT_CONSOLE_BAR_VISIBILITY,
   type ConsoleBar,
+  type ConsoleBarVisibility,
   type MobileConsoleMode,
   type SessionRenameWarning,
 } from "./components/ConsoleScreen";
@@ -137,9 +139,28 @@ import {
   reconcileWorkspacePaneLayouts,
   renameWorkspacePaneSession,
   replaceWorkspacePaneLayout,
+  workspacePaneLeaves,
   workspacePaneSessions,
 } from "./workspacePaneLayouts";
 import { rebaseWorkspaceEdits } from "./workspaceSync";
+import { forkSyncGroupFromSearch, type ForkSyncSelection } from "./forkSync";
+import { useForkSync } from "./useForkSync";
+import { ForkSyncControls } from "./components/ForkSyncControls";
+import { readViewPreference, writeViewPreference, writeLocalViewPreference } from "./viewPreferences";
+
+const CONSOLE_BAR_VISIBILITY_KEY = "muxdeck-console-bar-visibility";
+
+function storedConsoleBars(): ConsoleBarVisibility {
+  try {
+    const stored: unknown = JSON.parse(readViewPreference(CONSOLE_BAR_VISIBILITY_KEY) ?? "null");
+    if (stored && typeof stored === "object") {
+      const bars = stored as Record<string, unknown>;
+      if (typeof bars.sessionTabs === "boolean" && typeof bars.stagedInput === "boolean"
+        && typeof bars.shortcuts === "boolean") return bars as unknown as ConsoleBarVisibility;
+    }
+  } catch { /* Use the normal bars if the tab-local snapshot is unavailable. */ }
+  return DEFAULT_CONSOLE_BAR_VISIBILITY;
+}
 
 interface MuxLocation {
   path: string;
@@ -289,7 +310,7 @@ function writeTemporaryCallbackSessions(identity: string, sessions: readonly str
 
 function storedDesktopTabOrientation(): WorkspaceTabOrientation {
   try {
-    const stored = window.localStorage.getItem(DESKTOP_TAB_ORIENTATION_KEY);
+    const stored = readViewPreference(DESKTOP_TAB_ORIENTATION_KEY);
     if (stored === "horizontal" || stored === "vertical") return stored;
   } catch {
     // Storage can be unavailable in privacy-restricted browser contexts.
@@ -299,7 +320,7 @@ function storedDesktopTabOrientation(): WorkspaceTabOrientation {
 
 function storedDesktopTabRailWidth(): number {
   try {
-    const stored = window.localStorage.getItem(DESKTOP_TAB_RAIL_WIDTH_KEY);
+    const stored = readViewPreference(DESKTOP_TAB_RAIL_WIDTH_KEY);
     if (stored !== null && stored.trim() !== "") {
       const width = Number(stored);
       if (Number.isFinite(width)) return clampDesktopTabRailWidth(width);
@@ -312,7 +333,7 @@ function storedDesktopTabRailWidth(): number {
 
 function storedDesktopTabActionsVisible(): boolean {
   try {
-    const stored = window.localStorage.getItem(DESKTOP_TAB_ACTIONS_VISIBLE_KEY);
+    const stored = readViewPreference(DESKTOP_TAB_ACTIONS_VISIBLE_KEY);
     if (stored === "false") return false;
     if (stored === "true") return true;
   } catch {
@@ -848,7 +869,7 @@ function AppRoutes() {
   const { bindings: shortcutBindings } = useShortcutSettings();
   const { theme } = useTheme();
   const [location, setLocation] = useState(currentLocation);
-  const [consoleBars, setConsoleBars] = useState(DEFAULT_CONSOLE_BAR_VISIBILITY);
+  const [consoleBars, setConsoleBars] = useState(storedConsoleBars);
   const [desktopTabOrientation, setDesktopTabOrientationState] =
     useState<WorkspaceTabOrientation>(storedDesktopTabOrientation);
   const [desktopTabRailWidth, setDesktopTabRailWidthState] =
@@ -884,6 +905,7 @@ function AppRoutes() {
     );
   });
   const [workspacePaneLayouts, setWorkspacePaneLayouts] = useState<WorkspacePaneLayout[]>([]);
+  const [activeWorkspacePane, setActiveWorkspacePane] = useState<{ layoutId: string; paneId: string } | null>(null);
   const workspacePaneLayoutsRef = useRef<WorkspacePaneLayout[]>([]);
   const [workspacePaneLayoutsBusy, setWorkspacePaneLayoutsBusy] = useState(false);
   const [hydratedWorkspaceId, setHydratedWorkspaceId] = useState<string | null>(null);
@@ -1007,7 +1029,7 @@ function AppRoutes() {
   const setDesktopTabOrientation = useCallback((orientation: WorkspaceTabOrientation) => {
     setDesktopTabOrientationState(orientation);
     try {
-      window.localStorage.setItem(DESKTOP_TAB_ORIENTATION_KEY, orientation);
+      writeViewPreference(DESKTOP_TAB_ORIENTATION_KEY, orientation);
     } catch {
       // Keep the in-memory choice when storage is unavailable.
     }
@@ -1017,7 +1039,7 @@ function AppRoutes() {
     const clampedWidth = clampDesktopTabRailWidth(width);
     setDesktopTabRailWidthState(clampedWidth);
     try {
-      window.localStorage.setItem(DESKTOP_TAB_RAIL_WIDTH_KEY, String(clampedWidth));
+      writeViewPreference(DESKTOP_TAB_RAIL_WIDTH_KEY, String(clampedWidth));
     } catch {
       // Keep the in-memory choice when storage is unavailable.
     }
@@ -1026,7 +1048,7 @@ function AppRoutes() {
   const setDesktopTabActionsVisible = useCallback((visible: boolean) => {
     setDesktopTabActionsVisibleState(visible);
     try {
-      window.localStorage.setItem(DESKTOP_TAB_ACTIONS_VISIBLE_KEY, String(visible));
+      writeViewPreference(DESKTOP_TAB_ACTIONS_VISIBLE_KEY, String(visible));
     } catch {
       // Keep the in-memory choice when storage is unavailable.
     }
@@ -1343,7 +1365,10 @@ function AppRoutes() {
       const paneRoute = parsePaneLayoutRoute(current.path);
       let path = current.path;
       if (route || (resume && isDashboardPath(current.path))) {
-        path = landingSession
+        path = route && !resume && forkSyncGroupFromSearch(current.search)
+          && savedWorkspace.tabs.includes(route.sessionName)
+          ? sessionPath(route.sessionName, route.recentsOpen)
+          : landingSession
           ? sessionPath(landingSession, Boolean(route?.recentsOpen))
           : "/";
       } else if (
@@ -1968,6 +1993,90 @@ function AppRoutes() {
   const newSessionRoute = parseNewSessionRoute(location.path);
   const paneLayoutRoute = parsePaneLayoutRoute(location.path);
   const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+  const changeForkSyncSearch = useCallback((search: string) => {
+    replaceLocation(window.history.state, currentLocation().path, search);
+    syncLocation();
+  }, [replaceLocation, syncLocation]);
+
+  const applyForkSyncSelection = useCallback((selection: ForkSyncSelection) => {
+    const current = currentLocation();
+    const sameWorkspace = savedWorkspaceIdFromSearch(current.search) === selection.workspaceId;
+    const loadedSavedWorkspace = Boolean(selection.workspaceId && sameWorkspace
+      && hydratedWorkspaceIdRef.current === selection.workspaceId);
+    const sessionName = selection.view.kind === "session" ? selection.view.sessionName : undefined;
+    const incomingLayout = selection.view.kind === "panes" ? selection.view.layout : null;
+    const currentLayout = loadedSavedWorkspace && incomingLayout
+      ? workspacePaneLayoutsRef.current.find((layout) => layout.id === incomingLayout.id) : null;
+    const selectedLayout = currentLayout ?? incomingLayout;
+    const tabs = loadedSavedWorkspace ? [...workspaceRef.current.openSessions] : [...selection.tabs];
+    const requiredSessions = sessionName ? [sessionName] : selectedLayout ? workspacePaneSessions(selectedLayout) : [];
+    for (const name of requiredSessions) if (!tabs.includes(name)) tabs.push(name);
+    const nextWorkspace = restoreWorkspaceTabs(
+      workspaceRef.current, sessionName, tabs,
+      sameWorkspace ? workspaceRef.current.groups : [],
+      sameWorkspace ? workspaceRef.current.parents ?? {} : {},
+    );
+    workspaceRef.current = nextWorkspace;
+    setWorkspace(nextWorkspace);
+    let layouts = sameWorkspace ? workspacePaneLayoutsRef.current : [];
+    if (selection.view.kind === "panes") {
+      // A selection must not overwrite a newer saved layout or resurrect
+      // inactive tabs. The workspace stream remains authoritative for those.
+      const layout = selectedLayout!;
+      layouts = layouts.some((item) => item.id === layout.id)
+        ? replaceWorkspacePaneLayout(layouts, layout) : [...layouts, layout];
+      setActiveWorkspacePane(selection.view.activePaneId
+        ? { layoutId: selection.view.layout.id, paneId: selection.view.activePaneId } : null);
+    }
+    layouts = reconcileWorkspacePaneLayouts(layouts, tabs);
+    workspacePaneLayoutsRef.current = layouts;
+    setWorkspacePaneLayouts(layouts);
+    const search = searchWithSavedWorkspaceId(
+      searchWithWorkspaceState(current.search, nextWorkspace.openSessions,
+        nextWorkspace.groups, nextWorkspace.parents ?? {}), selection.workspaceId,
+    );
+    const path = selection.view.kind === "session"
+      ? sessionPath(selection.view.sessionName, Boolean(parseSessionRoute(current.path)?.recentsOpen))
+      : paneLayoutPath(selection.view.layout.id);
+    // Replace navigation only. Received selections never replay terminal input
+    // or request keyboard/browser focus in the receiving view.
+    replaceLocation(window.history.state, path, search);
+    syncLocation();
+  }, [replaceLocation, syncLocation]);
+
+  const forkSyncSelection = useMemo<ForkSyncSelection | null>(() => {
+    if (locationWorkspaceId && hydratedWorkspaceId !== locationWorkspaceId) return null;
+    const tabs = workspace.openSessions;
+    if (activeRoute && tabs.includes(activeRoute.sessionName)) {
+      return { workspaceId: locationWorkspaceId, tabs, view: { kind: "session", sessionName: activeRoute.sessionName } };
+    }
+    const layout = paneLayoutRoute && workspacePaneLayouts.find((item) => item.id === paneLayoutRoute.layoutId);
+    if (!layout) return null;
+    const panes = workspacePaneLeaves(layout.root);
+    const activePaneId = (activeWorkspacePane?.layoutId === layout.id
+      ? panes.find((pane) => pane.id === activeWorkspacePane.paneId)?.id : null)
+      ?? panes[0]?.id ?? null;
+    return {
+      workspaceId: locationWorkspaceId, tabs,
+      view: { kind: "panes", layout, activePaneId },
+    };
+  }, [activeRoute?.sessionName, paneLayoutRoute?.layoutId, locationWorkspaceId,
+    hydratedWorkspaceId, workspace.openSessions, workspacePaneLayouts, activeWorkspacePane]);
+  const forkSync = useForkSync(location.search, forkSyncSelection, applyForkSyncSelection, changeForkSyncSearch);
+
+  useEffect(() => {
+    writeLocalViewPreference(CONSOLE_BAR_VISIBILITY_KEY, JSON.stringify(consoleBars));
+    writeLocalViewPreference(DESKTOP_TAB_ORIENTATION_KEY, desktopTabOrientation);
+    writeLocalViewPreference(DESKTOP_TAB_RAIL_WIDTH_KEY, String(desktopTabRailWidth));
+    writeLocalViewPreference(DESKTOP_TAB_ACTIONS_VISIBLE_KEY, String(desktopTabActionsVisible));
+  }, [forkSync.active, consoleBars, desktopTabOrientation, desktopTabRailWidth, desktopTabActionsVisible]);
+
+  const selectActiveWorkspacePane = useCallback((paneId: string) => {
+    const route = parsePaneLayoutRoute(currentLocation().path);
+    if (!route) return;
+    setActiveWorkspacePane((previous) => previous?.layoutId === route.layoutId && previous.paneId === paneId
+      ? previous : { layoutId: route.layoutId, paneId });
+  }, []);
   const sessionNavigationHistory = useSessionNavigationHistory(
     locationWorkspaceId ?? temporaryTerminalKey,
     activeRoute?.sessionName ?? null,
@@ -4667,6 +4776,9 @@ function AppRoutes() {
         workspaceLinks={paneLinks}
         headerWidgets={paneHeaderWidgets}
         sessionNavigation={paneNavigation}
+        viewSyncControls={<ForkSyncControls {...forkSync} />}
+        selectedPaneId={activeWorkspacePane?.layoutId === paneLayout.id ? activeWorkspacePane.paneId : null}
+        onActivePaneChange={selectActiveWorkspacePane}
         desktopTabOrientation={desktopTabOrientation}
         desktopTabRailWidth={desktopTabRailWidth}
         workspacePersistenceState={workspacePersistenceState}
@@ -4707,6 +4819,7 @@ function AppRoutes() {
             onSessionTerminated={terminateOpenSession}
             onSessionCopied={completeCopiedSession}
             onSplitWorkspace={splitSessionIntoNewWorkspace}
+            forkSync={forkSync}
             onSplitEphemeralTab={openEphemeralSessionTab}
             splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
             copySessionDisabled={workspacePersistenceState === "loading"}
@@ -4828,6 +4941,7 @@ function AppRoutes() {
         onSessionTerminated={terminateOpenSession}
         onSessionCopied={completeCopiedSession}
         onSplitWorkspace={splitSessionIntoNewWorkspace}
+        forkSync={forkSync}
         onSplitEphemeralTab={openEphemeralSessionTab}
         splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
         copySessionDisabled={workspacePersistenceState === "loading"}

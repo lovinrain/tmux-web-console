@@ -10,6 +10,7 @@ import {
   useTheme,
 } from "./theme";
 import { THEME_PALETTES } from "./themePresets";
+import { enableLocalViewPreferences } from "./viewPreferences";
 
 function ThemeProbe() {
   const { theme, setTheme } = useTheme();
@@ -34,6 +35,7 @@ function renderTheme() {
 beforeEach(() => {
   vi.restoreAllMocks();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   delete document.documentElement.dataset.theme;
   delete document.documentElement.dataset.palette;
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -55,6 +57,30 @@ beforeEach(() => {
 });
 
 describe("ThemeProvider", () => {
+  it("keeps a linked tab's theme in session storage and restores it independently", () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+    enableLocalViewPreferences();
+    const view = renderTheme();
+    fireEvent.click(screen.getByRole("button", { name: "Light theme" }));
+    expect(window.sessionStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    view.unmount();
+    // A different view changing the browser default cannot replace this tab's theme.
+    window.localStorage.setItem(THEME_STORAGE_KEY, "dark");
+    renderTheme();
+    expect(screen.getByRole("status", { name: "Active theme" })).toHaveTextContent("light");
+  });
+
+  it("snapshots the current theme when an existing tab starts Fork-sync", () => {
+    renderTheme();
+    fireEvent.click(screen.getByRole("button", { name: "Light theme" }));
+    act(() => enableLocalViewPreferences());
+    expect(window.sessionStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+    fireEvent.click(screen.getByRole("button", { name: "Light theme" }));
+    expect(window.sessionStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+  });
+
   it("defaults to dark and synchronizes the root document", () => {
     renderTheme();
 

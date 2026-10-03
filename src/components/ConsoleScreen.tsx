@@ -71,6 +71,8 @@ import {
   type ShortcutBindings,
 } from "../shortcutSettings";
 import { useTheme } from "../theme";
+import { forkSyncGroupFromSearch, independentForkHref } from "../forkSync";
+import { ForkSyncControls, type ForkSyncControlsProps } from "./ForkSyncControls";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { AccountLink } from "./AccountLink";
 import { CopySessionControl, type CopySessionPlacement } from "./CopySessionControl";
@@ -199,6 +201,7 @@ interface ConsoleScreenProps {
     placement?: CopySessionPlacement,
   ) => void;
   onSplitWorkspace?: (sessionName: string) => OpenTabInNewWindowResult;
+  forkSync?: ForkSyncControlsProps;
   onSplitEphemeralTab?: (sessionName: string) => OpenTabInNewWindowResult;
   splitWorkspaceSelectionCount?: number;
   copySessionDisabled?: boolean;
@@ -636,6 +639,7 @@ export function ConsoleScreen({
   onSessionTerminated,
   onSessionCopied,
   onSplitWorkspace,
+  forkSync,
   onSplitEphemeralTab,
   splitWorkspaceSelectionCount = 0,
   copySessionDisabled = false,
@@ -747,7 +751,7 @@ export function ConsoleScreen({
     message: string;
   } | null>(null);
   const [workspaceTransferOpen, setWorkspaceTransferOpen] = useState(false);
-  const [ignoreSize, setIgnoreSize] = useState(false);
+  const [ignoreSize, setIgnoreSize] = useState(() => Boolean(forkSyncGroupFromSearch(window.location.search)));
   const [localBarVisibility, setLocalBarVisibility] = useState(
     DEFAULT_CONSOLE_BAR_VISIBILITY,
   );
@@ -2525,20 +2529,21 @@ export function ConsoleScreen({
                     )}
                     <a
                       className="split-workspace-button fork-view-button"
-                      href={window.location.href}
+                      href={independentForkHref(window.location.href)}
                       target="_blank"
                       rel="noopener noreferrer"
                       aria-label="Fork current view in a new browser tab"
-                      title="Fork: open this exact URL in a new browser tab"
-                      onClick={(event) => { event.currentTarget.href = window.location.href; recordViewActivity("fork"); }}
+                      title="Fork: open this view in an independent browser tab"
+                      onClick={(event) => { event.currentTarget.href = independentForkHref(window.location.href); recordViewActivity("fork"); }}
                       onAuxClick={(event) => {
-                        event.currentTarget.href = window.location.href;
+                        event.currentTarget.href = independentForkHref(window.location.href);
                         if (event.button === 1) recordViewActivity("fork");
                       }}
                     >
                       <WindowCopyIcon />
                       <span>Fork</span>
                     </a>
+                    {forkSync && <ForkSyncControls {...forkSync} onFork={() => recordViewActivity("fork")} />}
                   </div>
                 </div>
               )}

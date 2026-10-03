@@ -14,6 +14,7 @@ import {
   type ThemePaletteId,
   type ThemePalettePreferences,
 } from "./themePresets";
+import { LOCAL_VIEW_PREFERENCES_EVENT, readViewPreference, writeViewPreference } from "./viewPreferences";
 
 export type Theme = "dark" | "light";
 
@@ -41,7 +42,7 @@ function readStoredTheme(): Theme {
   if (typeof window === "undefined") return DEFAULT_THEME;
 
   try {
-    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const storedTheme = readViewPreference(THEME_STORAGE_KEY);
     return isTheme(storedTheme) ? storedTheme : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;
@@ -50,7 +51,7 @@ function readStoredTheme(): Theme {
 
 function readStoredPalettes(): ThemePalettePreferences {
   try {
-    const stored: unknown = JSON.parse(window.localStorage.getItem(THEME_PALETTES_STORAGE_KEY) ?? "null");
+    const stored: unknown = JSON.parse(readViewPreference(THEME_PALETTES_STORAGE_KEY) ?? "null");
     if (!stored || typeof stored !== "object") return { ...DEFAULT_THEME_PALETTES };
     const values = stored as Record<string, unknown>;
     return {
@@ -66,8 +67,8 @@ function storeTheme(theme: Theme, palettes: ThemePalettePreferences): void {
   if (typeof window === "undefined") return;
 
   try {
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    window.localStorage.setItem(THEME_PALETTES_STORAGE_KEY, JSON.stringify(palettes));
+    writeViewPreference(THEME_STORAGE_KEY, theme);
+    writeViewPreference(THEME_PALETTES_STORAGE_KEY, JSON.stringify(palettes));
   } catch {
     // Theme selection still works for this page when storage is unavailable.
   }
@@ -97,6 +98,12 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     applyTheme(theme, palette);
     storeTheme(theme, palettes);
   }, [theme, palette, palettes]);
+
+  useEffect(() => {
+    const saveLocalTheme = () => storeTheme(theme, palettes);
+    window.addEventListener(LOCAL_VIEW_PREFERENCES_EVENT, saveLocalTheme);
+    return () => window.removeEventListener(LOCAL_VIEW_PREFERENCES_EVENT, saveLocalTheme);
+  }, [theme, palettes]);
 
   const setTheme = useCallback((nextTheme: Theme) => {
     setThemeState(nextTheme);

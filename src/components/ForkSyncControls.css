@@ -1,0 +1,32 @@
+.fork-sync-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fork-sync-controls .split-workspace-button {
+  display: inline-flex;
+  align-items: center;
+}
+
+.split-action-options > .fork-sync-controls {
+  border-inline-start: 1px solid rgba(187, 244, 81, 0.24);
+}
+
+.fork-sync-status {
+  padding: 4px 6px;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.fork-sync-problem {
+  max-width: 240px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-pane-top-strip .fork-sync-controls {
+  margin-inline-start: auto;
+}

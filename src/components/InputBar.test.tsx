@@ -9,6 +9,7 @@ import {
   stageSessionDraft,
   type InputBarHandle,
 } from "./InputBar";
+import { enableLocalViewPreferences } from "../viewPreferences";
 
 const props = {
   sessionName: "test-session",
@@ -24,6 +25,7 @@ const props = {
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -32,6 +34,26 @@ afterEach(() => {
 });
 
 describe("InputBar", () => {
+  it("preserves a linked tab's own draft and its cleared state through reloads", () => {
+    const key = "muxdeck-terminal-draft:test-session";
+    localStorage.setItem(key, "browser default draft");
+    const view = render(<InputBar {...props} />);
+    const textarea = screen.getByRole("textbox", { name: "Staged input" });
+    act(() => enableLocalViewPreferences());
+    expect(sessionStorage.getItem(key)).toBe("browser default draft");
+    fireEvent.input(textarea, { target: { value: "this tab's draft" } });
+    expect(sessionStorage.getItem(key)).toBe("this tab's draft");
+    expect(localStorage.getItem(key)).toBe("browser default draft");
+    view.unmount();
+    const reloaded = render(<InputBar {...props} />);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("this tab's draft");
+    fireEvent.input(screen.getByRole("textbox", { name: "Staged input" }), { target: { value: "" } });
+    reloaded.unmount();
+    render(<InputBar {...props} />);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+    expect(localStorage.getItem(key)).toBe("browser default draft");
+  });
+
   it("keeps both regions mounted and preserves the draft while visibility changes", () => {
     const view = render(<InputBar {...props} />);
     const dock = screen.getByRole("region", { name: "Terminal input" });

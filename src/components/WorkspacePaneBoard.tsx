@@ -73,6 +73,9 @@ interface WorkspacePaneBoardProps {
   workspaceLinks?: ReactNode;
   headerWidgets?: ReactNode;
   sessionNavigation: ReactNode;
+  viewSyncControls?: ReactNode;
+  selectedPaneId?: string | null;
+  onActivePaneChange?: (paneId: string) => void;
   desktopTabOrientation: WorkspaceTabOrientation;
   desktopTabRailWidth: number;
   workspacePersistenceState: WorkspacePersistenceState;
@@ -119,6 +122,9 @@ export function WorkspacePaneBoard({
   workspaceLinks,
   headerWidgets,
   sessionNavigation,
+  viewSyncControls,
+  selectedPaneId,
+  onActivePaneChange,
   desktopTabOrientation,
   desktopTabRailWidth,
   workspacePersistenceState,
@@ -132,7 +138,8 @@ export function WorkspacePaneBoard({
   const draftRef = useRef(draft);
   const screenRef = useRef<HTMLElement>(null);
   const [activePaneId, setActivePaneId] = useState(
-    () => workspacePaneLeaves(layout.root)[0]?.id ?? "",
+    () => workspacePaneLeaves(layout.root).find((pane) => pane.id === selectedPaneId)?.id
+      ?? workspacePaneLeaves(layout.root)[0]?.id ?? "",
   );
   const activePaneIdRef = useRef(activePaneId);
   const [editingName, setEditingName] = useState(false);
@@ -182,13 +189,12 @@ export function WorkspacePaneBoard({
     setNameDraft(layout.name);
     const leaves = workspacePaneLeaves(layout.root);
     setActivePaneId((current) => {
-      const next = leaves.some((pane) => pane.id === current)
-        ? current
-        : leaves[0]?.id ?? "";
+      const next = leaves.find((pane) => pane.id === selectedPaneId)?.id
+        ?? (leaves.some((pane) => pane.id === current) ? current : leaves[0]?.id ?? "");
       activePaneIdRef.current = next;
       return next;
     });
-  }, [layout]);
+  }, [layout, selectedPaneId]);
 
   useEffect(() => {
     const title = workspaceName?.trim();
@@ -233,6 +239,7 @@ export function WorkspacePaneBoard({
   const focusPane = useCallback((paneId: string) => {
     activePaneIdRef.current = paneId;
     setActivePaneId(paneId);
+    onActivePaneChange?.(paneId);
     const pane = workspacePaneLeaves(draftRef.current.root).find((item) => item.id === paneId);
     if (pane?.session) {
       terminalFocusRequestCounter.current += 1;
@@ -249,7 +256,7 @@ export function WorkspacePaneBoard({
       ).find((element) => element.dataset.paneId === paneId);
       paneElement?.querySelector<HTMLSelectElement>("select")?.focus();
     });
-  }, []);
+  }, [onActivePaneChange]);
 
   const armPaneNavigation = useCallback(() => {
     if (isCompactWorkspaceViewport() || paneCount < 2) return;
@@ -379,6 +386,7 @@ export function WorkspacePaneBoard({
   const assignSession = (pane: WorkspaceSessionPane, session: string | null) => {
     activePaneIdRef.current = pane.id;
     setActivePaneId(pane.id);
+    onActivePaneChange?.(pane.id);
     void commit(assignWorkspacePaneSession(draftRef.current, pane.id, session));
   };
 
@@ -426,6 +434,7 @@ export function WorkspacePaneBoard({
     const nextPaneId = workspacePaneLeaves(next.root).find((item) => item.session === sessionName)!.id;
     activePaneIdRef.current = nextPaneId;
     setActivePaneId(nextPaneId);
+    onActivePaneChange?.(nextPaneId);
     void commit(next);
   };
 
@@ -439,6 +448,7 @@ export function WorkspacePaneBoard({
     const nextActivePaneId = leaves.at(-1)?.id ?? pane.id;
     activePaneIdRef.current = nextActivePaneId;
     setActivePaneId(nextActivePaneId);
+    onActivePaneChange?.(nextActivePaneId);
     void commit(next);
   };
 
@@ -448,6 +458,7 @@ export function WorkspacePaneBoard({
     const nextActivePaneId = leaves[0]?.id ?? "";
     activePaneIdRef.current = nextActivePaneId;
     setActivePaneId(nextActivePaneId);
+    onActivePaneChange?.(nextActivePaneId);
     void commit(next);
   };
 
@@ -538,6 +549,7 @@ export function WorkspacePaneBoard({
         onPointerDownCapture={() => {
           activePaneIdRef.current = pane.id;
           setActivePaneId(pane.id);
+          onActivePaneChange?.(pane.id);
           if (paneNavigationArmed) disarmPaneNavigation();
         }}
       >
@@ -620,7 +632,11 @@ export function WorkspacePaneBoard({
                 pane.session,
                 pane.id,
                 active,
-                () => setActivePaneId(pane.id),
+                () => {
+                  activePaneIdRef.current = pane.id;
+                  setActivePaneId(pane.id);
+                  onActivePaneChange?.(pane.id);
+                },
                 terminalFocusRequest?.paneId === pane.id
                   ? terminalFocusRequest.token
                   : undefined,
@@ -739,6 +755,7 @@ export function WorkspacePaneBoard({
           <ArrowLeftIcon /><span>Session</span>
         </button>
         <div className="workspace-pane-links">{workspaceLinks}</div>
+        {viewSyncControls}
         <span className={`workspace-pane-save-state ${workspacePersistenceState}`}>
           <SaveIcon />
           {saving
