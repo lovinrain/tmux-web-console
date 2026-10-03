@@ -3745,48 +3745,51 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             </button>
           )}
           {onReparentSession && (
-            <div className="workspace-session-level-controls" role="group" aria-label="Session nesting level">
-              <button
-                type="button"
-                className="workspace-session-placement-button"
-                disabled={!nestingEnabled || !placementParent}
-                aria-label="Up one level"
-                aria-description={placementUpHint}
-                title={placementUpHint}
-                onClick={() => changePlacementLevel("up")}
-              >
-                <ArrowLeftIcon />
-                <span>Up<span className="workspace-session-level-detail"> one level</span></span>
-              </button>
-              <button
-                type="button"
-                className="workspace-session-placement-button"
-                disabled={!nestingEnabled || !placementPreviousSibling}
-                aria-label="Down one level"
-                aria-description={placementDownHint}
-                title={placementDownHint}
-                onClick={() => changePlacementLevel("down")}
-              >
-                <ArrowRightIcon />
-                <span>Down<span className="workspace-session-level-detail"> one level</span></span>
-              </button>
+            <div className="workspace-session-placement-controls" role="group" aria-label="Session placement">
+              {props.onTransferSelectedSessions && (
+                <button
+                  type="button"
+                  className="workspace-session-placement-button"
+                  disabled={!nestingEnabled || !placementSessionAvailable}
+                  aria-label="Move / Nest"
+                  aria-haspopup="dialog"
+                  aria-description={placementHint}
+                  title={placementHint}
+                  onClick={() => {
+                    if (placementSession) props.onTransferSelectedSessions?.([placementSession]);
+                  }}
+                >
+                  <WindowMoveIcon />
+                  <span>Move / Nest</span>
+                </button>
+              )}
+              <div className="workspace-session-level-controls" role="group" aria-label="Session nesting level">
+                <button
+                  type="button"
+                  className="workspace-session-placement-button"
+                  disabled={!nestingEnabled || !placementParent}
+                  aria-label="Up one level"
+                  aria-description={placementUpHint}
+                  title={placementUpHint}
+                  onClick={() => changePlacementLevel("up")}
+                >
+                  <ArrowLeftIcon />
+                  <span>Up</span>
+                </button>
+                <button
+                  type="button"
+                  className="workspace-session-placement-button"
+                  disabled={!nestingEnabled || !placementPreviousSibling}
+                  aria-label="Down one level"
+                  aria-description={placementDownHint}
+                  title={placementDownHint}
+                  onClick={() => changePlacementLevel("down")}
+                >
+                  <ArrowRightIcon />
+                  <span>Down</span>
+                </button>
+              </div>
             </div>
-          )}
-          {onReparentSession && props.onTransferSelectedSessions && (
-            <button
-              type="button"
-              className="workspace-session-placement-button"
-              disabled={!nestingEnabled || !placementSessionAvailable}
-              aria-haspopup="dialog"
-              aria-description={placementHint}
-              title={placementHint}
-              onClick={() => {
-                if (placementSession) props.onTransferSelectedSessions?.([placementSession]);
-              }}
-            >
-              <WindowMoveIcon />
-              <span>Move / Nest</span>
-            </button>
           )}
           {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (
             <button

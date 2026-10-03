@@ -1017,9 +1017,9 @@ action returns to the most recently active open tab without changing their order
 
 Nested tabs have a `Move / Nest` button beside their title, including when tab
 actions are hidden. The session controls also have a joined `Up one level` /
-`Down one level` control that remains visible for top-level sessions. Up moves the
-selected session out of its parent; Down nests it under the previous sibling in
-the same tab group. Both keep its children attached and the session selected.
+`Down one level` control beside `Move / Nest` that remains visible for top-level
+sessions. Up moves the selected session out of its parent; Down nests it under the
+previous sibling in the same tab group. Both keep its children attached and the session selected.
 A half is disabled when its move is unavailable.
 You can also open `Move / Nest` in the session controls or right-click any workspace tab.
 Choose the destination workspace, then `Top level` or an existing parent session.

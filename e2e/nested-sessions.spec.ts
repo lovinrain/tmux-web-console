@@ -246,13 +246,19 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
   const resize = page.getByRole("separator", { name: "Resize vertical session tabs", exact: true });
   const expectLevelControlLayout = async () => {
     const controls = page.getByRole("group", { name: "Session nesting level", exact: true });
+    const placement = page.getByRole("button", { name: "Move / Nest", exact: true });
     const up = controls.getByRole("button", { name: "Up one level", exact: true });
     const down = controls.getByRole("button", { name: "Down one level", exact: true });
+    await expect(placement).toBeVisible();
     await expect(up).toBeVisible();
     await expect(down).toBeVisible();
     const controlBox = (await controls.boundingBox())!;
+    const placementBox = (await placement.boundingBox())!;
     const upBox = (await up.boundingBox())!;
     const downBox = (await down.boundingBox())!;
+    expect(placementBox.y).toBeCloseTo(upBox.y, 1);
+    expect(placementBox.height).toBeCloseTo(upBox.height, 1);
+    expect(placementBox.x + placementBox.width).toBeCloseTo(controlBox.x, 1);
     expect(upBox.width).toBeCloseTo(downBox.width, 1);
     expect(upBox.y).toBeCloseTo(downBox.y, 1);
     expect(upBox.x).toBeCloseTo(controlBox.x, 1);
