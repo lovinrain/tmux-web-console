@@ -1,15 +1,38 @@
-/* Emphasize and outline the session name so readiness preserves the selected row's
-   background, border, and marker. Adjust palette blue for text contrast. */
+/* Adjust palette blue for unread text and controls without changing selection. */
+html[data-theme][data-palette] .workspace-navigation {
+  --workspace-unread-color: color-mix(in srgb, var(--blue) 60%, #fff);
+}
+
+html[data-theme="light"][data-palette] .workspace-navigation {
+  --workspace-unread-color: color-mix(in srgb, var(--blue) 85%, #000);
+}
+
 html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] > .workspace-tab-title {
   padding: 1px 4px;
-  color: color-mix(in srgb, var(--blue) 60%, #fff);
+  color: var(--workspace-unread-color);
   border: 1px solid currentColor;
   border-radius: 2px;
   font-weight: 700;
 }
 
-html[data-theme="light"][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] > .workspace-tab-title {
-  color: color-mix(in srgb, var(--blue) 85%, #000);
+html[data-theme][data-palette] .workspace-navigation .workspace-mark-unread-button {
+  color: var(--workspace-unread-color);
+  background: var(--preset-raised);
+  border-color: var(--preset-line);
+}
+
+html[data-theme][data-palette] .workspace-navigation .workspace-mark-unread-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--blue) 12%, var(--preset-raised));
+}
+
+@container workspace-tab-rail (max-width: 176px) {
+  .workspace-navigation-vertical .workspace-mark-unread-button {
+    justify-content: center;
+  }
+
+  .workspace-navigation-vertical .workspace-mark-unread-button > span {
+    display: none;
+  }
 }
 
 .workspace-tab-group-ready-count {

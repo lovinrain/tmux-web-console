@@ -16,6 +16,24 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe("browser-local ready attention", () => {
+  it("keeps a manual unread mark through inventory refresh and reload until an explicit visit", () => {
+    const first = renderHook(({ sessions }) => useSessionReadyAttention(sessions), {
+      initialProps: { sessions: [working] },
+    });
+    act(() => first.result.current.markSessionUnread("alpha"));
+    first.rerender({ sessions: [{ ...working }] });
+    expect(first.result.current.uncheckedReadySessions.has("alpha")).toBe(true);
+    first.unmount();
+
+    const reloaded = renderHook(() => useSessionReadyAttention([working]));
+    expect(reloaded.result.current.uncheckedReadySessions.has("alpha")).toBe(true);
+    act(() => reloaded.result.current.checkSessionReady("alpha"));
+    expect(reloaded.result.current.uncheckedReadySessions.size).toBe(0);
+    const stored = localStorage.getItem(SESSION_READY_ATTENTION_STORAGE_KEY);
+    act(() => reloaded.result.current.markSessionUnread("missing"));
+    expect(localStorage.getItem(SESSION_READY_ATTENTION_STORAGE_KEY)).toBe(stored);
+  });
+
   it("restores unchecked events across reload and acknowledges only on an explicit visit", () => {
     const first = renderHook(({ sessions }) => useSessionReadyAttention(sessions), {
       initialProps: { sessions: [working] },
@@ -68,6 +86,10 @@ describe("browser-local ready attention", () => {
       initialProps: { sessions: [working] },
     });
     hook.rerender({ sessions: [ready] });
+    expect(hook.result.current.uncheckedReadySessions.has("alpha")).toBe(true);
+    act(() => hook.result.current.checkSessionReady("alpha"));
+    expect(hook.result.current.uncheckedReadySessions.size).toBe(0);
+    act(() => hook.result.current.markSessionUnread("alpha"));
     expect(hook.result.current.uncheckedReadySessions.has("alpha")).toBe(true);
     act(() => hook.result.current.checkSessionReady("alpha"));
     expect(hook.result.current.uncheckedReadySessions.size).toBe(0);

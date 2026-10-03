@@ -41,6 +41,7 @@ import {
   SearchIcon,
   TerminalIcon,
   TrashIcon,
+  UnreadIcon,
   WindowCopyIcon,
   WindowMoveIcon,
 } from "../icons";
@@ -99,6 +100,7 @@ export interface SessionWorkspaceNavigationProps {
   onCrossSeparator?: (crossing: SeparatorCrossing) => void;
   sessions: Session[];
   uncheckedReadySessions?: ReadonlySet<string>;
+  onMarkSessionUnread?: (sessionName: string) => void;
   recentsOpen: boolean;
   orientation?: WorkspaceTabOrientation;
   desktopTabRailWidth?: number;
@@ -2235,6 +2237,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && workspacePersistenceState !== "error" && !separatorsBusy);
   const placementSession = newSessionActive ? null : activeSession ?? activePaneSession;
   const placementSessionAvailable = Boolean(placementSession && openSessions.includes(placementSession));
+  const unreadTarget = placementSessionAvailable && placementSession && sessionsByName.has(placementSession)
+    ? placementSession : null;
+  const unreadTargetUnchecked = Boolean(unreadTarget && props.uncheckedReadySessions?.has(unreadTarget));
+  const unreadLabel = unreadTargetUnchecked ? "Already unread" : "Mark as unread";
+  const unreadHint = !unreadTarget
+    ? "Select a live session to mark as unread"
+    : unreadTargetUnchecked
+      ? `${tabTitle(unreadTarget, sessionsByName)} is already unread`
+      : `Mark ${tabTitle(unreadTarget, sessionsByName)} as unread until its next visit`;
   const placementParent = placementSessionAvailable
     ? workspaceSessionParent(placementSession!, sessionParents) : undefined;
   const placementPreviousSibling = placementSessionAvailable
@@ -3411,9 +3422,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           role="tab"
           aria-selected={active}
           aria-controls={active ? "muxdeck-active-console" : undefined}
-          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${readyUnchecked ? ", ready, unchecked" : ""}${selectedForMove ? ", selected for moving" : ""}`}
+          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${readyUnchecked ? ", unread" : ""}${selectedForMove ? ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
-          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${readyUnchecked ? " · Ready, unchecked — open this session to check it" : ""}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
+          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${readyUnchecked ? " · Unread — open this session to mark it as read" : ""}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
           aria-description={`${agentLabel}. ${tree ? `${tree.description} ` : ""}${canDragTab
@@ -3791,6 +3802,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               </div>
             </div>
           )}
+          {props.onMarkSessionUnread && (
+            <button
+              type="button"
+              className="workspace-session-placement-button workspace-mark-unread-button"
+              disabled={!unreadTarget || unreadTargetUnchecked}
+              aria-label={unreadLabel}
+              aria-description={unreadHint}
+              title={unreadHint}
+              onClick={() => {
+                if (!unreadTarget) return;
+                props.onMarkSessionUnread?.(unreadTarget);
+                setReorderAnnouncement(`${tabTitle(unreadTarget, sessionsByName)} marked as unread.`);
+              }}
+            >
+              <UnreadIcon />
+              <span>{unreadLabel}</span>
+            </button>
+          )}
           {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (
             <button
               type="button"
@@ -3904,7 +3933,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                 const uncheckedCount = group.tabs.filter((name) => props.uncheckedReadySessions?.has(name)).length;
                 const groupHint = [
                   groupActive ? `Active session: ${tabTitle(activeSession!, sessionsByName)}.` : "",
-                  uncheckedCount ? `${uncheckedCount} ready, unchecked ${uncheckedCount === 1 ? "session" : "sessions"}.` : "",
+                  uncheckedCount ? `${uncheckedCount} unread ${uncheckedCount === 1 ? "session" : "sessions"}.` : "",
                   groupDragEnabled ? "Drag this header to move the whole group, including nested sessions." : "",
                 ].filter(Boolean).join(" ");
                 const dropEdge = workspaceTabDrag?.target?.kind === "group"
@@ -3954,7 +3983,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                           <strong>{group.name}</strong>
                           <small>{group.tabs.length}</small>
                           {uncheckedCount > 0 && <span className="workspace-tab-group-ready-count"
-                            aria-label={`${uncheckedCount} ready, unchecked ${uncheckedCount === 1 ? "session" : "sessions"}`}>{uncheckedCount}</span>}
+                            aria-label={`${uncheckedCount} unread ${uncheckedCount === 1 ? "session" : "sessions"}`}>{uncheckedCount}</span>}
                           <ArrowDownIcon aria-hidden="true" />
                         </button>
                       ) : (
@@ -3964,7 +3993,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                           <strong>{group.name}</strong>
                           <small>{group.tabs.length}</small>
                           {uncheckedCount > 0 && <span className="workspace-tab-group-ready-count"
-                            aria-label={`${uncheckedCount} ready, unchecked ${uncheckedCount === 1 ? "session" : "sessions"}`}>{uncheckedCount}</span>}
+                            aria-label={`${uncheckedCount} unread ${uncheckedCount === 1 ? "session" : "sessions"}`}>{uncheckedCount}</span>}
                         </span>
                       )}
                       {onMoveTabGroup && (

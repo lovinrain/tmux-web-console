@@ -1403,11 +1403,18 @@ describe("App routing", () => {
     act(() => reportKnownSessions?.([ready, beta]));
     const tab = screen.getByRole("tab", { name: /alpha/ });
     expect(tab).toHaveAttribute("aria-selected", "true");
-    expect(tab).toHaveAccessibleName(/ready, unchecked/);
+    expect(tab).toHaveAccessibleName(/unread/);
     expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
     act(() => reportKnownSessions?.([ready, beta]));
     expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
 
+    fireEvent.click(tab);
+    expect(tab.closest(".workspace-tab")).not.toHaveAttribute("data-ready-unchecked");
+    fireEvent.click(screen.getByRole("button", { name: "Mark as unread" }));
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
+    act(() => reportKnownSessions?.([ready, beta]));
+    expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
     fireEvent.click(tab);
     expect(tab.closest(".workspace-tab")).not.toHaveAttribute("data-ready-unchecked");
     expect(reviewGlobalCallbackSessionMock).not.toHaveBeenCalled();

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentState, Session } from "./types";
 import {
   checkSessionReadyAttention, mergeSessionReadyAttention, observeSessionReadyAttention,
+  markSessionUnreadAttention,
   parseSessionReadyAttention, sessionReadyIdentity, sessionReadyIsUnchecked,
 } from "./sessionReadyAttention";
 
@@ -20,6 +21,41 @@ function completed() {
 }
 
 describe("unchecked ready events", () => {
+  it.each<AgentState>(["working", "running_command", "waiting_human", "waiting_command", "unknown", "other"])(
+    "manually marks a read %s session without changing its agent state", (state) => {
+      const live = session(state);
+      const observed = observeSessionReadyAttention({}, [live]);
+      const marked = markSessionUnreadAttention(observed, live);
+      expect(sessionReadyIsUnchecked(marked, live)).toBe(true);
+      expect(marked[sessionReadyIdentity(live)].state).toBe(state);
+      expect(marked[sessionReadyIdentity(live)].awaitingReady)
+        .toBe(observed[sessionReadyIdentity(live)].awaitingReady);
+      expect(markSessionUnreadAttention(marked, live)).toBe(marked);
+      const restored = parseSessionReadyAttention(JSON.stringify(marked));
+      expect(sessionReadyIsUnchecked(restored, live)).toBe(true);
+      expect(sessionReadyIsUnchecked(checkSessionReadyAttention(restored, live), live)).toBe(false);
+    },
+  );
+
+  it("a manual mark survives an older acknowledgement without resurrecting a subsequently read mark", () => {
+    const live = session("waiting_human", 20);
+    const checked = checkSessionReadyAttention(completed(), live);
+    const marked = markSessionUnreadAttention(checked, live);
+    const merged = mergeSessionReadyAttention(marked, checked);
+    expect(sessionReadyIsUnchecked(merged, live)).toBe(true);
+    expect(mergeSessionReadyAttention(checked, marked)).toEqual(merged);
+    const readAgain = checkSessionReadyAttention(marked, live);
+    expect(sessionReadyIsUnchecked(mergeSessionReadyAttention(readAgain, marked), live)).toBe(false);
+  });
+
+  it("a manual mark while working preserves the next automatic completion event", () => {
+    const working = session("working");
+    const marked = markSessionUnreadAttention({}, working);
+    const checked = checkSessionReadyAttention(marked, working);
+    const ready = session("waiting_human", 20);
+    expect(sessionReadyIsUnchecked(observeSessionReadyAttention(checked, [ready]), ready)).toBe(true);
+  });
+
   it.each<AgentState>(["working", "running_command"])("marks %s becoming ready once", (state) => {
     const busy = observeSessionReadyAttention({}, [session(state)]);
     const ready = session("waiting_human", 20);

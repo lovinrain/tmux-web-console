@@ -4,6 +4,7 @@ import {
   SESSION_READY_ATTENTION_STORAGE_KEY,
   checkSessionReadyAttention,
   mergeSessionReadyAttention,
+  markSessionUnreadAttention,
   observeSessionReadyAttention,
   parseSessionReadyAttention,
   sessionReadyIsUnchecked,
@@ -60,9 +61,14 @@ export function useSessionReadyAttention(sessions: readonly Session[]) {
     if (session) update((current) => checkSessionReadyAttention(current, session));
   }, [update]);
 
+  const markSessionUnread = useCallback((name: string) => {
+    const session = sessionsRef.current.find((candidate) => candidate.name === name);
+    if (session) update((current) => markSessionUnreadAttention(current, session));
+  }, [update]);
+
   const uncheckedReadySessions = useMemo(() => new Set(sessions
     .filter((session) => sessionReadyIsUnchecked(attention, session))
     .map((session) => session.name)), [attention, sessions]);
 
-  return { uncheckedReadySessions, checkSessionReady };
+  return { uncheckedReadySessions, checkSessionReady, markSessionUnread };
 }

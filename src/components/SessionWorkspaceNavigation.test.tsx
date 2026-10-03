@@ -170,6 +170,34 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it("marks the current session unread without visiting it, even when tab actions are hidden", () => {
+    const props = navigationProps({ onMarkSessionUnread: vi.fn(), tabActionsVisible: false });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const button = screen.getByRole("button", { name: "Mark as unread" });
+    expect(button).toHaveAccessibleDescription(/Alpha control/);
+    fireEvent.click(button);
+    expect(props.onMarkSessionUnread).toHaveBeenCalledWith("alpha");
+    expect(props.onSelect).not.toHaveBeenCalled();
+    view.rerender(<SessionWorkspaceNavigation {...props} uncheckedReadySessions={new Set(["alpha"])} />);
+    expect(screen.getByRole("button", { name: "Already unread" })).toBeDisabled();
+  });
+
+  it("targets the focused pane session and disables manual unread when no live session is selected", () => {
+    const props = navigationProps({ activeSession: null, onMarkSessionUnread: vi.fn() });
+    const view = render(
+      <ActivePaneSessionContext.Provider value="beta">
+        <SessionWorkspaceNavigation {...props} />
+      </ActivePaneSessionContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mark as unread" }));
+    expect(props.onMarkSessionUnread).toHaveBeenCalledWith("beta");
+    expect(props.onSelect).not.toHaveBeenCalled();
+    view.rerender(<SessionWorkspaceNavigation {...props} />);
+    expect(screen.getByRole("button", { name: "Mark as unread" })).toBeDisabled();
+    view.rerender(<SessionWorkspaceNavigation {...props} activeSession="ended" openSessions={["ended"]} />);
+    expect(screen.getByRole("button", { name: "Mark as unread" })).toBeDisabled();
+  });
+
   it("exposes unchecked status on tabs and collapsed groups without acknowledging move selection or expansion", () => {
     const props = navigationProps({
       orientation: "vertical", uncheckedReadySessions: new Set(["alpha", "beta"]),
@@ -178,13 +206,13 @@ describe("SessionWorkspaceNavigation", () => {
     });
     const { rerender } = render(<SessionWorkspaceNavigation {...props} />);
     const group = screen.getByRole("button", { name: "Expand Review tab group" });
-    expect(within(group).getByLabelText("2 ready, unchecked sessions")).toBeVisible();
+    expect(within(group).getByLabelText("2 unread sessions")).toBeVisible();
     fireEvent.click(group);
     expect(props.onToggleTabGroup).toHaveBeenCalledWith("review", false);
     expect(props.onSelect).not.toHaveBeenCalled();
 
     rerender(<SessionWorkspaceNavigation {...props} groups={[{ ...props.groups![0], collapsed: false }]} />);
-    const tab = screen.getByRole("tab", { name: /Alpha control.*ready, unchecked/ });
+    const tab = screen.getByRole("tab", { name: /Alpha control.*unread/ });
     expect(tab.closest(".workspace-tab")).toHaveAttribute("data-ready-unchecked", "true");
     expect(tab.querySelector(".workspace-tab-ready-mark")).not.toBeInTheDocument();
     fireEvent.click(tab, { ctrlKey: true });

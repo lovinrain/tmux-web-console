@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 import { THEME_PALETTES } from "../src/themePresets";
 import type { Session } from "../src/types";
@@ -173,13 +173,14 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   expect(otherLive).toBeDefined();
   let snapshot: Session = { ...live, customTitle: "Completed one", agentState: "working" };
   let otherSnapshot: Session = { ...otherLive, customTitle: "Completed two", agentState: "working" };
-  await page.route("**/api/sessions", (route) => route.fulfill({
+  const fulfillInventory = (route: Route) => route.fulfill({
     json: {
       ...inventory,
       sessions: inventory.sessions.map((session) => session.name === sessionName
         ? snapshot : session.name === otherName ? otherSnapshot : session),
     },
-  }));
+  });
+  await page.route("**/api/sessions", fulfillInventory);
   await page.goto(`${sessionUrl}&tab=${otherName}`);
   const tab = page.locator(`.workspace-tab[data-workspace-session-name="${sessionName}"]`);
   const otherTab = page.locator(`.workspace-tab[data-workspace-session-name="${otherName}"]`);
@@ -192,7 +193,7 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await expect(tab.getByRole("tab")).toHaveAttribute("aria-selected", "true");
   await expect(otherTab.getByRole("tab")).toHaveAttribute("aria-selected", "false");
-  await expect(tab.getByRole("tab")).toHaveAccessibleName(/ready, unchecked/);
+  await expect(tab.getByRole("tab")).toHaveAccessibleName(/unread/);
   await page.reload();
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
   await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
@@ -288,6 +289,31 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   await expect(tab.locator(".workspace-state-dot")).toHaveClass(/waiting_human/);
   await expect(tab).not.toHaveAttribute("data-ready-unchecked");
   await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
+
+  const peer = await page.context().newPage();
+  try {
+    await peer.route("**/api/sessions", fulfillInventory);
+    await peer.goto(page.url());
+    const peerTab = peer.locator(`.workspace-tab[data-workspace-session-name="${sessionName}"]`);
+    await expect(peerTab).not.toHaveAttribute("data-ready-unchecked");
+    await expect(page.getByRole("button", { name: "Mark as unread", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Mark as unread", exact: true }).click();
+    await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+    await expect(tab.getByRole("tab")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("button", { name: "Already unread", exact: true })).toBeDisabled();
+    await expect(peerTab).toHaveAttribute("data-ready-unchecked", "true");
+    await page.reload();
+    await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+    await page.screenshot({ path: testInfo.outputPath("marked-unread-side-tabs.png"), animations: "disabled" });
+
+    await peerTab.getByRole("tab").click();
+    await expect(peerTab).not.toHaveAttribute("data-ready-unchecked");
+    await expect(tab).not.toHaveAttribute("data-ready-unchecked");
+    await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
+    await expect(page.getByRole("button", { name: "Mark as unread", exact: true })).toBeEnabled();
+  } finally {
+    await peer.close();
+  }
 });
 
 test("live console applies presets without reconnecting, input, or tmux resizing", async ({ page }, testInfo) => {

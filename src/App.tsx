@@ -969,7 +969,7 @@ function AppRoutes() {
   const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
     useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
-  const { uncheckedReadySessions, checkSessionReady } = useSessionReadyAttention(knownSessions);
+  const { uncheckedReadySessions, checkSessionReady, markSessionUnread } = useSessionReadyAttention(knownSessions);
   const [recoverableSessions, setRecoverableSessions] = useState<RecoverableSession[]>([]);
   const [pendingForgets, setPendingForgets] = useState<PendingForget[]>([]);
   const pendingForgetsRef = useRef<PendingForget[]>([]);
@@ -4707,6 +4707,7 @@ function AppRoutes() {
         sessionParents={workspace.parents}
         sessions={knownSessions}
         uncheckedReadySessions={uncheckedReadySessions}
+        onMarkSessionUnread={markSessionUnread}
         recentsOpen={false}
         tabsVisible={consoleBars.sessionTabs}
         tabActionsVisible={desktopTabActionsVisible}
@@ -4962,6 +4963,7 @@ function AppRoutes() {
             sessionParents={workspace.parents}
             sessions={knownSessions}
             uncheckedReadySessions={uncheckedReadySessions}
+            onMarkSessionUnread={markSessionUnread}
             recentsOpen={recentsOpen}
             tabsVisible={consoleBars.sessionTabs}
             tabActionsVisible={desktopTabActionsVisible}
@@ -5046,6 +5048,7 @@ function AppRoutes() {
             sessionParents={workspace.parents}
             sessions={knownSessions}
             uncheckedReadySessions={uncheckedReadySessions}
+            onMarkSessionUnread={markSessionUnread}
             recentsOpen={newSessionRoute.recentsOpen}
             newSessionActive
             tabActionsVisible={desktopTabActionsVisible}

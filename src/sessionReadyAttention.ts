@@ -86,6 +86,21 @@ export function sessionReadyIsUnchecked(current: SessionReadyAttentionState, ses
   return Boolean(record && record.latestReadyEvent > record.lastCheckedEvent);
 }
 
+/** Advance attention so an older acknowledgement cannot clear a manual mark. */
+export function markSessionUnreadAttention(
+  current: SessionReadyAttentionState,
+  session: Session,
+): SessionReadyAttentionState {
+  const observed = observeSessionReadyAttention(current, [session]);
+  const key = sessionReadyIdentity(session);
+  const record = observed[key];
+  if (record.latestReadyEvent > record.lastCheckedEvent) return observed;
+  return {
+    ...observed,
+    [key]: { ...record, latestReadyEvent: Math.max(record.latestReadyEvent + 1, record.stateChangedAt) },
+  };
+}
+
 /** A check from another page must never acknowledge a newer ready event. */
 export function mergeSessionReadyAttention(
   current: SessionReadyAttentionState,
