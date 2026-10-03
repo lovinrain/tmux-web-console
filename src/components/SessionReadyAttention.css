@@ -1,22 +1,12 @@
-/* Loaded after the palette layer. A stronger blue fill separates unchecked
-   readiness from the lighter selected-tab fill in every palette. */
-html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"]:not([data-tab-move-selected="true"]) {
-  background: color-mix(in srgb, var(--blue) 32%, var(--preset-raised));
-  border-color: var(--blue);
+/* Emphasize only the session name so readiness preserves the selected row's
+   background, border, and marker. Adjust palette blue for text contrast. */
+html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] > .workspace-tab-title {
+  color: color-mix(in srgb, var(--blue) 60%, #fff);
+  font-weight: 700;
 }
 
-html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"]:not([data-tab-move-selected="true"]):is(.active, :hover) {
-  background: color-mix(in srgb, var(--blue) 36%, var(--preset-raised));
-  border-color: var(--blue);
-}
-
-html[data-theme][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] {
-  color: var(--preset-text);
-}
-
-/* Darken light-palette labels slightly to preserve contrast on the blue fill. */
-html[data-theme="light"][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] {
-  color: color-mix(in srgb, var(--preset-text) 85%, #000);
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-tab[data-ready-unchecked="true"] > [role="tab"] > .workspace-tab-title {
+  color: color-mix(in srgb, var(--blue) 85%, #000);
 }
 
 .workspace-tab-group-ready-count {

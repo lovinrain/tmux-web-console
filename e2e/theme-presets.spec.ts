@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 import { THEME_PALETTES } from "../src/themePresets";
@@ -156,39 +157,54 @@ test("narrow theme chooser has accessible groups, keyboard selection, and Escape
   await expect(opener).toBeFocused();
 });
 
-test("unchecked ready tabs survive refresh, contrast with selection in every palette, and clear on a new visit", async ({ page }, testInfo) => {
+test("unchecked ready names preserve selection and contrast in every palette, survive refresh, and clear on a new visit", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  await page.addInitScript(() => localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical"));
-  const idleName = `${sessionName}-idle`;
-  execFileSync("tmux", [...tmux, "new-session", "-d", "-s", idleName, "bash", "--noprofile", "--norc"]);
-  createdSessions.push(idleName);
+  await page.addInitScript(() => {
+    localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
+    localStorage.setItem("muxdeck-desktop-tab-rail-width", "480");
+  });
+  const otherName = `${sessionName}-also-ready`;
+  execFileSync("tmux", [...tmux, "new-session", "-d", "-s", otherName, "bash", "--noprofile", "--norc"]);
+  createdSessions.push(otherName);
   const inventory = await (await page.request.get("/mux/api/sessions")).json() as { sessions: Session[] };
   const live = inventory.sessions.find((session) => session.name === sessionName)!;
+  const otherLive = inventory.sessions.find((session) => session.name === otherName)!;
   expect(live).toBeDefined();
-  let snapshot: Session = { ...live, agentState: "working" };
+  expect(otherLive).toBeDefined();
+  let snapshot: Session = { ...live, customTitle: "Completed one", agentState: "working" };
+  let otherSnapshot: Session = { ...otherLive, customTitle: "Completed two", agentState: "working" };
   await page.route("**/api/sessions", (route) => route.fulfill({
-    json: { ...inventory, sessions: inventory.sessions.map((session) => session.name === sessionName ? snapshot : session) },
+    json: {
+      ...inventory,
+      sessions: inventory.sessions.map((session) => session.name === sessionName
+        ? snapshot : session.name === otherName ? otherSnapshot : session),
+    },
   }));
-  await page.goto(`${sessionUrl}&tab=${idleName}`);
+  await page.goto(`${sessionUrl}&tab=${otherName}`);
   const tab = page.locator(`.workspace-tab[data-workspace-session-name="${sessionName}"]`);
+  const otherTab = page.locator(`.workspace-tab[data-workspace-session-name="${otherName}"]`);
   await expect(tab.locator(".workspace-state-dot")).toHaveClass(/working/);
+  await expect(otherTab.locator(".workspace-state-dot")).toHaveClass(/working/);
   await tab.getByRole("tab").click();
   snapshot = { ...snapshot, agentState: "waiting_human", agentStateChangedAt: live.agentStateChangedAt + 1 };
+  otherSnapshot = { ...otherSnapshot, agentState: "waiting_human", agentStateChangedAt: otherLive.agentStateChangedAt + 1 };
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
+  await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await expect(tab.getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(otherTab.getByRole("tab")).toHaveAttribute("aria-selected", "false");
   await expect(tab.getByRole("tab")).toHaveAccessibleName(/ready, unchecked/);
   await page.reload();
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await page.addStyleTag({ content: ".workspace-tab { transition: none !important; }" });
 
   const colors: unknown[] = [];
   for (const palette of THEME_PALETTES) {
     await choosePreset(page, palette.name);
     await expect(page.locator("html")).toHaveAttribute("data-palette", palette.id);
-    for (const selected of [true, false]) {
-      const presentation = await tab.evaluate((element, selected) => {
-        const wasActive = element.classList.contains("active");
-        element.classList.toggle("active", selected);
+    const presentations = [];
+    for (const candidate of [tab, otherTab]) {
+      const presentation = await candidate.evaluate((element) => {
         const canvas = document.createElement("canvas");
         canvas.width = canvas.height = 1;
         const context = canvas.getContext("2d", { willReadFrequently: true })!;
@@ -206,46 +222,72 @@ test("unchecked ready tabs survive refresh, contrast with selection in every pal
           const first = luminance(left), second = luminance(right);
           return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
         };
-        const style = getComputedStyle(element);
-        const background = style.backgroundColor, border = style.borderTopColor;
-        const text = getComputedStyle(element.querySelector('[role="tab"]')!).color;
+        const title = element.querySelector(".workspace-tab-title")!;
+        const control = element.querySelector('[role="tab"]')!;
+        const appearance = () => ({
+          background: getComputedStyle(element).backgroundColor,
+          border: getComputedStyle(element).borderTopColor,
+          marker: getComputedStyle(element, "::after").backgroundColor,
+          text: getComputedStyle(title).color,
+          weight: Number(getComputedStyle(title).fontWeight),
+          controlText: getComputedStyle(control).color,
+        });
+        const ready = appearance();
         element.removeAttribute("data-ready-unchecked");
-        const normalBackground = getComputedStyle(element).backgroundColor;
-        element.classList.add("active");
-        const selectedBackground = getComputedStyle(element).backgroundColor;
-        element.classList.toggle("active", selected);
+        const normal = appearance();
         element.setAttribute("data-ready-unchecked", "true");
-        element.classList.toggle("active", wasActive);
         return {
-          background, normalBackground, selectedBackground, border, text,
-          textContrast: ratio(text, background),
-          selectedContrast: ratio(background, selectedBackground),
+          ...ready,
+          active: element.classList.contains("active"),
+          normalBackground: normal.background,
+          normalBorder: normal.border,
+          normalMarker: normal.marker,
+          normalText: normal.text,
+          normalControlText: normal.controlText,
+          textContrast: ratio(ready.text, ready.background),
         };
-      }, selected);
-      expect(presentation.background, palette.name).not.toBe(presentation.normalBackground);
+      });
+      expect(presentation.background, palette.name).toBe(presentation.normalBackground);
+      expect(presentation.border, palette.name).toBe(presentation.normalBorder);
+      expect(presentation.marker, palette.name).toBe(presentation.normalMarker);
+      expect(presentation.controlText, palette.name).toBe(presentation.normalControlText);
+      expect(presentation.text, palette.name).not.toBe(presentation.normalText);
+      expect(presentation.weight, palette.name).toBeGreaterThanOrEqual(700);
       expect(presentation.textContrast, palette.name).toBeGreaterThanOrEqual(4.5);
-      expect(presentation.selectedContrast, palette.name).toBeGreaterThanOrEqual(1.25);
-      colors.push({ palette: palette.id, active: selected, ...presentation });
+      presentations.push(presentation);
+      colors.push({ palette: palette.id, ...presentation });
+    }
+    expect(presentations.map(({ active }) => active), palette.name).toEqual([true, false]);
+    expect(presentations[0].background, palette.name).not.toBe(presentations[1].background);
+    expect(presentations[0].marker, palette.name).not.toBe(presentations[1].marker);
+    if (palette.id === "muxdeck") {
+      await page.screenshot({ path: testInfo.outputPath("ready-unchecked-muxdeck.png"), animations: "disabled" });
     }
   }
-  await testInfo.attach("ready-tab-palette-colors", { body: JSON.stringify(colors, null, 2), contentType: "application/json" });
+  const colorsPath = testInfo.outputPath("ready-tab-palette-colors.json");
+  writeFileSync(colorsPath, JSON.stringify(colors, null, 2));
+  await testInfo.attach("ready-tab-palette-colors", { path: colorsPath, contentType: "application/json" });
   await page.screenshot({ path: testInfo.outputPath("ready-unchecked-rose-pine-dawn.png"), animations: "disabled" });
 
   await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "horizontal");
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "vertical");
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
+  await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await page.screenshot({ path: testInfo.outputPath("ready-unchecked-side-tabs.png"), animations: "disabled" });
 
   await tab.getByRole("tab").click({ modifiers: ["Control"] });
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
   await tab.getByRole("tab").click();
   await expect(tab).not.toHaveAttribute("data-ready-unchecked");
+  await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await page.reload();
   await expect(tab.locator(".workspace-state-dot")).toHaveClass(/waiting_human/);
   await expect(tab).not.toHaveAttribute("data-ready-unchecked");
+  await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
 });
 
 test("live console applies presets without reconnecting, input, or tmux resizing", async ({ page }, testInfo) => {
