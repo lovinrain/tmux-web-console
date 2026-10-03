@@ -2027,7 +2027,7 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onReparentSession).toHaveBeenLastCalledWith("zulu", "beta");
   });
 
-  it("promotes the selected branch one level at a time without switching or closing sessions", async () => {
+  it("moves the selected branch up and down one level without switching or closing sessions", async () => {
     const props = navigationProps({ activeSession: "zulu", tabActionsVisible: false });
     function NestedNavigation() {
       const [workspace, setWorkspace] = useState<SessionWorkspaceState>({
@@ -2040,48 +2040,70 @@ describe("SessionWorkspaceNavigation", () => {
     render(<NestedNavigation />);
     const zulu = screen.getByRole("tab", { name: "Zulu shell, Other" });
     const child = screen.getByRole("tab", { name: "Archived deploy, Background work" });
-    const button = screen.getByRole("button", { name: "Up one level" });
-    fireEvent.click(button);
+    const controls = screen.getByRole("group", { name: "Session nesting level" });
+    const promote = within(controls).getByRole("button", { name: "Up one level" });
+    const nest = within(controls).getByRole("button", { name: "Down one level" });
+    expect(promote).toBeEnabled();
+    expect(nest).toBeDisabled();
+    fireEvent.click(promote);
     expect(zulu.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "alpha");
     expect(child.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "zulu");
     expect(zulu).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(button);
+    expect(nest).toBeEnabled();
+    fireEvent.click(promote);
     expect(zulu.closest(".workspace-tab")).not.toHaveAttribute("data-session-parent");
     expect(child.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "zulu");
-    expect(screen.queryByRole("button", { name: "Up one level" })).not.toBeInTheDocument();
+    expect(promote).toBeVisible();
+    expect(promote).toBeDisabled();
+    expect(promote).toHaveAccessibleDescription("This session is already at the top level");
+    expect(nest).toHaveAccessibleDescription("Nest Zulu shell under Alpha control; its nested sessions come with it");
+    fireEvent.click(nest);
+    expect(zulu.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "alpha");
+    expect(child.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "zulu");
+    expect(nest).toHaveAccessibleDescription("Nest Zulu shell under beta; its nested sessions come with it");
+    fireEvent.click(nest);
+    expect(zulu.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "beta");
+    expect(child.closest(".workspace-tab")).toHaveAttribute("data-session-parent", "zulu");
+    expect(zulu).toHaveAttribute("aria-selected", "true");
+    expect(nest).toBeDisabled();
+    expect(promote).toBeEnabled();
+    expect(screen.getByText("Zulu shell moved down one level.")).toBeInTheDocument();
     await waitFor(() => expect(zulu).toHaveFocus());
     expect(props.onSelect).not.toHaveBeenCalled();
     expect(props.onCloseTab).not.toHaveBeenCalled();
   });
 
   it.each<Partial<NavigationProps>>([
-    { workspacePersistenceState: "loading" },
-    { workspacePersistenceState: "error" },
-    { separatorsBusy: true },
-  ])("disables nested-tab moves while syncing: %j", (overrides) => {
+    { activeSession: "alpha" },
+    { activeSession: "beta", groups: [
+      { id: "review", name: "Review", color: "blue", collapsed: false, tabs: ["alpha"] },
+    ] },
+  ])("keeps root level controls visible without allowing a move across tab groups: %j", (overrides) => {
     const props = navigationProps({
-      activeSession: "beta", sessionParents: { beta: "alpha" },
-      onReparentSession: vi.fn(), onTransferSelectedSessions: vi.fn(), ...overrides,
+      onReparentSession: vi.fn(), ...overrides,
     });
     render(<SessionWorkspaceNavigation {...props} />);
-    const promote = screen.getByRole("button", { name: "Up one level" });
-    const placement = screen.getByRole("button", { name: "Move / Nest beta" });
+    const controls = screen.getByRole("group", { name: "Session nesting level" });
+    const promote = within(controls).getByRole("button", { name: "Up one level" });
+    const nest = within(controls).getByRole("button", { name: "Down one level" });
+    expect(controls).toBeVisible();
     expect(promote).toBeDisabled();
-    expect(placement).toBeDisabled();
+    expect(nest).toBeDisabled();
+    expect(nest).toHaveAccessibleDescription("There is no previous session at this level in the same tab group");
     fireEvent.click(promote);
-    fireEvent.click(placement);
+    fireEvent.click(nest);
     expect(props.onReparentSession).not.toHaveBeenCalled();
-    expect(props.onTransferSelectedSessions).not.toHaveBeenCalled();
   });
 
-  it("announces a rejected promotion and leaves the tab nested", () => {
+  it.each(["Up one level", "Down one level"])("announces a rejected %s and leaves the tab nested", (buttonName) => {
     render(<SessionWorkspaceNavigation {...navigationProps({
-      activeSession: "beta", sessionParents: { beta: "alpha" },
+      activeSession: "zulu", openSessions: ["alpha", "beta", "zulu"],
+      sessionParents: { beta: "alpha", zulu: "alpha" },
       onReparentSession: () => { throw new Error("Wait for the workspace to finish opening."); },
     })} />);
-    fireEvent.click(screen.getByRole("button", { name: "Up one level" }));
+    fireEvent.click(screen.getByRole("button", { name: buttonName }));
     expect(screen.getByText("Wait for the workspace to finish opening.")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "beta, Working" }).closest(".workspace-tab"))
+    expect(screen.getByRole("tab", { name: "Zulu shell, Other" }).closest(".workspace-tab"))
       .toHaveAttribute("data-session-parent", "alpha");
   });
 
@@ -2121,26 +2143,45 @@ describe("SessionWorkspaceNavigation", () => {
     { newSessionActive: true },
     { activeSession: null },
     { activeSession: "not-in-workspace" },
-  ])("disables the placement button when the workspace or session is unavailable: %j", (overrides) => {
+  ])("disables placement and level controls when the workspace or session is unavailable: %j", (overrides) => {
     const onTransferSelectedSessions = vi.fn();
+    const onReparentSession = vi.fn();
     render(<SessionWorkspaceNavigation {...navigationProps({
-      onReparentSession: vi.fn(), onTransferSelectedSessions, ...overrides,
+      activeSession: "zulu", openSessions: ["alpha", "beta", "zulu"],
+      sessionParents: { beta: "alpha", zulu: "alpha" },
+      onReparentSession, onTransferSelectedSessions, ...overrides,
     })} />);
     const button = screen.getByRole("button", { name: "Move / Nest" });
+    const promote = screen.getByRole("button", { name: "Up one level" });
+    const nest = screen.getByRole("button", { name: "Down one level" });
     expect(button).toBeDisabled();
+    expect(promote).toBeDisabled();
+    expect(nest).toBeDisabled();
     fireEvent.click(button);
+    fireEvent.click(promote);
+    fireEvent.click(nest);
+    if (overrides.workspacePersistenceState || overrides.separatorsBusy) {
+      const tabPlacement = screen.getByRole("button", { name: "Move / Nest Zulu shell" });
+      expect(tabPlacement).toBeDisabled();
+      fireEvent.click(tabPlacement);
+    }
+    expect(onReparentSession).not.toHaveBeenCalled();
     expect(onTransferSelectedSessions).not.toHaveBeenCalled();
   });
 
-  it("opens placement for the focused session in a multi-pane view", () => {
+  it("targets the focused session for placement and level changes in a multi-pane view", () => {
     const onTransferSelectedSessions = vi.fn();
+    const onReparentSession = vi.fn();
     render(<ActivePaneSessionContext.Provider value="beta">
       <SessionWorkspaceNavigation {...navigationProps({
-        activeSession: null, onReparentSession: vi.fn(), onTransferSelectedSessions,
+        activeSession: null, onReparentSession, onTransferSelectedSessions,
       })} />
     </ActivePaneSessionContext.Provider>);
     fireEvent.click(screen.getByRole("button", { name: "Move / Nest" }));
     expect(onTransferSelectedSessions).toHaveBeenCalledWith(["beta"]);
+    expect(screen.getByRole("button", { name: "Up one level" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Down one level" }));
+    expect(onReparentSession).toHaveBeenCalledWith("beta", "alpha");
   });
 
   it("drags horizontal desktop tabs to a new position without selecting or closing them", () => {

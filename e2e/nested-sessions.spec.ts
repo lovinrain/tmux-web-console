@@ -244,16 +244,33 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
 
   const navigation = page.locator(".workspace-navigation-vertical");
   const resize = page.getByRole("separator", { name: "Resize vertical session tabs", exact: true });
+  const expectLevelControlLayout = async () => {
+    const controls = page.getByRole("group", { name: "Session nesting level", exact: true });
+    const up = controls.getByRole("button", { name: "Up one level", exact: true });
+    const down = controls.getByRole("button", { name: "Down one level", exact: true });
+    await expect(up).toBeVisible();
+    await expect(down).toBeVisible();
+    const controlBox = (await controls.boundingBox())!;
+    const upBox = (await up.boundingBox())!;
+    const downBox = (await down.boundingBox())!;
+    expect(upBox.width).toBeCloseTo(downBox.width, 1);
+    expect(upBox.y).toBeCloseTo(downBox.y, 1);
+    expect(upBox.x).toBeCloseTo(controlBox.x, 1);
+    expect(upBox.x + upBox.width).toBeCloseTo(downBox.x, 1);
+    expect(downBox.x + downBox.width).toBeCloseTo(controlBox.x + controlBox.width, 1);
+  };
   for (const theme of ["dark", "light"]) {
     if (theme === "light") await page.getByRole("button", { name: "Light theme", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     await resize.press("Enter");
     await expect(navigation).not.toHaveAttribute("data-compact");
     await expectTree(page, tabs, parents);
+    await expectLevelControlLayout();
     await page.screenshot({ path: join(reviewDirectory, `nested-sidebar-${theme}.png`) });
     await resize.press("Home");
     await expect(navigation).toHaveAttribute("data-compact", "true");
     await expectTree(page, tabs, parents);
+    await expectLevelControlLayout();
     for (const name of Object.keys(parents)) {
       const row = tabRow(page, name);
       const rowBox = (await row.boundingBox())!;
@@ -315,12 +332,31 @@ test("existing branches move through the placement button, drag to nest, and tra
   await page.screenshot({ path: join(reviewDirectory, "placement-button-dialog.png") });
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(placementButton).toBeFocused();
-  await page.getByRole("button", { name: "Up one level", exact: true }).click();
+  const promote = page.getByRole("button", { name: "Up one level", exact: true });
+  const nest = page.getByRole("button", { name: "Down one level", exact: true });
+  await promote.click();
   await expectTree(page, source.tabs, { [child]: branch });
   await expectTree(second, source.tabs, { [child]: branch });
   await expect(tabRow(page, branch).getByRole("tab")).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("button", { name: "Up one level", exact: true })).toHaveCount(0);
+  await expect(promote).toBeVisible();
+  await expect(promote).toBeDisabled();
+  await expect(nest).toBeEnabled();
   await expect(tabRow(page, branch).getByRole("tab")).toBeFocused();
+  await nest.click();
+  await expectTree(page, source.tabs, source.parents!);
+  await expectTree(second, source.tabs, source.parents!);
+  await expect(promote).toBeEnabled();
+  await expect(nest).toBeDisabled();
+  await expect(tabRow(page, branch).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(tabRow(page, branch).getByRole("tab")).toBeFocused();
+  await expect(tabRow(second, sourceName).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(second.getByRole("button", { name: "Up one level", exact: true })).toBeVisible();
+  await expect(second.getByRole("button", { name: "Up one level", exact: true })).toBeDisabled();
+  await expect.poll(async () => (await readWorkspace(context.request, source.id)).parents).toEqual(source.parents);
+  await second.reload();
+  await expectTree(second, source.tabs, source.parents!);
+  // Reload restores the saved selection; reselect this page's independent session.
+  await selectTab(second, sourceName);
 
   // Reveal the complete target before dragging so auto-scroll cannot
   // move its nesting zone out from under the pointer just before the drop.
@@ -388,16 +424,16 @@ test("existing branches move through the placement button, drag to nest, and tra
     .toEqual({ [destinationParent]: destinationRoot, [child]: branch });
   await page.reload();
   await expectTree(page, destinationTabs, { [destinationParent]: destinationRoot, [child]: branch });
-  const footer = page.locator(".workspace-callback-footnote");
-  await expect(footer).toBeVisible();
-  await expect(footer).toContainText("Global 0/0");
-  await expect(footer).toContainText("Local 0/0");
-  const footerBox = (await footer.boundingBox())!;
-  const consoleBox = (await page.locator(".console-shell").boundingBox())!;
-  expect(consoleBox.y + consoleBox.height).toBeLessThanOrEqual(footerBox.y + 1);
-  await page.screenshot({ path: join(reviewDirectory, "session-placement-footer-dark.png") });
+  const callbackSummary = page.getByRole("button", { name: "Show callback list", exact: true });
+  await expect(callbackSummary).toBeVisible();
+  await expect(callbackSummary).toContainText("Global 0/0");
+  await expect(callbackSummary).toContainText("Local 0/0");
+  const summaryBox = (await callbackSummary.boundingBox())!;
+  const terminalBox = (await page.locator(".terminal-view").boundingBox())!;
+  expect(summaryBox.y + summaryBox.height).toBeLessThanOrEqual(terminalBox.y + 1);
+  await page.screenshot({ path: join(reviewDirectory, "session-placement-summary-dark.png") });
   await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
-  await page.screenshot({ path: join(reviewDirectory, "session-placement-footer-light.png") });
+  await page.screenshot({ path: join(reviewDirectory, "session-placement-summary-light.png") });
   expect(names.map(sessionIdentity)).toEqual(identities);
 });
 
@@ -427,6 +463,8 @@ test("folded groups hide the active tree and move together across synchronized s
   const second = await context.newPage();
   await second.goto(`/mux/session/${other}?workspace=${workspace.id}`);
   await expectTree(second, tabs, parents);
+  // Choose an independent session after the saved workspace restores its selection.
+  await selectTab(second, other);
   await page.getByRole("button", { name: "Collapse Family tab group", exact: true }).click();
   await page.getByRole("button", { name: "Collapse Other tab group", exact: true }).click();
   const family = page.locator('[data-workspace-tab-group-id="family"]');

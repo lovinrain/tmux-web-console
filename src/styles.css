@@ -2996,6 +2996,19 @@ a:focus-visible {
   border-left: 1px solid #30382e;
 }
 
+.workspace-session-level-controls {
+  display: grid;
+  width: 224px;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.workspace-session-level-controls > .workspace-session-placement-button {
+  min-width: 0;
+  justify-content: center;
+  padding-inline: 4px;
+}
+
 .workspace-add-session-button:disabled,
 .workspace-session-placement-button:disabled {
   color: #778173;
@@ -12377,6 +12390,7 @@ button[data-hold-scroll="true"] {
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-dashboard-actions,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-new-session-actions,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-add-session-button,
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-session-level-controls,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-session-placement-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-save-button,
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-saved-indicator,
@@ -12397,6 +12411,22 @@ button[data-hold-scroll="true"] {
     border-right: 0;
     border-bottom: 1px solid #30382e;
     border-left: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical .workspace-session-level-controls {
+    padding: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-session-level-controls > .workspace-session-placement-button {
+    justify-content: center;
+    padding-inline: 4px;
+    border-bottom: 0;
+  }
+
+  [data-desktop-tabs="vertical"] .workspace-navigation-vertical
+    .workspace-session-level-controls > .workspace-session-placement-button + .workspace-session-placement-button {
+    border-left: 1px solid #30382e;
   }
 
   [data-desktop-tabs="vertical"] .workspace-navigation-vertical
@@ -12806,6 +12836,10 @@ button[data-hold-scroll="true"] {
 
   /* The rail's query size excludes its 12px gutter and 1px border. */
   @container workspace-tab-rail (max-width: 227px) {
+    .workspace-navigation-vertical .workspace-session-level-detail {
+      display: none;
+    }
+
     .workspace-navigation-vertical[data-orientation="vertical"] .workspace-session-placement-button {
       flex-direction: column;
       justify-content: center;
@@ -14811,6 +14845,15 @@ html.history-resizing * {
     font-size: 8px;
     line-height: 10px;
     letter-spacing: 0;
+  }
+
+  .workspace-session-level-controls {
+    width: 96px;
+    flex: 0 0 96px;
+  }
+
+  .workspace-session-level-detail {
+    display: none;
   }
 
   .workspace-dashboard-button > span,

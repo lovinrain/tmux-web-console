@@ -26,6 +26,7 @@ import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowRightIcon,
   ArrowUpIcon,
   CheckIcon,
   CloseIcon,
@@ -2236,11 +2237,37 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const placementSessionAvailable = Boolean(placementSession && openSessions.includes(placementSession));
   const placementParent = placementSessionAvailable
     ? workspaceSessionParent(placementSession!, sessionParents) : undefined;
+  const placementPreviousSibling = placementSessionAvailable
+    ? previousWorkspaceSibling({ openSessions, parents: sessionParents, groups }, placementSession!)
+    : null;
+  const placementLevelUnavailableHint = !placementSessionAvailable
+    ? "Select a session to change its nesting level"
+    : !nestingEnabled ? "Wait for the workspace to finish syncing" : null;
+  const placementUpHint = placementLevelUnavailableHint ?? (placementParent
+    ? `Move ${tabTitle(placementSession!, sessionsByName)} out of ${tabTitle(placementParent, sessionsByName)}; its nested sessions come with it`
+    : "This session is already at the top level");
+  const placementDownHint = placementLevelUnavailableHint ?? (placementPreviousSibling
+    ? `Nest ${tabTitle(placementSession!, sessionsByName)} under ${tabTitle(placementPreviousSibling, sessionsByName)}; its nested sessions come with it`
+    : "There is no previous session at this level in the same tab group");
   const placementHint = !placementSessionAvailable
     ? "Select a session to move or nest"
     : !nestingEnabled
       ? "Wait for the workspace to finish syncing"
-      : `Organize ${tabTitle(placementSession!, sessionsByName)}: move up a level, choose a parent session, or move to another workspace`;
+      : `Organize ${tabTitle(placementSession!, sessionsByName)}: change its nesting level, choose a parent session, or move to another workspace`;
+  const changePlacementLevel = (direction: "up" | "down") => {
+    if (!nestingEnabled || !placementSessionAvailable || !placementSession) return;
+    const target = direction === "up"
+      ? placementParent ? workspaceSessionParent(placementParent, sessionParents) ?? null : undefined
+      : placementPreviousSibling ?? undefined;
+    if (target === undefined) return;
+    try {
+      onReparentSession?.(placementSession, target);
+      setReorderAnnouncement(`${tabTitle(placementSession, sessionsByName)} moved ${direction} one level.`);
+      window.requestAnimationFrame(() => activeTabRef.current?.focus());
+    } catch (error) {
+      setReorderAnnouncement(error instanceof Error ? error.message : "Unable to move this session.");
+    }
+  };
   const selectedWorkspaceTabSet = useMemo(
     () => new Set(selectedWorkspaceTabs),
     [selectedWorkspaceTabs],
@@ -3717,27 +3744,33 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               {addableSessionCount > 0 && <strong>{addableSessionCount}</strong>}
             </button>
           )}
-          {onReparentSession && placementParent && (
-            <button
-              type="button"
-              className="workspace-session-placement-button"
-              disabled={!nestingEnabled}
-              aria-label="Up one level"
-              title={`Move ${tabTitle(placementSession!, sessionsByName)} out of ${tabTitle(placementParent, sessionsByName)}; its nested sessions come with it`}
-              onClick={() => {
-                if (!placementSession) return;
-                try {
-                  onReparentSession(placementSession, workspaceSessionParent(placementParent, sessionParents) ?? null);
-                  setReorderAnnouncement(`${tabTitle(placementSession, sessionsByName)} moved up one level.`);
-                  window.requestAnimationFrame(() => activeTabRef.current?.focus());
-                } catch (error) {
-                  setReorderAnnouncement(error instanceof Error ? error.message : "Unable to move this session.");
-                }
-              }}
-            >
-              <ArrowLeftIcon />
-              <span>Up one level</span>
-            </button>
+          {onReparentSession && (
+            <div className="workspace-session-level-controls" role="group" aria-label="Session nesting level">
+              <button
+                type="button"
+                className="workspace-session-placement-button"
+                disabled={!nestingEnabled || !placementParent}
+                aria-label="Up one level"
+                aria-description={placementUpHint}
+                title={placementUpHint}
+                onClick={() => changePlacementLevel("up")}
+              >
+                <ArrowLeftIcon />
+                <span>Up<span className="workspace-session-level-detail"> one level</span></span>
+              </button>
+              <button
+                type="button"
+                className="workspace-session-placement-button"
+                disabled={!nestingEnabled || !placementPreviousSibling}
+                aria-label="Down one level"
+                aria-description={placementDownHint}
+                title={placementDownHint}
+                onClick={() => changePlacementLevel("down")}
+              >
+                <ArrowRightIcon />
+                <span>Down<span className="workspace-session-level-detail"> one level</span></span>
+              </button>
+            </div>
           )}
           {onReparentSession && props.onTransferSelectedSessions && (
             <button
