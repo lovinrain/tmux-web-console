@@ -13,6 +13,33 @@ const tmux = ["-L", socket];
 const sessionName = `muxdeck-theme-presets-${process.pid}`;
 const sessionUrl = `/mux/session/${sessionName}?tab=${sessionName}`;
 const createdSessions: string[] = [];
+const createdWorkspaces: string[] = [];
+
+function measureControlSurface(element: Element) {
+  const style = getComputedStyle(element);
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const context = canvas.getContext("2d", { willReadFrequently: true })!;
+  const luminance = (color: string) => {
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = color;
+    context.fillRect(0, 0, 1, 1);
+    const channels = Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3).map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  };
+  const backgroundLuminance = luminance(style.backgroundColor);
+  const textLuminance = luminance(style.color);
+  return {
+    label: element.getAttribute("aria-label"),
+    background: style.backgroundColor,
+    backgroundLuminance,
+    textContrast: (Math.max(backgroundLuminance, textLuminance) + 0.05)
+      / (Math.min(backgroundLuminance, textLuminance) + 0.05),
+  };
+}
 
 async function choosePreset(page: Page, name: string): Promise<void> {
   const opener = page.getByRole("button", { name: "Choose themes", exact: true });
@@ -60,7 +87,15 @@ test.beforeEach(async ({ context }) => {
   })).ok()).toBe(true);
 });
 
-test.afterAll(() => {
+test.afterAll(async ({ request }) => {
+  if (createdWorkspaces.length > 0) {
+    expect((await request.post("/mux/api/auth/login", {
+      data: { username: E2E_AUTH_USERNAME, password: E2E_AUTH_PASSWORD },
+    })).ok()).toBe(true);
+    for (const id of createdWorkspaces) {
+      expect((await request.delete(`/mux/api/workspaces/${id}`)).ok()).toBe(true);
+    }
+  }
   for (const name of createdSessions) {
     try {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
@@ -171,6 +206,12 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   const otherLive = inventory.sessions.find((session) => session.name === otherName)!;
   expect(live).toBeDefined();
   expect(otherLive).toBeDefined();
+  const saved = await page.request.post("/mux/api/workspaces", {
+    data: { name: "Unread presentation", tabs: [sessionName, otherName], activeSession: sessionName },
+  });
+  expect(saved.ok()).toBe(true);
+  const workspaceId = (await saved.json()).workspace.id as string;
+  createdWorkspaces.push(workspaceId);
   let snapshot: Session = { ...live, customTitle: "Completed one", agentState: "working" };
   let otherSnapshot: Session = { ...otherLive, customTitle: "Completed two", agentState: "working" };
   const fulfillInventory = (route: Route) => route.fulfill({
@@ -181,7 +222,21 @@ test("unchecked ready names preserve selection and contrast in every palette, su
     },
   });
   await page.route("**/api/sessions", fulfillInventory);
-  await page.goto(`${sessionUrl}&tab=${otherName}`);
+  await page.goto(`${sessionUrl}&tab=${otherName}&workspace=${workspaceId}`);
+  const actions = page.getByRole("group", { name: "Rename and unread actions", exact: true });
+  const rename = actions.getByRole("button", { name: "Rename workspace Unread presentation", exact: true });
+  const unread = actions.locator(".workspace-mark-unread-button");
+  const expectSharedActionRow = async () => {
+    const [left, right] = await Promise.all([rename.boundingBox(), unread.boundingBox()]);
+    expect(left).not.toBeNull();
+    expect(right).not.toBeNull();
+    expect(left!.y).toBeCloseTo(right!.y, 2);
+    expect(left!.height).toBeCloseTo(right!.height, 2);
+    expect(left!.x + left!.width).toBeLessThanOrEqual(right!.x);
+    expect(await actions.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  };
+  await expect(rename).toBeVisible();
+  await expectSharedActionRow();
   const tab = page.locator(`.workspace-tab[data-workspace-session-name="${sessionName}"]`);
   const otherTab = page.locator(`.workspace-tab[data-workspace-session-name="${otherName}"]`);
   await expect(tab.locator(".workspace-state-dot")).toHaveClass(/working/);
@@ -200,9 +255,26 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   await page.addStyleTag({ content: ".workspace-tab { transition: none !important; }" });
 
   const colors: unknown[] = [];
+  const controlColors: unknown[] = [];
+  const lightControls = [
+    page.getByRole("button", { name: "Move / Nest", exact: true }),
+    page.getByRole("button", { name: "Stable sort tabs: non-working first, then working", exact: true }),
+    page.getByRole("button", { name: "Create multi-pane view", exact: true }),
+    page.getByRole("button", { name: "Quick new temporary session", exact: true }),
+  ];
   for (const palette of THEME_PALETTES) {
     await choosePreset(page, palette.name);
     await expect(page.locator("html")).toHaveAttribute("data-palette", palette.id);
+    await expectSharedActionRow();
+    if (palette.mode === "light") {
+      for (const control of lightControls) {
+        const surface = await control.evaluate(measureControlSurface);
+        expect(surface.backgroundLuminance, `${palette.name}: ${surface.label}`).toBeGreaterThan(0.6);
+        expect(surface.textContrast, `${palette.name}: ${surface.label}`).toBeGreaterThanOrEqual(4.5);
+        controlColors.push({ palette: palette.id, ...surface });
+      }
+      await page.screenshot({ path: testInfo.outputPath(`sidebar-light-${palette.id}.png`), animations: "disabled" });
+    }
     const presentations = [];
     for (const candidate of [tab, otherTab]) {
       const presentation = await candidate.evaluate((element) => {
@@ -268,7 +340,26 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   const colorsPath = testInfo.outputPath("ready-tab-palette-colors.json");
   writeFileSync(colorsPath, JSON.stringify(colors, null, 2));
   await testInfo.attach("ready-tab-palette-colors", { path: colorsPath, contentType: "application/json" });
+  for (const control of lightControls) {
+    await control.hover();
+    expect((await control.evaluate(measureControlSurface)).backgroundLuminance).toBeGreaterThan(0.6);
+    await page.mouse.move(1000, 850);
+    await control.focus();
+    expect((await control.evaluate(measureControlSurface)).backgroundLuminance).toBeGreaterThan(0.6);
+    await page.getByRole("button", { name: "Choose themes", exact: true }).focus();
+  }
+  const controlColorsPath = testInfo.outputPath("sidebar-control-palettes.json");
+  writeFileSync(controlColorsPath, JSON.stringify(controlColors, null, 2));
+  await testInfo.attach("sidebar-control-palettes", { path: controlColorsPath, contentType: "application/json" });
   await page.screenshot({ path: testInfo.outputPath("ready-unchecked-rose-pine-dawn.png"), animations: "disabled" });
+
+  const resize = page.getByRole("separator", { name: "Resize vertical session tabs", exact: true });
+  for (const key of ["Enter", "Home"]) {
+    await resize.press(key);
+    await expectSharedActionRow();
+    await page.screenshot({ path: testInfo.outputPath(`rename-unread-row-${key.toLowerCase()}.png`), animations: "disabled" });
+  }
+  await resize.press("End");
 
   await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toHaveAttribute("aria-orientation", "horizontal");

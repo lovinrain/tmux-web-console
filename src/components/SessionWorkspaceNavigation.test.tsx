@@ -171,9 +171,16 @@ afterEach(() => {
 
 describe("SessionWorkspaceNavigation", () => {
   it("marks the current session unread without visiting it, even when tab actions are hidden", () => {
-    const props = navigationProps({ onMarkSessionUnread: vi.fn(), tabActionsVisible: false });
+    const props = navigationProps({
+      onMarkSessionUnread: vi.fn(), tabActionsVisible: false,
+      workspacePersistenceState: "saved", activeWorkspaceId: "workspace-one",
+      workspaceName: "Review", onRenameWorkspace: vi.fn(),
+    });
     const view = render(<SessionWorkspaceNavigation {...props} />);
     const button = screen.getByRole("button", { name: "Mark as unread" });
+    const actions = screen.getByRole("group", { name: "Rename and unread actions" });
+    expect(within(actions).getByRole("button", { name: "Mark as unread" })).toBe(button);
+    expect(within(actions).getByRole("button", { name: "Rename workspace Review" })).toBeVisible();
     expect(button).toHaveAccessibleDescription(/Alpha control/);
     fireEvent.click(button);
     expect(props.onMarkSessionUnread).toHaveBeenCalledWith("alpha");

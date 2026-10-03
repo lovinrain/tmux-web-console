@@ -18,6 +18,50 @@ html[data-theme="light"] {
   --preset-shadow: rgba(65, 55, 38, 0.14);
 }
 
+/* Override the more specific side-tab rules with each light palette's surfaces. */
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-session-placement-controls button,
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-tab-status-sort,
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-pane-layout-heading button,
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-pane-layout-create-inline,
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-quick-new-session-button {
+  color: var(--preset-text);
+  background: var(--preset-raised);
+  border-color: var(--preset-line);
+}
+
+html[data-theme="light"][data-palette] .workspace-navigation :is(
+  .workspace-session-placement-controls button, .workspace-tab-status-sort,
+  .workspace-pane-layout-heading button, .workspace-pane-layout-create-inline,
+  .workspace-quick-new-session-button
+):is(:hover, :focus-visible):not(:disabled) {
+  color: var(--preset-text);
+  background: color-mix(in srgb, var(--cyan) 8%, var(--preset-raised));
+  border-color: var(--cyan);
+}
+
+html[data-theme="light"][data-palette] .workspace-navigation :is(
+  .workspace-session-placement-controls, .workspace-tab-status-sort,
+  .workspace-pane-layout-heading, .workspace-pane-layout-create-inline
+) svg {
+  color: var(--cyan);
+}
+
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-quick-new-session-button {
+  color: var(--acid);
+}
+
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-tab-status-sort small {
+  color: var(--preset-muted);
+  background: var(--preset-soft);
+  border-color: var(--preset-line);
+}
+
+html[data-theme="light"][data-palette] .workspace-navigation .workspace-pane-layout-heading {
+  color: var(--cyan);
+  background: color-mix(in srgb, var(--cyan) 5%, var(--preset-raised));
+  border-color: var(--preset-line);
+}
+
 html[data-palette="nord"] {
   --preset-canvas: #2e3440;
   --preset-raised: #3b4252;

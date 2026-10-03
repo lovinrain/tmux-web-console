@@ -3802,24 +3802,6 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               </div>
             </div>
           )}
-          {props.onMarkSessionUnread && (
-            <button
-              type="button"
-              className="workspace-session-placement-button workspace-mark-unread-button"
-              disabled={!unreadTarget || unreadTargetUnchecked}
-              aria-label={unreadLabel}
-              aria-description={unreadHint}
-              title={unreadHint}
-              onClick={() => {
-                if (!unreadTarget) return;
-                props.onMarkSessionUnread?.(unreadTarget);
-                setReorderAnnouncement(`${tabTitle(unreadTarget, sessionsByName)} marked as unread.`);
-              }}
-            >
-              <UnreadIcon />
-              <span>{unreadLabel}</span>
-            </button>
-          )}
           {orientation === "vertical" && onSortTabsByWorkingState && openSessions.length > 1 && (
             <button
               type="button"
@@ -4260,21 +4242,43 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <span>Recreate {missingSessionCount}</span>
             </button>
           )}
-          {showRenameWorkspaceButton && (
-            <button
-              ref={renameButtonRef}
-              type="button"
-              className="workspace-rename-button"
-              onClick={() => setRenameDialogOpen(true)}
-              aria-haspopup="dialog"
-              aria-controls="workspace-rename-dialog"
-              aria-expanded={renameDialogOpen}
-              aria-label={`Rename workspace ${identityName}`}
-              title={`Rename ${identityName}`}
-            >
-              <EditIcon />
-              <span>Rename</span>
-            </button>
+          {(showRenameWorkspaceButton || props.onMarkSessionUnread) && (
+            <div className="workspace-rename-unread-actions" role="group" aria-label="Rename and unread actions">
+              {showRenameWorkspaceButton && (
+                <button
+                  ref={renameButtonRef}
+                  type="button"
+                  className="workspace-rename-button"
+                  onClick={() => setRenameDialogOpen(true)}
+                  aria-haspopup="dialog"
+                  aria-controls="workspace-rename-dialog"
+                  aria-expanded={renameDialogOpen}
+                  aria-label={`Rename workspace ${identityName}`}
+                  title={`Rename ${identityName}`}
+                >
+                  <EditIcon />
+                  <span>Rename</span>
+                </button>
+              )}
+              {props.onMarkSessionUnread && (
+                <button
+                  type="button"
+                  className="workspace-session-placement-button workspace-mark-unread-button"
+                  disabled={!unreadTarget || unreadTargetUnchecked}
+                  aria-label={unreadLabel}
+                  aria-description={unreadHint}
+                  title={unreadHint}
+                  onClick={() => {
+                    if (!unreadTarget) return;
+                    props.onMarkSessionUnread?.(unreadTarget);
+                    setReorderAnnouncement(`${tabTitle(unreadTarget, sessionsByName)} marked as unread.`);
+                  }}
+                >
+                  <UnreadIcon />
+                  <span>{unreadLabel}</span>
+                </button>
+              )}
+            </div>
           )}
           {!compactViewport && onSwitchWorkspace && (
             <WorkspaceQuickSwitcher

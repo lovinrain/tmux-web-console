@@ -25,12 +25,52 @@ html[data-theme][data-palette] .workspace-navigation .workspace-mark-unread-butt
   background: color-mix(in srgb, var(--blue) 12%, var(--preset-raised));
 }
 
-@container workspace-tab-rail (max-width: 176px) {
-  .workspace-navigation-vertical .workspace-mark-unread-button {
-    justify-content: center;
-  }
+.workspace-rename-unread-actions {
+  display: flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: stretch;
+  border-right: 1px solid var(--preset-line);
+}
 
-  .workspace-navigation-vertical .workspace-mark-unread-button > span {
+.workspace-rename-unread-actions > .workspace-rename-button {
+  border-right: 0;
+}
+
+.workspace-navigation-vertical[data-orientation="vertical"] .workspace-rename-unread-actions {
+  width: 100%;
+  min-width: 0;
+  flex: 0 0 44px;
+  border-right: 0;
+  border-bottom: 1px solid var(--preset-line);
+}
+
+.workspace-navigation-vertical[data-orientation="vertical"] .workspace-rename-unread-actions > button {
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  flex: 1 1 0;
+  justify-content: center;
+  padding-inline: 4px;
+  border: 0;
+}
+
+.workspace-navigation-vertical[data-orientation="vertical"] .workspace-rename-unread-actions > button + button {
+  border-left: 1px solid var(--preset-line);
+}
+
+@container workspace-tab-rail (max-width: 227px) {
+  .workspace-navigation-vertical .workspace-rename-unread-actions > button {
+    flex-direction: column;
+    gap: 2px;
+    font-size: 8px;
+    line-height: 10px;
+    letter-spacing: 0;
+  }
+}
+
+@container workspace-tab-rail (max-width: 176px) {
+  .workspace-navigation-vertical .workspace-rename-unread-actions > button > span {
     display: none;
   }
 }
