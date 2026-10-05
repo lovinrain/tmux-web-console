@@ -191,6 +191,88 @@ test("a browser without BroadcastChannel can unlink a pasted sync URL", async ({
   await expect(sessionTab(page, sessions[0])).toHaveAttribute("aria-selected", "true");
 });
 
+test("the focused browser owns terminal dimensions through resize, focus handoff and pane views", async ({ page, context }) => {
+  test.setTimeout(60_000);
+  const before = execFileSync("tmux", [...tmux, "list-panes", "-a", "-F", "#{session_id}:#{pane_id}:#{pane_pid}"], { encoding: "utf8" });
+  const created = await context.request.post("/mux/api/workspaces", { data: {
+    name: "Focused sizing fixture", tabs: sessions, activeSession: sessions[0], groups: [],
+    paneLayouts: [{ id: "pair", name: "Pair", root: {
+      id: "split", kind: "split", direction: "horizontal", ratio: 0.5,
+      first: { id: "left", kind: "pane", session: sessions[0] },
+      second: { id: "right", kind: "pane", session: sessions[1] },
+    } }],
+  } });
+  expect(created.ok()).toBe(true);
+  const workspace = (await created.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  const snapshot = async (): Promise<WorkspaceViewSnapshot> => {
+    const response = await context.request.post("/mux/api/workspace-views/snapshot", {
+      data: { scope: `workspace:${workspace.id}`, sessions },
+    });
+    expect(response.ok()).toBe(true);
+    return response.json();
+  };
+  const dimensions = (session: string) => {
+    const [width, height, status] = execFileSync("tmux", [
+      ...tmux, "display-message", "-p", "-t", `=${session}:0`, "#{window_width}:#{window_height}:#{status}",
+    ], { encoding: "utf8" }).trim().split(":");
+    const statusRows = status === "on" ? 1 : status === "off" ? 0 : Number(status);
+    return [Number(width), Number(height) + statusRows];
+  };
+  const expectFit = async (id: string) => {
+    await expect.poll(async () => {
+      const main = (await snapshot()).views.find((view) => view.id === id);
+      return Boolean(main?.terminals.length && main.terminals.every((terminal) => (
+        terminal.sizeOwner && JSON.stringify(dimensions(terminal.session)) === JSON.stringify([terminal.cols, terminal.rows])
+      )));
+    }).toBe(true);
+  };
+  const query = new URLSearchParams({ workspace: workspace.id });
+  for (const name of sessions) query.append("tab", name);
+  await page.goto(`/mux/session/${sessions[0]}?${query}`);
+  await expect.poll(async () => (await snapshot()).views.length).toBe(1);
+  const sourceId = (await snapshot()).views[0].id;
+  await expectFit(sourceId);
+  // Disable emulation after navigation, once Playwright has initialized the renderer.
+  await (await context.newCDPSession(page)).send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  await page.bringToFront();
+  const follower = await forkSync(page);
+  await (await context.newCDPSession(follower)).send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  await follower.setViewportSize({ width: 1120, height: 680 });
+  await follower.bringToFront();
+  await expect.poll(async () => (await snapshot()).views.length).toBe(2);
+  const followerId = (await snapshot()).views.find((view) => view.id !== sourceId)!.id;
+  await expectFit(followerId);
+  const followerSize = dimensions(sessions[0]);
+  await follower.setViewportSize({ width: 1360, height: 780 });
+  await expect.poll(() => dimensions(sessions[0])).not.toEqual(followerSize);
+  await expectFit(followerId);
+  const mainSize = dimensions(sessions[0]);
+  const sourceCols = (await snapshot()).views.find((view) => view.id === sourceId)!.terminals[0].cols;
+  await page.setViewportSize({ width: 1900, height: 1080 });
+  await expect.poll(async () => (await snapshot()).views.find((view) => view.id === sourceId)!.terminals[0].cols).not.toBe(sourceCols);
+  expect(dimensions(sessions[0])).toEqual(mainSize);
+  expect(await page.evaluate(() => document.hasFocus())).toBe(false);
+  await page.bringToFront();
+  expect(await page.evaluate(() => document.hasFocus())).toBe(true);
+  await expectFit(sourceId);
+  await follower.bringToFront();
+  await expectFit(followerId);
+  await page.bringToFront();
+  await panelTab(page).click();
+  await expect(follower.locator(".workspace-pane-leaf")).toHaveCount(2);
+  await expect.poll(async () => (await snapshot()).views.map((view) => view.terminals.length)).toEqual([2, 2]);
+  await expectFit(sourceId);
+  await follower.bringToFront();
+  await expectFit(followerId);
+  await follower.setViewportSize({ width: 1240, height: 720 });
+  await expectFit(followerId);
+  await follower.close();
+  await expect.poll(async () => (await snapshot()).views.length).toBe(1);
+  await expectFit(sourceId);
+  expect(execFileSync("tmux", [...tmux, "list-panes", "-a", "-F", "#{session_id}:#{pane_id}:#{pane_pid}"], { encoding: "utf8" })).toBe(before);
+});
+
 test("disconnecting a multi-pane view releases its size constraints and stays paused until Rejoin", async ({ page, context }, testInfo) => {
   test.setTimeout(60_000);
   const identity = () => sessions.map((name) => execFileSync("tmux", [
@@ -231,22 +313,22 @@ test("disconnecting a multi-pane view releases its size constraints and stays pa
   await panelTab(page).click();
   await expect(page.locator(".workspace-pane-leaf")).toHaveCount(2);
   await expect.poll(clientCount).toBe(2);
+  const sourceSize = windowSize();
+  await (await context.newCDPSession(page)).send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  await page.bringToFront();
   const follower = await forkSync(page);
+  await (await context.newCDPSession(follower)).send("Emulation.setFocusEmulationEnabled", { enabled: false });
+  await follower.bringToFront();
   await follower.setViewportSize({ width: 1120, height: 680 });
   await expect(follower.locator(".workspace-pane-leaf")).toHaveCount(2);
   await expect.poll(clientCount).toBe(4);
-  const sourceSize = windowSize();
   await expect.poll(async () => (await snapshot()).views.map((view) => view.terminals.length)).toEqual([2, 2]);
   const stagedDraft = () => follower.locator(".workspace-pane-leaf").first()
     .getByRole("textbox", { name: "Staged input", exact: true });
   await stagedDraft().fill("keep this disconnected view draft");
-  for (const leaf of await follower.locator(".workspace-pane-leaf").all()) {
-    const protectedButton = leaf.getByRole("button", { name: "Size protected", exact: true });
-    if (!await protectedButton.isVisible()) await leaf.getByRole("button", { name: /Show all console controls/ }).click();
-    await protectedButton.click();
-  }
   await expect.poll(async () => (await snapshot()).views.every((view) => view.terminals.every((terminal) => !terminal.ignoreSize))).toBe(true);
   await expect.poll(windowSize).not.toBe(sourceSize);
+  await page.bringToFront();
   const controls = page.locator(".workspace-pane-top-strip");
   await expect(controls.getByRole("button", { name: "Manage workspace views" })).toHaveText("Views 2");
   await controls.getByRole("button", { name: "Manage workspace views" }).click();
@@ -255,7 +337,7 @@ test("disconnecting a multi-pane view releases its size constraints and stays pa
   await expect(dialog.locator('[data-current-view="true"]').getByRole("button", { name: /Disconnect View/ })).toBeDisabled();
   const other = dialog.locator('[data-current-view="false"]');
   await expect(other).toContainText("In this sync group");
-  await expect(other).toContainText("Fit active");
+  await expect(other).toContainText("Following main view");
   await expect(other.locator(".workspace-view-terminals li")).toHaveCount(2);
   await page.screenshot({ path: testInfo.outputPath("workspace-views-light.png"), animations: "disabled" });
   await other.getByRole("button", { name: /Disconnect View/ }).click();

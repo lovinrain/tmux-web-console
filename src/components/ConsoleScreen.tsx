@@ -72,7 +72,7 @@ import {
   type ShortcutBindings,
 } from "../shortcutSettings";
 import { useTheme } from "../theme";
-import { forkSyncGroupFromSearch, independentForkHref } from "../forkSync";
+import { independentForkHref } from "../forkSync";
 import { WorkspaceViewDisconnected } from "./WorkspaceViewDisconnected";
 import { ForkSyncControls, type ForkSyncControlsProps } from "./ForkSyncControls";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
@@ -749,7 +749,7 @@ export function ConsoleScreen({
     message: string;
   } | null>(null);
   const [workspaceTransferOpen, setWorkspaceTransferOpen] = useState(false);
-  const [ignoreSize, setIgnoreSize] = useState(() => Boolean(forkSyncGroupFromSearch(window.location.search)));
+  const [ignoreSize, setIgnoreSize] = useState(false);
   const [localBarVisibility, setLocalBarVisibility] = useState(
     DEFAULT_CONSOLE_BAR_VISIBILITY,
   );
@@ -2460,7 +2460,7 @@ export function ConsoleScreen({
                 type="button"
                 className={ignoreSize ? "size-mode protected" : "size-mode"}
                 onClick={() => setIgnoreSize((current) => !current)}
-                title={ignoreSize ? "This browser will not resize the shared tmux window" : "This browser controls the shared tmux window size"}
+                title={ignoreSize ? "This browser will not resize the shared tmux window" : "The focused browser controls the shared tmux window size; other views follow"}
               >
                 {ignoreSize ? "Size protected" : "Fit active"}
               </button>

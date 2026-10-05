@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 import secrets
 from collections import OrderedDict
@@ -11,10 +12,12 @@ from typing import Any
 from aiohttp import web
 
 from .pty_bridge import PtyBridge
+from .tmux import TmuxClient, TmuxError
 
 VIEW_ID_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,128}\Z")
 VIEW_SCOPE_PATTERN = re.compile(r"(?:workspace|fork):[a-zA-Z0-9_-]{1,128}\Z")
 MAX_RETAINED_VIEW_IDS = 4096
+LOGGER = logging.getLogger("muxdeck")
 
 
 def validate_view_id(value: str | None) -> str | None:
@@ -40,16 +43,28 @@ class ViewAttachment:
     ignore_size: bool
     websocket: web.WebSocketResponse
     bridge: PtyBridge
+    session_id: str = ""
+    managed_size: bool = False
+    size_ignored: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.size_ignored is None:
+            self.size_ignored = self.ignore_size
 
 
 class WorkspaceViewRegistry:
     """Browser presence follows attached PTYs; eviction never stops a session."""
 
-    def __init__(self) -> None:
+    def __init__(self, tmux: TmuxClient | None = None) -> None:
         self.attachments: dict[str, ViewAttachment] = {}
         self._evicted: OrderedDict[str, None] = OrderedDict()
         self._numbers: OrderedDict[str, int] = OrderedDict()
         self._next_number = 1
+        self._tmux = tmux
+        self._focus_order: OrderedDict[str, int] = OrderedDict()
+        self._next_focus = 1
+        self._sizing_lock = asyncio.Lock()
+        self._closing = False
 
     def is_evicted(self, view_id: str | None) -> bool:
         return view_id is not None and view_id in self._evicted
@@ -73,6 +88,59 @@ class WorkspaceViewRegistry:
         attachment = self.attachments.get(token)
         if attachment is not None:
             attachment.cols, attachment.rows = cols, rows
+
+    async def focus(self, token: str, active: bool) -> None:
+        attachment = self.attachments.get(token)
+        if attachment is None or self.is_evicted(attachment.view_id):
+            return
+        attachment.managed_size = True
+        if active:
+            self._focus_order[attachment.view_id] = self._next_focus
+            self._next_focus += 1
+            self._focus_order.move_to_end(attachment.view_id)
+            while len(self._focus_order) > MAX_RETAINED_VIEW_IDS:
+                self._focus_order.popitem(last=False)
+        # Blur retains the last owner's size until another view takes focus.
+        await self.sync_sizes()
+
+    async def sync_sizes(self) -> None:
+        async with self._sizing_lock:
+            if self._closing:
+                return
+            attachments = tuple(self.attachments.items())
+            managed_sessions = {item.session for _, item in attachments if item.managed_size}
+            owners: dict[str, str] = {}
+            for token, item in attachments:
+                if item.ignore_size or self.is_evicted(item.view_id):
+                    continue
+                previous = self.attachments.get(owners.get(item.session, ""))
+                if previous is None or (
+                    self._focus_order.get(item.view_id, 0)
+                    > self._focus_order.get(previous.view_id, 0)
+                ):
+                    owners[item.session] = token
+            changes = []
+            for token, item in attachments:
+                ignored = item.ignore_size or (
+                    item.session in managed_sessions and owners.get(item.session) != token
+                )
+                if ignored != item.size_ignored:
+                    changes.append((token, item, ignored))
+            # Release the previous owner's constraint before enabling the new one.
+            changes.sort(key=lambda change: not change[2])
+            for token, item, ignored in changes:
+                if self.attachments.get(token) is not item or self.is_evicted(item.view_id):
+                    continue
+                try:
+                    if self._tmux is not None:
+                        await self._tmux.set_client_ignore_size(
+                            item.bridge.client_pid, item.session_id, ignored,
+                        )
+                except TmuxError:
+                    # A client can exit while focus/selection changes are in flight.
+                    LOGGER.debug("Terminal closed during size ownership update", exc_info=True)
+                else:
+                    item.size_ignored = ignored
 
     def snapshot(self, scope: str, sessions: list[str], view_id: str | None) -> dict[str, Any]:
         views: dict[str, dict[str, Any]] = {}
@@ -98,6 +166,7 @@ class WorkspaceViewRegistry:
                 "cols": attachment.cols,
                 "rows": attachment.rows,
                 "ignoreSize": attachment.ignore_size,
+                "sizeOwner": not attachment.size_ignored,
             })
         return {
             "views": sorted(views.values(), key=lambda view: view["number"]),
@@ -134,10 +203,11 @@ class WorkspaceViewRegistry:
                     await asyncio.wait_for(send(), timeout=1)
 
             async def release() -> None:
+                self.detach(token)
                 try:
                     await attachment.bridge.close()
                 finally:
-                    self.detach(token)
+                    await self.sync_sizes()
 
             # A stalled WebSocket must not hold the tmux size constraint alive.
             await asyncio.gather(release(), notify())
@@ -155,6 +225,7 @@ class WorkspaceViewRegistry:
 
     async def close(self) -> None:
         # A normal service shutdown must keep automatic reconnect enabled.
+        self._closing = True
         await asyncio.gather(*(
             attachment.websocket.close(code=1001, message=b"Server restarting")
             for attachment in tuple(self.attachments.values())

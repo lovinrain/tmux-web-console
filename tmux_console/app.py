@@ -1244,7 +1244,7 @@ def create_app(
     app[SNIPPETS_KEY] = snippets or SnippetStore()
     app[SHORTCUTS_KEY] = shortcuts or ShortcutStore()
     app[WORKSPACES_KEY] = workspaces or WorkspaceStore()
-    app[WORKSPACE_VIEWS_KEY] = WorkspaceViewRegistry()
+    app[WORKSPACE_VIEWS_KEY] = WorkspaceViewRegistry(app[TMUX_KEY])
 
     async def close_workspace_views(application: web.Application) -> None:
         await application[WORKSPACE_VIEWS_KEY].close()
@@ -6272,6 +6272,7 @@ def create_app(
             return json_error(str(error), 400)
         if app[WORKSPACE_VIEWS_KEY].is_evicted(viewer):
             return json_error("This view was disconnected. Rejoin to reconnect.", 423)
+        managed_size = viewer is not None
         viewer = viewer or f"legacy-{secrets.token_hex(16)}"
         session_name = request.query.get("session", "")
         try:
@@ -6299,7 +6300,7 @@ def create_app(
                 session.id,
                 cols,
                 rows,
-                ignore_size=ignore_size,
+                ignore_size=ignore_size or managed_size,
             )
         except Exception as error:
             LOGGER.exception("Failed to attach to tmux session %s", session.name)
@@ -6314,6 +6315,8 @@ def create_app(
                 view_id=viewer, scope=view_scope, group=view_group,
                 session=session.name, cols=cols, rows=rows, ignore_size=ignore_size,
                 websocket=websocket, bridge=bridge,
+                session_id=session.id, managed_size=managed_size,
+                size_ignored=ignore_size or managed_size,
             ))
         except PermissionError:
             await websocket.send_json({"type": "viewEvicted"})
@@ -6353,6 +6356,7 @@ def create_app(
         try:
             # Keep readiness inside cleanup: a browser can disappear while its
             # PTY is attaching, before the first control frame is delivered.
+            await app[WORKSPACE_VIEWS_KEY].sync_sizes()
             await websocket.send_str(json.dumps({
                 "type": "ready",
                 "session": session.name,
@@ -6390,6 +6394,8 @@ def create_app(
                         )
                         bridge.resize(resized_cols, resized_rows)
                         app[WORKSPACE_VIEWS_KEY].resize(view_token, resized_cols, resized_rows)
+                    elif payload.get("type") == "viewFocus" and isinstance(payload.get("active"), bool):
+                        await app[WORKSPACE_VIEWS_KEY].focus(view_token, payload["active"])
                     elif payload.get("type") == "input":
                         input_id = payload.get("id")
                         input_data = payload.get("data")
@@ -6520,6 +6526,7 @@ def create_app(
                 elif message.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
                     break
         finally:
+            app[WORKSPACE_VIEWS_KEY].detach(view_token)
             try:
                 if auth_monitor is not None:
                     auth_monitor.cancel()
@@ -6528,7 +6535,7 @@ def create_app(
                 try:
                     await _close_terminal_bridge(sender, bridge)
                 finally:
-                    app[WORKSPACE_VIEWS_KEY].detach(view_token)
+                    await app[WORKSPACE_VIEWS_KEY].sync_sizes()
         return websocket
 
     async def spa(_: web.Request) -> web.StreamResponse:

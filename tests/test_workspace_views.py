@@ -47,7 +47,7 @@ def test_snapshot_groups_panes_tracks_resize_and_separates_legacy_connections():
     source, independent, legacy = snapshot["views"]
     assert source["inScope"] and len(source["terminals"]) == 2
     assert source["terminals"][0] == {
-        "session": "alpha", "cols": 120, "rows": 45, "ignoreSize": False,
+        "session": "alpha", "cols": 120, "rows": 45, "ignoreSize": False, "sizeOwner": True,
     }
     assert independent["group"] is None
     assert not legacy["inScope"]
@@ -138,6 +138,9 @@ class ViewTmux(TmuxClient):
     async def get_session(self, name: str) -> Session:
         return Session(name=name, id="$1", windows=1, attached=0, created=1700000000)
 
+    async def set_client_ignore_size(self, client_pid, session_id, ignore_size):
+        assert session_id == "$1"
+
 
 @pytest.fixture
 async def view_client(monkeypatch):
@@ -146,7 +149,7 @@ async def view_client(monkeypatch):
     async def attach(cls, *_args, **_kwargs):
         del cls
         bridge = Mock(spec=PtyBridge)
-        bridge.client_pid = 4321
+        bridge.client_pid = 4321 + len(bridges)
         bridge.read = asyncio.Event().wait
         bridge.close = AsyncMock()
         bridge.write = AsyncMock(return_value=True)
@@ -217,6 +220,79 @@ async def test_terminal_rejects_invalid_view_metadata(view_client):
             await client.ws_connect(f"/ws/terminal?session=alpha&{query}")
         assert error.value.status == 400
     assert not bridges
+
+
+@pytest.mark.asyncio
+async def test_focus_controls_all_view_panes_and_background_resize_cannot_steal_ownership():
+    registry = WorkspaceViewRegistry()
+    items = [attachment(view, session) for view in ["source", "target"] for session in ["alpha", "beta"]]
+    tokens = []
+    for item in items:
+        item.managed_size = True
+        item.size_ignored = True
+        tokens.append(registry.attach(item))
+    protected = attachment("protected")
+    protected.ignore_size = True
+    protected.size_ignored = True
+    protected_token = registry.attach(protected)
+    await registry.focus(tokens[0], True)
+    assert [item.size_ignored for item in items] == [False, False, True, True]
+    await registry.focus(tokens[2], True)
+    assert [item.size_ignored for item in items] == [True, True, False, False]
+    registry.resize(tokens[0], 200, 60)
+    await registry.focus(tokens[0], False)
+    await registry.focus(protected_token, True)
+    assert [item.size_ignored for item in items] == [True, True, False, False]
+    assert protected.size_ignored
+    await registry.focus(tokens[0], True)
+    assert [item.size_ignored for item in items] == [False, False, True, True]
+    for token in tokens[:2]:
+        registry.detach(token)
+    await registry.sync_sizes()
+    assert [item.size_ignored for item in items[2:]] == [False, False]
+
+
+@pytest.mark.asyncio
+async def test_managed_view_releases_legacy_constraint_and_restores_it_on_close():
+    registry = WorkspaceViewRegistry()
+    legacy = attachment("legacy", scope=None, group=None)
+    registry.attach(legacy)
+    main = attachment("main", scope="workspace:other")
+    token = registry.attach(main)
+    await registry.focus(token, True)
+    assert legacy.size_ignored and not main.size_ignored
+    registry.detach(token)
+    await registry.sync_sizes()
+    assert not legacy.size_ignored
+
+
+@pytest.mark.asyncio
+async def test_view_focus_websocket_transfers_ownership_without_reattaching(view_client):
+    client, bridges = view_client
+    sockets = [await client.ws_connect(f"/ws/terminal?session=alpha&viewId={name}&viewScope=workspace:one")
+               for name in ["source", "target"]]
+    for websocket in sockets:
+        assert (await websocket.receive_json())["type"] == "ready"
+
+    async def owners():
+        response = await client.post("/api/workspace-views/snapshot", json={"scope": "workspace:one"})
+        return [view["id"] for view in (await response.json())["views"] if view["terminals"][0]["sizeOwner"]]
+
+    assert await owners() == ["source"]
+    for index, active, expected in [(1, True, "target"), (0, False, "target"), (0, True, "source")]:
+        await sockets[index].send_json({"type": "viewFocus", "active": active})
+        await sockets[index].send_json({"type": "input", "id": "barrier", "data": ""})
+        assert (await sockets[index].receive_json())["type"] == "inputAck"
+        assert await owners() == [expected]
+    assert len(bridges) == 2
+    for bridge in bridges:
+        bridge.close.assert_not_awaited()
+    await sockets[0].close()
+    await sockets[1].send_json({"type": "viewFocus", "active": True})
+    await sockets[1].send_json({"type": "input", "id": "barrier", "data": ""})
+    assert (await sockets[1].receive_json())["type"] == "inputAck"
+    assert await owners() == ["target"]
+    await sockets[1].close()
 
 
 @pytest.mark.asyncio

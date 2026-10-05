@@ -140,7 +140,8 @@ you can also create a session from **New Session**.
 
 Closing a browser tab leaves tmux running. A workspace tab's **X** only removes
 its navigation entry; **End** terminates the session after confirmation.
-**Fit active** can resize the shared tmux window; choose **Size protected** when
+**Fit active** lets the focused browser resize the shared tmux window while other
+views follow; choose **Size protected** when
 observing a session used by another client.
 
 ## Documentation

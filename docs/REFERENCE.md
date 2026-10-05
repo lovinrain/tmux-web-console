@@ -44,7 +44,8 @@ be queued.
 
 On wider screens, the header exposes two sizing modes:
 
-- `Fit active` lets the browser resize the shared tmux window. This is the useful
+- `Fit active` lets the focused browser resize the shared tmux window. Other Muxdeck
+  views follow without constraining its size; focus transfers ownership automatically. This is the useful
   interactive mode on a phone and matches ttyd behavior.
 - `Size protected` attaches with tmux's `ignore-size` flag. It does not disturb
   another client's dimensions, but tmux must crop the larger shared window.

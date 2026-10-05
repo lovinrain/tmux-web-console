@@ -2127,7 +2127,7 @@ export interface WorkspaceView {
   number: number;
   inScope: boolean;
   group: string | null;
-  terminals: Array<{ session: string; cols: number; rows: number; ignoreSize: boolean }>;
+  terminals: Array<{ session: string; cols: number; rows: number; ignoreSize: boolean; sizeOwner?: boolean }>;
 }
 
 export interface WorkspaceViewSnapshot {

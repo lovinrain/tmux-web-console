@@ -1265,16 +1265,7 @@ class TmuxClient:
                     with contextlib.suppress(TmuxError):
                         await self.run(["delete-buffer", "-b", capture_buffer])
 
-    async def _dispatch_client_command(
-        self,
-        client_pid: int,
-        session_id: str,
-        command: str,
-        mode_condition: str,
-        *,
-        rejection_message: str,
-        cleanup_buffer: str | None = None,
-    ) -> str:
+    async def _attached_client_name(self, client_pid: int, session_id: str) -> str:
         matching_rows: list[list[str]] = []
         for attempt in range(CLIENT_ATTACH_RETRY_ATTEMPTS):
             output = await self.run(["list-clients", "-F", CLIENT_IDENTITY_FORMAT])
@@ -1289,8 +1280,28 @@ class TmuxClient:
                 await asyncio.sleep(CLIENT_ATTACH_RETRY_DELAY)
         if len(matching_rows) != 1 or matching_rows[0][2] != session_id:
             raise TmuxError("tmux client is not attached to the expected session")
+        return matching_rows[0][1]
 
-        client_name = matching_rows[0][1]
+    async def set_client_ignore_size(
+        self, client_pid: int, session_id: str, ignore_size: bool,
+    ) -> None:
+        client_name = await self._attached_client_name(client_pid, session_id)
+        await self.run([
+            "refresh-client", "-t", client_name,
+            "-f", "ignore-size" if ignore_size else "!ignore-size",
+        ])
+
+    async def _dispatch_client_command(
+        self,
+        client_pid: int,
+        session_id: str,
+        command: str,
+        mode_condition: str,
+        *,
+        rejection_message: str,
+        cleanup_buffer: str | None = None,
+    ) -> str:
+        client_name = await self._attached_client_name(client_pid, session_id)
         key_bindings = await self.run(["list-keys", "-a"])
         user_keys = await self.run(["show-options", "-s", "user-keys"])
         guarded_tables = {"copy-mode", "copy-mode-vi", "prefix", "root"}

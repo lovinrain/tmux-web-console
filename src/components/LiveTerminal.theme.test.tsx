@@ -318,6 +318,43 @@ afterEach(() => {
 });
 
 describe("LiveTerminal browser copy mode", () => {
+  it("transfers browser focus on the existing socket even when terminal dimensions stay unchanged", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let focused = true;
+    vi.spyOn(document, "hasFocus").mockImplementation(() => focused);
+    const view = render(<LiveTerminal session="alpha" ignoreSize={false} theme="dark"
+      viewer={{ id: "main", scope: "workspace:one", group: "linked" }} {...callbacks} />);
+    const terminal = terminalMocks.instances[0];
+    const socket = socketMocks.instances[0];
+    act(() => {
+      socket.emit("open");
+      socket.emitMessage(JSON.stringify({ type: "ready" }));
+    });
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ type: "viewFocus", active: true }));
+    socket.send.mockClear();
+    focused = false;
+    act(() => window.dispatchEvent(new Event("blur")));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ type: "viewFocus", active: false }));
+    focused = true;
+    socket.send.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      vi.advanceTimersByTime(80);
+    });
+    expect(socket.send).toHaveBeenCalledOnce();
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: "viewFocus", active: true }));
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(socket.send).toHaveBeenLastCalledWith(JSON.stringify({ type: "viewFocus", active: false }));
+    expect(terminalMocks.instances).toEqual([terminal]);
+    expect(socketMocks.instances).toEqual([socket]);
+    expect(socket.close).not.toHaveBeenCalled();
+    view.unmount();
+    socket.send.mockClear();
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
   it("forces xterm selection while blocking mouse frames and preserves the terminal instance", () => {
     vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Linux x86_64");
     const terminalView = (browserCopyMode: boolean) => (

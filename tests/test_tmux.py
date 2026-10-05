@@ -77,6 +77,25 @@ def pane_row(**overrides: str) -> str:
     return OUTPUT_FIELD_SEPARATOR.join(values[field] for field in PANE_FORMAT_FIELDS)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ignored", [False, True])
+async def test_client_size_policy_changes_only_the_verified_attach_client(ignored):
+    client = RecordingRunTmux("123\t/dev/pts/7\t$1\n999\t/dev/pts/8\t$2")
+    await client.set_client_ignore_size(123, "$1", ignored)
+    assert client.calls == [
+        ["list-clients", "-F", CLIENT_IDENTITY_FORMAT],
+        ["refresh-client", "-t", "/dev/pts/7", "-f", "ignore-size" if ignored else "!ignore-size"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_size_policy_rejects_a_client_that_changed_sessions():
+    client = RecordingRunTmux("123\t/dev/pts/7\t$2")
+    with pytest.raises(TmuxError, match="expected session"):
+        await client.set_client_ignore_size(123, "$1", False)
+    assert client.calls == [["list-clients", "-F", CLIENT_IDENTITY_FORMAT]]
+
+
 def test_parse_sessions_groups_panes_and_selects_active_pane():
     output = "\n".join(
         [

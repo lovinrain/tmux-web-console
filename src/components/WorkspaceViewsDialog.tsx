@@ -79,7 +79,7 @@ export function WorkspaceViewsDialog({ controller, onClose }: {
             {view.terminals.map((terminal, index) => (
               <li key={index}>
                 <span>{terminal.session}</span>
-                <span>{terminal.ignoreSize ? "Size protected" : "Fit active"} · {terminal.cols}×{terminal.rows}</span>
+                <span>{terminal.ignoreSize ? "Size protected" : terminal.sizeOwner === false ? "Following main view" : "Fit active · Main view"} · {terminal.cols}×{terminal.rows}</span>
               </li>
             ))}
           </ul>

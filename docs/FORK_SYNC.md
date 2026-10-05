@@ -24,8 +24,17 @@ selections expire after 24 hours. Browser storage can be unavailable without
 preventing synchronization between live tabs, but reload restoration and local
 preferences then depend on the browser permitting storage.
 
-New linked terminals start in **Size protected** mode to avoid resizing another
-view's shared tmux window. **Fit active** can still be enabled deliberately.
+Linked terminals default to **Fit active**. The focused browser is the main view
+and controls the shared tmux window size. Resizing that browser, changing its
+sidebar or toolbar, and resizing its Pane-view dividers update tmux automatically.
+Other browser views remain connected and display the same output without
+constraining its dimensions. Switching browser focus transfers sizing ownership
+without reconnecting the terminals. A smaller following view can show only part
+of the main view's terminal; focus it to fit the session to its own dimensions.
+When no console browser has focus, the last main view retains sizing ownership.
+Closing or disconnecting it hands ownership to the most recently focused
+remaining eligible view. **Size protected** explicitly prevents a terminal from
+owning size, even when its browser is focused.
 Browser scroll positions, dialogs, and tmux copy-mode controls retain their normal
 local behavior. Fork-sync shares workspace session/Pane-view selection; it does
 not coordinate native tmux pane/window switches within individual terminal clients.
@@ -39,9 +48,10 @@ browsers, with each view's sync-group membership shown separately. Temporary
 workspaces use their Fork-sync group. Selection sync still requires the same
 browser profile; counting and disconnecting use server-side attachment tracking.
 
-Each entry shows its sessions, terminal dimensions, and **Fit active** or
-**Size protected** mode. An extra Fit active attachment can constrain the shared
-tmux window size. **Disconnect** releases every main terminal attachment belonging
+Each entry shows its sessions, terminal dimensions, and **Main view**,
+**Following main view**, or **Size protected** status. Fit active attachments
+automatically follow the main view; disconnecting peers is unnecessary for
+normal browser resizing. **Disconnect** releases every main terminal attachment belonging
 to that browser view, while its tmux sessions and applications keep running.
 The affected page pauses both attachment and selection sync and displays
 **Rejoin**. Its appearance and staged input are preserved. It remains paused
@@ -49,7 +59,7 @@ across reload when session storage is available; Rejoin restores the sync
 group's latest selection and reconnects its terminals.
 
 Unlink only stops selection synchronization; it keeps the terminal attached.
-Use Disconnect when the goal is to release a sizing contributor. Older or
+Use Disconnect to remove an unwanted attachment. Older or
 unassigned terminal connections to workspace sessions appear separately because
 their workspace membership is unknown. Older pages stop their attachment on
 disconnect, but can reconnect after a reload. Independent floating utility

@@ -817,6 +817,16 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         }
       };
 
+      const sendViewFocus = () => {
+        const socket = socketRef.current;
+        if (viewId && socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({
+            type: "viewFocus",
+            active: document.visibilityState === "visible" && document.hasFocus(),
+          }));
+        }
+      };
+
       const fitAndResize = () => {
         if (cancelled || layoutSuspendedRef.current || !hostRef.current) return;
         try {
@@ -835,6 +845,11 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         resizeTimer = window.setTimeout(fitAndResize, 80);
       };
       scheduleFitAndResizeRef.current = scheduleFitAndResize;
+
+      const onBrowserFocus = () => {
+        sendViewFocus();
+        scheduleFitAndResize();
+      };
 
       const connect = () => {
         if (cancelled || ended) return;
@@ -895,6 +910,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
               }
             } else if (message.type === "ready") {
               attempts = 0;
+              sendViewFocus();
               onPaneChange(message.paneId || null);
               onStateChange("live");
             } else if (message.type === "viewEvicted") {
@@ -953,6 +969,9 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       resizeObserver.observe(hostRef.current);
       window.visualViewport?.addEventListener("resize", scheduleFitAndResize);
       window.visualViewport?.addEventListener("scroll", scheduleFitAndResize);
+      window.addEventListener("focus", onBrowserFocus);
+      window.addEventListener("blur", sendViewFocus);
+      document.addEventListener("visibilitychange", onBrowserFocus);
 
       requestAnimationFrame(() => {
         fitAndResize();
@@ -983,6 +1002,9 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         resizeObserver.disconnect();
         window.visualViewport?.removeEventListener("resize", scheduleFitAndResize);
         window.visualViewport?.removeEventListener("scroll", scheduleFitAndResize);
+        window.removeEventListener("focus", onBrowserFocus);
+        window.removeEventListener("blur", sendViewFocus);
+        document.removeEventListener("visibilitychange", onBrowserFocus);
         input.dispose();
         scroll.dispose();
         fileLinks.dispose();

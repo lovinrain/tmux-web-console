@@ -1044,10 +1044,20 @@ temporary Fork-sync group; scope/group require a view ID. Share a view ID across
 all main terminals in one browser tab, and generate a fresh ID for a new page.
 These parameters describe attachment membership; they grant no authentication.
 
+Main terminals send `{type:"viewFocus",active:true|false}` on browser focus and
+visibility changes, including their initial readiness. The server enables sizing
+only for the most recently focused eligible view of each session and applies
+tmux's `ignore-size` flag to its peers without reconnecting them. Background
+resize messages update that view's local dimensions without taking ownership.
+Blur retains the last owner's size; disconnecting it selects another eligible
+view. Explicit `ignoreSize=1` always excludes that terminal from ownership.
+
 `POST /api/workspace-views/snapshot` accepts
 `{scope,sessions:[...],viewId?}` and returns `{views,evicted}`. Each view supplies
 `id`, `number`, `inScope`, `group`, and
-`terminals:[{session,cols,rows,ignoreSize}]`. Sessions must be a unique list of
+`terminals:[{session,cols,rows,ignoreSize,sizeOwner}]`. `ignoreSize` is the explicit
+protection preference; `sizeOwner` reports whether the attachment currently
+contributes to tmux's size. Sessions must be a unique list of
 at most 256 names. Matching unassigned terminal attachments appear with
 `inScope:false`; they do not contribute to the workspace count.
 
