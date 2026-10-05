@@ -1037,6 +1037,32 @@ should follow the behavior of the web client in `src/api.ts` and
 `src/components/LiveTerminal.tsx`. A terminal WebSocket is a live tmux
 attachment: arbitrary input can execute commands.
 
+Browser main terminals optionally supply `viewId`, `viewScope`, and `viewGroup`
+query parameters. IDs/groups use 1–128 ASCII letters, digits, underscores, or
+hyphens. Scope is `workspace:<id>` for a saved workspace or `fork:<group>` for a
+temporary Fork-sync group; scope/group require a view ID. Share a view ID across
+all main terminals in one browser tab, and generate a fresh ID for a new page.
+These parameters describe attachment membership; they grant no authentication.
+
+`POST /api/workspace-views/snapshot` accepts
+`{scope,sessions:[...],viewId?}` and returns `{views,evicted}`. Each view supplies
+`id`, `number`, `inScope`, `group`, and
+`terminals:[{session,cols,rows,ignoreSize}]`. Sessions must be a unique list of
+at most 256 names. Matching unassigned terminal attachments appear with
+`inScope:false`; they do not contribute to the workspace count.
+
+`POST /api/workspace-views/<viewId>/evict` accepts
+`{scope,sessions:[...],requesterId}`. Self-eviction is rejected with 400; a target
+outside the scoped/related snapshot returns 404. Eviction closes every attachment
+of that view and returns `{disconnected:true}`; it never terminates a tmux
+session. Affected sockets receive `{type:"viewEvicted",message}`, followed by
+a compatibility `exit` frame, then close with code 4004. New clients must ignore
+the compatibility exit after viewEvicted, pause their UI, and suppress automatic
+reattachment. Evicted IDs cannot attach again (HTTP 423) until
+`POST /api/workspace-views/<viewId>/resume` returns `{resumed:true}`.
+The snapshot's `evicted` flag lets a client recover a missed eviction notice.
+Ordinary server shutdown closes sockets with 1001 and permits reconnection.
+
 History actions are `page-up`, `page-down`, `line-up`, `line-down`, and `exit`.
 `line-up` enters tmux copy mode without paging and scrolls up one row;
 `line-down` scrolls down one row only while copy mode is active. Replies are

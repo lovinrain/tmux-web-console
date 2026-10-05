@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
-import type { SavedWorkspace } from "../src/api";
+import type { SavedWorkspace, WorkspaceViewSnapshot } from "../src/api";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 
 const socket = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
@@ -85,6 +85,7 @@ test("linked tabs share session and panel selection while appearance, normal for
   await expect(sessionTab(page, sessions[0])).toHaveAttribute("aria-selected", "true");
   const follower = await forkSync(page);
   await expect(sessionTab(follower, sessions[0])).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".workspace-views-button").first()).toHaveText("Views 2");
   expect(new URL(follower.url()).searchParams.get("fork-sync"))
     .toBe(new URL(page.url()).searchParams.get("fork-sync"));
 
@@ -120,11 +121,13 @@ test("linked tabs share session and panel selection while appearance, normal for
   await follower.getByRole("link", { name: "Fork current view in a new browser tab" }).click();
   const ordinary = await ordinaryOpened;
   await expect(sessionTab(ordinary, sessions[2])).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".workspace-views-button").first()).toHaveText("Views 3");
   expect(new URL(ordinary.url()).searchParams.has("fork-sync")).toBe(false);
   await sessionTab(ordinary, sessions[0]).click();
   await expect(sessionTab(page, sessions[2])).toHaveAttribute("aria-selected", "true");
   await expect(sessionTab(follower, sessions[2])).toHaveAttribute("aria-selected", "true");
   await ordinary.close();
+  await expect(page.locator(".workspace-views-button").first()).toHaveText("Views 2");
   // A stale deep link must restore the group's latest selection, even when the
   // saved workspace's last activity came from the independent fork.
   const staleUrl = new URL(page.url());
@@ -186,4 +189,92 @@ test("a browser without BroadcastChannel can unlink a pasted sync URL", async ({
   await page.getByRole("button", { name: "Unlink this browser tab" }).click();
   expect(new URL(page.url()).searchParams.has("fork-sync")).toBe(false);
   await expect(sessionTab(page, sessions[0])).toHaveAttribute("aria-selected", "true");
+});
+
+test("disconnecting a multi-pane view releases its size constraints and stays paused until Rejoin", async ({ page, context }, testInfo) => {
+  test.setTimeout(60_000);
+  const identity = () => sessions.map((name) => execFileSync("tmux", [
+    ...tmux, "display-message", "-p", "-t", `=${name}:0`, "#{session_id}:#{pane_id}",
+  ], { encoding: "utf8" }).trim());
+  const before = identity();
+  const clientCount = () => execFileSync("tmux", [
+    ...tmux, "list-clients", "-F", "#{client_session}",
+  ], { encoding: "utf8" }).trim().split("\n").filter((name) => sessions.slice(0, 2).includes(name)).length;
+  const windowSize = () => execFileSync("tmux", [
+    ...tmux, "display-message", "-p", "-t", `=${sessions[0]}:0`, "#{window_width}x#{window_height}",
+  ], { encoding: "utf8" }).trim();
+  for (const name of sessions.slice(0, 2)) {
+    execFileSync("tmux", [...tmux, "set-window-option", "-t", `=${name}:0`, "window-size", "smallest"]);
+  }
+  const created = await context.request.post("/mux/api/workspaces", { data: {
+    name: "View eviction fixture", tabs: sessions, activeSession: sessions[0], groups: [],
+    paneLayouts: [{ id: "pair", name: "Pair", root: {
+      id: "split", kind: "split", direction: "horizontal", ratio: 0.5,
+      first: { id: "left", kind: "pane", session: sessions[0] },
+      second: { id: "right", kind: "pane", session: sessions[1] },
+    } }],
+  } });
+  expect(created.ok()).toBe(true);
+  const workspace = (await created.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  const snapshot = async (): Promise<WorkspaceViewSnapshot> => {
+    const response = await context.request.post("/mux/api/workspace-views/snapshot", {
+      data: { scope: `workspace:${workspace.id}`, sessions },
+    });
+    expect(response.ok()).toBe(true);
+    return response.json();
+  };
+  const query = new URLSearchParams({ workspace: workspace.id });
+  for (const name of sessions) query.append("tab", name);
+  await page.goto(`/mux/session/${sessions[0]}?${query}`);
+  await selectTheme(page, "Solarized Light");
+  await panelTab(page).click();
+  await expect(page.locator(".workspace-pane-leaf")).toHaveCount(2);
+  await expect.poll(clientCount).toBe(2);
+  const follower = await forkSync(page);
+  await follower.setViewportSize({ width: 1120, height: 680 });
+  await expect(follower.locator(".workspace-pane-leaf")).toHaveCount(2);
+  await expect.poll(clientCount).toBe(4);
+  const sourceSize = windowSize();
+  await expect.poll(async () => (await snapshot()).views.map((view) => view.terminals.length)).toEqual([2, 2]);
+  const stagedDraft = () => follower.locator(".workspace-pane-leaf").first()
+    .getByRole("textbox", { name: "Staged input", exact: true });
+  await stagedDraft().fill("keep this disconnected view draft");
+  for (const leaf of await follower.locator(".workspace-pane-leaf").all()) {
+    const protectedButton = leaf.getByRole("button", { name: "Size protected", exact: true });
+    if (!await protectedButton.isVisible()) await leaf.getByRole("button", { name: /Show all console controls/ }).click();
+    await protectedButton.click();
+  }
+  await expect.poll(async () => (await snapshot()).views.every((view) => view.terminals.every((terminal) => !terminal.ignoreSize))).toBe(true);
+  await expect.poll(windowSize).not.toBe(sourceSize);
+  const controls = page.locator(".workspace-pane-top-strip");
+  await expect(controls.getByRole("button", { name: "Manage workspace views" })).toHaveText("Views 2");
+  await controls.getByRole("button", { name: "Manage workspace views" }).click();
+  const dialog = page.getByRole("dialog", { name: "Workspace views", exact: true });
+  await expect(dialog.locator(".workspace-view-row")).toHaveCount(2);
+  await expect(dialog.locator('[data-current-view="true"]').getByRole("button", { name: /Disconnect View/ })).toBeDisabled();
+  const other = dialog.locator('[data-current-view="false"]');
+  await expect(other).toContainText("In this sync group");
+  await expect(other).toContainText("Fit active");
+  await expect(other.locator(".workspace-view-terminals li")).toHaveCount(2);
+  await page.screenshot({ path: testInfo.outputPath("workspace-views-light.png"), animations: "disabled" });
+  await other.getByRole("button", { name: /Disconnect View/ }).click();
+  await expect(follower.getByText("This view was disconnected", { exact: true })).toHaveCount(2);
+  await expect.poll(clientCount).toBe(2);
+  await expect.poll(windowSize).toBe(sourceSize);
+  await expect(controls.getByRole("button", { name: "Manage workspace views" })).toHaveText("Views 1");
+  expect(identity()).toEqual(before);
+  await page.keyboard.press("Escape");
+  await follower.reload();
+  await expect(follower.getByText("This view was disconnected", { exact: true })).toHaveCount(2);
+  await expect.poll(clientCount).toBe(2);
+  await expect(stagedDraft()).toHaveValue("keep this disconnected view draft");
+  await sessionTab(page, sessions[2]).click();
+  await expect(panelTab(follower)).toHaveAttribute("aria-selected", "true");
+  await follower.getByRole("button", { name: "Rejoin", exact: true }).first().click();
+  await expect(sessionTab(follower, sessions[2])).toHaveAttribute("aria-selected", "true");
+  await expect.poll(async () => (await snapshot()).views.length).toBe(2);
+  await panelTab(follower).click();
+  await expect(stagedDraft()).toHaveValue("keep this disconnected view draft");
+  expect(identity()).toEqual(before);
 });

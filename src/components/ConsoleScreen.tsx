@@ -73,6 +73,7 @@ import {
 } from "../shortcutSettings";
 import { useTheme } from "../theme";
 import { forkSyncGroupFromSearch, independentForkHref } from "../forkSync";
+import { WorkspaceViewDisconnected } from "./WorkspaceViewDisconnected";
 import { ForkSyncControls, type ForkSyncControlsProps } from "./ForkSyncControls";
 import type { ConnectionState, Pane, Session, SessionTag } from "../types";
 import { AccountLink } from "./AccountLink";
@@ -2747,9 +2748,11 @@ export function ConsoleScreen({
 
       <div className="terminal-coordinate top-left">{pane ? `${pane.width}x${pane.height}` : "--x--"}</div>
       <div className="terminal-view">
-        <LiveTerminal
+        {forkSync?.views?.paused ? <WorkspaceViewDisconnected onRejoin={forkSync.views.resume} /> : <LiveTerminal
           ref={terminalRef}
           session={sessionName}
+          viewer={forkSync?.views?.identity}
+          onViewEvicted={forkSync?.views?.pause}
           elementId={activeConsoleId}
           ignoreSize={ignoreSize}
           layoutSuspended={mobileInputDistractionFree}
@@ -2768,7 +2771,7 @@ export function ConsoleScreen({
           onStateChange={stateChange}
           onPaneChange={paneChange}
           onHistoryNavigation={historyNavigation}
-        />
+        />}
         <nav className="terminal-view-controls" aria-label="Terminal view controls">
           <ScrollButton
             type="button"

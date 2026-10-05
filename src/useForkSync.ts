@@ -27,6 +27,7 @@ export function useForkSync(
   selection: ForkSyncSelection | null,
   onSelection: (selection: ForkSyncSelection) => void,
   onSearchChange: (search: string) => void,
+  paused = false,
 ) {
   const requestedGroup = forkSyncGroupFromSearch(search);
   const group = requestedGroup && !unlinked(requestedGroup) ? requestedGroup : null;
@@ -47,7 +48,7 @@ export function useForkSync(
   }, [requestedGroup, group, search, onSearchChange]);
 
   useEffect(() => {
-    if (!group || !supported) return;
+    if (!group || !supported || paused) return;
     let connection: ForkSyncPeer;
     try {
       connection = new ForkSyncPeer(
@@ -77,7 +78,7 @@ export function useForkSync(
       connection.close();
       if (peer.current === connection) peer.current = null;
     };
-  }, [group, sender, supported]);
+  }, [group, sender, supported, paused]);
 
   useEffect(() => {
     if (skipInitialPublish.current) {
@@ -91,7 +92,7 @@ export function useForkSync(
 
   const prepareFork = useCallback(() => {
     const current = selectionRef.current;
-    if (!current || !supported) return window.location.href;
+    if (!current || !supported || paused) return window.location.href;
     const nextGroup = group ?? newGroup;
     const storage = sharedStorage();
     if (peer.current?.group === nextGroup) peer.current.select(current, true);
@@ -107,7 +108,7 @@ export function useForkSync(
     const destination = new URL(window.location.href);
     destination.search = nextSearch;
     return destination.href;
-  }, [group, newGroup, onSearchChange, sender, supported]);
+  }, [group, newGroup, onSearchChange, sender, supported, paused]);
 
   const unlink = useCallback(() => {
     if (group) {
@@ -124,11 +125,11 @@ export function useForkSync(
   destination.search = searchWithForkSyncGroup(search, group ?? newGroup);
   return {
     linked: Boolean(group),
-    active: Boolean(group) && supported && problem === null,
-    available: supported && selection !== null && problem === null,
+    active: Boolean(group) && supported && problem === null && !paused,
+    available: supported && selection !== null && problem === null && !paused,
     href: destination.href,
     prepareFork,
     unlink,
-    problem: problem ?? (!supported ? "This browser does not support linked tabs." : null),
+    problem: paused ? "This view is disconnected." : problem ?? (!supported ? "This browser does not support linked tabs." : null),
   };
 }

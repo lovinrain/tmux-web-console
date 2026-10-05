@@ -11,7 +11,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { terminalWebSocketUrl } from "../api";
+import { terminalWebSocketUrl, type WorkspaceViewIdentity } from "../api";
 import { attachCodexComposerTheme } from "../codexComposerTheme";
 import {
   desktopAttachmentsAvailable,
@@ -53,6 +53,8 @@ export interface LiveTerminalHandle {
 interface LiveTerminalProps {
   session: string;
   identity?: string;
+  viewer?: WorkspaceViewIdentity;
+  onViewEvicted?: () => void;
   elementId?: string;
   ignoreSize: boolean;
   browserCopyMode?: boolean;
@@ -128,6 +130,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
   function LiveTerminal({
     session,
     identity,
+    viewer,
+    onViewEvicted,
     elementId = "muxdeck-active-console",
     ignoreSize,
     browserCopyMode = false,
@@ -150,6 +154,11 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const terminalRef = useRef<Terminal | null>(null);
     const codexThemeRef = useRef<ReturnType<typeof attachCodexComposerTheme> | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
+    const onViewEvictedRef = useRef(onViewEvicted);
+    onViewEvictedRef.current = onViewEvicted;
+    const viewId = viewer?.id;
+    const viewScope = viewer?.scope;
+    const viewGroup = viewer?.group;
     const applicationScrollRequestsRef = useRef(new Map<string, {
       socket: WebSocket;
       resolve: (result: ApplicationScrollResult) => void;
@@ -517,6 +526,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       setAwayFromLive(false);
       let cancelled = false;
       let ended = false;
+      let evicted = false;
       let reconnectTimer: number | undefined;
       let resizeTimer: number | undefined;
       let attempts = 0;
@@ -830,7 +840,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         if (cancelled || ended) return;
         onStateChange(attempts > 0 ? "reconnecting" : "connecting");
         const socket = new WebSocket(
-          terminalWebSocketUrl(session, terminal.cols, terminal.rows, ignoreSize, identity),
+          terminalWebSocketUrl(session, terminal.cols, terminal.rows, ignoreSize, identity,
+            viewId ? { id: viewId, scope: viewScope ?? null, group: viewGroup ?? null } : undefined),
         );
         socket.binaryType = "arraybuffer";
         socketRef.current = socket;
@@ -839,14 +850,14 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           if (!cancelled) sendResize();
         });
         socket.addEventListener("message", (event) => {
-          if (cancelled) return;
+          if (cancelled || evicted) return;
           if (event.data instanceof ArrayBuffer) {
             terminal.write(new Uint8Array(event.data));
             return;
           }
           if (event.data instanceof Blob) {
             void event.data.arrayBuffer().then((data) => {
-              if (!cancelled) terminal.write(new Uint8Array(data));
+              if (!cancelled && !evicted) terminal.write(new Uint8Array(data));
             });
             return;
           }
@@ -886,6 +897,15 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
               attempts = 0;
               onPaneChange(message.paneId || null);
               onStateChange("live");
+            } else if (message.type === "viewEvicted") {
+              evicted = true;
+              ended = true;
+              if (socketRef.current === socket) socketRef.current = null;
+              rejectPendingSubmissions();
+              rejectHistoryRequests(socket);
+              onStateChange("disconnected");
+              onViewEvictedRef.current?.();
+              socket.close();
             } else if (message.type === "exit") {
               ended = true;
               onStateChange("ended");
@@ -898,22 +918,27 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
             // Only JSON control frames are sent as text.
           }
         });
-        socket.addEventListener("close", () => {
+        socket.addEventListener("close", (event) => {
           if (socketRef.current === socket) socketRef.current = null;
           rejectPendingSubmissions();
           rejectHistoryRequests(socket);
+          if (!cancelled && !ended && event.code === 4004) {
+            ended = true;
+            onStateChange("disconnected");
+            onViewEvictedRef.current?.();
+          }
           if (cancelled || ended) return;
           attempts += 1;
           onStateChange("reconnecting");
           reconnectTimer = window.setTimeout(connect, Math.min(1000 * 2 ** (attempts - 1), 8000));
         });
         socket.addEventListener("error", () => {
-          if (!cancelled) onStateChange("error");
+          if (!cancelled && !ended) onStateChange("error");
         });
       };
 
       const input = terminal.onData((data) => {
-        if (suppressTerminalInput) return;
+        if (suppressTerminalInput || ended) return;
         if (socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current.send(encoder.encode(data));
         }
@@ -971,7 +996,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         terminal.dispose();
         terminalRef.current = null;
       };
-    }, [identity, ignoreSize, onPaneChange, onStateChange, session]);
+    }, [identity, ignoreSize, onPaneChange, onStateChange, session, viewId, viewScope, viewGroup]);
 
     useEffect(() => {
       const terminal = terminalRef.current;
@@ -983,7 +1008,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         if (codexThemeRef.current === adapter) codexThemeRef.current = null;
       };
       // Theme updates are applied in place below; agent detection must not reconnect the PTY.
-    }, [agentKind, identity, ignoreSize, onPaneChange, onStateChange, session]);
+    }, [agentKind, identity, ignoreSize, onPaneChange, onStateChange, session, viewId, viewScope, viewGroup]);
 
     useEffect(() => {
       if (terminalRef.current) {

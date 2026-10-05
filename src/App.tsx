@@ -144,6 +144,7 @@ import {
 } from "./workspacePaneLayouts";
 import { rebaseWorkspaceEdits } from "./workspaceSync";
 import { forkSyncGroupFromSearch, type ForkSyncSelection } from "./forkSync";
+import { useWorkspaceViews } from "./useWorkspaceViews";
 import { useForkSync } from "./useForkSync";
 import { ForkSyncControls } from "./components/ForkSyncControls";
 import { readViewPreference, writeViewPreference, writeLocalViewPreference } from "./viewPreferences";
@@ -2062,7 +2063,9 @@ function AppRoutes() {
     };
   }, [activeRoute?.sessionName, paneLayoutRoute?.layoutId, locationWorkspaceId,
     hydratedWorkspaceId, workspace.openSessions, workspacePaneLayouts, activeWorkspacePane]);
-  const forkSync = useForkSync(location.search, forkSyncSelection, applyForkSyncSelection, changeForkSyncSearch);
+  const workspaceViews = useWorkspaceViews(locationWorkspaceId, location.search, workspace.openSessions);
+  const selectionSync = useForkSync(location.search, forkSyncSelection, applyForkSyncSelection, changeForkSyncSearch, workspaceViews.paused);
+  const forkSync = { ...selectionSync, views: workspaceViews };
 
   useEffect(() => {
     writeLocalViewPreference(CONSOLE_BAR_VISIBILITY_KEY, JSON.stringify(consoleBars));

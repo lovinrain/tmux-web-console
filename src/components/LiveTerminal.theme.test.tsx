@@ -221,6 +221,40 @@ const callbacks = {
   onPaneChange: vi.fn(),
 };
 
+describe("LiveTerminal workspace eviction", () => {
+  it("keeps stable metadata connected, uses the latest callback, and ignores exit/input/reconnect after eviction", async () => {
+    vi.useFakeTimers();
+    const oldEviction = vi.fn(), latestEviction = vi.fn();
+    const viewer = { id: "this-tab", scope: "workspace:one", group: "linked" };
+    const view = render(<LiveTerminal session="alpha" ignoreSize={false} theme="dark"
+      viewer={viewer} onViewEvicted={oldEviction} {...callbacks} />);
+    view.rerender(<LiveTerminal session="alpha" ignoreSize={false} theme="dark"
+      viewer={{ ...viewer }} onViewEvicted={latestEviction} {...callbacks} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    expect(socketMocks.instances).toHaveLength(1);
+    const socket = socketMocks.instances[0];
+    expect(new URL(socket.url).searchParams.get("viewId")).toBe("this-tab");
+    act(() => {
+      socket.emit("open");
+      socket.emitMessage(JSON.stringify({ type: "ready", paneId: "%1" }));
+    });
+    const sends = socket.send.mock.calls.length;
+    act(() => {
+      socket.emitMessage(JSON.stringify({ type: "viewEvicted" }));
+      socket.emitMessage(JSON.stringify({ type: "exit" }));
+      terminalMocks.instances[0].emitData("should not be sent");
+      socket.emit("close");
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(latestEviction).toHaveBeenCalledOnce();
+    expect(oldEviction).not.toHaveBeenCalled();
+    expect(callbacks.onStateChange).toHaveBeenLastCalledWith("disconnected");
+    expect(callbacks.onStateChange).not.toHaveBeenCalledWith("ended");
+    expect(socket.send).toHaveBeenCalledTimes(sends);
+    expect(socketMocks.instances).toHaveLength(1);
+  });
+});
+
 function setTerminalBufferLine(terminal: MockTerminalInstance, content: string) {
   const cell = {
     chars: "",

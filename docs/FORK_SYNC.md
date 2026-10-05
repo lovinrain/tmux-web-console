@@ -30,6 +30,35 @@ Browser scroll positions, dialogs, and tmux copy-mode controls retain their norm
 local behavior. Fork-sync shares workspace session/Pane-view selection; it does
 not coordinate native tmux pane/window switches within individual terminal clients.
 
+## Count and disconnect views
+
+**Split → Views N** lists browser views with connected main terminals. The count
+includes this tab. Multiple terminals in a Pane view count as one browser view.
+For saved workspaces, the list includes independent forks and views from other
+browsers, with each view's sync-group membership shown separately. Temporary
+workspaces use their Fork-sync group. Selection sync still requires the same
+browser profile; counting and disconnecting use server-side attachment tracking.
+
+Each entry shows its sessions, terminal dimensions, and **Fit active** or
+**Size protected** mode. An extra Fit active attachment can constrain the shared
+tmux window size. **Disconnect** releases every main terminal attachment belonging
+to that browser view, while its tmux sessions and applications keep running.
+The affected page pauses both attachment and selection sync and displays
+**Rejoin**. Its appearance and staged input are preserved. It remains paused
+across reload when session storage is available; Rejoin restores the sync
+group's latest selection and reconnects its terminals.
+
+Unlink only stops selection synchronization; it keeps the terminal attached.
+Use Disconnect when the goal is to release a sizing contributor. Older or
+unassigned terminal connections to workspace sessions appear separately because
+their workspace membership is unknown. Older pages stop their attachment on
+disconnect, but can reconnect after a reload. Independent floating utility
+terminals are not counted as main workspace views. External tmux clients are
+outside this list and can also affect size.
+
+The list refreshes approximately every two seconds and on browser focus.
+Tracking is in memory and rebuilds as terminals reconnect after a service restart.
+
 Each group orders updates with a sequence counter and sender identity so
 simultaneous selections converge. Applied remote updates are not rebroadcast as
 new user actions. Saved workspace contents and panel definitions continue to use

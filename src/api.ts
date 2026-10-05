@@ -2116,12 +2116,57 @@ export async function openUtilityTerminal(
   });
 }
 
+export interface WorkspaceViewIdentity {
+  id: string;
+  scope: string | null;
+  group: string | null;
+}
+
+export interface WorkspaceView {
+  id: string;
+  number: number;
+  inScope: boolean;
+  group: string | null;
+  terminals: Array<{ session: string; cols: number; rows: number; ignoreSize: boolean }>;
+}
+
+export interface WorkspaceViewSnapshot {
+  views: WorkspaceView[];
+  evicted: boolean;
+}
+
+export function getWorkspaceViews(
+  scope: string, sessions: string[], viewId: string, signal?: AbortSignal,
+): Promise<WorkspaceViewSnapshot> {
+  return jsonRequest("/api/workspace-views/snapshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope, sessions, viewId }),
+    signal,
+  });
+}
+
+export async function evictWorkspaceView(
+  scope: string, sessions: string[], requesterId: string, viewId: string,
+): Promise<void> {
+  await jsonRequest(`/api/workspace-views/${encodeURIComponent(viewId)}/evict`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope, sessions, requesterId }),
+  });
+}
+
+export async function resumeWorkspaceView(viewId: string): Promise<void> {
+  await jsonRequest(`/api/workspace-views/${encodeURIComponent(viewId)}/resume`, { method: "POST" });
+}
+
 export function terminalWebSocketUrl(
   session: string,
   cols: number,
   rows: number,
   ignoreSize: boolean,
   identity?: string,
+  viewer?: WorkspaceViewIdentity,
 ): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const query = new URLSearchParams({
@@ -2131,5 +2176,10 @@ export function terminalWebSocketUrl(
     ignoreSize: ignoreSize ? "1" : "0",
   });
   if (identity) query.set("identity", identity);
+  if (viewer) {
+    query.set("viewId", viewer.id);
+    if (viewer.scope) query.set("viewScope", viewer.scope);
+    if (viewer.group) query.set("viewGroup", viewer.group);
+  }
   return `${protocol}//${window.location.host}${BASE_PATH}/ws/terminal?${query}`;
 }

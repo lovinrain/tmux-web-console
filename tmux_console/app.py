@@ -204,6 +204,12 @@ from .work_links import (
 )
 from .work_links_api import register_work_link_routes
 from .worker_link import resolve_worker_terminal
+from .workspace_views import (
+    ViewAttachment,
+    WorkspaceViewRegistry,
+    validate_view_id,
+    validate_view_scope,
+)
 from .workspaces import (
     WorkspaceForgetSnapshot,
     WorkspaceNotFoundError,
@@ -234,6 +240,7 @@ MESSAGES_KEY = web.AppKey("messages", SessionMessageStore)
 SNIPPETS_KEY = web.AppKey("snippets", SnippetStore)
 SHORTCUTS_KEY = web.AppKey("shortcuts", ShortcutStore)
 WORKSPACES_KEY = web.AppKey("workspaces", WorkspaceStore)
+WORKSPACE_VIEWS_KEY = web.AppKey("workspace_views", WorkspaceViewRegistry)
 CALLBACK_MESSAGES_KEY = web.AppKey("callback_messages", CallbackMessageStore)
 ATTACHMENTS_KEY = web.AppKey("attachments", AttachmentStore)
 AGENT_STATES_KEY = web.AppKey("agent_states", AgentStateDetector)
@@ -1237,6 +1244,12 @@ def create_app(
     app[SNIPPETS_KEY] = snippets or SnippetStore()
     app[SHORTCUTS_KEY] = shortcuts or ShortcutStore()
     app[WORKSPACES_KEY] = workspaces or WorkspaceStore()
+    app[WORKSPACE_VIEWS_KEY] = WorkspaceViewRegistry()
+
+    async def close_workspace_views(application: web.Application) -> None:
+        await application[WORKSPACE_VIEWS_KEY].close()
+
+    app.on_shutdown.append(close_workspace_views)
     app[CALLBACK_MESSAGES_KEY] = callback_messages or CallbackMessageStore(
         default_callback_messages_path(app[WORKSPACES_KEY].path)
     )
@@ -6196,7 +6209,70 @@ def create_app(
         limit = max(20, min(parse_int(request.query.get("limit"), 250), 1000))
         return web.json_response(snapshot.page(before=before, limit=limit))
 
+    def view_sessions(value: Any) -> list[str]:
+        if (
+            not isinstance(value, list) or len(value) > 256
+            or not all(isinstance(name, str) and 0 < len(name) <= 256 for name in value)
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError("invalid workspace view sessions")
+        return value
+
+    async def workspace_view_snapshot(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise TypeError("workspace view request must be an object")
+            scope = validate_view_scope(payload.get("scope"))
+            if scope is None:
+                raise ValueError("workspace view scope is required")
+            viewer = validate_view_id(payload.get("viewId"))
+            names = view_sessions(payload.get("sessions", []))
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 400)
+        return web.json_response(app[WORKSPACE_VIEWS_KEY].snapshot(scope, names, viewer))
+
+    async def evict_workspace_view(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise TypeError("workspace view request must be an object")
+            scope = validate_view_scope(payload.get("scope"))
+            target = validate_view_id(request.match_info["view_id"])
+            requester = validate_view_id(payload.get("requesterId"))
+            names = view_sessions(payload.get("sessions", []))
+            if scope is None or target is None or requester is None:
+                raise ValueError("workspace scope and browser view identifiers are required")
+            if target == requester:
+                raise ValueError("use the other view's disconnect button")
+        except (ValueError, TypeError) as error:
+            return json_error(str(error), 400)
+        if not await app[WORKSPACE_VIEWS_KEY].evict(scope, names, target):
+            return json_error("browser view is no longer connected to this workspace", 404)
+        return web.json_response({"disconnected": True})
+
+    async def resume_workspace_view(request: web.Request) -> web.Response:
+        try:
+            viewer = validate_view_id(request.match_info["view_id"])
+            if viewer is None:
+                raise ValueError("browser view identifier is required")
+        except ValueError as error:
+            return json_error(str(error), 400)
+        app[WORKSPACE_VIEWS_KEY].resume(viewer)
+        return web.json_response({"resumed": True})
+
     async def terminal(request: web.Request) -> web.StreamResponse:
+        try:
+            viewer = validate_view_id(request.query.get("viewId"))
+            view_scope = validate_view_scope(request.query.get("viewScope"))
+            view_group = validate_view_id(request.query.get("viewGroup"))
+            if (view_scope is not None or view_group is not None) and viewer is None:
+                raise ValueError("browser view identifier is required")
+        except ValueError as error:
+            return json_error(str(error), 400)
+        if app[WORKSPACE_VIEWS_KEY].is_evicted(viewer):
+            return json_error("This view was disconnected. Rejoin to reconnect.", 423)
+        viewer = viewer or f"legacy-{secrets.token_hex(16)}"
         session_name = request.query.get("session", "")
         try:
             session = await app[TMUX_KEY].get_session(session_name)
@@ -6233,16 +6309,17 @@ def create_app(
             await websocket.close(code=1011)
             return websocket
 
-        await websocket.send_str(
-            json.dumps(
-                {
-                    "type": "ready",
-                    "session": session.name,
-                    "paneId": session.active_pane.id if session.active_pane else None,
-                    "ignoreSize": ignore_size,
-                }
-            )
-        )
+        try:
+            view_token = app[WORKSPACE_VIEWS_KEY].attach(ViewAttachment(
+                view_id=viewer, scope=view_scope, group=view_group,
+                session=session.name, cols=cols, rows=rows, ignore_size=ignore_size,
+                websocket=websocket, bridge=bridge,
+            ))
+        except PermissionError:
+            await websocket.send_json({"type": "viewEvicted"})
+            await bridge.close()
+            await websocket.close(code=4004)
+            return websocket
 
         async def send_output() -> None:
             while True:
@@ -6250,7 +6327,7 @@ def create_app(
                 if data is None:
                     break
                 await websocket.send_bytes(data)
-            if not websocket.closed:
+            if not websocket.closed and not app[WORKSPACE_VIEWS_KEY].is_evicted(viewer):
                 await websocket.send_str(
                     json.dumps({"type": "exit", "code": bridge.process.poll()})
                 )
@@ -6274,7 +6351,17 @@ def create_app(
         )
         claude_scroll_continuation: tuple[str, str, float] | None = None
         try:
+            # Keep readiness inside cleanup: a browser can disappear while its
+            # PTY is attaching, before the first control frame is delivered.
+            await websocket.send_str(json.dumps({
+                "type": "ready",
+                "session": session.name,
+                "paneId": session.active_pane.id if session.active_pane else None,
+                "ignoreSize": ignore_size,
+            }))
             async for message in websocket:
+                if app[WORKSPACE_VIEWS_KEY].is_evicted(viewer):
+                    break
                 if not await request_auth_still_valid(request):
                     await websocket.close(
                         code=4003,
@@ -6297,10 +6384,12 @@ def create_app(
                     if payload.get("type") != "applicationScroll" or payload.get("profile") != "claude":
                         claude_scroll_continuation = None
                     if payload.get("type") == "resize":
-                        bridge.resize(
+                        resized_cols, resized_rows = clamp_size(
                             parse_int(str(payload.get("cols", "")), cols),
                             parse_int(str(payload.get("rows", "")), rows),
                         )
+                        bridge.resize(resized_cols, resized_rows)
+                        app[WORKSPACE_VIEWS_KEY].resize(view_token, resized_cols, resized_rows)
                     elif payload.get("type") == "input":
                         input_id = payload.get("id")
                         input_data = payload.get("data")
@@ -6436,7 +6525,10 @@ def create_app(
                     auth_monitor.cancel()
                     await asyncio.gather(auth_monitor, return_exceptions=True)
             finally:
-                await _close_terminal_bridge(sender, bridge)
+                try:
+                    await _close_terminal_bridge(sender, bridge)
+                finally:
+                    app[WORKSPACE_VIEWS_KEY].detach(view_token)
         return websocket
 
     async def spa(_: web.Request) -> web.StreamResponse:
@@ -6465,6 +6557,9 @@ def create_app(
     session_segment = "{session:[^/]+}"
 
     app.router.add_get(f"{prefix}/api/health", health)
+    app.router.add_post(f"{prefix}/api/workspace-views/snapshot", workspace_view_snapshot)
+    app.router.add_post(f"{prefix}/api/workspace-views/{{view_id}}/evict", evict_workspace_view)
+    app.router.add_post(f"{prefix}/api/workspace-views/{{view_id}}/resume", resume_workspace_view)
     register_work_link_routes(app, prefix, app[WORK_LINKS_KEY], app[TMUX_KEY],
                               app[SESSION_REGISTRY_KEY], app[SESSION_RENAME_LOCK_KEY])
     app.router.add_get(f"{prefix}/api/capabilities", api_capabilities)

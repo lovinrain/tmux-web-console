@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import errno
 from unittest.mock import Mock
 
@@ -13,6 +14,7 @@ def make_bare_bridge(*, closed: bool = False) -> tuple[PtyBridge, Mock]:
     bridge = PtyBridge.__new__(PtyBridge)
     bridge.master_fd = 123
     bridge.closed = closed
+    bridge._close_task = None
 
     def finish() -> None:
         bridge.closed = True
@@ -58,6 +60,22 @@ def test_resize_updates_the_pty_and_notifies_the_tmux_client(monkeypatch):
 
     set_window_size.assert_called_once_with(123, 120, 48)
     killpg.assert_called_once_with(456, pty_bridge_module.signal.SIGWINCH)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_and_repeated_close_releases_descriptor_only_once(monkeypatch):
+    bridge, _finish = make_bare_bridge(closed=True)
+    bridge.process = Mock(pid=456)
+    bridge.process.poll.return_value = 0
+    bridge._poll_task = asyncio.create_task(asyncio.sleep(60))
+    close_fd = Mock()
+    monkeypatch.setattr(pty_bridge_module.os, "close", close_fd)
+
+    await asyncio.gather(bridge.close(), bridge.close())
+    await bridge.close()
+
+    close_fd.assert_called_once_with(123)
+    assert bridge._poll_task.cancelled()
 
 
 @pytest.mark.asyncio

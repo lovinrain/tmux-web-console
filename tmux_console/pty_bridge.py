@@ -32,6 +32,7 @@ class PtyBridge:
         self.loop = asyncio.get_running_loop()
         self.output: asyncio.Queue[bytes | None] = asyncio.Queue(self.MAX_PENDING_CHUNKS)
         self.closed = False
+        self._close_task: asyncio.Task[None] | None = None
         self._poll_task = asyncio.create_task(self._poll_process())
         self.loop.add_reader(self.master_fd, self._read_ready)
 
@@ -152,6 +153,13 @@ class PtyBridge:
                 os.killpg(self.process.pid, signal.SIGWINCH)
 
     async def close(self) -> None:
+        # Eviction and the WebSocket handler can finish the same attachment
+        # concurrently. In particular, never close a reused descriptor twice.
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close())
+        await asyncio.shield(self._close_task)
+
+    async def _close(self) -> None:
         if not self.closed:
             self._finish()
 

@@ -1,4 +1,7 @@
+import { useCallback, useState } from "react";
 import { RefreshIcon } from "../icons";
+import type { WorkspaceViewsController } from "../useWorkspaceViews";
+import { WorkspaceViewsDialog } from "./WorkspaceViewsDialog";
 import "./ForkSyncControls.css";
 
 export interface ForkSyncControlsProps {
@@ -10,9 +13,13 @@ export interface ForkSyncControlsProps {
   unlink: () => void;
   problem?: string | null;
   onFork?: () => void;
+  views?: WorkspaceViewsController;
 }
 
-export function ForkSyncControls({ active, linked = active, available, href, prepareFork, unlink, problem, onFork }: ForkSyncControlsProps) {
+export function ForkSyncControls({ active, linked = active, available, href, prepareFork, unlink, problem, onFork, views }: ForkSyncControlsProps) {
+  const [showViews, setShowViews] = useState(false);
+  const closeViews = useCallback(() => setShowViews(false), []);
+  const count = views?.views.filter((view) => view.inScope).length ?? 0;
   return (
     <span className="fork-sync-controls">
       {available ? (
@@ -45,7 +52,16 @@ export function ForkSyncControls({ active, linked = active, available, href, pre
             Unlink
           </button>
       )}
+      {views?.available && (
+        <button type="button" className="split-workspace-button workspace-views-button"
+          aria-label="Manage workspace views" aria-haspopup="dialog"
+          title="See attached views and disconnect those affecting the shared terminal size"
+          onClick={() => { views.refresh(); setShowViews(true); }}>
+          Views {views.loading ? "…" : views.error ? "?" : count}
+        </button>
+      )}
       {problem && <span className="fork-sync-problem" role="status">{problem}</span>}
+      {showViews && views?.available && <WorkspaceViewsDialog controller={views} onClose={closeViews} />}
     </span>
   );
 }
