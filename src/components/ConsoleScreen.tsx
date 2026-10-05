@@ -60,6 +60,7 @@ import {
   type OverflowCandidate,
 } from "../headerOverflow";
 import { paneCommandKind } from "../sessionDashboardModel";
+import { CTRL_END_SEQUENCE } from "../terminalInput";
 import { resolveTerminalFileLinkPath } from "../terminalFileLinks";
 import {
   SHORTCUT_ACTION_EVENT,
@@ -248,10 +249,6 @@ const STATE_LABEL: Record<ConnectionState, string> = {
 
 const RAW_PAGE_UP_SEQUENCE = "\x1b[5~";
 const RAW_PAGE_DOWN_SEQUENCE = "\x1b[6~";
-// Claude Code handles application scrolling in its alternate screen. Its
-// terminal parser maps xterm's Ctrl+End sequence to the scroll-to-bottom
-// action, whereas tmux's copy-mode cancel cannot reach that state.
-const RAW_APPLICATION_BOTTOM_SEQUENCE = "\x1b[8^";
 const MOBILE_CONSOLE_LAYOUT_QUERY = [
   "(max-width: 640px)",
   "(max-width: 1024px) and (pointer: coarse)",
@@ -1621,14 +1618,14 @@ export function ConsoleScreen({
         active.scrollTargetKey === scrollTargetKey
         && active.connection === "live"
         && active.applicationReturnMode === "application"
-      ) terminalRef.current?.send(RAW_APPLICATION_BOTTOM_SEQUENCE);
+      ) terminalRef.current?.send(CTRL_END_SEQUENCE);
     }
   }, [forgetTmuxScrollTarget, rememberTmuxScrollTarget, scrollTargetKey, updatePendingTmuxScroll]);
   const returnToLiveTerminal = useCallback(() => {
     tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
     setApplicationScrollMessage(null);
     if (returnScrollMode === "application") {
-      terminalRef.current?.send(RAW_APPLICATION_BOTTOM_SEQUENCE);
+      terminalRef.current?.send(CTRL_END_SEQUENCE);
     } else {
       terminalRef.current?.navigateHistory("exit");
     }
@@ -2840,6 +2837,18 @@ export function ConsoleScreen({
               <ScrollControlIcon mode="application" step="line" direction={direction} />
             </ScrollButton>
           ))}
+          <button
+            type="button"
+            className="terminal-view-control"
+            aria-label="Ctrl+End - jump to latest output"
+            aria-controls={activeConsoleId}
+            title="Send Ctrl+End to the foreground application; jump to the latest output in Claude Code"
+            disabled={connection !== "live"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => terminalRef.current?.send(CTRL_END_SEQUENCE)}
+          >
+            <span>Ctrl+End</span>
+          </button>
           <ScrollButton
             type="button"
             repeatContext={scrollRepeatContext}

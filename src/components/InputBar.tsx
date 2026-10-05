@@ -37,7 +37,7 @@ import {
   transferHasFiles,
   type SessionAttachmentUploader,
 } from "../attachments";
-import type { TerminalSubmissionTerminator } from "../terminalInput";
+import { CTRL_END_SEQUENCE, type TerminalSubmissionTerminator } from "../terminalInput";
 import { ScrollControlIcon } from "./ScrollControlIcon";
 import { ScrollButton } from "./ScrollButton";
 import {
@@ -1488,6 +1488,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               <ScrollControlIcon mode="application" step="line" direction={direction} />
             </ScrollButton>
           ))}
+          <TerminalKeyButton
+            terminalKey={{
+              label: "Ctrl+End",
+              data: CTRL_END_SEQUENCE,
+              ariaLabel: "Ctrl+End - jump to latest output",
+              title: "Send Ctrl+End to the foreground application; jump to the latest output in Claude Code",
+            }}
+            enabled={enabled}
+            onSend={onSend}
+          />
         </div>
         {INPUT_EDIT_KEYS.map((terminalKey) => (
           <TerminalKeyButton

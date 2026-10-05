@@ -168,6 +168,7 @@ describe("InputBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear terminal input" }));
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
     fireEvent.click(screen.getByRole("button", { name: "PgDn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ctrl+End - jump to latest output" }));
     fireEvent.click(screen.getByRole("button", { name: "Esc" }));
     fireEvent.click(screen.getByRole("button", { name: "^C" }));
     fireEvent.click(screen.getByRole("button", { name: "Show other keys" }));
@@ -194,6 +195,7 @@ describe("InputBar", () => {
       ["\x01\x0b"],
       ["\x1b[5~"],
       ["\x1b[6~"],
+      ["\x1b[1;5F"],
       ["\x1b"],
       ["\x03"],
       ["\x1b[A"],
@@ -371,8 +373,8 @@ describe("InputBar", () => {
       fireEvent.click(button);
     }
     expect(onScrollApplication).toHaveBeenCalledTimes(4);
-    for (const name of ["Tmux scrolling", "Application scrolling"]) {
-      expect(within(screen.getByRole("group", { name })).getAllByRole("button")).toHaveLength(4);
+    for (const [name, count] of [["Tmux scrolling", 4], ["Application scrolling", 5]] as const) {
+      expect(within(screen.getByRole("group", { name })).getAllByRole("button")).toHaveLength(count);
     }
     expect(screen.getByRole("group", { name: "Application scrolling" }).nextElementSibling)
       .toBe(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }));
@@ -449,6 +451,7 @@ describe("InputBar", () => {
     expect(screen.getByRole("button", { name: "Focus live terminal input" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Esc" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Tmux Page Up" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ctrl+End - jump to latest output" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Ctrl+A - move to start of input" }))
       .toBeDisabled();
     expect(screen.getByRole("button", { name: "Ctrl+K - delete to end of input" }))
@@ -474,16 +477,18 @@ describe("InputBar", () => {
     const onSend = vi.fn(() => true);
     render(<InputBar {...props} onSend={onSend} />);
     const textarea = screen.getByRole("textbox", { name: "Staged input" });
-    const startButton = screen.getByRole("button", {
-      name: "Ctrl+A - move to start of input",
-    });
     textarea.focus();
 
-    expect(fireEvent.mouseDown(startButton)).toBe(false);
-    expect(textarea).toHaveFocus();
-    fireEvent.click(startButton);
-
-    expect(onSend).toHaveBeenCalledWith("\x01");
+    for (const [name, data] of [
+      ["Ctrl+A - move to start of input", "\x01"],
+      ["Ctrl+End - jump to latest output", "\x1b[1;5F"],
+    ]) {
+      const button = screen.getByRole("button", { name });
+      expect(fireEvent.mouseDown(button)).toBe(false);
+      expect(textarea).toHaveFocus();
+      fireEvent.click(button);
+      expect(onSend).toHaveBeenLastCalledWith(data);
+    }
   });
 
   it("clears terminal-side input without discarding the local staged draft", () => {

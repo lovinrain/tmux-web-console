@@ -1,5 +1,8 @@
 export type TerminalSubmissionTerminator = "none" | "enter" | "tab";
 
+// Standard xterm Ctrl+End (kEND5), re-encoded by tmux for the foreground application.
+export const CTRL_END_SEQUENCE = "\x1b[1;5F";
+
 export function prepareTerminalSubmission(
   data: string,
   terminator: TerminalSubmissionTerminator,

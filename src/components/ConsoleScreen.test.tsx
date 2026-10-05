@@ -1076,7 +1076,7 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.click(screen.getByRole("button", { name: "PgUp" }));
     expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
     fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
-    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[5~"], ["\x1b[8^"]]);
+    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[5~"], ["\x1b[1;5F"]]);
     expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalled();
   });
 
@@ -1094,7 +1094,7 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.click(within(controls).getByRole("button", { name: "Tmux Line Up" }));
     fireEvent.click(within(controls).getByRole("button", { name: "Focus live terminal input" }));
     expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([["line-up"]]);
-    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[8^");
+    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[1;5F");
   });
 
   it.each(["line-up", "line-down"] as const)("keeps application Live after a rejected %s", async (action) => {
@@ -1110,7 +1110,7 @@ describe("ConsoleScreen session identity", () => {
     act(() => liveTerminalState.onHistoryNavigation?.(action, "rejected"));
     fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
     expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([[action]]);
-    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[8^"]]);
+    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[1;5F"]]);
   });
 
   it.each(["line-up", "line-down"] as const)("waits for each held %s acknowledgment and stops on rejection", async (action) => {
@@ -1150,7 +1150,7 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.send).not.toHaveBeenCalled();
     act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
     act(() => liveTerminalState.onHistoryNavigation?.("exit", "rejected"));
-    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[8^"]]);
+    expect(liveTerminalHandle.send.mock.calls).toEqual([["\x1b[1;5F"]]);
     fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
     expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledTimes(2);
     expect(liveTerminalHandle.send).toHaveBeenCalledTimes(2);
@@ -1220,7 +1220,7 @@ describe("ConsoleScreen session identity", () => {
     act(() => liveTerminalState.onStateChange?.("live"));
     fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
     expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([["line-up"]]);
-    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[8^");
+    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[1;5F");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Tmux Line Up" })[0]);
     act(() => liveTerminalState.onHistoryNavigation?.("line-up", "accepted"));
@@ -1281,7 +1281,7 @@ describe("ConsoleScreen session identity", () => {
       expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[5~");
       expect(liveTerminalHandle.scrollApplication).toHaveBeenLastCalledWith("down", kind);
       fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
-      expect(liveTerminalHandle.send).toHaveBeenLastCalledWith("\x1b[8^");
+      expect(liveTerminalHandle.send).toHaveBeenLastCalledWith("\x1b[1;5F");
       expect(JSON.parse(window.localStorage.getItem("muxdeck-agent-scroll-preferences") || "{}")).toEqual({ [kind]: "tmux" });
     },
   );
@@ -1329,7 +1329,7 @@ describe("ConsoleScreen session identity", () => {
     act(() => previousNavigation?.("line-up", "accepted"));
     expect(screen.getByRole("main")).toHaveAttribute("data-scroll-mode", "application");
     fireEvent.click(screen.getByRole("button", { name: "Return to live terminal" }));
-    expect(liveTerminalHandle.send).toHaveBeenLastCalledWith("\x1b[8^");
+    expect(liveTerminalHandle.send).toHaveBeenLastCalledWith("\x1b[1;5F");
   });
 
   it("ignores native acknowledgments after switching sessions", async () => {
@@ -1398,7 +1398,7 @@ describe("ConsoleScreen session identity", () => {
 
     fireEvent.click(returnToLive);
 
-    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[8^");
+    expect(liveTerminalHandle.send).toHaveBeenCalledWith("\x1b[1;5F");
     expect(liveTerminalHandle.navigateHistory).not.toHaveBeenCalledWith("exit");
     expect(liveTerminalHandle.jumpToLive).toHaveBeenCalledOnce();
     expect(liveTerminalHandle.focus).toHaveBeenCalledOnce();
@@ -2104,6 +2104,9 @@ describe("ConsoleScreen session identity", () => {
     const rawPageDown = within(terminalControls).getByRole("button", {
       name: "Raw terminal Page Down",
     });
+    const ctrlEnd = within(terminalControls).getByRole("button", {
+      name: "Ctrl+End - jump to latest output",
+    });
     const tmuxPageUp = within(terminalControls).getByRole("button", {
       name: "Tmux Page Up",
     });
@@ -2118,12 +2121,14 @@ describe("ConsoleScreen session identity", () => {
 
     expect(rawPageUp).toBeDisabled();
     expect(rawPageDown).toBeDisabled();
+    expect(ctrlEnd).toBeDisabled();
     expect(tmuxPageUp).toBeDisabled();
     expect(tmuxPageDown).toBeDisabled();
     expect(returnToLive).toBeDisabled();
     act(() => liveTerminalState.onStateChange?.("live"));
     expect(rawPageUp).toBeEnabled();
     expect(rawPageDown).toBeEnabled();
+    expect(ctrlEnd).toBeEnabled();
     expect(tmuxPageUp).toBeEnabled();
     expect(tmuxPageDown).toBeEnabled();
     expect(returnToLive).toBeEnabled();
@@ -2135,6 +2140,7 @@ describe("ConsoleScreen session identity", () => {
     for (const control of [
       rawPageUp,
       rawPageDown,
+      ctrlEnd,
       tmuxPageUp,
       tmuxPageDown,
       returnToLive,
@@ -2148,6 +2154,7 @@ describe("ConsoleScreen session identity", () => {
     fireEvent.input(stagedInput, { target: { value: "keep this reply available" } });
     fireEvent.click(rawPageUp);
     fireEvent.click(rawPageDown);
+    fireEvent.click(ctrlEnd);
     fireEvent.click(tmuxPageUp);
     fireEvent.click(tmuxPageDown);
     fireEvent.click(returnToLive);
@@ -2155,6 +2162,7 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.send.mock.calls).toEqual([
       ["\x1b[5~"],
       ["\x1b[6~"],
+      ["\x1b[1;5F"],
     ]);
     expect(liveTerminalHandle.navigateHistory.mock.calls).toEqual([
       ["page-up"],
@@ -2196,7 +2204,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByTestId("live-terminal")).toBe(liveTerminal);
     expect(stagedInput).toHaveValue("keep this reply available");
     expect(liveTerminalHandle.navigateHistory).toHaveBeenCalledTimes(3);
-    expect(liveTerminalHandle.send).toHaveBeenCalledTimes(2);
+    expect(liveTerminalHandle.send).toHaveBeenCalledTimes(3);
   });
 
   it("focuses staged input without remounting or resizing the terminal", async () => {

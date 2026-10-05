@@ -2171,6 +2171,65 @@ test("desktop CWD browser hands over the path when there is no clipboard", async
   await browser.getByRole("button", { name: "Close file browser" }).click();
 });
 
+test("Ctrl+End sends one key on desktop and mobile while preserving draft and focus", async ({ page }) => {
+  const readerSession = `${sessionName}-ctrl-end`;
+  const readerFile = `/tmp/${readerSession}-reader.py`;
+  const keyLog = `/tmp/${readerSession}-keys.bin`;
+  writeFileSync(readerFile, [
+    "import os, sys, tty",
+    "with open(sys.argv[1], 'wb', buffering=0) as log:",
+    "    tty.setraw(0)",
+    "    print('CTRL_END_READY', flush=True)",
+    "    while True:",
+    "        log.write(os.read(0, 4096))",
+    "",
+  ].join("\n"));
+  const receivedKeys = () => existsSync(keyLog) ? readFileSync(keyLog, "utf8") : "";
+  try {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", readerSession,
+      "python3", "-u", readerFile, keyLog]);
+    await expect.poll(() => workspaceTmuxContentSnapshot(readerSession)).toContain("CTRL_END_READY");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${readerSession}?tab=${encodeURIComponent(readerSession)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
+    const stagedInput = page.getByRole("textbox", { name: "Staged input", includeHidden: true });
+    const draft = "keep this draft while returning to the latest output";
+    await stagedInput.fill(draft);
+
+    const desktopCtrlEnd = page.getByRole("group", { name: "Application scrolling" })
+      .getByRole("button", { name: "Ctrl+End - jump to latest output" });
+    await expect(desktopCtrlEnd).toBeVisible();
+    await expect(desktopCtrlEnd).toHaveText("Ctrl+End");
+    await desktopCtrlEnd.click();
+    await expect.poll(receivedKeys).toBe("\x1b[1;5F");
+    await expect(stagedInput).toBeFocused();
+    await expect(stagedInput).toHaveValue(draft);
+    await page.screenshot({ path: "artifacts/ctrl-end-desktop.png", fullPage: true });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("navigation", { name: "Mobile console focus" })
+      .getByRole("button", { name: "Terminal", exact: true }).click();
+    const terminalInput = page.locator(".terminal-host .xterm-helper-textarea");
+    await terminalInput.focus();
+    const mobileCtrlEnd = page.getByRole("navigation", { name: "Terminal view controls" })
+      .getByRole("button", { name: "Ctrl+End - jump to latest output" });
+    await mobileCtrlEnd.scrollIntoViewIfNeeded();
+    await expect(mobileCtrlEnd).toBeVisible();
+    const box = (await mobileCtrlEnd.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    await mobileCtrlEnd.click();
+    await expect.poll(receivedKeys).toBe("\x1b[1;5F\x1b[1;5F");
+    await expect(terminalInput).toBeFocused();
+    await expect(stagedInput).toHaveValue(draft);
+    await page.screenshot({ path: "artifacts/ctrl-end-mobile.png", fullPage: true });
+  } finally {
+    execFileSync("tmux", [...tmux, "kill-session", "-t", `=${readerSession}`]);
+    rmSync(readerFile, { force: true });
+    rmSync(keyLog, { force: true });
+  }
+});
+
 test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", async ({
   context,
   page,
@@ -7100,12 +7159,14 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   await expect(rawPageUp).not.toHaveClass(/preferred-scroll-control/);
   await expect(rawPageDown).not.toHaveClass(/preferred-scroll-control/);
   const portraitRailButtons = terminalControls.getByRole("button");
-  await expect(portraitRailButtons).toHaveCount(11);
+  await expect(portraitRailButtons).toHaveCount(12);
+  // Browser scrolling can round offsets while button bounds remain fractional.
+  const scrollRoundingTolerance = 1;
   for (const direction of ["Up", "Down"]) {
     const appLine = terminalControls.getByRole("button", { name: `Application Scroll ${direction}` });
     await expect(appLine).toBeVisible();
-    await expect(appLine).toBeDisabled();
-    await expect(appLine).toHaveAttribute("title", /not supported/);
+    await expect(appLine).toBeEnabled();
+    await expect(appLine).toHaveAttribute("title", /wheel settings/);
   }
   for (const button of await portraitRailButtons.all()) {
     await button.scrollIntoViewIfNeeded();
@@ -7113,8 +7174,8 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
     expect(box).not.toBeNull();
     expect(box!.width).toBeGreaterThanOrEqual(44);
     expect(box!.height).toBeGreaterThanOrEqual(44);
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+    expect(box!.x).toBeGreaterThanOrEqual(-scrollRoundingTolerance);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390 + scrollRoundingTolerance);
   }
   expect(await terminalControls.evaluate((element) => (
     element.scrollWidth > element.clientWidth
@@ -7314,8 +7375,8 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   for (const button of await reflowedRailButtons.all()) {
     await button.scrollIntoViewIfNeeded();
     const box = await button.boundingBox();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+    expect(box!.x).toBeGreaterThanOrEqual(-scrollRoundingTolerance);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(320 + scrollRoundingTolerance);
   }
   expect(await terminalControls.evaluate((element) => (
     element.scrollWidth > element.clientWidth
@@ -7330,7 +7391,7 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   }).getByRole("button");
   await expect(landscapePurposeButtons).toHaveCount(3);
   const landscapeRailButtons = terminalControls.getByRole("button");
-  await expect(landscapeRailButtons).toHaveCount(11);
+  await expect(landscapeRailButtons).toHaveCount(12);
   for (const button of await landscapeRailButtons.all()) {
     const box = await button.boundingBox();
     expect(box).not.toBeNull();

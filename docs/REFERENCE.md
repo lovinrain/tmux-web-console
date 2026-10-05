@@ -163,7 +163,9 @@ accessible names remain available to assistive technology.
 
 The shortcut strip in `Input` mode sends terminal input. Its `PgUp` and `PgDn`
 controls send real Page Up/Page Down key sequences to the foreground application,
-matching a physical keyboard for tools such as Claude Code. For Codex or other
+matching a physical keyboard for tools such as Claude Code. The adjacent
+`Ctrl+End` button sends that key to jump to the latest output in Claude Code;
+it is also available in the phone terminal rail. For Codex or other
 content in tmux history, `Tmux PgUp` sends `Ctrl+B` followed by Page Up to enter
 copy mode one page back; `Tmux PgDn` pages down once that mode is active. `^C`
 returns to the live pane. The tmux controls assume the default `Ctrl+B` prefix.
