@@ -13612,6 +13612,7 @@ html.history-resizing * {
   min-height: 0;
   padding: 14px 18px 28px;
   overflow: auto;
+  overflow-anchor: none;
   background:
     linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
     #0d100e;
@@ -13628,6 +13629,20 @@ html.history-resizing * {
   line-height: 1.55;
   tab-size: 4;
   white-space: pre;
+}
+
+.history-pagination {
+  display: flex;
+  min-height: 34px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 11px;
+  text-align: center;
 }
 
 .load-older {

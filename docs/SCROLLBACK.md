@@ -21,7 +21,10 @@ pixel width is retained for the current browser page, as with manual resizing;
 **Esc** closes the window.
 
 - **Pane scrollback → Scrollback** captures the live pane's currently retained
-  tmux buffer. Its older pages belong to one immutable, ten-minute snapshot.
+  tmux buffer. Older lines load automatically in 250-line pages as you scroll
+  near the top, preserving the text you are reading. Its older pages belong
+  to one immutable, ten-minute snapshot. A failed page pauses automatic loading
+  and offers a retry; the refresh button captures a new snapshot after expiry.
 - **Pane scrollback → Recorded output** opens the earliest terminal output Muxdeck
   saved for that pane, which can start after the conversation began. This is
   separate from the native **Transcript**, which shows prompts and replies with

@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -25,6 +26,7 @@ export const HISTORY_PANEL_MOBILE_BREAKPOINT = 640;
 const HISTORY_PANEL_KEYBOARD_STEP = 16;
 const HISTORY_PANEL_KEYBOARD_LARGE_STEP = 64;
 const HISTORY_PANEL_WIDTH_PRESETS = [50, 75, 100] as const;
+const HISTORY_LOAD_OLDER_DISTANCE = 160;
 
 interface HistoryPanelProps {
   pane: Pane;
@@ -71,6 +73,7 @@ export function HistoryPanel({
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [panelWidth, setPanelWidth] = useState(() => (
@@ -79,6 +82,12 @@ export function HistoryPanel({
   const [restoreWidth, setRestoreWidth] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const capturePending = useRef(false);
+  const olderRequestRef = useRef<object | null>(null);
+  const scrollAdjustmentRef = useRef<
+    { kind: "bottom" }
+    | { kind: "prepend"; viewport: HTMLDivElement; previousHeight: number }
+    | null
+  >(null);
   const panelWidthRef = useRef(panelWidth);
   const resizeRef = useRef<ResizeState | null>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -150,15 +159,18 @@ export function HistoryPanel({
   const capture = async () => {
     if (capturePending.current) return;
     capturePending.current = true;
+    // A refresh invalidates pages still arriving from the previous snapshot.
+    olderRequestRef.current = null;
+    scrollAdjustmentRef.current = null;
+    setLoadingOlder(false);
+    setOlderError(null);
     setLoading(true);
     setError(null);
     try {
       const next = await createHistorySnapshot(pane.id);
+      scrollAdjustmentRef.current = { kind: "bottom" };
       setPage(next);
       setLines(next.lines);
-      requestAnimationFrame(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to capture history");
     } finally {
@@ -171,22 +183,43 @@ export function HistoryPanel({
     if (view === "scrollback" && page === null) void capture();
   }, [pane.id, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadOlder = async () => {
-    if (!page?.nextCursor || loadingOlder) return;
-    setLoadingOlder(true);
+  useLayoutEffect(() => {
     const viewport = scrollRef.current;
-    const previousHeight = viewport?.scrollHeight || 0;
+    const adjustment = scrollAdjustmentRef.current;
+    if (!viewport || !adjustment) return;
+    scrollAdjustmentRef.current = null;
+    if (adjustment.kind === "bottom") viewport.scrollTop = viewport.scrollHeight;
+    else if (adjustment.viewport === viewport) {
+      viewport.scrollTop += viewport.scrollHeight - adjustment.previousHeight;
+    }
+  }, [lines, view]);
+
+  useEffect(() => () => { olderRequestRef.current = null; }, []);
+
+  const loadOlder = async () => {
+    if (!page || page.nextCursor === null || loading || capturePending.current || olderRequestRef.current) return;
+    const request = {};
+    olderRequestRef.current = request;
+    setLoadingOlder(true);
+    setOlderError(null);
     try {
       const older = await loadHistoryPage(page.snapshotId, page.nextCursor);
+      if (olderRequestRef.current !== request) return;
+      const viewport = scrollRef.current;
+      if (viewport) {
+        scrollAdjustmentRef.current = { kind: "prepend", viewport, previousHeight: viewport.scrollHeight };
+      }
       setLines((current) => [...older.lines, ...current]);
       setPage(older);
-      requestAnimationFrame(() => {
-        if (viewport) viewport.scrollTop += viewport.scrollHeight - previousHeight;
-      });
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to load older history");
+      if (olderRequestRef.current === request) {
+        setOlderError(requestError instanceof Error ? requestError.message : "Unable to load older history");
+      }
     } finally {
-      setLoadingOlder(false);
+      if (olderRequestRef.current === request) {
+        olderRequestRef.current = null;
+        setLoadingOlder(false);
+      }
     }
   };
 
@@ -393,11 +426,17 @@ export function HistoryPanel({
             {" "}Recorded output{sessionName ? " and Submitted messages are" : " is"} also available.</div>
         )}
 
-        <div className="history-scroll" ref={scrollRef}>
-          {page?.nextCursor !== null && page && (
-            <button type="button" className="load-older" onClick={() => void loadOlder()} disabled={loadingOlder}>
-              {loadingOlder ? "Loading..." : "Load older lines"}
-            </button>
+        <div className="history-scroll" ref={scrollRef} role="region" aria-label="Captured terminal history" tabIndex={0}
+          onScroll={(event) => {
+            if (!error && !olderError && event.currentTarget.scrollTop <= HISTORY_LOAD_OLDER_DISTANCE) void loadOlder();
+          }}>
+          {page && (
+            <div className="history-pagination" role="status" aria-live="polite">
+              {loadingOlder ? "Loading older lines…" : olderError ? <>
+                <span>{olderError}</span>
+                <button type="button" className="secondary-button" onClick={() => void loadOlder()}>Retry loading older lines</button>
+              </> : page.nextCursor !== null ? "Scroll up to load older lines" : "Beginning of captured history"}
+            </div>
           )}
           {loading && <div className="history-status">Capturing retained tmux history...</div>}
           {error && <div className="history-status error">{error}<button type="button" onClick={() => void capture()}>Retry</button></div>}

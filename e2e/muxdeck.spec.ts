@@ -1245,6 +1245,82 @@ test("desktop scrollback width is adjustable for the current browser tab", async
   await expect(panel).toHaveCount(0);
 });
 
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`scrollback automatically loads older lines without moving the reader at ${viewport.width}px`, async ({ page }, testInfo) => {
+    if (!socketName.startsWith("muxdeck-playwright-")) throw new Error("History paging requires the disposable Playwright socket");
+    const name = `${sessionName}-history-paging-${viewport.width}`;
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+    const historyPaneId = execFileSync("tmux", [...tmux, "list-panes", "-t", `=${name}`, "-F", "#{pane_id}"], { encoding: "utf8" }).trim();
+    let releaseOlder!: () => void;
+    const firstOlderPage = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    const olderRequests: string[] = [];
+    const inputFrames: string[] = [];
+    page.on("websocket", (socket) => {
+      if (!socket.url().includes("/ws/terminal")) return;
+      socket.on("framesent", ({ payload }) => {
+        if (typeof payload === "string") {
+          try { if (JSON.parse(payload).type === "resize") return; } catch { /* Raw input remains an input frame. */ }
+        }
+        inputFrames.push(String(payload));
+      });
+    });
+    try {
+      execFileSync("tmux", [...tmux, "send-keys", "-t", historyPaneId,
+        "for muxdeck_history_row in {1..620}; do printf 'AUTO_HISTORY_%04d\\n' \"$muxdeck_history_row\"; done", "Enter"]);
+      await expect.poll(() => execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", historyPaneId], { encoding: "utf8" }))
+        .toContain("AUTO_HISTORY_0620");
+      const paneMode = () => execFileSync("tmux", [...tmux, "display-message", "-p", "-t", historyPaneId, "#{pane_mode}:#{pane_pid}"], { encoding: "utf8" }).trim();
+      const originalMode = paneMode();
+      await page.route("**/api/history/*", async (route) => {
+        olderRequests.push(route.request().url());
+        if (olderRequests.length === 1) await firstOlderPage;
+        await route.continue();
+      });
+      await page.setViewportSize(viewport);
+      await page.goto(`/mux/session/${name}?tab=${name}`);
+      await page.evaluate(() => document.fonts.ready);
+      await page.getByRole("button", { name: "Pane scrollback", exact: true }).click();
+      const history = page.getByRole("region", { name: "Captured terminal history" });
+      const output = history.locator("pre");
+      await expect(output).toContainText("AUTO_HISTORY_0620");
+      await expect(output).not.toContainText("AUTO_HISTORY_0001");
+      expect(olderRequests).toHaveLength(0);
+      const framesBeforePaging = [...inputFrames];
+      const anchor = (await output.textContent())!.split("\n")[0];
+      await history.evaluate((element) => { element.scrollTop = 100; });
+      await expect.poll(() => olderRequests.length).toBe(1);
+      await expect(history.getByRole("status")).toHaveText("Loading older lines…");
+      // Movement while the request is pending should also survive prepending.
+      await history.evaluate((element) => { element.scrollTop = 80; });
+      const anchorBefore = await output.evaluate((element) => element.getBoundingClientRect().top);
+      releaseOlder();
+      await expect.poll(async () => (await output.textContent())!.split("\n").length).toBeGreaterThan(250);
+      const anchorAfter = await output.evaluate((element, text) => {
+        const lines = element.textContent!.split("\n");
+        const bounds = element.getBoundingClientRect();
+        return bounds.top + lines.indexOf(text) * bounds.height / lines.length;
+      }, anchor);
+      expect(Math.abs(anchorAfter - anchorBefore)).toBeLessThan(1);
+      expect(olderRequests).toHaveLength(1);
+
+      await history.evaluate((element) => { element.scrollTop = 0; });
+      await expect(history.getByRole("status")).toHaveText("Beginning of captured history");
+      await expect(output).toContainText("AUTO_HISTORY_0001");
+      expect(olderRequests).toHaveLength(2);
+      expect(new Set(olderRequests).size).toBe(2);
+      await history.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+      await expect(history.getByRole("button", { name: "Load older lines", exact: true })).toHaveCount(0);
+      expect(olderRequests).toHaveLength(2);
+      expect(inputFrames).toEqual(framesBeforePaging);
+      expect(paneMode()).toBe(originalMode);
+      await page.screenshot({ path: testInfo.outputPath(`history-auto-load-${viewport.width}.png`), animations: "disabled" });
+    } finally {
+      releaseOlder();
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+    }
+  });
+}
+
 test("terminal HTTP links require Ctrl-click and do not send a mouse frame", async ({ page }) => {
   test.setTimeout(45_000);
   const uri = "https://example.test/muxdeck-link-check";

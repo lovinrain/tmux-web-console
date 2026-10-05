@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHistorySnapshot, listSubmittedMessages, loadSavedScrollback, loadAgentTranscript } from "../api";
+import { createHistorySnapshot, listSubmittedMessages, loadHistoryPage, loadSavedScrollback, loadAgentTranscript } from "../api";
 import type { HistoryPage, Pane } from "../types";
 import {
   DEFAULT_HISTORY_PANEL_WIDTH,
@@ -39,6 +39,15 @@ function pane(): Pane {
     alternate_on: false,
     dead: false,
     activity: 1,
+  };
+}
+
+function historyPage(overrides: Partial<HistoryPage> = {}): HistoryPage {
+  return {
+    snapshotId: "snapshot-one", paneId: "%7", capturedAt: 100,
+    lines: ["Recent line"], nextCursor: 250, totalLines: 501,
+    historySize: 500, historyLimit: 2000, alternateOn: false,
+    ...overrides,
   };
 }
 
@@ -125,6 +134,85 @@ afterEach(() => {
 });
 
 describe("HistoryPanel", () => {
+  it("automatically pages near the top, keeps the reading position, and stops at the beginning", async () => {
+    vi.mocked(createHistorySnapshot).mockResolvedValue(historyPage());
+    let finishOlder!: (page: HistoryPage) => void;
+    vi.mocked(loadHistoryPage).mockReturnValueOnce(new Promise((resolve) => { finishOlder = resolve; }));
+    renderPanel();
+    await screen.findByText("Recent line");
+    const viewport = screen.getByRole("region", { name: "Captured terminal history" });
+    Object.defineProperty(viewport, "scrollHeight", {
+      configurable: true,
+      get: () => viewport.querySelector("pre")?.textContent?.includes("Older line") ? 1300 : 1000,
+    });
+    viewport.scrollTop = 400;
+    fireEvent.scroll(viewport);
+    expect(loadHistoryPage).not.toHaveBeenCalled();
+    viewport.scrollTop = 100;
+    fireEvent.scroll(viewport);
+    fireEvent.scroll(viewport);
+    expect(loadHistoryPage).toHaveBeenCalledOnce();
+    expect(loadHistoryPage).toHaveBeenCalledWith("snapshot-one", 250);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading older lines");
+
+    // The reader can keep moving while a page is in flight.
+    viewport.scrollTop = 80;
+    await act(async () => finishOlder(historyPage({ lines: ["Older line"], nextCursor: 1 })));
+    expect(viewport.querySelector("pre")).toHaveTextContent("Older line Recent line");
+    expect(viewport.scrollTop).toBe(380);
+    fireEvent.scroll(viewport);
+    expect(loadHistoryPage).toHaveBeenCalledOnce();
+
+    vi.mocked(loadHistoryPage).mockResolvedValueOnce(historyPage({ lines: ["Beginning"], nextCursor: null }));
+    viewport.scrollTop = 0;
+    fireEvent.scroll(viewport);
+    await screen.findByText("Beginning of captured history");
+    expect(loadHistoryPage).toHaveBeenLastCalledWith("snapshot-one", 1);
+    fireEvent.scroll(viewport);
+    expect(loadHistoryPage).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Load older lines" })).not.toBeInTheDocument();
+  });
+
+  it("pauses automatic paging after failure and retries the same snapshot without discarding loaded lines", async () => {
+    vi.mocked(createHistorySnapshot).mockResolvedValue(historyPage());
+    vi.mocked(loadHistoryPage).mockRejectedValueOnce(new Error("History request failed"));
+    renderPanel();
+    await screen.findByText("Recent line");
+    const viewport = screen.getByRole("region", { name: "Captured terminal history" });
+    fireEvent.scroll(viewport);
+    await screen.findByText("History request failed");
+    fireEvent.scroll(viewport);
+    fireEvent.scroll(viewport);
+    expect(loadHistoryPage).toHaveBeenCalledOnce();
+    expect(viewport.querySelector("pre")).toHaveTextContent("Recent line");
+    vi.mocked(loadHistoryPage).mockResolvedValueOnce(historyPage({ lines: ["Older line"], nextCursor: null }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading older lines" }));
+    await screen.findByText("Beginning of captured history");
+    expect(screen.queryByText("History request failed")).not.toBeInTheDocument();
+    expect(viewport.querySelector("pre")).toHaveTextContent("Older line Recent line");
+    expect(loadHistoryPage).toHaveBeenLastCalledWith("snapshot-one", 250);
+    expect(createHistorySnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("ignores pages from a snapshot replaced by refresh", async () => {
+    vi.mocked(createHistorySnapshot).mockResolvedValueOnce(historyPage());
+    let finishOlder!: (page: HistoryPage) => void;
+    vi.mocked(loadHistoryPage).mockReturnValueOnce(new Promise((resolve) => { finishOlder = resolve; }));
+    renderPanel();
+    await screen.findByText("Recent line");
+    fireEvent.scroll(screen.getByRole("region", { name: "Captured terminal history" }));
+    vi.mocked(createHistorySnapshot).mockResolvedValueOnce(historyPage({ snapshotId: "snapshot-new", lines: ["New snapshot"], nextCursor: 100 }));
+    fireEvent.click(screen.getByRole("button", { name: "Capture a new snapshot" }));
+    await screen.findByText("New snapshot");
+    await act(async () => finishOlder(historyPage({ lines: ["Stale older line"], nextCursor: null })));
+    expect(screen.queryByText(/Stale older line/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Scroll up to load older lines");
+    vi.mocked(loadHistoryPage).mockResolvedValueOnce(historyPage({ snapshotId: "snapshot-new", lines: ["New older line"], nextCursor: null }));
+    fireEvent.scroll(screen.getByRole("region", { name: "Captured terminal history" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Beginning of captured history"));
+    expect(loadHistoryPage).toHaveBeenLastCalledWith("snapshot-new", 100);
+  });
+
   it("navigates recorded output and submitted input without changing the scrollback snapshot", async () => {
     vi.mocked(loadAgentTranscript).mockResolvedValue({ sources: [], selectedSource: null, status: "unidentified", messages: [], nextCursor: null, partial: false, notice: "No conversation ID recorded." });
     vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
