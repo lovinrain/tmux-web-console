@@ -937,9 +937,9 @@ async def test_navigate_history_dispatches_in_the_exact_client_context(
     tmux = RecordingRunTmux(
         [
             "12\t/dev/pts/2\t$2\n4321\t/dev/pts/7\t$7\n",
-            *([""] * 9),
+            *([""] * 3),
             "ok:4321:$7:%12\n",
-            *([""] * 6),
+            "",
         ]
     )
 
@@ -954,7 +954,7 @@ async def test_navigate_history_dispatches_in_the_exact_client_context(
         "'rejected:#{client_pid}:#{session_id}:#{pane_id}' ; "
         f"wait-for -S {table_name}"
     )
-    assert tmux.calls == [
+    expected_calls = [
         ["list-clients", "-F", CLIENT_IDENTITY_FORMAT],
         ["list-keys", "-a"],
         ["show-options", "-s", "user-keys"],
@@ -1009,6 +1009,19 @@ async def test_navigate_history_dispatches_in_the_exact_client_context(
         ["set-option", "-gu", result_option],
     ]
 
+    assert tmux.calls[:3] == expected_calls[:3]
+    setup = [argument for call in expected_calls[3:10] for argument in [*call, ";"]][:-1]
+    assert tmux.calls[3] == setup
+    assert tmux.calls[4] == expected_calls[10]
+    cleanup = [
+        ["unbind-key", "-q", "-a", "-T", table_name],
+        *[["unbind-key", "-q", "-T", table, "User999"]
+          for table in ("root", "prefix", "copy-mode-vi", "copy-mode")],
+        ["set-option", "-gu", result_option],
+    ]
+    assert tmux.calls[5] == [argument for call in cleanup for argument in [*call, ";"]][:-1]
+    assert len(tmux.calls) == 6
+
 
 async def test_navigate_history_rejects_a_client_context_mismatch_and_cleans_up(
     monkeypatch,
@@ -1017,27 +1030,31 @@ async def test_navigate_history_rejects_a_client_context_mismatch_and_cleans_up(
     tmux = RecordingRunTmux(
         [
             "4321\t/dev/pts/7\t$7\n",
-            *([""] * 9),
+            *([""] * 3),
             "rejected:4321:$7:%12\n",
-            *([""] * 6),
+            "",
         ]
     )
 
     with pytest.raises(TmuxError, match="rejected"):
         await tmux.navigate_history(4321, "$7", "exit")
 
-    assert tmux.calls[-6:] == [
-        ["unbind-key", "-a", "-T", "muxdeck-history-abc123"],
-        ["unbind-key", "-T", "root", "User999"],
-        ["unbind-key", "-T", "prefix", "User999"],
-        ["unbind-key", "-T", "copy-mode-vi", "User999"],
-        ["unbind-key", "-T", "copy-mode", "User999"],
+    cleanup = [
+        ["unbind-key", "-q", "-a", "-T", "muxdeck-history-abc123"],
+        ["unbind-key", "-q", "-T", "root", "User999"],
+        ["unbind-key", "-q", "-T", "prefix", "User999"],
+        ["unbind-key", "-q", "-T", "copy-mode-vi", "User999"],
+        ["unbind-key", "-q", "-T", "copy-mode", "User999"],
         ["set-option", "-gu", "@muxdeck-history-abc123"],
     ]
 
+    assert tmux.calls[-1] == [argument for call in cleanup for argument in [*call, ";"]][:-1]
 
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
 async def test_navigate_history_cleans_a_guard_after_bind_reports_failure(
     monkeypatch,
+    cleanup_fails,
 ):
     monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123")
     bind_failure = TmuxError("tmux command timed out")
@@ -1047,9 +1064,8 @@ async def test_navigate_history_cleans_a_guard_after_bind_reports_failure(
             "",
             "",
             bind_failure,
-            "",
-            "",
-            "",
+            TmuxError("partial cleanup") if cleanup_fails else "",
+            *([""] * 6),
         ]
     )
 
@@ -1057,11 +1073,16 @@ async def test_navigate_history_cleans_a_guard_after_bind_reports_failure(
         await tmux.navigate_history(4321, "$7", "page-up")
 
     assert raised.value is bind_failure
-    assert tmux.calls[-3:] == [
-        ["unbind-key", "-a", "-T", "muxdeck-history-abc123"],
-        ["unbind-key", "-T", "copy-mode", "User999"],
+    cleanup = [
+        ["unbind-key", "-q", "-a", "-T", "muxdeck-history-abc123"],
+        *[["unbind-key", "-q", "-T", table, "User999"]
+          for table in ("root", "prefix", "copy-mode-vi", "copy-mode")],
         ["set-option", "-gu", "@muxdeck-history-abc123"],
     ]
+    if cleanup_fails:
+        assert tmux.calls[-6:] == cleanup
+    else:
+        assert tmux.calls[-1] == [argument for call in cleanup for argument in [*call, ";"]][:-1]
 
 
 @pytest.mark.parametrize(

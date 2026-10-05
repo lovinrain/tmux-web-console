@@ -193,8 +193,12 @@ retained snapshot.
 
 Both layouts also offer `Tmux Line↑` and `Tmux Line↓` directly after the tmux
 page controls. Press and hold any enabled page or line scroll button to scroll
-continuously: one step happens immediately, repeating starts after 350 ms, and
-further steps are spaced by at least 100 ms. Releasing or moving off the button
+continuously. Page buttons start repeating after 350 ms, with at least 100 ms
+between repeats. Fine-scroll buttons repeat on the next display frame after
+the preceding step is acknowledged, with no additional hold delay. Claude's
+closely spaced steps in the same direction reuse the initial repaint check;
+direction changes, input, resizing, and paging require verification again.
+Releasing or moving off the button
 stops scrolling. Switching sessions, hiding the controls, disconnecting, or
 leaving the browser also stops the hold. Native application requests finish
 before another step starts; releasing does not queue more steps.

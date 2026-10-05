@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, expect } from "@playwright/test";
@@ -9,7 +9,10 @@ const socket = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
 if (!socket?.startsWith("muxdeck-playwright-")) throw new Error("Use the disposable Playwright socket");
 const tmux = ["-L", socket];
 const session = `muxdeck-held-scroll-${process.pid}`;
+const claudeSession = `${session}-claude`;
 const directory = mkdtempSync(join(tmpdir(), "muxdeck-held-scroll-"));
+const claudeInputPath = join(directory, "claude-input.bin");
+let claudePane = "";
 
 test.beforeAll(() => {
   const script = join(directory, "native_scroll.py");
@@ -29,10 +32,44 @@ while time.monotonic() < deadline:
 `);
   execFileSync("tmux", [...tmux, "new-session", "-d", "-s", session,
     "bash", "--noprofile", "--norc", "-c", 'exec -a codex python3 "$1"', "fixture", script]);
+  const claudeScript = join(directory, "claude_scroll.py");
+  // A wheel-aware Claude-named fixture paints its transcript immediately, so
+  // continuous scrolling exercises the real acknowledgment path and movement.
+  writeFileSync(claudeInputPath, "");
+  writeFileSync(claudeScript, `import ctypes, os, re, select, sys, time, tty
+assert ctypes.CDLL(None).prctl(15, b"claude", 0, 0, 0) == 0
+tty.setraw(0)
+os.write(1, b"\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h")
+position = 1000
+def render():
+    row = max(8, os.get_terminal_size().lines - 1)
+    os.write(1, (f"\\x1b[H\\x1b[2JClaude scrolling fixture\\x1b[6;1HCLAUDE_POSITION_{position:04d}"
+                 f"\\x1b[{row};1HDRAFT_SENTINEL_12345").encode())
+render()
+pending = b""
+deadline = time.monotonic() + 180
+with open(sys.argv[1], "ab", buffering=0) as recorded:
+    while time.monotonic() < deadline:
+        if not select.select([0], [], [], 0.5)[0]:
+            continue
+        data = os.read(0, 4096)
+        if not data:
+            break
+        recorded.write(data)
+        pending += data
+        while match := re.search(rb"\\x1b\\[<6[45];[0-9]+;[0-9]+M", pending):
+            position += -1 if b"<64;" in match[0] else 1
+            pending = pending[match.end():]
+            render()
+`);
+  claudePane = execFileSync("tmux", [...tmux, "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", claudeSession,
+    "bash", "--noprofile", "--norc", "-c", 'exec -a claude python3 "$1" "$2"', "fixture", claudeScript, claudeInputPath],
+  { encoding: "utf8" }).trim();
 });
 
 test.afterAll(() => {
   execFileSync("tmux", [...tmux, "kill-session", "-t", `=${session}`]);
+  execFileSync("tmux", [...tmux, "kill-session", "-t", `=${claudeSession}`]);
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -130,6 +167,72 @@ for (const width of [1440, 390]) {
     await page.waitForTimeout(450);
     await page.mouse.up();
     expect(sent.length).toBe(stoppedAt);
+  });
+}
+
+for (const width of [1440, 390]) {
+  test(`holding Claude application arrows moves its transcript and stops at ${width}px`, async ({ page }) => {
+    const sent: string[] = [];
+    const profiles: string[] = [];
+    const rejected: unknown[] = [];
+    const pending = new Set<string>();
+    let maximumPending = 0;
+    page.on("websocket", (websocket) => {
+      websocket.on("framesent", ({ payload }) => {
+        try {
+          const message = JSON.parse(payload.toString());
+          if (message.type === "applicationScroll") {
+            profiles.push(message.profile);
+            sent.push(message.direction);
+            pending.add(message.id);
+            maximumPending = Math.max(maximumPending, pending.size);
+          }
+        } catch { /* raw terminal input */ }
+      });
+      websocket.on("framereceived", ({ payload }) => {
+        try {
+          const message = JSON.parse(payload.toString());
+          if (message.type === "applicationScrollNack") rejected.push(message);
+          if (message.type === "applicationScrollAck" || message.type === "applicationScrollNack") pending.delete(message.id);
+        } catch { /* terminal output */ }
+      });
+    });
+    const capture = () => execFileSync("tmux", [...tmux, "capture-pane", "-p", "-t", claudePane], { encoding: "utf8" });
+    const position = () => Number(capture().match(/CLAUDE_POSITION_(\d+)/)?.[1] ?? -1);
+    const inputStart = readFileSync(claudeInputPath, "utf8").length;
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/mux/session/${claudeSession}?tab=${claudeSession}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "claude");
+    const mobile = width < 640;
+    const controls = mobile
+      ? page.getByRole("navigation", { name: "Terminal view controls" })
+      : page.getByRole("group", { name: "Terminal input shortcuts" });
+    if (!mobile) await page.getByRole("textbox", { name: "Staged input" }).fill("keep this unsent draft");
+    for (const direction of ["up", "down"]) {
+      const before = position();
+      expect(before).toBeGreaterThan(0);
+      const start = sent.length;
+      const button = controls.getByRole("button", { name: `Application Scroll ${direction === "up" ? "Up" : "Down"}` });
+      await button.hover();
+      await page.mouse.down();
+      await expect.poll(() => sent.length - start, { intervals: [20] }).toBeGreaterThanOrEqual(4);
+      await page.mouse.up();
+      const stoppedAt = sent.length;
+      await expect.poll(() => pending.size, { intervals: [20] }).toBe(0);
+      await page.waitForTimeout(300);
+      expect(sent.length).toBe(stoppedAt);
+      expect(sent.slice(start).every((value) => value === direction)).toBe(true);
+      if (direction === "up") expect(position()).toBeLessThan(before);
+      else expect(position()).toBeGreaterThan(before);
+      expect(capture()).toContain("DRAFT_SENTINEL_12345");
+      if (!mobile) await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("keep this unsent draft");
+    }
+    expect(maximumPending).toBe(1);
+    expect(new Set(profiles)).toEqual(new Set(["claude"]));
+    expect(rejected).toEqual([]);
+    // Only native wheel packets reach the fixture; no draft editing or Enter.
+    expect(readFileSync(claudeInputPath, "utf8").slice(inputStart).replace(/\x1b\[<6[45];[0-9]+;[0-9]+M/g, "")).toBe("");
   });
 }
 

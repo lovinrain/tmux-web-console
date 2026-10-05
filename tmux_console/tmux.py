@@ -1104,6 +1104,9 @@ class TmuxClient:
         session_id: str,
         direction: str,
         profile: str = "wheel",
+        *,
+        expected_pane: str | None = None,
+        verify_movement: bool = True,
     ) -> str:
         if (
             isinstance(client_pid, bool)
@@ -1119,6 +1122,15 @@ class TmuxClient:
             raise ValueError("invalid application scroll direction")
         if not isinstance(profile, str) or profile not in APPLICATION_SCROLL_PROFILES:
             raise ValueError("invalid application scroll profile")
+        if expected_pane is not None and (
+            not isinstance(expected_pane, str)
+            or not TMUX_PANE_ID_PATTERN.fullmatch(expected_pane)
+        ):
+            raise ValueError("invalid expected scroll pane")
+        if not isinstance(verify_movement, bool):
+            raise TypeError("invalid scroll verification mode")
+        if not verify_movement and expected_pane is None:
+            raise ValueError("continuous scrolling requires an expected pane")
 
         button = (64 if direction == "up" else 65) + (
             8 if profile == "alt-wheel" else 0
@@ -1169,7 +1181,11 @@ class TmuxClient:
             )
         input_enabled = "#{&&:#{==:#{pane_dead},0},#{==:#{pane_input_off},0}}"
         condition = f"#{{&&:{allowed_mode},#{{&&:{receiver_ready},{input_enabled}}}}}"
-        capture_buffer = f"{buffer_name}-before" if profile == "claude" else None
+        if expected_pane is not None:
+            condition = f"#{{&&:{condition},#{{==:#{{pane_id}},{expected_pane}}}}}"
+        capture_buffer = (
+            f"{buffer_name}-before" if profile == "claude" and verify_movement else None
+        )
         codex_view_buffer = f"{buffer_name}-codex-view" if profile == "codex" else None
         commands = f"{cancel_copy_mode} ; "
         if capture_buffer is not None:
@@ -1201,7 +1217,7 @@ class TmuxClient:
                     if alternate:
                         same_view = f"#{{&&:{same_view},#{{alternate_on}}}}"
                     condition = f"#{{&&:{condition},{same_view}}}"
-                if profile == "claude":
+                if profile == "claude" and verify_movement:
                     # Let an immediately preceding PageUp/PageDown or resize
                     # finish painting before measuring this wheel event. Its
                     # delayed repaint must not hide a dropped direction change.
@@ -1329,21 +1345,15 @@ class TmuxClient:
             f"wait-for -S {wait_channel}"
         )
 
-        installed_guards: list[str] = []
+        installed_guards = sorted(guarded_tables)
         try:
-            for guarded_table in sorted(guarded_tables):
-                # A timed-out tmux client may have committed the binding server-side.
-                installed_guards.append(guarded_table)
-                await self.run(
-                    [
-                        "bind-key",
-                        "-T",
-                        guarded_table,
-                        dispatch_key,
-                        rejected_commands,
-                    ]
-                )
-            await self.run(
+            # Install all guards before dispatching in one tmux command queue.
+            # Each queue entry keeps the same identity/mode checks as before.
+            commands = [
+                ["bind-key", "-T", table, dispatch_key, rejected_commands]
+                for table in installed_guards
+            ]
+            commands.extend([
                 [
                     "bind-key",
                     "-T",
@@ -1354,20 +1364,18 @@ class TmuxClient:
                     dispatch_condition,
                     success_commands,
                     rejected_commands,
-                ]
-            )
-            await self.run(
+                ],
                 [
                     "bind-key",
                     "-T",
                     table_name,
                     "Any",
                     f"send-keys ; switch-client -T {table_name}",
-                ]
-            )
+                ],
+            ])
             # -K makes tmux dispatch the private binding in this exact client's
             # command context, where active-pane resolves its independent pane.
-            await self.run(
+            commands.append(
                 [
                     "switch-client",
                     "-c",
@@ -1385,15 +1393,25 @@ class TmuxClient:
                     wait_channel,
                 ]
             )
+            await self._run_command_queue(commands)
             result = await self.run(["show-options", "-gv", result_option])
         finally:
-            with contextlib.suppress(TmuxError):
-                await self.run(["unbind-key", "-a", "-T", table_name])
-            for guarded_table in reversed(installed_guards):
-                with contextlib.suppress(TmuxError):
-                    await self.run(["unbind-key", "-T", guarded_table, dispatch_key])
-            with contextlib.suppress(TmuxError):
-                await self.run(["set-option", "-gu", result_option])
+            cleanup = [
+                ["unbind-key", "-q", "-a", "-T", table_name],
+                *[
+                    ["unbind-key", "-q", "-T", table, dispatch_key]
+                    for table in reversed(installed_guards)
+                ],
+                ["set-option", "-gu", result_option],
+            ]
+            try:
+                await self._run_command_queue(cleanup)
+            except TmuxError:
+                # A partial install or timed-out queue must still clean every
+                # binding, even when one cleanup command cannot be applied.
+                for args in cleanup:
+                    with contextlib.suppress(TmuxError):
+                        await self.run(args)
             if cleanup_buffer is not None:
                 with contextlib.suppress(TmuxError):
                     await self.run(["delete-buffer", "-b", cleanup_buffer])
@@ -1411,6 +1429,14 @@ class TmuxClient:
         if not pane_id.startswith("%") or not pane_id[1:].isdigit():
             raise TmuxError("tmux did not return the attached client pane")
         return pane_id
+
+    async def _run_command_queue(self, commands: Sequence[Sequence[str]]) -> str:
+        args: list[str] = []
+        for command in commands:
+            if args:
+                args.append(";")
+            args.extend(command)
+        return await self.run(args)
 
     async def get_pane(self, pane_id: str) -> Pane:
         if not pane_id.startswith("%") or not pane_id[1:].isdigit():

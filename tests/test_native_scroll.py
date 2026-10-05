@@ -8,6 +8,7 @@ import signal
 import subprocess
 import textwrap
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -57,7 +58,8 @@ async def test_application_scroll_encodes_only_allowed_wheel_profiles(
     )
 
     dispatch = [call for call in tmux.calls if "if-shell" in call][-1]
-    condition, command = dispatch[6:8]
+    command_index = dispatch.index("if-shell") + 2
+    condition, command = dispatch[command_index:command_index + 2]
     if profile == "codex":
         assert "#{==:#{pane_current_command},codex}" in condition
         assert "#{alternate_on}" in condition
@@ -112,10 +114,8 @@ async def test_application_scroll_rejection_cleans_private_resources(monkeypatch
     tmux = RecordingScrollTmux(reject=True)
     with pytest.raises(TmuxError, match="SGR mouse reporting"):
         await tmux.navigate_application_scroll(4321, "$7", "up")
-    assert tmux.calls[-2:] == [
-        ["set-option", "-gu", "@muxdeck-history-abc123"],
-        ["delete-buffer", "-b", "muxdeck-scroll-abc123"],
-    ]
+    assert tmux.calls[-2][-3:] == ["set-option", "-gu", "@muxdeck-history-abc123"]
+    assert tmux.calls[-1] == ["delete-buffer", "-b", "muxdeck-scroll-abc123"]
 
 
 @pytest.mark.parametrize("changed", [False, True])
@@ -146,11 +146,47 @@ async def test_claude_retries_only_when_transcript_body_does_not_move(
     assert await tmux.navigate_application_scroll(4321, "$7", "up", "claude") == "%12"
     dispatches = [call for call in tmux.calls if "if-shell" in call]
     assert len(dispatches) == (1 if changed else 2)
-    assert "capture-pane -b muxdeck-scroll-abc123-before" in dispatches[0][7]
+    command_index = dispatches[0].index("if-shell") + 2
+    assert "capture-pane -b muxdeck-scroll-abc123-before" in dispatches[0][command_index + 1]
     if not changed:
-        assert "#{==:#{pane_id},%12}" in dispatches[1][6]
-        assert "capture-pane" not in dispatches[1][7]
+        retry_index = dispatches[1].index("if-shell") + 2
+        assert "#{==:#{pane_id},%12}" in dispatches[1][retry_index]
+        assert "capture-pane" not in dispatches[1][retry_index + 1]
     assert tmux.calls[-1] == ["delete-buffer", "-b", "muxdeck-scroll-abc123-before"]
+
+
+async def test_claude_continuation_checks_the_same_pane_without_repaint_waits(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr("tmux_console.tmux.asyncio.sleep", sleep)
+    tmux = RecordingScrollTmux()
+    assert await tmux.navigate_application_scroll(
+        4321, "$7", "up", "claude", expected_pane="%12", verify_movement=False,
+    ) == "%12"
+    sleep.assert_not_awaited()
+    dispatch = next(call for call in tmux.calls if "if-shell" in call)
+    index = dispatch.index("if-shell") + 2
+    condition, command = dispatch[index:index + 2]
+    for guard in ["#{pane_id},%12", "#{pane_dead}", "#{pane_input_off}",
+                  "#{mouse_any_flag}", "#{mouse_sgr_flag}", "#{client_pid},4321", "#{session_id},$7"]:
+        assert guard in condition
+    assert "paste-buffer -r -d" in command
+    assert "capture-pane" not in command
+    assert not any(call[0] in {"capture-pane", "show-buffer"} for call in tmux.calls)
+
+
+@pytest.mark.parametrize(("expected_pane", "verify_movement", "error_type"), [
+    (None, False, ValueError), ("bad", False, ValueError),
+    ("%12 ; display-message", False, ValueError), (True, False, ValueError),
+    ("%12", "no", TypeError),
+])
+async def test_fast_scrolling_requires_a_valid_pinned_pane(expected_pane, verify_movement, error_type):
+    tmux = RecordingScrollTmux()
+    with pytest.raises(error_type):
+        await tmux.navigate_application_scroll(
+            4321, "$7", "up", "claude", expected_pane=expected_pane,
+            verify_movement=verify_movement,
+        )
+    assert tmux.calls == []
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
@@ -383,6 +419,23 @@ async def test_real_application_scroll_uses_client_pane_without_leaking_input(
                     await asyncio.gather(in_flight, return_exceptions=True)
             one_packet = f"\x1b[<64;{max(1, width - 1)};{max(1, height // 2)}M".encode()
             assert target_log.read_bytes() == before_switch + one_packet
+            assert global_log.read_bytes() == b""
+            await select_client_pane(b"o", target_pane)
+
+            before_fast_scroll = target_log.read_bytes()
+            assert await tmux.navigate_application_scroll(
+                bridge.client_pid, session_id, "up", "claude",
+                expected_pane=target_pane, verify_movement=False,
+            ) == target_pane
+            await wait_for(lambda: len(target_log.read_bytes()) > len(before_fast_scroll))
+            assert target_log.read_bytes() == before_fast_scroll + one_packet
+            await select_client_pane(b"p", global_pane)
+            with pytest.raises(TmuxError, match="SGR mouse reporting"):
+                await tmux.navigate_application_scroll(
+                    bridge.client_pid, session_id, "up", "claude",
+                    expected_pane=target_pane, verify_movement=False,
+                )
+            assert target_log.read_bytes() == before_fast_scroll + one_packet
             assert global_log.read_bytes() == b""
             await select_client_pane(b"o", target_pane)
 

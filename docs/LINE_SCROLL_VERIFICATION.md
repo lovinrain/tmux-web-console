@@ -92,7 +92,17 @@ temporary buffers and are not written to transcript files. This is a bounded
 visual check, not an application-provided scroll acknowledgement; identical
 visible rows and concurrent output limit what it can infer. Requests are
 serialized, and the current pane's App buttons are disabled while its request
-is pending.
+is pending. Closely spaced same-direction Claude requests on the same WebSocket
+reuse that verification for 750 ms after the previous acknowledgment. Each
+continuing step still checks the original pane, attachment, modes, and input
+permissions, and sends one wheel event; it omits the per-step captures and
+repaint waits. A direction change, input, resize, history action, error, or new
+connection resets verification. Longer pauses use the full check again.
+
+Dispatch setup and cleanup use grouped tmux command queues, reducing the normal
+history action from 17 tmux process launches to six. The identity conditions,
+temporary key guards, and one-row mode commands remain the same. If grouped
+cleanup fails, each owned binding is cleaned individually.
 
 ## Completed application checks
 

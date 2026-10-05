@@ -225,6 +225,7 @@ LOGGER = logging.getLogger("muxdeck")
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 MAX_INPUT_BYTES = 1024 * 1024
+CLAUDE_SCROLL_CONTINUATION_SECONDS = 0.75
 FORGET_UNDO_SECONDS = 30.0
 TMUX_KEY = web.AppKey("tmux", TmuxClient)
 SNAPSHOTS_KEY = web.AppKey("snapshots", SnapshotStore)
@@ -6271,6 +6272,7 @@ def create_app(
             if auth_store() is not None
             else None
         )
+        claude_scroll_continuation: tuple[str, str, float] | None = None
         try:
             async for message in websocket:
                 if not await request_auth_still_valid(request):
@@ -6280,15 +6282,20 @@ def create_app(
                     )
                     break
                 if message.type == WSMsgType.BINARY:
+                    claude_scroll_continuation = None
                     if len(message.data) <= MAX_INPUT_BYTES:
                         await bridge.write(message.data)
                 elif message.type == WSMsgType.TEXT:
                     try:
                         payload = json.loads(message.data)
                     except (json.JSONDecodeError, TypeError):
+                        claude_scroll_continuation = None
                         continue
                     if not isinstance(payload, dict):
+                        claude_scroll_continuation = None
                         continue
+                    if payload.get("type") != "applicationScroll" or payload.get("profile") != "claude":
+                        claude_scroll_continuation = None
                     if payload.get("type") == "resize":
                         bridge.resize(
                             parse_int(str(payload.get("cols", "")), cols),
@@ -6328,6 +6335,8 @@ def create_app(
                             except (ConnectionError, RuntimeError):
                                 break
                     elif payload.get("type") == "applicationScroll":
+                        continuation = claude_scroll_continuation
+                        claude_scroll_continuation = None
                         scroll_id = payload.get("id")
                         if not isinstance(scroll_id, str) or not scroll_id or len(scroll_id) > 128:
                             continue
@@ -6346,9 +6355,20 @@ def create_app(
                             and profile in profiles
                         ):
                             try:
-                                scroll_pane = await app[TMUX_KEY].navigate_application_scroll(
-                                    bridge.client_pid, session.id, direction, profiles[profile]
-                                )
+                                if (
+                                    profile == "claude"
+                                    and continuation is not None
+                                    and continuation[0] == direction
+                                    and time.monotonic() - continuation[2] < CLAUDE_SCROLL_CONTINUATION_SECONDS
+                                ):
+                                    scroll_pane = await app[TMUX_KEY].navigate_application_scroll(
+                                        bridge.client_pid, session.id, direction, profiles[profile],
+                                        expected_pane=continuation[1], verify_movement=False,
+                                    )
+                                else:
+                                    scroll_pane = await app[TMUX_KEY].navigate_application_scroll(
+                                        bridge.client_pid, session.id, direction, profiles[profile]
+                                    )
                             except (TmuxError, ValueError) as error:
                                 LOGGER.debug("Application scrolling failed for client %s: %s", bridge.client_pid, error)
                                 result["message"] = (
@@ -6359,6 +6379,8 @@ def create_app(
                                     "or the active pane changed."
                                 )
                             else:
+                                if profile == "claude":
+                                    claude_scroll_continuation = (direction, scroll_pane, time.monotonic())
                                 result = {
                                     "type": "applicationScrollAck", "id": scroll_id,
                                     "paneId": scroll_pane,
