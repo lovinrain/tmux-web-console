@@ -721,7 +721,10 @@ async def test_workspace_quick_links_api_separates_common_and_saved_workspace_li
         active_session="agent",
     )
     client = TestClient(TestServer(create_app(workspaces=store, base_path="")))
-    common = [{"id": "docs", "label": "Docs", "url": "https://docs.test/"}]
+    common = [
+        {"id": "docs", "label": "Docs", "url": "https://docs.test/"},
+        {"id": "untitled", "label": "", "url": "https://docs.test/reference"},
+    ]
     workspace = [
         {"id": "ticket", "label": "Ticket 42", "url": "https://issues.test/42"}
     ]

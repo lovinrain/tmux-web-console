@@ -1428,6 +1428,22 @@ def test_common_workspace_and_session_quick_links_are_atomic_and_independent(tmp
     assert json.loads(path.read_text(encoding="utf-8"))["sessionQuickLinks"] == {}
 
 
+@pytest.mark.parametrize("title", ["", "   ", "x" * 48])
+def test_untitled_quick_links_round_trip_in_every_shelf(tmp_path, title):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+    store.create_workspace(name="Project", tabs=["agent"], active_session="agent")
+    links = [{"id": "reference", "label": title, "url": "https://docs.test/reference"}]
+    expected = [{**links[0], "label": title.strip()}]
+    assert store.replace_common_quick_links(links) == expected
+    assert store.replace_workspace_quick_links("workspace-id", links) == expected
+    assert store.replace_session_quick_links("agent", links) == expected
+    restored = WorkspaceStore(path)
+    assert restored.list_common_quick_links() == expected
+    assert restored.get_workspace_quick_links("workspace-id") == expected
+    assert restored.get_session_quick_links("agent") == expected
+
+
 def test_scoped_notes_are_independent_normalized_and_persistent(tmp_path):
     path = tmp_path / "workspaces.json"
     store = WorkspaceStore(path, clock=lambda: 10, id_factory=lambda: "workspace-id")
@@ -1567,7 +1583,9 @@ def test_scoped_note_map_validation_rejects_malformed_values(
 @pytest.mark.parametrize(
     ("links", "message"),
     [
-        ([{"id": "x", "label": "", "url": "https://example.test"}], "label cannot be blank"),
+        ([{"id": "x", "label": "x" * 49, "url": "https://example.test"}], "48 characters or fewer"),
+        ([{"id": "x", "label": 7, "url": "https://example.test"}], "label must be a string"),
+        ([{"id": "x", "label": "bad\x00title", "url": "https://example.test"}], "control characters"),
         ([{"id": "x", "label": "Docs", "url": "javascript:alert(1)"}], "valid HTTP or HTTPS URL"),
         ([{"id": "x", "label": "Docs", "url": "https://example.test/\x7f"}], "control characters"),
         ([{"id": "x", "label": "Docs", "url": "https://example.test:bad"}], "valid HTTP or HTTPS URL"),

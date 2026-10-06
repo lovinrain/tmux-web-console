@@ -421,8 +421,6 @@ def _normalize_quick_link_label(value: object, field: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string")
     label = value.strip()
-    if not label:
-        raise ValueError(f"{field} cannot be blank")
     if len(label) > MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH:
         raise ValueError(
             f"{field} must be {MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH} characters or fewer"

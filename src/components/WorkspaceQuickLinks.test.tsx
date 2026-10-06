@@ -65,15 +65,13 @@ describe("WorkspaceQuickLinks", () => {
       name: "Manage common quick links",
     }));
     const dialog = screen.getByRole("dialog", { name: "Manage Common links" });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "Label" }), {
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Title (optional)" }), {
       target: { value: "Build board" },
     });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "URL" }), {
       target: { value: "ci.example.test/builds" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Add to shelf" }));
-    expect(within(dialog).getByText("https://ci.example.test/builds")).toBeVisible();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save links" }));
 
     await waitFor(() => expect(replaceCommonWorkspaceQuickLinks).toHaveBeenCalledWith([
       commonLinks[0],
@@ -82,9 +80,11 @@ describe("WorkspaceQuickLinks", () => {
         url: "https://ci.example.test/builds",
       }),
     ]));
-    expect(screen.queryByRole("dialog", { name: "Manage Common links" }))
-      .not.toBeInTheDocument();
-    expect(within(common).getByRole("link", { name: "Build board" })).toBeVisible();
+    expect(await within(common).findByRole("link", { name: "Build board" })).toBeVisible();
+    expect(dialog).toBeVisible();
+    expect(within(dialog).queryByRole("button", { name: "Save links" })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Manage Common links" })).not.toBeInTheDocument();
   });
 
   it("loads and removes links belonging only to the saved workspace", async () => {
@@ -107,12 +107,11 @@ describe("WorkspaceQuickLinks", () => {
     }));
     const dialog = screen.getByRole("dialog", { name: "Manage Release room links" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove Ticket 42" }));
-    expect(within(dialog).getByText("No links pinned yet.")).toBeVisible();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save links" }));
 
     await waitFor(() => expect(replaceWorkspaceQuickLinks)
       .toHaveBeenCalledWith("workspace/id", []));
-    expect(within(workspace).getByText("No links yet")).toBeVisible();
+    expect(await within(workspace).findByText("No links yet")).toBeVisible();
+    expect(within(dialog).getByText("No links pinned yet.")).toBeVisible();
     expect(within(screen.getByRole("region", { name: "Common quick links" }))
       .getByRole("link", { name: "Docs" })).toBeVisible();
   });
@@ -128,7 +127,7 @@ describe("WorkspaceQuickLinks", () => {
       name: "Manage common quick links",
     }));
     const dialog = screen.getByRole("dialog", { name: "Manage Common links" });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "Label" }), {
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Title (optional)" }), {
       target: { value: "Unsafe" },
     });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "URL" }), {
@@ -141,11 +140,19 @@ describe("WorkspaceQuickLinks", () => {
     expect(within(dialog).queryByText("Unsafe", { selector: "strong" }))
       .not.toBeInTheDocument();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save links" }));
+    expect(replaceCommonWorkspaceQuickLinks).not.toHaveBeenCalled();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "URL" }), {
+      target: { value: "https://valid.test/" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add to shelf" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Workspace storage is read-only",
     );
     expect(dialog).toBeVisible();
+    expect(within(dialog).getByRole("textbox", { name: "URL" })).toHaveValue("https://valid.test/");
+    expect(within(common).queryByRole("link", { name: "Unsafe" })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add to shelf" }));
+    expect(await within(common).findByRole("link", { name: "Unsafe" })).toBeVisible();
   });
 
   it("does not apply a late save response after the active workspace changes", async () => {
@@ -174,7 +181,7 @@ describe("WorkspaceQuickLinks", () => {
       name: "Manage workspace quick links",
     }));
     const firstDialog = screen.getByRole("dialog", { name: "Manage First links" });
-    fireEvent.click(within(firstDialog).getByRole("button", { name: "Save links" }));
+    fireEvent.click(within(firstDialog).getByRole("button", { name: "Remove Ticket 42" }));
 
     view.rerender(
       <WorkspaceQuickLinks
@@ -225,7 +232,6 @@ describe("WorkspaceQuickLinks", () => {
     fireEvent.click(within(firstDialog).getByRole("button", {
       name: "Remove Agent trace",
     }));
-    fireEvent.click(within(firstDialog).getByRole("button", { name: "Save links" }));
     expect(replaceSessionQuickLinks).toHaveBeenCalledWith("agent-one", []);
 
     view.rerender(<WorkspaceQuickLinks sessionName="agent-two" />);
@@ -249,6 +255,67 @@ describe("WorkspaceQuickLinks", () => {
     expect(screen.getByRole("dialog", { name: "Manage agent-two links" })).toBeVisible();
     expect(within(session).queryByRole("link", { name: "Stale response" }))
       .not.toBeInTheDocument();
+  });
+  it.each(["common", "workspace", "session"] as const)("adds an untitled link immediately to the %s shelf", async (scope) => {
+    render(<WorkspaceQuickLinks sessionName="agent-one" workspaceId="first" workspaceName="Release room" />);
+    const heading = scope === "common" ? "Common" : scope === "workspace" ? "Release room" : "agent-one";
+    const regionName = scope === "common" ? "Common" : scope === "workspace" ? "Workspace" : "Session";
+    const region = screen.getByRole("region", { name: `${regionName} quick links` });
+    await waitFor(() => expect(within(region).getByRole("button", { name: `Manage ${scope} quick links` })).toBeEnabled());
+    fireEvent.click(within(region).getByRole("button", { name: `Manage ${scope} quick links` }));
+    const dialog = screen.getByRole("dialog", { name: `Manage ${heading} links` });
+    expect(within(dialog).getByRole("textbox", { name: "URL" })).toHaveFocus();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "URL" }), { target: { value: "example.test/untitled" } });
+    fireEvent.submit(dialog);
+    expect(await within(region).findByRole("link", { name: "https://example.test/untitled" })).toBeVisible();
+    const entry = expect.objectContaining({ label: "", url: "https://example.test/untitled" });
+    if (scope === "common") expect(replaceCommonWorkspaceQuickLinks).toHaveBeenCalledWith(expect.arrayContaining([entry]));
+    if (scope === "workspace") expect(replaceWorkspaceQuickLinks).toHaveBeenCalledWith("first", expect.arrayContaining([entry]));
+    if (scope === "session") expect(replaceSessionQuickLinks).toHaveBeenCalledWith("agent-one", expect.arrayContaining([entry]));
+    expect(within(dialog).getByRole("textbox", { name: "URL" })).toHaveValue("");
+  });
+
+  it("edits a saved link and persists shelf ordering without a separate save", async () => {
+    vi.mocked(getCommonWorkspaceQuickLinks).mockResolvedValue([
+      commonLinks[0], { id: "untitled", label: "", url: "https://two.test/" },
+    ]);
+    render(<WorkspaceQuickLinks sessionName="agent-one" />);
+    const region = screen.getByRole("region", { name: "Common quick links" });
+    await within(region).findByRole("link", { name: "https://two.test/" });
+    fireEvent.click(within(region).getByRole("button", { name: "Manage common quick links" }));
+    const dialog = screen.getByRole("dialog", { name: "Manage Common links" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Edit https://two.test/" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Title (optional)" }), { target: { value: "Two" } });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "URL" }), { target: { value: "two.test/new" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update link" }));
+    expect(await within(region).findByRole("link", { name: "Two" })).toHaveAttribute("href", "https://two.test/new");
+    expect(vi.mocked(replaceCommonWorkspaceQuickLinks).mock.calls[0][0][1]).toEqual({
+      id: "untitled", label: "Two", url: "https://two.test/new",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move Two up" }));
+    await waitFor(() => expect(within(region).getAllByRole("link").map((link) => link.textContent)).toEqual(["Two", "Docs"]));
+    expect(within(dialog).getByRole("button", { name: "Move Two up" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Edit Two" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Title (optional)" }), { target: { value: "" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update link" }));
+    expect(await within(region).findByRole("link", { name: "https://two.test/new" })).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove https://two.test/new" }));
+    await waitFor(() => expect(within(region).getAllByRole("link")).toHaveLength(1));
+  });
+
+  it("retains a link after failed removal and lets the same action retry", async () => {
+    vi.mocked(replaceCommonWorkspaceQuickLinks).mockRejectedValueOnce(new Error("Cannot write shelf"));
+    render(<WorkspaceQuickLinks sessionName="agent-one" />);
+    const region = screen.getByRole("region", { name: "Common quick links" });
+    await within(region).findByRole("link", { name: "Docs" });
+    fireEvent.click(within(region).getByRole("button", { name: "Manage common quick links" }));
+    const dialog = screen.getByRole("dialog", { name: "Manage Common links" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove Docs" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Cannot write shelf");
+    expect(within(region).getByRole("link", { name: "Docs" })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Remove Docs" })).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove Docs" }));
+    expect(await within(region).findByText("No links yet")).toBeVisible();
   });
 });
 

@@ -2688,7 +2688,7 @@ a:focus-visible {
 .workspace-quick-links-editor li {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 42px 42px;
+  grid-template-columns: minmax(0, 1fr) repeat(5, 36px);
   align-items: stretch;
   border-bottom: 1px solid #293128;
 }
@@ -2726,6 +2726,7 @@ a:focus-visible {
 .workspace-quick-links-editor a,
 .workspace-quick-links-editor button {
   display: grid;
+  min-height: 40px;
   place-items: center;
   padding: 0;
   color: #849080;
@@ -2754,6 +2755,23 @@ a:focus-visible {
 
 .workspace-quick-links-editor svg {
   width: 15px;
+}
+
+.workspace-quick-links-editor button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.workspace-quick-links-save-status {
+  margin-right: auto;
+  align-self: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-quick-links-cancel-edit {
+  grid-column: 1 / -1;
+  justify-self: end;
 }
 
 .workspace-quick-links-empty-editor {

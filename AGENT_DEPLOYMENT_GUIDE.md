@@ -1065,6 +1065,10 @@ For a failed replacement:
    stopped; preserve owner and modes. Preserve `workspaces.json` even when the rollback release
    does not understand it, so a later compatible release can recover the saved
    workspace list.
+   Releases before optional quick-link titles reject blank link labels, including
+   in schema-14 workspace files. Before rolling back to such a release, retain
+   the current file privately and restore the pre-upgrade `workspaces.json` while
+   Muxdeck is stopped. Do not downgrade or discard other live state to fix labels.
    When rolling back to a release that only understands workspace-file versions
    1 through 13, retain the version-14 file separately and restore the pre-upgrade
    workspace file; older releases cannot read nested tab relationships.

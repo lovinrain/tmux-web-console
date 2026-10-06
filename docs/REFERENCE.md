@@ -1257,9 +1257,12 @@ workspace region belongs only to the active saved workspace; a temporary
 workspace must be saved before links can be added there. The session region is
 available in both temporary and saved workspaces and follows that session across
 every workspace in which it is opened. Use the plus or pencil at the end of a
-region to open its manager, stage additions or removals, and choose `Save links`
-to persist the complete ordered list. Each region supports up to 16 user-defined
-links with 48-character labels. Links accept only HTTP or HTTPS URLs without
+region to open its manager. `Add to shelf` saves a new link immediately; its title
+is optional, and untitled links display their URL. The manager also lets you edit
+titles and URLs, reorder links with the up/down arrows, and remove links. Each
+action persists immediately, so `Done` simply closes the manager. Each region
+supports up to 16 user-defined links with optional 48-character titles.
+Links accept only HTTP or HTTPS URLs without
 embedded credentials, open in a new browser tab, and send no referrer. The shelf
 is not shown in compact mobile layouts.
 

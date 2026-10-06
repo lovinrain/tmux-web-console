@@ -572,8 +572,10 @@ full contract, Google Docs title chips, and agent access instructions.
 
 ### Quick links
 
-A link has `id`, `label`, and an absolute `http` or `https` `url`. Collection
-updates replace the complete ordered list for that scope.
+A link has `id`, `label`, and an absolute `http` or `https` `url`. `label` is a
+string of up to 48 characters and can be empty; untitled links display their URL.
+Collection updates replace the complete ordered list for that scope. The shelf
+manager writes each add, edit, reorder and removal immediately.
 
 | Method and route | Request | Result |
 | --- | --- | --- |

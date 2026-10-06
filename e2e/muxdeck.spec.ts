@@ -6107,17 +6107,20 @@ test("desktop link shelf scopes common, workspace, and session links", async ({
     const narrowToolbarBox = await consoleToolbar.boundingBox();
     const narrowWorkspaceBox = await workspaceRegion.boundingBox();
     const narrowSessionBox = await sessionRegion.boundingBox();
-    const narrowFocusBox = await consoleToolbar.getByRole("button", {
-      name: "Enter desktop terminal focus",
-    }).boundingBox();
     expect(narrowToolbarBox).not.toBeNull();
     expect(narrowWorkspaceBox).not.toBeNull();
     expect(narrowSessionBox).not.toBeNull();
-    expect(narrowFocusBox).not.toBeNull();
     expect(narrowWorkspaceBox!.x + narrowWorkspaceBox!.width)
       .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
     expect(narrowSessionBox!.x + narrowSessionBox!.width)
       .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
+    // The compact toolbar scrolls horizontally to keep every action accessible.
+    const narrowFocusButton = consoleToolbar.getByRole("button", {
+      name: "Enter desktop terminal focus",
+    });
+    await narrowFocusButton.scrollIntoViewIfNeeded();
+    const narrowFocusBox = await narrowFocusButton.boundingBox();
+    expect(narrowFocusBox).not.toBeNull();
     expect(narrowFocusBox!.x + narrowFocusBox!.width)
       .toBeLessThanOrEqual(narrowToolbarBox!.x + narrowToolbarBox!.width + 1);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -6136,11 +6139,20 @@ test("desktop link shelf scopes common, workspace, and session links", async ({
       name: "Manage common quick links",
     }).click();
     const commonDialog = page.getByRole("dialog", { name: "Manage Common links" });
-    await commonDialog.getByRole("textbox", { name: "Label" }).fill("Team runbook");
+    await commonDialog.getByRole("textbox", { name: "Title (optional)" }).fill("Team runbook");
     await commonDialog.getByRole("textbox", { name: "URL" })
       .fill("docs.example.test/runbook");
     await commonDialog.getByRole("button", { name: "Add to shelf" }).click();
-    await commonDialog.getByRole("button", { name: "Save links" }).click();
+    await expect(commonRegion.getByRole("link", { name: "Team runbook" })).toBeVisible();
+    await expect(commonDialog.getByRole("button", { name: "Save links" })).toHaveCount(0);
+    await commonDialog.getByRole("textbox", { name: "URL" }).fill("docs.example.test/reference");
+    await commonDialog.getByRole("button", { name: "Add to shelf" }).click();
+    await expect(commonRegion.getByRole("link", { name: "https://docs.example.test/reference" })).toBeVisible();
+    const untitled = await (await request.get("/mux/api/workspace-quick-links")).json();
+    expect(untitled.links[1].label).toBe("");
+    await commonDialog.getByRole("button", { name: "Move https://docs.example.test/reference up" }).click();
+    await expect(commonRegion.getByRole("link").first()).toHaveAttribute("href", "https://docs.example.test/reference");
+    await commonDialog.getByRole("button", { name: "Done" }).click();
     const commonLink = commonRegion.getByRole("link", { name: "Team runbook" });
     await expect(commonLink).toHaveAttribute("href", "https://docs.example.test/runbook");
     await expect(commonLink).toHaveAttribute("target", "_blank");
@@ -6152,11 +6164,11 @@ test("desktop link shelf scopes common, workspace, and session links", async ({
     const workspaceDialog = page.getByRole("dialog", {
       name: `Manage ${firstName} links`,
     });
-    await workspaceDialog.getByRole("textbox", { name: "Label" }).fill("Launch ticket");
+    await workspaceDialog.getByRole("textbox", { name: "Title (optional)" }).fill("Launch ticket");
     await workspaceDialog.getByRole("textbox", { name: "URL" })
       .fill("https://issues.example.test/launch");
     await workspaceDialog.getByRole("button", { name: "Add to shelf" }).click();
-    await workspaceDialog.getByRole("button", { name: "Save links" }).click();
+    await workspaceDialog.getByRole("button", { name: "Done" }).click();
     await expect(workspaceRegion.getByRole("link", { name: "Launch ticket" })).toBeVisible();
 
     await sessionRegion.getByRole("button", {
@@ -6165,14 +6177,23 @@ test("desktop link shelf scopes common, workspace, and session links", async ({
     const sessionDialog = page.getByRole("dialog", {
       name: `Manage ${sessionName} links`,
     });
-    await sessionDialog.getByRole("textbox", { name: "Label" }).fill("Agent trace");
+    await sessionDialog.getByRole("textbox", { name: "Title (optional)" }).fill("Agent trace");
     await sessionDialog.getByRole("textbox", { name: "URL" })
       .fill("https://traces.example.test/current");
     await sessionDialog.getByRole("button", { name: "Add to shelf" }).click();
-    await sessionDialog.getByRole("button", { name: "Save links" }).click();
+    await sessionDialog.getByRole("button", { name: "Done" }).click();
     await expect(sessionRegion.getByRole("link", { name: "Agent trace" })).toBeVisible();
 
     await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(commonRegion.getByRole("link").first()).toHaveAttribute("href", "https://docs.example.test/reference");
+    await commonRegion.getByRole("button", { name: "Manage common quick links" }).click();
+    const editDialog = page.getByRole("dialog", { name: "Manage Common links" });
+    await editDialog.getByRole("button", { name: "Edit https://docs.example.test/reference" }).click();
+    await editDialog.getByRole("textbox", { name: "Title (optional)" }).fill("Reference");
+    await editDialog.getByRole("textbox", { name: "URL" }).fill("https://docs.example.test/reference/latest");
+    await editDialog.getByRole("button", { name: "Update link" }).click();
+    await expect(commonRegion.getByRole("link", { name: "Reference" })).toHaveAttribute("href", "https://docs.example.test/reference/latest");
+    await editDialog.getByRole("button", { name: "Done" }).click();
     await expect(page.getByRole("region", { name: "Common quick links" })
       .getByRole("link", { name: "Team runbook" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Workspace quick links" })
@@ -6252,7 +6273,7 @@ test("desktop link shelf scopes common, workspace, and session links", async ({
       name: `Manage ${firstName} links`,
     });
     await removeDialog.getByRole("button", { name: "Remove Launch ticket" }).click();
-    await removeDialog.getByRole("button", { name: "Save links" }).click();
+    await removeDialog.getByRole("button", { name: "Done" }).click();
     await expect(firstWorkspaceRegion.getByRole("link", { name: "Launch ticket" }))
       .toHaveCount(0);
   } finally {

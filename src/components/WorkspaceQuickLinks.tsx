@@ -3,7 +3,6 @@ import {
   useId,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -18,10 +17,11 @@ import {
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import {
   CloseIcon,
+  ArrowUpIcon,
+  ArrowDownIcon,
   EditIcon,
   ExternalLinkIcon,
   PlusIcon,
-  SaveIcon,
   TrashIcon,
 } from "../icons";
 
@@ -43,7 +43,7 @@ interface QuickLinkDialogProps {
   workspaceName?: string | null;
   links: WorkspaceQuickLink[];
   onClose: () => void;
-  onSave: (links: WorkspaceQuickLink[]) => Promise<void>;
+  onSave: (links: WorkspaceQuickLink[]) => Promise<WorkspaceQuickLink[]>;
 }
 
 function requestErrorMessage(error: unknown, fallback: string): string {
@@ -54,6 +54,10 @@ function quickLinkId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
   if (uuid) return `link_${uuid.replaceAll("-", "")}`;
   return `link_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function quickLinkTitle(link: WorkspaceQuickLink): string {
+  return link.label || link.url;
 }
 
 export function normalizeWorkspaceQuickLinkUrl(value: string): string {
@@ -98,6 +102,8 @@ function WorkspaceQuickLinksDialog({
   const descriptionId = useId();
   const dialogRef = useRef<HTMLFormElement>(null);
   const labelRef = useRef<HTMLInputElement>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
+  const savingRef = useRef(false);
   const mountedRef = useRef(true);
   const restoreFocusRef = useRef<HTMLElement | null>(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
@@ -105,6 +111,7 @@ function WorkspaceQuickLinksDialog({
   const [draftLinks, setDraftLinks] = useState(() => links.map((link) => ({ ...link })));
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [entryError, setEntryError] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -125,10 +132,10 @@ function WorkspaceQuickLinksDialog({
     const containFocus = (event: FocusEvent) => {
       const dialog = dialogRef.current;
       if (!dialog || !(event.target instanceof Node) || dialog.contains(event.target)) return;
-      labelRef.current?.focus();
+      urlRef.current?.focus();
     };
     document.addEventListener("focusin", containFocus);
-    labelRef.current?.focus();
+    urlRef.current?.focus();
     return () => {
       mountedRef.current = false;
       document.removeEventListener("focusin", containFocus);
@@ -142,7 +149,7 @@ function WorkspaceQuickLinksDialog({
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        if (!saving) onClose();
+        if (!savingRef.current) onClose();
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
@@ -172,54 +179,70 @@ function WorkspaceQuickLinksDialog({
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [onClose, saving]);
 
-  const addLink = () => {
-    const trimmedLabel = label.trim();
-    if (!trimmedLabel) {
-      setEntryError("Enter a short label.");
-      labelRef.current?.focus();
-      return;
+  const persistLinks = async (next: WorkspaceQuickLink[]): Promise<boolean> => {
+    if (savingRef.current) return false;
+    savingRef.current = true;
+    setSaving(true);
+    setRequestError(null);
+    try {
+      const saved = await onSave(next);
+      if (!mountedRef.current) return false;
+      setDraftLinks(saved);
+      return true;
+    } catch (error) {
+      if (mountedRef.current) {
+        setRequestError(requestErrorMessage(error, "Unable to update the link shelf."));
+      }
+      return false;
+    } finally {
+      savingRef.current = false;
+      if (mountedRef.current) setSaving(false);
     }
+  };
+
+  const clearEntry = () => {
+    setLabel("");
+    setUrl("");
+    setEditingId(null);
+    setEntryError(null);
+  };
+
+  const addLink = async () => {
+    if (savingRef.current || (!editingId && draftLinks.length >= MAX_WORKSPACE_QUICK_LINKS)) return;
+    const trimmedLabel = label.trim();
     if (trimmedLabel.length > MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH) {
       setEntryError(
-        `Label must be ${MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH} characters or fewer.`,
+        `Title must be ${MAX_WORKSPACE_QUICK_LINK_LABEL_LENGTH} characters or fewer.`,
       );
       labelRef.current?.focus();
       return;
     }
     try {
       const normalizedUrl = normalizeWorkspaceQuickLinkUrl(url);
-      setDraftLinks((current) => [
-        ...current,
-        { id: quickLinkId(), label: trimmedLabel, url: normalizedUrl },
-      ]);
-      setLabel("");
-      setUrl("");
+      const entry = { id: editingId || quickLinkId(), label: trimmedLabel, url: normalizedUrl };
+      const next = editingId
+        ? draftLinks.map((link) => link.id === editingId ? entry : link)
+        : [...draftLinks, entry];
       setEntryError(null);
-      setRequestError(null);
-      window.requestAnimationFrame(() => labelRef.current?.focus());
+      if (await persistLinks(next)) {
+        clearEntry();
+        window.requestAnimationFrame(() => urlRef.current?.focus());
+      }
     } catch (error) {
       setEntryError(requestErrorMessage(error, "Enter a valid link."));
     }
   };
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (saving) return;
-    setSaving(true);
-    setEntryError(null);
-    setRequestError(null);
-    try {
-      await onSave(draftLinks);
-      if (mountedRef.current) onClose();
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setRequestError(requestErrorMessage(error, "Unable to save quick links."));
-      setSaving(false);
-    }
+  const moveLink = (index: number, direction: -1 | 1) => {
+    const destination = index + direction;
+    if (destination < 0 || destination >= draftLinks.length) return;
+    const next = [...draftLinks];
+    [next[index], next[destination]] = [next[destination], next[index]];
+    void persistLinks(next);
   };
 
   const close = () => {
-    if (!saving) onClose();
+    if (!savingRef.current) onClose();
   };
 
   return createPortal(
@@ -238,7 +261,7 @@ function WorkspaceQuickLinksDialog({
         aria-describedby={descriptionId}
         aria-busy={saving}
         tabIndex={-1}
-        onSubmit={(event) => void submit(event)}
+        onSubmit={(event) => { event.preventDefault(); void addLink(); }}
         onKeyDown={(event) => event.stopPropagation()}
         onKeyUp={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}
@@ -273,28 +296,48 @@ function WorkspaceQuickLinksDialog({
               <p className="workspace-quick-links-empty-editor">No links pinned yet.</p>
             ) : (
               <ol>
-                {draftLinks.map((link) => (
+                {draftLinks.map((link, index) => (
                   <li key={link.id}>
                     <span>
-                      <strong>{link.label}</strong>
-                      <small>{link.url}</small>
+                      <strong title={link.url}>{quickLinkTitle(link)}</strong>
+                      {link.label && <small>{link.url}</small>}
                     </span>
                     <a
                       href={link.url}
                       target="_blank"
                       rel="noreferrer"
                       referrerPolicy="no-referrer"
-                      aria-label={`Open ${link.label} in a new tab`}
+                      aria-label={`Open ${quickLinkTitle(link)} in a new tab`}
                     >
                       <ExternalLinkIcon />
                     </a>
+                    <button type="button" disabled={saving} title="Edit title or URL"
+                      aria-label={`Edit ${quickLinkTitle(link)}`}
+                      onClick={() => {
+                        setEditingId(link.id);
+                        setLabel(link.label);
+                        setUrl(link.url);
+                        setEntryError(null);
+                        setRequestError(null);
+                        window.requestAnimationFrame(() => labelRef.current?.focus());
+                      }}>
+                      <EditIcon />
+                    </button>
+                    <button type="button" disabled={saving || editingId !== null || index === 0}
+                      title="Move link up" aria-label={`Move ${quickLinkTitle(link)} up`}
+                      onClick={() => moveLink(index, -1)}><ArrowUpIcon /></button>
+                    <button type="button" disabled={saving || editingId !== null || index === draftLinks.length - 1}
+                      title="Move link down" aria-label={`Move ${quickLinkTitle(link)} down`}
+                      onClick={() => moveLink(index, 1)}><ArrowDownIcon /></button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setDraftLinks((current) => current.filter((item) => item.id !== link.id));
-                        setRequestError(null);
+                      className="workspace-quick-link-remove"
+                      onClick={async () => {
+                        if (await persistLinks(draftLinks.filter((item) => item.id !== link.id))) {
+                          if (editingId === link.id) clearEntry();
+                        }
                       }}
-                      aria-label={`Remove ${link.label}`}
+                      aria-label={`Remove ${quickLinkTitle(link)}`}
                       title="Remove link"
                       disabled={saving}
                     >
@@ -306,9 +349,9 @@ function WorkspaceQuickLinksDialog({
             )}
           </section>
 
-          <fieldset disabled={saving || draftLinks.length >= MAX_WORKSPACE_QUICK_LINKS}>
-            <legend>Add a link</legend>
-            <label htmlFor={`${headingId}-label`}>Label</label>
+          <fieldset disabled={saving || (!editingId && draftLinks.length >= MAX_WORKSPACE_QUICK_LINKS)}>
+            <legend>{editingId ? "Edit link" : "Add a link"}</legend>
+            <label htmlFor={`${headingId}-label`}>Title (optional)</label>
             <input
               ref={labelRef}
               id={`${headingId}-label`}
@@ -323,6 +366,7 @@ function WorkspaceQuickLinksDialog({
             />
             <label htmlFor={`${headingId}-url`}>URL</label>
             <input
+              ref={urlRef}
               id={`${headingId}-url`}
               type="url"
               inputMode="url"
@@ -336,13 +380,14 @@ function WorkspaceQuickLinksDialog({
               }}
             />
             <button
-              type="button"
+              type="submit"
               className="secondary-button workspace-quick-links-add"
-              onClick={addLink}
-              disabled={saving || draftLinks.length >= MAX_WORKSPACE_QUICK_LINKS}
+              disabled={saving || (!editingId && draftLinks.length >= MAX_WORKSPACE_QUICK_LINKS)}
             >
-              <PlusIcon /> Add to shelf
+              {editingId ? <EditIcon /> : <PlusIcon />}{editingId ? "Update link" : "Add to shelf"}
             </button>
+            {editingId && <button type="button" className="secondary-button workspace-quick-links-cancel-edit"
+              onClick={clearEntry}>Cancel edit</button>}
           </fieldset>
 
           {draftLinks.length >= MAX_WORKSPACE_QUICK_LINKS && (
@@ -355,11 +400,11 @@ function WorkspaceQuickLinksDialog({
         </div>
 
         <div className="title-actions">
-          <button type="button" className="secondary-button" onClick={close} disabled={saving}>
-            Cancel
-          </button>
-          <button type="submit" className="primary-button" disabled={saving}>
-            <SaveIcon /> {saving ? "Saving..." : "Save links"}
+          <span className="workspace-quick-links-save-status" role="status">
+            {saving ? "Updating shelf…" : "Shelf changes save immediately."}
+          </span>
+          <button type="button" className="primary-button" onClick={close} disabled={saving}>
+            Done
           </button>
         </div>
       </form>
@@ -422,9 +467,9 @@ function QuickLinkRegion({
               target="_blank"
               rel="noreferrer"
               referrerPolicy="no-referrer"
-              title={`${link.label} - ${link.url}`}
+              title={link.label ? `${link.label} - ${link.url}` : link.url}
             >
-              <span>{link.label}</span>
+              <span>{quickLinkTitle(link)}</span>
               <ExternalLinkIcon />
             </a>
           </span>
@@ -436,7 +481,7 @@ function QuickLinkRegion({
         onClick={onManage}
         disabled={unavailable}
         aria-label={`Manage ${regionLabel.toLowerCase()}`}
-        title={disabledReason || error || `Add or remove ${regionLabel.toLowerCase()}`}
+        title={disabledReason || error || `Add, edit, reorder or remove ${regionLabel.toLowerCase()}`}
       >
         {links.length === 0 ? <PlusIcon /> : <EditIcon />}
       </button>
@@ -526,22 +571,23 @@ export function WorkspaceQuickLinks({
       const saved = await replaceCommonWorkspaceQuickLinks(links);
       setCommonLinks(saved);
       setCommonError(null);
-      return;
+      return saved;
     }
     if (dialogScope === "session") {
       const targetSessionName = sessionName;
       const saved = await replaceSessionQuickLinks(targetSessionName, links);
-      if (currentSessionNameRef.current !== targetSessionName) return;
+      if (currentSessionNameRef.current !== targetSessionName) return saved;
       setSessionLinks(saved);
       setSessionError(null);
-      return;
+      return saved;
     }
     if (!workspaceId) throw new Error("Save this workspace before adding its own links.");
     const targetWorkspaceId = workspaceId;
     const saved = await replaceWorkspaceQuickLinks(targetWorkspaceId, links);
-    if (currentWorkspaceIdRef.current !== targetWorkspaceId) return;
+    if (currentWorkspaceIdRef.current !== targetWorkspaceId) return saved;
     setWorkspaceLinks(saved);
     setWorkspaceError(null);
+    return saved;
   };
 
   const workspaceLabel = workspaceName?.trim() || "This workspace";
