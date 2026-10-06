@@ -25,13 +25,14 @@ describe("BulkSessionActionsDialog", () => {
     expect(onApply).not.toHaveBeenCalled();
   });
 
-  it.each(["close", "end"] as const)("labels running commands explicitly before a bulk %s", (action) => {
+  it.each(["close", "end"] as const)("labels running commands and retained dead panes explicitly before a bulk %s", (action) => {
     render(
       <BulkSessionActionsDialog
         action={action}
         targets={[
           { ...targets[0], session: { ...targets[0].session, agentState: "running_command" } },
           { ...targets[1], session: { ...targets[1].session, agentState: "waiting_command" } },
+          { name: "exited", session: { ...targets[0].session, name: "exited", panes: [{ dead: true }] } as Session },
         ]}
         onApply={vi.fn()}
         onClose={vi.fn()}
@@ -42,6 +43,8 @@ describe("BulkSessionActionsDialog", () => {
     expect(rows[0]).toHaveTextContent("Command running");
     expect(rows[0]).not.toHaveTextContent("Ready");
     expect(rows[1]).toHaveTextContent("Ready");
+    expect(rows[2]).toHaveTextContent("Dead");
+    expect(rows[2]).not.toHaveTextContent("Ready");
   });
 
   it("reports partial failure and retries only failed identities", async () => {

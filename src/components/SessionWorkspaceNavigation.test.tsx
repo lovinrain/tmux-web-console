@@ -170,6 +170,74 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it.each(["horizontal", "vertical"] as const)("marks only fully exited sessions dead in %s tabs while preserving the active tab", (orientation) => {
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      orientation,
+      openSessions: ["alpha", "beta", "ended"],
+      sessions: [
+        session({ name: "alpha", customTitle: "Exited command", agentState: "waiting_human", panes: [pane({ dead: true })] }),
+        session({ name: "beta", agentState: "working", panes: [pane({ dead: true }), pane({ id: "%2", window_index: 1 })] }),
+      ],
+      uncheckedReadySessions: new Set(["alpha"]),
+    })} />);
+
+    const dead = screen.getByRole("tab", { name: "Exited command, Dead, unread" });
+    expect(dead).toHaveAttribute("aria-selected", "true");
+    expect(dead.closest(".workspace-tab")).toHaveClass("active");
+    expect(dead.closest(".workspace-tab")).toHaveAttribute("data-session-dead", "true");
+    expect(dead).toHaveTextContent("Dead");
+    expect(dead).toHaveAttribute("title", expect.stringContaining("all tmux panes have exited"));
+    expect(screen.getByRole("tab", { name: "beta, Working" }).closest(".workspace-tab"))
+      .not.toHaveAttribute("data-session-dead");
+    expect(screen.getByRole("tab", { name: "ended, unavailable" }).closest(".workspace-tab"))
+      .not.toHaveAttribute("data-session-dead");
+  });
+
+  it("selects exact dead tabs for cleanup without including live group members, descendants or closed sessions", () => {
+    const deadSessions = [
+      session({ name: "alpha", panes: [pane({ dead: true })] }),
+      session({ name: "beta" }),
+      session({ name: "zulu", panes: [pane({ dead: true })] }),
+      session({ name: "closed-dead", panes: [pane({ dead: true })] }),
+    ];
+    const props = navigationProps({
+      orientation: "vertical", openSessions: ["alpha", "beta", "zulu", "missing"],
+      sessions: deadSessions, sessionParents: { beta: "alpha" },
+      groups: [{ id: "mixed", name: "Mixed", color: "blue", collapsed: false, tabs: ["alpha", "beta"] }],
+      onBulkSessionAction: vi.fn(), onTabSelectionChange: vi.fn(),
+      onSessionTerminated: vi.fn(), tabActionsVisible: false,
+    });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select 2 dead session tabs" }));
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["alpha", "zulu"]);
+    expect(screen.getByRole("group", { name: "2 dead session tabs selected" })).toHaveTextContent("Dead only");
+    expect(screen.getByRole("tab", { name: /beta, Mixed group/ }).closest(".workspace-tab"))
+      .not.toHaveAttribute("data-tab-move-selected");
+    expect(props.onSelect).not.toHaveBeenCalled();
+
+    // A group refresh must not expand a cleanup selection to its live members.
+    view.rerender(<SessionWorkspaceNavigation {...props} groups={[{ ...props.groups![0] }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 selected tabs" }));
+    expect(props.onBulkSessionAction).toHaveBeenLastCalledWith("close", ["alpha", "zulu"]);
+    fireEvent.click(screen.getByRole("button", { name: "End 2 selected sessions" }));
+    expect(props.onBulkSessionAction).toHaveBeenLastCalledWith("end", ["alpha", "zulu"]);
+
+    // A respawn leaves cleanup immediately; other selected dead tabs remain.
+    view.rerender(<SessionWorkspaceNavigation {...props} sessions={deadSessions.map((item) => (
+      item.name === "alpha" ? { ...item, panes: [pane()] } : item
+    ))} />);
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["zulu"]);
+    fireEvent.click(screen.getByRole("button", { name: "End 1 selected sessions" }));
+    expect(props.onBulkSessionAction).toHaveBeenLastCalledWith("end", ["zulu"]);
+    expect(screen.getByRole("tab", { name: /alpha, Mixed group, Other/ }).closest(".workspace-tab"))
+      .not.toHaveAttribute("data-session-dead");
+
+    view.rerender(<SessionWorkspaceNavigation {...props} sessions={deadSessions.map((item) => ({ ...item, panes: [pane()] }))} />);
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith([]);
+    expect(screen.queryByRole("button", { name: /Select .* dead session/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /dead session tabs selected/ })).not.toBeInTheDocument();
+  });
+
   it("marks the current session unread without visiting it, even when tab actions are hidden", () => {
     const props = navigationProps({
       onMarkSessionUnread: vi.fn(), tabActionsVisible: false,

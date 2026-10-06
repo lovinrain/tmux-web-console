@@ -46,6 +46,7 @@ import {
   WindowMoveIcon,
 } from "../icons";
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
+import { sessionHasOnlyDeadPanes } from "../sessionLifecycle";
 import { requestThemeToggle } from "../theme";
 import {
   PANE_NAVIGATION_ACTION,
@@ -85,6 +86,7 @@ import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 import { WorkspaceSessionAddDialog } from "./WorkspaceSessionAddDialog";
 import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
+import "./DeadPaneTabs.css";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
@@ -296,13 +298,21 @@ function clampDesktopTabRailWidthForViewport(width: number, maxWidth: number): n
   return Math.min(maxWidth, clampDesktopTabRailWidth(width));
 }
 
-const STATE_LABELS: Record<AgentState, string> = {
+type WorkspaceSessionState = AgentState | "dead" | "unavailable";
+
+function workspaceSessionState(session: Session | undefined): WorkspaceSessionState {
+  return sessionHasOnlyDeadPanes(session) ? "dead" : session?.agentState ?? "unavailable";
+}
+
+const STATE_LABELS: Record<WorkspaceSessionState, string> = {
   working: "Working",
   running_command: "Command running",
   waiting_human: "Needs input",
   waiting_command: "Background work",
   unknown: "Unclear",
   other: "Other",
+  dead: "Dead",
+  unavailable: "Unavailable",
 };
 
 const WORKSPACE_PERSISTENCE_COPY: Record<
@@ -1196,7 +1206,7 @@ export function WorkspaceTabSearchDialog({
           {results.map((result) => {
             const highlighted = result.sessionName === highlightedSession;
             const active = result.sessionName === activeSession;
-            const state = result.session?.agentState || "unavailable";
+            const state = workspaceSessionState(result.session);
             const tree = sessionTreeContext(result.sessionName, sessionParents, sessionsByName);
             return (
               <button
@@ -1241,7 +1251,7 @@ export function WorkspaceTabSearchDialog({
                   )}
                 </span>
                 <span className={`workspace-tab-search-result-state ${state}`}>
-                  {active ? "Current" : result.session ? STATE_LABELS[result.session.agentState] : "Unavailable"}
+                  {active ? "Current" : STATE_LABELS[state]}
                 </span>
               </button>
             );
@@ -1345,7 +1355,8 @@ function WorkspaceSessionRow({
 }: WorkspaceSessionRowProps) {
   const pane = session ? activePane(session) : undefined;
   const displayTitle = session ? sessionDisplayTitle(session) : sessionName;
-  const stateLabel = session ? STATE_LABELS[session.agentState] : "Unavailable";
+  const state = workspaceSessionState(session);
+  const stateLabel = STATE_LABELS[state];
   const canReorder = (
     open
     && onMoveTab
@@ -1359,6 +1370,7 @@ function WorkspaceSessionRow({
     <div
       className={`workspace-session-row${active ? " active" : ""}${open && (onTerminate || hasWindowActions) ? " stacked-actions" : ""}`}
       data-workspace-session-name={sessionName}
+      data-session-dead={state === "dead" ? "true" : undefined}
       data-session-parent={tree?.parentName}
       data-session-depth={tree?.depth}
       style={sessionTreeStyle(tree)}
@@ -1372,7 +1384,7 @@ function WorkspaceSessionRow({
         title={tree?.description}
       >
         <span
-          className={`workspace-state-dot ${session?.agentState || "unavailable"}`}
+          className={`workspace-state-dot ${state}`}
           aria-hidden="true"
         />
         <span className="workspace-session-copy">
@@ -1398,7 +1410,7 @@ function WorkspaceSessionRow({
           )}
         </span>
         <span className="workspace-session-indicators">
-          <span className={`workspace-session-status ${session?.agentState || "unavailable"}`}>
+          <span className={`workspace-session-status ${state}`}>
             {active ? `Active \u00b7 ${stateLabel}` : stateLabel}
           </span>
           {session && session.queuedMessageCount > 0 && (
@@ -2164,6 +2176,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const [windowActionError, setWindowActionError] = useState("");
   const [selectedWorkspaceTabs, setSelectedWorkspaceTabs] = useState<string[]>([]);
+  const [deadTabsOnlySelected, setDeadTabsOnlySelected] = useState(false);
   const [workspaceTabDrag, setWorkspaceTabDrag] = useState<WorkspaceTabDragState | null>(
     null,
   );
@@ -2174,6 +2187,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
     [sessions],
+  );
+  const deadSessionTabs = useMemo(
+    () => openSessions.filter((name) => sessionHasOnlyDeadPanes(sessionsByName.get(name))),
+    [openSessions, sessionsByName],
   );
   const groupsBySession = useMemo(() => {
     const result = new Map<string, WorkspaceTabGroup>();
@@ -2226,8 +2243,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && !compactViewport
     && tabsVisible,
   );
-  const desktopTabMultiSelectEnabled = desktopTabDragEnabled && Boolean(onMoveTabs);
+  const desktopTabMultiSelectEnabled = !compactViewport && tabsVisible
+    && Boolean(onMoveTabs || props.onBulkSessionAction);
   const groupDragEnabled = desktopTabDragEnabled && Boolean(onMoveTabs)
+    && !deadTabsOnlySelected
     && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error"
     && !separatorsBusy;
   const separatorDragEnabled = Boolean(props.onCrossSeparator && orientation === "vertical"
@@ -2284,15 +2303,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     [selectedWorkspaceTabs],
   );
   const orderedSelection = useMemo(
-    () => openSessions.filter((name) => selectedWorkspaceTabSet.has(name)),
-    [openSessions, selectedWorkspaceTabSet],
+    () => openSessions.filter((name) => selectedWorkspaceTabSet.has(name)
+      && (!deadTabsOnlySelected || deadSessionTabs.includes(name))),
+    [deadSessionTabs, deadTabsOnlySelected, openSessions, selectedWorkspaceTabSet],
   );
   const onTabSelectionChange = props.onTabSelectionChange;
   useEffect(() => {
     onTabSelectionChange?.(orderedSelection);
   }, [onTabSelectionChange, orderedSelection]);
   useEffect(() => () => onTabSelectionChange?.([]), [onTabSelectionChange]);
-  useEffect(() => { setSelectedWorkspaceTabs([]); }, [activeWorkspaceId]);
+  useEffect(() => {
+    setSelectedWorkspaceTabs([]);
+    setDeadTabsOnlySelected(false);
+  }, [activeWorkspaceId]);
   const unselectedTabs = openSessions.filter((name) => !selectedWorkspaceTabSet.has(name));
   const previousSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection[0]) - 1];
   const nextSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection.at(-1)!) + 1];
@@ -2312,6 +2335,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   };
 
   const clearWorkspaceTabSelection = useCallback((announce = true) => {
+    setDeadTabsOnlySelected(false);
     if (selectedWorkspaceTabs.length === 0) return;
     setSelectedWorkspaceTabs([]);
     if (announce) setReorderAnnouncement("Tab move selection cleared.");
@@ -2323,6 +2347,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     additive: boolean,
   ) => {
     if (!desktopTabMultiSelectEnabled || !openSessions.includes(sessionName)) return;
+    setDeadTabsOnlySelected(false);
 
     let candidates: string[];
     if (range) {
@@ -2388,10 +2413,21 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   useEffect(() => {
     setSelectedWorkspaceTabs((current) => {
       if (!desktopTabMultiSelectEnabled) return current.length > 0 ? [] : current;
-      const next = expandWorkspaceTabSelection(openSessions, groups, current, sessionParents);
+      // Cleanup selects exact dead sessions, even inside mixed groups or trees.
+      // A respawned pane removes its session from this selection on refresh.
+      const next = deadTabsOnlySelected
+        ? current.filter((name) => deadSessionTabs.includes(name))
+        : expandWorkspaceTabSelection(openSessions, groups, current, sessionParents);
       return sameSessionNames(current, next) ? current : next;
     });
-  }, [desktopTabMultiSelectEnabled, groups, openSessions, sessionParents]);
+  }, [deadSessionTabs, deadTabsOnlySelected, desktopTabMultiSelectEnabled, groups, openSessions, sessionParents]);
+
+  const selectDeadSessionTabs = () => {
+    setDeadTabsOnlySelected(true);
+    workspaceTabSelectionAnchorRef.current = deadSessionTabs[0] ?? null;
+    setSelectedWorkspaceTabs(deadSessionTabs);
+    setReorderAnnouncement(`${deadSessionTabs.length} dead session tab${deadSessionTabs.length === 1 ? "" : "s"} selected. Close tabs to remove them here, or End sessions to remove them from tmux.`);
+  };
 
   useEffect(() => {
     if (selectedWorkspaceTabs.length > 0) return;
@@ -3357,13 +3393,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   ) => {
     const index = openSessions.indexOf(sessionName);
     const session = sessionsByName.get(sessionName);
+    const state = workspaceSessionState(session);
+    const dead = state === "dead";
     const title = tabTitle(sessionName, sessionsByName);
     const agentLabel = sessionAgentInfo(session).label;
     const tree = sessionTreeContext(sessionName, sessionParents, sessionsByName);
     const active = !newSessionActive && sessionName === activeSession;
     const readyUnchecked = props.uncheckedReadySessions?.has(sessionName) ?? false;
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
-    const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1;
+    const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1 && !deadTabsOnlySelected;
     const previousMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, -1);
     const nextMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, 1);
     const crossingNames = selectedDrag ? orderedSelection : [sessionName];
@@ -3371,7 +3409,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       ? selectionMoveTargets.previous >= 0 : previousMoveIndex >= 0));
     const canMoveNext = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "next")) || (selectedDrag && onMoveTabs
       ? selectionMoveTargets.next >= 0 : nextMoveIndex >= 0));
-    const canDragTab = desktopTabDragEnabled && (
+    const canDragTab = desktopTabDragEnabled && !deadTabsOnlySelected && (
       nestingEnabled || (selectedDrag && onMoveTabs)
         ? true
         : !group || (!group.collapsed && group.tabs.length > 1)
@@ -3392,6 +3430,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       <div
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
+        data-session-dead={dead ? "true" : undefined}
         data-ready-unchecked={readyUnchecked ? "true" : undefined}
         data-session-parent={tree?.parentName}
         data-session-depth={tree?.depth}
@@ -3422,9 +3461,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           role="tab"
           aria-selected={active}
           aria-controls={active ? "muxdeck-active-console" : undefined}
-          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[session.agentState]}` : ", unavailable"}${readyUnchecked ? ", unread" : ""}${selectedForMove ? ", selected for moving" : ""}`}
+          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[state]}` : ", unavailable"}${readyUnchecked ? ", unread" : ""}${selectedForMove ? deadTabsOnlySelected ? ", selected for cleanup" : ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
-          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${readyUnchecked ? " · Unread — open this session to mark it as read" : ""}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
+          title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${dead ? " · Dead: all tmux panes have exited" : ""}${readyUnchecked ? " · Unread — open this session to mark it as read" : ""}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
           draggable={canDragTab ? true : undefined}
           aria-description={`${agentLabel}. ${tree ? `${tree.description} ` : ""}${canDragTab
@@ -3471,13 +3510,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <CheckIcon />
             </span>
           )}
-          <span className={`workspace-state-dot ${session?.agentState || "unavailable"}`} aria-hidden="true" />
+          <span className={`workspace-state-dot ${state}`} aria-hidden="true" />
           <span
             className="workspace-tab-compact-index"
             data-index={index + 1}
             aria-hidden="true"
           />
           <span className="workspace-tab-title">{title}</span>
+          {dead && <span className="workspace-tab-dead-label" aria-hidden="true">Dead</span>}
           <SessionAgentIcon session={session} />
         </button>
         {tree && onReparentSession && props.onTransferSelectedSessions && (
@@ -3816,6 +3856,18 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <small>Stable</small>
             </button>
           )}
+          {desktopTabMultiSelectEnabled && props.onBulkSessionAction && deadSessionTabs.length > 0 && (
+            <button
+              type="button"
+              className="workspace-select-dead-tabs"
+              disabled={workspacePersistenceState === "loading" || workspacePersistenceState === "error"}
+              aria-label={`Select ${deadSessionTabs.length} dead session tab${deadSessionTabs.length === 1 ? "" : "s"}`}
+              title="Select only sessions whose tmux panes have all exited, then close their tabs or end their sessions"
+              onClick={selectDeadSessionTabs}
+            >
+              <CheckIcon /><span>Select dead</span><strong>{deadSessionTabs.length}</strong>
+            </button>
+          )}
           {orientation === "vertical" && onChangeSeparator && (
             <>
               <div className="workspace-separator-controls" role="group" aria-label="Separator placement">
@@ -4125,15 +4177,17 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <div
               className="workspace-tab-selection-status"
               role="group"
-              aria-label={`${selectedWorkspaceTabs.length} tabs selected for moving`}
+              aria-label={deadTabsOnlySelected
+                ? `${orderedSelection.length} dead session tabs selected`
+                : `${orderedSelection.length} tabs selected for moving`}
             >
               <span className="workspace-tab-selection-status-count">
                 <CheckIcon />
-                <strong>{selectedWorkspaceTabs.length}</strong>
+                <strong>{orderedSelection.length}</strong>
                 <span>selected</span>
               </span>
-              <small>Drag together</small>
-              {onMoveTabs && (
+              <small>{deadTabsOnlySelected ? "Dead only" : "Drag together"}</small>
+              {onMoveTabs && !deadTabsOnlySelected && (
                 <>
                   <button
                     type="button"
@@ -4151,7 +4205,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   >{orientation === "vertical" ? <ArrowDownIcon /> : <ArrowLeftIcon />}</button>
                 </>
               )}
-              {props.onTransferSelectedSessions && (
+              {props.onTransferSelectedSessions && !deadTabsOnlySelected && (
                 <button
                   type="button"
                   className="workspace-selection-bulk-action"

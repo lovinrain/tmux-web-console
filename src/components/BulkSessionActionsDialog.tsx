@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { Session } from "../types";
+import { sessionHasOnlyDeadPanes } from "../sessionLifecycle";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import "./BulkSessionActionsDialog.css";
 
@@ -55,6 +56,7 @@ export function BulkSessionActionsDialog({ action, targets, onApply, onClose }: 
           {target.session?.customTitle && <code>{target.name}</code>}
           <span>{results[target.name] || (
             ending && !target.session ? "Unavailable"
+              : sessionHasOnlyDeadPanes(target.session) ? "Dead"
               : target.session?.agentState === "working" ? "Working"
                 : target.session?.agentState === "running_command" ? "Command running"
                   : "Ready"

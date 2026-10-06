@@ -3690,6 +3690,113 @@ test("bulk selection closes tabs safely and ends sessions only after confirmatio
   }
 });
 
+test("dead session tabs stay distinct and bulk cleanup excludes live group members and children", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const deadNames = [`${sessionName}-dead-a`, `${sessionName}-dead-b`];
+  const mixedName = `${sessionName}-mixed`;
+  const createdNames: string[] = [];
+  let workspaceId: string | undefined;
+  const tabs = [sessionName, ...deadNames, mixedName];
+
+  try {
+    for (const name of deadNames) {
+      const retainedPane = execFileSync("tmux", [...tmux, "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", name,
+        "bash", "--noprofile", "--norc", "-c", "sleep 1; exit 17"], { encoding: "utf8" }).trim();
+      createdNames.push(name);
+      execFileSync("tmux", [...tmux, "set-option", "-w", "-t", retainedPane, "remain-on-exit", "on"]);
+    }
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", mixedName, "bash", "--noprofile", "--norc"]);
+    createdNames.push(mixedName);
+    const exitedWindow = execFileSync("tmux", [...tmux, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", `=${mixedName}`,
+      "bash", "--noprofile", "--norc", "-c", "sleep 1; exit 23"], { encoding: "utf8" }).trim();
+    execFileSync("tmux", [...tmux, "set-option", "-w", "-t", exitedWindow, "remain-on-exit", "on"]);
+
+    await expect.poll(async () => {
+      const response = await request.get("/mux/api/sessions");
+      const sessions = (await response.json()).sessions as Array<{ name: string; panes: Array<{ dead: boolean }> }>;
+      return sessions.filter((session) => deadNames.includes(session.name)
+        && session.panes.length > 0 && session.panes.every((pane) => pane.dead)).map((session) => session.name).sort();
+    }).toEqual([...deadNames].sort());
+    const identities = tabs.map(workspaceTmuxIdentity);
+    const response = await request.post("/mux/api/workspaces", {
+      data: {
+        name: "Dead pane cleanup", tabs, activeSession: sessionName,
+        groups: [{ id: "mixed", name: "Mixed", color: "blue", collapsed: false, tabs: [sessionName, deadNames[0]] }],
+        parents: { [mixedName]: deadNames[1] },
+      },
+    });
+    expect(response.ok()).toBe(true);
+    workspaceId = (await response.json()).workspace.id;
+    await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}${tabs.map((name) => `&tab=${name}`).join("")}`);
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    await expect(page.locator('.workspace-tab[data-session-dead="true"]')).toHaveCount(2);
+    const deadTab = page.getByRole("tab", { name: new RegExp(`^${deadNames[0]},.*Dead`) });
+    const mixedTab = page.getByRole("tab", { name: new RegExp(`^${mixedName},`) });
+    await expect(mixedTab).not.toHaveAttribute("data-session-dead");
+    await expect(mixedTab.locator("..")).not.toHaveAttribute("data-session-dead");
+    await deadTab.click();
+    await expect(deadTab).toHaveAttribute("aria-selected", "true");
+    await expect(deadTab.locator("..")).toHaveClass(/active/);
+    await page.getByRole("button", { name: "Mark as unread", exact: true }).click();
+    await expect(deadTab.locator("..")).toHaveAttribute("data-ready-unchecked", "true");
+
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") await page.getByRole("button", { name: "Light theme", exact: true }).click();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      const colors = await deadTab.locator(".workspace-tab-title").evaluate((element) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--muted)";
+        document.body.append(probe);
+        const expected = getComputedStyle(probe).color;
+        probe.remove();
+        return { actual: getComputedStyle(element).color, expected };
+      });
+      expect(colors.actual).toBe(colors.expected);
+      await expect(deadTab.locator("..")).toHaveClass(/active/);
+      await page.screenshot({ path: `artifacts/dead-session-tabs-${theme}.png` });
+    }
+
+    await page.getByRole("button", { name: "Select 2 dead session tabs" }).click();
+    await expect(page.locator('.workspace-tab[data-tab-move-selected="true"]')).toHaveCount(2);
+    await expect(mixedTab.locator("..")).not.toHaveAttribute("data-tab-move-selected");
+    await expect(page.getByRole("tab", { name: new RegExp(`^${sessionName},`) }).locator(".."))
+      .not.toHaveAttribute("data-tab-move-selected");
+    await page.getByRole("button", { name: "Close 2 selected tabs" }).click();
+    let dialog = page.getByRole("alertdialog", { name: "Close 2 selected tabs?" });
+    const closeTargets = dialog.getByRole("list", { name: "Selected sessions" });
+    await expect(closeTargets.getByRole("listitem")).toHaveCount(2);
+    for (const name of deadNames) await expect(closeTargets).toContainText(name);
+    await expect(closeTargets).not.toContainText(mixedName);
+    await dialog.getByRole("button", { name: "Close 2 tabs" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+    await expect.poll(async () => {
+      const saved = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      return (await saved.json()).workspace.tabs;
+    }).toEqual([sessionName, mixedName]);
+
+    await page.goto(`/mux/session/${sessionName}${tabs.map((name, index) => `${index ? "&" : "?"}tab=${name}`).join("")}`);
+    await page.getByRole("button", { name: "Select 2 dead session tabs" }).click();
+    await page.getByRole("button", { name: "End 2 selected sessions" }).click();
+    dialog = page.getByRole("alertdialog", { name: "End 2 selected sessions?" });
+    await expect(dialog.getByRole("list", { name: "Selected sessions" }).getByText("Dead", { exact: true })).toHaveCount(2);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+    await dialog.getByRole("button", { name: "End 2 sessions" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    expect(workspaceTmuxIdentity(sessionName)).toBe(identities[0]);
+    expect(workspaceTmuxIdentity(mixedName)).toBe(identities[3]);
+    const remaining = execFileSync("tmux", [...tmux, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8" }).trim().split("\n");
+    for (const name of deadNames) expect(remaining).not.toContain(name);
+  } finally {
+    if (workspaceId) await request.delete(`/mux/api/workspaces/${workspaceId}`);
+    for (const name of createdNames) {
+      try { execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], { stdio: "ignore" }); } catch { /* Already ended by the test. */ }
+    }
+  }
+});
+
 test("Fork preserves the current view and split workspace opens the selected tabs in source order", async ({ page, request, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const first = `${sessionName}-split-first`;

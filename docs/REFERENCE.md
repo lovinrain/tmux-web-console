@@ -124,7 +124,15 @@ They use distinct icons when the header is narrow; hover reveals the full action
 and explanation. Their complete accessible labels remain available.
 
 The desktop tab-selection bar also provides `Close tabs` and `End sessions`.
-Both show a confirmation listing the captured selection, native names, and
+Retained tmux sessions whose panes have all exited show a gray title, gray status
+dot and `Dead` badge in top and side tabs. Their active-tab and selection indicators
+remain visible. A session with any live pane, including a live pane in another
+window, keeps its normal status. Completed assistant replies and idle shells are
+still live. On desktop, `Select dead` selects exactly the dead sessions in the
+current workspace for bulk cleanup, including those in collapsed groups. It does
+not select their live group members or nested children. A session that respawns
+leaves this cleanup selection when the pane inventory refreshes.
+Each bulk action shows a confirmation listing the captured selection, native names, and
 display titles. `Close tabs` removes tabs only from the current workspace and
 records their history without stopping tmux. `End sessions` terminates the
 selected sessions everywhere, including their panes, programs, and owned
