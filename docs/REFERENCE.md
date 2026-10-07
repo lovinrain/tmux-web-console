@@ -286,7 +286,7 @@ ephemeral and resets on session changes, workspace overview, mobile layout,
 desktop Focus, or reload.
 
 On desktop, `Focus` in the top `VIEW` toolbar expands the live terminal to the
-full browser viewport and leaves floating `Sessions`, `Redraw`, `Float input`, `Show all
+full browser viewport and leaves floating `Sessions`, `Notes`, `Redraw`, `Float input`, `Show all
 buttons`, and `Exit` controls. `Show all buttons` overlays the existing bottom
 shortcut strip
 as a wrapped floating panel, including `More Keys`; it does not shrink the
@@ -329,6 +329,12 @@ Geometry is remembered locally per workspace. `Sessions` or the Find tab shortcu
 refocuses the floating search; Escape closes it only while focus is inside.
 `Modal` returns to the centered picker. The presentation choice lasts for the
 current page; leaving the workspace or switching to mobile closes the picker.
+
+`Notes` in Focus reveals the Common, Workspace, and Session sticky-note cards.
+Choose a card to open its existing floating editor while keeping Focus active;
+autosave and pinning work as usual. Toggle `Notes` again to hide the cards.
+Open editors keep their drafts when entering or leaving Focus. Workspace notes
+require a saved workspace.
 
 ### Session history
 

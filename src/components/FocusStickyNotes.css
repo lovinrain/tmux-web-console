@@ -1,0 +1,53 @@
+.desktop-focus-notes-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(480px, calc(100vw - 24px));
+  padding: 10px;
+  color: var(--preset-text, var(--paper));
+  background: var(--preset-raised, var(--ink-raised));
+  border: 1px solid var(--preset-line, var(--line));
+  border-radius: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.3);
+}
+
+.desktop-focus-notes-panel .scoped-sticky-notes {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  container-type: normal;
+}
+
+.desktop-focus-notes-panel .scoped-sticky-notes-label {
+  display: none;
+}
+
+.desktop-focus-notes-panel .scoped-sticky-note {
+  width: 100%;
+  min-width: 0;
+  height: 56px;
+  min-height: 56px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  justify-items: stretch;
+  padding: 8px;
+  transform: none;
+}
+
+.desktop-focus-notes-panel .scoped-sticky-note > span {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: hidden;
+  clip: auto;
+  clip-path: none;
+  white-space: normal;
+}
+
+.desktop-focus-notes-panel .scoped-sticky-note strong,
+.desktop-focus-notes-panel .scoped-sticky-note small {
+  display: block;
+}

@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useId,
   useRef,
@@ -30,6 +31,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from "../icons";
+import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
 
 export const MAX_SCOPED_NOTE_PAGES = 128;
 export const MAX_SCOPED_NOTE_PAGE_NAME_LENGTH = 80;
@@ -1417,6 +1419,7 @@ export function ScopedStickyNotes({
   workspaceName = null,
 }: ScopedStickyNotesProps) {
   const desktop = useDesktopScopedNotes();
+  const focusNotesHost = useContext(FocusStickyNotesContext);
   const [defaultSize, setDefaultSize] = useNoteDefaultSize();
   const windowWorkspaceIdentity = noteWorkspaceIdentity(workspaceId, sessionName);
   const [common, setCommon] = useState<NoteSnapshot>({
@@ -1734,8 +1737,16 @@ export function ScopedStickyNotes({
   const workspaceEditor = editorForScope("workspace");
   const sessionEditor = editorForScope("session");
 
-  return (
-    <>
+  useEffect(() => {
+    if (!focusNotesHost) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = focusNotesHost.querySelector<HTMLButtonElement>("button:not(:disabled)");
+      (target ?? focusNotesHost).focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusNotesHost]);
+
+  const cards = (
       <section className="scoped-sticky-notes" aria-label="Sticky notes">
         <span className="scoped-sticky-notes-label" aria-hidden="true">NOTES</span>
         <StickyNoteCard
@@ -1767,7 +1778,11 @@ export function ScopedStickyNotes({
             : openEditor("session")}
         />
       </section>
+  );
 
+  return (
+    <>
+      {desktop && focusNotesHost ? createPortal(cards, focusNotesHost) : cards}
       {desktop && openEditors.map((editor) => (
         <StickyNoteEditor
           key={editor.key}

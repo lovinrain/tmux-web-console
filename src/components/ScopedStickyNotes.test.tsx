@@ -16,6 +16,7 @@ import {
   type ScopedNoteNotebook,
 } from "../api";
 import { renderWithTheme } from "../test-utils";
+import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
 import {
   DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
   DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
@@ -149,6 +150,38 @@ beforeEach(() => {
 });
 
 describe("ScopedStickyNotes", () => {
+  it("moves scope cards into Focus without remounting an open editor or losing its draft", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const notes = (target: HTMLDivElement | null) => (
+      <FocusStickyNotesContext.Provider value={target}>
+        <ScopedStickyNotes sessionName="agent-one" workspaceId="workspace-one" workspaceName="Launch room" />
+      </FocusStickyNotesContext.Provider>
+    );
+    const view = render(notes(null));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit common note" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    const draft = within(editor).getByRole("textbox", { name: "Note" });
+    fireEvent.change(draft, { target: { value: "Keep this draft through Focus" } });
+
+    view.rerender(notes(host));
+    expect(within(host).getByRole("region", { name: "Sticky notes" })).toBeVisible();
+    expect(screen.getAllByRole("region", { name: "Sticky notes" })).toHaveLength(1);
+    expect(within(host).getByRole("button", { name: "Edit workspace note" })).toBeEnabled();
+    expect(within(host).getByRole("button", { name: "Edit session note" })).toBeEnabled();
+    expect(screen.getByRole("dialog", { name: "Common" })).toBe(editor);
+    expect(draft).toHaveValue("Keep this draft through Focus");
+
+    view.rerender(notes(null));
+    expect(host).toBeEmptyDOMElement();
+    expect(screen.getByRole("dialog", { name: "Common" })).toBe(editor);
+    expect(draft).toHaveValue("Keep this draft through Focus");
+    await waitFor(() => expect(replaceCommonNotebook).toHaveBeenCalledWith(notebook("Keep this draft through Focus")));
+    view.unmount();
+    host.remove();
+  });
+
   it("loads common, workspace, and session cards in scope order", async () => {
     await renderLoadedNotes();
 

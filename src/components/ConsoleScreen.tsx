@@ -41,6 +41,7 @@ import {
   HistoryIcon,
   KeyboardIcon,
   ListIcon,
+  MemoIcon,
   MoveIcon,
   PinIcon,
   RefreshIcon,
@@ -123,6 +124,8 @@ import {
 } from "./SessionWorkspaceNavigation";
 import { ThemeToggle } from "./ThemeToggle";
 import { TimeZoneSelect } from "./TimeZoneSelect";
+import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
+import "./FocusStickyNotes.css";
 
 interface ConsoleScreenProps {
   sessionName: string;
@@ -783,6 +786,8 @@ export function ConsoleScreen({
     text: string;
   } | null>(null);
   const [desktopTerminalFocus, setDesktopTerminalFocus] = useState(false);
+  const [desktopFocusNotesOpen, setDesktopFocusNotesOpen] = useState(false);
+  const [desktopFocusNotesHost, setDesktopFocusNotesHost] = useState<HTMLDivElement | null>(null);
   const [floatingDraftSnapshot, setFloatingDraftSnapshot] = useState({
     sessionName,
     value: "",
@@ -1245,6 +1250,10 @@ export function ConsoleScreen({
     setMobileMode,
     workspaceOverlayOpen,
   ]);
+
+  useEffect(() => {
+    if (!desktopTerminalFocus) setDesktopFocusNotesOpen(false);
+  }, [desktopTerminalFocus]);
 
   useEffect(() => {
     if (!desktopTerminalFocus || !desktopFocusShortcutsOpen) return;
@@ -2448,7 +2457,10 @@ export function ConsoleScreen({
           )}
           <div className="console-tray-tools">
             {headerNotes && <span className="console-tray-section-title">Workspace tools</span>}
-            {headerNotes}
+            <FocusStickyNotesContext.Provider value={desktopTerminalFocus && desktopFocusNotesOpen
+              ? desktopFocusNotesHost : null}>
+              {headerNotes}
+            </FocusStickyNotesContext.Provider>
           </div>
           <div className="console-actions">
             <div className="console-tray-action-section">
@@ -3014,6 +3026,25 @@ export function ConsoleScreen({
                 </button>
               </div>
             )}
+            {headerNotes && (
+              <button
+                type="button"
+                className="desktop-terminal-focus-input"
+                aria-label={desktopFocusNotesOpen ? "Hide sticky note shortcuts" : "Show sticky note shortcuts"}
+                aria-controls={`${activeConsoleId}-focus-notes`}
+                aria-expanded={desktopFocusNotesOpen}
+                title="Common, Workspace, and Session sticky notes"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setDesktopFocusNotesOpen((open) => !open);
+                  if (desktopFocusNotesOpen && desktopFocusNotesHost?.contains(document.activeElement)) {
+                    window.requestAnimationFrame(() => terminalRef.current?.focus());
+                  }
+                }}
+              >
+                <MemoIcon /><span>Notes</span>
+              </button>
+            )}
             <button
               type="button"
               className="desktop-terminal-focus-redraw"
@@ -3102,6 +3133,14 @@ export function ConsoleScreen({
               <ContractIcon />
               <span>Exit</span>
             </button>
+            {headerNotes && desktopFocusNotesOpen && (
+              <div
+                id={`${activeConsoleId}-focus-notes`}
+                ref={setDesktopFocusNotesHost}
+                className="desktop-focus-notes-panel"
+                tabIndex={-1}
+              />
+            )}
           </div>
         )}
       </div>

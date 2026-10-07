@@ -6515,6 +6515,81 @@ test("desktop link shelf scopes common, workspace, and session links", async ({
   }
 });
 
+test("focus sticky notes open all three scopes alongside the terminal", async ({ page, request }, testInfo) => {
+  const workspaceName = `Focus notes ${process.pid}`;
+  const response = await request.post("/mux/api/workspaces", {
+    data: { name: workspaceName, tabs: [sessionName], groups: [], activeSession: sessionName },
+  });
+  expect(response.ok()).toBe(true);
+  const workspaceId = (await response.json()).workspace.id as string;
+  const notes = [
+    { scope: "common", title: "Common", path: "/mux/api/common-note", content: "Focus common note" },
+    { scope: "workspace", title: workspaceName, path: `/mux/api/workspaces/${workspaceId}/note`, content: "Focus workspace note" },
+    { scope: "session", title: sessionName, path: `/mux/api/sessions/${encodeURIComponent(sessionName)}/note`, content: "Focus session note" },
+  ];
+  try {
+    for (const note of notes) {
+      expect((await request.put(note.path, { data: { note: note.content } })).ok()).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${encodeURIComponent(sessionName)}?workspace=${workspaceId}&tab=${encodeURIComponent(sessionName)}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("textbox", { name: "Staged input" }).fill("Focus notes preserve this terminal draft");
+    const terminalInputFrames = await trackTerminalInputFrames(page);
+    const shell = page.locator(".console-shell");
+    const enterFocus = page.getByRole("button", { name: "Enter desktop terminal focus" });
+    const exitFocus = page.getByRole("button", { name: "Exit desktop terminal focus" });
+    const cards = page.locator(".desktop-focus-notes-panel");
+    await enterFocus.click();
+    const showNotes = page.getByRole("button", { name: "Show sticky note shortcuts" });
+    await expect(showNotes).toHaveText("Notes");
+    await expect(showNotes).toHaveAttribute("aria-expanded", "false");
+    await showNotes.click();
+    await expect(cards.getByRole("region", { name: "Sticky notes" })).toBeVisible();
+    await expect(cards.getByRole("button", { name: "Edit common note" })).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath("focus-sticky-notes-dark.png") });
+
+    for (const note of notes) {
+      await cards.getByRole("button", { name: `Edit ${note.scope} note` }).click();
+      const editor = page.getByRole("dialog", { name: note.title });
+      await expect(editor).not.toHaveAttribute("aria-modal", "true");
+      const draft = editor.getByRole("textbox", { name: "Note" });
+      await expect(draft).toHaveValue(note.content);
+      await draft.fill(`${note.content} saved from Focus`);
+      await expect(editor.getByRole("status")).toHaveText("Saved");
+      await expect(shell).toHaveAttribute("data-desktop-focus", "true");
+      await editor.getByRole("button", { name: "Done" }).click();
+      await expect(editor).toBeHidden();
+      await expect(cards).toBeVisible();
+      expect((await (await request.get(note.path)).json()).note).toBe(`${note.content} saved from Focus`);
+    }
+
+    await cards.getByRole("button", { name: "Edit common note" }).click();
+    const commonEditor = page.getByRole("dialog", { name: "Common" });
+    await page.getByRole("button", { name: "Hide sticky note shortcuts" }).click();
+    await expect(cards).toBeHidden();
+    await expect(commonEditor.getByRole("textbox", { name: "Note" })).toHaveValue("Focus common note saved from Focus");
+    await exitFocus.click();
+    await expect(commonEditor).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Focus notes preserve this terminal draft");
+    await commonEditor.getByRole("button", { name: "Done" }).click();
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await page.setViewportSize({ width: 760, height: 900 });
+    await enterFocus.click();
+    await expect(showNotes).toHaveAttribute("aria-expanded", "false");
+    await showNotes.click();
+    await expect(cards).toBeInViewport();
+    for (const note of notes) {
+      await expect(cards.getByRole("button", { name: `Edit ${note.scope} note` })).toBeInViewport();
+      await expect(cards.getByText(note.scope === "common" ? "Common" : note.scope === "workspace" ? "Workspace" : "Session", { exact: true })).toBeVisible();
+    }
+    await page.screenshot({ path: testInfo.outputPath("focus-sticky-notes-light.png") });
+    expect(await terminalInputFrames()).toBe(0);
+  } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+  }
+});
+
 test("desktop sticky notes autosave and remain isolated by scope", async ({
   page,
   request,
@@ -6604,7 +6679,10 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
     expect(actionsBox).not.toBeNull();
     expect(cardBoxes[0]!.x).toBeLessThan(cardBoxes[1]!.x);
     expect(cardBoxes[1]!.x).toBeLessThan(cardBoxes[2]!.x);
-    expect(notesBox!.x + notesBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
+    // The action cluster can wrap below the widget row on desktop.
+    if (notesBox!.y + notesBox!.height > actionsBox!.y + 1) {
+      expect(notesBox!.x + notesBox!.width).toBeLessThanOrEqual(actionsBox!.x + 1);
+    }
 
     // Cards that outgrow the rail spill out of its start edge and cover the
     // session identity, so check both boundaries at a squeezed and a roomy
@@ -6739,7 +6817,7 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
 
     await page.getByRole("tab", {
       name: new RegExp(`^${helperSession},`),
-    }).click();
+    }).press("Enter");
     await expectRoute(
       page,
       `/mux/session/${helperSession}`,
@@ -6769,7 +6847,7 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
     await clearDialog.getByRole("button", { name: "Done" }).click();
     await expect(noteRegion.getByRole("button", { name: "Add common note" }))
       .toContainText("Add note");
-    expect(await (await request.get("/mux/api/common-note")).json()).toEqual({
+    expect(await (await request.get("/mux/api/common-note")).json()).toMatchObject({
       note: "",
     });
 

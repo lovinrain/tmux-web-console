@@ -1609,6 +1609,7 @@ describe("ConsoleScreen session identity", () => {
         onOpenTabSearch={onOpenTabSearch}
         sessionHistoryBack="earlier-session"
         onNavigateSessionHistory={onNavigateSessionHistory}
+        headerNotes={<div>Sticky note shortcuts</div>}
       />,
     );
 
@@ -1670,6 +1671,16 @@ describe("ConsoleScreen session identity", () => {
     const focusInput = within(focusControls).getByRole("button", {
       name: "Show floating staged input",
     });
+    const focusNotes = within(focusControls).getByRole("button", {
+      name: "Show sticky note shortcuts",
+    });
+    expect(focusNotes).toHaveTextContent("Notes");
+    expect(focusNotes).toHaveAttribute("aria-controls", "muxdeck-active-console-focus-notes");
+    expect(focusNotes).toHaveAttribute("aria-expanded", "false");
+    expect(fireEvent.mouseDown(focusNotes)).toBe(false);
+    fireEvent.click(focusNotes);
+    expect(focusNotes).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("muxdeck-active-console-focus-notes")).toBeInTheDocument();
     const focusSessions = within(focusControls).getByRole("button", {
       name: "Switch workspace session",
     });
@@ -1777,6 +1788,8 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("button", {
       name: "Exit desktop terminal focus",
     })).toHaveAttribute("aria-keyshortcuts", "Control+Shift+F");
+    expect(screen.getByRole("button", { name: "Show sticky note shortcuts" }))
+      .toHaveAttribute("aria-expanded", "false");
     expect(fireEvent.keyDown(window, {
       code: "KeyF",
       key: "f",
