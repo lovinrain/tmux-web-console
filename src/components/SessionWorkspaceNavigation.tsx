@@ -47,6 +47,7 @@ import {
 } from "../icons";
 import { paneCommandKind, sessionDisplayTitle, sortSessions } from "../sessionDashboardModel";
 import { sessionHasOnlyDeadPanes } from "../sessionLifecycle";
+import { useFloatingSessionJumper } from "../useFloatingSessionJumper";
 import { requestThemeToggle } from "../theme";
 import {
   PANE_NAVIGATION_ACTION,
@@ -87,6 +88,7 @@ import { WorkspaceSaveDialog } from "./WorkspaceSaveDialog";
 import { WorkspaceSessionAddDialog } from "./WorkspaceSessionAddDialog";
 import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
 import "./DeadPaneTabs.css";
+import "./FloatingSessionJumper.css";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
@@ -950,6 +952,10 @@ function workspaceTabDropIndex(
 }
 
 interface WorkspaceTabSearchDialogProps {
+  workspaceKey?: string;
+  floating?: boolean;
+  onFloatingChange?: (floating: boolean) => void;
+  focusRequest?: number;
   activeSession: string | null;
   openSessions: string[];
   groups?: readonly WorkspaceTabGroup[];
@@ -991,6 +997,10 @@ function searchScore(
 }
 
 export function WorkspaceTabSearchDialog({
+  workspaceKey = "temporary-workspace",
+  floating = false,
+  onFloatingChange,
+  focusRequest = 0,
   activeSession,
   openSessions,
   groups = [],
@@ -1014,6 +1024,8 @@ export function WorkspaceTabSearchDialog({
   const [highlightedSession, setHighlightedSession] = useState<string | null>(activeSession);
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const restoreFocusRef = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  const floatingWindow = useFloatingSessionJumper(workspaceKey, floating);
   const listId = useId();
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
@@ -1066,21 +1078,22 @@ export function WorkspaceTabSearchDialog({
   }, [highlightedSession, listId]);
 
   useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    const releaseBodyScroll = acquireBodyScrollLock();
-    const frame = window.requestAnimationFrame(() => searchRef.current?.focus());
+    const previousFocus = restoreFocusRef.current;
+    const panelElement = dialogRef.current;
+    const releaseBodyScroll = floating ? () => {} : acquireBodyScrollLock();
     const closeOnCompactLayout = () => {
       if (isCompactWorkspaceViewport()) onClose();
     };
     const handleDialogKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (floating && (!(event.target instanceof Node) || !dialogRef.current?.contains(event.target)
+        || document.querySelector('[aria-modal="true"]'))) return;
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         onClose();
         return;
       }
-      if (event.key !== "Tab" || !dialogRef.current) return;
+      if (floating || event.key !== "Tab" || !dialogRef.current) return;
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
         "button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
       )).filter((element) => !element.hasAttribute("hidden") && element.tabIndex >= 0);
@@ -1107,14 +1120,23 @@ export function WorkspaceTabSearchDialog({
     window.addEventListener("keydown", handleDialogKeyDown, true);
     window.visualViewport?.addEventListener("resize", closeOnCompactLayout);
     return () => {
-      window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", closeOnCompactLayout);
       window.removeEventListener("keydown", handleDialogKeyDown, true);
       window.visualViewport?.removeEventListener("resize", closeOnCompactLayout);
       releaseBodyScroll();
-      if (previousFocus?.isConnected) previousFocus.focus();
+      if ((!floating || panelElement?.contains(document.activeElement) || document.activeElement === document.body)
+        && !document.querySelector('[aria-modal="true"]')) {
+        const target = previousFocus?.isConnected ? previousFocus
+          : document.querySelector<HTMLElement>("#muxdeck-active-console .xterm-helper-textarea");
+        target?.focus();
+      }
     };
-  }, [onClose]);
+  }, [floating, onClose]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => searchRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [floating, focusRequest]);
 
   const moveHighlight = (offset: number) => {
     if (results.length === 0) return;
@@ -1128,7 +1150,8 @@ export function WorkspaceTabSearchDialog({
   };
 
   const chooseSession = (sessionName: string) => {
-    onClose();
+    if (floating) setQuery("");
+    else onClose();
     onSelect(sessionName);
   };
 
@@ -1149,23 +1172,44 @@ export function WorkspaceTabSearchDialog({
     }
   };
 
-  return (
-    <div className="workspace-tab-search-backdrop" role="presentation" onMouseDown={onClose}>
+  const panel = (
       <aside
         ref={dialogRef}
         className="workspace-tab-search-dialog"
+        data-floating={floating ? "true" : undefined}
+        style={floating ? {
+          left: floatingWindow.geometry.x, top: floatingWindow.geometry.y,
+          width: floatingWindow.geometry.width, height: floatingWindow.geometry.height,
+        } : undefined}
         role="dialog"
-        aria-modal="true"
+        aria-modal={!floating}
         aria-labelledby="workspace-tab-search-title"
         onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onKeyUp={(event) => event.stopPropagation()}
       >
-        <header className="workspace-tab-search-header">
+        <header className="workspace-tab-search-header"
+          tabIndex={floating ? 0 : undefined}
+          aria-label={floating ? "Move session jumper window" : undefined}
+          title={floating ? "Drag to move. Arrow keys move the window; Shift moves faster. Enter resets it." : undefined}
+          onPointerDown={floating ? floatingWindow.move : undefined}
+          onKeyDown={floating ? floatingWindow.moveWithKeyboard : undefined}
+        >
           <div>
             <p className="eyebrow">OPEN WORKSPACE TABS</p>
             <h2 id="workspace-tab-search-title">Jump to tab</h2>
           </div>
           <div className="workspace-tab-search-header-actions">
             <kbd>{findTabShortcut || "Button only"}</kbd>
+            {onFloatingChange && (
+              <button type="button" className="workspace-tab-search-mode-button"
+                aria-label={floating ? "Use modal session jumper" : "Float session jumper"}
+                title={floating ? "Return to a centered modal picker" : "Keep the session jumper open as a movable window"}
+                onClick={() => onFloatingChange(!floating)}
+              >
+                <WindowMoveIcon /><span>{floating ? "Modal" : "Float"}</span>
+              </button>
+            )}
             <button type="button" className="icon-button" onClick={onClose} aria-label="Close tab search">
               <CloseIcon />
             </button>
@@ -1281,7 +1325,19 @@ export function WorkspaceTabSearchDialog({
           <span><kbd>Enter</kbd> jump</span>
           <span><kbd>Esc</kbd> close</span>
         </footer>
+        {floating && (
+          <button type="button" className="workspace-session-jumper-resize"
+            aria-label="Resize session jumper window"
+            title="Drag to resize. Arrow keys resize the window; Shift resizes faster. Enter resets it."
+            onPointerDown={floatingWindow.resize}
+            onKeyDown={floatingWindow.resizeWithKeyboard}
+          >↘</button>
+        )}
       </aside>
+  );
+  return floating ? panel : (
+    <div className="workspace-tab-search-backdrop" role="presentation" onMouseDown={onClose}>
+      {panel}
     </div>
   );
 }

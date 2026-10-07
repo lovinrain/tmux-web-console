@@ -451,6 +451,103 @@ describe("SessionWorkspaceNavigation", () => {
     }
   });
 
+  it("floats the jumper without a backdrop or focus trap, keeps it open after a jump, and restores modal behavior", () => {
+    const onClose = vi.fn();
+    const onSelect = vi.fn();
+    function Picker() {
+      const [floating, setFloating] = useState(false);
+      const [active, setActive] = useState("alpha");
+      return <>
+        <button type="button">Outside terminal control</button>
+        <WorkspaceTabSearchDialog activeSession={active} openSessions={["alpha", "beta"]}
+          sessions={sessions} workspaceKey="test-floating-picker"
+          floating={floating} onFloatingChange={setFloating} onClose={onClose}
+          onSelect={(name) => { onSelect(name); setActive(name); }} />
+      </>;
+    }
+    render(<Picker />);
+    let dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(document.body.style.overflow).toBe("hidden");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Float session jumper" }));
+    dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    expect(dialog).toHaveAttribute("aria-modal", "false");
+    expect(dialog).toHaveAttribute("data-floating", "true");
+    expect(document.querySelector(".workspace-tab-search-backdrop")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
+    const outside = screen.getByRole("button", { name: "Outside terminal control" });
+    outside.focus();
+    expect(fireEvent.keyDown(outside, { key: "Tab" })).toBe(true);
+    expect(fireEvent.keyDown(outside, { key: "Escape" })).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    const search = within(dialog).getByRole("combobox");
+    fireEvent.change(search, { target: { value: "beta" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith("beta");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeVisible();
+    expect(search).toHaveValue("");
+    expect(within(dialog).getByRole("option", { name: /beta/ })).toHaveTextContent("Current");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use modal session jumper" }));
+    dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(document.body.style.overflow).toBe("hidden");
+    fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("moves and resizes the floating jumper with the keyboard and restores its workspace geometry after reopening", () => {
+    const props = {
+      activeSession: "alpha", openSessions: ["alpha", "beta"], sessions,
+      workspaceKey: "test-jumper-geometry", floating: true,
+      onSelect: vi.fn(), onClose: vi.fn(),
+    };
+    const view = render(<WorkspaceTabSearchDialog {...props} />);
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    const left = Number.parseFloat(dialog.style.left);
+    const width = Number.parseFloat(dialog.style.width);
+    const move = within(dialog).getByLabelText("Move session jumper window");
+    fireEvent.keyDown(move, { key: "ArrowLeft" });
+    expect(Number.parseFloat(dialog.style.left)).toBe(left - 16);
+    const resize = within(dialog).getByRole("button", { name: "Resize session jumper window" });
+    fireEvent.keyDown(resize, { key: "ArrowRight", shiftKey: true });
+    expect(Number.parseFloat(dialog.style.width)).toBe(width + 64);
+    const geometry = { left: dialog.style.left, top: dialog.style.top, width: dialog.style.width, height: dialog.style.height };
+    view.unmount();
+    render(<WorkspaceTabSearchDialog {...props} />);
+    const reopened = screen.getByRole("dialog", { name: "Jump to tab" });
+    expect({ left: reopened.style.left, top: reopened.style.top, width: reopened.style.width, height: reopened.style.height }).toEqual(geometry);
+    fireEvent.keyDown(within(reopened).getByLabelText("Move session jumper window"), { key: "Home" });
+    expect(reopened.style.width).toBe(`${width}px`);
+  });
+
+  it("returns focus to the active terminal after the original terminal is replaced, without stealing outside focus", () => {
+    const original = document.createElement("textarea");
+    document.body.append(original);
+    original.focus();
+    const view = render(<WorkspaceTabSearchDialog activeSession="alpha"
+      openSessions={["alpha", "beta"]} sessions={sessions} floating
+      onSelect={vi.fn()} onClose={vi.fn()} />);
+    original.remove();
+    const console = document.createElement("div");
+    console.id = "muxdeck-active-console";
+    console.innerHTML = '<textarea class="xterm-helper-textarea"></textarea><button>Outside</button>';
+    document.body.append(console);
+    const terminal = console.querySelector("textarea")!;
+    within(screen.getByRole("dialog", { name: "Jump to tab" })).getByRole("combobox").focus();
+    view.unmount();
+    expect(terminal).toHaveFocus();
+
+    const reopened = render(<WorkspaceTabSearchDialog activeSession="beta"
+      openSessions={["alpha", "beta"]} sessions={sessions} floating
+      onSelect={vi.fn()} onClose={vi.fn()} />);
+    const outside = console.querySelector("button")!;
+    outside.focus();
+    reopened.unmount();
+    expect(outside).toHaveFocus();
+    console.remove();
+  });
+
   it("shows nesting and parent context in tab search even when the parent is filtered out", () => {
     const onSelect = vi.fn();
     render(

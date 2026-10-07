@@ -2915,6 +2915,36 @@ describe("App routing", () => {
     expect(within(dialog).queryByRole("option")).not.toBeInTheDocument();
   });
 
+  it("keeps the floating jumper open through session navigation and refocuses it with Find tab", async () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("alpha", "$alpha"), session("beta", "$beta")]));
+    fireEvent.click(screen.getByRole("button", { name: /Search open tabs/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Float session jumper" }));
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    const search = within(dialog).getByRole("combobox");
+    fireEvent.change(search, { target: { value: "beta" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "beta");
+    expect(dialog).toBeVisible();
+    expect(search).toHaveValue("");
+    expect(within(dialog).getByRole("option", { name: /beta/ })).toHaveTextContent("Current");
+
+    act(() => navigateConsoleSessionHistory?.("back"));
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "alpha");
+    expect(dialog).toBeVisible();
+    fireEvent.keyDown(window, { key: ">", code: "Period", ctrlKey: true, shiftKey: true });
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "beta");
+    expect(dialog).toBeVisible();
+    const outside = screen.getByRole("button", { name: "Back to sessions" });
+    outside.focus();
+    fireEvent.keyDown(window, { key: ":", code: "Semicolon", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(search).toHaveFocus());
+    expect(screen.getAllByRole("dialog", { name: "Jump to tab" })).toHaveLength(1);
+    fireEvent.click(outside);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Jump to tab" })).not.toBeInTheDocument());
+  });
+
   it("suppresses global workspace shortcuts while an aria-modal dialog is open", () => {
     replaceUrl(sessionUrl(
       "alpha",

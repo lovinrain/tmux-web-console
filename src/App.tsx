@@ -980,7 +980,16 @@ function AppRoutes() {
   const [historySaveError, setHistorySaveError] = useState<string | null>(null);
   const [quickSessionBusy, setQuickSessionBusy] = useState(false);
   const [quickSessionError, setQuickSessionError] = useState<string | null>(null);
-  const [tabSearchOpen, setTabSearchOpen] = useState(false);
+  const [tabSearchPresentation, setTabSearchPresentation] = useState({
+    open: false, floating: false, focusRequest: 0,
+  });
+  const tabSearchOpen = tabSearchPresentation.open;
+  const setTabSearchOpen = useCallback((open: boolean) => {
+    setTabSearchPresentation((current) => current.open === open ? current : { ...current, open });
+  }, []);
+  const setTabSearchFloating = useCallback((floating: boolean) => {
+    setTabSearchPresentation((current) => ({ ...current, floating }));
+  }, []);
   const [renameWarnings, setRenameWarnings] = useState<Map<string, SessionRenameWarning>>(
     () => new Map(),
   );
@@ -2996,7 +3005,7 @@ function AppRoutes() {
   const navigateSessionHistory = (direction: "back" | "forward") => {
     const sessionName = sessionNavigationHistory.navigate(direction);
     if (!sessionName) return;
-    setTabSearchOpen(false);
+    setTabSearchPresentation((current) => current.floating ? current : { ...current, open: false });
     switchSession(sessionName);
   };
 
@@ -3236,9 +3245,9 @@ function AppRoutes() {
       || isCompactWorkspaceViewport()
       || document.querySelector('[aria-modal="true"]')
     ) return;
-    setTabSearchOpen(true);
+    setTabSearchPresentation((current) => ({ ...current, open: true, focusRequest: current.focusRequest + 1 }));
   }, []);
-  const closeTabSearch = useCallback(() => setTabSearchOpen(false), []);
+  const closeTabSearch = useCallback(() => setTabSearchOpen(false), [setTabSearchOpen]);
 
   useEffect(() => {
     if (tabSearchOpen && workspace.openSessions.length === 0) {
@@ -3247,8 +3256,15 @@ function AppRoutes() {
   }, [tabSearchOpen, workspace.openSessions.length]);
 
   useEffect(() => {
-    setTabSearchOpen(false);
+    const workspaceRoute = parseSessionRoute(location.path)
+      || parseNewSessionRoute(location.path) || parsePaneLayoutRoute(location.path);
+    setTabSearchPresentation((current) => current.floating && workspaceRoute
+      ? current : current.open ? { ...current, open: false } : current);
   }, [location.path]);
+
+  useEffect(() => {
+    setTabSearchOpen(false);
+  }, [locationWorkspaceId, temporaryTerminalKey, setTabSearchOpen]);
 
   useEffect(() => {
     const handleWorkspaceShortcut = (event: KeyboardEvent) => {
@@ -3256,7 +3272,7 @@ function AppRoutes() {
         event.defaultPrevented
         || event.isComposing
         || event.keyCode === 229
-        || tabSearchOpen
+        || (tabSearchOpen && !tabSearchPresentation.floating)
         || isCompactWorkspaceViewport()
         || document.querySelector('[aria-modal="true"]')
         || !event.ctrlKey
@@ -3360,7 +3376,7 @@ function AppRoutes() {
       }
 
       if (searchRequested) {
-        setTabSearchOpen(true);
+        openTabSearch();
         return;
       }
 
@@ -3394,10 +3410,12 @@ function AppRoutes() {
     createQuickSession,
     desktopTabActionsVisible,
     openNewSession,
+    openTabSearch,
     setDesktopTabActionsVisible,
     shortcutBindings,
     switchSession,
     tabSearchOpen,
+    tabSearchPresentation.floating,
     toggleWorkspaceCallbackSession,
     workspacePersistenceState,
   ]);
@@ -4567,6 +4585,11 @@ function AppRoutes() {
       )}
       {tabSearchOpen && (activeRoute || newSessionRoute || paneLayoutRoute) && (
         <WorkspaceTabSearchDialog
+          key={locationWorkspaceId ?? temporaryTerminalKey}
+          workspaceKey={locationWorkspaceId ? `workspace:${locationWorkspaceId}` : temporaryTerminalKey}
+          floating={tabSearchPresentation.floating}
+          onFloatingChange={setTabSearchFloating}
+          focusRequest={tabSearchPresentation.focusRequest}
           activeSession={tabSearchActiveSession}
           openSessions={workspace.openSessions}
           groups={workspace.groups}

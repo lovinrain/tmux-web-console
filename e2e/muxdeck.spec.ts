@@ -2708,6 +2708,105 @@ test("focus session picker stays in the workspace and preserves focus and drafts
   }
 });
 
+test("floating focus session jumper stays usable alongside the terminal", async ({ page }, testInfo) => {
+  const first = `${sessionName}-jumper-first`;
+  const second = `${sessionName}-jumper-second`;
+  const tabs = [first, second];
+  for (const name of tabs) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${first}?${tabs.map((name) => `tab=${encodeURIComponent(name)}`).join("&")}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("textbox", { name: "Staged input" }).fill("Floating jumper keeps this draft");
+    const terminalInputFrames = await trackTerminalInputFrames(page);
+    const enterFocus = page.getByRole("button", { name: "Enter desktop terminal focus" });
+    const exitFocus = page.getByRole("button", { name: "Exit desktop terminal focus" });
+    const switcher = page.getByRole("button", { name: "Switch workspace session" });
+    const dialog = page.getByRole("dialog", { name: "Jump to tab" });
+    const search = dialog.getByRole("combobox");
+    const terminal = page.locator(".xterm-helper-textarea");
+    await enterFocus.click();
+    await switcher.click();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await dialog.getByRole("button", { name: "Float session jumper" }).click();
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
+    await expect(page.locator(".workspace-tab-search-backdrop")).toHaveCount(0);
+    await expect(search).toBeFocused();
+    expect(await page.evaluate(() => document.body.style.overflow)).not.toBe("hidden");
+
+    const beforeMove = (await dialog.boundingBox())!;
+    const move = dialog.getByLabel("Move session jumper window");
+    const header = (await move.boundingBox())!;
+    await page.mouse.move(header.x + 40, header.y + 28);
+    await page.mouse.down();
+    await page.mouse.move(header.x - 160, header.y + 78, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(async () => (await dialog.boundingBox())!.x).toBe(beforeMove.x - 200);
+    const resize = dialog.getByRole("button", { name: "Resize session jumper window" });
+    await resize.focus();
+    await resize.press("Shift+ArrowRight");
+    await resize.press("ArrowDown");
+    const geometry = (await dialog.boundingBox())!;
+    expect(geometry.width).toBe(beforeMove.width + 64);
+    expect(geometry.height).toBe(beforeMove.height + 16);
+    await page.screenshot({ path: testInfo.outputPath("floating-session-jumper-dark.png") });
+
+    await search.fill(second);
+    await search.press("Enter");
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await expect(dialog).toBeVisible();
+    await expect(search).toHaveValue("");
+    await expect(dialog.getByRole("option", { name: new RegExp(second) })).toContainText("Current");
+    await page.getByRole("button", { name: "Back to previous session" }).click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    await expect(dialog).toBeVisible();
+    await page.getByRole("button", { name: "Forward to next session" }).click();
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await expect(dialog).toBeVisible();
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.locator(".terminal-host .xterm-screen").click({ position: { x: 40, y: 120 } });
+    await expect(terminal).toBeFocused();
+    await page.keyboard.press("Control+Shift+Semicolon");
+    await expect(search).toBeFocused();
+    await expect(dialog).toHaveCount(1);
+    await dialog.getByRole("button", { name: "Close tab search" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(terminal).toBeFocused();
+    await switcher.click();
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
+    expect(await dialog.boundingBox()).toEqual(geometry);
+    await dialog.getByRole("button", { name: "Use modal session jumper" }).click();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await expect(page.locator(".workspace-tab-search-backdrop")).toBeVisible();
+    await search.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(terminal).toBeFocused();
+
+    await switcher.click();
+    await dialog.getByRole("button", { name: "Float session jumper" }).click();
+    await exitFocus.click();
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await page.setViewportSize({ width: 760, height: 900 });
+    await enterFocus.click();
+    await expect(dialog).toBeInViewport();
+    const narrowGeometry = (await dialog.boundingBox())!;
+    expect(narrowGeometry.x).toBeGreaterThanOrEqual(12);
+    expect(narrowGeometry.x + narrowGeometry.width).toBeLessThanOrEqual(748);
+    await expect(dialog).toHaveCSS("color", "rgb(34, 38, 31)");
+    await page.screenshot({ path: testInfo.outputPath("floating-session-jumper-light.png") });
+    await dialog.getByRole("button", { name: "Close tab search" }).click();
+    await page.getByRole("button", { name: "Back to previous session" }).click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    expect(await terminalInputFrames()).toBe(0);
+    await exitFocus.click();
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Floating jumper keeps this draft");
+  } finally {
+    for (const name of tabs) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
+
 test("desktop tabs switch to a persistent vertical rail without reconnecting", async ({
   page,
 }) => {

@@ -1,0 +1,110 @@
+.workspace-tab-search-mode-button {
+  display: inline-flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  color: var(--preset-text, var(--paper));
+  background: var(--preset-raised, var(--ink));
+  border: 1px solid var(--preset-line, var(--muted));
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.workspace-tab-search-mode-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.workspace-tab-search-mode-button:hover,
+.workspace-tab-search-mode-button:focus-visible {
+  border-color: var(--cyan);
+}
+
+.workspace-tab-search-dialog[data-floating="true"] {
+  position: fixed;
+  z-index: 39;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  color: var(--paper);
+  animation: none;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-header {
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 12px 13px 10px;
+  cursor: move;
+  touch-action: none;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-header:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -3px;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-header h2 {
+  font-size: 21px;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-header-actions {
+  gap: 6px;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-header-actions > kbd {
+  display: none;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-field {
+  min-height: 48px;
+  flex: 0 0 auto;
+  margin: 12px 12px 8px;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-field input {
+  height: 42px;
+  font-size: 16px;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-results {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 4px 12px 12px;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-direct-shortcuts {
+  display: none;
+}
+
+.workspace-tab-search-dialog[data-floating="true"] .workspace-tab-search-footer {
+  flex: 0 0 auto;
+  padding-right: 26px;
+}
+
+.workspace-session-jumper-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.workspace-session-jumper-resize:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+}
+
+html.session-jumper-window-moving,
+html.session-jumper-window-moving * {
+  user-select: none;
+}
