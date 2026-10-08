@@ -117,11 +117,15 @@ import { SessionTerminateDialog } from "./SessionTerminateDialog";
 import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
 import {
   DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
-  MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
   clampDesktopTabRailWidth,
+} from "./workspaceNavigation/viewport";
+import {
+  MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
+} from "./workspaceNavigation/constants";
+import {
   type OpenTabInNewWindowResult,
   type WorkspaceTabOrientation,
-} from "./SessionWorkspaceNavigation";
+} from "./workspaceNavigation/types";
 import { ThemeToggle } from "./ThemeToggle";
 import { TimeZoneSelect } from "./TimeZoneSelect";
 import { FocusStickyNotesContext } from "./FocusStickyNotesContext";

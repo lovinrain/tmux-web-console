@@ -1,5 +1,7 @@
 import { BASE_PATH } from "./api";
-import type { OpenTabInNewWindowResult } from "./components/SessionWorkspaceNavigation";
+import type {
+  OpenTabInNewWindowResult,
+} from "./components/workspaceNavigation/types";
 
 /** A session-only page carries no saved or temporary workspace state. */
 export function ephemeralSessionHref(sessionName: string): string {

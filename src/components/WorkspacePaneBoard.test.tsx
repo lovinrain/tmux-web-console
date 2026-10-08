@@ -4,7 +4,9 @@ import { useContext, type ComponentProps } from "react";
 import type { WorkspacePaneLayout } from "../api";
 import type { Session } from "../types";
 import { WorkspacePaneBoard } from "./WorkspacePaneBoard";
-import { ActivePaneSessionContext } from "./SessionWorkspaceNavigation";
+import {
+  ActivePaneSessionContext,
+} from "./workspaceNavigation/context";
 import { WORKSPACE_SESSION_DRAG_TYPE } from "../workspaceSessionDrag";
 
 const layout: WorkspacePaneLayout = {

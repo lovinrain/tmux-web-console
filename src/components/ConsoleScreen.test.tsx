@@ -27,7 +27,9 @@ import type { TerminalSubmissionTerminator } from "../terminalInput";
 import { ThemeProvider, type Theme } from "../theme";
 import type { ConnectionState, Pane, Session } from "../types";
 import { ConsoleScreen } from "./ConsoleScreen";
-import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./SessionWorkspaceNavigation";
+import {
+  MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID,
+} from "./workspaceNavigation/constants";
 import type { ApplicationScrollResult, TerminalHistoryAction, TerminalHistoryResult } from "./LiveTerminal";
 
 const liveTerminalHandle = vi.hoisted(() => ({

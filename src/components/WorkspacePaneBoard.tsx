@@ -60,10 +60,14 @@ import {
 } from "../workspacePaneLayouts";
 import {
   ActivePaneSessionContext,
+} from "./workspaceNavigation/context";
+import {
   isCompactWorkspaceViewport,
+} from "./workspaceNavigation/viewport";
+import {
   type WorkspacePersistenceState,
   type WorkspaceTabOrientation,
-} from "./SessionWorkspaceNavigation";
+} from "./workspaceNavigation/types";
 
 interface WorkspacePaneBoardProps {
   layout: WorkspacePaneLayout;

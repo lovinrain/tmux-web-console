@@ -30,7 +30,9 @@ import {
 import { useTheme } from "../theme";
 import type { Session } from "../types";
 import { AccountLink } from "./AccountLink";
-import type { WorkspaceTabOrientation } from "./SessionWorkspaceNavigation";
+import type {
+  WorkspaceTabOrientation,
+} from "./workspaceNavigation/types";
 import { ThemeToggle } from "./ThemeToggle";
 
 export const NEW_SESSION_PANEL_ID = "muxdeck-new-session";

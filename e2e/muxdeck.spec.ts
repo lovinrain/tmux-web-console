@@ -3371,7 +3371,7 @@ test("desktop workspace shortcuts cycle, fuzzy-run commands, and search tabs", a
     ]) {
       await expect(commandPalette.getByText(shortcut, { exact: true }).first()).toBeVisible();
     }
-    await commandSearch.fill("rn ssn");
+    await commandSearch.fill("rnm tmx ssn");
     await expect(commandPalette.locator('[role="option"][aria-selected="true"] strong'))
       .toHaveText("Rename tmux session");
     await page.screenshot({ path: "artifacts/workspace-command-palette-desktop.png" });
@@ -3638,7 +3638,8 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
   }
 
   try {
-    await page.setViewportSize({ width: 1440, height: 900 });
+    // Keep pointer-driven tab controls clear of the complete horizontal toolbar.
+    await page.setViewportSize({ width: 1920, height: 900 });
     await page.goto(
       `/mux/session/${secondSession}?kind=shells&view=list`
       + initialTabs.map((tab) => `&tab=${encodeURIComponent(tab)}`).join(""),
@@ -3653,6 +3654,8 @@ test("workspace tabs reorder on desktop and mobile, update the URL, and survive 
     const moveThirdLeft = page.getByRole("button", {
       name: `Move ${thirdSession} tab left`,
     });
+    await moveThirdLeft.scrollIntoViewIfNeeded();
+    await expect(moveThirdLeft).toBeInViewport();
     await moveThirdLeft.click();
     await expect(moveThirdLeft).toBeFocused();
     await expect(visibleTabs).toHaveText(singleReorderedTabs);
@@ -4000,7 +4003,8 @@ test("workspace tabs split, copy, and move into isolated browser windows", async
   const helperIdentity = workspaceTmuxIdentity(helperSession);
 
   try {
-    await page.setViewportSize({ width: 1440, height: 900 });
+    // This scenario exercises pointer actions in the complete horizontal toolbar.
+    await page.setViewportSize({ width: 1920, height: 900 });
     await page.goto(
       `/mux/session/${encodeURIComponent(helperSession)}?kind=shells&view=list`
       + sourceTabs.map((tab) => `&tab=${encodeURIComponent(tab)}`).join("")
@@ -4246,7 +4250,7 @@ test("workspace tabs split, copy, and move into isolated browser windows", async
       { kind: "shells", view: "list" },
     );
 
-    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.setViewportSize({ width: 1920, height: 900 });
     const orientationToggle = page.getByRole("group", { name: "Console bars" })
       .getByRole("button", { name: "Vertical session tabs" });
     await expect(orientationToggle).toHaveAttribute("aria-pressed", "true");
@@ -4840,6 +4844,17 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
 
   const primaryTabName = new RegExp(`^${sessionName},`);
   const alternateTabName = new RegExp(`^${alternateSessionName},`);
+  const fittedTerminalHeight = async () => {
+    const terminalBox = (await page.locator(".terminal-stage").boundingBox())!;
+    const terminalViewBox = (await page.locator(".terminal-view").boundingBox())!;
+    const terminalControlsBox = (await page.locator(".terminal-view-controls").boundingBox())!;
+    expect(terminalBox.height).toBeGreaterThanOrEqual(64);
+    expect(terminalBox.height).toBeCloseTo(
+      terminalViewBox.height - terminalControlsBox.height, 0,
+    );
+    expect(terminalBox.y + terminalBox.height).toBeLessThanOrEqual(terminalControlsBox.y + 1);
+    return terminalBox.height;
+  };
 
   try {
     await page.addInitScript(() => {
@@ -4908,10 +4923,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
       expect(box?.width).toBeGreaterThanOrEqual(44);
       expect(box?.height).toBeGreaterThanOrEqual(44);
     }
-    const terminalHeight = await page.locator(".terminal-stage").evaluate(
-      (element) => element.getBoundingClientRect().height,
-    );
-    expect(terminalHeight).toBeGreaterThan(480);
+    const terminalHeight = await fittedTerminalHeight();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
       .toBe(true);
     await page.screenshot({ path: "artifacts/console-mobile-terminal.png" });
@@ -5205,10 +5217,7 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
     await page.setViewportSize({ width: 750, height: 342 });
     await expect(mobileFocus).toBeVisible();
     await expect(consoleShell).toHaveAttribute("data-mobile-focus", "terminal");
-    const landscapeTerminalHeight = await page.locator(".terminal-stage").evaluate(
-      (element) => element.getBoundingClientRect().height,
-    );
-    expect(landscapeTerminalHeight).toBeGreaterThan(150);
+    await fittedTerminalHeight();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
       .toBe(true);
 

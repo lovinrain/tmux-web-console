@@ -45,6 +45,15 @@ import {
 } from "./api";
 import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
 import { useSessionNavigationHistory } from "./useSessionNavigationHistory";
+import { useWorkspaceTabSearch } from "./useWorkspaceTabSearch";
+import {
+  newSessionPath,
+  paneLayoutPath,
+  parseNewSessionRoute,
+  parsePaneLayoutRoute,
+  parseSessionRoute,
+  sessionPath,
+} from "./workspaceRoutes";
 import { useSessionReadyAttention } from "./useSessionReadyAttention";
 import {
   ConsoleScreen,
@@ -78,15 +87,21 @@ import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import { WorkspacePaneBoard } from "./components/WorkspacePaneBoard";
 import {
   SessionWorkspaceNavigation,
+} from "./components/SessionWorkspaceNavigation";
+import {
   WorkspaceTabSearchDialog,
+} from "./components/workspaceNavigation/WorkspaceTabSearchDialog";
+import {
   DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
   clampDesktopTabRailWidth,
   isCompactWorkspaceViewport,
+} from "./components/workspaceNavigation/viewport";
+import {
   type OpenTabInNewWindowMode,
   type OpenTabInNewWindowResult,
   type WorkspaceTabOrientation,
   type WorkspacePersistenceState,
-} from "./components/SessionWorkspaceNavigation";
+} from "./components/workspaceNavigation/types";
 import { SnippetLibrary } from "./components/SnippetLibrary";
 import {
   ShortcutSettingsProvider,
@@ -181,19 +196,6 @@ interface PendingForget extends ForgetUndoNotification {
   pathAfterForget: string;
 }
 
-interface SessionRoute {
-  sessionName: string;
-  recentsOpen: boolean;
-}
-
-interface NewSessionRoute {
-  recentsOpen: boolean;
-}
-
-interface PaneLayoutRoute {
-  layoutId: string;
-}
-
 interface PendingRecentsNavigation {
   sessionName: string;
   sessionId?: string;
@@ -267,7 +269,6 @@ const SESSION_BINDINGS_KEY = "muxdeckSessionBindings";
 const DESKTOP_TAB_ORIENTATION_KEY = "muxdeck-desktop-tab-orientation";
 const DESKTOP_TAB_RAIL_WIDTH_KEY = "muxdeck-desktop-tab-rail-width";
 const DESKTOP_TAB_ACTIONS_VISIBLE_KEY = "muxdeck-desktop-tab-actions-visible";
-const NEW_SESSION_PATH = "/sessions/new";
 const WORKSPACE_ACTIVITY_DEBOUNCE_MS = 400;
 const TEMPORARY_CALLBACK_SESSIONS_PREFIX = "muxdeck.callback-sessions.v1:";
 
@@ -501,46 +502,6 @@ function currentLocation(): MuxLocation {
 
 function targetUrl(path: string, search = window.location.search): string {
   return `${BASE_PATH}${path === "/" ? "/" : path}${search}`;
-}
-
-function decodeSessionName(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function parseSessionRoute(path: string): SessionRoute | null {
-  const match = path.match(/^\/session\/(.+?)(\/recents)?\/?$/);
-  if (!match) return null;
-  return {
-    sessionName: decodeSessionName(match[1]),
-    recentsOpen: Boolean(match[2]),
-  };
-}
-
-function sessionPath(sessionName: string, recentsOpen = false): string {
-  const base = `/session/${encodeURIComponent(sessionName)}`;
-  return recentsOpen ? `${base}/recents` : base;
-}
-
-function parseNewSessionRoute(path: string): NewSessionRoute | null {
-  const match = path.match(/^\/sessions\/new(\/recents)?\/?$/);
-  return match ? { recentsOpen: Boolean(match[1]) } : null;
-}
-
-function newSessionPath(recentsOpen = false): string {
-  return recentsOpen ? `${NEW_SESSION_PATH}/recents` : NEW_SESSION_PATH;
-}
-
-function parsePaneLayoutRoute(path: string): PaneLayoutRoute | null {
-  const match = path.match(/^\/panes\/([^/]+)\/?$/);
-  return match ? { layoutId: decodeSessionName(match[1]) } : null;
-}
-
-function paneLayoutPath(layoutId: string): string {
-  return `/panes/${encodeURIComponent(layoutId)}`;
 }
 
 function withoutRecentsEntry(state: unknown): Record<string, unknown> {
@@ -980,16 +941,6 @@ function AppRoutes() {
   const [historySaveError, setHistorySaveError] = useState<string | null>(null);
   const [quickSessionBusy, setQuickSessionBusy] = useState(false);
   const [quickSessionError, setQuickSessionError] = useState<string | null>(null);
-  const [tabSearchPresentation, setTabSearchPresentation] = useState({
-    open: false, floating: false, focusRequest: 0,
-  });
-  const tabSearchOpen = tabSearchPresentation.open;
-  const setTabSearchOpen = useCallback((open: boolean) => {
-    setTabSearchPresentation((current) => current.open === open ? current : { ...current, open });
-  }, []);
-  const setTabSearchFloating = useCallback((floating: boolean) => {
-    setTabSearchPresentation((current) => ({ ...current, floating }));
-  }, []);
   const [renameWarnings, setRenameWarnings] = useState<Map<string, SessionRenameWarning>>(
     () => new Map(),
   );
@@ -3005,7 +2956,7 @@ function AppRoutes() {
   const navigateSessionHistory = (direction: "back" | "forward") => {
     const sessionName = sessionNavigationHistory.navigate(direction);
     if (!sessionName) return;
-    setTabSearchPresentation((current) => current.floating ? current : { ...current, open: false });
+    closeModalTabSearch();
     switchSession(sessionName);
   };
 
@@ -3235,36 +3186,21 @@ function AppRoutes() {
     commitWorkspaceStructure(moveWorkspaceTabGroup(workspaceRef.current, groupId, direction));
   }, [commitWorkspaceStructure]);
 
-  const openTabSearch = useCallback(() => {
-    const current = currentLocation();
-    if (
-      (!parseSessionRoute(current.path)
-        && !parseNewSessionRoute(current.path)
-        && !parsePaneLayoutRoute(current.path))
-      || workspaceRef.current.openSessions.length === 0
-      || isCompactWorkspaceViewport()
-      || document.querySelector('[aria-modal="true"]')
-    ) return;
-    setTabSearchPresentation((current) => ({ ...current, open: true, focusRequest: current.focusRequest + 1 }));
-  }, []);
-  const closeTabSearch = useCallback(() => setTabSearchOpen(false), [setTabSearchOpen]);
-
-  useEffect(() => {
-    if (tabSearchOpen && workspace.openSessions.length === 0) {
-      setTabSearchOpen(false);
-    }
-  }, [tabSearchOpen, workspace.openSessions.length]);
-
-  useEffect(() => {
-    const workspaceRoute = parseSessionRoute(location.path)
-      || parseNewSessionRoute(location.path) || parsePaneLayoutRoute(location.path);
-    setTabSearchPresentation((current) => current.floating && workspaceRoute
-      ? current : current.open ? { ...current, open: false } : current);
-  }, [location.path]);
-
-  useEffect(() => {
-    setTabSearchOpen(false);
-  }, [locationWorkspaceId, temporaryTerminalKey, setTabSearchOpen]);
+  const {
+    presentation: tabSearchPresentation,
+    open: openTabSearch,
+    close: closeTabSearch,
+    closeModal: closeModalTabSearch,
+    setFloating: setTabSearchFloating,
+  } = useWorkspaceTabSearch({
+    path: location.path,
+    workspaceId: locationWorkspaceId,
+    temporaryTerminalKey,
+    openSessionCount: workspace.openSessions.length,
+    getLocation: currentLocation,
+    workspaceRef,
+  });
+  const tabSearchOpen = tabSearchPresentation.open;
 
   useEffect(() => {
     const handleWorkspaceShortcut = (event: KeyboardEvent) => {

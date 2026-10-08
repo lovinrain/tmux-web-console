@@ -158,6 +158,9 @@ observing a session used by another client.
 
 ## Development
 
+See [Workspace frontend structure](docs/FRONTEND_STRUCTURE.md) for navigation
+module ownership, import boundaries, and focused regression checks.
+
 ~~~bash
 .venv/bin/python -m pip install -e '.[dev]'
 ~~~

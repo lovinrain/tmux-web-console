@@ -27,9 +27,10 @@ import {
 } from "../icons";
 import { ShortcutSettingsDialog } from "./ShortcutSettingsDialog";
 
-export const DESKTOP_COMMAND_PALETTE_SHORTCUT = "Ctrl+Shift+H";
-export const DESKTOP_SHORTCUT_LAUNCHER_SHORTCUT = "Ctrl+Shift+Z";
-
+export {
+  DESKTOP_COMMAND_PALETTE_SHORTCUT,
+  DESKTOP_SHORTCUT_LAUNCHER_SHORTCUT,
+} from "./workspaceNavigation/constants";
 export interface WorkspaceCommand {
   id: string;
   shortcutId?: ShortcutActionId;
