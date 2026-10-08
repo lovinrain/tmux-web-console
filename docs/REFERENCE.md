@@ -322,7 +322,9 @@ reload or a workspace switch; tab order and staged drafts are preserved.
 
 In `Sessions`, choose `Float` to keep the session jumper open as a floating
 window. Selecting a session or using Back/Forward leaves it open, and the terminal
-remains usable. Drag its title strip to move it or its bottom-right grip to
+remains usable. Live status, title, and tab-order updates preserve the highlighted
+session while you choose; changing the search or current session resets it.
+Drag its title strip to move it or its bottom-right grip to
 resize it. With either handle focused, arrows adjust it by 16 pixels,
 Shift+Arrow by 64 pixels, and Enter or Home resets its size and position.
 Geometry is remembered locally per workspace. `Sessions` or the Find tab shortcut

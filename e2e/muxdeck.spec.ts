@@ -2708,7 +2708,7 @@ test("focus session picker stays in the workspace and preserves focus and drafts
   }
 });
 
-test("floating focus session jumper stays usable alongside the terminal", async ({ page }, testInfo) => {
+test("floating focus session jumper stays usable alongside the terminal", async ({ page, request }, testInfo) => {
   const first = `${sessionName}-jumper-first`;
   const second = `${sessionName}-jumper-second`;
   const tabs = [first, second];
@@ -2753,7 +2753,19 @@ test("floating focus session jumper stays usable alongside the terminal", async 
     expect(geometry.height).toBe(beforeMove.height + 16);
     await page.screenshot({ path: testInfo.outputPath("floating-session-jumper-dark.png") });
 
-    await search.fill(second);
+    await search.focus();
+    await search.press("ArrowDown");
+    const targetOption = dialog.getByRole("option", { name: new RegExp(second) });
+    await expect(targetOption).toHaveAttribute("aria-selected", "true");
+    const updatedTitle = "Floating jumper updated title";
+    const titleResponse = await request.put("/mux/api/session-title", {
+      data: { session: second, title: updatedTitle },
+    });
+    expect(titleResponse.ok()).toBe(true);
+    await expect(targetOption).toContainText(updatedTitle);
+    await expect(targetOption).toHaveAttribute("aria-selected", "true");
+    await expect(search).toHaveAttribute("aria-activedescendant", (await targetOption.getAttribute("id"))!);
+    await expectRoute(page, `/mux/session/${first}`, tabs);
     await search.press("Enter");
     await expectRoute(page, `/mux/session/${second}`, tabs);
     await expect(dialog).toBeVisible();

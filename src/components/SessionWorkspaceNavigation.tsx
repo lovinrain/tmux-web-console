@@ -1041,6 +1041,7 @@ export function WorkspaceTabSearchDialog({
     return memberships;
   }, [groups]);
   const normalizedQuery = query.trim().toLowerCase();
+  const highlightContextRef = useRef({ activeSession, query: normalizedQuery });
   const results = useMemo<TabSearchResult[]>(() => openSessions
     .map((sessionName, position) => {
       const session = sessionsByName.get(sessionName);
@@ -1058,14 +1059,21 @@ export function WorkspaceTabSearchDialog({
     groupsBySession,
     sessionsByName,
   ]);
-  const resultNames = results.map((result) => result.sessionName).join("\u0000");
-
   useEffect(() => {
-    const activeResult = normalizedQuery
-      ? undefined
-      : results.find((result) => result.sessionName === activeSession);
-    setHighlightedSession(activeResult?.sessionName ?? results[0]?.sessionName ?? null);
-  }, [activeSession, normalizedQuery, resultNames, results]);
+    const contextChanged = highlightContextRef.current.activeSession !== activeSession
+      || highlightContextRef.current.query !== normalizedQuery;
+    highlightContextRef.current = { activeSession, query: normalizedQuery };
+    setHighlightedSession((current) => {
+      // Live status, title, and ordering updates must not replace the user's choice.
+      if (!contextChanged && results.some((result) => result.sessionName === current)) {
+        return current;
+      }
+      const activeResult = normalizedQuery
+        ? undefined
+        : results.find((result) => result.sessionName === activeSession);
+      return activeResult?.sessionName ?? results[0]?.sessionName ?? null;
+    });
+  }, [activeSession, normalizedQuery, results]);
 
   useEffect(() => {
     if (!highlightedSession) return;

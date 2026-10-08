@@ -496,6 +496,61 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { floating: false, interaction: "keyboard" },
+    { floating: true, interaction: "keyboard" },
+    { floating: true, interaction: "pointer" },
+  ])("keeps the highlighted session through live metadata updates: %j", ({ floating, interaction }) => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const props = {
+      activeSession: "alpha", openSessions: ["alpha", "beta", "zulu"], sessions, groups: [],
+      floating, onSelect, onClose,
+    };
+    const view = render(<WorkspaceTabSearchDialog {...props} />);
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    const search = within(dialog).getByRole("combobox");
+    const beta = within(dialog).getByRole("option", { name: /beta/ });
+    if (interaction === "keyboard") fireEvent.keyDown(search, { key: "ArrowDown" });
+    else fireEvent.mouseEnter(beta);
+    expect(beta).toHaveAttribute("aria-selected", "true");
+
+    view.rerender(<WorkspaceTabSearchDialog {...props} sessions={sessions.map((item) => (
+      item.name === "beta"
+        ? { ...item, customTitle: "Beta updated", agentState: "waiting_human" as const, activity: item.activity + 1 }
+        : { ...item }
+    ))} />);
+    const updated = within(dialog).getByRole("option", { name: /Beta updated/ });
+    expect(updated).toHaveAttribute("aria-selected", "true");
+    expect(search).toHaveAttribute("aria-activedescendant", updated.id);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("beta");
+  });
+
+  it("preserves the highlighted tab on reorder, recovers on removal, and follows explicit view and search changes", () => {
+    const props = {
+      activeSession: "alpha", openSessions: ["alpha", "beta", "zulu"], sessions, groups: [],
+      floating: true, onSelect: vi.fn(), onClose: vi.fn(),
+    };
+    const view = render(<WorkspaceTabSearchDialog {...props} />);
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    const search = within(dialog).getByRole("combobox");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    view.rerender(<WorkspaceTabSearchDialog {...props} openSessions={["zulu", "alpha", "beta"]} />);
+    expect(within(dialog).getByRole("option", { name: /beta/ })).toHaveAttribute("aria-selected", "true");
+    view.rerender(<WorkspaceTabSearchDialog {...props} openSessions={["zulu", "alpha"]} />);
+    expect(within(dialog).getByRole("option", { name: /Alpha control/ })).toHaveAttribute("aria-selected", "true");
+    view.rerender(<WorkspaceTabSearchDialog {...props} activeSession="zulu" openSessions={["zulu", "alpha"]} />);
+    expect(within(dialog).getByRole("option", { name: /Zulu shell/ })).toHaveAttribute("aria-selected", "true");
+    fireEvent.change(search, { target: { value: "alpha" } });
+    expect(within(dialog).getByRole("option", { name: /Alpha control/ })).toHaveAttribute("aria-selected", "true");
+    fireEvent.change(search, { target: { value: "" } });
+    expect(within(dialog).getByRole("option", { name: /Zulu shell/ })).toHaveAttribute("aria-selected", "true");
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
   it("moves and resizes the floating jumper with the keyboard and restores its workspace geometry after reopening", () => {
     const props = {
       activeSession: "alpha", openSessions: ["alpha", "beta"], sessions,
