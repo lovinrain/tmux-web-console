@@ -154,6 +154,55 @@ test("linked tabs share session and panel selection while appearance, normal for
   await expect(page.locator("html")).toHaveAttribute("data-palette", "nord");
 });
 
+test("landing-page workspace windows stay independent of the source focus-sync group", async ({ page, context }) => {
+  const workspaces: SavedWorkspace[] = [];
+  for (const [name, tabs] of [
+    ["Source workspace", sessions.slice(0, 2)],
+    ["Destination workspace", sessions.slice(2)],
+  ] as const) {
+    const response = await context.request.post("/mux/api/workspaces", {
+      data: { name, tabs, activeSession: tabs[0], groups: [] },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as SavedWorkspace;
+    workspaceIds.push(workspace.id);
+    workspaces.push(workspace);
+  }
+  const [source, destination] = workspaces;
+  const query = new URLSearchParams({ workspace: source.id, kind: "shells" });
+  for (const name of source.tabs) query.append("tab", name);
+  await page.goto(`/mux/session/${source.activeSession}?${query}`);
+  await expect(sessionTab(page, sessions[0])).toHaveAttribute("aria-selected", "true");
+
+  const follower = await forkSync(page);
+  await expect(sessionTab(follower, sessions[0])).toHaveAttribute("aria-selected", "true");
+  const syncGroup = new URL(page.url()).searchParams.get("fork-sync");
+  expect(syncGroup).toBeTruthy();
+  await follower.close();
+  await page.getByRole("button", { name: "Back to sessions", exact: true }).click();
+  await expect(page.locator("main.dashboard-shell")).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("fork-sync")).toBe(syncGroup);
+
+  const openedPromise = context.waitForEvent("page");
+  await page.getByRole("link", {
+    name: "Open workspace Destination workspace in new window", exact: true,
+  }).click();
+  const opened = await openedPromise;
+  await expect(opened.getByRole("status", { name: "Workspace saved automatically" })).toBeVisible();
+  await expect(sessionTab(opened, sessions[2])).toHaveAttribute("aria-selected", "true");
+  expect(new URL(opened.url()).searchParams.get("workspace")).toBe(destination.id);
+  expect(new URL(opened.url()).searchParams.has("fork-sync")).toBe(false);
+  expect(new URL(opened.url()).searchParams.get("kind")).toBe("shells");
+  expect(await opened.evaluate(() => window.opener === null)).toBe(true);
+
+  await opened.reload();
+  await expect(sessionTab(opened, sessions[2])).toHaveAttribute("aria-selected", "true");
+  expect(new URL(opened.url()).searchParams.get("workspace")).toBe(destination.id);
+  await expect(page.locator("main.dashboard-shell")).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("fork-sync")).toBe(syncGroup);
+  expect(new URL(page.url()).searchParams.get("workspace")).toBe(source.id);
+});
+
 test("temporary pane views bootstrap a linked tab and survive reloading both views", async ({ page }) => {
   const query = new URLSearchParams();
   for (const name of sessions) query.append("tab", name);

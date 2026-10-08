@@ -456,6 +456,8 @@ describe("session classification", () => {
     { title: "flat", parents: undefined },
   ])("opens a $title saved workspace with its own hierarchy", async ({ parents }) => {
     const search = new URLSearchParams({ workspace: "other" });
+    search.set("fork-sync", "source-pair");
+    search.set("q", "release");
     search.append("tab", "web");
     search.append("tab", "api");
     search.set("tab-parent", JSON.stringify({ api: "web" }));
@@ -473,9 +475,14 @@ describe("session classification", () => {
       name: "Open workspace Saved in new window",
     });
     const url = new URL(link.getAttribute("href")!, "https://muxdeck.test");
+    expect(url.pathname).toBe("/mux/session/api");
+    expect(url.searchParams.get("workspace")).toBe("saved");
+    expect(url.searchParams.has("fork-sync")).toBe(false);
+    expect(url.searchParams.get("q")).toBe("release");
     expect(url.searchParams.getAll("tab")).toEqual(["api", "web"]);
     expect(JSON.parse(url.searchParams.get("tab-parent") ?? "{}"))
       .toEqual(parents ?? {});
+    expect(new URL(window.location.href).searchParams.get("fork-sync")).toBe("source-pair");
   });
 
   it("preserves the current session tree when copying a workspace from the dashboard", async () => {

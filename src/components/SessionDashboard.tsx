@@ -75,6 +75,7 @@ import {
   type WorkspaceSessionParents,
   type WorkspaceTabGroup,
 } from "../workspaceState";
+import { searchWithForkSyncGroup } from "../forkSync";
 import { AppTabs } from "./AppTabs";
 import { stageSessionDraft } from "./InputBar";
 import { MessageQueueDialog } from "./MessageQueueDialog";
@@ -293,7 +294,7 @@ function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
     : "/";
   const search = searchWithSavedWorkspaceId(
     searchWithWorkspaceState(
-      window.location.search,
+      searchWithForkSyncGroup(window.location.search, null),
       workspace.tabs,
       workspace.groups ?? [],
       workspace.parents ?? {},

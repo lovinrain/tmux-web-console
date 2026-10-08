@@ -965,7 +965,9 @@ it, so the workspace you came from is unchanged. A saved workspace can be
 resumed, opened in a new window, renamed, or deleted from that list. Its `New
 window` link carries the workspace's stable ID, ordered tabs, groups, active
 session, and current dashboard filters, then opens with no `window.opener`
-relationship. Deleting one removes only the saved workspace record; none of
+relationship. It starts independently of any focus-sync group on the landing
+page, preserving the clicked workspace and leaving the source tab linked.
+Deleting one removes only the saved workspace record; none of
 these workspace actions stops, renames, or sends input to a tmux session.
 
 An unsaved multi-tab console identifies itself as `Temporary workspace` and
