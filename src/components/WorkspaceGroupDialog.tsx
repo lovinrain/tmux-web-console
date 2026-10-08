@@ -63,12 +63,17 @@ export function WorkspaceGroupDialog({
   const [color, setColor] = useState<WorkspaceTabGroupColor>(
     existing?.color ?? "blue",
   );
-  const [selectedTabs, setSelectedTabs] = useState<Set<string>>(() => new Set(
-    existing?.tabs
-      ?? (initialSession && openSessions.includes(initialSession)
-        ? [initialSession]
-        : openSessions.slice(0, 1)),
-  ));
+  const [selectedTabs, setSelectedTabs] = useState<Set<string>>(() => {
+    if (existing) return new Set(existing.tabs);
+    // Moving the active group's last tab makes creation look like a rename.
+    // Only suggest an ungrouped tab; moving grouped tabs must be explicit.
+    const groupedTabs = new Set(groups.flatMap((group) => group.tabs));
+    const initialTab = initialSession && openSessions.includes(initialSession)
+      && !groupedTabs.has(initialSession)
+      ? initialSession
+      : openSessions.find((tab) => !groupedTabs.has(tab));
+    return new Set(initialTab ? [initialTab] : []);
+  });
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
     [sessions],
@@ -82,7 +87,11 @@ export function WorkspaceGroupDialog({
     return result;
   }, [existing?.id, groups]);
   const nameError = name.length > 0 ? workspaceTabGroupNameError(name) : null;
-  const selectionError = selectedTabs.size === 0 ? "Choose at least one open tab." : null;
+  const selectionError = selectedTabs.size === 0
+    ? existing
+      ? "Choose at least one open tab."
+      : "Choose tabs for the new group. Selecting grouped tabs will move them."
+    : null;
   const canSave = !workspaceTabGroupNameError(name) && !selectionError;
 
   useEffect(() => acquireBodyScrollLock(), []);

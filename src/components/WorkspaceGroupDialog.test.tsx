@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Pane, Session } from "../types";
+import { setWorkspaceTabGroup, type SessionWorkspaceState } from "../workspaceState";
 import { WorkspaceGroupDialog } from "./WorkspaceGroupDialog";
 
 function pane(): Pane {
@@ -71,7 +72,7 @@ describe("WorkspaceGroupDialog", () => {
         groups={[]}
         openSessions={["alpha", "beta"]}
         sessions={sessions}
-        initialSession="alpha"
+        initialSession="beta"
         onSave={onSave}
         onDelete={vi.fn()}
         onClose={onClose}
@@ -86,7 +87,7 @@ describe("WorkspaceGroupDialog", () => {
       target: { value: "Release lane" },
     });
     fireEvent.click(within(dialog).getByRole("radio", { name: "orange" }));
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: /beta/i }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /alpha/i }));
     fireEvent.click(create);
 
     expect(onSave).toHaveBeenCalledOnce();
@@ -141,6 +142,95 @@ describe("WorkspaceGroupDialog", () => {
       collapsed: true,
       tabs: ["alpha", "beta"],
     });
+  });
+
+  it.each(["alpha", null])("creates a second group without moving an existing group's tab (initial: %s)", (initialSession) => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta"],
+      recentSessions: [],
+      groups: [{
+        id: "review",
+        name: "Review",
+        color: "cyan",
+        collapsed: true,
+        tabs: ["alpha"],
+      }],
+    };
+    const onSave = vi.fn();
+    render(
+      <WorkspaceGroupDialog
+        groups={workspace.groups}
+        openSessions={workspace.openSessions}
+        sessions={sessions}
+        initialSession={initialSession}
+        onSave={onSave}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Create a group" });
+    expect(within(dialog).getByRole("textbox", { name: "Group name" })).toHaveValue("");
+    expect(within(dialog).getByRole("checkbox", { name: /alpha/i })).not.toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: /beta/i })).toBeChecked();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Group name" }), {
+      target: { value: "Build" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create group" }));
+
+    expect(onSave).toHaveBeenCalledOnce();
+    const next = setWorkspaceTabGroup(workspace, onSave.mock.calls[0][0]);
+    expect(next.groups).toEqual([
+      workspace.groups[0],
+      {
+        id: expect.any(String),
+        name: "Build",
+        color: "blue",
+        collapsed: false,
+        tabs: ["beta"],
+      },
+    ]);
+    expect(next.groups[1].id).not.toBe(workspace.groups[0].id);
+  });
+
+  it("requires an explicit tab move when every open tab is already grouped", () => {
+    const onSave = vi.fn();
+    render(
+      <WorkspaceGroupDialog
+        groups={[{
+          id: "review",
+          name: "Review",
+          color: "cyan",
+          collapsed: false,
+          tabs: ["alpha", "beta"],
+        }]}
+        openSessions={["alpha", "beta"]}
+        sessions={sessions}
+        initialSession="alpha"
+        onSave={onSave}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Create a group" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Group name" }), {
+      target: { value: "Build" },
+    });
+    const create = within(dialog).getByRole("button", { name: "Create group" });
+    expect(create).toBeDisabled();
+    for (const checkbox of within(dialog).getAllByRole("checkbox")) {
+      expect(checkbox).not.toBeChecked();
+    }
+    fireEvent.submit(create.closest("form")!);
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /beta.*move from Review/i }));
+    expect(create).toBeEnabled();
+    fireEvent.click(create);
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Build",
+      tabs: ["beta"],
+    }));
   });
 
   it("ungroups an existing group without touching its tmux sessions", () => {

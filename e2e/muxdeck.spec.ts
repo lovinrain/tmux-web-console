@@ -4643,7 +4643,7 @@ test("sidebar separators save with a temporary workspace and can be removed afte
   }
 });
 
-test("workspace tab groups persist in the URL and remain manageable on mobile", async ({ page }) => {
+test("workspace tab groups persist in the sidebar and remain manageable on mobile", async ({ page }) => {
   test.setTimeout(60_000);
   const firstGroupedSession = `${sessionName}-group-one`;
   const secondGroupedSession = `${sessionName}-group-two`;
@@ -4672,6 +4672,8 @@ test("workspace tab groups persist in the URL and remain manageable on mobile", 
       timeout: 10_000,
     });
 
+    await page.getByRole("group", { name: "Console bars" })
+      .getByRole("button", { name: "Vertical session tabs" }).click();
     await page.getByRole("button", { name: "Create tab group" }).click();
     const createDialog = page.getByRole("dialog", { name: "Create a group" });
     await createDialog.getByRole("textbox", { name: "Group name" }).fill("Review lane");
@@ -4703,6 +4705,39 @@ test("workspace tab groups persist in the URL and remain manageable on mobile", 
       }],
     });
 
+    // The active session is grouped: creating another group should choose the
+    // ungrouped tab, preserving the original group and its members.
+    const firstGroupId = await groupBlock.getAttribute("data-workspace-tab-group-id");
+    await page.getByRole("button", { name: "Create tab group" }).click();
+    await createDialog.getByRole("textbox", { name: "Group name" }).fill("Support lane");
+    await expect(createDialog.getByRole("checkbox", {
+      name: new RegExp(firstGroupedSession),
+    })).not.toBeChecked();
+    await expect(createDialog.getByRole("checkbox", {
+      name: new RegExp(secondGroupedSession),
+    })).not.toBeChecked();
+    await createDialog.getByRole("button", { name: "Create group" }).click();
+    await expect(groupBlock.getByRole("tab")).toHaveCount(2);
+    await expect.poll(async () => page.evaluate(() => (
+      new URL(window.location.href).searchParams.getAll("tab-group")
+        .map((value) => JSON.parse(value))
+    ))).toEqual([
+      {
+        id: expect.any(String),
+        name: "Support lane",
+        color: "blue",
+        collapsed: false,
+        tabs: [sessionName],
+      },
+      {
+        id: firstGroupId,
+        name: "Review lane",
+        color: "orange",
+        collapsed: false,
+        tabs: [firstGroupedSession, secondGroupedSession],
+      },
+    ]);
+
     await page.getByRole("button", { name: "Search open tabs" }).click();
     const searchDialog = page.getByRole("dialog", { name: "Jump to tab" });
     await searchDialog.getByRole("combobox").fill("Review lane");
@@ -4718,7 +4753,7 @@ test("workspace tab groups persist in the URL and remain manageable on mobile", 
     })).toBeHidden();
     await page.getByRole("button", { name: "Expand Review lane tab group" }).click();
 
-    await page.getByRole("button", { name: "Move Review lane group left" }).click();
+    await page.getByRole("button", { name: "Move Review lane group up" }).click();
     await expect.poll(async () => page.evaluate(() => (
       new URL(window.location.href).searchParams.getAll("tab")
     ))).toEqual([firstGroupedSession, secondGroupedSession, sessionName]);
@@ -4728,6 +4763,11 @@ test("workspace tab groups persist in the URL and remain manageable on mobile", 
       .getByRole("button", { name: "Overview" })
       .click();
     const overview = page.getByRole("dialog", { name: "Switch sessions" });
+    await overview.getByRole("button", { name: "New group", exact: true }).click();
+    await createDialog.getByRole("textbox", { name: "Group name" }).fill("Third lane");
+    await expect(createDialog.getByRole("checkbox", { checked: true })).toHaveCount(0);
+    await expect(createDialog.getByRole("button", { name: "Create group" })).toBeDisabled();
+    await createDialog.getByRole("button", { name: "Close tab group editor" }).click();
     await overview.getByRole("button", { name: "Edit Review lane tab group" }).click();
 
     const editDialog = page.getByRole("dialog", { name: "Edit Review lane" });
@@ -4742,6 +4782,8 @@ test("workspace tab groups persist in the URL and remain manageable on mobile", 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByRole("button", { name: "Collapse Release lane tab group" }))
+      .toBeVisible();
+    await expect(page.getByRole("button", { name: "Collapse Support lane tab group" }))
       .toBeVisible();
     await expect.poll(async () => page.evaluate(() => {
       const value = new URL(window.location.href).searchParams.get("tab-group");

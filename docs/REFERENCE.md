@@ -1428,7 +1428,11 @@ accessible 44px-or-larger controls, alongside reorder, terminate, and close, so
 the actions remain available on compact and touch layouts.
 
 `New group` in the scrollable tab strip opens the group editor for a required
-name, one of nine colors, and one or more open tabs. A group stays contiguous and
+name, one of nine colors, and one or more open tabs. It initially selects the
+active tab only if that tab is ungrouped, otherwise the first ungrouped tab.
+When all tabs already belong to groups, choose tabs explicitly; creating a group
+never moves existing members by default. Moving a group's last member removes
+that empty group. A group stays contiguous and
 moves as one block; member-tab arrows only reorder within that group, while an
 ungrouped tab moves across a neighboring group atomically. The group chip can
 collapse every member, including an active parent or child. Folding keeps the
