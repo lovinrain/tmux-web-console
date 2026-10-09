@@ -39,6 +39,11 @@ export const SESSION_TAG_LABELS: Readonly<Record<SessionTag, string>> = {
   background: "Background",
 };
 
+export interface SessionAttention {
+  latestReadyEvent: number;
+  lastCheckedEvent: number;
+}
+
 export interface Session {
   name: string;
   id: string;
@@ -52,6 +57,8 @@ export interface Session {
   agentState: AgentState;
   agentStateReason: string;
   agentStateChangedAt: number;
+  /** Shared by native session identity across all browsers and workspaces. */
+  readyAttention?: SessionAttention;
   /** Passive recovery metadata only; never an instruction to resume an agent. */
   agentType?: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
   agentSessionId?: string | null;

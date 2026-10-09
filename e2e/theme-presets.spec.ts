@@ -221,6 +221,22 @@ test("unchecked ready names preserve selection and contrast in every palette, su
         ? snapshot : session.name === otherName ? otherSnapshot : session),
     },
   });
+  // This fixture controls inventory and attention together. The independent
+  // browser spec exercises the real stream; palette checks use polling.
+  await page.context().route("**/api/sessions/stream", (route) => route.abort());
+  const fulfillAttention = async (route: Route) => {
+    const current = route.request().url().includes(encodeURIComponent(otherName))
+      ? otherSnapshot : snapshot;
+    const body = route.request().postDataJSON() as { action: "read" | "unread"; latestReadyEvent: number };
+    const cursor = current.readyAttention!;
+    const readyAttention = body.action === "read"
+      ? { ...cursor, lastCheckedEvent: Math.max(cursor.lastCheckedEvent, body.latestReadyEvent) }
+      : { ...cursor, latestReadyEvent: cursor.latestReadyEvent + Number(cursor.latestReadyEvent === cursor.lastCheckedEvent) };
+    if (current === otherSnapshot) otherSnapshot = { ...current, readyAttention };
+    else snapshot = { ...current, readyAttention };
+    await route.fulfill({ json: { readyAttention } });
+  };
+  await page.context().route("**/api/sessions/*/attention", fulfillAttention);
   await page.route("**/api/sessions", fulfillInventory);
   await page.goto(`${sessionUrl}&tab=${otherName}&workspace=${workspaceId}`);
   const actions = page.getByRole("group", { name: "Rename and unread actions", exact: true });
@@ -242,8 +258,10 @@ test("unchecked ready names preserve selection and contrast in every palette, su
   await expect(tab.locator(".workspace-state-dot")).toHaveClass(/working/);
   await expect(otherTab.locator(".workspace-state-dot")).toHaveClass(/working/);
   await tab.getByRole("tab").click();
-  snapshot = { ...snapshot, agentState: "waiting_human", agentStateChangedAt: live.agentStateChangedAt + 1 };
-  otherSnapshot = { ...otherSnapshot, agentState: "waiting_human", agentStateChangedAt: otherLive.agentStateChangedAt + 1 };
+  snapshot = { ...snapshot, agentState: "waiting_human", agentStateChangedAt: live.agentStateChangedAt + 1,
+    readyAttention: { latestReadyEvent: 1, lastCheckedEvent: 0 } };
+  otherSnapshot = { ...otherSnapshot, agentState: "waiting_human", agentStateChangedAt: otherLive.agentStateChangedAt + 1,
+    readyAttention: { latestReadyEvent: 1, lastCheckedEvent: 0 } };
   await expect(tab).toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
   await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
   await expect(tab.getByRole("tab")).toHaveAttribute("aria-selected", "true");
@@ -392,14 +410,14 @@ test("unchecked ready names preserve selection and contrast in every palette, su
     await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
     await expect(tab.getByRole("tab")).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("button", { name: "Already unread", exact: true })).toBeDisabled();
-    await expect(peerTab).toHaveAttribute("data-ready-unchecked", "true");
+    await expect(peerTab).toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
     await page.reload();
     await expect(tab).toHaveAttribute("data-ready-unchecked", "true");
     await page.screenshot({ path: testInfo.outputPath("marked-unread-side-tabs.png"), animations: "disabled" });
 
     await peerTab.getByRole("tab").click();
     await expect(peerTab).not.toHaveAttribute("data-ready-unchecked");
-    await expect(tab).not.toHaveAttribute("data-ready-unchecked");
+    await expect(tab).not.toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
     await expect(otherTab).toHaveAttribute("data-ready-unchecked", "true");
     await expect(page.getByRole("button", { name: "Mark as unread", exact: true })).toBeEnabled();
   } finally {

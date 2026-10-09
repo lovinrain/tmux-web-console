@@ -21,6 +21,7 @@ formats remain the contracts between these parts.
 | Explain new-window action failures | `src/components/workspaceNavigation/windowActions.tsx` |
 | Own picker presentation and route/workspace lifetime | `src/useWorkspaceTabSearch.ts` |
 | Parse and build workspace paths without browser side effects | `src/workspaceRoutes.ts` |
+| Share session inventory streaming, recovery metadata, and polling fallback | `src/sessionInventory.ts` |
 
 Import a constant, context, or type directly from its owner. Importing the full
 navigation component for a shared value connects unrelated screens and their
@@ -38,6 +39,11 @@ while navigating within the workspace.
 The active-pane context has one definition shared by navigation and pane boards.
 Viewport thresholds also have one owner used by the rail, search picker, recents
 dialog, and controller.
+
+Dashboard, console, new-session, and pane-view inventory use the same stream
+transport. Embedded pane consoles receive their parent's snapshots. Shared
+read/unread markers come from the session registry through that inventory;
+browser-local attention is only a fallback for an older backend.
 
 The search component tests were moved from the navigation suite with their
 assertions retained. A separate integration case checks that tabs, Overview,

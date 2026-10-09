@@ -12,9 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from .agent_reference import AgentReference
+from .session_attention import (
+    initialize_session_attention,
+    observe_session_attention,
+    update_session_attention,
+)
 from .tmux import CreatedSession, Session
 
-SESSION_REGISTRY_SCHEMA_VERSION = 4
+SESSION_REGISTRY_SCHEMA_VERSION = 5
 LAST_SEEN_WRITE_INTERVAL_SECONDS = 60
 SESSION_REGISTRY_UNAVAILABLE_MESSAGE = (
     "session recovery registry is unavailable; repair the configured SQLite "
@@ -145,7 +150,7 @@ class SessionRegistry:
     def _initialize(self) -> None:
         connection = self._require_connection()
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {0, 1, 2, 3, SESSION_REGISTRY_SCHEMA_VERSION}:
+        if version not in {0, 1, 2, 3, 4, SESSION_REGISTRY_SCHEMA_VERSION}:
             raise sqlite3.DatabaseError(
                 f"unsupported session registry schema version: {version}"
             )
@@ -248,6 +253,7 @@ class SessionRegistry:
                     FROM session_history WHERE agent_type IS NOT NULL
                 """)
             connection.execute(f"PRAGMA user_version={SESSION_REGISTRY_SCHEMA_VERSION}")
+            initialize_session_attention(connection)
 
     def _require_connection(self) -> sqlite3.Connection:
         if self._connection is None:
@@ -263,6 +269,28 @@ class SessionRegistry:
 
     def _database_error(self, error: BaseException) -> SessionRegistryUnavailable:
         return SessionRegistryUnavailable(SESSION_REGISTRY_UNAVAILABLE_MESSAGE)
+
+    def observe_ready_attention(
+        self, sessions: list[Session], states: Mapping[str, str],
+    ) -> dict[str, dict[str, int]]:
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    return observe_session_attention(connection, sessions, states)
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
+    def update_ready_attention(
+        self, session: Session, action: str, observed_event: int,
+    ) -> dict[str, int]:
+        with self._lock:
+            try:
+                connection = self._require_connection()
+                with connection:
+                    return update_session_attention(connection, session, action, observed_event)
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
 
     def reconcile(
         self,

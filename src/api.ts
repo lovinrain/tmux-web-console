@@ -6,6 +6,7 @@ import type {
   MessageQueue,
   QueuedMessage,
   Session,
+  SessionAttention,
   SessionTag,
   SnippetNode,
   SnippetTree,
@@ -82,6 +83,27 @@ export function recordSessionView(session: Session, kind: SessionViewKind): Prom
     body: JSON.stringify({ sessionId: session.id, sessionCreated: session.created,
       serverStarted: session.serverStarted, serverPid: session.serverPid, kind }),
   });
+}
+
+export async function updateSessionAttention(
+  session: Session,
+  action: "read" | "unread",
+  latestReadyEvent: number,
+): Promise<SessionAttention> {
+  const result = await jsonRequest<{ readyAttention: SessionAttention }>(
+    `/api/sessions/${encodeURIComponent(session.name)}/attention`,
+    {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.id, sessionCreated: session.created,
+        serverStarted: session.serverStarted, serverPid: session.serverPid,
+        action, latestReadyEvent,
+      }),
+    },
+  );
+  return result.readyAttention;
 }
 
 export function recordClosedSessionTab(session: string, sessionId: string): Promise<void> {

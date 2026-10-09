@@ -620,6 +620,7 @@ Responses contain both `note` and `notebook`.
 | `POST /api/sessions/{session}/copy` | `sessionId`; optional `theme` | Creates a session in the source PWD with the next available suffixed name. |
 | `PUT /api/session-name` | `session`, `name` | Renames a live native tmux session and migrates Muxdeck references. |
 | `DELETE /api/sessions/{session}` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid` | Terminates exactly the identified tmux session. This is destructive. |
+| `POST /api/sessions/{session}/attention` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid`, `action` (`read` or `unread`), `latestReadyEvent` | Returns `{readyAttention:{latestReadyEvent,lastCheckedEvent}}` for the exact live identity. |
 
 Omitting `launchMode` retains the configured tmux default-shell behavior; it
 does not automatically start a coding agent. `directory` must be an absolute
@@ -641,6 +642,22 @@ identifies a coding agent's detected terminal command, including an active
 background shell while its main prompt accepts input. It is an active state,
 not a ready-for-review state. Session streams publish transitions into and out
 of it with the same snapshot fields.
+
+Each session also carries `readyAttention`. It is unread when
+`latestReadyEvent > lastCheckedEvent`. The server advances the event once when
+an observed work episode becomes `waiting_human`; transient unknown/waiting
+signals retain the episode, and exiting to an ordinary shell disarms it.
+Marking unread advances a read session's event without changing its agent state.
+A read request acknowledges the supplied event only, so a delayed request cannot
+clear a newer completion or manual mark. Future read events return `400`;
+changed native identities return `409`.
+
+Attention is persisted in the session registry and shared across workspaces,
+browser profiles, and laptops. A rename keeps the marker; a recreated native
+session gets a separate record. Browser-local attention is a compatibility
+fallback for servers that omit `readyAttention`. Existing local-only badges
+are not imported as shared events; initially idle sessions start read.
+Reload older browser pages after upgrading both backend and frontend.
 
 ### Programmatic launch
 
@@ -1021,6 +1038,9 @@ tokens. See [Saved scrollback](SCROLLBACK.md) for sampling and retention limits.
 contain serialized session snapshots, heartbeat comments keep intermediaries
 alive, and an `auth` event reports an expired/revoked remembered device before
 the stream closes.
+Read/unread writes wake the shared sampler and publish the updated
+`readyAttention` to every subscriber. They do not change the selected session,
+workspace layout, theme, or terminal input.
 
 ### Terminal WebSocket
 

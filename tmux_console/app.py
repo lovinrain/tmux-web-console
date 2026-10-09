@@ -386,6 +386,12 @@ class SessionSnapshotBuilder:
         items = await self._tmux.list_sessions()
         states = await self._agent_states.detect_sessions(self._tmux, items)
         observed_at = int(self._clock())
+        attention = (
+            self._registry.observe_ready_attention(
+                items, {name: state.name for name, state in states.items()},
+            )
+            if self._registry is not None else {}
+        )
         references = (
             await self._agent_references.detect_sessions(items)
             if self._agent_references is not None
@@ -434,6 +440,8 @@ class SessionSnapshotBuilder:
             next_state_history[item.name] = (item.id, state.name, changed_at)
 
             record = item.to_dict()
+            if item.name in attention:
+                record["readyAttention"] = attention[item.name]
             reference = references.get(item.name)
             record.update(
                 {
@@ -499,6 +507,7 @@ class SessionStreamBroker:
         self._sampler: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._closed = False
+        self._changed = asyncio.Event()
 
     @property
     def subscriber_count(self) -> int:
@@ -555,6 +564,7 @@ class SessionStreamBroker:
     async def _sample_loop(self) -> None:
         current_task = asyncio.current_task()
         while True:
+            self._changed.clear()
             try:
                 payload = await self._snapshots.build()
             except TmuxError as error:
@@ -572,7 +582,13 @@ class SessionStreamBroker:
                         self._latest = serialized
                         for queue in self._subscribers:
                             self._offer_latest(queue, serialized)
-            await asyncio.sleep(self._sample_seconds)
+            try:
+                await asyncio.wait_for(self._changed.wait(), timeout=self._sample_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    def notify_change(self) -> None:
+        self._changed.set()
 
     @staticmethod
     def _offer_latest(queue: SessionStreamQueue, snapshot: str | None) -> None:
@@ -2473,6 +2489,45 @@ def create_app(
                     return json_error("session identity changed", 409)
                 app[SESSION_REGISTRY_KEY].record_view_event(target, kind)
             return web.Response(status=204)
+        except (ValueError, TypeError, RecursionError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TmuxError, SessionRegistryUnavailable) as error:
+            return json_error(str(error), 503)
+
+    async def update_session_attention(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+            fields = {
+                "sessionId", "sessionCreated", "serverStarted", "serverPid",
+                "action", "latestReadyEvent",
+            }
+            if not isinstance(payload, dict) or set(payload) != fields:
+                raise ValueError("session identity, action, and latestReadyEvent are required")
+            if not isinstance(payload["sessionId"], str):
+                raise TypeError("sessionId must be a string")
+            validate_tmux_session_id(payload["sessionId"])
+            for field in ("sessionCreated", "serverStarted", "serverPid", "latestReadyEvent"):
+                if type(payload[field]) is not int or not 0 <= payload[field] <= 9007199254740991:
+                    raise ValueError(f"{field} must be a non-negative safe integer")
+            action = payload["action"]
+            if not isinstance(action, str) or action not in {"read", "unread"}:
+                raise ValueError("action must be read or unread")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                target = await app[TMUX_KEY].get_session(
+                    validate_tmux_session_name(request.match_info["session"]),
+                )
+                if (target.id, target.created, target.server_started, target.server_pid) != (
+                    payload["sessionId"], payload["sessionCreated"],
+                    payload["serverStarted"], payload["serverPid"],
+                ):
+                    return json_error("session identity changed", 409)
+                attention = app[SESSION_REGISTRY_KEY].update_ready_attention(
+                    target, action, payload["latestReadyEvent"],
+                )
+                app[SESSION_STREAM_BROKER_KEY].notify_change()
+            return web.json_response({"readyAttention": attention})
         except (ValueError, TypeError, RecursionError) as error:
             return json_error(str(error), 400)
         except TmuxSessionNotFoundError as error:
@@ -6673,6 +6728,9 @@ def create_app(
         save_session_file_content,
     )
     app.router.add_delete(f"{prefix}/api/sessions/{session_segment}", terminate_session)
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/attention", update_session_attention,
+    )
     app.router.add_put(f"{prefix}/api/session-name", rename_session)
     app.router.add_get(f"{prefix}/api/sessions/stream", sessions_stream)
     app.router.add_get(f"{prefix}/api/callback-sessions/stream", callback_sessions_stream)

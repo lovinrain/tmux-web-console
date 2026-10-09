@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from typing import Literal
+from unittest.mock import AsyncMock
 from urllib.parse import quote
 
 import pytest
@@ -3569,6 +3570,49 @@ async def test_sessions_stream_shares_one_sampler_across_clients_and_stops_last(
         calls_after_disconnect = tmux.list_calls
         await asyncio.sleep(0.03)
         assert tmux.list_calls == calls_after_disconnect
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_read_and_unread_updates_wake_session_stream_for_every_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "SESSION_STREAM_SAMPLE_SECONDS", 60)
+    monkeypatch.setattr(app_module, "SESSION_STREAM_HEARTBEAT_SECONDS", 10)
+    session = make_session()
+    tmux = FakeTmux([[session]])
+    tmux.get_session = AsyncMock(return_value=session)
+    detector = FakeAgentStateDetector([{session.name: AgentState("working", "active")}])
+    client = TestClient(TestServer(create_app(
+        tmux=tmux, titles=SessionTitleStore(tmp_path / "titles.json"),
+        session_registry=SessionRegistry(tmp_path / "registry.sqlite3"),
+        agent_states=detector, base_path="",
+    )))
+    try:
+        await client.start_server()
+        responses = await asyncio.gather(
+            client.get("/api/sessions/stream"), client.get("/api/sessions/stream"),
+        )
+        for response in responses:
+            initial = event_payload(await read_sse_record(response))
+            assert initial["sessions"][0]["readyAttention"] == {
+                "latestReadyEvent": 0, "lastCheckedEvent": 0,
+            }
+        identity = termination_payload()
+        for action, observed, expected in [
+            ("unread", 0, {"latestReadyEvent": 1, "lastCheckedEvent": 0}),
+            ("read", 1, {"latestReadyEvent": 1, "lastCheckedEvent": 1}),
+        ]:
+            result = await client.post(f"/api/sessions/{session.name}/attention", json={
+                **identity, "action": action, "latestReadyEvent": observed,
+            })
+            assert result.status == 200
+            assert await result.json() == {"readyAttention": expected}
+            for response in responses:
+                snapshot = event_payload(await asyncio.wait_for(read_sse_record(response), 2))
+                assert snapshot["sessions"][0]["readyAttention"] == expected
+                assert snapshot["sessions"][0]["agentState"] == "working"
+        for response in responses:
+            response.close()
     finally:
         await client.close()
 

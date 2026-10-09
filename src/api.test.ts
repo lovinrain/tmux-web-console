@@ -5,6 +5,7 @@ import {
   createQueuedMessage,
   copySession,
   recordSessionView,
+  updateSessionAttention,
   createSession,
   createWorkspace,
   deleteQueuedMessage,
@@ -75,6 +76,24 @@ import {
   listWorkspaces,
 } from "./api";
 import type { Session } from "./types";
+
+it("persists a read marker for the full native identity and keeps it alive on page exit", async () => {
+  const live = {
+    name: "[review] plus+", id: "$1", created: 100, serverStarted: 90, serverPid: 42,
+  } as Session;
+  const readyAttention = { latestReadyEvent: 2, lastCheckedEvent: 1 };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ readyAttention })));
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(updateSessionAttention(live, "read", 1)).resolves.toEqual(readyAttention);
+  const [url, options] = fetchMock.mock.calls[0];
+  expect(url).toBe(`${BASE_PATH}/api/sessions/%5Breview%5D%20plus%2B/attention`);
+  expect(options.method).toBe("POST");
+  expect(options.keepalive).toBe(true);
+  expect(JSON.parse(options.body)).toEqual({
+    sessionId: "$1", sessionCreated: 100, serverStarted: 90, serverPid: 42,
+    action: "read", latestReadyEvent: 1,
+  });
+});
 
 class MockEventSource {
   static instances: MockEventSource[] = [];

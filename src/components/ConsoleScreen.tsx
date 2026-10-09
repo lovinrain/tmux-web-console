@@ -16,7 +16,6 @@ import {
   type SessionViewKind,
   createQueuedMessage,
   deleteQueuedMessage,
-  listSessions,
   renameSession,
   uploadSessionAttachment,
   updateSessionDetails,
@@ -27,6 +26,7 @@ import {
   type WorkspaceSessionsTransferResult,
   type RecoverableSession,
 } from "../api";
+import { subscribeToSessionInventory } from "../sessionInventory";
 import {
   ArrowLeftIcon,
   CheckIcon,
@@ -1440,7 +1440,6 @@ export function ConsoleScreen({
 
 
   useEffect(() => {
-    let cancelled = false;
     if (sessionSnapshot !== undefined) {
       const match = sessionSnapshot?.name === sessionName ? sessionSnapshot : null;
       if (!match) {
@@ -1454,10 +1453,8 @@ export function ConsoleScreen({
       }
       return;
     }
-    const load = async () => {
-      try {
-        const sessions = await listSessions();
-        if (cancelled) return;
+    return subscribeToSessionInventory({
+      onSessions: (sessions) => {
         onSessionsChange?.(sessions);
         const match = sessions.find((item) => item.name === sessionName);
         if (!match) {
@@ -1482,18 +1479,12 @@ export function ConsoleScreen({
         // Follow the inventory so header actions never target a stale pane.
         setPaneId(match.activePaneId);
         setLookupError(null);
-      } catch (error) {
-        if (!cancelled) {
-          setLookupError({
-            sessionName,
-            message: error instanceof Error ? error.message : "Unable to load session",
-          });
-        }
-      }
-    };
-    void load();
-    const timer = window.setInterval(load, 5000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+      },
+      onError: (error) => setLookupError({
+        sessionName,
+        message: error instanceof Error ? error.message : "Unable to load session",
+      }),
+    });
   }, [onSessionsChange, sessionName, sessionSnapshot]);
 
   useEffect(() => {

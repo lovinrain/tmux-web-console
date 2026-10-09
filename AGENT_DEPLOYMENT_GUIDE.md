@@ -488,7 +488,7 @@ archived or migrated. A bridge invocation is owned by its controller and is
 cancelled if that controller disconnects; detached interactive sessions retain
 their normal tmux lifetime.
 
-The SQLite registry uses `PRAGMA user_version = 4`. Version 1 upgrades in a
+The SQLite registry uses `PRAGMA user_version = 5`. Version 1 upgrades in a
 transaction by adding `session_history` and `history_workspaces` and importing
 the existing recovery records; the original `sessions` table remains intact.
 Version 3 adds the history of observed coding agents. Version 4 adds
@@ -496,10 +496,15 @@ Version 3 adds the history of observed coding agents. Version 4 adds
 existing records and agent references. Existing origins remain unknown; do not
 infer them from names. Native session start times come from tmux's existing
 `created` identity field, separately from first-observed timestamps.
+Version 5 adds `session_attention`, keyed by full native identity, for shared
+completion and read markers. It preserves history and recovery records.
+Initially idle sessions begin read; old browser-local badges are not imported.
+Read/unread updates use the existing session event stream, including across
+independent browser profiles. Reload older pages after this upgrade.
 
 Back up `sessions.sqlite3` consistently before a backend upgrade, retain the
 private backup, and deploy backend and frontend together. Older releases reject
-version 4. Rollback requires stopping only Muxdeck, retaining the upgraded
+version 5. Rollback requires stopping only Muxdeck, retaining the upgraded
 database separately, and restoring the pre-upgrade database with the old code.
 Never downgrade `user_version` in place. Keep the registry private (`0600`).
 

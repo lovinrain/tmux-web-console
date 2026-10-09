@@ -71,6 +71,63 @@ async def test_view_activity_rejects_invalid_or_stale_identity(tmp_path, field, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field,value,status", [
+    ("sessionId", "$2", 409), ("sessionCreated", 101, 409),
+    ("serverStarted", 91, 409), ("serverPid", 43, 409),
+    ("sessionCreated", True, 400), ("latestReadyEvent", -1, 400),
+    ("latestReadyEvent", 1.5, 400), ("latestReadyEvent", 9007199254740992, 400),
+    ("action", [], 400), ("action", "toggle", 400), ("extra", "no", 400),
+])
+async def test_attention_rejects_invalid_payloads_and_recreated_identities(tmp_path, field, value, status):
+    live = live_session()
+    tmux = TmuxClient()
+    tmux.get_session = AsyncMock(return_value=live)
+    registry = SessionRegistry(tmp_path / "registry.sqlite3")
+    app = create_app(tmux=tmux, session_registry=registry, base_path="")
+    try:
+        payload = {
+            "sessionId": "$1", "sessionCreated": 100, "serverStarted": 90,
+            "serverPid": 42, "action": "unread", "latestReadyEvent": 0, field: value,
+        }
+        response = await post(app, "/api/sessions/{session}/attention", payload, session="source")
+        assert response.status == status
+        assert registry.observe_ready_attention([live], {"source": "waiting_human"})["source"] == {
+            "latestReadyEvent": 0, "lastCheckedEvent": 0,
+        }
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
+async def test_attention_read_acknowledges_only_observed_event_and_reports_storage_failure(tmp_path):
+    live = live_session()
+    tmux = TmuxClient()
+    tmux.get_session = AsyncMock(return_value=live)
+    registry = SessionRegistry(tmp_path / "registry.sqlite3")
+    app = create_app(tmux=tmux, session_registry=registry, base_path="")
+    payload = {
+        "sessionId": "$1", "sessionCreated": 100, "serverStarted": 90,
+        "serverPid": 42, "action": "read", "latestReadyEvent": 1,
+    }
+    try:
+        registry.update_ready_attention(live, "unread", 0)
+        response = await post(app, "/api/sessions/{session}/attention", payload, session="source")
+        assert json.loads(response.text)["readyAttention"] == {"latestReadyEvent": 1, "lastCheckedEvent": 1}
+        registry.update_ready_attention(live, "unread", 1)
+        response = await post(app, "/api/sessions/{session}/attention", payload, session="source")
+        assert json.loads(response.text)["readyAttention"] == {"latestReadyEvent": 2, "lastCheckedEvent": 1}
+        response = await post(app, "/api/sessions/{session}/attention", {
+            **payload, "latestReadyEvent": 3,
+        }, session="source")
+        assert response.status == 400
+        registry.close()
+        response = await post(app, "/api/sessions/{session}/attention", payload, session="source")
+        assert response.status == 503
+    finally:
+        registry.close()
+
+
+@pytest.mark.asyncio
 async def test_copy_records_the_source_snapshot_and_requested_placement(tmp_path):
     source = live_session()
     tmux = TmuxClient()

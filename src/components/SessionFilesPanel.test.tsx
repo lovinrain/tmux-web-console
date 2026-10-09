@@ -635,6 +635,9 @@ describe("SessionFilesPanel", () => {
       expect.any(AbortSignal),
     ));
 
+    await waitFor(() => expect(within(panel).getByRole("button", {
+      name: "Search nested folders",
+    })).toBeEnabled());
     fireEvent.click(within(panel).getByRole("button", {
       name: "Search nested folders",
     }));

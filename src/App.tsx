@@ -55,6 +55,7 @@ import {
   sessionPath,
 } from "./workspaceRoutes";
 import { useSessionReadyAttention } from "./useSessionReadyAttention";
+import { subscribeToSessionInventory } from "./sessionInventory";
 import {
   ConsoleScreen,
   DEFAULT_CONSOLE_BAR_VISIBILITY,
@@ -3881,23 +3882,9 @@ function AppRoutes() {
   }, [refreshSessionInventory]);
 
   useEffect(() => {
-    if (!parsePaneLayoutRoute(location.path)) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const sessions = await listSessions();
-        if (!cancelled) replaceKnownSessions(sessions);
-      } catch {
-        // Each embedded console displays its own connection state; keep the
-        // most recent inventory while a transient list request is unavailable.
-      }
-    };
-    void load();
-    const timer = window.setInterval(load, 5_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    if (!parsePaneLayoutRoute(location.path) && !parseNewSessionRoute(location.path)) return;
+    // Pane leaves receive these snapshots rather than opening their own streams.
+    return subscribeToSessionInventory({ onSessions: replaceKnownSessions });
   }, [location.path, replaceKnownSessions]);
 
   const updateKnownSession = useCallback((updatedSession: Session) => {

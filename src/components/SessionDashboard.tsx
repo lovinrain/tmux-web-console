@@ -11,9 +11,7 @@ import {
 import {
   BASE_PATH,
   forgetRecoverableSession,
-  listSessions,
   recreateSession,
-  subscribeToSessions,
   updateSessionDetails,
   updateSessionIgnored,
   updateSessionStar,
@@ -23,6 +21,7 @@ import {
   type RecoverableSession,
   type SavedWorkspace,
 } from "../api";
+import { subscribeToSessionInventory } from "../sessionInventory";
 import {
   ChevronRightIcon,
   EditIcon,
@@ -690,97 +689,20 @@ export function SessionDashboard({
 
   useEffect(() => {
     document.title = "Muxdeck - tmux sessions";
-    const controller = new AbortController();
-    let stopped = false;
-    let pollingTimer: number | undefined;
-    let streamVersion = 0;
-    let pollRequestId = 0;
-
-    const stopPolling = () => {
-      if (pollingTimer !== undefined) {
-        window.clearInterval(pollingTimer);
-        pollingTimer = undefined;
-      }
-    };
-
-    const refresh = async () => {
-      const requestId = ++pollRequestId;
-      const streamVersionAtStart = streamVersion;
-      try {
-        const next = await listSessions(controller.signal);
-        if (
-          stopped
-          || controller.signal.aborted
-          || requestId !== pollRequestId
-          || streamVersionAtStart !== streamVersion
-        ) return;
+    return subscribeToSessionInventory({
+      pollInterval: 4000,
+      onMode: setUpdateMode,
+      onSessions: (next) => {
         setRecoverableSessions(recoveryItemsFromSessions(next));
         setSessions(withoutTerminatedSessions(next));
         setError(null);
-      } catch (requestError) {
-        if (
-          !stopped
-          && !controller.signal.aborted
-          && requestId === pollRequestId
-          && streamVersionAtStart === streamVersion
-        ) {
-          setError(requestError instanceof Error ? requestError.message : "Unable to reach tmux");
-        }
-      } finally {
-        if (
-          !stopped
-          && !controller.signal.aborted
-          && requestId === pollRequestId
-          && streamVersionAtStart === streamVersion
-        ) setLoading(false);
-      }
-    };
-
-    const startPolling = () => {
-      if (stopped || pollingTimer !== undefined) return;
-      setUpdateMode("polling");
-      pollingTimer = window.setInterval(() => void refresh(), 4000);
-    };
-
-    void refresh();
-    let unsubscribe = () => {};
-    try {
-      unsubscribe = subscribeToSessions({
-        onSessions: (next, recoverable = []) => {
-          if (stopped) return;
-          streamVersion += 1;
-          stopPolling();
-          setSessions(withoutTerminatedSessions(next));
-          setRecoverableSessions(recoverable);
-          setError(null);
-          setLoading(false);
-          setUpdateMode("live");
-        },
-        onStatus: (status) => {
-          if (stopped) return;
-          if (status === "open") {
-            stopPolling();
-            setUpdateMode("live");
-          } else if (status === "error") {
-            startPolling();
-          } else {
-            setUpdateMode("connecting");
-          }
-        },
-        onError: () => {
-          // EventSource reconnects automatically while polling covers the gap.
-        },
-      });
-    } catch {
-      startPolling();
-    }
-
-    return () => {
-      stopped = true;
-      controller.abort();
-      stopPolling();
-      unsubscribe();
-    };
+        setLoading(false);
+      },
+      onError: (error) => {
+        setError(error instanceof Error ? error.message : "Unable to reach tmux");
+        setLoading(false);
+      },
+    });
   }, [refreshKey, recoveryRefreshKey, withoutTerminatedSessions]);
 
   const visibleSessions = useMemo(

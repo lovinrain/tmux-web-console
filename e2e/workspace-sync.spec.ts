@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import type { Session } from "../src/types";
 import type { GlobalCallbackSnapshot, SavedWorkspace } from "../src/api";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 
@@ -81,6 +83,86 @@ async function finishLayout(page: Page): Promise<void> {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   }));
 }
+
+test("session read and unread sync between independent browsers and override stale laptop history", async ({
+  page, context, browser,
+}) => {
+  const socket = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
+  if (!socket?.startsWith("muxdeck-playwright-")) throw new Error("Disposable test socket required");
+  const names = [`muxdeck-read-sync-${process.pid}`, `muxdeck-read-sync-helper-${process.pid}`];
+  const created: string[] = [];
+  let secondContext: Awaited<ReturnType<typeof browser.newContext>> | null = null;
+  try {
+    for (const name of names) {
+      execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+      created.push(name);
+    }
+    const response = await context.request.post("/mux/api/workspaces", {
+      data: { name: "Shared session read markers", tabs: names, activeSession: names[0], groups: [] },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as SavedWorkspace;
+    workspaceIds.push(workspace.id);
+    const frozenInventory = await (await context.request.get("/mux/api/sessions")).json();
+    // HTTP inventories stay stale throughout: only a real stream can deliver
+    // another browser's read/unread changes to these pages.
+    await context.route("**/api/sessions", (route) => route.fulfill({ json: frozenInventory }));
+    const openIndependent = async (staleIdentity?: string) => {
+      secondContext = await browser.newContext({ viewport: { width: 1440, height: 700 } });
+      expect((await secondContext.request.post("/mux/api/auth/login", {
+        data: { username: E2E_AUTH_USERNAME, password: E2E_AUTH_PASSWORD },
+      })).ok()).toBe(true);
+      await secondContext.route("**/api/sessions", (route) => route.fulfill({ json: frozenInventory }));
+      await secondContext.addInitScript((identity) => {
+        localStorage.setItem("muxdeck-desktop-tab-orientation", "vertical");
+        if (identity) localStorage.setItem("muxdeck.session-ready-attention.v1:/mux/", JSON.stringify({
+          [identity]: {
+            state: "waiting_human", stateChangedAt: 999, awaitingReady: false,
+            latestReadyEvent: 999, lastCheckedEvent: 0,
+          },
+        }));
+      }, staleIdentity);
+      const secondPage = await secondContext.newPage();
+      await openWorkspace(secondPage, workspace);
+      return secondPage;
+    };
+    await openWorkspace(page, workspace);
+    let secondPage = await openIndependent();
+    await tabRow(secondPage, names[1]).getByRole("tab").click();
+    await expect(tabRow(secondPage, names[1]).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+
+    await page.getByRole("button", { name: "Mark as unread", exact: true }).click();
+    await expect(tabRow(page, names[0])).toHaveAttribute("data-ready-unchecked", "true");
+    await expect(tabRow(secondPage, names[0])).toHaveAttribute("data-ready-unchecked", "true");
+    await expect(tabRow(secondPage, names[1]).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+    await tabRow(secondPage, names[0]).getByRole("tab").click();
+    await expect(tabRow(page, names[0])).not.toHaveAttribute("data-ready-unchecked", "true");
+    await expect(tabRow(secondPage, names[0])).not.toHaveAttribute("data-ready-unchecked", "true");
+    await expect(tabRow(page, names[0]).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+
+    await page.getByRole("button", { name: "Mark as unread", exact: true }).click();
+    await expect(tabRow(secondPage, names[0])).toHaveAttribute("data-ready-unchecked", "true");
+    await tabRow(secondPage, names[1]).getByRole("tab").click();
+    await tabRow(secondPage, names[0]).getByRole("tab").click();
+    await expect(tabRow(page, names[0])).not.toHaveAttribute("data-ready-unchecked", "true");
+    const inventory = await context.request.get("/mux/api/sessions");
+    const live = ((await inventory.json()).sessions as Session[]).find((item) => item.name === names[0])!;
+    expect(live.readyAttention).toEqual({ latestReadyEvent: 2, lastCheckedEvent: 2 });
+    await secondContext!.close();
+    secondContext = null;
+
+    secondPage = await openIndependent(JSON.stringify([live.id, live.created, live.serverStarted, live.serverPid]));
+    await expect(tabRow(secondPage, names[0])).not.toHaveAttribute("data-ready-unchecked", "true");
+    await page.getByRole("button", { name: "Mark as unread", exact: true }).click();
+    await expect(tabRow(secondPage, names[0])).toHaveAttribute("data-ready-unchecked", "true");
+  } finally {
+    await secondContext?.close();
+    await page.close();
+    for (const name of created) {
+      execFileSync("tmux", ["-L", socket, "kill-session", "-t", `=${name}`]);
+    }
+  }
+});
 
 test("workspace closes reach another tab without moving its focus or resurrecting on pagehide", async ({
   page, context,
