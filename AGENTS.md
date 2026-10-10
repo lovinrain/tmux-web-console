@@ -41,6 +41,33 @@ again. Preserve unrelated work and follow the deployment safety checks above.
   immediately, so building in the running checkout deploys before validation.
   Documentation and tooling changes need no frontend build or service restart.
 
+## Artifact cleanup and retention
+
+Prevent completed development and deployment artifacts from accumulating. The
+user has authorized routine guarded cleanup of obsolete Muxdeck build and
+deployment artifacts as part of delivery. Preserve unrelated work.
+
+- After successful validation and delivery, remove unused staging dependencies,
+  generated frontend builds, and clean worktrees whose commits are already merged.
+  Use normal Git worktree removal; do not force removal of dirty, locked, or
+  unmerged worktrees.
+- Keep the current release plus two previous rollback releases with their matching
+  pre-upgrade state backups. Protect additional releases and artifacts while they
+  are referenced by processes, service configuration, or dependency symlinks, or
+  needed for pending deployment acceptance or a migration rollback.
+- Exclude live JSON/SQLite stores, session history, credentials, and uploaded user
+  files from routine artifact cleanup. Do not remove the only remaining copy of
+  user data merely because an older backup is outside the retention window.
+- Retain small task timelines and reports separately from bulky build directories.
+  Preserve failure traces until the issue is resolved; expire resolved browser
+  traces after 14 days.
+- Use shared cleanup tooling with an explicit dry-run manifest, reference checks,
+  exact deletion boundaries, and an audit log. Create or extend shared tooling
+  before automating recurring deletion; do not rely on folder age alone.
+- Record allocation before and after cleanup. Reuse the deployment checker when
+  cleaning installation artifacts to verify service and tmux identities. Routine
+  cleanup must not restart services or tmux.
+
 ## Session work links
 
 When linking a ticket, PR, or Google Doc to the current coding session, run
