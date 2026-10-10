@@ -145,4 +145,37 @@ describe("SessionHistoryDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh session history" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("History unavailable");
   });
+
+  it("uses stable paging cursors, keeps counts, and clears stale entries when a filter changes", async () => {
+    const older = { ...entry, id: "older", name: "older-session" };
+    vi.mocked(listSessionHistory).mockResolvedValueOnce({ entries: [entry], nextOffset: 50, nextCursor: "stable.50", totalCount: 51 })
+      .mockResolvedValueOnce({ entries: [older], nextOffset: null, nextCursor: null, totalCount: 51 });
+    render(<SessionHistoryDialog workspaceId="project" onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    await screen.findByText("1 of 51 sessions");
+    fireEvent.click(screen.getByRole("button", { name: "Load older sessions" }));
+    await screen.findByText("older-session");
+    expect(listSessionHistory).toHaveBeenLastCalledWith("project", "", true, 50, expect.any(AbortSignal), null, "stable.50");
+    expect(screen.getByText("2 of 51 sessions")).toBeVisible();
+    let finish!: (value: Awaited<ReturnType<typeof listSessionHistory>>) => void;
+    vi.mocked(listSessionHistory).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "All history" }));
+    expect(screen.queryByText("older-session")).not.toBeInTheDocument();
+    expect(screen.queryByText(entry.name, { selector: "strong" })).not.toBeInTheDocument();
+    finish({ entries: [], nextOffset: null, totalCount: 0 });
+    await screen.findByText("0 of 0 sessions");
+  });
+
+  it("retains loaded history and retries a failed older page using the same cursor", async () => {
+    vi.mocked(listSessionHistory).mockResolvedValueOnce({ entries: [entry], nextOffset: 50, nextCursor: "stable.50" })
+      .mockRejectedValueOnce(new Error("Temporary network failure"))
+      .mockResolvedValueOnce({ entries: [{ ...entry, id: "older", name: "older-session" }], nextOffset: null });
+    render(<SessionHistoryDialog onClose={vi.fn()} onOpenSession={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Load older sessions" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Temporary network failure");
+    expect(screen.getByText(entry.name, { selector: "strong" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Load older sessions" }));
+    await screen.findByText("older-session");
+    expect(listSessionHistory).toHaveBeenLastCalledWith(null, "", true, 50, expect.any(AbortSignal), null, "stable.50");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 });

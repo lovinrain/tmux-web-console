@@ -20,7 +20,11 @@ interface Props {
   onOpenSession: (name: string) => void;
 }
 
-export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessionName = null, showWorkspaceMembership = true, onClose, onOpenSession }: Props) {
+export function SessionHistoryDialog(props: Props) {
+  return <SessionHistoryContent key={JSON.stringify([props.workspaceId ?? null, props.sessionName ?? null])} {...props} />;
+}
+
+function SessionHistoryContent({ workspaceId = null, workspaceName, sessionName = null, showWorkspaceMembership = true, onClose, onOpenSession }: Props) {
   const { timeZone } = useDisplayTimeZone();
   const date = (value: number | null) => value === null
     ? "Not recorded" : formatTimestamp(value * 1000, timeZone, FULL_TIMESTAMP_FORMAT);
@@ -28,8 +32,11 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
   const [search, setSearch] = useState("");
   const [recycled, setRecycled] = useState(!sessionName);
   const [entries, setEntries] = useState<SessionHistoryEntry[]>([]);
-  const [offset, setOffset] = useState(0);
+  const [pagination, setPagination] = useState<{ offset: number; cursor: string | null }>({ offset: 0, cursor: null });
+  const { offset, cursor } = pagination;
   const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +70,8 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
         }
       }
       if (event.key === "Tab") {
-        const nodes = Array.from(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input, select, [tabindex='0']") ?? []);
+        const nodes = Array.from(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex='0']") ?? [])
+          .filter((node) => !node.closest("details:not([open])") || node.matches("summary"));
         const first = nodes[0];
         const last = nodes.at(-1);
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
@@ -89,15 +97,32 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    void listSessionHistory(workspaceId, search, recycled, offset, controller.signal, sessionName).then((result) => {
+    if (!offset) {
+      setEntries([]);
+      setNextOffset(null);
+      setNextCursor(null);
+      setTotalCount(null);
+      setMessagesFor(null);
+      setOutputFor(null);
+      setTranscriptFor(null);
+      setConfirm(null);
+    }
+    const result = cursor
+      ? listSessionHistory(workspaceId, search, recycled, offset, controller.signal, sessionName, cursor)
+      : listSessionHistory(workspaceId, search, recycled, offset, controller.signal, sessionName);
+    void result.then((result) => {
       if (controller.signal.aborted) return;
       setEntries((previous) => offset ? [...previous, ...result.entries.filter((entry) => !previous.some((item) => item.id === entry.id))] : result.entries);
       setNextOffset(result.nextOffset);
+      setNextCursor(result.nextCursor ?? null);
+      setTotalCount(result.totalCount ?? null);
     }).catch((failure: unknown) => {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Unable to load history");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [offset, recycled, revision, search, sessionName, workspaceId]);
+  }, [cursor, offset, recycled, revision, search, sessionName, workspaceId]);
+
+  const resetPage = () => setPagination({ offset: 0, cursor: null });
 
   const restore = async (entry: SessionHistoryEntry, create: boolean) => {
     if (busy) return;
@@ -128,15 +153,16 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
         ? `Session start, creation origin and coding agents recorded in ${sessionName}, including earlier shells under this name. `
         : workspaceId ? `Previously associated with ${workspaceName || "this workspace"}. ` : "Closed tabs and ended or missing sessions. "}
         Browse local agent transcripts, saved output and submitted messages, reopen a running session, or explicitly create a fresh shell. Recreating a shell does not restore its running processes.</p>
-      <form className="session-history-search" onSubmit={(event) => { event.preventDefault(); setOffset(0); setSearch(query.trim()); setRevision((current) => current + 1); }}>
+      <form className="session-history-search" onSubmit={(event) => { event.preventDefault(); resetPage(); setSearch(query.trim()); setRevision((current) => current + 1); }}>
         <SearchIcon /><input ref={input} aria-label="Search session history" placeholder="Session name, old name, directory, or agent ID" maxLength={256} value={query} onChange={(event) => setQuery(event.target.value)} />
         <button type="submit" disabled={Boolean(busy)}>Search</button>
-        <button type="button" aria-label="Refresh session history" disabled={loading || Boolean(busy)} onClick={() => { setOffset(0); setRevision((value) => value + 1); }}><RefreshIcon /></button>
+        <button type="button" aria-label="Refresh session history" disabled={loading || Boolean(busy)} onClick={() => { resetPage(); setRevision((value) => value + 1); }}><RefreshIcon /></button>
       </form>
       <div className="session-history-filters">
-        <button type="button" aria-pressed={!recycled} disabled={Boolean(busy)} onClick={() => { setOffset(0); setRecycled(false); }}>All history</button>
-        <button type="button" aria-pressed={recycled} disabled={Boolean(busy)} onClick={() => { setOffset(0); setRecycled(true); }}>Closed &amp; ended</button>
+        <button type="button" aria-pressed={!recycled} disabled={Boolean(busy)} onClick={() => { resetPage(); setRecycled(false); }}>All history</button>
+        <button type="button" aria-pressed={recycled} disabled={Boolean(busy)} onClick={() => { resetPage(); setRecycled(true); }}>Closed &amp; ended</button>
         <span>Newest activity first / shared across browsers</span>
+        {totalCount !== null && <span>{entries.length.toLocaleString()} of {totalCount.toLocaleString()} sessions</span>}
       </div>
       {error && <p className="session-history-error" role="alert">{error}</p>}
       {confirm && <div className="session-history-confirm" role="alertdialog" aria-label="Recreate shell confirmation">
@@ -199,12 +225,13 @@ export function SessionHistoryDialog({ workspaceId = null, workspaceName, sessio
           </footer>
           {messagesFor === entry.id && <SubmittedMessages key={entry.id} target={{ historyId: entry.id }} />}
           {outputFor === entry.id && <SavedScrollback target={{ historyId: entry.id }} />}
-          {transcriptFor === entry.id && <AgentTranscript target={{ historyId: entry.id }}
+          {transcriptFor === entry.id && <AgentTranscript target={{ historyId: entry.id }} title={entry.title || entry.name}
             onShowBeginning={() => { setOutputFor(entry.id); setTranscriptFor(null); }} />}
           {!entry.directoryAvailable && entry.state !== "live" && <p>Saved directory is unavailable. Restore the directory before recreating this shell.</p>}
         </article>)}
         {loading && <p role="status">Loading session history...</p>}
-        {nextOffset !== null && <button type="button" disabled={loading || Boolean(busy)} onClick={() => setOffset(nextOffset)}>Load older sessions</button>}
+        {nextOffset !== null && <button type="button" disabled={loading || Boolean(busy)}
+          onClick={() => { setPagination({ offset: nextOffset, cursor: nextCursor }); setRevision((value) => value + 1); }}>Load older sessions</button>}
       </div>
     </section>
   </div>, document.body);

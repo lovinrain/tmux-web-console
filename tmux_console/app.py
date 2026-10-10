@@ -1483,8 +1483,15 @@ def create_app(
                     async with application[SESSION_RENAME_LOCK_KEY]:
                         live = await application[TMUX_KEY].list_sessions()
                         references = await application[AGENT_REFERENCES_KEY].detect_sessions(live)
+                        other_panes = [pane for session in live for pane in session.panes
+                                       if pane != session.active_pane]
+                        other_references = await application[AGENT_REFERENCES_KEY].detect_panes(other_panes)
                         for session in live:
-                            application[SESSION_REGISTRY_KEY].observe_history(session, references.get(session.name))
+                            application[SESSION_REGISTRY_KEY].observe_history(
+                                session, references.get(session.name),
+                                pane_references=[other_references[pane.id] for pane in session.panes
+                                                 if pane.id in other_references],
+                            )
                 except (TmuxError, SessionRegistryUnavailable):
                     LOGGER.warning("Unable to refresh conversation IDs for submitted messages")
                 if live is not None:
@@ -2420,7 +2427,7 @@ def create_app(
 
     async def list_session_history(request: web.Request) -> web.Response:
         try:
-            if set(request.query) - {"workspace", "q", "recycled", "offset", "session"}:
+            if set(request.query) - {"workspace", "q", "recycled", "offset", "session", "cursor"}:
                 raise ValueError("unknown history query field")
             offset = int(request.query.get("offset", "0"))
             if not 0 <= offset <= 1_000_000:
@@ -2437,6 +2444,7 @@ def create_app(
                 workspace_id=request.query.get("workspace"), query=query,
                 recycled=request.query.get("recycled", "0") == "1", offset=offset,
                 session_name=session_name,
+                cursor=request.query.get("cursor"),
             )
             return web.json_response(result)
         except ValueError as error:
@@ -6176,7 +6184,10 @@ def create_app(
                     reference = await app[AGENT_REFERENCES_KEY].detect_pane(pane, refresh=True)
                     live_identity = (identity, pane.id, pane.process_pid)
                     agents = [{"agentType": reference.agent_type, "agentSessionId": reference.session_id}]
-                    recorded_history_id = app[SESSION_REGISTRY_KEY].observe_history(session, reference)
+                    recorded_history_id = app[SESSION_REGISTRY_KEY].observe_history(
+                        session, reference if pane == session.active_pane else None,
+                        pane_references=[reference] if pane != session.active_pane else None,
+                    )
                     # Some CLIs close their transcript descriptor while idle.
                     # Only use IDs actually recorded for this same single-pane
                     # session incarnation; never select by shared CWD or mtime.

@@ -26,6 +26,25 @@ Copying preserves the original Markdown in either format. Text stays selectable;
 embedded HTML and scripts are skipped, remote images become text placeholders,
 and links open separately. Activity remains literal text.
 
+**Export Markdown** downloads the complete selected conversation, including
+messages that have not been loaded on screen. **Export PDF** opens the complete
+conversation in a formatted print view; choose **Print / Save as PDF**, then
+**Save as PDF** in the browser's print dialog. Allow pop-ups for Muxdeck if the
+print view is blocked. Both exports follow **Show activity** and include roles,
+UTC timestamps when recorded, source ID, and notices for unreadable or shortened
+records. **Cancel export**, switching conversations, refreshing, or closing
+history cancels a pending export. Finished print views remain available.
+
+Exports read from the beginning and retain the native pagination snapshot, so
+appends do not move messages during export. Progress counts the collected
+messages. No export archive is written on the server. Browser collection is
+bounded to 32 MiB of message text, 50,000 messages, and 2,000 page requests; a
+limit or changed/unavailable source stops export without saving an incomplete
+file. Existing reader limits still apply and are explicitly reported. Markdown
+keeps message Markdown/code and quotes activity as literal text. PDF has
+selectable text, wraps long code, omits remote images and active HTML, and needs
+no extra PDF service or package.
+
 There is one **Transcript** tab. **Scrollback** captures the retained tmux buffer;
 **Recorded output** opens the earliest terminal output saved by Muxdeck, which can
 start after the conversation began. A captured “Earlier messages are available”
@@ -65,6 +84,12 @@ reference detector uses PID registrations when available, with legacy detection
 for older versions. An ID that was never detectable cannot be reconstructed by
 the transcript reader.
 
+The background recorder observes agents in every pane, including inactive
+panes, using cached and bounded ID discovery. Those references supplement the
+session's primary agent rather than overwriting it. When history includes a
+later unidentified agent, its default transcript still prefers the most recent
+recorded conversation ID. An explicit conversation selection is never replaced.
+
 Codex discovery follows executable launchers such as Volta and Node before
 looking for the actual CLI's rollout, while still excluding nested agents.
 When an idle CLI exposes no current ID, a single-pane session can offer IDs
@@ -85,6 +110,11 @@ has been written to update its classification.
 Claude metadata messages, Codex environment/AGENTS blocks, and Grok synthetic
 reminders are activity rather than user prompts. Cursor's generated context is
 excluded, and native `<user_query>` wrappers are unwrapped for Cursor and Grok.
+Leading setup blocks are separated even when real input follows in the same
+text block; literal examples inside prose or code remain visible. Codex's
+`<send_user_message_question_reply>` records display as **Question** and
+**Your answer**, preserving the complete question and answer text. Malformed
+or unfamiliar envelopes remain visible unchanged rather than being discarded.
 
 Only visible user/assistant text and supported tool records are extracted.
 System/developer instructions, provider context, reasoning blocks, encrypted

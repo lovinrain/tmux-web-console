@@ -9,8 +9,8 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.agent_reference import AgentReference, AgentReferenceDetector
-from tmux_console.app import create_app
-from tmux_console.tmux import TmuxClient
+from tmux_console.app import SESSION_REGISTRY_KEY, create_app
+from tmux_console.tmux import Session, TmuxClient
 
 
 class References(AgentReferenceDetector):
@@ -136,3 +136,31 @@ async def test_history_can_be_scoped_to_one_session_over_http(tmp_path):
             subprocess.run, ["tmux", "-L", socket, "kill-server"],
             check=False, capture_output=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_history_cursor_is_accepted_and_bound_to_http_filters():
+    class EmptyTmux(TmuxClient):
+        async def list_sessions(self):
+            return []
+    app = create_app(tmux=EmptyTmux(binary="must-not-start-tmux"), base_path="")
+    for i in range(55):
+        app[SESSION_REGISTRY_KEY].observe_history(Session(
+            name=f"work-{i}", id=f"${i}", created=100 + i,
+            windows=1, attached=0, server_started=90, server_pid=42,
+        ))
+    async with TestClient(TestServer(app)) as client:
+        first = await client.get("/api/session-history", params={"q": "work-", "recycled": "0"})
+        assert first.status == 200
+        initial = await first.json()
+        assert len(initial["entries"]) == 50 and initial["totalCount"] == 55
+        second = await client.get("/api/session-history", params={
+            "q": "work-", "recycled": "0", "cursor": initial["nextCursor"],
+        })
+        assert second.status == 200
+        rest = await second.json()
+        assert len(rest["entries"]) == 5 and rest["nextCursor"] is None
+        assert len({e["id"] for e in initial["entries"] + rest["entries"]}) == 55
+        mismatch = await client.get("/api/session-history", params={"cursor": initial["nextCursor"], "q": "other"})
+        assert mismatch.status == 400
+        assert "refresh" in (await mismatch.json())["error"]

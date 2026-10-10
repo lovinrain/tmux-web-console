@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 import sqlite3
 from dataclasses import replace
@@ -450,6 +451,70 @@ def test_codex_mixed_context_preserves_first_prompt_and_legacy_phase(tmp_path):
         reader.read(references(), view="conversation", cursor=result["nextCursor"])
 
 
+def test_codex_question_replies_render_question_and_answer_without_transport_ids(tmp_path):
+    replies = [
+        {"question": "May I proceed?\nChoose an option.", "answer": "**Continue**\nKeep the tests.", "questionItemId": "internal-id"},
+        {"question": "Which format?", "answer": "Markdown"},
+    ]
+    envelope = "<send_user_message_question_reply>\n" + json.dumps(replies) + "\n</send_user_message_question_reply>"
+    path = write_native(tmp_path, "codex", [codex_message(envelope)])
+    before = path.read_bytes()
+    result = AgentTranscriptReader(roots={"codex": tmp_path}).read(references(), view="conversation")
+    assert result["messages"][0]["kind"] == "prompt"
+    assert result["messages"][0]["text"] == (
+        "Question:\nMay I proceed?\nChoose an option.\n\nYour answer:\n**Continue**\nKeep the tests."
+        "\n\nQuestion:\nWhich format?\n\nYour answer:\nMarkdown"
+    )
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("body", [
+    "not JSON", "[]", '{"answer": "Continue"}',
+    '[{"answer": "Continue"}]', '[{"question": "Proceed?", "answer": ["yes"]}]',
+    '[{"question": "Proceed?", "answer": "yes", "futureField": "preserve me"}]',
+])
+def test_unrecognized_codex_question_reply_is_preserved(tmp_path, body):
+    text = f"<send_user_message_question_reply>{body}</send_user_message_question_reply>"
+    write_native(tmp_path, "codex", [codex_message(text)])
+    result = AgentTranscriptReader(roots={"codex": tmp_path}).read(references(), view="conversation")
+    assert result["messages"][0]["text"] == text
+
+
+def test_setup_and_prompt_in_same_text_block_keep_literal_examples_visible(tmp_path):
+    setup = "# AGENTS.md instructions for /work\n<INSTRUCTIONS>Setup</INSTRUCTIONS>"
+    environment = "<environment_context>Machine details</environment_context>"
+    prompt = "Fix this example:\n```xml\n<environment_context>Literal example</environment_context>\n```"
+    write_native(tmp_path, "codex", [codex_message(setup + "\n" + environment + "\n\n" + prompt)])
+    reader = AgentTranscriptReader(roots={"codex": tmp_path})
+    conversation = reader.read(references(), view="conversation")
+    assert [m["text"] for m in conversation["messages"]] == [prompt]
+    activity = reader.read(references(), view="all", limit=1)
+    assert activity["messages"][0]["text"] == setup + "\n\n" + environment
+    following = reader.read(references(), view="all", cursor=activity["nextCursor"], limit=1)
+    assert following["messages"] == conversation["messages"]
+
+
+def test_context_extraction_preserves_indented_markdown_in_the_real_prompt(tmp_path):
+    prompt = "    print('Preserve this code indentation')"
+    write_native(tmp_path, "codex", [codex_message("<environment_context>Setup</environment_context>\n\n" + prompt)])
+    result = AgentTranscriptReader(roots={"codex": tmp_path}).read(references(), view="conversation")
+    assert result["messages"][0]["text"] == prompt
+
+
+def test_default_source_prefers_recorded_conversation_over_later_unidentified_agent(tmp_path):
+    write_native(tmp_path, "codex", [codex_message("Known conversation")])
+    agents = [
+        {**references()[0], "lastSeenAt": 100},
+        {"agentType": "claude", "agentSessionId": None, "lastSeenAt": 200},
+    ]
+    reader = AgentTranscriptReader(roots={"codex": tmp_path})
+    result = reader.read(agents, view="conversation")
+    assert result["messages"][0]["text"] == "Known conversation"
+    assert result["selectedSource"] == f"codex:{ID}"
+    explicit = reader.read(agents, selected="claude:", view="conversation")
+    assert explicit["status"] == "unidentified"
+
+
 def test_read_budget_does_not_discard_a_prompt_that_straddles_scan_pages(tmp_path, monkeypatch):
     monkeypatch.setattr("tmux_console.agent_transcripts.MAX_SCAN_BYTES", 500)
     write_native(tmp_path, "codex", [
@@ -492,3 +557,23 @@ async def test_idle_single_pane_can_read_its_recorded_conversation_without_guess
         assert (await client.get(path, params={"source": f"codex:{OTHER}"})).status == 400
         tmux.session = replace(tmux.session, id="$new", created=500)
         assert (await (await client.get(path)).json())["status"] == "unidentified"
+
+
+async def test_background_observation_records_agents_from_inactive_panes(tmp_path, monkeypatch):
+    monkeypatch.setattr("tmux_console.app.SUBMITTED_MESSAGE_POLL_SECONDS", 0.01)
+    tmux, detector = TranscriptTmux(), References()
+    app = create_app(tmux=tmux, agent_references=detector, base_path="")
+    async with TestClient(TestServer(app)):
+        history = None
+        for _ in range(50):
+            history = app[SESSION_REGISTRY_KEY].history_for_identity(
+                tmux.session.id, tmux.session.created,
+                tmux.session.server_started, tmux.session.server_pid,
+            )
+            if history and len(app[SESSION_REGISTRY_KEY].list_session_agents(history["id"])) == 2:
+                break
+            await asyncio.sleep(0.01)
+        assert history
+        agents = app[SESSION_REGISTRY_KEY].list_session_agents(history["id"])
+        assert {agent["agentSessionId"] for agent in agents} == {ID, OTHER}
+        assert ("%2", False) in detector.requested

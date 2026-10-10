@@ -2,8 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAgentTranscript, type AgentTranscriptMessage, type AgentTranscriptPage } from "../api";
 import { AgentTranscript } from "./AgentTranscript";
+import { collectTranscript, downloadTranscriptMarkdown } from "../transcriptExport";
+import { writeTranscriptPrint } from "./TranscriptPrint";
 
 vi.mock("../api", () => ({ loadAgentTranscript: vi.fn() }));
+vi.mock("../transcriptExport", () => ({ collectTranscript: vi.fn(), downloadTranscriptMarkdown: vi.fn() }));
+vi.mock("./TranscriptPrint", () => ({ writeTranscriptPrint: vi.fn() }));
 
 const source = { key: "codex:conversation", agentType: "codex", agentSessionId: "conversation" };
 const other = { key: "claude:other", agentType: "claude", agentSessionId: "other" };
@@ -143,5 +147,65 @@ describe("AgentTranscript", () => {
     vi.mocked(loadAgentTranscript).mockResolvedValueOnce(page([message("first", "First prompt after metadata")]));
     fireEvent.click(screen.getByRole("button", { name: "Continue searching" }));
     await screen.findByText("First prompt after metadata");
+  });
+
+  it("exports the whole selected conversation with progress, activity scope, and a named download", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page([message("first", "Loaded first prompt")]));
+    const transcript = { source, view: "all" as const, messages: [message("first", "Loaded first prompt"), message("unloaded", "Last saved reply", "assistant")],
+      notices: [], exportedAt: 0 };
+    vi.mocked(collectTranscript).mockImplementation(async (_target, _source, _view, _signal, progress) => {
+      progress(2);
+      return transcript;
+    });
+    render(<AgentTranscript target={{ historyId: "history" }} title="Project conversation" />);
+    await screen.findByText("Loaded first prompt");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show activity" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Export Markdown" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Export Markdown" }));
+    await screen.findByText("Markdown exported · 2 messages.");
+    expect(collectTranscript).toHaveBeenCalledWith({ historyId: "history" }, source.key, "all", expect.any(AbortSignal), expect.any(Function));
+    expect(downloadTranscriptMarkdown).toHaveBeenCalledWith(transcript, "Project conversation");
+    expect(screen.queryByText("Last saved reply")).not.toBeInTheDocument();
+  });
+
+  it("cancels an export and ignores its late result when the selected conversation changes", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page([message("first", "First conversation")], { sources: [source, other] }));
+    let finish!: (value: Awaited<ReturnType<typeof collectTranscript>>) => void;
+    vi.mocked(collectTranscript).mockImplementationOnce((_target, _source, _view, _signal, progress) => {
+      progress(50);
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("First conversation");
+    fireEvent.click(screen.getByRole("button", { name: "Export Markdown" }));
+    await screen.findByText("Preparing Markdown · 50 messages…");
+    const signal = vi.mocked(collectTranscript).mock.calls[0][3];
+    vi.mocked(loadAgentTranscript).mockResolvedValueOnce(page([message("other", "Other conversation")], { sources: [source, other], selectedSource: other.key }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: other.key } });
+    await screen.findByText("Other conversation");
+    expect(signal.aborted).toBe(true);
+    await act(async () => finish({ source, view: "conversation", messages: [], notices: [], exportedAt: 0 }));
+    expect(downloadTranscriptMarkdown).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Cancel export" })).not.toBeInTheDocument();
+  });
+
+  it("opens the PDF window synchronously, removes its opener, and shows pop-up failures", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page([message("first", "Prompt")]));
+    const transcript = { source, view: "conversation" as const, messages: [], notices: [], exportedAt: 0 };
+    vi.mocked(collectTranscript).mockResolvedValue(transcript);
+    const popup = { document: document.implementation.createHTMLDocument(), closed: false, opener: window, close: vi.fn() } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(popup);
+    render(<AgentTranscript target={{ paneId: "%1" }} title="PDF conversation" />);
+    await screen.findByText("Prompt");
+    fireEvent.click(screen.getByRole("button", { name: "Export PDF" }));
+    expect(open).toHaveBeenCalledWith("", "_blank");
+    expect(popup.opener).toBeNull();
+    await screen.findByText(/PDF view ready/);
+    expect(writeTranscriptPrint).toHaveBeenCalledWith(popup, transcript, "PDF conversation");
+    open.mockReturnValueOnce(null);
+    fireEvent.click(screen.getByRole("button", { name: "Export PDF" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Allow pop-ups");
+    expect(collectTranscript).toHaveBeenCalledOnce();
+    open.mockRestore();
   });
 });

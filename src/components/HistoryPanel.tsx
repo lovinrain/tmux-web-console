@@ -400,7 +400,7 @@ export function HistoryPanel({
         <div className="history-view-content" id={`${viewId}-content`} role="tabpanel"
           aria-labelledby={`${viewId}-${view}`}>
         {view === "transcript" ? <>
-          <AgentTranscript target={{ paneId: pane.id, identity: sessionIdentity }}
+          <AgentTranscript target={{ paneId: pane.id, identity: sessionIdentity }} title={sessionName}
             onShowScrollback={() => selectView("scrollback")} onShowBeginning={() => selectView("recorded")} />
           <footer className="history-footer"><button type="button" className="primary-button" onClick={onClose}>Back to live</button></footer>
         </> : view === "recorded" ? <>

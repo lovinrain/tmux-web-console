@@ -485,7 +485,7 @@ class AgentReferenceDetector:
         live_panes = {
             pane.id
             for session in sessions
-            if (pane := session.active_pane) is not None
+            for pane in session.panes
         }
         self._cache = {
             pane_id: cached
@@ -493,3 +493,8 @@ class AgentReferenceDetector:
             if pane_id in live_panes and cached.expires_at > now
         }
         return results
+
+    async def detect_panes(self, panes: list[Pane]) -> dict[str, AgentReference]:
+        """Record other panes using the same bounded discovery/cache as status."""
+        references = await asyncio.gather(*(self.detect_pane(pane) for pane in panes))
+        return {pane.id: reference for pane, reference in zip(panes, references, strict=True)}

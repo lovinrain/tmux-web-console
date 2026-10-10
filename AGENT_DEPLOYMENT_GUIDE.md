@@ -1250,6 +1250,16 @@ Most redeployments do not need a restart at all. The frontend is served from dis
 `dist/` ships frontend changes immediately with no restart and no risk to tmux.
 Restart only when Python code or unit environment actually changed.
 
+History cursor paging and Markdown/PDF transcript export need the updated
+backend and frontend together, with no state-schema upgrade or new transcript
+archive. Reopened workspace memberships repair stale closure markers during
+normal observation; the existing SQLite schema remains version 5. Reload open
+browser pages to use stable history cursors and complete-conversation export.
+Exports read native agent storage through the existing authenticated endpoint;
+PDF uses a browser print view and requires no new service, port, or proxy route.
+Rollback to the preceding schema-5 release can keep current state. Preserve
+the separate pre-schema-5 backup when retaining older rollback code.
+
 Workspace streaming and `expectedUpdatedAt` checks do not themselves require a
 schema change. Nested tab relationships use schema 14, upgraded atomically on
 the next state write; keep the pre-upgrade workspace file for rollback.

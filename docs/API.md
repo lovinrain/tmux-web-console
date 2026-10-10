@@ -793,7 +793,7 @@ These routes require a live session and return the saved value:
 
 | Method and route | Request | Purpose |
 | --- | --- | --- |
-| `GET /api/session-history?workspace=ID&q=TEXT&recycled=0&offset=0` | Optional query fields | Lists observed/current or recycled session history. |
+| `GET /api/session-history?workspace=ID&q=TEXT&recycled=0&offset=0` | Optional `workspace`, `q`, `recycled`, `offset`, `session`, `cursor` | Lists observed/current or recycled session history. |
 | `POST /api/sessions/{session}/view-events` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid`, `kind` | Records browser view activity for the exact live identity; returns `204`. |
 | `POST /api/session-history/close-tab` | `session`, `sessionId` | Records that a live session tab was closed without ending tmux. |
 | `POST /api/session-history/{historyId}/restore` | `create` boolean | Finds the original live identity or explicitly recreates a shell from saved name/PWD. |
@@ -807,6 +807,25 @@ An origin has `kind` (`new`, `copy`, or `recreate`), `recordedAt`, optional
 `sourceHistoryId`/`sourceName`, and optional `placement` (`sibling` or `child`).
 The source name is a snapshot at creation; its history ID survives renames.
 These fields supplement first/last observation times and the `agents` array.
+
+The history response contains `entries` (at most 50), `nextOffset`,
+`nextCursor`, and `totalCount`. Use the opaque `nextCursor` with the same
+filters for subsequent pages: it preserves the initial ordering while returning
+current entry metadata. New activity/inserts appear after refresh instead of
+skipping or duplicating older entries. Ordering snapshots are private,
+process-local, and expire after ten minutes or bounded cache eviction; an
+expired or invalid cursor returns `400` with an instruction to refresh.
+The cache retains at most 32 lists and 250,000 total IDs. A list exceeding
+100,000 entries requires narrower filters. Legacy numeric offsets remain
+supported; arbitrary non-page-aligned offsets do not issue a cursor.
+
+`session` matches the current name or an exact decoded previous name.
+`q` searches names, aliases, title, directory, and every observed agent type/ID,
+including earlier conversations. `recycled=1` includes ended/missing entries;
+with a workspace filter, live entries appear only when removed from that
+workspace. A closure in another workspace or a global tab-close marker does
+not make a present workspace membership recycled. Re-adding membership clears
+its closure marker, including stale markers left by older versions.
 
 The copy endpoint accepts optional `placement` (`sibling` or `child`) to record
 placement at creation. The source identity comes from the validated tmux copy

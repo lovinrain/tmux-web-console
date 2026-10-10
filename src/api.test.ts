@@ -29,6 +29,7 @@ import {
   getShortcutSettings,
   listSessionFiles,
   listSessions,
+  listSessionHistory,
   loadSavedScrollback,
   listQueuedMessages,
   listCallbackMessages,
@@ -142,6 +143,23 @@ describe("saved scrollback API", () => {
       expect.objectContaining({ signal }),
     );
   });
+});
+
+it("encodes stable history cursors together with all scope filters and passes cancellation", async () => {
+  const payload = { entries: [], nextOffset: 50, nextCursor: "next.50", totalCount: 100 };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+  vi.stubGlobal("fetch", fetchMock);
+  const signal = new AbortController().signal;
+  await expect(listSessionHistory("workspace/id", '研究 "old"', true, 50, signal, "work+1", "opaque.50")).resolves.toEqual(payload);
+  const [url, options] = fetchMock.mock.calls[0];
+  const params = new URL(url, "http://localhost").searchParams;
+  expect(params.get("workspace")).toBe("workspace/id");
+  expect(params.get("q")).toBe('研究 "old"');
+  expect(params.get("session")).toBe("work+1");
+  expect(params.get("cursor")).toBe("opaque.50");
+  expect(params.get("offset")).toBe("50");
+  expect(params.get("recycled")).toBe("1");
+  expect(options.signal).toBe(signal);
 });
 
 function session(): Session {

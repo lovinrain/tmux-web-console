@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -187,6 +188,24 @@ async def test_detector_does_not_walk_proc_for_a_plain_shell(tmp_path: Path):
     assert await detector.detect_sessions([session(pane(command="bash"))]) == {
         "agent": AgentReference(None, None)
     }
+
+
+@pytest.mark.asyncio
+async def test_other_pane_discovery_reuses_cache_during_inventory_refresh(tmp_path: Path, monkeypatch):
+    identifier = "11111111-1111-4111-8111-111111111111"
+    discovery = []
+    def discover(pane, agent_type, **kwargs):
+        discovery.append(pane.id)
+        return identifier
+    monkeypatch.setattr("tmux_console.agent_reference.discover_agent_session_id", discover)
+    detector = AgentReferenceDetector(proc_root=tmp_path)
+    active = pane(command="bash")
+    other = replace(pane(command="codex"), id="%2", active=False, process_pid=101)
+    native = replace(session(active), panes=[active, other])
+    assert await detector.detect_panes([other]) == {"%2": AgentReference("codex", identifier)}
+    await detector.detect_sessions([native])
+    assert await detector.detect_panes([other]) == {"%2": AgentReference("codex", identifier)}
+    assert discovery == ["%2"]
 
 
 def claude_process(

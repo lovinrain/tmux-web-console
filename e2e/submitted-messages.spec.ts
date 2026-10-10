@@ -153,6 +153,14 @@ for (const width of [1440, 390]) {
         await history.getByRole("button", { name: `Transcript for ${name}`, exact: true }).click();
         await expect(history.getByText("An older Claude answer preserved in the local transcript")).toBeVisible();
         await expect(history.getByText(finalText, { exact: true })).toBeVisible();
+        const downloadReady = page.waitForEvent("download");
+        await history.getByRole("button", { name: "Export Markdown", exact: true }).click();
+        const download = await downloadReady;
+        const exported = readFileSync((await download.path())!, "utf8");
+        expect(exported).toContain("An older Claude answer preserved in the local transcript");
+        expect(exported).toContain(finalText);
+        expect(exported).toContain(middleText);
+        expect(exported).toContain("## Claude");
         await history.getByRole("button", { name: `Saved output for ${name}`, exact: true }).click();
         await expect(history.getByLabel("Beginning output", { exact: true })).toContainText(`Opening context for ${identifier}`);
         await history.getByLabel("Output", { exact: true }).selectOption("recent");

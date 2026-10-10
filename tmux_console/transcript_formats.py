@@ -9,8 +9,31 @@ from typing import Any
 
 MAX_MESSAGE_BYTES = 256 * 1024
 CONVERSATION_KINDS = {"prompt", "response"}
-_CONTEXT_BLOCK = re.compile(r"\s*<(environment_context|user_info)>[\s\S]*</\1>\s*")
+_CONTEXT_PREFIX = re.compile(r"\s*<(environment_context|user_info)>[\s\S]*?</\1>(?=\s|$)")
+_AGENTS_PREFIX = re.compile(r"\s*# AGENTS\.md instructions for [^\n]*\n\s*<INSTRUCTIONS>[\s\S]*?</INSTRUCTIONS>(?=\s|$)")
 _USER_QUERY = re.compile(r"\s*<user_query>([\s\S]*?)</user_query>\s*")
+_QUESTION_REPLY = re.compile(r"\s*<send_user_message_question_reply>([\s\S]*?)</send_user_message_question_reply>\s*")
+
+
+def _question_reply(text: str) -> str:
+    """Unwrap transport metadata only when every question/answer is understood."""
+    match = _QUESTION_REPLY.fullmatch(text)
+    if not match:
+        return text
+    try:
+        replies = json.loads(match[1])
+    except (ValueError, RecursionError):
+        return text
+    if not isinstance(replies, list) or not replies or any(
+        not isinstance(item, dict)
+        or set(item) - {"question", "answer", "questionItemId"}
+        or not isinstance(item.get("question"), str)
+        or not isinstance(item.get("answer"), str)
+        or "questionItemId" in item and not isinstance(item["questionItemId"], str)
+        for item in replies
+    ):
+        return text
+    return "\n\n".join(f"Question:\n{item['question']}\n\nYour answer:\n{item['answer']}" for item in replies)
 
 
 def _text(content: object) -> str:
@@ -38,16 +61,20 @@ def _user_text(content: object, agent: str) -> tuple[str, str]:
     prompts: list[str] = []
     context: list[str] = []
     for text in parts:
-        stripped = text.strip()
-        generated = bool(_CONTEXT_BLOCK.fullmatch(text)) or (
-            agent == "codex" and stripped.startswith("# AGENTS.md instructions for ")
-            and "<INSTRUCTIONS>" in stripped and stripped.endswith("</INSTRUCTIONS>")
-        )
-        if generated:
-            context.append(text)
-        elif text:
+        # Only leading native setup blocks are extracted. Quoted examples in
+        # real prose/code remain prompts, and malformed wrappers stay visible.
+        while text:
+            generated = _CONTEXT_PREFIX.match(text)
+            if generated is None and agent == "codex":
+                generated = _AGENTS_PREFIX.match(text)
+            if generated is None:
+                break
+            context.append(generated[0].strip())
+            text = text[generated.end():].lstrip("\r\n")
+        if text:
             query = _USER_QUERY.fullmatch(text) if agent in {"cursor", "grok"} else None
-            prompts.append(query[1].strip() if query else text)
+            prompt = query[1].strip() if query else text
+            prompts.append(_question_reply(prompt) if agent == "codex" else prompt)
     return "\n\n".join(prompts), "\n\n".join(context)
 
 

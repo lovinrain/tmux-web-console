@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -38,6 +38,7 @@ test("Transcript formats the first Codex prompt and replies, separates recorded 
     ...Array.from({ length: 5005 }, () => ({ type: "event_msg", payload: { type: "token_count" } })),
     message("<environment_context>Injected setup, not the user's prompt</environment_context>", "user"),
     message("The original request before the terminal buffer", "user"),
+    message('<send_user_message_question_reply>[{"question":"Which export format?","answer":"Markdown and PDF","questionItemId":"internal-id"}]</send_user_message_question_reply>', "user"),
     message("Checking files in a progress update", "assistant", "commentary"),
     { type: "response_item", payload: { type: "function_call_output", output: "Detailed tool output" } },
     ...Array.from({ length: 52 }, (_, index) => message(index === 0 ? formattedReply : `Saved answer ${index + 1}`))];
@@ -73,6 +74,35 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     await expect(page.locator(".agent-transcript")).not.toContainText("Injected setup");
     await expect(page.locator(".agent-transcript")).not.toContainText("Checking files in a progress update");
     await expect(page.getByRole("heading", { name: "A readable reply" })).toBeVisible();
+    await expect(page.locator(".agent-transcript")).toContainText("Your answer:");
+    await expect(page.locator(".agent-transcript")).toContainText("Markdown and PDF");
+    await expect(page.locator(".agent-transcript")).not.toContainText("send_user_message_question_reply");
+    // Export must resolve all pages, including the final reply not loaded in UI.
+    await expect(page.getByText("Saved answer 52", { exact: true })).not.toBeVisible();
+    const downloadReady = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Export Markdown", exact: true }).click();
+    const download = await downloadReady;
+    expect(download.suggestedFilename()).toMatch(/\.md$/);
+    const exported = readFileSync((await download.path())!, "utf8");
+    expect(exported).toContain("Saved answer 52");
+    expect(exported).toContain(formattedReply);
+    expect(exported).toContain("Your answer:\nMarkdown and PDF");
+    expect(exported).not.toContain("Detailed tool output");
+    await expect(page.getByText("Saved answer 52", { exact: true })).not.toBeVisible();
+    const popupReady = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Export PDF", exact: true }).click();
+    const printable = await popupReady;
+    await expect(printable.getByRole("button", { name: "Print / Save as PDF" })).toBeVisible();
+    await expect(printable.getByText("Saved answer 52", { exact: true })).toBeVisible();
+    await expect(printable.getByRole("heading", { name: "A readable reply" })).toBeVisible();
+    expect(await printable.evaluate(() => window.opener)).toBeNull();
+    await printable.evaluate(() => { window.print = () => { document.body.dataset.printRequested = "yes"; }; });
+    await printable.getByRole("button", { name: "Print / Save as PDF" }).click();
+    await expect(printable.locator("body")).toHaveAttribute("data-print-requested", "yes");
+    await printable.emulateMedia({ media: "print" });
+    const pdf = await printable.pdf();
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    await printable.close();
     await page.getByRole("button", { name: "Plain text", exact: true }).click();
     await expect(page.locator(".agent-transcript-plain").filter({ hasText: "## A readable reply" })).toBeVisible();
     const inputBeforeEscape = terminalInputs.length;

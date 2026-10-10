@@ -3,6 +3,21 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session")
+def test_frontend_assets(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Keep API assets separate from both Vite output and test file fixtures."""
+    dist = tmp_path_factory.mktemp("test-frontend")
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Muxdeck test frontend</title>")
+    return dist
+
+
+@pytest.fixture(autouse=True)
+def isolate_frontend_assets(monkeypatch: pytest.MonkeyPatch, test_frontend_assets: Path) -> None:
+    """API tests must not race Vite replacing the checkout's dist/assets."""
+    monkeypatch.setattr("tmux_console.app.DIST", test_frontend_assets)
+
+
 @pytest.fixture(autouse=True)
 def isolate_default_state_files(
     monkeypatch: pytest.MonkeyPatch,

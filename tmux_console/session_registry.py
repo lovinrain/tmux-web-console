@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_reference import AgentReference
+from .session_history_pages import HistoryPageStore, MAX_HISTORY_IDS, PAGE_SIZE
 from .session_attention import (
     initialize_session_attention,
     observe_session_attention,
@@ -134,6 +135,7 @@ class SessionRegistry:
         self._clock = clock
         self._id_factory = id_factory or (lambda: str(uuid.uuid4()))
         self._lock = threading.RLock()
+        self._history_pages = HistoryPageStore()
         self._connection: sqlite3.Connection | None = None
         try:
             self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -756,12 +758,20 @@ class SessionRegistry:
             except sqlite3.Error as error:
                 raise self._database_error(error) from error
 
-    def observe_history(self, session: Session, reference: AgentReference | None = None) -> str:
+    def observe_history(
+        self, session: Session, reference: AgentReference | None = None,
+        *, pane_references: list[AgentReference] | None = None,
+    ) -> str:
         with self._lock:
             try:
                 connection = self._require_connection()
                 with connection:
-                    return self._observe_history(connection, session, reference, int(self._clock()))
+                    timestamp = int(self._clock())
+                    history_id = self._observe_history(connection, session, reference, timestamp)
+                    for pane_reference in pane_references or []:
+                        self._record_agent(connection, history_id, pane_reference.agent_type,
+                                           pane_reference.session_id, timestamp)
+                    return history_id
             except sqlite3.Error as error:
                 raise self._database_error(error) from error
 
@@ -795,7 +805,10 @@ class SessionRegistry:
                 connection = self._require_connection()
                 with connection:
                     by_name: dict[str, str] = {}
-                    for row in connection.execute("SELECT id, name FROM session_history ORDER BY last_seen, rowid"):
+                    for row in connection.execute(
+                        "SELECT id, name FROM session_history "
+                        "ORDER BY state = 'live', created, last_seen, rowid"
+                    ):
                         by_name[row["name"]] = row["id"]
                     wanted: set[tuple[str, str]] = set()
                     for workspace in workspaces:
@@ -808,8 +821,9 @@ class SessionRegistry:
                                 INSERT INTO history_workspaces VALUES (?, ?, ?, ?, ?, 1, NULL)
                                 ON CONFLICT(history_id, workspace_id) DO UPDATE SET
                                     workspace_name = excluded.workspace_name,
-                                    last_seen = excluded.last_seen, present = 1
+                                    last_seen = excluded.last_seen, present = 1, closed_at = NULL
                                 WHERE history_workspaces.present = 0
+                                   OR history_workspaces.closed_at IS NOT NULL
                                    OR history_workspaces.workspace_name != excluded.workspace_name
                                    OR excluded.last_seen - history_workspaces.last_seen >= 60
                             """, (history_id, workspace["id"], workspace["name"], timestamp, timestamp))
@@ -869,6 +883,7 @@ class SessionRegistry:
     def list_history(
         self, *, workspace_id: str | None = None, query: str = "",
         recycled: bool = False, offset: int = 0, session_name: str | None = None,
+        cursor: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             try:
@@ -879,22 +894,49 @@ class SessionRegistry:
                     clauses.append("EXISTS (SELECT 1 FROM history_workspaces w WHERE w.history_id = h.id AND w.workspace_id = ?)")
                     params.append(workspace_id)
                 if session_name:
-                    # names is a JSON array, so match the quoted element rather
-                    # than a bare substring: "251" must not match "251_2".
-                    clauses.append("(h.name = ? OR instr(h.names, ?) > 0)")
-                    params.extend([session_name, json.dumps(session_name)])
+                    clauses.append("(h.name = ? OR EXISTS (SELECT 1 FROM json_each(h.names) n WHERE n.value = ?))")
+                    params.extend([session_name, session_name])
                 if query:
-                    clauses.append("(instr(lower(h.names || ' ' || coalesce(h.title, '') || ' ' || h.directory || ' ' || coalesce(h.agent_type, '') || ' ' || coalesce(h.agent_id, '')), lower(?)) > 0)")
-                    params.append(query)
+                    clauses.append("""(
+                        instr(lower(h.name || ' ' || coalesce(h.title, '') || ' ' || h.directory
+                            || ' ' || coalesce(h.agent_type, '') || ' ' || coalesce(h.agent_id, '')), lower(?)) > 0
+                        OR EXISTS (SELECT 1 FROM json_each(h.names) n WHERE instr(lower(n.value), lower(?)) > 0)
+                        OR EXISTS (SELECT 1 FROM session_agents a WHERE a.history_id = h.id
+                            AND instr(lower(a.agent_type || ' ' || a.agent_id), lower(?)) > 0)
+                    )""")
+                    params.extend([query, query, query])
                 if recycled:
-                    clauses.append("(h.state != 'live' OR h.tab_closed_at IS NOT NULL OR EXISTS (SELECT 1 FROM history_workspaces w WHERE w.history_id = h.id AND w.closed_at IS NOT NULL))")
-                rows = connection.execute(
-                    "SELECT h.* FROM session_history h WHERE " + " AND ".join(clauses)
-                    + " ORDER BY max(h.last_seen, coalesce(h.ended_at, 0), coalesce(h.tab_closed_at, 0), coalesce((SELECT max(coalesce(w.closed_at, w.last_seen)) FROM history_workspaces w WHERE w.history_id = h.id), 0)) DESC, h.id LIMIT 51 OFFSET ?",
-                    [*params, offset],
-                ).fetchall()
+                    closure = "EXISTS (SELECT 1 FROM history_workspaces w WHERE w.history_id = h.id AND w.present = 0 AND w.closed_at IS NOT NULL"
+                    if workspace_id:
+                        clauses.append("(h.state != 'live' OR " + closure + " AND w.workspace_id = ?))")
+                        params.append(workspace_id)
+                    else:
+                        clauses.append("(h.state != 'live' OR h.tab_closed_at IS NOT NULL OR " + closure + "))")
+                filters = (workspace_id or None, query, recycled, session_name or None)
+                key: str | None
+                if cursor is not None:
+                    key, ordering, offset = self._history_pages.get(cursor, filters)
+                    ordered_ids = ordering.ids
+                else:
+                    ordered_ids = tuple(str(row[0]) for row in connection.execute(
+                        "SELECT h.id FROM session_history h WHERE " + " AND ".join(clauses)
+                        + " ORDER BY max(h.last_seen, coalesce(h.ended_at, 0), coalesce(h.tab_closed_at, 0), coalesce((SELECT max(max(coalesce(w.closed_at, 0), w.last_seen)) FROM history_workspaces w WHERE w.history_id = h.id), 0)) DESC, h.id LIMIT ?",
+                        [*params, MAX_HISTORY_IDS + 1],
+                    ))
+                    if len(ordered_ids) > MAX_HISTORY_IDS:
+                        raise ValueError("too many history entries; narrow the search or workspace filter")
+                    key = self._history_pages.create(ordered_ids, filters) if (
+                        len(ordered_ids) > offset + PAGE_SIZE and offset % PAGE_SIZE == 0
+                    ) else None
+                page_ids = ordered_ids[offset:offset + PAGE_SIZE]
+                rows = []
+                if page_ids:
+                    by_id = {row["id"]: row for row in connection.execute(
+                        "SELECT * FROM session_history WHERE id IN (" + ",".join("?" for _ in page_ids) + ")", page_ids,
+                    )}
+                    rows = [by_id[history_id] for history_id in page_ids if history_id in by_id]
                 entries = []
-                for row in rows[:50]:
+                for row in rows:
                     memberships = connection.execute("SELECT * FROM history_workspaces WHERE history_id = ? ORDER BY last_seen DESC", (row["id"],)).fetchall()
                     agents = connection.execute(
                         "SELECT agent_type, agent_id, first_seen, last_seen FROM session_agents "
@@ -918,7 +960,10 @@ class SessionRegistry:
                         "workspaces": [{"id": w["workspace_id"], "name": w["workspace_name"], "present": bool(w["present"]), "lastSeenAt": w["last_seen"], "closedAt": w["closed_at"]} for w in memberships],
                         "agents": [{"agentType": a["agent_type"], "agentSessionId": a["agent_id"] or None, "firstSeenAt": a["first_seen"], "lastSeenAt": a["last_seen"]} for a in agents],
                     })
-                return {"entries": entries, "nextOffset": offset + 50 if len(rows) > 50 else None}
+                next_offset = offset + PAGE_SIZE if offset + PAGE_SIZE < len(ordered_ids) else None
+                return {"entries": entries, "nextOffset": next_offset,
+                        "nextCursor": f"{key}.{next_offset}" if key is not None and next_offset is not None else None,
+                        "totalCount": len(ordered_ids)}
             except (OSError, sqlite3.Error) as error:
                 raise self._database_error(error) from error
 

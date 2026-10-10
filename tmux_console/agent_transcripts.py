@@ -227,7 +227,10 @@ class AgentTranscriptReader:
             for item in sorted(agents, key=lambda item: item.get("lastSeenAt", 0))
             if item.get("agentType")
         }.values())
-        chosen = next((item for item in sources if item["key"] == selected), None) if selected else (sources[-1] if sources else None)
+        # A later observation without an ID must not hide a conversation that
+        # was actually recorded. Explicit selections still resolve exactly.
+        identified = [item for item in sources if item["agentSessionId"]]
+        chosen = next((item for item in sources if item["key"] == selected), None) if selected else ((identified or sources)[-1] if sources else None)
         if selected and chosen is None:
             raise ValueError("conversation does not belong to this session")
         result: dict[str, Any] = {"sources": sources, "selectedSource": chosen["key"] if chosen else None,

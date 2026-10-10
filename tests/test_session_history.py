@@ -4,7 +4,10 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from tmux_console.agent_reference import AgentReference
+from tmux_console.session_history_pages import HistoryPageStore
 from tmux_console.session_registry import (
     REGISTRY_COLUMN_NAMES,
     SESSION_REGISTRY_SCHEMA_VERSION,
@@ -228,4 +231,141 @@ def test_browser_events_are_bounded_and_do_not_replace_creation_origin(tmp_path)
     assert entry["origin"]["kind"] == "new"
     assert len(entry["viewEvents"]) == 100
     assert entry["viewEvents"][0]["id"] > entry["viewEvents"][-1]["id"]
+    registry.close()
+
+
+def test_reopened_workspace_membership_clears_closure_and_repairs_legacy_rows(tmp_path):
+    path = tmp_path / "sessions.sqlite3"
+    registry = SessionRegistry(path, clock=lambda: 300)
+    registry.observe_history(session())
+    registry.sync_history_workspaces([workspace()])
+    registry.sync_history_workspaces([workspace(tabs=[])])
+    assert registry.list_history(workspace_id="project", recycled=True)["totalCount"] == 1
+    registry.sync_history_workspaces([workspace()])
+    entry = registry.list_history(workspace_id="project")["entries"][0]
+    assert entry["workspaces"][0]["present"] is True
+    assert entry["workspaces"][0]["closedAt"] is None
+    assert registry.list_history(workspace_id="project", recycled=True)["entries"] == []
+    # Existing installations can already contain present-but-closed rows.
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE history_workspaces SET closed_at = 299")
+    registry.sync_history_workspaces([workspace()])
+    assert registry.list_history()["entries"][0]["workspaces"][0]["closedAt"] is None
+    registry.close()
+
+
+def test_workspace_recycle_filter_uses_only_that_workspaces_closure(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 300)
+    history_id = registry.observe_history(session())
+    second = {**workspace("Second"), "id": "second"}
+    registry.sync_history_workspaces([workspace(), second])
+    registry.mark_history(history_id)
+    registry.sync_history_workspaces([workspace(), {**second, "tabs": []}])
+    assert registry.list_history(workspace_id="project", recycled=True)["entries"] == []
+    assert registry.list_history(workspace_id="second", recycled=True)["totalCount"] == 1
+    assert registry.list_history(recycled=True)["totalCount"] == 1
+    registry.mark_history(history_id, ended=True)
+    assert registry.list_history(workspace_id="project", recycled=True)["totalCount"] == 1
+    registry.close()
+
+
+def test_search_finds_previous_agents_and_decoded_unicode_aliases(tmp_path):
+    clock = [300]
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: clock[0])
+    original = session(name='研究 "old"')
+    registry.observe_history(original, AgentReference("claude", "earlier-agent-id"))
+    clock[0] += 60
+    registry.observe_history(replace(original, name="renamed"), AgentReference("codex", "newer-agent-id"))
+    for query in ("earlier-agent-id", "claude", '研究 "old"'):
+        assert [e["name"] for e in registry.list_history(query=query)["entries"]] == ["renamed"]
+    assert registry.list_history(session_name=original.name)["totalCount"] == 1
+    assert registry.list_history(session_name="研究")["entries"] == []
+    registry.close()
+
+
+def test_membership_prefers_new_native_start_over_late_observation_of_reused_name(tmp_path):
+    clock = [300]
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: clock[0])
+    old = session()
+    old_id = registry.observe_history(old)
+    registry.sync_history_workspaces([workspace()])
+    current = session(session_id="$2", created=250)
+    current_id = registry.observe_history(current)
+    clock[0] += 60
+    registry.observe_history(old)
+    registry.sync_history_workspaces([workspace()])
+    entries = {entry["id"]: entry for entry in registry.list_history(workspace_id="project")["entries"]}
+    assert entries[current_id]["workspaces"][0]["present"] is True
+    assert entries[old_id]["workspaces"][0]["present"] is False
+    registry.close()
+
+
+def test_history_cursor_keeps_order_when_observations_and_memberships_change(tmp_path):
+    clock = [300]
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: clock[0])
+    sessions = [session(f"work-{i}", f"${i}", 100 + i) for i in range(105)]
+    registry.reconcile(sessions)
+    expected = [e["id"] for offset in (0, 50, 100)
+                for e in registry.list_history(offset=offset)["entries"]]
+    first = registry.list_history()
+    cursor = first["nextCursor"]
+    assert first["totalCount"] == 105 and cursor
+    clock[0] += 60
+    reordered = sessions[next(i for i, s in enumerate(sessions)
+                              if registry.history_for_identity(s.id, s.created, 90, 42)["id"] == expected[75])]
+    registry.observe_history(reordered, AgentReference("codex", "new-observation"))
+    registry.observe_history(session("new-arrival", "$new", 290))
+    entries = first["entries"][:]
+    while cursor:
+        page = registry.list_history(cursor=cursor)
+        assert page["totalCount"] == 105
+        entries.extend(page["entries"])
+        cursor = page["nextCursor"]
+    assert [e["id"] for e in entries] == expected
+    assert next(e for e in entries if e["id"] == expected[75])["agentSessionId"] == "new-observation"
+    assert registry.list_history()["totalCount"] == 106
+    with pytest.raises(ValueError, match="cursor"):
+        registry.list_history(cursor=first["nextCursor"], query="different-filter")
+    # Legacy arbitrary offsets remain valid, but do not emit unusable cursors.
+    assert registry.list_history(offset=1)["nextCursor"] is None
+    registry.close()
+
+
+def test_history_page_store_expires_and_bounds_ordering_snapshots():
+    clock = [0.0]
+    store = HistoryPageStore(clock=lambda: clock[0])
+    filters = (None, "", False, None)
+    ids = tuple(str(i) for i in range(100))
+    key = store.create(ids, filters)
+    assert store.get(f"{key}.50", filters)[1].ids == ids
+    for cursor in (f"{key}.0", f"{key}.1", f"{key}.100", f"{key}.５０", "x" * 129, ""):
+        with pytest.raises(ValueError, match="cursor"):
+            store.get(cursor, filters)
+    clock[0] = 601
+    with pytest.raises(ValueError, match="expired"):
+        store.get(f"{key}.50", filters)
+    key = store.create(ids, filters)
+    for _ in range(32):
+        store.create(ids, filters)
+    with pytest.raises(ValueError, match="expired"):
+        store.get(f"{key}.50", filters)
+    large = tuple(str(i) for i in range(100_000))
+    key = store.create(large, filters)
+    store.create(large, filters)
+    store.create(large, filters)
+    with pytest.raises(ValueError, match="expired"):
+        store.get(f"{key}.50", filters)
+
+
+def test_other_pane_agents_are_retained_without_replacing_primary_agent(tmp_path):
+    registry = SessionRegistry(tmp_path / "sessions.sqlite3", clock=lambda: 300)
+    primary = AgentReference("claude", "primary-id")
+    other = AgentReference("codex", "other-pane-id")
+    registry.observe_history(session(), primary, pane_references=[other])
+    registry.observe_history(session(), None, pane_references=[other])
+    entry = registry.list_history()["entries"][0]
+    assert entry["agentType"] == "claude"
+    assert entry["agentSessionId"] == "primary-id"
+    assert {a["agentSessionId"] for a in entry["agents"]} == {"primary-id", "other-pane-id"}
+    assert registry.list_history(query="other-pane-id")["totalCount"] == 1
     registry.close()

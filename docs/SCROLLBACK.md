@@ -11,6 +11,9 @@ Codex's “Earlier messages are available” notice or absent from tmux's buffer
 **Session history / Agents → Transcript** also works for ended sessions while
 their native files remain available. See [Agent transcripts](AGENT_TRANSCRIPTS.md)
 for formats, paging, and availability limits.
+The transcript offers complete-conversation **Export Markdown** and
+**Export PDF** (browser **Print / Save as PDF**) independently of how many
+messages have been loaded. Exports use browser memory, not a new server archive.
 
 On desktop, the pane-history header offers **50%**, **75%**, and **100%** window
 widths across all its tabs. **Restore** returns to the width used before the

@@ -14,6 +14,7 @@ const TranscriptMarkdown = lazy(() => import("./TranscriptMarkdown"));
 
 interface Props {
   target: SavedScrollbackTarget;
+  title?: string;
   onShowScrollback?: () => void;
   onShowBeginning?: () => void;
 }
@@ -49,7 +50,7 @@ export function AgentTranscript(props: Props) {
   return <TranscriptContent key={key} {...props} />;
 }
 
-function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props) {
+function TranscriptContent({ target, title = "Session transcript", onShowScrollback, onShowBeginning }: Props) {
   const [source, setSource] = useState<string | null>(null);
   const [sources, setSources] = useState<AgentTranscriptSource[]>([]);
   const [revision, setRevision] = useState(0);
@@ -61,6 +62,11 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
   const [plainText, setPlainText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
+  const [exporting, setExporting] = useState<"markdown" | "pdf" | null>(null);
+  const [exportCount, setExportCount] = useState(0);
+  const [exportStatus, setExportStatus] = useState("");
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportRequest = useRef<{ controller: AbortController; popup: Window | null } | null>(null);
   const request = useRef<AbortController | null>(null);
   const morePending = useRef(false);
   const scroll = useRef<HTMLDivElement>(null);
@@ -80,6 +86,13 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
     setMessages([]);
     setError(null);
     setCopyStatus("");
+    exportRequest.current?.controller.abort();
+    exportRequest.current?.popup?.close();
+    exportRequest.current = null;
+    setExporting(null);
+    setExportCount(0);
+    setExportStatus("");
+    setExportError(null);
     const selectedTarget: SavedScrollbackTarget = paneId !== undefined ? { paneId, identity } : { historyId: historyId! };
     void readVisiblePage(selectedTarget, source, null, controller.signal, view).then((result) => {
       if (controller.signal.aborted) return;
@@ -92,7 +105,12 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
     });
-    return () => { controller.abort(); request.current?.abort(); };
+    return () => {
+      controller.abort();
+      request.current?.abort();
+      exportRequest.current?.controller.abort();
+      exportRequest.current?.popup?.close();
+    };
   }, [paneId, identity, historyId, source, revision, view]);
 
   const loadMore = async () => {
@@ -146,6 +164,54 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
       setCopyStatus("Unable to copy. Select the text to copy it manually.");
     }
   };
+  const cancelExport = () => {
+    exportRequest.current?.controller.abort();
+    exportRequest.current?.popup?.close();
+    exportRequest.current = null;
+    setExporting(null);
+    setExportStatus("Export cancelled.");
+  };
+  const exportTranscript = async (format: "markdown" | "pdf") => {
+    if (exportRequest.current || loading || page?.status !== "available" || !page.selectedSource) return;
+    const controller = new AbortController();
+    let popup: Window | null = null;
+    setExportError(null);
+    setExportStatus("");
+    try {
+      if (format === "pdf") {
+        // Open inside the click gesture, before fetching the remaining pages.
+        popup = window.open("", "_blank");
+        if (!popup) throw new Error("Allow pop-ups for Muxdeck to open the PDF print view.");
+        popup.opener = null;
+        popup.document.title = "Preparing transcript";
+        popup.document.body.textContent = "Preparing the full conversation… You can cancel in Muxdeck.";
+      }
+      exportRequest.current = { controller, popup };
+      setExporting(format);
+      setExportCount(0);
+      const exporter = await import("../transcriptExport");
+      const transcript = await exporter.collectTranscript(target, page.selectedSource, view, controller.signal, setExportCount);
+      controller.signal.throwIfAborted();
+      if (popup) {
+        const { writeTranscriptPrint } = await import("./TranscriptPrint");
+        controller.signal.throwIfAborted();
+        writeTranscriptPrint(popup, transcript, title);
+        setExportStatus("PDF view ready. Choose Print / Save as PDF in the new tab.");
+      } else {
+        exporter.downloadTranscriptMarkdown(transcript, title);
+        setExportStatus(`Markdown exported · ${transcript.messages.length.toLocaleString()} messages.`);
+      }
+      if (transcript.notices.length) setExportStatus((status) => `${status} Includes notices about incomplete or shortened records.`);
+    } catch (failure) {
+      popup?.close();
+      if (!controller.signal.aborted) setExportError(failure instanceof Error ? failure.message : "Unable to export the transcript.");
+    } finally {
+      if (exportRequest.current?.controller === controller) {
+        exportRequest.current = null;
+        setExporting(null);
+      }
+    }
+  };
   const entry = (message: AgentTranscriptMessage) => <article key={message.id} className="agent-transcript-message"
     data-role={message.role} data-kind={kindOf(message)} data-message-id={message.id} tabIndex={-1}>
     <div className="agent-transcript-message-heading"><strong>{kindOf(message) === "response" && selected ? label(selected) : roleLabel(message)}</strong>
@@ -182,6 +248,7 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
     </div>
     {page?.notice && <p className="agent-transcript-notice" role="status">{page.notice}</p>}
     {error && <p className="agent-transcript-error" role="alert">{error} <button type="button" onClick={refresh}>Refresh</button></p>}
+    {exportError && <p className="agent-transcript-error" role="alert">{exportError}</p>}
     <div className="agent-transcript-messages" ref={scroll} aria-label="Transcript messages" tabIndex={0} aria-busy={loading || loadingMore}>
       {loading && <p role="status">Finding the first saved prompt...</p>}
       {groups.map((group) => group.activity
@@ -200,9 +267,15 @@ function TranscriptContent({ target, onShowScrollback, onShowBeginning }: Props)
       <button type="button" className="secondary-button" disabled={!firstPrompt || loading} onClick={() => jump(firstPrompt?.id)}>First prompt</button>
       <button type="button" className="secondary-button" disabled={!lastReply || loading} onClick={() => jump(lastReply?.id)}>Latest loaded reply</button>
       <button type="button" className="secondary-button" disabled={!shown.length || loading} onClick={() => void copy()}>Copy loaded transcript</button>
+      <button type="button" className="secondary-button" disabled={loading || page?.status !== "available" || !page.selectedSource || Boolean(exporting)}
+        title="Download all saved messages in this conversation" onClick={() => void exportTranscript("markdown")}>Export Markdown</button>
+      <button type="button" className="secondary-button" disabled={loading || page?.status !== "available" || !page.selectedSource || Boolean(exporting)}
+        title="Open the full conversation for Print / Save as PDF" onClick={() => void exportTranscript("pdf")}>Export PDF</button>
+      {exporting && <button type="button" className="secondary-button" onClick={cancelExport}>Cancel export</button>}
       {onShowScrollback && <button type="button" className="secondary-button" onClick={onShowScrollback}>Terminal scrollback</button>}
       {onShowBeginning && <button type="button" className="secondary-button" onClick={onShowBeginning}>Recorded terminal output</button>}
       <span role="status">{copyStatus}</span>
+      <span role="status">{exporting ? `Preparing ${exporting === "pdf" ? "PDF" : "Markdown"} · ${exportCount.toLocaleString()} messages…` : exportStatus}</span>
     </div>
   </section>;
 }
