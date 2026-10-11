@@ -29,6 +29,7 @@ import {
   getShortcutSettings,
   listSessionFiles,
   listSessions,
+  type SessionInventorySnapshot,
   listSessionHistory,
   loadSavedScrollback,
   listQueuedMessages,
@@ -245,15 +246,19 @@ describe("session creation API", () => {
       lastSeenAt: 2,
       directoryAvailable: true,
     }];
+    const inventoryVersion = { epoch: "server-one", revision: 7 };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       sessions: live,
       recoverableSessions: recoverable,
+      inventoryVersion,
     }), { status: 200, headers: { "Content-Type": "application/json" } })));
 
     const listed = await listSessions();
 
     expect(listed).toEqual(live);
     expect(recoverableSessionsFromList(listed)).toEqual(recoverable);
+    expect((listed as SessionInventorySnapshot).inventoryVersion).toEqual(inventoryVersion);
+    expect(Object.keys(listed)).toEqual(["0"]);
   });
 
   it("creates a default session with an explicit empty JSON object", async () => {
@@ -2030,6 +2035,14 @@ describe("subscribeToSessions", () => {
     }));
     expect(onSessions).toHaveBeenCalledWith(sessions);
 
+    const inventoryVersion = { epoch: "server-one", revision: 7 };
+    source.emit("sessions", new MessageEvent("sessions", {
+      data: JSON.stringify({ sessions, inventoryVersion }),
+    }));
+    expect((onSessions.mock.calls.at(-1)![0] as SessionInventorySnapshot).inventoryVersion)
+      .toEqual(inventoryVersion);
+    expect(Object.keys(onSessions.mock.calls.at(-1)![0])).toEqual(["0"]);
+
     unsubscribe();
     unsubscribe();
     expect(source.close).toHaveBeenCalledOnce();
@@ -2068,6 +2081,25 @@ describe("subscribeToSessions", () => {
     expect(() => subscribeToSessions({ onSessions: vi.fn() })).toThrow(
       "Server-sent events are not supported",
     );
+  });
+
+  it.each([
+    null, {}, { epoch: "", revision: 1 }, { epoch: "server-one", revision: -1 },
+    { epoch: "server-one", revision: 1.5 }, { epoch: "server-one", revision: "1" },
+  ])("rejects invalid inventory versions from both transports: %j", async (inventoryVersion) => {
+    const payload = { sessions: [session()], inventoryVersion };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
+    await expect(listSessions()).rejects.toThrow("invalid version");
+    vi.stubGlobal("EventSource", MockEventSource);
+    const onSessions = vi.fn(), onError = vi.fn();
+    subscribeToSessions({ onSessions, onError });
+    MockEventSource.instances[0].emit("sessions", new MessageEvent("sessions", {
+      data: JSON.stringify(payload),
+    }));
+    expect(onSessions).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Session inventory contained an invalid version",
+    }));
   });
 });
 

@@ -126,6 +126,51 @@ async function copySession(page: Page, parent: string, child: boolean): Promise<
   return name;
 }
 
+test("a copied session opens from fresh HTTP despite a cached inventory stream", async ({ page, context }) => {
+  const inventory = await context.request.get("/mux/api/sessions");
+  expect(inventory.ok()).toBe(true);
+  const cached = await inventory.json();
+  expect(cached.inventoryVersion).toEqual({ epoch: expect.any(String), revision: expect.any(Number) });
+  await page.addInitScript(() => {
+    let frames = 0;
+    const listen = EventSource.prototype.addEventListener;
+    EventSource.prototype.addEventListener = function (type, listener, options) {
+      if (type === "sessions") {
+        listen.call(this, type, () => { frames++; }, options);
+      }
+      return listen.call(this, type, listener, options);
+    };
+    Object.defineProperty(window, "__copyInventoryFrames", { get: () => frames });
+  });
+  await page.route("**/mux/api/sessions/stream", (route) => route.fulfill({
+    contentType: "text/event-stream",
+    body: `event: sessions\ndata: ${JSON.stringify(cached)}\n\n`,
+  }));
+  await page.goto(`/mux/session/${encodeURIComponent(sourceName)}?tab=${encodeURIComponent(sourceName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live");
+  const framesBeforeCopy = await page.evaluate(() => (
+    window as Window & { __copyInventoryFrames: number }
+  ).__copyInventoryFrames);
+  await page.route("**/mux/api/sessions", async (route) => {
+    const response = await route.fetch();
+    // Deliver the new session's HTTP snapshot after the older SSE replay,
+    // while subsequent streams keep replaying the snapshot without the copy.
+    await page.waitForFunction((before) => (
+      window as Window & { __copyInventoryFrames: number }
+    ).__copyInventoryFrames > before, framesBeforeCopy);
+    await route.fulfill({ response });
+  });
+  const copyResponse = page.waitForResponse((response) => (
+    response.request().method() === "POST" && response.url().endsWith("/copy")
+  ));
+  await page.getByRole("button", { name: "Copy sibling session", exact: true }).click();
+  const receipt = await (await copyResponse).json();
+  expect(cached.sessions.some((item: { name: string }) => item.name === receipt.session)).toBe(false);
+  await expect(page).toHaveURL(new RegExp(`/mux/session/${receipt.session}`));
+  await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 2_000 });
+  await expect(tabRow(page, receipt.session).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+});
+
 function sessionIdentity(name: string): string {
   return execFileSync("tmux", [
     ...tmux, "list-panes", "-t", `=${name}`,

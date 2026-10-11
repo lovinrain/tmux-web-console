@@ -1057,7 +1057,12 @@ tokens. See [Saved scrollback](SCROLLBACK.md) for sampling and retention limits.
 contain serialized session snapshots, heartbeat comments keep intermediaries
 alive, and an `auth` event reports an expired/revoked remembered device before
 the stream closes.
-Read/unread writes wake the shared sampler and publish the updated
+Both HTTP inventory and stream snapshots include
+`inventoryVersion: {epoch, revision}`. The epoch changes when the server starts;
+the revision advances only when inventory content changes. Compare revisions
+within the same epoch to reject cached stream replays or late HTTP snapshots.
+Session creation and copying wake the shared sampler immediately.
+Read/unread writes also wake the sampler and publish the updated
 `readyAttention` to every subscriber. They do not change the selected session,
 workspace layout, theme, or terminal input.
 

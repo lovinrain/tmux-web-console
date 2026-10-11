@@ -220,9 +220,27 @@ export function loadSavedScrollback(
   return jsonRequest(`${path}/saved-scrollback?${search}`, { signal });
 }
 
-type SessionListWithRecovery = Session[] & {
+export interface SessionInventoryVersion {
+  epoch: string;
+  revision: number;
+}
+
+export type SessionInventorySnapshot = Session[] & {
   recoverableSessions?: RecoverableSession[];
+  inventoryVersion?: SessionInventoryVersion;
 };
+
+function attachInventoryVersion(sessions: Session[], value: unknown): void {
+  if (value === undefined) return;
+  if (
+    !isRecord(value)
+    || typeof value.epoch !== "string" || value.epoch.length === 0
+    || !isNonnegativeSafeInteger(value.revision)
+  ) throw new Error("Session inventory contained an invalid version");
+  Object.defineProperty(sessions, "inventoryVersion", {
+    configurable: true, value: { epoch: value.epoch, revision: value.revision },
+  });
+}
 
 function isUnknownFieldError(error: unknown, field: string): error is ApiRequestError {
   return error instanceof ApiRequestError
@@ -246,7 +264,9 @@ export async function listSessions(signal?: AbortSignal): Promise<Session[]> {
   const result = await jsonRequest<{
     sessions: Session[];
     recoverableSessions?: RecoverableSession[];
+    inventoryVersion?: unknown;
   }>("/api/sessions", { signal });
+  attachInventoryVersion(result.sessions, result.inventoryVersion);
   Object.defineProperty(result.sessions, "recoverableSessions", {
     configurable: true,
     value: result.recoverableSessions ?? [],
@@ -255,7 +275,7 @@ export async function listSessions(signal?: AbortSignal): Promise<Session[]> {
 }
 
 export function recoverableSessionsFromList(sessions: Session[]): RecoverableSession[] {
-  return (sessions as SessionListWithRecovery).recoverableSessions ?? [];
+  return (sessions as SessionInventorySnapshot).recoverableSessions ?? [];
 }
 
 export type HostMetricRange = "15m" | "1h" | "24h";
@@ -892,6 +912,7 @@ export function subscribeToSessions({
       const payload = JSON.parse(event.data) as {
         sessions?: unknown;
         recoverableSessions?: unknown;
+        inventoryVersion?: unknown;
       };
       if (!Array.isArray(payload.sessions)) {
         throw new Error("Session stream event did not contain a sessions array");
@@ -902,6 +923,7 @@ export function subscribeToSessions({
       ) {
         throw new Error("Session stream event contained an invalid recovery list");
       }
+      attachInventoryVersion(payload.sessions as Session[], payload.inventoryVersion);
       if (payload.recoverableSessions === undefined) {
         onSessions(payload.sessions as Session[]);
       } else {

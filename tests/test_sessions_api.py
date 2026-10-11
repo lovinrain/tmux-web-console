@@ -2721,7 +2721,7 @@ async def test_sessions_api_tracks_state_changes_and_prunes_absent_sessions(tmp_
         assert unchanged["agentStateChangedAt"] == 100
         assert changed["agentState"] == "waiting_human"
         assert changed["agentStateChangedAt"] == 300
-        assert absent == {"sessions": []}
+        assert absent["sessions"] == []
         assert reappeared["agentStateChangedAt"] == 500
     finally:
         await client.close()
@@ -2739,10 +2739,76 @@ async def test_session_snapshot_builder_serializes_concurrent_samples(tmp_path):
         clock=lambda: 100,
     )
 
-    await asyncio.gather(builder.build(), builder.build())
+    first, second = await asyncio.gather(builder.build(), builder.build())
 
     assert tmux.list_calls == 2
     assert tmux.max_active_calls == 1
+    assert first["inventoryVersion"] == second["inventoryVersion"]
+    assert first["inventoryVersion"]["revision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_inventory_versions_order_http_and_stream_content_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "SESSION_STREAM_SAMPLE_SECONDS", 60)
+    session = make_session()
+    tmux = FakeTmux([[session]])
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    application = create_app(tmux=tmux, titles=titles, base_path="")
+    broker = application[SESSION_STREAM_BROKER_KEY]
+    client = TestClient(TestServer(application))
+    try:
+        await client.start_server()
+        response = await client.get("/api/sessions/stream")
+        initial = event_payload(await read_sse_record(response))
+        repeated = await (await client.get("/api/sessions")).json()
+        assert repeated["inventoryVersion"] == initial["inventoryVersion"]
+        titles.set_title(session.name, "New title")
+        changed = await (await client.get("/api/sessions")).json()
+        assert changed["inventoryVersion"] == {
+            "epoch": initial["inventoryVersion"]["epoch"],
+            "revision": initial["inventoryVersion"]["revision"] + 1,
+        }
+        broker.notify_change()
+        streamed = event_payload(await asyncio.wait_for(read_sse_record(response), 2))
+        assert streamed["inventoryVersion"] == changed["inventoryVersion"]
+        assert streamed["sessions"][0]["customTitle"] == "New title"
+        response.close()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_copy_wakes_inventory_for_every_subscriber_without_waiting_for_poll(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "SESSION_STREAM_SAMPLE_SECONDS", 60)
+    source = make_session("source")
+    copied = make_recreated_session("source_1")
+    tmux = CopyingFakeTmux(CreatedSession(copied.name, copied.id))
+    tmux._last_snapshot = [source]
+    tmux._snapshots = iter([[source]])
+
+    async def copy_session(*args, **kwargs):
+        tmux._last_snapshot = [source, copied]
+        return tmux.result
+
+    tmux.copy_session = AsyncMock(side_effect=copy_session)
+    client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
+    responses = []
+    try:
+        await client.start_server()
+        responses = await asyncio.gather(
+            client.get("/api/sessions/stream"), client.get("/api/sessions/stream"),
+        )
+        initial = [event_payload(await read_sse_record(response)) for response in responses]
+        created = await client.post("/api/sessions/source/copy", json={"sessionId": source.id})
+        assert created.status == 201
+        for before, response in zip(initial, responses, strict=True):
+            changed = event_payload(await asyncio.wait_for(read_sse_record(response), 2))
+            assert {item["name"] for item in changed["sessions"]} == {source.name, copied.name}
+            assert changed["inventoryVersion"]["revision"] > before["inventoryVersion"]["revision"]
+    finally:
+        for response in responses:
+            response.close()
+        await client.close()
 
 
 @pytest.mark.asyncio

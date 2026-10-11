@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listSessions, subscribeToSessions, type RecoverableSession, type SessionStreamOptions } from "./api";
+import {
+  listSessions, subscribeToSessions, type RecoverableSession,
+  type SessionInventorySnapshot, type SessionStreamOptions,
+} from "./api";
 import { subscribeToSessionInventory } from "./sessionInventory";
 import type { Session } from "./types";
 
@@ -18,9 +21,14 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 const sessions = (name: string) => [{ name }] as Session[];
+const inventory = (names: string[], revision: number, epoch = "server-one") => (
+  Object.defineProperty(names.map((name) => ({ name })), "inventoryVersion", {
+    value: { epoch, revision },
+  }) as SessionInventorySnapshot
+);
 
 describe("shared inventory transport", () => {
-  it.each(["snapshot", "error"])("ignores a late HTTP %s after a newer stream frame", async (outcome) => {
+  it.each(["snapshot", "error"])("ignores a late legacy HTTP %s after a stream frame", async (outcome) => {
     let resolve!: (value: Session[]) => void;
     let reject!: (error: Error) => void;
     vi.mocked(listSessions).mockReturnValue(new Promise((yes, no) => {
@@ -37,6 +45,68 @@ describe("shared inventory transport", () => {
     expect(onError).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(15_000);
     expect(listSessions).toHaveBeenCalledOnce();
+    stop();
+  });
+
+  it("shows a fresh Copy HTTP inventory after a cached stream replay", async () => {
+    let finish!: (value: Session[]) => void;
+    vi.mocked(listSessions).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const onSessions = vi.fn();
+    const stop = subscribeToSessionInventory({ onSessions });
+    const cached = inventory(["source"], 4);
+    const created = inventory(["source", "source_1"], 5);
+    stream.onSessions(cached);
+    finish(created);
+    await Promise.resolve();
+    expect(onSessions.mock.calls.map(([value]) => value)).toEqual([cached, created]);
+    stream.onSessions(cached);
+    stream.onSessions(created);
+    expect(onSessions).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it.each([4, 5])("keeps streamed read markers when HTTP revision %i arrives late", async (revision) => {
+    let finish!: (value: Session[]) => void;
+    vi.mocked(listSessions).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const onSessions = vi.fn();
+    const stop = subscribeToSessionInventory({ onSessions });
+    const checked = inventory(["source"], 5);
+    checked[0].readyAttention = { latestReadyEvent: 2, lastCheckedEvent: 2 };
+    stream.onSessions(checked);
+    finish(inventory(["source"], revision));
+    await Promise.resolve();
+    expect(onSessions).toHaveBeenCalledExactlyOnceWith(checked);
+    const unread = inventory(["source"], 6);
+    unread[0].readyAttention = { latestReadyEvent: 3, lastCheckedEvent: 2 };
+    stream.onSessions(unread);
+    expect(onSessions).toHaveBeenLastCalledWith(unread);
+    stop();
+  });
+
+  it("ignores a cached stream older than the HTTP inventory already displayed", async () => {
+    const current = inventory(["source", "source_1"], 5);
+    vi.mocked(listSessions).mockResolvedValue(current);
+    const onSessions = vi.fn();
+    const stop = subscribeToSessionInventory({ onSessions });
+    await Promise.resolve();
+    stream.onSessions(inventory(["source"], 4));
+    expect(onSessions).toHaveBeenCalledExactlyOnceWith(current);
+    stop();
+  });
+
+  it("accepts a restarted stream epoch and rejects old in-flight HTTP", async () => {
+    let finish!: (value: Session[]) => void;
+    vi.mocked(listSessions).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const onSessions = vi.fn();
+    const stop = subscribeToSessionInventory({ onSessions });
+    stream.onSessions(inventory(["source"], 50));
+    stream.onStatus?.("error");
+    const restarted = inventory(["source", "source_1"], 1, "server-two");
+    stream.onSessions(restarted);
+    finish(inventory(["source"], 51));
+    await Promise.resolve();
+    expect(onSessions).toHaveBeenCalledTimes(2);
+    expect(onSessions).toHaveBeenLastCalledWith(restarted);
     stop();
   });
 

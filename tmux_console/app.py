@@ -374,13 +374,30 @@ class SessionSnapshotBuilder:
         self._clock = clock
         self._lock = asyncio.Lock()
         self._state_history: dict[str, tuple[str, str, int]] = {}
+        self._inventory_epoch = secrets.token_hex(16)
+        self._inventory_revision = 0
+        self._last_inventory: str | None = None
 
-    async def build(self) -> dict[str, list[dict[str, Any]]]:
+    async def build(self) -> dict[str, Any]:
         async with self._lock:
             if self._mutation_lock is not None:
                 async with self._mutation_lock:
-                    return await self._build_unlocked()
-            return await self._build_unlocked()
+                    payload = await self._build_unlocked()
+            else:
+                payload = await self._build_unlocked()
+            # HTTP and SSE share this builder. Version content changes only, so
+            # cached stream replays can be ordered without emitting idle events.
+            serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if serialized != self._last_inventory:
+                self._inventory_revision += 1
+                self._last_inventory = serialized
+            return {
+                **payload,
+                "inventoryVersion": {
+                    "epoch": self._inventory_epoch,
+                    "revision": self._inventory_revision,
+                },
+            }
 
     async def _build_unlocked(self) -> dict[str, list[dict[str, Any]]]:
         items = await self._tmux.list_sessions()
@@ -1941,6 +1958,7 @@ def create_app(
     ) -> list[str]:
         # Capture a new session promptly, even when no browser has opened it yet.
         history_capture_wake.set()
+        app[SESSION_STREAM_BROKER_KEY].notify_change()
         directory = (
             created_session.directory
             or requested_directory
