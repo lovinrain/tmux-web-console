@@ -2604,7 +2604,7 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   expect(page.url()).toBe(urlBeforeFocus);
 });
 
-test("focus session picker stays in the workspace and preserves focus and drafts", async ({
+test("session history works beside the title and in Focus without losing drafts", async ({
   page, request,
 }, testInfo) => {
   const first = `${sessionName}-focus-first`;
@@ -2635,10 +2635,29 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     const dialog = page.getByRole("dialog", { name: "Jump to tab" });
     const search = dialog.getByRole("combobox");
 
-    await enterFocus.click();
-    await expect(switcher).toHaveText("Sessions");
+    const titleLine = page.locator(".console-title-line");
+    await expect(titleLine.getByRole("group", { name: "Session navigation" })).toBeVisible();
     await expect(back).toBeDisabled();
     await expect(forward).toBeDisabled();
+    await page.keyboard.press("Control+Shift+2");
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await expect(back).toHaveAttribute("title", `Back to ${first}`);
+    await expect(forward).toBeDisabled();
+    await back.focus();
+    await page.keyboard.press("Enter");
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    await expect(back).toBeDisabled();
+    await expect(forward).toHaveAttribute("title", `Forward to ${second}`);
+    await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
+    await page.screenshot({ path: testInfo.outputPath("session-title-history-dark.png") });
+
+    await enterFocus.click();
+    await expect(titleLine.getByRole("group", { name: "Session navigation" })).toHaveCount(0);
+    await expect(switcher).toHaveText("Sessions");
+    await expect(back).toBeDisabled();
+    await expect(forward).toHaveAttribute("title", `Forward to ${second}`);
     await switcher.click();
     await expect(switcher).toHaveAttribute("aria-expanded", "true");
     await expect(search).toBeFocused();
@@ -2701,6 +2720,27 @@ test("focus session picker stays in the workspace and preserves focus and drafts
     expect(await terminalKeydownFrameCount()).toBe(0);
     await exitFocus.click();
     await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    await expect(titleLine.getByRole("group", { name: "Session navigation" })).toBeVisible();
+    for (const button of [back, forward]) {
+      await expect(button).toBeInViewport();
+      const buttonBox = (await button.boundingBox())!;
+      const titleBox = (await titleLine.getByRole("heading").boundingBox())!;
+      expect(buttonBox.x).toBeGreaterThanOrEqual(titleBox.x + titleBox.width);
+      expect(Math.abs(buttonBox.y + buttonBox.height / 2 - titleBox.y - titleBox.height / 2)).toBeLessThan(2);
+      await expect(button).toHaveCSS("background-color", "rgb(233, 227, 216)");
+    }
+    await page.screenshot({ path: testInfo.outputPath("session-title-history-light-narrow.png") });
+    await forward.click();
+    await expectRoute(page, `/mux/session/${third}`, tabs);
+    await back.click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
+    await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    expect(await terminalKeydownFrameCount()).toBe(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const button of [back, forward]) await expect(button).toBeInViewport();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   } finally {
     for (const name of tabs) {
       execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);

@@ -7984,6 +7984,48 @@ span.workspace-tab-group-toggle {
   white-space: nowrap;
 }
 
+.console-session-history-navigation {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.console-session-history-button {
+  display: inline-flex;
+  width: 28px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--paper);
+  background: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.console-session-history-button:hover:not(:disabled),
+.console-session-history-button:focus-visible {
+  color: var(--acid);
+  background: var(--ink-raised);
+  border-color: var(--acid);
+}
+
+.console-session-history-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.console-session-history-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.console-session-history-button[data-direction="back"] svg {
+  transform: rotate(180deg);
+}
+
 .console-identity > p {
   max-width: 55vw;
   margin: 3px 0 0;
@@ -11415,6 +11457,10 @@ button[data-hold-scroll="true"] {
 
   .console-identity {
     min-width: 112px;
+  }
+
+  .console-identity:has(.console-session-history-navigation) {
+    min-width: 200px;
   }
 
   /* The tray button is the way back to anything the header drops, so it must

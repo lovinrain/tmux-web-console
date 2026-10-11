@@ -271,6 +271,8 @@ describe("ConsoleScreen session identity", () => {
         sessionSnapshot={session()}
         keyboardShortcutsEnabled={false}
         onBack={vi.fn()}
+        sessionHistoryBack="earlier-session"
+        onNavigateSessionHistory={vi.fn()}
       />,
     );
 
@@ -286,6 +288,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.queryByRole("group", {
       name: "Sessions and workspaces navigation",
     })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Session navigation" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Staged input" }))
       .toHaveAttribute("id", "muxdeck-pane-layout-left-staged-textarea");
   });
@@ -2336,22 +2339,53 @@ describe("ConsoleScreen session identity", () => {
     expect(keys).not.toBePressed();
   });
 
-  it("reports live session metadata and places workspace navigation above the console", async () => {
-    const currentSession = session();
+  it("places session history beside the title and navigates without entering Focus", async () => {
+    const currentSession = session("251");
     const onSessionsChange = vi.fn();
+    const onNavigateSessionHistory = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([currentSession]);
-    renderWithTheme(
-      <ConsoleScreen
-        sessionName="test"
-        onBack={vi.fn()}
-        onSessionsChange={onSessionsChange}
-        sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
-      />,
-    );
+    const props = {
+      sessionName: "test",
+      onBack: vi.fn(),
+      onSessionsChange,
+      onNavigateSessionHistory,
+      sessionNavigation: <nav aria-label="Quick sessions">Workspace tabs</nav>,
+    };
+    const view = renderWithTheme(<ConsoleScreen {...props} />);
 
-    await screen.findByRole("heading", { name: "test" });
+    const title = await screen.findByRole("heading", { name: "251" });
     expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
     expect(onSessionsChange).toHaveBeenCalledWith([currentSession]);
+    const navigation = within(title.parentElement!).getByRole("group", { name: "Session navigation" });
+    expect(navigation.previousElementSibling).toHaveClass("agent-badge");
+    const back = within(navigation).getByRole("button", { name: "Back to previous session" });
+    const forward = within(navigation).getByRole("button", { name: "Forward to next session" });
+    expect(back).toBeDisabled();
+    expect(back).toHaveAttribute("title", "No previous session");
+    expect(forward).toBeDisabled();
+    expect(forward).toHaveAttribute("title", "No next session");
+    fireEvent.click(back);
+    fireEvent.click(forward);
+    expect(onNavigateSessionHistory).not.toHaveBeenCalled();
+
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} sessionHistoryBack="earlier-session" /></ThemeProvider>);
+    expect(back).toBeEnabled();
+    expect(back).toHaveAttribute("title", "Back to earlier-session");
+    expect(forward).toBeDisabled();
+    expect(fireEvent.mouseDown(back)).toBe(false);
+    fireEvent.click(back);
+    expect(onNavigateSessionHistory).toHaveBeenCalledExactlyOnceWith("back");
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledOnce());
+
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} sessionHistoryForward="next-session" /></ThemeProvider>);
+    expect(back).toBeDisabled();
+    expect(forward).toBeEnabled();
+    expect(forward).toHaveAttribute("title", "Forward to next-session");
+    fireEvent.click(forward);
+    expect(onNavigateSessionHistory).toHaveBeenLastCalledWith("forward");
+    await waitFor(() => expect(liveTerminalHandle.focus).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("main")).toHaveAttribute("data-desktop-focus", "false");
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
   });
 
   it("keeps workspace navigation available when a visited session has ended", async () => {
@@ -2941,6 +2975,8 @@ describe("ConsoleScreen session identity", () => {
         onSplitEphemeralTab={vi.fn()}
         onToggleCallbackSession={vi.fn()}
         onSessionWorkspaceTransfer={vi.fn()}
+        sessionHistoryBack="earlier-session"
+        onNavigateSessionHistory={vi.fn()}
       />,
     );
     await waitFor(() => expect(screen.getByRole("button", { name: "Pane scrollback" })).toBeEnabled());
@@ -2953,6 +2989,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.queryByText(/Workspace sidebar|Workspace links|Workspace notes/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy sibling session|Copy child session|Split to ephemeral tab/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Sessions and workspaces navigation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Session navigation" })).not.toBeInTheDocument();
     expect(container.querySelector(".console-session-navigation")).toBeNull();
 
     for (const action of ["view-session-tabs", "view-floating-input", "view-floating-terminal", "session-copy-new"] as const) {

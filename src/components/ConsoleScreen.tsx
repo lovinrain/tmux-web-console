@@ -591,6 +591,36 @@ function EphemeralTabMarker() {
   );
 }
 
+function SessionHistoryButton({
+  direction,
+  target,
+  onNavigate,
+  className,
+}: {
+  direction: "back" | "forward";
+  target?: string | null;
+  onNavigate?: (direction: "back" | "forward") => void;
+  className: string;
+}) {
+  const back = direction === "back";
+  return (
+    <button
+      type="button"
+      className={className}
+      data-direction={direction}
+      aria-label={back ? "Back to previous session" : "Forward to next session"}
+      title={target
+        ? `${back ? "Back" : "Forward"} to ${target}`
+        : back ? "No previous session" : "No next session"}
+      disabled={!target || !onNavigate}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onNavigate?.(direction)}
+    >
+      <ChevronRightIcon />
+    </button>
+  );
+}
+
 export function ConsoleScreen({
   sessionName,
   embedded = false,
@@ -2380,6 +2410,22 @@ export function ConsoleScreen({
           <div className="console-title-line">
             <h1>{session?.customTitle || sessionName}</h1>
             <span className={`agent-badge ${classification.tone}`}>{classification.label}</span>
+            {!embedded && !ephemeral && !desktopTerminalFocus && onNavigateSessionHistory && (
+              <div className="console-session-history-navigation" role="group" aria-label="Session navigation">
+                <SessionHistoryButton
+                  direction="back"
+                  target={sessionHistoryBack}
+                  onNavigate={navigateSessionHistory}
+                  className="console-session-history-button"
+                />
+                <SessionHistoryButton
+                  direction="forward"
+                  target={sessionHistoryForward}
+                  onNavigate={navigateSessionHistory}
+                  className="console-session-history-button"
+                />
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -2981,18 +3027,12 @@ export function ConsoleScreen({
           >
             {!ephemeral && onOpenTabSearch && (
               <div className="desktop-terminal-session-navigation" role="group" aria-label="Session navigation">
-                <button
-                  type="button"
+                <SessionHistoryButton
+                  direction="back"
+                  target={sessionHistoryBack}
+                  onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
                   className="desktop-terminal-focus-sessions desktop-terminal-session-history"
-                  data-direction="back"
-                  aria-label="Back to previous session"
-                  title={sessionHistoryBack ? `Back to ${sessionHistoryBack}` : "No previous session"}
-                  disabled={!sessionHistoryBack || !onNavigateSessionHistory}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => navigateSessionHistory("back")}
-                >
-                  <ChevronRightIcon />
-                </button>
+                />
                 <button
                   type="button"
                   className="desktop-terminal-focus-sessions"
@@ -3007,18 +3047,12 @@ export function ConsoleScreen({
                   <ListIcon />
                   <span>Sessions</span>
                 </button>
-                <button
-                  type="button"
+                <SessionHistoryButton
+                  direction="forward"
+                  target={sessionHistoryForward}
+                  onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
                   className="desktop-terminal-focus-sessions desktop-terminal-session-history"
-                  data-direction="forward"
-                  aria-label="Forward to next session"
-                  title={sessionHistoryForward ? `Forward to ${sessionHistoryForward}` : "No next session"}
-                  disabled={!sessionHistoryForward || !onNavigateSessionHistory}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => navigateSessionHistory("forward")}
-                >
-                  <ChevronRightIcon />
-                </button>
+                />
               </div>
             )}
             {headerNotes && (
