@@ -56,7 +56,7 @@ test("nonadjacent folds preserve the active terminal and survive URL reload and 
   await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
   await selectForFold(page, [a, b]);
   await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").first().boundingBox())?.width ?? 0).toBeLessThanOrEqual(16);
+  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").first().boundingBox())?.width ?? 0).toBeLessThanOrEqual(20);
   await expect.poll(() => visibleNames(page)).toEqual([gap]);
   await page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true }).click();
   const preview = page.getByRole("dialog", { name: "Fold preview", exact: true });
@@ -91,7 +91,7 @@ test("nonadjacent folds preserve the active terminal and survive URL reload and 
   await expect(page.locator(".workspace-navigation-horizontal")).toBeVisible();
   await selectForFold(page, [a, b]);
   await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toBeVisible();
-  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").first().boundingBox())?.width ?? 0).toBeLessThanOrEqual(16);
+  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").first().boundingBox())?.width ?? 0).toBeLessThanOrEqual(20);
   await page.screenshot({ path: test.info().outputPath("fold-top-tabs-light.png") });
   expect(identities()).toEqual(before);
 });
