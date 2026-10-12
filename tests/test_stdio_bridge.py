@@ -587,9 +587,26 @@ def test_version_probe_bypasses_api_and_preserves_exit_code_and_streams(tmp_path
 def _process_is_running(pid: int) -> bool:
     try:
         status = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
     return status.rsplit(")", 1)[1].split()[0] != "Z"
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError, PermissionError])
+def test_process_liveness_handles_exit_during_proc_read(monkeypatch, error):
+    original_read = Path.read_text
+
+    def read(path, *args, **kwargs):
+        if str(path) == "/proc/999999999/stat":
+            raise error("process stat unavailable")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    if error is PermissionError:
+        with pytest.raises(PermissionError):
+            _process_is_running(999999999)
+    else:
+        assert not _process_is_running(999999999)
 
 
 def _await_condition(condition, message: str, timeout: float = 8) -> None:
