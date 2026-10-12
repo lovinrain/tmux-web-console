@@ -1,0 +1,71 @@
+.workspace-tab.workspace-fold-placeholder {
+  border-style: dashed;
+}
+
+.workspace-tab.workspace-fold-placeholder > [role="tab"] {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-tab.workspace-fold-placeholder > [role="tab"] > svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.workspace-fold-title,
+.workspace-fold-count {
+  flex: 0 0 auto;
+  font-weight: 750;
+}
+
+.workspace-fold-placeholder .workspace-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-fold-selection-help {
+  padding: 8px;
+  color: var(--paper);
+  font-size: 11px;
+}
+
+.workspace-fold-selection-help button {
+  margin-inline-start: 8px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.workspace-fold-selection-toggle[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: -3px;
+}
+
+/* Give the scrollable tabs a full row so workspace controls cannot cover them. */
+.workspace-navigation-horizontal:has(.workspace-fold-selection-toggle) {
+  height: auto;
+  flex-wrap: wrap;
+}
+
+.workspace-navigation-horizontal:has(.workspace-fold-selection-toggle) > .workspace-tab-viewport {
+  height: 50px;
+  flex: 0 0 100%;
+  order: -1;
+}
+
+.workspace-navigation-horizontal:has(.workspace-fold-selection-toggle) > :not(.workspace-tab-viewport) {
+  min-height: 40px;
+}
+
+.workspace-navigation-horizontal:has(.workspace-fold-selection-toggle) > .workspace-tab-selection-status,
+.workspace-navigation-horizontal:has(.workspace-fold-selection-toggle) > .workspace-fold-selection-help {
+  height: auto;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+}

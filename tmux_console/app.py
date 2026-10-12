@@ -607,7 +607,7 @@ class SessionStreamBroker:
                             self._offer_latest(queue, serialized)
             try:
                 await asyncio.wait_for(self._changed.wait(), timeout=self._sample_seconds)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     def notify_change(self) -> None:
@@ -5939,6 +5939,7 @@ def create_app(
         allowed = required | {
             "groups",
             "parents",
+            "folds",
             "separators",
             "separatorsBefore",
             "paneLayouts",
@@ -5955,6 +5956,7 @@ def create_app(
                 active_session=payload["activeSession"],
                 groups=payload.get("groups", []),
                 parents=payload.get("parents", {}),
+                folds=payload.get("folds", []),
                 separators=payload.get("separators", []),
                 separators_before=payload.get("separatorsBefore", []),
                 pane_layouts=payload.get("paneLayouts", []),
@@ -5985,6 +5987,7 @@ def create_app(
             "tabs",
             "groups",
             "parents",
+            "folds",
             "separators",
             "separatorsBefore",
             "paneLayouts",
@@ -6001,6 +6004,7 @@ def create_app(
             "tabs",
             "groups",
             "parents",
+            "folds",
             "separators",
             "separatorsBefore",
             "paneLayouts",
@@ -6009,7 +6013,7 @@ def create_app(
         }
         if not set(payload) & workspace_fields:
             return json_error(
-                "name, tabs, groups, parents, separators, separatorsBefore, paneLayouts, "
+                "name, tabs, groups, parents, folds, separators, separatorsBefore, paneLayouts, "
                 "callbackSessions, or activeSession is required",
                 400,
             )
@@ -6019,6 +6023,7 @@ def create_app(
                 "tabs",
                 "groups",
                 "parents",
+                "folds",
                 "separators",
                 "separatorsBefore",
                 "paneLayouts",
@@ -6045,6 +6050,8 @@ def create_app(
                 update_groups="groups" in payload,
                 parents=payload.get("parents"),
                 update_parents="parents" in payload,
+                folds=payload.get("folds"),
+                update_folds="folds" in payload,
                 separators=payload.get("separators"),
                 update_separators="separators" in payload,
                 separators_before=payload.get("separatorsBefore"),
@@ -6090,7 +6097,7 @@ def create_app(
         missing = sorted(required - set(payload))
         if missing:
             return json_error(f"{missing[0]} is required", 400)
-        allowed = required | {"groups", "parents", "expectedUpdatedAt"}
+        allowed = required | {"groups", "parents", "folds", "expectedUpdatedAt"}
         unknown = sorted(str(field) for field in set(payload) - allowed)
         if unknown:
             return json_error(f"unknown field: {unknown[0]}", 400)
@@ -6105,6 +6112,8 @@ def create_app(
                 update_groups="groups" in payload,
                 parents=payload.get("parents"),
                 update_parents="parents" in payload,
+                folds=payload.get("folds"),
+                update_folds="folds" in payload,
                 **(
                     {"expected_updated_at": payload["expectedUpdatedAt"]}
                     if "expectedUpdatedAt" in payload else {}

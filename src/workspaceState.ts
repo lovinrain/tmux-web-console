@@ -1,8 +1,18 @@
+import {
+  normalizeWorkspaceTabFolds,
+  revealWorkspaceFold,
+  sameWorkspaceTabFolds,
+  withWorkspaceTabFolds,
+  WORKSPACE_FOLDS_SEARCH_PARAM,
+  type WorkspaceTabFold,
+} from "./workspaceFolds";
+
 export interface SessionWorkspaceState {
   openSessions: string[];
   recentSessions: string[];
   groups: WorkspaceTabGroup[];
   parents?: WorkspaceSessionParents;
+  folds?: WorkspaceTabFold[];
 }
 
 /** Child session name to its parent; hierarchy is workspace metadata only. */
@@ -349,7 +359,7 @@ export function reparentWorkspaceSession(
   const hierarchy = normalizeWorkspaceHierarchy([
     ...remaining.slice(0, insertAt), ...branch, ...remaining.slice(insertAt),
   ], groups, parents);
-  return withWorkspaceParents({ ...workspace, openSessions: hierarchy.tabs, groups: hierarchy.groups }, parents);
+  return withWorkspaceTabFolds(withWorkspaceParents({ ...workspace, openSessions: hierarchy.tabs, groups: hierarchy.groups }, parents));
 }
 
 export function previousWorkspaceSibling(
@@ -420,12 +430,28 @@ export function workspaceParentsFromSearch(
   }
 }
 
+export function workspaceFoldsFromSearch(
+  search: string,
+  openSessions: readonly string[],
+  parents: WorkspaceSessionParents = workspaceParentsFromSearch(search, openSessions),
+  groups: readonly WorkspaceTabGroup[] = workspaceGroupsFromSearch(search, openSessions),
+): WorkspaceTabFold[] {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const folds: unknown[] = [];
+  for (const serialized of params.getAll(WORKSPACE_FOLDS_SEARCH_PARAM)) {
+    try { folds.push(JSON.parse(serialized)); }
+    catch { /* Invalid URL metadata is discarded during canonicalization. */ }
+  }
+  return normalizeWorkspaceTabFolds(folds, openSessions, parents, groups);
+}
+
 export function searchWithoutWorkspaceTabs(search: string): string {
   const parts = queryParts(search).filter(
     (part) => ![
       WORKSPACE_TAB_SEARCH_PARAM,
       WORKSPACE_GROUPS_SEARCH_PARAM,
       WORKSPACE_PARENTS_SEARCH_PARAM,
+      WORKSPACE_FOLDS_SEARCH_PARAM,
     ].includes(queryPartName(part)),
   );
   return parts.length > 0 ? `?${parts.join("&")}` : "";
@@ -465,6 +491,7 @@ export function searchWithWorkspaceState(
   openSessions: readonly string[],
   groups: readonly WorkspaceTabGroup[],
   parents: WorkspaceSessionParents = workspaceParentsFromSearch(search, openSessions),
+  folds: readonly WorkspaceTabFold[] = workspaceFoldsFromSearch(search, openSessions, parents, groups),
 ): string {
   const hierarchy = normalizeWorkspaceHierarchy(openSessions, groups, parents);
   const tabs = hierarchy.tabs;
@@ -472,6 +499,7 @@ export function searchWithWorkspaceState(
     WORKSPACE_TAB_SEARCH_PARAM,
     WORKSPACE_GROUPS_SEARCH_PARAM,
     WORKSPACE_PARENTS_SEARCH_PARAM,
+    WORKSPACE_FOLDS_SEARCH_PARAM,
   ].includes(queryPartName(part)));
   for (const sessionName of tabs) {
     parts.push(`${WORKSPACE_TAB_SEARCH_PARAM}=${encodeURIComponent(sessionName)}`);
@@ -484,6 +512,9 @@ export function searchWithWorkspaceState(
   if (hierarchy.parents) {
     parts.push(`${WORKSPACE_PARENTS_SEARCH_PARAM}=${encodeURIComponent(JSON.stringify(hierarchy.parents))}`);
   }
+  for (const fold of normalizeWorkspaceTabFolds(folds, tabs, hierarchy.parents, hierarchy.groups)) {
+    parts.push(`${WORKSPACE_FOLDS_SEARCH_PARAM}=${encodeURIComponent(JSON.stringify(fold))}`);
+  }
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 
@@ -492,7 +523,7 @@ export function isolatedWorkspaceSearch(
   openSessions: readonly string[] = [],
 ): string {
   return searchWithSavedWorkspaceId(
-    searchWithWorkspaceState(search, openSessions, [], {}),
+    searchWithWorkspaceState(search, openSessions, [], {}, []),
     null,
   );
 }
@@ -506,6 +537,7 @@ export function visitWorkspaceSession(
   workspace: SessionWorkspaceState,
   sessionName: string,
 ): SessionWorkspaceState {
+  workspace = revealWorkspaceFold(workspace, sessionName);
   const openSessions = workspace.openSessions.includes(sessionName)
     ? workspace.openSessions
     : [...workspace.openSessions, sessionName];
@@ -572,6 +604,7 @@ export function restoreWorkspaceTabs(
   orderedTabs: readonly string[],
   orderedGroups: readonly WorkspaceTabGroup[] = workspace.groups,
   orderedParents: WorkspaceSessionParents | undefined = workspace.parents,
+  orderedFolds: readonly WorkspaceTabFold[] | undefined = workspace.folds,
 ): SessionWorkspaceState {
   const requestedTabs = uniqueSessionNames(orderedTabs);
   if (activeSession && !requestedTabs.includes(activeSession)) requestedTabs.push(activeSession);
@@ -590,15 +623,19 @@ export function restoreWorkspaceTabs(
   }
   recentSessions = recentSessions.slice(0, MAX_RECENT_SESSIONS);
   const groups = hierarchy.groups;
+  const folds = normalizeWorkspaceTabFolds(orderedFolds, openSessions, hierarchy.parents, groups);
 
   if (
     sameSessions(openSessions, workspace.openSessions)
     && sameSessions(recentSessions, workspace.recentSessions)
     && sameGroups(groups, workspace.groups)
     && sameWorkspaceParents(hierarchy.parents, workspace.parents)
+    && sameWorkspaceTabFolds(folds, workspace.folds)
   ) return workspace;
 
-  return withWorkspaceParents({ openSessions, recentSessions, groups }, hierarchy.parents ?? {});
+  return withWorkspaceTabFolds(withWorkspaceParents({
+    openSessions, recentSessions, groups, ...(workspace.folds ? { folds: workspace.folds } : {}),
+  }, hierarchy.parents ?? {}), folds);
 }
 
 export function closeWorkspaceSession(
@@ -607,11 +644,11 @@ export function closeWorkspaceSession(
 ): SessionWorkspaceState {
   if (!workspace.openSessions.includes(sessionName)) return workspace;
   const openSessions = workspace.openSessions.filter((name) => name !== sessionName);
-  return withWorkspaceParents({
+  return withWorkspaceTabFolds(withWorkspaceParents({
     ...workspace,
     openSessions,
     groups: normalizeWorkspaceTabGroups(workspace.groups, openSessions),
-  }, normalizeWorkspaceParents(workspace.parents, openSessions));
+  }, normalizeWorkspaceParents(workspace.parents, openSessions)));
 }
 
 export function removeWorkspaceSession(
@@ -872,11 +909,11 @@ export function setWorkspaceTabGroup(
     tabs: selectedTabs,
   });
 
-  return {
+  return withWorkspaceTabFolds({
     ...workspace,
     openSessions,
     groups: normalizeWorkspaceTabGroups(groups, openSessions),
-  };
+  });
 }
 
 export function removeWorkspaceTabGroup(
@@ -996,15 +1033,21 @@ export function renameWorkspaceSession(
       ]),
   ), openSessions);
   const hierarchy = normalizeWorkspaceHierarchy(openSessions, groups, parents);
+  const sourceFoldId = workspace.folds?.find((fold) => fold.tabs.includes(previousName))?.id;
+  const folds = workspace.folds?.map((fold) => ({
+    ...fold,
+    tabs: rename(fold.tabs.filter((tab) => !(sourcePresent && tab === nextName && fold.id !== sourceFoldId))),
+  }));
   if (
     sameSessions(hierarchy.tabs, workspace.openSessions)
     && sameSessions(recentSessions, workspace.recentSessions)
     && sameGroups(hierarchy.groups, workspace.groups)
     && sameWorkspaceParents(hierarchy.parents, workspace.parents)
   ) return workspace;
-  return withWorkspaceParents({
+  return withWorkspaceTabFolds(withWorkspaceParents({
     openSessions: hierarchy.tabs, recentSessions, groups: hierarchy.groups,
-  }, hierarchy.parents ?? {});
+    ...(folds ? { folds } : {}),
+  }, hierarchy.parents ?? {}));
 }
 
 export function clearClosedWorkspaceHistory(

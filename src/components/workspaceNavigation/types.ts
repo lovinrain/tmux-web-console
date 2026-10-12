@@ -2,6 +2,7 @@ import type { RecoverableSession, SavedWorkspace, WorkspacePaneLayout } from "..
 import type { Session } from "../../types";
 import type { SeparatorCrossing } from "../../workspaceSeparatorMovement";
 import type { WorkspaceSessionParents, WorkspaceTabGroup } from "../../workspaceState";
+import type { WorkspaceTabFold } from "../../workspaceFolds";
 
 export interface SessionWorkspaceNavigationProps {
   activeSession: string | null;
@@ -9,6 +10,9 @@ export interface SessionWorkspaceNavigationProps {
   recentSessions: string[];
   groups?: WorkspaceTabGroup[];
   sessionParents?: WorkspaceSessionParents;
+  folds?: WorkspaceTabFold[];
+  onFoldTabs?: (sessionNames: string[]) => void;
+  onUnfoldTabs?: (foldId: string) => void;
   separators?: string[];
   separatorsBefore?: string[];
   separatorsBusy?: boolean;

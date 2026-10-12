@@ -1,4 +1,5 @@
 import type { SavedWorkspace } from "./api";
+import { normalizeWorkspaceTabFolds, workspaceFoldMembers, type WorkspaceTabFold } from "./workspaceFolds";
 import {
   normalizeWorkspaceHierarchy,
   normalizeWorkspaceParents,
@@ -6,7 +7,7 @@ import {
   type WorkspaceTabGroup,
 } from "./workspaceState";
 
-type WorkspaceContents = Pick<SavedWorkspace, "tabs" | "groups" | "parents">;
+type WorkspaceContents = Pick<SavedWorkspace, "tabs" | "groups" | "parents" | "folds">;
 
 function sameOrder(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -93,7 +94,7 @@ export function rebaseWorkspaceEdits(
   base: WorkspaceContents,
   local: WorkspaceContents,
   remote: WorkspaceContents,
-): { tabs: string[]; groups: WorkspaceTabGroup[]; parents?: WorkspaceSessionParents } {
+): { tabs: string[]; groups: WorkspaceTabGroup[]; parents?: WorkspaceSessionParents; folds?: WorkspaceTabFold[] } {
   const tabs = rebaseTabs(base.tabs, local.tabs, remote.tabs);
   const baseGroups = new Map((base.groups ?? []).map((group) => [group.id, group]));
   const localGroups = new Map((local.groups ?? []).map((group) => [group.id, group]));
@@ -145,5 +146,33 @@ export function rebaseWorkspaceEdits(
     ));
   }
 
-  return normalizeWorkspaceHierarchy(tabs, groups, rebaseParents(base, local, remote));
+  const hierarchy = normalizeWorkspaceHierarchy(tabs, groups, rebaseParents(base, local, remote));
+  const baseFolds = new Map((base.folds ?? []).map((fold) => [fold.id, fold]));
+  const localFolds = new Map((local.folds ?? []).map((fold) => [fold.id, fold]));
+  const remoteFolds = new Map((remote.folds ?? []).map((fold) => [fold.id, fold]));
+  const folds: WorkspaceTabFold[] = [];
+  for (const remoteFold of remoteFolds.values()) {
+    const baseFold = baseFolds.get(remoteFold.id);
+    const localFold = localFolds.get(remoteFold.id);
+    if (baseFold && !localFold) continue;
+    folds.push({
+      id: remoteFold.id,
+      tabs: localFold ? rebaseTabs(baseFold?.tabs ?? [], localFold.tabs, remoteFold.tabs) : [...remoteFold.tabs],
+    });
+  }
+  for (const fold of localFolds.values()) {
+    if (!baseFolds.has(fold.id) && !remoteFolds.has(fold.id)) folds.push({ ...fold, tabs: [...fold.tabs] });
+  }
+  const assignments = (state: WorkspaceContents) => new Map((state.folds ?? []).flatMap((fold) => (
+    workspaceFoldMembers(fold, state.tabs, state.parents).map((tab) => [tab, fold.id] as const)
+  )));
+  const baseFoldAssignments = assignments(base);
+  const localFoldAssignments = assignments(local);
+  for (const fold of folds) {
+    fold.tabs = fold.tabs.filter((root) => workspaceFoldMembers({ ...fold, tabs: [root] }, hierarchy.tabs, hierarchy.parents)
+      .every((tab) => baseFoldAssignments.get(tab) === localFoldAssignments.get(tab)
+        || localFoldAssignments.get(tab) === fold.id));
+  }
+  const normalizedFolds = normalizeWorkspaceTabFolds(folds, hierarchy.tabs, hierarchy.parents, hierarchy.groups);
+  return normalizedFolds.length > 0 ? { ...hierarchy, folds: normalizedFolds } : hierarchy;
 }

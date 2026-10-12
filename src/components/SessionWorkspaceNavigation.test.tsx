@@ -9,6 +9,7 @@ import {
 import { THEME_TOGGLE_REQUEST_EVENT } from "../theme";
 import { WORKSPACE_SESSION_DRAG_TYPE } from "../workspaceSessionDrag";
 import { moveWorkspaceSession, moveWorkspaceSessions, reparentWorkspaceSession, type SessionWorkspaceState } from "../workspaceState";
+import { foldWorkspaceTabs, unfoldWorkspaceTabs } from "../workspaceFolds";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionWorkspaceNavigation } from "./SessionWorkspaceNavigation";
 import { MOBILE_WORKSPACE_OVERVIEW_CONTROL_ID } from "./workspaceNavigation/constants";
@@ -72,6 +73,57 @@ afterEach(() => {
 });
 
 describe("SessionWorkspaceNavigation", () => {
+  it.each(["horizontal", "vertical"] as const)("folds an arbitrary nested selection inside a group in %s tabs", (orientation) => {
+    const onSelect = vi.fn();
+    function FoldedNavigation() {
+      const [state, setState] = useState<SessionWorkspaceState>({
+        openSessions: ["root", "alpha", "child", "gap", "beta"], recentSessions: [],
+        parents: { alpha: "root", child: "alpha", gap: "root", beta: "root" },
+        groups: [{ id: "group", name: "Family", color: "blue", collapsed: false,
+          tabs: ["root", "alpha", "child", "gap", "beta"] }],
+      });
+      return <SessionWorkspaceNavigation {...navigationProps({
+        orientation, activeSession: "child", sessions: ["root", "alpha", "child", "gap", "beta"].map((name) => session({ name })),
+        ...state, sessionParents: state.parents, folds: state.folds,
+        onSelect, uncheckedReadySessions: new Set(["alpha", "beta"]),
+        onFoldTabs: (names) => setState((current) => foldWorkspaceTabs(current, names, "fold")),
+        onUnfoldTabs: (id) => setState((current) => unfoldWorkspaceTabs(current, id)),
+      })} />;
+    }
+    render(<FoldedNavigation />);
+    fireEvent.click(screen.getByRole("button", { name: "Select tabs to fold" }));
+    fireEvent.click(screen.getByRole("tab", { name: /^alpha,/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }));
+    const selected = screen.getByRole("group", { name: "3 tabs selected for folding" });
+    expect(selected).toHaveTextContent("Fold selection");
+    fireEvent.click(within(selected).getByRole("button", { name: "Fold selected tabs" }));
+    const placeholder = screen.getByRole("tab", { name: "Unfold 3 sessions" });
+    expect(placeholder).toHaveAttribute("aria-selected", "true");
+    expect(placeholder).toHaveTextContent("child");
+    expect(placeholder.closest(".workspace-tab")).toHaveAttribute("data-session-depth", "1");
+    expect(within(placeholder).getByLabelText("2 unread sessions")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^alpha,/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^gap,/ })).toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(placeholder);
+    expect(screen.getByRole("tab", { name: /^child,/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /^alpha,/ })).toHaveFocus();
+    expect(screen.queryByRole("tab", { name: "Unfold 3 sessions" })).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("explains incompatible fold selection and cancels without changing the active session", () => {
+    const props = navigationProps({ openSessions: ["alpha", "beta"], sessionParents: { beta: "alpha" }, onFoldTabs: vi.fn() });
+    render(<SessionWorkspaceNavigation {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select tabs to fold" }));
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }));
+    expect(screen.getByRole("button", { name: "Fold selected tabs" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Fold selected tabs" })).toHaveAttribute("title", "Select at least two tabs to fold.");
+    fireEvent.keyDown(screen.getByRole("tab", { name: /^beta,/ }), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Select tabs to fold" })).toHaveAttribute("aria-pressed", "false");
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
   it.each(["horizontal", "vertical"] as const)("marks only fully exited sessions dead in %s tabs while preserving the active tab", (orientation) => {
     render(<SessionWorkspaceNavigation {...navigationProps({
       orientation,

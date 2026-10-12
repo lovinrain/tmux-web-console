@@ -16,6 +16,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .messages import validate_session_name
+from .workspace_folds import (
+    MAX_WORKSPACE_FOLDS,
+    WorkspaceFold,
+    reconcile_workspace_folds,
+    validate_workspace_folds,
+)
 
 LOGGER = logging.getLogger("muxdeck.workspaces")
 MAX_WORKSPACE_ID_LENGTH = 128
@@ -56,6 +62,7 @@ WORKSPACE_GROUP_COLORS = (
 WORKSPACE_GROUP_COLOR_SET = frozenset(WORKSPACE_GROUP_COLORS)
 _GROUPS_OMITTED = object()
 _PARENTS_OMITTED = object()
+_FOLDS_OMITTED = object()
 _QUICK_LINKS_OMITTED = object()
 _SEPARATORS_OMITTED = object()
 _PANE_LAYOUTS_OMITTED = object()
@@ -63,7 +70,7 @@ _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
 _EXPECTED_UPDATED_AT_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 14
+WORKSPACE_SCHEMA_VERSION = 15
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -77,6 +84,7 @@ def workspace_api_capabilities() -> dict[str, Any]:
         "limits": {
             "tabsPerWorkspace": MAX_WORKSPACE_TABS,
             "groupsPerWorkspace": MAX_WORKSPACE_GROUPS,
+            "foldsPerWorkspace": MAX_WORKSPACE_FOLDS,
             "quickLinksPerScope": MAX_WORKSPACE_QUICK_LINKS,
             "callbackSessionsPerWorkspace": MAX_WORKSPACE_CALLBACK_SESSIONS,
             "callbackSessionsGlobal": MAX_GLOBAL_CALLBACK_SESSIONS,
@@ -1290,6 +1298,7 @@ class SavedWorkspace:
     pane_layouts: tuple[WorkspacePaneLayout, ...] = ()
     callback_sessions: tuple[str, ...] = ()
     parents: tuple[tuple[str, str], ...] = ()
+    folds: tuple[WorkspaceFold, ...] = ()
 
     def to_dict(self, *, include_internal: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -1312,6 +1321,8 @@ class SavedWorkspace:
             payload["callbackSessions"] = list(self.callback_sessions)
         if self.parents:
             payload["parents"] = dict(self.parents)
+        if self.folds:
+            payload["folds"] = [fold.to_dict() for fold in self.folds]
         if include_internal:
             payload["inheritedPins"] = list(self.inherited_pins)
         return payload
@@ -2239,6 +2250,7 @@ class WorkspaceStore:
         active_session: object,
         groups: object = _GROUPS_OMITTED,
         parents: object = _PARENTS_OMITTED,
+        folds: object = _FOLDS_OMITTED,
         quick_links: object = _QUICK_LINKS_OMITTED,
         separators: object = _SEPARATORS_OMITTED,
         separators_before: object = _SEPARATORS_OMITTED,
@@ -2260,6 +2272,10 @@ class WorkspaceStore:
         validated_groups = validate_workspace_groups(
             [] if groups is _GROUPS_OMITTED else groups,
             validated_tabs,
+        )
+        validated_folds = validate_workspace_folds(
+            [] if folds is _FOLDS_OMITTED else folds, validated_tabs, validated_parents,
+            {tab: group.id for group in validated_groups for tab in group.tabs},
         )
         validated_quick_links = validate_workspace_quick_links(
             [] if quick_links is _QUICK_LINKS_OMITTED else quick_links,
@@ -2285,6 +2301,7 @@ class WorkspaceStore:
                 tabs=merged_tabs,
                 parents=validated_parents,
                 groups=validated_groups,
+                folds=validated_folds,
                 quick_links=validated_quick_links,
                 separators=validated_separators,
                 separators_before=validated_separators_before,
@@ -2308,11 +2325,13 @@ class WorkspaceStore:
         tabs: object = None,
         groups: object = None,
         parents: object = None,
+        folds: object = None,
         active_session: object = None,
         update_name: bool = False,
         update_tabs: bool = False,
         update_groups: bool = False,
         update_parents: bool = False,
+        update_folds: bool = False,
         update_active_session: bool = False,
         separators: object = None,
         update_separators: bool = False,
@@ -2343,6 +2362,7 @@ class WorkspaceStore:
                 update_tabs
                 or update_groups
                 or update_parents
+                or update_folds
                 or update_active_session
                 or update_separators
                 or update_separators_before
@@ -2389,6 +2409,16 @@ class WorkspaceStore:
                 if update_parents
                 else _reconcile_workspace_parents(current.parents, next_tabs)
             )
+            next_folds = (
+                validate_workspace_folds(
+                    folds, next_tabs, next_parents,
+                    {tab: group.id for group in next_groups for tab in group.tabs},
+                )
+                if update_folds else reconcile_workspace_folds(
+                    current.folds, next_tabs, next_parents,
+                    {tab: group.id for group in next_groups for tab in group.tabs},
+                )
+            )
             next_pane_layouts = (
                 validate_workspace_pane_layouts(pane_layouts, next_tabs)
                 if update_pane_layouts
@@ -2417,6 +2447,7 @@ class WorkspaceStore:
                 tabs=next_tabs,
                 parents=next_parents,
                 groups=next_groups,
+                folds=next_folds,
                 pane_layouts=next_pane_layouts,
                 callback_sessions=next_callback_sessions,
                 separators=(
@@ -2940,6 +2971,8 @@ class WorkspaceStore:
         update_groups: bool = False,
         parents: object = None,
         update_parents: bool = False,
+        folds: object = None,
+        update_folds: bool = False,
         expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
@@ -2977,6 +3010,20 @@ class WorkspaceStore:
                 if update_groups
                 else _reconcile_workspace_groups(current.groups, merged_tabs)
             )
+            validated_parents = (
+                validate_workspace_parents(parents, merged_tabs)
+                if update_parents else _reconcile_workspace_parents(current.parents, merged_tabs)
+            )
+            validated_folds = (
+                validate_workspace_folds(
+                    folds, merged_tabs, validated_parents,
+                    {tab: group.id for group in validated_groups for tab in group.tabs},
+                )
+                if update_folds else reconcile_workspace_folds(
+                    current.folds, merged_tabs, validated_parents,
+                    {tab: group.id for group in validated_groups for tab in group.tabs},
+                )
+            )
             timestamp = max(
                 self._timestamp(),
                 current.updated_at + 1,
@@ -2985,12 +3032,9 @@ class WorkspaceStore:
             workspace = replace(
                 current,
                 tabs=merged_tabs,
-                parents=(
-                    validate_workspace_parents(parents, merged_tabs)
-                    if update_parents
-                    else _reconcile_workspace_parents(current.parents, merged_tabs)
-                ),
+                parents=validated_parents,
                 groups=validated_groups,
+                folds=validated_folds,
                 pane_layouts=_reconcile_workspace_pane_layouts(
                     current.pane_layouts, merged_tabs
                 ),
@@ -3381,6 +3425,11 @@ class WorkspaceStore:
                 workspace = replace(
                     current,
                     tabs=renamed_tabs,
+                    folds=tuple(replace(fold, tabs=tuple(dict.fromkeys(
+                        new_name if tab == current_name else tab
+                        for tab in fold.tabs
+                        if tab == current_name or tab != new_name
+                    ))) for fold in current.folds),
                     parents=_rename_workspace_parents(
                         current.parents, current.tabs, current_name, new_name,
                     ),
@@ -3459,6 +3508,11 @@ class WorkspaceStore:
             return changed
 
     def _workspace_dict(self, workspace: SavedWorkspace) -> dict[str, Any]:
+        if workspace.folds:
+            workspace = replace(workspace, folds=reconcile_workspace_folds(
+                workspace.folds, workspace.tabs, workspace.parents,
+                {tab: group.id for group in workspace.groups for tab in group.tabs},
+            ))
         return {
             **workspace.to_dict(),
             "sessionRevision": self._session_rename_revision,
@@ -3755,6 +3809,9 @@ class WorkspaceStore:
         if version >= 14:
             expected.add("parents")
             optional.add("parents")
+        if version >= 15:
+            expected.add("folds")
+            optional.add("folds")
         missing = sorted((expected - optional) - set(record))
         if missing:
             raise ValueError(f"{path} is missing field: {missing[0]}")
@@ -3770,6 +3827,11 @@ class WorkspaceStore:
             if version >= 3
             else ()
         )
+        parents = validate_workspace_parents(record.get("parents", {}), tabs) if version >= 14 else ()
+        folds = validate_workspace_folds(
+            record.get("folds", []), tabs, parents,
+            {tab: group.id for group in groups for tab in group.tabs},
+        ) if version >= 15 else ()
         quick_links = (
             validate_workspace_quick_links(record["quickLinks"])
             if version >= 4
@@ -3809,10 +3871,8 @@ class WorkspaceStore:
             id=workspace_id,
             name=name,
             tabs=tabs,
-            parents=(
-                validate_workspace_parents(record.get("parents", {}), tabs)
-                if version >= 14 else ()
-            ),
+            parents=parents,
+            folds=folds,
             groups=groups,
             quick_links=quick_links,
             inherited_pins=inherited_pins,
@@ -3873,6 +3933,13 @@ class WorkspaceStore:
         pinned_sessions: tuple[str, ...] | None = None,
         global_callback_sessions: tuple[str, ...] | None = None,
     ) -> None:
+        workspaces = {
+            workspace_id: replace(workspace, folds=reconcile_workspace_folds(
+                workspace.folds, workspace.tabs, workspace.parents,
+                {tab: group.id for group in workspace.groups for tab in group.tabs},
+            )) if workspace.folds else workspace
+            for workspace_id, workspace in workspaces.items()
+        }
         next_revision = (
             self._session_rename_revision
             if session_rename_revision is None

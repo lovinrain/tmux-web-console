@@ -59,6 +59,7 @@ import {
   type WorkspaceTabGroup
 } from "../workspaceState";
 import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
+import { normalizeWorkspaceTabFolds, workspaceFoldMembers, workspaceFoldSelectionError, type WorkspaceTabFold } from "../workspaceFolds";
 import "./DeadPaneTabs.css";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
@@ -81,10 +82,12 @@ import type { SessionWorkspaceNavigationProps, WorkspaceTabOrientation } from ".
 import { clampDesktopTabRailWidth, clampDesktopTabRailWidthForViewport, COMPACT_DESKTOP_TAB_RAIL_MAX_WIDTH, DEFAULT_DESKTOP_TAB_RAIL_WIDTH, DESKTOP_TAB_RAIL_KEYBOARD_LARGE_STEP, DESKTOP_TAB_RAIL_KEYBOARD_STEP, isCompactWorkspaceViewport, MIN_DESKTOP_TAB_RAIL_WIDTH, useDesktopTabRailMaxWidth, useWorkspaceTabOrientation } from "./workspaceNavigation/viewport";
 import { moveToNewWindowDisabledReason, newWindowFailureMessage, WorkspaceWindowActionError } from "./workspaceNavigation/windowActions";
 import { WorkspaceRecentsDialog } from "./workspaceNavigation/WorkspaceRecentsDialog";
+import { WorkspaceFoldTab } from "./workspaceNavigation/WorkspaceFoldTab";
 export type { OpenTabInNewWindowMode, OpenTabInNewWindowResult, SessionWorkspaceNavigationProps, WorkspacePersistenceState, WorkspaceTabOrientation } from "./workspaceNavigation/types";
 
 
 type WorkspaceTabDropEdge = "before" | "after";
+const EMPTY_WORKSPACE_FOLDS: WorkspaceTabFold[] = [];
 
 interface WorkspaceTabDragTarget {
   kind: "tab" | "group" | "nest" | "root";
@@ -162,6 +165,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     recentSessions,
     groups = [],
     sessionParents = EMPTY_SESSION_PARENTS,
+    folds = EMPTY_WORKSPACE_FOLDS,
+    onFoldTabs,
+    onUnfoldTabs,
     separators = [],
     separatorsBefore = [],
     separatorsBusy = false,
@@ -290,6 +296,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const [windowActionError, setWindowActionError] = useState("");
   const [selectedWorkspaceTabs, setSelectedWorkspaceTabs] = useState<string[]>([]);
+  const [foldSelectionMode, setFoldSelectionMode] = useState(false);
+  const unfoldFocusRef = useRef<string | null>(null);
   const [deadTabsOnlySelected, setDeadTabsOnlySelected] = useState(false);
   const [workspaceTabDrag, setWorkspaceTabDrag] = useState<WorkspaceTabDragState | null>(
     null,
@@ -313,6 +321,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     }));
     return result;
   }, [groups]);
+  const validFolds = useMemo(() => normalizeWorkspaceTabFolds(folds, openSessions, sessionParents, groups),
+    [folds, openSessions, sessionParents, groups]);
+  const foldedTabs = useMemo(() => {
+    const result = new Map<string, { fold: WorkspaceTabFold; members: string[] }>();
+    for (const fold of validFolds) {
+      const members = workspaceFoldMembers(fold, openSessions, sessionParents);
+      for (const name of members) result.set(name, { fold, members });
+    }
+    return result;
+  }, [validFolds, openSessions, sessionParents]);
+  useLayoutEffect(() => {
+    const name = unfoldFocusRef.current;
+    if (!name || foldedTabs.has(name)) return;
+    const row = Array.from(navigationRef.current?.querySelectorAll<HTMLElement>("[data-workspace-session-name]") ?? [])
+      .find((element) => element.dataset.workspaceSessionName === name);
+    row?.querySelector<HTMLButtonElement>("[role='tab']")?.focus();
+    unfoldFocusRef.current = null;
+  }, [foldedTabs]);
   const workspaceTabItems = useMemo<Array<
     { kind: "tab"; sessionName: string } | { kind: "group"; group: WorkspaceTabGroup }
   >>(() => {
@@ -357,8 +383,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && !compactViewport
     && tabsVisible,
   );
-  const desktopTabMultiSelectEnabled = !compactViewport && tabsVisible
-    && Boolean(onMoveTabs || props.onBulkSessionAction);
+  const desktopTabMultiSelectEnabled = (!compactViewport || foldSelectionMode) && tabsVisible
+    && Boolean(onMoveTabs || props.onBulkSessionAction || onFoldTabs);
   const groupDragEnabled = desktopTabDragEnabled && Boolean(onMoveTabs)
     && !deadTabsOnlySelected
     && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error"
@@ -429,6 +455,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   useEffect(() => {
     setSelectedWorkspaceTabs([]);
     setDeadTabsOnlySelected(false);
+    setFoldSelectionMode(false);
   }, [activeWorkspaceId]);
   const unselectedTabs = openSessions.filter((name) => !selectedWorkspaceTabSet.has(name));
   const previousSelectionNeighbor = openSessions[openSessions.indexOf(orderedSelection[0]) - 1];
@@ -450,6 +477,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
 
   const clearWorkspaceTabSelection = useCallback((announce = true) => {
     setDeadTabsOnlySelected(false);
+    setFoldSelectionMode(false);
     if (selectedWorkspaceTabs.length === 0) return;
     setSelectedWorkspaceTabs([]);
     if (announce) setReorderAnnouncement("Tab move selection cleared.");
@@ -482,7 +510,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         : selectedRange;
     } else {
       workspaceTabSelectionAnchorRef.current = sessionName;
-      const unit = expandWorkspaceTabSelection(openSessions, groups, [sessionName], sessionParents);
+      const unit = expandWorkspaceTabSelection(openSessions, foldSelectionMode ? [] : groups, [sessionName], sessionParents);
       const current = new Set(selectedWorkspaceTabs);
       const remove = unit.every((name) => current.has(name));
       candidates = remove
@@ -490,14 +518,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         : [...selectedWorkspaceTabs, ...unit];
     }
 
-    const next = expandWorkspaceTabSelection(openSessions, groups, candidates, sessionParents);
+    const next = expandWorkspaceTabSelection(openSessions, foldSelectionMode ? [] : groups, candidates, sessionParents);
     setSelectedWorkspaceTabs(next);
     setReorderAnnouncement(next.length === 0
       ? "Tab move selection cleared."
+      : foldSelectionMode ? `${next.length} tabs selected for folding.`
       : `${next.length} tab${next.length === 1 ? "" : "s"} selected for moving. Drag any selected tab to move ${next.length === 1 ? "it" : "them"} together.`);
   }, [
     activeSession,
     desktopTabMultiSelectEnabled,
+    foldSelectionMode,
     groups,
     openSessions,
     selectedWorkspaceTabs,
@@ -509,9 +539,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     sessionName: string,
   ) => {
     const additive = event.ctrlKey || event.metaKey;
-    if (desktopTabMultiSelectEnabled && (event.shiftKey || additive)) {
+    if (desktopTabMultiSelectEnabled && (foldSelectionMode || event.shiftKey || additive)) {
       event.preventDefault();
-      updateWorkspaceTabSelection(sessionName, event.shiftKey, additive);
+      updateWorkspaceTabSelection(sessionName, event.shiftKey, additive || foldSelectionMode);
       return;
     }
     workspaceTabSelectionAnchorRef.current = sessionName;
@@ -520,6 +550,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, [
     clearWorkspaceTabSelection,
     desktopTabMultiSelectEnabled,
+    foldSelectionMode,
     onSelect,
     updateWorkspaceTabSelection,
   ]);
@@ -531,10 +562,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       // A respawned pane removes its session from this selection on refresh.
       const next = deadTabsOnlySelected
         ? current.filter((name) => deadSessionTabs.includes(name))
-        : expandWorkspaceTabSelection(openSessions, groups, current, sessionParents);
+        : expandWorkspaceTabSelection(openSessions, foldSelectionMode ? [] : groups, current, sessionParents);
       return sameSessionNames(current, next) ? current : next;
     });
-  }, [deadSessionTabs, deadTabsOnlySelected, desktopTabMultiSelectEnabled, groups, openSessions, sessionParents]);
+  }, [deadSessionTabs, deadTabsOnlySelected, desktopTabMultiSelectEnabled, foldSelectionMode, groups, openSessions, sessionParents]);
 
   const selectDeadSessionTabs = () => {
     setDeadTabsOnlySelected(true);
@@ -1326,7 +1357,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     event: ReactKeyboardEvent<HTMLButtonElement>,
     sessionName: string,
   ) => {
-    if (event.key === "Escape" && selectedWorkspaceTabs.length > 0) {
+    if (event.key === "Escape" && (selectedWorkspaceTabs.length > 0 || foldSelectionMode)) {
       event.preventDefault();
       clearWorkspaceTabSelection();
       return;
@@ -1505,6 +1536,24 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     sessionName: string,
     group?: WorkspaceTabGroup,
   ) => {
+    const folded = foldedTabs.get(sessionName);
+    if (folded) {
+      const { fold, members } = folded;
+      if (fold.tabs[0] !== sessionName) return null;
+      const active = !newSessionActive && Boolean(activeSession && members.includes(activeSession));
+      return <WorkspaceFoldTab key={`fold-${fold.id}`} fold={fold} count={members.length}
+        titles={members.map((name) => tabTitle(name, sessionsByName))}
+        activeTitle={active ? tabTitle(activeSession!, sessionsByName) : null}
+        unreadCount={members.filter((name) => props.uncheckedReadySessions?.has(name)).length}
+        tree={sessionTreeContext(sessionName, sessionParents, sessionsByName)}
+        activeRef={active ? activeTabRef : undefined}
+        onUnfold={onUnfoldTabs ? (id) => {
+          unfoldFocusRef.current = sessionName;
+          onUnfoldTabs(id);
+          setReorderAnnouncement(`${members.length} folded tabs restored.`);
+        } : undefined}
+        onKeyDown={tabKeyDown} />;
+    }
     const index = openSessions.indexOf(sessionName);
     const session = sessionsByName.get(sessionName);
     const state = workspaceSessionState(session);
@@ -2211,6 +2260,19 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   <span>New group</span>
                 </button>
               )}
+              {onFoldTabs && openSessions.length > 1 && (
+                <button type="button" className="workspace-new-group-button workspace-fold-selection-toggle"
+                  aria-label="Select tabs to fold" aria-pressed={foldSelectionMode}
+                  disabled={workspacePersistenceState === "loading" || workspacePersistenceState === "error"}
+                  title="Select any sibling tabs, including nonadjacent tabs, and fold them into one placeholder"
+                  onClick={() => {
+                    setSelectedWorkspaceTabs([]);
+                    setDeadTabsOnlySelected(false);
+                    setFoldSelectionMode((current) => !current);
+                  }}>
+                  <FolderIcon /><span>Fold tabs</span>
+                </button>
+              )}
               {paneLayouts.map((paneLayout) => {
                 const active = paneLayout.id === activePaneLayoutId;
                 const assignedCount = assignedPaneSessionCount(paneLayout.root);
@@ -2287,20 +2349,43 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           </div>
+          {foldSelectionMode && orderedSelection.length === 0 && (
+            <div className="workspace-fold-selection-help" role="status">
+              Click tabs at the same level to select them, then choose Fold.
+              <button type="button" onClick={() => clearWorkspaceTabSelection()} aria-label="Cancel fold selection">Cancel</button>
+            </div>
+          )}
           {orderedSelection.length > 0 && (
             <div
               className="workspace-tab-selection-status"
               role="group"
               aria-label={deadTabsOnlySelected
                 ? `${orderedSelection.length} dead session tabs selected`
-                : `${orderedSelection.length} tabs selected for moving`}
+                : `${orderedSelection.length} tabs selected for ${foldSelectionMode ? "folding" : "moving"}`}
             >
               <span className="workspace-tab-selection-status-count">
                 <CheckIcon />
                 <strong>{orderedSelection.length}</strong>
                 <span>selected</span>
               </span>
-              <small>{deadTabsOnlySelected ? "Dead only" : "Drag together"}</small>
+              <small>{deadTabsOnlySelected ? "Dead only" : foldSelectionMode ? "Fold selection" : "Drag together"}</small>
+              {onFoldTabs && !deadTabsOnlySelected && (() => {
+                const error = workspaceFoldSelectionError({ openSessions, groups, parents: sessionParents, folds: validFolds }, orderedSelection);
+                return <button type="button" className="workspace-selection-bulk-action"
+                  aria-label="Fold selected tabs" aria-description={error ?? "Replace selected branches with one placeholder; keep all sessions running"}
+                  disabled={Boolean(error) || workspacePersistenceState === "loading" || workspacePersistenceState === "error"}
+                  title={error ?? "Fold selected tabs into one placeholder"}
+                  onClick={() => {
+                    onFoldTabs(orderedSelection);
+                    clearWorkspaceTabSelection(false);
+                    setReorderAnnouncement(`${orderedSelection.length} tabs folded. Click the placeholder to unfold them.`);
+                    window.requestAnimationFrame(() => {
+                      const row = Array.from(navigationRef.current?.querySelectorAll<HTMLElement>("[data-fold-anchor]") ?? [])
+                        .find((element) => element.dataset.foldAnchor === orderedSelection[0]);
+                      row?.querySelector<HTMLButtonElement>("[role='tab']")?.focus();
+                    });
+                  }}><FolderIcon /><span>Fold</span></button>;
+              })()}
               {onMoveTabs && !deadTabsOnlySelected && (
                 <>
                   <button

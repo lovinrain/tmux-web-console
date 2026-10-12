@@ -36,7 +36,7 @@ def test_nested_sessions_persist_and_explicit_empty_parents_flattens_tree(tmp_pa
 
     assert WorkspaceStore(path).get_workspace(original["id"])["parents"] == original["parents"]
     payload = json.loads(path.read_text())
-    assert payload["version"] == WORKSPACE_SCHEMA_VERSION == 14
+    assert payload["version"] == WORKSPACE_SCHEMA_VERSION
     assert payload["workspaces"][0]["parents"] == original["parents"]
 
     flat = store.update_workspace(
@@ -75,7 +75,7 @@ def test_every_legacy_schema_loads_flat_and_upgrades_without_inventing_parents(t
     assert store.get_workspace("legacy").get("parents", {}) == {}
     store.update_workspace("legacy", name="Upgraded", update_name=True)
     upgraded = json.loads(path.read_text())
-    assert upgraded["version"] == 14
+    assert upgraded["version"] == WORKSPACE_SCHEMA_VERSION
     assert "parents" not in upgraded["workspaces"][0]
 
 

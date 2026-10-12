@@ -1,3 +1,4 @@
+import { foldWorkspaceTabs, normalizeWorkspaceTabFolds, sameWorkspaceTabFolds, unfoldWorkspaceTabs, withWorkspaceTabFolds, type WorkspaceTabFold } from "./workspaceFolds";
 import {
   useCallback,
   useEffect,
@@ -134,6 +135,7 @@ import {
   removeWorkspaceTabGroup,
   renameWorkspaceSession,
   restoreWorkspaceTabs,
+  workspaceFoldsFromSearch,
   sameWorkspaceParents,
   savedWorkspaceIdFromSearch,
   searchWithSavedWorkspaceId,
@@ -230,12 +232,13 @@ interface WorkspaceActivitySnapshot {
   tabs: string[];
   groups: WorkspaceTabGroup[];
   parents?: WorkspaceSessionParents;
+  folds?: WorkspaceTabFold[];
   activeSession: string | null;
   sessionRevision: number;
   expectedUpdatedAt?: number;
 }
 
-type PendingWorkspaceSnapshot = Pick<SessionWorkspaceState, "openSessions" | "groups" | "parents">;
+type PendingWorkspaceSnapshot = Pick<SessionWorkspaceState, "openSessions" | "groups" | "parents" | "folds">;
 
 interface ActiveWorkspaceIdentity {
   id: string;
@@ -361,6 +364,7 @@ function sameWorkspaceActivity(
     && left.tabs.length === right.tabs.length
     && left.tabs.every((tab, index) => tab === right.tabs[index])
     && sameWorkspaceGroups(left.groups, right.groups)
+    && sameWorkspaceTabFolds(left.folds, right.folds)
     && sameWorkspaceParents(left.parents, right.parents),
   );
 }
@@ -402,6 +406,7 @@ function persistWorkspaceActivityOnPageHide(
     tabs: snapshot.tabs,
     ...(includeGroups ? { groups: snapshot.groups } : {}),
     ...(snapshot.parents === undefined ? {} : { parents: snapshot.parents }),
+    ...(snapshot.folds === undefined ? {} : { folds: snapshot.folds }),
     activeSession: snapshot.activeSession,
     sessionRevision: snapshot.sessionRevision,
     ...(supportsWorkspaceVersionChecks()
@@ -796,7 +801,11 @@ function canonicalizeRenamedLocation(
       ([child, parent]) => [renamedNames.get(child) ?? child, renamedNames.get(parent) ?? parent],
     ),
   ), tabs);
-  const search = searchWithWorkspaceState(location.search, tabs, groups, parents);
+  const folds = workspaceFoldsFromSearch(location.search, sourceTabs).map((fold) => ({
+    ...fold,
+    tabs: fold.tabs.filter((name) => !staleTargets.has(name)).map((name) => renamedNames.get(name) ?? name),
+  }));
+  const search = searchWithWorkspaceState(location.search, tabs, groups, parents, folds);
   return path === location.path && search === location.search
     ? location
     : { path, search };
@@ -864,7 +873,7 @@ function AppRoutes() {
       route?.sessionName,
       tabs,
       workspaceGroupsFromSearch(initialLocation.search, tabs),
-      workspaceParentsFromSearch(initialLocation.search, tabs),
+      workspaceParentsFromSearch(initialLocation.search, tabs), workspaceFoldsFromSearch(initialLocation.search, tabs),
     );
   });
   const [workspacePaneLayouts, setWorkspacePaneLayouts] = useState<WorkspacePaneLayout[]>([]);
@@ -1239,7 +1248,7 @@ function AppRoutes() {
         current.search,
         workspaceRef.current.openSessions,
         workspaceRef.current.groups,
-        workspaceRef.current.parents ?? {},
+        workspaceRef.current.parents ?? {}, workspaceRef.current.folds ?? [],
       ),
       null,
     );
@@ -1295,7 +1304,7 @@ function AppRoutes() {
         savedWorkspace.activeSession ?? targetSession ?? undefined,
         savedWorkspace.tabs,
         savedWorkspace.groups ?? [],
-        savedWorkspace.parents ?? {},
+        savedWorkspace.parents ?? {}, savedWorkspace.folds ?? [],
       );
       workspaceRef.current = restoredWorkspace;
       setWorkspace(restoredWorkspace);
@@ -1344,7 +1353,7 @@ function AppRoutes() {
           current.search,
           savedWorkspace.tabs,
           savedWorkspace.groups ?? [],
-          savedWorkspace.parents ?? {},
+          savedWorkspace.parents ?? {}, savedWorkspace.folds ?? [],
         ),
         workspaceId,
       );
@@ -1429,6 +1438,7 @@ function AppRoutes() {
     const created = await createWorkspace({
       name, tabs, groups, activeSession,
       ...(currentWorkspace.parents ? { parents: currentWorkspace.parents } : {}),
+      ...(currentWorkspace.folds?.length ? { folds: currentWorkspace.folds } : {}),
       ...(workspaceSeparators.anchors.length ? { separators: workspaceSeparators.anchors } : {}),
       ...(workspaceSeparators.beforeAnchors.length ? { separatorsBefore: workspaceSeparators.beforeAnchors } : {}),
       ...(workspacePaneLayoutsRef.current.length
@@ -1477,7 +1487,7 @@ function AppRoutes() {
       created.activeSession ?? undefined,
       created.tabs,
       boundGroups,
-      created.parents ?? currentWorkspace.parents ?? {},
+      created.parents ?? currentWorkspace.parents ?? {}, created.folds ?? currentWorkspace.folds ?? [],
     );
     workspaceRef.current = boundWorkspace;
     setWorkspace(boundWorkspace);
@@ -1503,6 +1513,7 @@ function AppRoutes() {
         tabs: [...group.tabs],
       })),
       parents: created.parents,
+      folds: created.folds,
       activeSession: created.activeSession,
       sessionRevision: created.sessionRevision,
     };
@@ -1517,7 +1528,7 @@ function AppRoutes() {
         latestLocation.search,
         created.tabs,
         boundGroups,
-        created.parents ?? currentWorkspace.parents ?? {},
+        created.parents ?? currentWorkspace.parents ?? {}, created.folds ?? currentWorkspace.folds ?? [],
       ),
       created.id,
     );
@@ -1816,12 +1827,13 @@ function AppRoutes() {
     );
     const orderedGroups = workspaceGroupsFromSearch(nextLocation.search, orderedTabs);
     const orderedParents = workspaceParentsFromSearch(nextLocation.search, orderedTabs);
+    const orderedFolds = workspaceFoldsFromSearch(nextLocation.search, orderedTabs, orderedParents, orderedGroups);
     setWorkspace((current) => restoreWorkspaceTabs(
       current,
       route?.sessionName,
       orderedTabs,
       orderedGroups,
-      orderedParents,
+      orderedParents, orderedFolds,
     ));
     setLocation(nextLocation);
   }, []);
@@ -1847,7 +1859,7 @@ function AppRoutes() {
           restored.search,
           workspaceRef.current.openSessions,
           workspaceRef.current.groups,
-          workspaceRef.current.parents ?? {},
+          workspaceRef.current.parents ?? {}, workspaceRef.current.folds ?? [],
         );
         if (pending.replaceRestoredEntry) {
           replaceLocation(
@@ -1882,6 +1894,7 @@ function AppRoutes() {
                 openSessions: workspaceRef.current.openSessions,
                 groups: workspaceRef.current.groups,
                 parents: workspaceRef.current.parents,
+                folds: workspaceRef.current.folds,
               }
             : null);
         if (!restoredWorkspace) {
@@ -1902,7 +1915,7 @@ function AppRoutes() {
             restored.search,
             restoredWorkspace.openSessions,
             restoredWorkspace.groups,
-            restoredWorkspace.parents ?? {},
+            restoredWorkspace.parents ?? {}, restoredWorkspace.folds ?? [],
           ),
         );
       }
@@ -1976,7 +1989,7 @@ function AppRoutes() {
     const nextWorkspace = restoreWorkspaceTabs(
       workspaceRef.current, sessionName, tabs,
       sameWorkspace ? workspaceRef.current.groups : [],
-      sameWorkspace ? workspaceRef.current.parents ?? {} : {},
+      sameWorkspace ? workspaceRef.current.parents ?? {} : {}, sameWorkspace ? workspaceRef.current.folds ?? [] : [],
     );
     workspaceRef.current = nextWorkspace;
     setWorkspace(nextWorkspace);
@@ -1995,7 +2008,7 @@ function AppRoutes() {
     setWorkspacePaneLayouts(layouts);
     const search = searchWithSavedWorkspaceId(
       searchWithWorkspaceState(current.search, nextWorkspace.openSessions,
-        nextWorkspace.groups, nextWorkspace.parents ?? {}), selection.workspaceId,
+        nextWorkspace.groups, nextWorkspace.parents ?? {}, nextWorkspace.folds ?? []), selection.workspaceId,
     );
     const path = selection.view.kind === "session"
       ? sessionPath(selection.view.sessionName, Boolean(parseSessionRoute(current.path)?.recentsOpen))
@@ -2096,19 +2109,20 @@ function AppRoutes() {
     const orderedTabs = workspaceTabsFromSearch(location.search, route?.sessionName);
     const orderedGroups = workspaceGroupsFromSearch(location.search, orderedTabs);
     const orderedParents = workspaceParentsFromSearch(location.search, orderedTabs);
+    const orderedFolds = workspaceFoldsFromSearch(location.search, orderedTabs, orderedParents, orderedGroups);
     setWorkspace((current) => restoreWorkspaceTabs(
       current,
       route?.sessionName,
       orderedTabs,
       orderedGroups,
-      orderedParents,
+      orderedParents, orderedFolds,
     ));
 
     const canonicalSearch = searchWithWorkspaceState(
       location.search,
       orderedTabs,
       orderedGroups,
-      orderedParents,
+      orderedParents, orderedFolds,
     );
     if (canonicalSearch === location.search) return;
     replaceLocation(
@@ -2126,14 +2140,19 @@ function AppRoutes() {
     workspaceActivityRunning.current = true;
     workspaceActivityInFlight.current = snapshot;
 
-    workspaceActivityCompletion.current = updateWorkspaceActivity(
+    const activityArgs = [
       snapshot.workspaceId,
       snapshot.tabs,
       snapshot.groups,
       snapshot.activeSession,
       snapshot.sessionRevision,
       snapshot.expectedUpdatedAt,
-      ...(snapshot.parents === undefined ? [] as const : [snapshot.parents] as const),
+    ] as const;
+    workspaceActivityCompletion.current = (snapshot.folds !== undefined
+      ? updateWorkspaceActivity(...activityArgs, snapshot.parents, snapshot.folds)
+      : snapshot.parents !== undefined
+        ? updateWorkspaceActivity(...activityArgs, snapshot.parents)
+        : updateWorkspaceActivity(...activityArgs)
     ).then((savedWorkspace) => {
       if (
         !appMounted.current
@@ -2317,6 +2336,7 @@ function AppRoutes() {
 
     const currentWorkspace = workspaceRef.current;
     const openSessions = currentWorkspace.openSessions;
+    const folds = normalizeWorkspaceTabFolds(currentWorkspace.folds, openSessions, currentWorkspace.parents, currentWorkspace.groups);
     const route = parseSessionRoute(current.path);
     const liveNames = new Set(knownSessionsRef.current.map((session) => session.name));
     const activeSession = route && openSessions.includes(route.sessionName)
@@ -2333,6 +2353,9 @@ function AppRoutes() {
       })),
       parents: currentWorkspace.parents
         ?? (canonicalWorkspace.current?.parents ? {} : undefined),
+      folds: folds.length > 0
+        ? folds
+        : canonicalWorkspace.current?.folds?.length ? [] : undefined,
       activeSession,
       sessionRevision: sessionRevision.value,
       expectedUpdatedAt: canonicalWorkspace.current?.id === workspaceId
@@ -2367,13 +2390,14 @@ function AppRoutes() {
       && JSON.stringify(pending.tabs) === JSON.stringify(saved.tabs)
       && sameWorkspaceGroups(pending.groups, saved.groups ?? [])
       && sameWorkspaceParents(pending.parents, saved.parents)
+      && sameWorkspaceTabFolds(pending.folds, saved.folds)
       && pending.activeSession === saved.activeSession ? pending : undefined);
     if (echo) acknowledgedWorkspaceActivities.current.add(echo);
     const base = echo ?? previous;
     const sameIdentityRevision = saved.sessionRevision === previous.sessionRevision;
     const merged = sameIdentityRevision
-      ? rebaseWorkspaceEdits(base, { tabs: local.openSessions, groups: local.groups, parents: local.parents }, saved)
-      : { tabs: saved.tabs, groups: saved.groups ?? [], parents: saved.parents };
+      ? rebaseWorkspaceEdits(base, { tabs: local.openSessions, groups: local.groups, parents: local.parents, folds: local.folds }, saved)
+      : { tabs: saved.tabs, groups: saved.groups ?? [], parents: saved.parents, folds: saved.folds };
     const previousActive = echo?.activeSession ?? lastSavedWorkspaceActivity.current?.activeSession;
     const activeChangedLocally = sameIdentityRevision && previousActive !== undefined
       && (route?.sessionName ?? null) !== previousActive;
@@ -2393,7 +2417,7 @@ function AppRoutes() {
       !previous.tabs.includes(name) || merged.tabs.includes(name)
     ));
     const nextWorkspace = restoreWorkspaceTabs(
-      { ...local, recentSessions }, nextRoute?.sessionName, merged.tabs, merged.groups, merged.parents ?? {},
+      { ...local, recentSessions }, nextRoute?.sessionName, merged.tabs, merged.groups, merged.parents ?? {}, merged.folds ?? [],
     );
     canonicalWorkspace.current = saved;
     workspaceSessionRevision.current = { workspaceId: saved.id, value: saved.sessionRevision };
@@ -2422,6 +2446,7 @@ function AppRoutes() {
       tabs: saved.tabs,
       groups: saved.groups ?? [],
       parents: saved.parents,
+      folds: saved.folds,
       // Viewing a remote update does not broadcast this browser's selection.
       activeSession: activeChangedLocally
         ? (previousActive ?? null)
@@ -2430,7 +2455,7 @@ function AppRoutes() {
       expectedUpdatedAt: saved.updatedAt,
     };
     setWorkspaceSyncProblem((problem) => problem?.kind === "save" ? null : problem);
-    const search = searchWithWorkspaceState(current.search, merged.tabs, merged.groups, merged.parents ?? {});
+    const search = searchWithWorkspaceState(current.search, merged.tabs, merged.groups, merged.parents ?? {}, merged.folds ?? []);
     if (path !== current.path || search !== current.search) {
       replaceLocation(window.history.state, path, search);
       setLocation({ path, search });
@@ -2528,6 +2553,7 @@ function AppRoutes() {
     queueWorkspaceActivity,
     workspace.groups,
     workspace.parents,
+    workspace.folds,
     workspaceGroupsPending,
     workspaceGroupsSupported,
     workspace.openSessions,
@@ -2603,7 +2629,7 @@ function AppRoutes() {
       current.search,
       nextWorkspace.openSessions,
       nextWorkspace.groups,
-      nextWorkspace.parents ?? {},
+      nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
     );
     const liveSession = knownSessionsRef.current.find((session) => (
       session.name === sessionName
@@ -2655,7 +2681,7 @@ function AppRoutes() {
       current.search,
       workspace.openSessions,
       workspace.groups,
-      workspace.parents ?? {},
+      workspace.parents ?? {}, workspace.folds ?? [],
     );
     const currentRoute = parseSessionRoute(current.path);
     if (currentRoute && !currentRoute.recentsOpen) {
@@ -2727,7 +2753,7 @@ function AppRoutes() {
       current.search,
       nextWorkspace.openSessions,
       nextWorkspace.groups,
-      nextWorkspace.parents ?? {},
+      nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
     );
     const state = window.history.state as Record<string, unknown> | null;
 
@@ -2804,7 +2830,7 @@ function AppRoutes() {
           current.search,
           nextWorkspace.openSessions,
           nextWorkspace.groups,
-          nextWorkspace.parents ?? {},
+          nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
         ),
         [{ name: created.name, sessionId: created.id }],
       );
@@ -2859,7 +2885,7 @@ function AppRoutes() {
         current.search,
         nextWorkspace.openSessions,
         nextWorkspace.groups,
-        nextWorkspace.parents ?? {},
+        nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
       ),
       [{ name: sessionName, sessionId }],
     );
@@ -2879,7 +2905,7 @@ function AppRoutes() {
       current.search,
       nextWorkspace.openSessions,
       nextWorkspace.groups,
-      nextWorkspace.parents ?? {},
+      nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
     );
     const liveSession = knownSessionsRef.current.find((session) => (
       session.name === sessionName
@@ -2907,6 +2933,7 @@ function AppRoutes() {
           openSessions: [...nextWorkspace.openSessions],
           groups: nextWorkspace.groups,
           parents: nextWorkspace.parents,
+          folds: nextWorkspace.folds,
         };
         window.history.back();
         return;
@@ -2992,7 +3019,7 @@ function AppRoutes() {
       current.search,
       nextWorkspace.openSessions,
       nextWorkspace.groups,
-      nextWorkspace.parents ?? {},
+      nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
     );
     replaceLocation(
       window.history.state,
@@ -3098,6 +3125,7 @@ function AppRoutes() {
   }, [persistWorkspacePaneLayouts]);
 
   const commitWorkspaceStructure = useCallback((nextWorkspace: SessionWorkspaceState) => {
+    nextWorkspace = withWorkspaceTabFolds(nextWorkspace);
     if (nextWorkspace === workspaceRef.current) return;
     workspaceRef.current = nextWorkspace;
     if (pendingWorkspaceSnapshot.current) {
@@ -3105,6 +3133,7 @@ function AppRoutes() {
         openSessions: [...nextWorkspace.openSessions],
         groups: nextWorkspace.groups,
         parents: nextWorkspace.parents,
+        folds: nextWorkspace.folds,
       };
     }
     setWorkspace(nextWorkspace);
@@ -3116,7 +3145,7 @@ function AppRoutes() {
         current.search,
         nextWorkspace.openSessions,
         nextWorkspace.groups,
-        nextWorkspace.parents ?? {},
+        nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
       ),
     );
     syncLocation();
@@ -3171,6 +3200,14 @@ function AppRoutes() {
 
   const saveTabGroup = useCallback((group: WorkspaceTabGroup) => {
     commitWorkspaceStructure(setWorkspaceTabGroup(workspaceRef.current, group));
+  }, [commitWorkspaceStructure]);
+
+  const foldSessionTabs = useCallback((sessionNames: string[]) => {
+    commitWorkspaceStructure(foldWorkspaceTabs(workspaceRef.current, sessionNames, crypto.randomUUID()));
+  }, [commitWorkspaceStructure]);
+
+  const unfoldSessionTabs = useCallback((foldId: string) => {
+    commitWorkspaceStructure(unfoldWorkspaceTabs(workspaceRef.current, foldId));
   }, [commitWorkspaceStructure]);
 
   const deleteTabGroup = useCallback((groupId: string) => {
@@ -3365,7 +3402,7 @@ function AppRoutes() {
       currentLocation().search,
       nextWorkspace.openSessions,
       nextWorkspace.groups,
-      nextWorkspace.parents ?? {},
+      nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
     );
     if ((route?.recentsOpen || newRoute?.recentsOpen) && state?.[RECENTS_ENTRY_KEY] === true) {
       if (state[FROM_DASHBOARD_KEY] === true) {
@@ -3373,6 +3410,7 @@ function AppRoutes() {
           openSessions: [...nextWorkspace.openSessions],
           groups: nextWorkspace.groups,
           parents: nextWorkspace.parents,
+          folds: nextWorkspace.folds,
         };
         window.history.go(-2);
       } else {
@@ -3390,6 +3428,7 @@ function AppRoutes() {
         openSessions: [...nextWorkspace.openSessions],
         groups: nextWorkspace.groups,
         parents: nextWorkspace.parents,
+        folds: nextWorkspace.folds,
       };
       window.history.back();
       return;
@@ -3484,6 +3523,7 @@ function AppRoutes() {
         openSessions: [...workspaceRef.current.openSessions],
         groups: workspaceRef.current.groups,
         parents: workspaceRef.current.parents,
+        folds: workspaceRef.current.folds,
       };
       window.history.back();
       return;
@@ -3532,7 +3572,7 @@ function AppRoutes() {
     }
     const search = searchWithWorkspaceState(
       isolatedWorkspaceSearch(current.search, tabs), tabs, [],
-      normalizeWorkspaceParents(workspaceRef.current.parents, tabs),
+      normalizeWorkspaceParents(workspaceRef.current.parents, tabs), workspaceRef.current.folds ?? [],
     );
     const destination = new URL(
       targetUrl(sessionPath(focusedSession), search),
@@ -3590,7 +3630,7 @@ function AppRoutes() {
           current.search,
           closedWorkspace.openSessions,
           closedWorkspace.groups,
-          closedWorkspace.parents ?? {},
+          closedWorkspace.parents ?? {}, closedWorkspace.folds ?? [],
         ),
       );
       syncLocation();
@@ -3706,7 +3746,7 @@ function AppRoutes() {
           writeTemporaryCallbackSessions(pending.workspaceKey, callbacks);
         }
         replaceLocation(window.history.state, current.path,
-          searchWithWorkspaceState(current.search, restored.openSessions, restored.groups, restored.parents ?? {}));
+          searchWithWorkspaceState(current.search, restored.openSessions, restored.groups, restored.parents ?? {}, restored.folds ?? []));
         syncLocation();
       }
       if (sameWorkspace && pending.restoreActive && currentLocation().path === pending.pathAfterForget
@@ -4042,7 +4082,7 @@ function AppRoutes() {
               savedSource.activeSession ?? targetSession ?? undefined,
               savedSource.tabs,
               savedSource.groups ?? [],
-              savedSource.parents ?? {},
+              savedSource.parents ?? {}, savedSource.folds ?? [],
             );
             workspaceRef.current = restoredWorkspace;
             setWorkspace(restoredWorkspace);
@@ -4069,7 +4109,7 @@ function AppRoutes() {
                 latest.search,
                 savedSource.tabs,
                 savedSource.groups ?? [],
-                savedSource.parents ?? {},
+                savedSource.parents ?? {}, savedSource.folds ?? [],
               ),
               sourceWorkspaceId,
             );
@@ -4211,6 +4251,7 @@ function AppRoutes() {
         openSessions: renamedPending.openSessions,
         groups: renamedPending.groups,
         parents: renamedPending.parents,
+        folds: renamedPending.folds,
       };
     }
     if (
@@ -4244,7 +4285,7 @@ function AppRoutes() {
       current.search,
       nextWorkspace.openSessions,
       nextWorkspace.groups,
-      nextWorkspace.parents ?? {},
+      nextWorkspace.parents ?? {}, nextWorkspace.folds ?? [],
     );
     replaceLocation(
       window.history.state,
@@ -4316,7 +4357,7 @@ function AppRoutes() {
       current.search,
       workspace.openSessions,
       workspace.groups,
-      workspace.parents ?? {},
+      workspace.parents ?? {}, workspace.folds ?? [],
     );
     replaceLocation(
       window.history.state,
@@ -4327,7 +4368,7 @@ function AppRoutes() {
       { [SNIPPETS_FROM_DASHBOARD_KEY]: true },
       "/snippets",
       searchWithSavedWorkspaceId(
-        searchWithWorkspaceState("", workspace.openSessions, workspace.groups, workspace.parents ?? {}),
+        searchWithWorkspaceState("", workspace.openSessions, workspace.groups, workspace.parents ?? {}, workspace.folds ?? []),
         savedWorkspaceIdFromSearch(current.search),
       ),
     );
@@ -4341,6 +4382,7 @@ function AppRoutes() {
         openSessions: [...workspace.openSessions],
         groups: workspace.groups,
         parents: workspace.parents,
+        folds: workspace.folds,
       };
       window.history.back();
       return;
@@ -4349,7 +4391,7 @@ function AppRoutes() {
       {},
       "/",
       searchWithSavedWorkspaceId(
-        searchWithWorkspaceState("", workspace.openSessions, workspace.groups, workspace.parents ?? {}),
+        searchWithWorkspaceState("", workspace.openSessions, workspace.groups, workspace.parents ?? {}, workspace.folds ?? []),
         savedWorkspaceIdFromSearch(currentLocation().search),
       ),
     );
@@ -4532,7 +4574,7 @@ function AppRoutes() {
       location.search,
       workspace.openSessions,
       workspace.groups,
-      workspace.parents ?? {},
+      workspace.parents ?? {}, workspace.folds ?? [],
     ),
   );
 
@@ -4654,6 +4696,9 @@ function AppRoutes() {
         recentSessions={workspace.recentSessions}
         groups={workspace.groups}
         sessionParents={workspace.parents}
+        folds={workspace.folds}
+        onFoldTabs={foldSessionTabs}
+        onUnfoldTabs={unfoldSessionTabs}
         sessions={knownSessions}
         uncheckedReadySessions={uncheckedReadySessions}
         onMarkSessionUnread={markSessionUnread}
@@ -4910,6 +4955,9 @@ function AppRoutes() {
             recentSessions={workspace.recentSessions}
             groups={workspace.groups}
             sessionParents={workspace.parents}
+            folds={workspace.folds}
+            onFoldTabs={foldSessionTabs}
+            onUnfoldTabs={unfoldSessionTabs}
             sessions={knownSessions}
             uncheckedReadySessions={uncheckedReadySessions}
             onMarkSessionUnread={markSessionUnread}
@@ -4995,6 +5043,9 @@ function AppRoutes() {
             recentSessions={workspace.recentSessions}
             groups={workspace.groups}
             sessionParents={workspace.parents}
+            folds={workspace.folds}
+            onFoldTabs={foldSessionTabs}
+            onUnfoldTabs={unfoldSessionTabs}
             sessions={knownSessions}
             uncheckedReadySessions={uncheckedReadySessions}
             onMarkSessionUnread={markSessionUnread}

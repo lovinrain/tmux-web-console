@@ -12,6 +12,7 @@ import type {
   SnippetTree,
 } from "./types";
 import { normalizeWorkspaceParents, WORKSPACE_TAB_GROUP_COLORS, type WorkspaceTabGroup, type WorkspaceSessionParents } from "./workspaceState";
+import { normalizeWorkspaceTabFolds, sameWorkspaceTabFolds, type WorkspaceTabFold } from "./workspaceFolds";
 import type { Theme } from "./theme";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -1176,6 +1177,7 @@ export interface SavedWorkspace {
   tabs: string[];
   groups?: WorkspaceTabGroup[];
   parents?: WorkspaceSessionParents;
+  folds?: WorkspaceTabFold[];
   separators?: string[];
   separatorsBefore?: string[];
   quickLinks?: WorkspaceQuickLink[];
@@ -1316,6 +1318,7 @@ export interface CreateWorkspaceInput {
   tabs: string[];
   groups: WorkspaceTabGroup[];
   parents?: WorkspaceSessionParents;
+  folds?: WorkspaceTabFold[];
   separators?: string[];
   separatorsBefore?: string[];
   paneLayouts?: WorkspacePaneLayout[];
@@ -1325,7 +1328,7 @@ export interface CreateWorkspaceInput {
 
 export type WorkspaceUpdate = Partial<Pick<
   SavedWorkspace,
-  "name" | "tabs" | "groups" | "parents" | "separators" | "separatorsBefore" | "paneLayouts" | "callbackSessions" | "activeSession" | "sessionRevision"
+  "name" | "tabs" | "groups" | "parents" | "folds" | "separators" | "separatorsBefore" | "paneLayouts" | "callbackSessions" | "activeSession" | "sessionRevision"
 >> & { expectedUpdatedAt?: number };
 
 let workspaceVersionChecksSupported = true;
@@ -1663,6 +1666,14 @@ function isWorkspaceSnapshot(value: unknown, workspaceId: string): value is Save
         && isStringArray(group.tabs)
       ))
     ))
+    && (value.folds === undefined || (
+      Array.isArray(value.folds)
+      && value.folds.every((fold) => isRecord(fold) && typeof fold.id === "string" && isStringArray(fold.tabs))
+      && sameWorkspaceTabFolds(value.folds as WorkspaceTabFold[], normalizeWorkspaceTabFolds(
+        value.folds, value.tabs, value.parents as WorkspaceSessionParents | undefined,
+        value.groups as WorkspaceTabGroup[] | undefined,
+      ))
+    ))
     && (value.separators === undefined || isStringArray(value.separators))
     && (value.separatorsBefore === undefined || isStringArray(value.separatorsBefore))
     && (value.callbackSessions === undefined || isStringArray(value.callbackSessions))
@@ -1980,6 +1991,7 @@ export async function updateWorkspaceActivity(
   sessionRevision: number,
   expectedUpdatedAt?: number,
   parents?: WorkspaceSessionParents,
+  folds?: WorkspaceTabFold[],
 ): Promise<SavedWorkspace> {
   let includeGroups = groups !== undefined;
   let includeVersion = supportsWorkspaceVersionChecks() && expectedUpdatedAt !== undefined;
@@ -1993,6 +2005,7 @@ export async function updateWorkspaceActivity(
           tabs,
           ...(includeGroups ? { groups } : {}),
           ...(parents === undefined ? {} : { parents }),
+          ...(folds === undefined ? {} : { folds }),
           activeSession,
           sessionRevision,
           ...(includeVersion ? { expectedUpdatedAt } : {}),

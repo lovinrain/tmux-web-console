@@ -139,7 +139,7 @@ blindly retry a destructive request with old identity values.
 ### Workspace session revision
 
 Every workspace response includes `sessionRevision`. Supply that exact integer
-for any mutation containing session-name references: tabs, parents, groups, separators,
+for any mutation containing session-name references: tabs, parents, groups, folds, separators,
 pane layouts, callback sessions, or the active session. The revision is a
 global rename/transfer fence, not a per-workspace version. A revision mismatch
 returns `409` when session identity or membership changed through a rename,
@@ -197,6 +197,7 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
   "tabs": ["agent-a", "agent-b"],
   "parents": {"agent-b": "agent-a"},
   "groups": [],
+  "folds": [],
   "quickLinks": [],
   "separators": [],
   "separatorsBefore": [],
@@ -221,17 +222,25 @@ only: child sessions have the same capabilities and lifecycle as any other tmux
 session. The ordered `tabs` array remains canonical, with the browser displaying
 the tree in depth-first order.
 
+`folds` is optional workspace metadata, interpreted as `[]` when absent. Each
+entry is `{ "id": "fold-id", "tabs": ["sibling-a", "sibling-b"] }`, with a unique
+1–64-character ID using letters, digits, `_`, or `-`. These branch roots must be
+workspace tabs with the same parent and group, ordered as in `tabs`; they may be
+nonadjacent. Descendants are hidden with their roots without changing their
+parent links or tab order. Folds cannot overlap, must cover at least two sessions,
+and are limited to 128 per workspace. A single root with descendants is allowed.
+
 ### Workspace CRUD
 
 | Method and route | Request | Result |
 | --- | --- | --- |
 | `GET /api/workspaces` | None | `{workspaces:[...]}`, most recently active first. |
-| `POST /api/workspaces` | `name`, `tabs`, `activeSession`; optional `parents`, `groups`, `separators`, `separatorsBefore`, `paneLayouts`, `callbackSessions` | Creates a workspace and returns `{workspace}` with `201`. |
+| `POST /api/workspaces` | `name`, `tabs`, `activeSession`; optional `parents`, `groups`, `folds`, `separators`, `separatorsBefore`, `paneLayouts`, `callbackSessions` | Creates a workspace and returns `{workspace}` with `201`. |
 | `GET /api/workspaces/{workspaceId}` | None | `{workspace}`. |
 | `GET /api/workspaces/{workspaceId}/stream` | None | SSE `workspace` events containing `{workspace,callbacks}`; `workspace` is `null` when deleted or absent. |
 | `PATCH /api/workspaces/{workspaceId}` | One or more workspace fields; `sessionRevision` when any session-bearing field is present; optional `expectedUpdatedAt` | Replaces the supplied fields and returns `{workspace}`; rejects a stale version with `409`. |
 | `DELETE /api/workspaces/{workspaceId}` | None | Deletes saved navigation state and its workspace note; does not terminate tmux sessions. |
-| `POST /api/workspaces/{workspaceId}/activity` | `tabs`, `activeSession`, `sessionRevision`; optional `parents`, `groups`, `expectedUpdatedAt` | Saves tab activity and advances `lastActiveAt`; rejects a stale version with `409`. |
+| `POST /api/workspaces/{workspaceId}/activity` | `tabs`, `activeSession`, `sessionRevision`; optional `parents`, `groups`, `folds`, `expectedUpdatedAt` | Saves tab activity and advances `lastActiveAt`; rejects a stale version with `409`. |
 
 Create a workspace:
 
@@ -242,7 +251,7 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
   https://mux.example.test/mux/api/workspaces
 ```
 
-`PATCH` supports `name`, `tabs`, `parents`, `groups`, `separators`,
+`PATCH` supports `name`, `tabs`, `parents`, `groups`, `folds`, `separators`,
 `separatorsBefore`, `paneLayouts`, `callbackSessions`, and `activeSession`.
 Renaming with only `name` does not need `sessionRevision`. Whole-array updates
 are useful for import/export; prefer granular routes for interactive or
@@ -253,6 +262,12 @@ relationships, promoting children through any removed parents to the closest
 surviving ancestor. Native session renames update both sides of these links.
 Forgetting removes the entry from every workspace; Undo restores its prior
 relationships where they remain valid and have not since been changed.
+
+Supplying `folds` replaces the complete list; `[]` unfolds all placeholders.
+Omitting it preserves existing folds and reconciles session removals, renames,
+group changes and reparenting. Invalid or overlapping folds are rejected before
+any write. These changes use the existing workspace event stream and version
+checks. Folding does not terminate, move or resize a tmux session.
 
 ### Workspace event stream
 

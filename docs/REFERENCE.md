@@ -1820,7 +1820,18 @@ browser, so switching Global/Workspace keeps the window in place.
 The selected scope is remembered in browser storage and a fresh browser starts
 at `Global`.
 
-The workspace schema is version 14. Version 1 files load at session revision zero;
+**Fold tabs** lets you select arbitrary, nonadjacent sibling branches and replace
+them with one placeholder at their existing tree level. Select tabs with
+Ctrl/Cmd-click or Shift-click and choose **Fold**, or use **Fold tabs** to pick
+individual branches inside a group. All selected roots must share a parent and
+group. Their descendants are included without moving or reparenting any session.
+The placeholder shows the session count, the active session, and an unread count.
+Click it to unfold and restore the original positions. Selecting a hidden session
+through the jumper or a shortcut reveals its fold. Folds persist in temporary
+workspace URLs and in saved workspaces, whose existing stream shares fold/unfold
+changes across browsers while preserving each browser's selected session.
+
+The workspace schema is version 15. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
@@ -1828,13 +1839,15 @@ version 1 through 6 files load with no global session pins or inherited-pin
 provenance. Versions 1 through 7 load with no sidebar separators; version 8 retains
 its after-session separators and loads with no before-session separators, and
 versions 1 through 9 load with no named pane views. Versions 1 through 13 load
-with no parent/child tab relationships. A legacy document
+with no parent/child tab relationships; versions 1 through 14 load with no folds.
+A legacy document
 upgrades atomically on its next workspace,
 quick-link, note, global-pin, or callback-list write. Versions 1 through 10 load
 with an empty callback list, and older files load with an empty explicit global
 callback list. A workspace name is limited to 80
 characters and a workspace can contain
-at most 256 unique ordered tabs, 16 disjoint contiguous groups, and 16 ordered
+at most 256 unique ordered tabs, 16 disjoint contiguous groups, 128 disjoint folds,
+and 16 ordered
 quick links. It can keep 16 named pane layouts, each with at most 12 leaves and
 six levels of nested splits. Pane names are limited to 64 characters and split
 ratios stay between 15% and 85%. The global common shelf and each native-session shelf also permit 16
@@ -1844,8 +1857,8 @@ with 80-character names, workspace callback lists to 64 unique session names,
 and the explicit global callback list to 256 unique session names.
 Page content has no separate character validator. Writes use an
 atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 13
-reject the version 14 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 14
+reject the version 15 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
