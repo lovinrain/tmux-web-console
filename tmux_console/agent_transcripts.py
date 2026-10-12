@@ -170,6 +170,35 @@ class AgentTranscriptReader:
     def __init__(self, *, roots: dict[str, Path] | None = None) -> None:
         self.roots = default_transcript_roots() if roots is None else roots
 
+    def accepts_codex_reference(self, identifier: str) -> bool:
+        """Validate a reconnect ID when its native header is available.
+
+        A missing transcript does not invalidate an explicit exit instruction;
+        transcript reads already report that file as unavailable. Never infer a
+        conversation from its directory or accept a mismatched/worker header.
+        """
+        if not UUID_PATTERN.fullmatch(identifier):
+            return False
+        try:
+            path = self._locate("codex", identifier)
+            if path is None:
+                return True
+            with _open_file(path) as source:
+                line = source.readline(65_537)
+        except (OSError, _Unsupported):
+            return True
+        try:
+            if len(line) > 65_536:
+                return False
+            record = json.loads(line)
+            payload = record["payload"]
+            origin = payload.get("source")
+            return (record["type"] == "session_meta"
+                    and payload.get("id", payload.get("session_id")) == identifier
+                    and not (isinstance(origin, dict) and "subagent" in origin))
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            return False
+
     def _locate(self, agent: str, identifier: str) -> Path | None:
         root = self.roots.get(agent)
         if root is None or not root.exists():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import time
@@ -9,6 +10,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.agent_reference import AgentReference, AgentReferenceDetector
+from tmux_console.agent_transcripts import AgentTranscriptReader
 from tmux_console.app import SESSION_REGISTRY_KEY, create_app
 from tmux_console.tmux import Session, TmuxClient
 
@@ -164,3 +166,61 @@ async def test_history_cursor_is_accepted_and_bound_to_http_filters():
         mismatch = await client.get("/api/session-history", params={"cursor": initial["nextCursor"], "q": "other"})
         assert mismatch.status == 400
         assert "refresh" in (await mismatch.json())["error"]
+
+
+@pytest.mark.parametrize("trigger", ["history", "background"])
+async def test_codex_exit_banners_repair_existing_metadata_and_live_transcripts(tmp_path, monkeypatch, trigger):
+    """Reproduce an exited agent in a real, disposable tmux server."""
+    identifiers = [f"{i:08x}-1111-4111-8111-111111111111" for i in range(1, 4)]
+    root = tmp_path / "codex"
+    for identifier in [identifiers[0], identifiers[-1]]:
+        path = root / "sessions/2026/10/03" / f"rollout-2026-10-03T00-00-00-{identifier}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"type": "session_meta", "payload": {"id": identifier, "source": "cli"}}) + "\n"
+                        + json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user",
+                            "content": [{"type": "input_text", "text": identifier}]}}) + "\n")
+    monkeypatch.setattr("tmux_console.app.SUBMITTED_MESSAGE_POLL_SECONDS", 0.01 if trigger == "background" else 60)
+    socket = f"muxdeck-id-recovery-{os.getpid()}-{time.time_ns()}"
+    tmux = TmuxClient(socket_name=socket)
+    app = create_app(tmux=tmux, agent_transcripts=AgentTranscriptReader(roots={"codex": root}), base_path="")
+    client = TestClient(TestServer(app))
+    try:
+        command = "printf '%s\\n' " + " ".join(f"'To reconnect, run:' 'codex resume {identifier}'" for identifier in identifiers)
+        created = await tmux.create_session(
+            "exited-codex", start_directory=str(tmp_path), launch_mode="command",
+            command=["/bin/bash", "--noprofile", "--norc", "-c", command + "; exec /bin/bash --noprofile --norc"],
+        )
+        native = await tmux.get_session(created.name)
+        pane = native.active_pane
+        app[SESSION_REGISTRY_KEY].reconcile([native], {native.name: AgentReference("codex", None)})
+        for _ in range(100):
+            if f"codex resume {identifiers[-1]}" in (await tmux.capture_visible(pane.id)).splitlines():
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("disposable shell did not print its exit banners")
+        await client.start_server()
+        if trigger == "background":
+            for _ in range(100):
+                current = app[SESSION_REGISTRY_KEY].list_history()["entries"][0]
+                if current["agentSessionId"] == identifiers[-1]:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail("background observation did not recover the IDs")
+        response = await client.get("/api/session-history", params={"session": native.name})
+        assert response.status == 200
+        entry = (await response.json())["entries"][0]
+        assert entry["agentSessionId"] == identifiers[-1]
+        assert {item["agentSessionId"] for item in entry["agents"]} == {None, *identifiers}
+        url = f"/api/panes/%25{pane.id[1:]}/agent-transcript"
+        transcript = await (await client.get(url, params={"identity": native.identity})).json()
+        assert transcript["status"] == "available"
+        assert transcript["selectedSource"] == f"codex:{identifiers[-1]}"
+        assert transcript["messages"][0]["text"] == identifiers[-1]
+        missing = await (await client.get(url, params={"source": f"codex:{identifiers[1]}"})).json()
+        assert missing["status"] == "missing"
+        assert (await tmux.get_session(native.name)).identity == native.identity
+    finally:
+        await client.close()
+        await asyncio.to_thread(subprocess.run, ["tmux", "-L", socket, "kill-server"], check=False, capture_output=True)

@@ -300,6 +300,7 @@ class SessionRegistry:
         references: Mapping[str, AgentReference] | None = None,
         *,
         observed_at: int | None = None,
+        recovered_references: Mapping[str, list[AgentReference]] | None = None,
     ) -> list[RecoveryRecord]:
         timestamp = int(self._clock()) if observed_at is None else int(observed_at)
         references = references or {}
@@ -310,11 +311,16 @@ class SessionRegistry:
                 live_history_ids: set[str] = set()
                 with connection:
                     for session in sessions:
-                        live_history_ids.add(self._observe_history(connection, session, references.get(session.name), timestamp))
+                        reference = self._recover_history_reference(
+                            connection, session, references.get(session.name), recovered_references,
+                        )
+                        history_id = self._observe_history(connection, session, reference, timestamp)
+                        live_history_ids.add(history_id)
+                        self._record_recovered_agents(connection, history_id, session, recovered_references, timestamp)
                         registry_id = self._reconcile_session(
                             connection,
                             session,
-                            references.get(session.name),
+                            reference,
                             timestamp,
                         )
                         live_registry_ids.add(registry_id)
@@ -749,9 +755,10 @@ class SessionRegistry:
                         "lastSeenAt": row["last_seen"],
                     }
                     for row in connection.execute(
-                        "SELECT agent_type, agent_id, first_seen, last_seen "
-                        "FROM session_agents WHERE history_id = ? "
-                        "ORDER BY first_seen, agent_type",
+                        "SELECT a.agent_type, a.agent_id, a.first_seen, a.last_seen "
+                        "FROM session_agents a JOIN session_history h ON h.id = a.history_id WHERE a.history_id = ? "
+                        "ORDER BY CASE WHEN a.agent_type = h.agent_type AND a.agent_id = h.agent_id THEN 1 ELSE 0 END, "
+                        "a.first_seen, a.agent_type",
                         (history_id,),
                     )
                 ]
@@ -761,19 +768,51 @@ class SessionRegistry:
     def observe_history(
         self, session: Session, reference: AgentReference | None = None,
         *, pane_references: list[AgentReference] | None = None,
+        recovered_references: Mapping[str, list[AgentReference]] | None = None,
     ) -> str:
         with self._lock:
             try:
                 connection = self._require_connection()
                 with connection:
                     timestamp = int(self._clock())
-                    history_id = self._observe_history(connection, session, reference, timestamp)
+                    recovered = self._recover_history_reference(connection, session, reference, recovered_references)
+                    history_id = self._observe_history(connection, session, recovered, timestamp)
+                    if recovered is not reference:
+                        self._reconcile_session(connection, session, recovered, timestamp)
+                    self._record_recovered_agents(connection, history_id, session, recovered_references, timestamp)
                     for pane_reference in pane_references or []:
                         self._record_agent(connection, history_id, pane_reference.agent_type,
                                            pane_reference.session_id, timestamp)
                     return history_id
             except sqlite3.Error as error:
                 raise self._database_error(error) from error
+
+    def _recover_history_reference(
+        self, connection: sqlite3.Connection, session: Session,
+        reference: AgentReference | None,
+        recovered_references: Mapping[str, list[AgentReference]] | None,
+    ) -> AgentReference | None:
+        # Exit banners describe past conversations. Keep a live agent's identity
+        # (even an unidentified one) and any ID already recorded for this incarnation.
+        if not recovered_references or (reference and reference.agent_type):
+            return reference
+        pane = session.active_pane
+        candidates = recovered_references.get(pane.id, []) if pane else []
+        if not candidates:
+            return reference
+        row = connection.execute(
+            "SELECT agent_id FROM session_history WHERE tmux_id = ? AND created = ? AND server_started = ? AND server_pid = ?",
+            _identity(session),
+        ).fetchone()
+        return reference if row and row["agent_id"] else candidates[-1]
+
+    def _record_recovered_agents(
+        self, connection: sqlite3.Connection, history_id: str, session: Session,
+        recovered_references: Mapping[str, list[AgentReference]] | None, timestamp: int,
+    ) -> None:
+        for pane in session.panes:
+            for reference in (recovered_references or {}).get(pane.id, []):
+                self._record_agent(connection, history_id, reference.agent_type, reference.session_id, timestamp)
 
     def record_view_event(self, session: Session, kind: str) -> None:
         """Record browser actions separately from the native session's origin."""

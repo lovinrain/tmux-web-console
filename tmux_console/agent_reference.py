@@ -440,7 +440,7 @@ class AgentReferenceDetector:
         self,
         *,
         cache_seconds: float = 30.0,
-        missing_cache_seconds: float = 30.0,
+        missing_cache_seconds: float = 5.0,
         concurrency: int = 3,
         proc_root: Path = Path("/proc"),
         claude_projects_root: Path | None = None,

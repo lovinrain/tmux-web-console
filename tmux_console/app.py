@@ -21,6 +21,7 @@ from aiohttp import WSMsgType, web
 from muxpilot.fencing import receiver_middleware
 
 from .agent_reference import AgentReferenceDetector
+from .agent_reference_recovery import AgentReferenceRecovery
 from .agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from .auth import (
     AuthConfigurationError,
@@ -271,6 +272,7 @@ HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 WORK_LINKS_KEY = web.AppKey("work_links", WorkLinkStore)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
+AGENT_RECOVERY_KEY = web.AppKey("agent_recovery", AgentReferenceRecovery)
 AGENT_TRANSCRIPTS_KEY = web.AppKey("agent_transcripts", AgentTranscriptReader)
 TRANSCRIPT_READ_LIMIT_KEY = web.AppKey("transcript_read_limit", asyncio.Semaphore)
 SUBMITTED_MESSAGES_KEY = web.AppKey("submitted_messages", SubmittedMessageStore)
@@ -361,6 +363,7 @@ class SessionSnapshotBuilder:
         registry: SessionRegistry | None = None,
         agent_references: AgentReferenceDetector | None = None,
         work_links: WorkLinkStore | None = None,
+        agent_recovery: AgentReferenceRecovery | None = None,
     ) -> None:
         self._tmux = tmux
         self._titles = titles
@@ -370,6 +373,7 @@ class SessionSnapshotBuilder:
         self._workspaces = workspaces
         self._registry = registry
         self._agent_references = agent_references
+        self._agent_recovery = agent_recovery
         self._work_links = work_links
         self._clock = clock
         self._lock = asyncio.Lock()
@@ -378,13 +382,13 @@ class SessionSnapshotBuilder:
         self._inventory_revision = 0
         self._last_inventory: str | None = None
 
-    async def build(self) -> dict[str, Any]:
+    async def build(self, *, recover_references: bool = False) -> dict[str, Any]:
         async with self._lock:
             if self._mutation_lock is not None:
                 async with self._mutation_lock:
-                    payload = await self._build_unlocked()
+                    payload = await self._build_unlocked(recover_references=recover_references)
             else:
-                payload = await self._build_unlocked()
+                payload = await self._build_unlocked(recover_references=recover_references)
             # HTTP and SSE share this builder. Version content changes only, so
             # cached stream replays can be ordered without emitting idle events.
             serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -399,7 +403,7 @@ class SessionSnapshotBuilder:
                 },
             }
 
-    async def _build_unlocked(self) -> dict[str, list[dict[str, Any]]]:
+    async def _build_unlocked(self, *, recover_references: bool = False) -> dict[str, list[dict[str, Any]]]:
         items = await self._tmux.list_sessions()
         states = await self._agent_states.detect_sessions(self._tmux, items)
         observed_at = int(self._clock())
@@ -414,8 +418,10 @@ class SessionSnapshotBuilder:
             if self._agent_references is not None
             else {}
         )
+        recovered = (await self._agent_recovery.recover_sessions(items)
+                     if recover_references and self._agent_recovery is not None else {})
         recoverable_sessions = (
-            self._registry.reconcile(items, references, observed_at=observed_at)
+            self._registry.reconcile(items, references, observed_at=observed_at, recovered_references=recovered)
             if self._registry is not None
             else []
         )
@@ -1311,6 +1317,7 @@ def create_app(
     history_capture_wake = asyncio.Event()
     app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[AGENT_TRANSCRIPTS_KEY] = agent_transcripts or AgentTranscriptReader()
+    app[AGENT_RECOVERY_KEY] = AgentReferenceRecovery(app[TMUX_KEY], app[AGENT_TRANSCRIPTS_KEY])
     app[TRANSCRIPT_READ_LIMIT_KEY] = asyncio.Semaphore(3)
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
     forgotten_sessions: dict[str, ForgottenSession] = {}
@@ -1331,6 +1338,7 @@ def create_app(
         workspaces=app[WORKSPACES_KEY],
         registry=app[SESSION_REGISTRY_KEY],
         agent_references=app[AGENT_REFERENCES_KEY],
+        agent_recovery=app[AGENT_RECOVERY_KEY],
         work_links=app[WORK_LINKS_KEY],
     )
     app[WORKSPACE_STREAM_BROKER_KEY] = WorkspaceStreamBroker()
@@ -1503,11 +1511,13 @@ def create_app(
                         other_panes = [pane for session in live for pane in session.panes
                                        if pane != session.active_pane]
                         other_references = await application[AGENT_REFERENCES_KEY].detect_panes(other_panes)
+                        recovered = await application[AGENT_RECOVERY_KEY].recover_sessions(live)
                         for session in live:
                             application[SESSION_REGISTRY_KEY].observe_history(
                                 session, references.get(session.name),
                                 pane_references=[other_references[pane.id] for pane in session.panes
                                                  if pane.id in other_references],
+                                recovered_references=recovered,
                             )
                 except (TmuxError, SessionRegistryUnavailable):
                     LOGGER.warning("Unable to refresh conversation IDs for submitted messages")
@@ -2457,7 +2467,7 @@ def create_app(
             if session_name is not None and len(session_name) > 256:
                 raise ValueError("session name cannot exceed 256 characters")
             # Reconcile only from a successful full inventory, never from an error/partial result.
-            await app[SESSION_SNAPSHOTS_KEY].build()
+            await app[SESSION_SNAPSHOTS_KEY].build(recover_references=True)
             result = app[SESSION_REGISTRY_KEY].list_history(
                 workspace_id=request.query.get("workspace"), query=query,
                 recycled=request.query.get("recycled", "0") == "1", offset=offset,
@@ -6200,18 +6210,27 @@ def create_app(
                     # Resolve the requested pane, even when another pane is active.
                     # Bypass the status cache to follow in-app resume immediately.
                     reference = await app[AGENT_REFERENCES_KEY].detect_pane(pane, refresh=True)
+                    recovered = await app[AGENT_RECOVERY_KEY].recover_sessions([session], prune_cache=False)
+                    active_reference = (reference if pane == session.active_pane
+                                        else await app[AGENT_REFERENCES_KEY].detect_pane(session.active_pane))
                     live_identity = (identity, pane.id, pane.process_pid)
                     agents = [{"agentType": reference.agent_type, "agentSessionId": reference.session_id}]
                     recorded_history_id = app[SESSION_REGISTRY_KEY].observe_history(
-                        session, reference if pane == session.active_pane else None,
+                        session, active_reference,
                         pane_references=[reference] if pane != session.active_pane else None,
+                        recovered_references=recovered,
                     )
                     # Some CLIs close their transcript descriptor while idle.
-                    # Only use IDs actually recorded for this same single-pane
-                    # session incarnation; never select by shared CWD or mtime.
-                    if reference.agent_type and not reference.session_id and len(session.panes) == 1:
-                        recorded = [item for item in app[SESSION_REGISTRY_KEY].list_session_agents(recorded_history_id)
-                                    if item["agentType"] == reference.agent_type and item["agentSessionId"]]
+                    # Use recorded IDs for a single-pane incarnation or explicit
+                    # reconnect evidence for this exact pane in a multi-pane session.
+                    if not reference.session_id:
+                        recorded = (app[SESSION_REGISTRY_KEY].list_session_agents(recorded_history_id)
+                                    if len(session.panes) == 1 else [
+                                        {"agentType": item.agent_type, "agentSessionId": item.session_id}
+                                        for item in recovered.get(pane.id, [])
+                                    ])
+                        recorded = [item for item in recorded if item["agentSessionId"]
+                                    and (reference.agent_type is None or item["agentType"] == reference.agent_type)]
                         if recorded:
                             agents, recorded_fallback = recorded, True
             else:
@@ -6225,7 +6244,7 @@ def create_app(
                 )
             if recorded_fallback:
                 result["notice"] = " ".join(filter(None, [
-                    "Showing a conversation previously recorded for this session. The current agent did not expose a conversation ID.",
+                    "Showing conversations previously recorded for this pane. No current conversation ID is exposed.",
                     result.get("notice"),
                 ]))
             if live_identity is not None:

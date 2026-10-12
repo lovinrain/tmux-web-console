@@ -81,8 +81,26 @@ old command-line resume argument; rollouts marked as subagents are excluded.
 Session history keeps existing stable history identities, so renaming preserves
 access and reusing a tmux name does not merge conversations. Claude's existing
 reference detector uses PID registrations when available, with legacy detection
-for older versions. An ID that was never detectable cannot be reconstructed by
-the transcript reader.
+for older versions.
+
+After Codex exits, Muxdeck can recover IDs from its explicit reconnect messages
+in the retained pane output. Background observation and opening Session history
+perform this recovery. The capture is limited to the last 2,000 terminal rows
+and 1 MiB of parsing text, with at most 16 distinct IDs per pane. Captures are
+cached for 60 seconds when references are found and five seconds otherwise;
+a change in the pane's command or identity invalidates the cache. Native header
+checks read at most 64 KiB and reject mismatched IDs and subagents. An explicit
+ID remains recorded when its native file is missing, with the usual availability
+notice. Recovery creates no transcript archive or state-schema upgrade.
+
+Recovered IDs supplement every conversation already recorded for that tmux
+incarnation. Only a missing ID for an exited agent can become the session's
+primary reference; a live agent or an existing known reference takes precedence.
+The current primary reference wins when observation timestamps tie. Recovery
+rechecks pane identity before accepting output and never chooses by shared CWD.
+Routine workspace inventory updates do not trigger extra recovery captures.
+If neither live process evidence nor an explicit reconnect message survives,
+Muxdeck continues to show that the ID is unavailable.
 
 The background recorder observes agents in every pane, including inactive
 panes, using cached and bounded ID discovery. Those references supplement the
