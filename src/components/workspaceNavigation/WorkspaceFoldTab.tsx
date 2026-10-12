@@ -48,7 +48,7 @@ export function WorkspaceFoldTab({ fold, count, titles, activeTitle, unreadCount
         onKeyDown={onKeyDown}
       >
         {tree && <span className="workspace-tab-child-marker" aria-hidden="true" />}
-        <FolderIcon />
+        <FolderIcon className="workspace-fold-icon" />
         <span className="workspace-fold-title">{fold.closedSessions ? "Saved fold" : "Fold"}</span>
         <strong className="workspace-fold-count">{count}</strong>
         <span className="workspace-tab-title">{activeTitle ?? titles[0]}</span>

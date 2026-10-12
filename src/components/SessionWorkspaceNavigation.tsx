@@ -2275,7 +2275,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     setDeadTabsOnlySelected(false);
                     setFoldSelectionMode((current) => !current);
                   }}>
-                  <FolderIcon /><span>Fold tabs</span>
+                  <FolderIcon className="workspace-fold-icon" /><span>Fold tabs</span>
                 </button>
               )}
               {paneLayouts.map((paneLayout) => {
@@ -2389,7 +2389,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                         .find((element) => element.dataset.foldAnchor === orderedSelection[0]);
                       row?.querySelector<HTMLButtonElement>("[role='tab']")?.focus();
                     });
-                  }}><FolderIcon /><span>Fold</span></button>;
+                  }}><FolderIcon className="workspace-fold-icon" /><span>Fold</span></button>;
               })()}
               {props.onFoldAndCloseTabs && !deadTabsOnlySelected && (() => {
                 const error = workspaceFoldSelectionError({ openSessions, groups, parents: sessionParents, folds: validFolds }, orderedSelection)
@@ -2398,7 +2398,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   aria-label="Fold and close selected sessions" disabled={Boolean(error)}
                   title={error ?? "Save recovery metadata and close the selected sessions; confirmation required"}
                   onClick={() => { props.onFoldAndCloseTabs?.(orderedSelection); clearWorkspaceTabSelection(false); }}>
-                  <FolderIcon /><span>Fold and close</span></button>;
+                  <FolderIcon className="workspace-fold-icon" /><span>Fold and close</span></button>;
               })()}
               {onMoveTabs && !deadTabsOnlySelected && (
                 <>
