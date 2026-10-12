@@ -1,0 +1,34 @@
+.title-sheet.workspace-fold-preview {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.workspace-fold-preview > p { margin: 16px 20px; }
+.workspace-fold-resume-note { font-size: 12px; opacity: .8; }
+.workspace-fold-members { padding: 0; margin: 16px 20px; list-style: none; }
+.workspace-fold-members > li {
+  display: flex; align-items: center; gap: 12px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px;
+}
+.workspace-fold-members > li.active { border-color: var(--accent); }
+.workspace-fold-member-info { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.workspace-fold-member-info > * { overflow-wrap: anywhere; }
+.workspace-fold-member-info small, .workspace-fold-member-info code { font-size: 11px; }
+.workspace-fold-member-actions, .workspace-fold-preview footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.workspace-fold-member-actions { justify-content: flex-end; max-width: 55%; }
+.workspace-fold-preview footer { padding: 16px 20px; border-top: 1px solid var(--line); }
+.workspace-fold-preview button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+  color: var(--paper); background: transparent; font: inherit; font-size: 12px; cursor: pointer;
+}
+.workspace-fold-preview button:hover:not(:disabled) { border-color: var(--accent); }
+.workspace-fold-preview button:disabled { opacity: .45; cursor: default; }
+.workspace-fold-preview button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workspace-fold-preview .title-close { width: 30px; height: 30px; padding: 4px; }
+.workspace-fold-preview button svg { width: 14px; height: 14px; }
+.workspace-fold-preview .form-error { white-space: pre-wrap; }
+@media (max-width: 600px) {
+  .workspace-fold-members > li { align-items: stretch; flex-direction: column; }
+  .workspace-fold-member-actions { max-width: none; justify-content: flex-start; }
+}

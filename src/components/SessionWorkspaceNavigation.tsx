@@ -83,6 +83,7 @@ import { clampDesktopTabRailWidth, clampDesktopTabRailWidthForViewport, COMPACT_
 import { moveToNewWindowDisabledReason, newWindowFailureMessage, WorkspaceWindowActionError } from "./workspaceNavigation/windowActions";
 import { WorkspaceRecentsDialog } from "./workspaceNavigation/WorkspaceRecentsDialog";
 import { WorkspaceFoldTab } from "./workspaceNavigation/WorkspaceFoldTab";
+import { WorkspaceFoldPreview } from "./workspaceNavigation/WorkspaceFoldPreview";
 export type { OpenTabInNewWindowMode, OpenTabInNewWindowResult, SessionWorkspaceNavigationProps, WorkspacePersistenceState, WorkspaceTabOrientation } from "./workspaceNavigation/types";
 
 
@@ -323,6 +324,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, [groups]);
   const validFolds = useMemo(() => normalizeWorkspaceTabFolds(folds, openSessions, sessionParents, groups),
     [folds, openSessions, sessionParents, groups]);
+  const [previewFoldId, setPreviewFoldId] = useState<string | null>(null);
+  const previewFold = validFolds.find((fold) => fold.id === previewFoldId);
+  const closeFoldPreview = useCallback(() => setPreviewFoldId(null), []);
   const foldedTabs = useMemo(() => {
     const result = new Map<string, { fold: WorkspaceTabFold; members: string[] }>();
     for (const fold of validFolds) {
@@ -1547,6 +1551,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         unreadCount={members.filter((name) => props.uncheckedReadySessions?.has(name)).length}
         tree={sessionTreeContext(sessionName, sessionParents, sessionsByName)}
         activeRef={active ? activeTabRef : undefined}
+        onPreview={setPreviewFoldId}
         onUnfold={onUnfoldTabs ? (id) => {
           unfoldFocusRef.current = sessionName;
           onUnfoldTabs(id);
@@ -2378,13 +2383,22 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   onClick={() => {
                     onFoldTabs(orderedSelection);
                     clearWorkspaceTabSelection(false);
-                    setReorderAnnouncement(`${orderedSelection.length} tabs folded. Click the placeholder to unfold them.`);
+                    setReorderAnnouncement(`${orderedSelection.length} tabs folded. Click the placeholder to preview, or use its arrow to unfold.`);
                     window.requestAnimationFrame(() => {
                       const row = Array.from(navigationRef.current?.querySelectorAll<HTMLElement>("[data-fold-anchor]") ?? [])
                         .find((element) => element.dataset.foldAnchor === orderedSelection[0]);
                       row?.querySelector<HTMLButtonElement>("[role='tab']")?.focus();
                     });
                   }}><FolderIcon /><span>Fold</span></button>;
+              })()}
+              {props.onFoldAndCloseTabs && !deadTabsOnlySelected && (() => {
+                const error = workspaceFoldSelectionError({ openSessions, groups, parents: sessionParents, folds: validFolds }, orderedSelection)
+                  ?? props.foldCloseDisabledReason;
+                return <button type="button" className="workspace-selection-bulk-action"
+                  aria-label="Fold and close selected sessions" disabled={Boolean(error)}
+                  title={error ?? "Save recovery metadata and close the selected sessions; confirmation required"}
+                  onClick={() => { props.onFoldAndCloseTabs?.(orderedSelection); clearWorkspaceTabSelection(false); }}>
+                  <FolderIcon /><span>Fold and close</span></button>;
               })()}
               {onMoveTabs && !deadTabsOnlySelected && (
                 <>
@@ -2647,7 +2661,16 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         </p>
       )}
 
-      {recentsOpen && !terminateTarget && !groupDialog && (
+      {previewFold && <WorkspaceFoldPreview key={previewFold.id} fold={previewFold}
+        members={workspaceFoldMembers(previewFold, openSessions, sessionParents)} sessions={sessionsByName}
+        activeSession={activeSession} workspaceId={activeWorkspaceId}
+        onPreview={onSelect} onClose={closeFoldPreview}
+        onUnfold={onUnfoldTabs ? () => onUnfoldTabs(previewFold.id) : undefined}
+        onFoldAndClose={props.onFoldAndCloseTabs ? () => props.onFoldAndCloseTabs?.(previewFold.tabs, previewFold.id) : undefined}
+        closeDisabledReason={props.foldCloseDisabledReason}
+        onRecover={props.onRecoverFoldSession ? (name, mode) => props.onRecoverFoldSession!(previewFold.id, name, mode) : undefined} />}
+
+      {recentsOpen && !terminateTarget && !groupDialog && !previewFold && (
         <WorkspaceRecentsDialog
           {...props}
           sessionsByName={sessionsByName}

@@ -53,6 +53,21 @@ def test_schema_14_upgrade_preserves_nested_tabs_and_does_not_invent_folds(tmp_p
     assert WorkspaceStore(path).get_workspace(workspace["id"])["parents"] == workspace["parents"]
 
 
+def test_schema_15_keeps_live_folds_and_upgrades_without_inventing_closed_sessions(tmp_path):
+    path = tmp_path / "workspaces.json"
+    workspace = create_folded(WorkspaceStore(path))
+    document = json.loads(path.read_text())
+    document["version"] = 15
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    store = WorkspaceStore(path)
+    assert store.get_workspace(workspace["id"])["folds"] == workspace["folds"]
+    assert path.read_bytes() == before
+    store.update_workspace(workspace["id"], name="Upgraded", update_name=True)
+    assert json.loads(path.read_text())["version"] == 16
+    assert store.get_workspace(workspace["id"])["folds"] == workspace["folds"]
+
+
 @pytest.mark.parametrize("folds", [
     None, {}, "fold", [{"id": "", "tabs": ["a", "b"]}],
     [{"id": "bad id", "tabs": ["a", "b"]}],

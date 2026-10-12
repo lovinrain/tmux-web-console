@@ -229,6 +229,29 @@ workspace tabs with the same parent and group, ordered as in `tabs`; they may be
 nonadjacent. Descendants are hidden with their roots without changing their
 parent links or tab order. Folds cannot overlap, must cover at least two sessions,
 and are limited to 128 per workspace. A single root with descendants is allowed.
+Fold-and-close adds optional `closedSessions` snapshots. Each stores `name`,
+`historyId`, `directory`, `title`, `agentType`, `agentSessionId`, `sessionId`,
+`sessionCreated`, `serverStarted`, `serverPid`, and `savedAt` (Unix seconds).
+Snapshots stay ordered by workspace tabs and reference only members of that
+fold. They remain available after recovery; a root-only save from an older
+client preserves them. URLs contain only fold IDs and roots.
+
+`POST /api/workspaces/{workspaceId}/folds/{foldId}/close` requires `tabs`
+(sibling roots), `sessions` (every branch member's `name` and complete native
+identity), `sessionRevision`, and `expectedUpdatedAt`. It creates or updates the
+placeholder, saves all metadata atomically, then closes only the confirmed
+identities. No closure occurs if preflight or persistence fails. The response
+is `{workspace, closed: [names], failures: {name: message}}`; partial closure
+keeps recovery metadata and permits exact-identity retries.
+
+`POST /api/workspaces/{workspaceId}/folds/{foldId}/recover` requires
+`{session: name, mode: "shell" | "agent"}`. Shell mode bypasses tmux's
+`default-command`. Agent mode creates tmux and explicitly resumes the exact
+saved coding conversation after validating its history association, CLI and
+local transcript. Missing/unsupported agent recovery returns `409` without
+creating a shell. Success returns `{session, sessionId, created, warnings?}`
+with `201`; a retry of an already recovered shell returns `200`. A different
+live session using the same name is never replaced or sent input.
 
 ### Workspace CRUD
 

@@ -5,6 +5,40 @@ export interface WorkspaceTabFold {
   id: string;
   /** Sibling branch roots; descendants stay in their original tree. */
   tabs: string[];
+  /** Durable recovery snapshots captured before fold-and-close terminates tmux. */
+  closedSessions?: WorkspaceFoldSnapshot[];
+}
+
+export interface WorkspaceFoldSnapshot {
+  name: string;
+  historyId: string;
+  directory: string;
+  title: string | null;
+  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
+  agentSessionId: string | null;
+  sessionId: string;
+  sessionCreated: number;
+  serverStarted: number;
+  serverPid: number;
+  savedAt: number;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isWorkspaceFoldSnapshot(value: unknown): value is WorkspaceFoldSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.name === "string" && item.name.length > 0 && item.name.length <= 256
+    && typeof item.historyId === "string" && UUID.test(item.historyId)
+    && typeof item.directory === "string" && item.directory.startsWith("/") && item.directory.length <= 4096
+    && (item.title === null || typeof item.title === "string")
+    && (item.agentType === null || ["claude", "codex", "copilot", "cursor", "grok"].includes(item.agentType as string))
+    && (item.agentSessionId === null || (item.agentType !== null && typeof item.agentSessionId === "string"
+      && item.agentSessionId.length > 0 && item.agentSessionId.length <= 256))
+    && typeof item.sessionId === "string" && /^\$\d+$/.test(item.sessionId)
+    && ["sessionCreated", "serverStarted", "serverPid", "savedAt"].every((field) => (
+      typeof item[field] === "number" && Number.isSafeInteger(item[field]) && (item[field] as number) > 0
+    ));
 }
 
 export const MAX_WORKSPACE_TAB_FOLDS = 128;
@@ -96,9 +130,15 @@ export function normalizeWorkspaceTabFolds(
     const roots = selectionRoots(workspace, raw.tabs.filter((name): name is string => (
       typeof name === "string" && open.has(name)
     )));
-    const fold = { id: raw.id, tabs: roots };
+    const fold: WorkspaceTabFold = { id: raw.id, tabs: roots };
     const members = workspaceFoldMembers(fold, tabs, parents);
-    if (members.length < 2 || !sameLevel(workspace, roots) || members.some((name) => hidden.has(name))) continue;
+    if (raw.closedSessions !== undefined) {
+      if (!Array.isArray(raw.closedSessions) || !raw.closedSessions.every(isWorkspaceFoldSnapshot)) continue;
+      const snapshots = new Map(raw.closedSessions.map((item) => [item.name, item]));
+      const saved = members.flatMap((name) => snapshots.has(name) ? [snapshots.get(name)!] : []);
+      if (saved.length) fold.closedSessions = saved;
+    }
+    if (members.length < (fold.closedSessions ? 1 : 2) || !sameLevel(workspace, roots) || members.some((name) => hidden.has(name))) continue;
     ids.add(fold.id);
     members.forEach((name) => hidden.add(name));
     folds.push(fold);
@@ -114,14 +154,22 @@ export function sameWorkspaceTabFolds(
   const b = right ?? [];
   return a.length === b.length && a.every((fold, index) => fold.id === b[index].id
     && fold.tabs.length === b[index].tabs.length
-    && fold.tabs.every((tab, position) => tab === b[index].tabs[position]));
+    && fold.tabs.every((tab, position) => tab === b[index].tabs[position])
+    && JSON.stringify(fold.closedSessions ?? []) === JSON.stringify(b[index].closedSessions ?? []));
 }
 
 export function withWorkspaceTabFolds<T extends FoldWorkspace>(
   workspace: T,
   value: unknown = workspace.folds,
 ): T {
-  const folds = normalizeWorkspaceTabFolds(value, workspace.openSessions, workspace.parents, workspace.groups);
+  // URL snapshots and older clients only contain fold IDs and roots. Preserve
+  // server-held recovery metadata for a surviving placeholder.
+  const previous = new Map((workspace.folds ?? []).map((fold) => [fold.id, fold.closedSessions]));
+  const candidates = Array.isArray(value) ? value.map((fold) => (
+    fold && typeof fold === "object" && !Array.isArray(fold) && !fold.closedSessions && previous.get(fold.id)
+      ? { ...fold, closedSessions: previous.get(fold.id) } : fold
+  )) : value;
+  const folds = normalizeWorkspaceTabFolds(candidates, workspace.openSessions, workspace.parents, workspace.groups);
   if (sameWorkspaceTabFolds(workspace.folds, folds)) return workspace;
   const next = { ...workspace };
   if (folds.length > 0) next.folds = folds;

@@ -107,6 +107,7 @@ from .file_browser import (
     upload_file,
     write_text_file,
 )
+from .fold_recovery import register_fold_recovery_routes
 from .history import SnapshotStore
 from .host_metrics import (
     HOST_METRIC_RANGES,
@@ -6681,6 +6682,14 @@ def create_app(
     app.router.add_post(f"{prefix}/api/workspace-views/{{view_id}}/resume", resume_workspace_view)
     register_work_link_routes(app, prefix, app[WORK_LINKS_KEY], app[TMUX_KEY],
                               app[SESSION_REGISTRY_KEY], app[SESSION_RENAME_LOCK_KEY])
+    register_fold_recovery_routes(
+        app, prefix, tmux=app[TMUX_KEY], registry=app[SESSION_REGISTRY_KEY],
+        workspaces=app[WORKSPACES_KEY], references=app[AGENT_REFERENCES_KEY],
+        reference_recovery=app[AGENT_RECOVERY_KEY], transcripts=app[AGENT_TRANSCRIPTS_KEY],
+        titles=app[TITLES_KEY], scrollback=app[SCROLLBACK_RECORDER_KEY],
+        session_lock=app[SESSION_RENAME_LOCK_KEY], record_created=record_created_session,
+        notify_sessions=app[SESSION_STREAM_BROKER_KEY].notify_change,
+    )
     app.router.add_get(f"{prefix}/api/capabilities", api_capabilities)
     app.router.add_get(f"{prefix}/api/host-metrics", host_metrics_snapshot)
     app.router.add_get(f"{prefix}/api/sessions", sessions)

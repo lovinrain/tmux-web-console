@@ -70,7 +70,7 @@ _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
 _EXPECTED_UPDATED_AT_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
-WORKSPACE_SCHEMA_VERSION = 15
+WORKSPACE_SCHEMA_VERSION = 16
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
     "workspace storage is unavailable; inspect and repair the configured workspaces "
     "file, then restart Muxdeck"
@@ -2413,6 +2413,7 @@ class WorkspaceStore:
                 validate_workspace_folds(
                     folds, next_tabs, next_parents,
                     {tab: group.id for group in next_groups for tab in group.tabs},
+                    previous=current.folds,
                 )
                 if update_folds else reconcile_workspace_folds(
                     current.folds, next_tabs, next_parents,
@@ -3018,6 +3019,7 @@ class WorkspaceStore:
                 validate_workspace_folds(
                     folds, merged_tabs, validated_parents,
                     {tab: group.id for group in validated_groups for tab in group.tabs},
+                    previous=current.folds,
                 )
                 if update_folds else reconcile_workspace_folds(
                     current.folds, merged_tabs, validated_parents,
@@ -3429,7 +3431,11 @@ class WorkspaceStore:
                         new_name if tab == current_name else tab
                         for tab in fold.tabs
                         if tab == current_name or tab != new_name
-                    ))) for fold in current.folds),
+                    )), closed_sessions=tuple(
+                        replace(item, name=new_name) if item.name == current_name else item
+                        for item in fold.closed_sessions
+                        if item.name == current_name or item.name != new_name
+                    )) for fold in current.folds),
                     parents=_rename_workspace_parents(
                         current.parents, current.tabs, current_name, new_name,
                     ),

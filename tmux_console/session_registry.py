@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from .agent_reference import AgentReference
-from .session_history_pages import HistoryPageStore, MAX_HISTORY_IDS, PAGE_SIZE
 from .session_attention import (
     initialize_session_attention,
     observe_session_attention,
     update_session_attention,
 )
+from .session_history_pages import MAX_HISTORY_IDS, PAGE_SIZE, HistoryPageStore
 from .tmux import CreatedSession, Session
 
 SESSION_REGISTRY_SCHEMA_VERSION = 5
@@ -806,6 +806,21 @@ class SessionRegistry:
         ).fetchone()
         return reference if row and row["agent_id"] else candidates[-1]
 
+    def latest_recorded_agent(self, history_id: str) -> dict[str, Any] | None:
+        """Prefer the current identified conversation, then the last known ID."""
+        with self._lock:
+            try:
+                row = self._require_connection().execute("""
+                    SELECT a.agent_type, a.agent_id FROM session_agents a
+                    JOIN session_history h ON h.id = a.history_id
+                    WHERE a.history_id = ? AND a.agent_id != ''
+                    ORDER BY (a.agent_type = h.agent_type AND a.agent_id = h.agent_id) DESC,
+                        a.last_seen DESC, a.first_seen DESC, a.rowid DESC LIMIT 1
+                """, (history_id,)).fetchone()
+                return {"agentType": row["agent_type"], "agentSessionId": row["agent_id"]} if row else None
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
     def _record_recovered_agents(
         self, connection: sqlite3.Connection, history_id: str, session: Session,
         recovered_references: Mapping[str, list[AgentReference]] | None, timestamp: int,
@@ -916,6 +931,19 @@ class SessionRegistry:
                     (session_id, session_created, server_started, server_pid),
                 ).fetchone()
                 return dict(row) if row else None
+            except sqlite3.Error as error:
+                raise self._database_error(error) from error
+
+    def is_history_recovery(self, session: Session, source_history_id: str) -> bool:
+        """Only reuse a shell explicitly created from this saved incarnation."""
+        with self._lock:
+            try:
+                row = self._require_connection().execute("""
+                    SELECT 1 FROM session_history h JOIN session_origins o ON o.history_id = h.id
+                    WHERE h.tmux_id = ? AND h.created = ? AND h.server_started = ? AND h.server_pid = ?
+                        AND o.kind = 'recreate' AND o.source_history_id = ?
+                """, (*_identity(session), source_history_id)).fetchone()
+                return row is not None
             except sqlite3.Error as error:
                 raise self._database_error(error) from error
 

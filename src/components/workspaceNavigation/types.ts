@@ -13,6 +13,9 @@ export interface SessionWorkspaceNavigationProps {
   folds?: WorkspaceTabFold[];
   onFoldTabs?: (sessionNames: string[]) => void;
   onUnfoldTabs?: (foldId: string) => void;
+  onFoldAndCloseTabs?: (sessionNames: string[], foldId?: string) => void;
+  foldCloseDisabledReason?: string | null;
+  onRecoverFoldSession?: (foldId: string, sessionName: string, mode: "shell" | "agent") => Promise<void>;
   separators?: string[];
   separatorsBefore?: string[];
   separatorsBusy?: boolean;

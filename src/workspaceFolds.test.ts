@@ -71,12 +71,31 @@ describe("workspace tab folds", () => {
     expect(restoreWorkspaceTabs(tree(), "a-child", state.openSessions, state.groups, state.parents, state.folds).folds).toEqual(state.folds);
   });
 
-  it("reveals an explicitly visited hidden session without changing its tree", () => {
+  it("previews an explicitly visited hidden session without unfolding or changing its tree", () => {
     const state = foldWorkspaceTabs(tree(), ["a", "b"], "fold");
     const visited = visitWorkspaceSession(state, "a-child");
-    expect(visited.folds).toBeUndefined();
+    expect(visited.folds).toEqual(state.folds);
     expect(visited.parents).toEqual(state.parents);
     expect(visited.recentSessions[0]).toBe("a-child");
+  });
+
+  it("keeps recovery snapshots through navigation, URL round trips, renames and concurrent browser saves", () => {
+    const snapshot = { name: "a", historyId: "12345678-1234-1234-1234-123456789012", directory: "/private/project",
+      title: "Saved title", agentType: "codex" as const, agentSessionId: "87654321-1234-1234-1234-123456789012",
+      sessionId: "$1", sessionCreated: 100, serverStarted: 90, serverPid: 10, savedAt: 110 };
+    const state = foldWorkspaceTabs(tree(), ["a", "b"], "fold");
+    state.folds![0].closedSessions = [snapshot];
+    const search = searchWithWorkspaceState("?workspace=saved", state.openSessions, state.groups, state.parents, state.folds);
+    expect(decodeURIComponent(search)).not.toContain(snapshot.directory);
+    expect(search).not.toContain(snapshot.agentSessionId);
+    const restored = restoreWorkspaceTabs(state, "b", state.openSessions, state.groups, state.parents,
+      workspaceFoldsFromSearch(search, state.openSessions));
+    expect(restored.folds).toEqual(state.folds);
+    expect(renameWorkspaceSession(state, "a", "renamed").folds![0].closedSessions)
+      .toEqual([{ ...snapshot, name: "renamed" }]);
+    const base = { tabs: state.openSessions, groups: state.groups, parents: state.parents,
+      folds: [{ id: "fold", tabs: ["a", "b"] }] };
+    expect(rebaseWorkspaceEdits(base, base, { ...base, folds: state.folds }).folds).toEqual(state.folds);
   });
 
   it("reconciles close, rename and reparent operations without hiding an unrelated session", () => {

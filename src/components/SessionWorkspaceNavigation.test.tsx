@@ -97,7 +97,7 @@ describe("SessionWorkspaceNavigation", () => {
     const selected = screen.getByRole("group", { name: "3 tabs selected for folding" });
     expect(selected).toHaveTextContent("Fold selection");
     fireEvent.click(within(selected).getByRole("button", { name: "Fold selected tabs" }));
-    const placeholder = screen.getByRole("tab", { name: "Unfold 3 sessions" });
+    const placeholder = screen.getByRole("tab", { name: "Preview fold of 3 sessions" });
     expect(placeholder).toHaveAttribute("aria-selected", "true");
     expect(placeholder).toHaveTextContent("child");
     expect(placeholder.closest(".workspace-tab")).toHaveAttribute("data-session-depth", "1");
@@ -106,10 +106,40 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.getByRole("tab", { name: /^gap,/ })).toBeInTheDocument();
     expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(placeholder);
+    const preview = screen.getByRole("dialog", { name: "Fold preview" });
+    expect(within(preview).getByRole("list", { name: "Folded sessions" })).toHaveTextContent("child");
+    fireEvent.click(within(preview).getByRole("button", { name: "Preview beta" }));
+    expect(onSelect).toHaveBeenLastCalledWith("beta");
+    expect(screen.getByRole("tab", { name: "Preview fold of 3 sessions" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^alpha,/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Unfold 3 sessions" }));
     expect(screen.getByRole("tab", { name: /^child,/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /^alpha,/ })).toHaveFocus();
-    expect(screen.queryByRole("tab", { name: "Unfold 3 sessions" })).not.toBeInTheDocument();
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "Preview fold of 3 sessions" })).not.toBeInTheDocument();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers shell and recorded-agent recovery from a saved fold without unfolding it", async () => {
+    const snapshot = { name: "alpha", historyId: "12345678-1234-1234-1234-123456789012", directory: "/project",
+      title: null, agentType: "codex" as const, agentSessionId: "87654321-1234-1234-1234-123456789012",
+      sessionId: "$1", sessionCreated: 100, serverStarted: 90, serverPid: 10, savedAt: 110 };
+    const onRecover = vi.fn().mockResolvedValue(undefined);
+    const onUnfold = vi.fn();
+    render(<SessionWorkspaceNavigation {...navigationProps({
+      activeSession: "alpha", openSessions: ["alpha", "beta"], sessions: [],
+      folds: [{ id: "saved", tabs: ["alpha", "beta"], closedSessions: [snapshot,
+        { ...snapshot, name: "beta", sessionId: "$2", agentType: null, agentSessionId: null }] }],
+      onUnfoldTabs: onUnfold, onRecoverFoldSession: onRecover,
+    })} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Preview fold of 2 sessions" }));
+    const preview = screen.getByRole("dialog", { name: "Fold preview" });
+    expect(within(preview).getByRole("button", { name: "Recover coding session for beta" })).toBeDisabled();
+    fireEvent.click(within(preview).getByRole("button", { name: "Recover all + coding" }));
+    await waitFor(() => expect(onRecover).toHaveBeenCalledTimes(2));
+    expect(onRecover).toHaveBeenNthCalledWith(1, "saved", "alpha", "agent");
+    expect(onRecover).toHaveBeenNthCalledWith(2, "saved", "beta", "shell");
+    expect(onUnfold).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Preview fold of 2 sessions" })).toBeInTheDocument();
   });
 
   it("explains incompatible fold selection and cancels without changing the active session", () => {

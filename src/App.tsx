@@ -80,6 +80,7 @@ import {
   type WorkspaceRecreateTarget,
 } from "./components/WorkspaceRecreateDialog";
 import { FLOATING_TERMINAL_STORAGE_PREFIX, newTemporaryTerminalKey } from "./floatingTerminalState";
+import { useWorkspaceFoldActions } from "./useWorkspaceFoldActions";
 import { ScopedStickyNotes } from "./components/ScopedStickyNotes";
 import { WorkspaceTimer } from "./components/WorkspaceTimer";
 import { HostPulse } from "./components/HostPulse";
@@ -3921,6 +3922,39 @@ function AppRoutes() {
     }
   }, [refreshSessionInventory]);
 
+  const captureSavedWorkspaceForFold = useCallback(async () => {
+    const id = savedWorkspaceIdFromSearch(currentLocation().search);
+    if (!id || hydratedWorkspaceIdRef.current !== id) throw new Error("Save and open this workspace before fold-and-close.");
+    workspaceActivityCommit.current();
+    while (workspaceActivityInFlight.current?.workspaceId === id
+      || queuedWorkspaceActivities.current.some((snapshot) => snapshot.workspaceId === id)) {
+      workspaceActivityFlush.current();
+      await workspaceActivityCompletion.current;
+      if (!appMounted.current || hydratedWorkspaceIdRef.current !== id
+        || savedWorkspaceIdFromSearch(currentLocation().search) !== id) {
+        throw new Error("Workspace changed; choose sessions in the intended workspace.");
+      }
+      workspaceActivityCommit.current();
+    }
+    const saved = canonicalWorkspace.current;
+    if (failedWorkspaceActivity.current?.workspaceId === id || saved?.id !== id) {
+      throw new Error("Recent changes have not finished saving. Retry after the workspace syncs.");
+    }
+    return saved;
+  }, []);
+  const getFoldWorkspace = useCallback(() => workspaceRef.current, []);
+  const getFoldSessions = useCallback(() => knownSessionsRef.current, []);
+  const receiveFoldWorkspace = useCallback((saved: SavedWorkspace) => receiveWorkspaceSnapshot.current(saved), []);
+  const foldCloseDisabledReason = workspacePersistenceState === "unsaved"
+    ? "Save this workspace before fold-and-close so recovery metadata is retained."
+    : workspacePersistenceState !== "saved" ? "Wait for this workspace to finish syncing." : null;
+  const foldActions = useWorkspaceFoldActions({
+    workspaceId: hydratedWorkspaceId, disabledReason: foldCloseDisabledReason,
+    getWorkspace: getFoldWorkspace, getSessions: getFoldSessions,
+    captureSavedWorkspace: captureSavedWorkspaceForFold, onWorkspaceUpdated: receiveFoldWorkspace,
+    refreshInventory: refreshSessionInventory,
+  });
+
   useEffect(() => {
     if (!parsePaneLayoutRoute(location.path) && !parseNewSessionRoute(location.path)) return;
     // Pane leaves receive these snapshots rather than opening their own streams.
@@ -4438,6 +4472,7 @@ function AppRoutes() {
   const withWorkspaceSyncNotice = (content: ReactNode) => (
     <>
       <ForgetUndoNotifications items={pendingForgets} onUndo={undoForgottenSession} onExpire={expireForgottenSession} />
+      {foldActions.confirmation}
       {bulkSessionAction && <BulkSessionActionsDialog
         action={bulkSessionAction.action} targets={bulkSessionAction.targets}
         onApply={applyBulkSessionAction} onClose={() => setBulkSessionAction(null)}
@@ -4699,6 +4734,9 @@ function AppRoutes() {
         folds={workspace.folds}
         onFoldTabs={foldSessionTabs}
         onUnfoldTabs={unfoldSessionTabs}
+        onFoldAndCloseTabs={foldActions.foldAndClose}
+        foldCloseDisabledReason={foldCloseDisabledReason}
+        onRecoverFoldSession={foldActions.recover}
         sessions={knownSessions}
         uncheckedReadySessions={uncheckedReadySessions}
         onMarkSessionUnread={markSessionUnread}
@@ -4958,6 +4996,9 @@ function AppRoutes() {
             folds={workspace.folds}
             onFoldTabs={foldSessionTabs}
             onUnfoldTabs={unfoldSessionTabs}
+            onFoldAndCloseTabs={foldActions.foldAndClose}
+            foldCloseDisabledReason={foldCloseDisabledReason}
+            onRecoverFoldSession={foldActions.recover}
             sessions={knownSessions}
             uncheckedReadySessions={uncheckedReadySessions}
             onMarkSessionUnread={markSessionUnread}
@@ -5046,6 +5087,9 @@ function AppRoutes() {
             folds={workspace.folds}
             onFoldTabs={foldSessionTabs}
             onUnfoldTabs={unfoldSessionTabs}
+            onFoldAndCloseTabs={foldActions.foldAndClose}
+            foldCloseDisabledReason={foldCloseDisabledReason}
+            onRecoverFoldSession={foldActions.recover}
             sessions={knownSessions}
             uncheckedReadySessions={uncheckedReadySessions}
             onMarkSessionUnread={markSessionUnread}

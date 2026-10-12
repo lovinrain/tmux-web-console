@@ -156,6 +156,7 @@ export function rebaseWorkspaceEdits(
     const localFold = localFolds.get(remoteFold.id);
     if (baseFold && !localFold) continue;
     folds.push({
+      ...remoteFold,
       id: remoteFold.id,
       tabs: localFold ? rebaseTabs(baseFold?.tabs ?? [], localFold.tabs, remoteFold.tabs) : [...remoteFold.tabs],
     });

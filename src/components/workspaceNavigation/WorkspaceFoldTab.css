@@ -27,6 +27,15 @@
   text-overflow: ellipsis;
 }
 
+.workspace-tab.workspace-fold-placeholder > .workspace-fold-unfold {
+  flex: 0 0 28px;
+  padding: 4px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+.workspace-fold-unfold svg { width: 13px; height: 13px; }
+
 .workspace-fold-selection-help {
   padding: 8px;
   color: var(--paper);

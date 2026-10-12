@@ -17,8 +17,9 @@ export function agentDisplayLabel(agentType: RecoveryAgentType): string {
 /**
  * The CLI invocation that reopens a recorded agent conversation.
  *
- * Muxdeck never runs this: recreating a shell only restores the shell. The
- * command is shown so the recorded reference is actionable by hand. Copilot is
+ * Ordinary shell recreation only restores the shell. Saved-fold recovery can
+ * explicitly launch an equivalent, validated argument vector after checking
+ * the recorded ID and native transcript. Copilot is
  * omitted deliberately - no resume-by-id form has been verified for it.
  */
 export function agentResumeCommand(

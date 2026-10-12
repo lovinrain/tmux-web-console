@@ -84,7 +84,7 @@ export function paneLabel(pane?: Pane): string {
   }
 }
 
-export function tabTitle(sessionName: string, sessionsByName: Map<string, Session>): string {
+export function tabTitle(sessionName: string, sessionsByName: ReadonlyMap<string, Session>): string {
   const session = sessionsByName.get(sessionName);
   return session ? sessionDisplayTitle(session) : sessionName;
 }

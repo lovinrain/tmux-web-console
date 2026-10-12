@@ -129,6 +129,31 @@ export function restoreSessionHistory(id: string, create: boolean): Promise<{ se
   });
 }
 
+export interface FoldSessionFence {
+  name: string;
+  sessionId: string;
+  sessionCreated: number;
+  serverStarted: number;
+  serverPid: number;
+}
+
+export function closeWorkspaceFold(workspace: SavedWorkspace, foldId: string, tabs: string[], sessions: FoldSessionFence[]): Promise<{
+  workspace: SavedWorkspace; closed: string[]; failures: Record<string, string>;
+}> {
+  return jsonRequest(`/api/workspaces/${encodeURIComponent(workspace.id)}/folds/${encodeURIComponent(foldId)}/close`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tabs, sessions, sessionRevision: workspace.sessionRevision, expectedUpdatedAt: workspace.updatedAt }),
+  });
+}
+
+export function recoverWorkspaceFoldSession(workspaceId: string, foldId: string, session: string, mode: "shell" | "agent"): Promise<{
+  session: string; sessionId: string; created: boolean; warnings?: string[];
+}> {
+  return jsonRequest(`/api/workspaces/${encodeURIComponent(workspaceId)}/folds/${encodeURIComponent(foldId)}/recover`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session, mode }),
+  });
+}
+
 export interface SubmittedMessage {
   id: string;
   agentType: "claude" | "codex";

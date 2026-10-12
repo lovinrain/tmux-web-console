@@ -1,6 +1,5 @@
 import {
   normalizeWorkspaceTabFolds,
-  revealWorkspaceFold,
   sameWorkspaceTabFolds,
   withWorkspaceTabFolds,
   WORKSPACE_FOLDS_SEARCH_PARAM,
@@ -513,7 +512,8 @@ export function searchWithWorkspaceState(
     parts.push(`${WORKSPACE_PARENTS_SEARCH_PARAM}=${encodeURIComponent(JSON.stringify(hierarchy.parents))}`);
   }
   for (const fold of normalizeWorkspaceTabFolds(folds, tabs, hierarchy.parents, hierarchy.groups)) {
-    parts.push(`${WORKSPACE_FOLDS_SEARCH_PARAM}=${encodeURIComponent(JSON.stringify(fold))}`);
+    // Recovery directories and agent IDs belong in server storage, not URLs.
+    parts.push(`${WORKSPACE_FOLDS_SEARCH_PARAM}=${encodeURIComponent(JSON.stringify({ id: fold.id, tabs: fold.tabs }))}`);
   }
   return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
@@ -537,7 +537,6 @@ export function visitWorkspaceSession(
   workspace: SessionWorkspaceState,
   sessionName: string,
 ): SessionWorkspaceState {
-  workspace = revealWorkspaceFold(workspace, sessionName);
   const openSessions = workspace.openSessions.includes(sessionName)
     ? workspace.openSessions
     : [...workspace.openSessions, sessionName];
@@ -1037,6 +1036,9 @@ export function renameWorkspaceSession(
   const folds = workspace.folds?.map((fold) => ({
     ...fold,
     tabs: rename(fold.tabs.filter((tab) => !(sourcePresent && tab === nextName && fold.id !== sourceFoldId))),
+    ...(fold.closedSessions ? { closedSessions: fold.closedSessions.map((item) => (
+      item.name === previousName ? { ...item, name: nextName } : item
+    )) } : {}),
   }));
   if (
     sameSessions(hierarchy.tabs, workspace.openSessions)

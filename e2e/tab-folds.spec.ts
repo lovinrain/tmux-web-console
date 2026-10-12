@@ -55,13 +55,22 @@ test("nonadjacent folds preserve the active terminal and survive URL reload and 
   await page.goto(`/mux/session/${a}?${query}`);
   await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
   await selectForFold(page, [a, b]);
-  await expect(page.getByRole("tab", { name: "Unfold 2 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").boundingBox())?.width ?? 0).toBeLessThanOrEqual(16);
+  await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").first().boundingBox())?.width ?? 0).toBeLessThanOrEqual(16);
   await expect.poll(() => visibleNames(page)).toEqual([gap]);
+  await page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Fold preview", exact: true });
+  await preview.getByRole("button", { name: `Preview ${b}`, exact: true }).click();
+  await expect(preview).toBeHidden();
+  expect(new URL(page.url()).pathname).toBe(`/mux/session/${b}`);
+  await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => visibleNames(page)).toEqual([gap]);
+  await page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true }).click();
+  await preview.getByRole("button", { name: `Preview ${a}`, exact: true }).click();
   expect(new URL(page.url()).pathname).toBe(`/mux/session/${a}`);
   expect(new URL(page.url()).searchParams.getAll("tab")).toEqual(tabs);
   await page.reload();
-  await expect(page.getByRole("tab", { name: "Unfold 2 sessions", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Save workspace", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Save this workspace", exact: true });
@@ -73,18 +82,61 @@ test("nonadjacent folds preserve the active terminal and survive URL reload and 
   expect(workspace.folds?.[0].tabs).toEqual([a, b]);
   await expect(page.locator(".workspace-saved-indicator.saved")).toHaveCount(1);
   await page.reload();
-  await expect(page.getByRole("tab", { name: "Unfold 2 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.screenshot({ path: test.info().outputPath("fold-saved-light.png") });
-  await page.getByRole("tab", { name: "Unfold 2 sessions", exact: true }).click();
+  await page.getByRole("button", { name: "Unfold 2 sessions", exact: true }).click();
   await expect.poll(() => visibleNames(page)).toEqual(tabs);
   await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
   await expect(page.locator(".workspace-navigation-horizontal")).toBeVisible();
   await selectForFold(page, [a, b]);
-  await expect(page.getByRole("tab", { name: "Unfold 2 sessions", exact: true })).toBeVisible();
-  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").boundingBox())?.width ?? 0).toBeLessThanOrEqual(16);
+  await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toBeVisible();
+  await expect.poll(async () => (await page.locator(".workspace-fold-placeholder svg").first().boundingBox())?.width ?? 0).toBeLessThanOrEqual(16);
   await page.screenshot({ path: test.info().outputPath("fold-top-tabs-light.png") });
   expect(identities()).toEqual(before);
+});
+
+test("fold-and-close preserves a saved nested tree and recovers shells from its preview", async ({ page, context }) => {
+  const original = identities();
+  const parents = { [a]: root, [child]: a, [gap]: root, [b]: root };
+  const response = await context.request.post("/mux/api/workspaces", { data: {
+    name: "Closed folds", tabs: names, activeSession: a, parents,
+  } });
+  expect(response.ok()).toBe(true);
+  const workspace = (await response.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  await page.goto(`/mux/session/${a}?workspace=${workspace.id}`);
+  await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Select tabs to fold", exact: true }).click();
+  for (const name of [a, b]) await row(page, name).getByRole("tab").click();
+  await page.getByRole("button", { name: "Fold and close selected sessions", exact: true }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Fold and close 3 sessions?", exact: true });
+  await expect(confirm).toContainText(child);
+  await confirm.getByRole("button", { name: "Fold and close", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true })).toContainText("Saved fold");
+  const persisted = (await (await context.request.get(`/mux/api/workspaces/${workspace.id}`)).json()).workspace as SavedWorkspace;
+  expect(persisted.parents).toEqual(parents);
+  expect(persisted.tabs).toEqual(names);
+  expect(persisted.folds?.[0].closedSessions?.map((item) => item.name)).toEqual([a, child, b]);
+  expect(identities()).toEqual(original.filter((line) => ![a, child, b].some((name) => line.startsWith(`${name}:`))));
+  await page.reload();
+  await page.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Fold preview", exact: true });
+  await expect(preview).toContainText("0 running");
+  await page.screenshot({ path: test.info().outputPath("fold-preview-closed-light.png") });
+  await preview.getByRole("button", { name: `Recover shell for ${a}`, exact: true }).click();
+  await expect(preview.getByRole("button", { name: `Preview ${a}`, exact: true })).toBeVisible();
+  await preview.getByRole("button", { name: `Preview ${a}`, exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true }).click();
+  await preview.getByRole("button", { name: "Recover all shells", exact: true }).click();
+  await expect(preview).toContainText("3 running");
+  await preview.getByRole("button", { name: "Unfold", exact: true }).click();
+  await expect.poll(() => visibleNames(page)).toEqual(names);
+  await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  expect(identities().filter((line) => [root, gap, other].some((name) => line.startsWith(`${name}:`))))
+    .toEqual(original.filter((line) => [root, gap, other].some((name) => line.startsWith(`${name}:`))));
 });
 
 test("nested folds sync across browser profiles while keeping each selected session", async ({ page, context, browser }) => {
@@ -107,20 +159,20 @@ test("nested folds sync across browser profiles while keeping each selected sess
     await row(second, other).getByRole("tab").click();
     await selectForFold(page, [a, b]);
     for (const view of [page, second]) {
-      await expect(view.getByRole("tab", { name: "Unfold 3 sessions", exact: true })).toBeVisible();
+      await expect(view.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true })).toBeVisible();
       await expect.poll(() => visibleNames(view)).toEqual([root, gap, other]);
       await expect(view.locator("[data-workspace-tab-fold-id]")).toHaveAttribute("data-session-depth", "1");
     }
-    await expect(second.getByRole("tab", { name: "Unfold 3 sessions", exact: true })).toHaveAttribute("aria-selected", "false");
+    await expect(second.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true })).toHaveAttribute("aria-selected", "false");
     await expect(row(second, other).getByRole("tab")).toHaveAttribute("aria-selected", "true");
     await second.reload();
-    await expect(second.getByRole("tab", { name: "Unfold 3 sessions", exact: true })).toBeVisible();
+    await expect(second.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true })).toBeVisible();
     // Reload restores the workspace's saved active session. Establish the
     // independent selection again before checking the live unfold stream.
     await row(second, other).getByRole("tab").click();
     await expect(row(second, other).getByRole("tab")).toHaveAttribute("aria-selected", "true");
     await page.screenshot({ path: test.info().outputPath("fold-nested-light.png") });
-    await second.getByRole("tab", { name: "Unfold 3 sessions", exact: true }).click();
+    await second.getByRole("button", { name: "Unfold 3 sessions", exact: true }).click();
     for (const view of [page, second]) await expect.poll(() => visibleNames(view)).toEqual(names);
     await expect(row(page, child).getByRole("tab")).toHaveAttribute("aria-selected", "true");
     await expect(row(second, other).getByRole("tab")).toHaveAttribute("aria-selected", "true");

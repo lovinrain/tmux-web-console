@@ -1826,12 +1826,29 @@ Ctrl/Cmd-click or Shift-click and choose **Fold**, or use **Fold tabs** to pick
 individual branches inside a group. All selected roots must share a parent and
 group. Their descendants are included without moving or reparenting any session.
 The placeholder shows the session count, the active session, and an unread count.
-Click it to unfold and restore the original positions. Selecting a hidden session
-through the jumper or a shortcut reveals its fold. Folds persist in temporary
+Click it to open **Fold preview**, then choose a member to show its terminal
+without unfolding. The separate arrow or **Unfold** action restores individual
+tabs in their original positions. Selecting a hidden session through the jumper
+or a shortcut also keeps the fold intact. Folds persist in temporary
 workspace URLs and in saved workspaces, whose existing stream shares fold/unfold
 changes across browsers while preserving each browser's selected session.
 
-The workspace schema is version 15. Version 1 files load at session revision zero;
+In a saved workspace, **Fold and close** records every selected branch member's
+name, title, directory, native identity, history reference and latest identified
+coding conversation before closing its tmux session. Confirmation lists all
+descendants; closing ends every pane and running process in those sessions,
+including views in other workspaces. The **Saved fold** placeholder remains.
+Its preview provides **Shell only** and **Resume coding session** per member,
+plus bulk recovery. Resume requires a supported recorded ID, the agent CLI and
+its native local transcript. Claude, Codex, Cursor and Grok are supported;
+Copilot's resume-by-ID command has not been verified. A failed coding recovery
+leaves that member closed, with shell-only recovery still available.
+Recovery creates one fresh pane at the saved directory. It cannot reconstruct
+the previous pane layout, in-flight commands or process state. Terminal output
+and conversation history remain available through **History**. Snapshots contain
+metadata only; this feature does not duplicate transcripts or scrollback.
+
+The workspace schema is version 16. Version 1 files load at session revision zero;
 version 1 and 2 files load with no tab groups, version 1 through 3 files load with
 no common or workspace quick links, version 1 through 4 files load with no
 session quick links, version 1 through 5 files load with empty scoped notes, and
@@ -1840,6 +1857,10 @@ provenance. Versions 1 through 7 load with no sidebar separators; version 8 reta
 its after-session separators and loads with no before-session separators, and
 versions 1 through 9 load with no named pane views. Versions 1 through 13 load
 with no parent/child tab relationships; versions 1 through 14 load with no folds.
+Version 15 retains live folds without closed-session snapshots; version 16 adds
+their optional `closedSessions` recovery metadata. Older clients that save only
+fold IDs and roots preserve snapshots for surviving placeholders. Snapshot
+directories and agent IDs are omitted from workspace URLs.
 A legacy document
 upgrades atomically on its next workspace,
 quick-link, note, global-pin, or callback-list write. Versions 1 through 10 load
@@ -1857,8 +1878,8 @@ with 80-character names, workspace callback lists to 64 unique session names,
 and the explicit global callback list to 256 unique session names.
 Page content has no separate character validator. Writes use an
 atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 14
-reject the version 15 document. If an existing workspace file is unreadable,
+rollback is possible because releases that only understand versions 1 through 15
+reject the version 16 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
 
