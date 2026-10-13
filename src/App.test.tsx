@@ -309,6 +309,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onSessionRenamed,
     onSessionTerminated,
     onSessionCopied,
+    copySessionDisabled = false,
     onSplitWorkspace,
     onSplitEphemeralTab,
     ephemeral = false,
@@ -377,6 +378,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       sessionId: string,
       placement?: "sibling" | "child",
     ) => void;
+    copySessionDisabled?: boolean;
     onSplitWorkspace?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
     onSplitEphemeralTab?: (sessionName: string) => "opened" | "blocked" | "failed" | "workspace-sync-pending";
     ephemeral?: boolean;
@@ -411,6 +413,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       <main
         aria-label="Console"
         data-session={sessionName}
+        data-session-copy-disabled={copySessionDisabled}
         data-workspace-name={workspaceName ?? ""}
         data-tab-orientation={desktopTabOrientation}
         data-tab-actions-visible={tabActionsVisible}
@@ -4225,6 +4228,9 @@ describe("App routing", () => {
       });
       expect(moveTabToWindow).toBeDisabled();
       expect(copyTabToWindow).toBeEnabled();
+      expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+        "data-session-copy-disabled", "true",
+      );
 
       await act(async () => {
         pendingWorkspace.resolve(savedWorkspace());
@@ -4263,6 +4269,9 @@ describe("App routing", () => {
       expect(newSessionButton).toHaveAttribute("title", "New session (Ctrl+Shift+B)");
       expect(moveTabToWindow).toBeEnabled();
       expect(copyTabToWindow).toBeEnabled();
+      expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+        "data-session-copy-disabled", "false",
+      );
       expect(screen.queryByRole("status", { name: "Opening saved workspace" }))
         .not.toBeInTheDocument();
     });
@@ -4298,8 +4307,8 @@ describe("App routing", () => {
       })).toBeVisible();
     });
 
-    it("waits for saved-workspace hydration before direct creation can submit", async () => {
-      const pendingWorkspace = deferred<SavedWorkspace>();
+    it.each([false, true])("waits for saved-workspace hydration before direct creation can submit (failed load: %s)", async (failFirst) => {
+      let pendingWorkspace = deferred<SavedWorkspace>();
       getWorkspaceMock.mockImplementationOnce(() => pendingWorkspace.promise);
       listSessionsMock.mockResolvedValue([
         session("alpha", "$alpha"),
@@ -4318,6 +4327,20 @@ describe("App routing", () => {
       expect(createSessionButton).toBeDisabled();
       fireEvent.click(createSessionButton);
       expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
+
+      if (failFirst) {
+        await act(async () => {
+          pendingWorkspace.reject(new Error("workspace temporarily unavailable"));
+          await Promise.resolve();
+        });
+        expect(screen.getByRole("status", { name: "Workspace sync issue" })).toBeVisible();
+        expect(createSessionButton).toBeDisabled();
+        fireEvent.click(createSessionButton);
+        expect(window.location.pathname).toBe(`${BASE_PATH}/sessions/new`);
+        pendingWorkspace = deferred<SavedWorkspace>();
+        getWorkspaceMock.mockImplementationOnce(() => pendingWorkspace.promise);
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      }
 
       await act(async () => {
         pendingWorkspace.resolve(savedWorkspace());
@@ -4721,6 +4744,9 @@ describe("App routing", () => {
         "Move is unavailable until the workspace sync issue is resolved.",
       );
       expect(copyTabToWindow).toBeEnabled();
+      expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+        "data-session-copy-disabled", "true",
+      );
 
       fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
 
@@ -4899,6 +4925,48 @@ describe("App routing", () => {
       expect(window.location.pathname).toBe(`${BASE_PATH}/session/server-beta`);
     });
 
+    it.each(["dashboard Back", "Recents selection"])(
+      "keeps a workspace saved from the console bound through %s",
+      async (navigation) => {
+        let stored = savedWorkspace({ groups: [coreGroup] });
+        createWorkspaceMock.mockResolvedValue(stored);
+        getWorkspaceMock.mockImplementation(async () => stored);
+        listSessionsMock.mockResolvedValue([session("alpha", "$alpha"), session("beta", "$beta")]);
+        updateWorkspaceActivityMock.mockImplementation(async (_id, tabs, groups, activeSession, sessionRevision, _expected, parents, folds) => {
+          stored = { ...stored, tabs, groups, parents, folds, activeSession, sessionRevision, updatedAt: stored.updatedAt + 1 };
+          return stored;
+        });
+        replaceUrl(dashboardUrl(`?tab=alpha&tab=beta&tab-group=${encodeURIComponent(JSON.stringify(coreGroup))}`));
+        render(<App />);
+        fireEvent.click(screen.getByRole("button", { name: "Open alpha session" }));
+        fireEvent.click(screen.getByRole("button", { name: "Save workspace" }));
+        const save = screen.getByRole("dialog", { name: "Save this workspace" });
+        fireEvent.change(within(save).getByRole("textbox", { name: "Workspace name" }), { target: { value: stored.name } });
+        fireEvent.click(within(save).getByRole("button", { name: "Save workspace" }));
+        await screen.findByRole("status", { name: "Workspace saved automatically" });
+
+        if (navigation === "dashboard Back") {
+          fireEvent.click(screen.getByRole("button", { name: "Back to sessions" }));
+          await screen.findByRole("main", { name: "Dashboard" });
+          expect(dashboardActiveWorkspaceId).toBe(stored.id);
+          fireEvent.click(screen.getByRole("button", { name: "Open alpha session" }));
+        } else {
+          fireEvent.click(screen.getByRole("button", { name: /Open session switcher/ }));
+          const recents = screen.getByRole("dialog", { name: "Switch sessions" });
+          fireEvent.click(within(recents).getByRole("button", { name: /beta tmux session/ }));
+          await waitFor(() => expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`));
+        }
+
+        expect(new URLSearchParams(window.location.search).get("workspace")).toBe(stored.id);
+        expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-workspace-name", stored.name);
+        const source = navigation === "dashboard Back" ? "alpha" : "beta";
+        act(() => reportSessionCopy?.(source, `${source}_1`, "$copy", "child"));
+        await waitFor(() => expect(stored.tabs).toContain(`${source}_1`));
+        expect(stored.parents?.[`${source}_1`]).toBe(source);
+        expect(stored.groups?.[0].tabs).toContain(`${source}_1`);
+      },
+    );
+
     it("preserves saved tab groups through dashboard history and workspace resume", async () => {
       getWorkspaceMock.mockResolvedValue(savedWorkspace({
         groups: [coreGroup],
@@ -5072,7 +5140,10 @@ describe("App routing", () => {
         tabs: ["ended-one", "ended-two"],
         activeSession: "ended-two",
       });
-      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      getWorkspaceMock.mockResolvedValueOnce(serverWorkspace).mockResolvedValue({
+        ...serverWorkspace, tabs: ["ended-one"], activeSession: "ended-one",
+        sessionRevision: 1, updatedAt: 1_001,
+      });
       listSessionsMock.mockResolvedValue(withRecovery([], [
         recoverable("ended-one"),
         recoverable("ended-two"),
@@ -5265,6 +5336,7 @@ describe("App routing", () => {
 
     it("autosyncs reordered saved tabs with the current workspace revision", async () => {
       vi.useFakeTimers();
+      const pendingSave = deferred<SavedWorkspace>();
       const serverWorkspace = savedWorkspace({
         tabs: ["alpha", "beta", "gamma"],
         activeSession: "beta",
@@ -5276,11 +5348,7 @@ describe("App routing", () => {
         session("beta", "$beta"),
         session("gamma", "$gamma"),
       ]);
-      updateWorkspaceActivityMock.mockResolvedValue({
-        ...serverWorkspace,
-        name: "Renamed remotely",
-        sessionRevision: 8,
-      });
+      updateWorkspaceActivityMock.mockImplementationOnce(() => pendingSave.promise);
       replaceUrl(sessionUrl(
         "beta",
         "?kind=codex&flag&workspace=workspace-one&tab=stale",
@@ -5301,15 +5369,11 @@ describe("App routing", () => {
       expect(window.location.search).toBe(
         "?kind=codex&flag&workspace=workspace-one&tab=beta&tab=alpha&tab=gamma",
       );
+      expect(screen.getByRole("status", { name: "Saving workspace changes" })).toBeVisible();
+      expect(screen.queryByRole("status", { name: "Workspace saved automatically" }))
+        .not.toBeInTheDocument();
       await act(async () => {
-        vi.advanceTimersByTime(399);
-        await Promise.resolve();
-      });
-      expect(updateWorkspaceActivityMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        vi.advanceTimersByTime(1);
-        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
       });
       expect(updateWorkspaceActivityMock).toHaveBeenCalledOnce();
       expect(updateWorkspaceActivityMock).toHaveBeenCalledWith(
@@ -5320,7 +5384,17 @@ describe("App routing", () => {
         7,
         1_000,
       );
+      expect(screen.getByRole("status", { name: "Saving workspace changes" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Rename workspace Workspace one" })).toBeEnabled();
+      await act(async () => {
+        pendingSave.resolve({
+          ...serverWorkspace, tabs: ["beta", "alpha", "gamma"],
+          name: "Renamed remotely", sessionRevision: 8, updatedAt: 1_001,
+        });
+        await pendingSave.promise;
+      });
       expect(screen.getByTitle("Renamed remotely - Saved")).toBeVisible();
+      expect(openTabs()).toEqual(["beta", "alpha", "gamma"]);
     });
 
     it("quick-adds a running session while preserving focus and autosaves membership", async () => {
@@ -5629,7 +5703,9 @@ describe("App routing", () => {
       });
       Reflect.deleteProperty(legacyWorkspace, "groups");
       getWorkspaceMock.mockResolvedValue(legacyWorkspace);
-      updateWorkspaceActivityMock.mockResolvedValue(legacyWorkspace);
+      updateWorkspaceActivityMock.mockImplementation(async (_id, tabs, _groups, activeSession, sessionRevision) => ({
+        ...legacyWorkspace, tabs, activeSession, sessionRevision,
+      }));
       listSessionsMock.mockResolvedValue([
         session("alpha", "$alpha"),
         session("second work", "$second"),

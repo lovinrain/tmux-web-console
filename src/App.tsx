@@ -388,6 +388,17 @@ function sameWorkspaceGroups(
   });
 }
 
+function sameWorkspaceStructure(
+  left: Pick<SavedWorkspace, "tabs" | "groups" | "parents" | "folds">,
+  right: Pick<SavedWorkspace, "tabs" | "groups" | "parents" | "folds">,
+): boolean {
+  return left.tabs.length === right.tabs.length
+    && left.tabs.every((tab, index) => tab === right.tabs[index])
+    && (right.groups === undefined || sameWorkspaceGroups(left.groups ?? [], right.groups))
+    && sameWorkspaceParents(left.parents, right.parents)
+    && sameWorkspaceTabFolds(left.folds, right.folds);
+}
+
 function sameWorkspacePaneLayouts(
   left: readonly WorkspacePaneLayout[],
   right: readonly WorkspacePaneLayout[],
@@ -1850,17 +1861,24 @@ function AppRoutes() {
       navigationGeneration.current += 1;
       const pending = pendingRecentsNavigation.current;
       const pendingWorkspace = pendingWorkspaceSnapshot.current;
+      // Application Back carries the current workspace through older browser
+      // entries. Those entries can predate Save and have no workspace ID.
+      const carriedWorkspaceId = hydratedWorkspaceIdRef.current
+        ?? savedWorkspaceIdFromSearch(locationRef.current.search);
       if (pending) {
         pendingRecentsNavigation.current = null;
         const overrides = pending.sessionId
           ? [{ name: pending.sessionName, sessionId: pending.sessionId }]
           : [];
         const restored = currentLocation();
-        const restoredSearch = searchWithWorkspaceState(
-          restored.search,
-          workspaceRef.current.openSessions,
-          workspaceRef.current.groups,
-          workspaceRef.current.parents ?? {}, workspaceRef.current.folds ?? [],
+        const restoredSearch = searchWithSavedWorkspaceId(
+          searchWithWorkspaceState(
+            restored.search,
+            workspaceRef.current.openSessions,
+            workspaceRef.current.groups,
+            workspaceRef.current.parents ?? {}, workspaceRef.current.folds ?? [],
+          ),
+          carriedWorkspaceId,
         );
         if (pending.replaceRestoredEntry) {
           replaceLocation(
@@ -1913,7 +1931,9 @@ function AppRoutes() {
           window.history.state,
           restored.path,
           searchWithWorkspaceState(
-            restored.search,
+            pendingWorkspace
+              ? searchWithSavedWorkspaceId(restored.search, carriedWorkspaceId)
+              : restored.search,
             restoredWorkspace.openSessions,
             restoredWorkspace.groups,
             restoredWorkspace.parents ?? {}, restoredWorkspace.folds ?? [],
@@ -2070,18 +2090,29 @@ function AppRoutes() {
       ? activeWorkspaceIdentity.name
       : null
   );
+  const savedWorkspaceStructure = canonicalWorkspace.current;
+  const workspaceStructurePending = Boolean(locationWorkspaceId
+    && savedWorkspaceStructure?.id === locationWorkspaceId
+    && !sameWorkspaceStructure({
+      tabs: workspace.openSessions, groups: workspace.groups,
+      parents: workspace.parents, folds: workspace.folds,
+    }, savedWorkspaceStructure));
   const workspacePersistenceState: WorkspacePersistenceState = (
     !locationWorkspaceId
       ? "unsaved"
       : workspaceSyncProblem?.kind === "load" || workspaceSyncProblem?.kind === "save"
         ? "error"
         : hydratedWorkspaceId === locationWorkspaceId
-          ? (workspaceGroupsSupported === false || workspaceGroupsPending)
+          ? workspaceStructurePending
+            ? "saving"
+            : (workspaceGroupsSupported === false || workspaceGroupsPending)
               && workspace.groups.length > 0
             ? "limited"
             : "saved"
           : "loading"
   );
+  const workspaceBindingPending = Boolean(locationWorkspaceId
+    && hydratedWorkspaceId !== locationWorkspaceId);
 
   const recoveryByName = new Map(
     recoverableSessions.map((recovery) => [recovery.name, recovery]),
@@ -2544,7 +2575,10 @@ function AppRoutes() {
       sameWorkspaceActivity(lastSavedWorkspaceActivity.current, snapshot)
       && !failedWorkspaceActivity.current
     ) return;
-    queueWorkspaceActivity(snapshot);
+    const saved = canonicalWorkspace.current;
+    const structureChanged = saved?.id === snapshot.workspaceId
+      && !sameWorkspaceStructure(snapshot, saved);
+    queueWorkspaceActivity(snapshot, structureChanged ? 0 : WORKSPACE_ACTIVITY_DEBOUNCE_MS);
   }, [
     currentWorkspaceActivitySnapshot,
     hydratedWorkspaceId,
@@ -2785,7 +2819,7 @@ function AppRoutes() {
   }, [refreshGlobalCallbackSnapshot, replaceLocation, syncLocation]);
 
   const createQuickSession = useCallback(async () => {
-    if (quickSessionCreating.current || workspacePersistenceState === "loading") return;
+    if (quickSessionCreating.current || workspaceBindingPending) return;
     quickSessionCreating.current = true;
     setQuickSessionBusy(true);
     setQuickSessionError(null);
@@ -2848,7 +2882,7 @@ function AppRoutes() {
       quickSessionCreating.current = false;
       if (appMounted.current) setQuickSessionBusy(false);
     }
-  }, [replaceLocation, syncLocation, theme, workspacePersistenceState]);
+  }, [replaceLocation, syncLocation, theme, workspaceBindingPending]);
 
   const completeCopiedSession = useCallback((
     sourceName: string,
@@ -4128,6 +4162,18 @@ function AppRoutes() {
               workspaceId: sourceWorkspaceId,
               value: result.sessionRevision,
             };
+            // The transfer already persisted this tree and its new version.
+            canonicalWorkspace.current = savedSource;
+            lastSavedWorkspaceActivity.current = {
+              workspaceId: sourceWorkspaceId,
+              tabs: savedSource.tabs,
+              groups: savedSource.groups ?? [],
+              parents: savedSource.parents,
+              folds: savedSource.folds,
+              activeSession: targetSession ?? savedSource.activeSession,
+              sessionRevision: result.sessionRevision,
+              expectedUpdatedAt: savedSource.updatedAt,
+            };
             setWorkspaceIdentity(savedSource);
             setHydratedWorkspaceBinding(sourceWorkspaceId);
 
@@ -4855,7 +4901,7 @@ function AppRoutes() {
             forkSync={forkSync}
             onSplitEphemeralTab={openEphemeralSessionTab}
             splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
-            copySessionDisabled={workspacePersistenceState === "loading"}
+            copySessionDisabled={workspaceBindingPending}
             renameWarning={knownSessions.find((item) => item.name === sessionName)
               ? renameWarnings.get(
                   knownSessions.find((item) => item.name === sessionName)!.id,
@@ -4977,7 +5023,7 @@ function AppRoutes() {
         forkSync={forkSync}
         onSplitEphemeralTab={openEphemeralSessionTab}
         splitWorkspaceSelectionCount={selectedWorkspaceTabs.length}
-        copySessionDisabled={workspacePersistenceState === "loading"}
+        copySessionDisabled={workspaceBindingPending}
         renameWarning={renameWarning}
         onDismissRenameWarning={dismissRenameWarning}
         sessionNavigation={(
@@ -5069,7 +5115,7 @@ function AppRoutes() {
         onCreated={completeNewSession}
         onCancel={closeNewSessionView}
         onActiveChange={setNewSessionViewActive}
-        workspaceLoading={workspacePersistenceState === "loading"}
+        workspaceLoading={workspaceBindingPending}
         desktopTabOrientation={desktopTabOrientation}
         sessionNavigation={(
           <SessionWorkspaceNavigation

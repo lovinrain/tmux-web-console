@@ -367,7 +367,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const canRenameWorkspace = Boolean(
     activeWorkspaceId
     && onRenameWorkspace
-    && ["saved", "limited"].includes(workspacePersistenceState),
+    && ["saved", "saving", "limited"].includes(workspacePersistenceState),
   );
   const showRenameWorkspaceButton = canRenameWorkspace && !compactViewport;
   const newSessionDisabled = newSessionActive || workspacePersistenceState === "loading";

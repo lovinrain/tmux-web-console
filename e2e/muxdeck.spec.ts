@@ -5417,6 +5417,95 @@ test("mobile workspace quick-switches one live terminal and keeps a page-local v
   }
 });
 
+test("workspace saved from console stays bound through navigation and restores children from server", async ({
+  page, browser, request,
+}) => {
+  test.setTimeout(45_000);
+  const source = `${sessionName}-durable`;
+  const parent = `${source}-parent`;
+  const child = `${parent}_1`;
+  const initialTabs = [source, parent];
+  const savedTabs = [...initialTabs, child];
+  const workspaceName = `Durable navigation ${process.pid}`;
+  const group = {
+    id: `durable-${process.pid}`, name: "Durable group", color: "cyan",
+    collapsed: false, tabs: initialTabs,
+  };
+  let workspaceId: string | null = null;
+  let secondContext: Awaited<ReturnType<typeof browser.newContext>> | null = null;
+  for (const name of initialTabs) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const originalIdentities = initialTabs.map(workspaceTmuxIdentity);
+
+  try {
+    const query = new URLSearchParams({ kind: "shells", view: "list" });
+    initialTabs.forEach((name) => query.append("tab", name));
+    query.append("tab-group", JSON.stringify(group));
+    await page.goto(`/mux/?${query}`);
+    const inputFrames = await trackTerminalInputFrames(page, ["click", "keydown"]);
+    await page.getByRole("button", { name: `Open ${source}`, exact: true }).click();
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("button", { name: "Save workspace", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Save this workspace" });
+    await dialog.getByRole("textbox", { name: "Workspace name" }).fill(workspaceName);
+    await dialog.getByRole("button", { name: "Save workspace", exact: true }).click();
+    await expect(page.getByRole("status", { name: "Workspace saved automatically" })).toBeVisible();
+    workspaceId = new URL(page.url()).searchParams.get("workspace");
+    if (!workspaceId) throw new Error("Saved workspace has no ID");
+
+    // Recents returns through the dashboard history entry created before Save.
+    await page.getByRole("button", { name: /Open session switcher/ }).click();
+    await page.getByRole("dialog", { name: "Switch sessions" })
+      .locator(".workspace-session-select").filter({ hasText: parent }).click();
+    await expectRoute(page, `/mux/session/${parent}`, initialTabs, { workspace: workspaceId });
+    const staleSavedUrl = page.url();
+    await page.getByRole("button", { name: "Copy child session", exact: true }).click();
+    await expectRoute(page, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
+    await expect(page.getByRole("status", { name: "Workspace saved automatically" })).toBeVisible();
+    const expectedStructure = {
+      tabs: savedTabs, parents: { [child]: parent }, groups: [{ ...group, tabs: savedTabs }],
+    };
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      const { workspace } = await response.json();
+      return { tabs: workspace.tabs, parents: workspace.parents, groups: workspace.groups };
+    }).toEqual(expectedStructure);
+
+    await page.getByRole("button", { name: "Back to sessions" }).click();
+    await expectRoute(page, "/mux/", savedTabs, { workspace: workspaceId });
+    await page.getByRole("button", { name: `Resume workspace ${workspaceName}`, exact: true }).click();
+    await expectRoute(page, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
+    expect(await inputFrames()).toBe(0);
+
+    // A bookmarked snapshot cannot replace the newer server-side hierarchy.
+    await page.goto(staleSavedUrl);
+    await expectRoute(page, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
+    expect(JSON.parse(new URL(page.url()).searchParams.get("tab-parent") ?? "{}"))
+      .toEqual(expectedStructure.parents);
+
+    secondContext = await browser.newContext();
+    const secondPage = await secondContext.newPage();
+    await authenticatePage(secondPage);
+    await secondPage.goto(`${new URL(page.url()).origin}/mux/?workspace=${workspaceId}`);
+    await secondPage.getByRole("button", { name: `Resume workspace ${workspaceName}`, exact: true }).click();
+    await expectRoute(secondPage, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
+    expect(JSON.parse(new URL(secondPage.url()).searchParams.get("tab-parent") ?? "{}"))
+      .toEqual(expectedStructure.parents);
+    expect(initialTabs.map(workspaceTmuxIdentity)).toEqual(originalIdentities);
+  } finally {
+    await secondContext?.close();
+    if (workspaceId) await request.delete(`/mux/api/workspaces/${workspaceId}`);
+    for (const name of [...initialTabs, child]) {
+      try {
+        execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`], { stdio: "ignore" });
+      } catch {
+        // This disposable fixture may not have been created before a failure.
+      }
+    }
+  }
+});
+
 test("saved workspace survives reload and device handoff without touching tmux panes", async ({
   page,
   browser,

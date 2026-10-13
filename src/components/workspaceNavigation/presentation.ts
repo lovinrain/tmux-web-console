@@ -31,7 +31,12 @@ export const WORKSPACE_PERSISTENCE_COPY: Record<
   saved: {
     label: "Saved",
     accessibleLabel: "Workspace saved automatically",
-    description: "Tab order and your active session save automatically.",
+    description: "Tabs, groups, nesting, and folds are saved with this workspace.",
+  },
+  saving: {
+    label: "Saving",
+    accessibleLabel: "Saving workspace changes",
+    description: "Saving changes to this workspace. They are confirmed when this says Saved.",
   },
   loading: {
     label: "Opening",

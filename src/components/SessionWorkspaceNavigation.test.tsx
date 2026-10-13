@@ -3408,6 +3408,7 @@ describe("SessionWorkspaceNavigation", () => {
 
   it.each([
     ["saved", "Workspace saved automatically", "Saved"],
+    ["saving", "Saving workspace changes", "Saving"],
     ["loading", "Opening saved workspace", "Opening"],
     [
       "limited",
@@ -3463,6 +3464,7 @@ describe("SessionWorkspaceNavigation", () => {
 
   it.each([
     ["saved", "Workspace saved automatically", "Saved workspace", "Saved"],
+    ["saving", "Saving workspace changes", "Saved workspace", "Saving"],
     ["loading", "Opening saved workspace", "Opening workspace", "Opening"],
     [
       "limited",

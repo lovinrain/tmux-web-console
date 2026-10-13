@@ -99,6 +99,7 @@ export type OpenTabInNewWindowResult =
 export type WorkspacePersistenceState =
   | "unsaved"
   | "loading"
+  | "saving"
   | "saved"
   | "limited"
   | "error";
