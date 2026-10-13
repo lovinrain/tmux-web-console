@@ -194,7 +194,13 @@ async def test_codex_exit_banners_repair_existing_metadata_and_live_transcripts(
         pane = native.active_pane
         app[SESSION_REGISTRY_KEY].reconcile([native], {native.name: AgentReference("codex", None)})
         for _ in range(100):
-            if f"codex resume {identifiers[-1]}" in (await tmux.capture_visible(pane.id)).splitlines():
+            # tmux pads captured lines with trailing spaces on some versions,
+            # so compare the stripped text as the production parser does.
+            visible = [
+                line.strip()
+                for line in (await tmux.capture_visible(pane.id)).splitlines()
+            ]
+            if f"codex resume {identifiers[-1]}" in visible:
                 break
             await asyncio.sleep(0.01)
         else:

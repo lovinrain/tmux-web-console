@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -26,6 +27,16 @@ class RecordingScrollTmux(TmuxClient):
         self.calls.append(list(args))
         if args[0] == "list-clients":
             return "4321\t/dev/pts/7\t$7\n"
+        if args[0] == "list-buffers":
+            # Report every private buffer this dispatch has named so far, so
+            # cleanup resolves the exact buffer instead of a prefix match.
+            names = {
+                match
+                for call in self.calls
+                for arg in call
+                for match in re.findall(r"muxdeck-scroll-[0-9a-f]+(?:-before)?", arg)
+            }
+            return "".join(f"{name}\n" for name in sorted(names))
         if list(args[:2]) == ["show-options", "-gv"]:
             status = "rejected" if self.reject else "ok"
             return f"{status}:4321:$7:%12\n"
@@ -114,8 +125,13 @@ async def test_application_scroll_rejection_cleans_private_resources(monkeypatch
     tmux = RecordingScrollTmux(reject=True)
     with pytest.raises(TmuxError, match="SGR mouse reporting"):
         await tmux.navigate_application_scroll(4321, "$7", "up")
-    assert tmux.calls[-2][-3:] == ["set-option", "-gu", "@muxdeck-history-abc123"]
     assert tmux.calls[-1] == ["delete-buffer", "-b", "muxdeck-scroll-abc123"]
+    # The private option is always unset, and the buffer is confirmed by exact
+    # name first so cleanup cannot prefix-match a longer buffer still in use.
+    assert ["set-option", "-gu", "@muxdeck-history-abc123"] in [
+        call[-3:] for call in tmux.calls
+    ]
+    assert tmux.calls[-2][0] == "list-buffers"
 
 
 @pytest.mark.parametrize("changed", [False, True])
@@ -189,7 +205,30 @@ async def test_fast_scrolling_requires_a_valid_pinned_pane(expected_pane, verify
     assert tmux.calls == []
 
 
+def tmux_supports_client_key_dispatch() -> bool:
+    """Whether the installed tmux can dispatch a key into a client's context.
+
+    `send-keys -K` arrived after tmux 3.2. Without it Muxdeck falls back to
+    acting on the window's active pane, which cannot distinguish two consoles
+    focused on different panes of the same window.
+    """
+    if shutil.which("tmux") is None:
+        return False
+    usage = subprocess.run(
+        ["tmux", "list-commands", "send-keys"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    groups = re.findall(r"\[-([A-Za-z]+)\]", usage)
+    return any("K" in group for group in groups) if groups else True
+
+
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")
+@pytest.mark.skipif(
+    not tmux_supports_client_key_dispatch(),
+    reason="tmux predates send-keys -K; independent client panes are unavailable",
+)
 @pytest.mark.parametrize("profile", ["wheel", "alt-wheel", "claude", "codex"])
 async def test_real_application_scroll_uses_client_pane_without_leaking_input(
     tmp_path, monkeypatch, profile

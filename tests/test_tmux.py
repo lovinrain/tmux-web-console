@@ -11,6 +11,7 @@ from tmux_console.status import AgentStateDetector, classify_agent_state
 from tmux_console.tmux import (
     CLIENT_IDENTITY_FORMAT,
     CREATED_SESSION_FORMAT,
+    FORMAT_FIELD_SEPARATOR,
     MAX_SESSION_NAME_LENGTH,
     OUTPUT_FIELD_SEPARATOR,
     PANE_FORMAT,
@@ -131,6 +132,14 @@ def test_parse_sessions_ignores_malformed_records():
     assert sessions[0].panes[0].alternate_on is True
 
 
+def test_parse_sessions_accepts_raw_control_separator():
+    sessions = parse_sessions(
+        pane_row().replace(OUTPUT_FIELD_SEPARATOR, FORMAT_FIELD_SEPARATOR)
+    )
+
+    assert [session.name for session in sessions] == ["agent-one"]
+
+
 def test_parse_sessions_preserves_tabs_inside_pane_titles():
     sessions = parse_sessions(pane_row(pane_title="Codex\tworking"))
 
@@ -144,6 +153,14 @@ class RecordingRunTmux(TmuxClient):
         self.calls: list[list[str]] = []
 
     async def run(self, args: Sequence[str]) -> str:
+        if args[0] == "list-commands":
+            # Capability probe. Answered out of band so the scripted outputs
+            # still line up with the dispatch commands under test, and reports
+            # a tmux that has `send-keys -K`.
+            return (
+                "send-keys (send) [-FHKlMRX] [-N repeat-count] "
+                "[-t target-pane] key ...\n"
+            )
         self.calls.append(list(args))
         result = self.output.pop(0) if isinstance(self.output, list) else self.output
         if isinstance(result, TmuxError):
@@ -2337,3 +2354,107 @@ async def test_detect_sessions_captures_copilot_footers(
     assert states["copilot-work"].name == "working"
     assert states["copilot-work"].reason == "Copilot is running a turn"
     assert tmux.captured == [copilot.id]
+
+
+class LegacyDispatchTmux(TmuxClient):
+    """A tmux whose `send-keys` predates `-K`, as on tmux 3.2 and earlier."""
+
+    def __init__(self, *, pane: str = "%12", result: str | None = None) -> None:
+        super().__init__(binary="unused-tmux", socket_name="isolated-test")
+        self.calls: list[list[str]] = []
+        self.pane = pane
+        self.result = result
+        self.buffers: list[str] = []
+
+    async def run(self, args: Sequence[str]) -> str:
+        self.calls.append(list(args))
+        if args[0] == "list-commands":
+            return (
+                "send-keys (send) [-FHlMRX] [-N repeat-count] "
+                "[-t target-pane] key ...\n"
+            )
+        if args[0] == "list-clients":
+            return f"4321\t/dev/pts/7\t$7\t{self.pane}\n"
+        if args[0] == "list-buffers":
+            return "".join(f"{name}\n" for name in self.buffers)
+        if list(args[:2]) == ["show-options", "-gv"]:
+            return self.result if self.result is not None else f"ok:4321:$7:{self.pane}\n"
+        return ""
+
+
+async def test_capability_probe_reads_the_send_keys_flag_list():
+    modern = RecordingRunTmux("")
+    assert await modern.supports_client_key_dispatch() is True
+
+    legacy = LegacyDispatchTmux()
+    assert await legacy.supports_client_key_dispatch() is False
+    # The answer is cached, so the probe runs once per client object.
+    assert await legacy.supports_client_key_dispatch() is False
+    assert [call for call in legacy.calls if call[0] == "list-commands"] == [
+        ["list-commands", "send-keys"]
+    ]
+
+
+async def test_capability_probe_keeps_the_key_table_when_flags_are_unreadable():
+    class Unreadable(LegacyDispatchTmux):
+        async def run(self, args: Sequence[str]) -> str:
+            if args[0] == "list-commands":
+                self.calls.append(list(args))
+                return "unexpected output"
+            return await super().run(args)
+
+    assert await Unreadable().supports_client_key_dispatch() is True
+
+    class Failing(LegacyDispatchTmux):
+        async def run(self, args: Sequence[str]) -> str:
+            if args[0] == "list-commands":
+                raise TmuxError("unknown command")
+            return await super().run(args)
+
+    assert await Failing().supports_client_key_dispatch() is True
+
+
+async def test_legacy_tmux_pins_the_guarded_command_to_the_client_pane(monkeypatch):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123")
+    tmux = LegacyDispatchTmux()
+
+    assert await tmux.navigate_history(4321, "$7", "page-up") == "%12"
+
+    dispatch = next(call for call in tmux.calls if call[0] == "if-shell")
+    assert dispatch[:4] == ["if-shell", "-F", "-t", "%12"]
+    # The pane, its session and the requested mode are all re-checked by tmux
+    # at execution time rather than trusted from the earlier lookup.
+    assert "#{==:#{pane_id},%12}" in dispatch[4]
+    assert "#{==:#{session_id},$7}" in dispatch[4]
+    assert "#{==:#{pane_mode},copy-mode}" in dispatch[4]
+    assert dispatch[5].startswith("copy-mode -u ; ")
+    assert "'ok:4321:$7:#{pane_id}'" in dispatch[5]
+    assert dispatch[6].startswith("set-option -gF @muxdeck-history-abc123 'rejected:")
+    # No key table is installed, so no user key or binding needs cleaning up.
+    assert not [call for call in tmux.calls if call[0] in {"bind-key", "unbind-key"}]
+    assert not [call for call in tmux.calls if call[0] == "send-keys"]
+    assert ["set-option", "-gu", "@muxdeck-history-abc123"] in tmux.calls
+
+
+async def test_legacy_tmux_rejects_a_guarded_command_that_did_not_run(monkeypatch):
+    monkeypatch.setattr("tmux_console.tmux.secrets.token_hex", lambda _: "abc123")
+    tmux = LegacyDispatchTmux(result="rejected:4321:$7:%12\n")
+
+    with pytest.raises(TmuxError, match="rejected the terminal history action"):
+        await tmux.navigate_history(4321, "$7", "page-up")
+
+    assert ["set-option", "-gu", "@muxdeck-history-abc123"] in tmux.calls
+
+
+async def test_private_buffer_cleanup_never_deletes_a_longer_buffer_name():
+    # tmux resolves `delete-buffer -b` as a prefix, so an exact match must be
+    # confirmed before deleting or a still-needed capture would be discarded.
+    tmux = LegacyDispatchTmux()
+    tmux.buffers = ["muxdeck-scroll-abc123-before"]
+
+    await tmux._delete_buffer_exact("muxdeck-scroll-abc123")
+    assert not [call for call in tmux.calls if call[0] == "delete-buffer"]
+
+    tmux.buffers.append("muxdeck-scroll-abc123")
+    await tmux._delete_buffer_exact("muxdeck-scroll-abc123")
+    assert ["delete-buffer", "-b", "muxdeck-scroll-abc123"] in tmux.calls

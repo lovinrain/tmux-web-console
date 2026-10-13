@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import TypedDict
 from weakref import WeakValueDictionary
 
-# tmux escapes this control byte as the literal text ``\037`` in format output.
+# tmux versions may return this separator as either the control byte or the
+# literal text ``\037`` in format output.
 FORMAT_FIELD_SEPARATOR = "\x1f"
 OUTPUT_FIELD_SEPARATOR = r"\037"
 PANE_FORMAT_FIELDS = (
@@ -71,6 +72,16 @@ PANE_IDENTITY_MISMATCH = "MUXDECK_PANE_IDENTITY_CHANGED"
 PANE_INPUT_UNAVAILABLE = "MUXDECK_PANE_INPUT_UNAVAILABLE"
 PANE_INPUT_PARTIAL = "MUXDECK_PANE_INPUT_PARTIAL"
 CLIENT_IDENTITY_FORMAT = "#{client_pid}\t#{client_name}\t#{session_id}"
+# Adds the client's current pane so a tmux without `send-keys -K` can still
+# resolve a dispatch target. `list-clients` expands each row in its own
+# client's context, so session and window follow that client.
+CLIENT_DISPATCH_FORMAT = (
+    "#{client_pid}\t#{client_name}\t#{session_id}\t#{pane_id}"
+)
+# tmux prints each command's accepted flags, so the dispatch strategy can be
+# chosen from the running binary instead of parsing a version string such as
+# "3.2a", "next-3.4" or "master".
+COMMAND_FLAG_PATTERN = re.compile(r"\[-([A-Za-z]+)\]")
 MAX_SESSION_NAME_LENGTH = 256
 AUTOMATIC_SESSION_NAME_COMPONENT_LENGTH = 32
 AUTOMATIC_SESSION_NAME_ATTEMPTS = 5
@@ -419,6 +430,8 @@ def parse_sessions(output: str) -> list[Session]:
             continue
         values = raw_line.split(OUTPUT_FIELD_SEPARATOR)
         if len(values) != len(PANE_FORMAT_FIELDS):
+            values = raw_line.split(FORMAT_FIELD_SEPARATOR)
+        if len(values) != len(PANE_FORMAT_FIELDS):
             continue
         row = dict(zip(PANE_FORMAT_FIELDS, values, strict=True))
         name = row["session_name"]
@@ -492,6 +505,7 @@ class TmuxClient:
             else os.environ.get("MUXDECK_TMUX_SOCKET")
         )
         self._history_dispatch_lock = asyncio.Lock()
+        self._client_key_dispatch: bool | None = None
         self._capability_probe_lock = asyncio.Lock()
         self._session_creation_lock = asyncio.Lock()
         self._pane_input_locks: WeakValueDictionary[tuple[str, str, int], asyncio.Lock] = WeakValueDictionary()
@@ -1282,6 +1296,52 @@ class TmuxClient:
             raise TmuxError("tmux client is not attached to the expected session")
         return matching_rows[0][1]
 
+    async def _attached_client_pane(self, client_pid: int, session_id: str) -> str:
+        """Return the pane the attached client is currently looking at.
+
+        `list-clients` expands each row in its own client's context, so the
+        session and window follow that client. Only the dispatch fallback needs
+        this, so the narrower identity lookup above keeps its original format.
+        """
+        matching_rows: list[list[str]] = []
+        for attempt in range(CLIENT_ATTACH_RETRY_ATTEMPTS):
+            output = await self.run(["list-clients", "-F", CLIENT_DISPATCH_FORMAT])
+            matching_rows = []
+            for row in output.splitlines():
+                fields = row.split("\t")
+                if len(fields) == 4 and fields[0] == str(client_pid):
+                    matching_rows.append(fields)
+            if matching_rows:
+                break
+            if attempt + 1 < CLIENT_ATTACH_RETRY_ATTEMPTS:
+                await asyncio.sleep(CLIENT_ATTACH_RETRY_DELAY)
+        if len(matching_rows) != 1 or matching_rows[0][2] != session_id:
+            raise TmuxError("tmux client is not attached to the expected session")
+        return matching_rows[0][3]
+
+    async def supports_client_key_dispatch(self) -> bool:
+        """Report whether this tmux can send a key into a client's own context.
+
+        `send-keys -K` arrived after tmux 3.2, and the private key table used by
+        `_dispatch_client_command` depends on it. tmux prints each command's
+        accepted flags, which avoids parsing version strings such as "3.2a",
+        "next-3.4" or "master". Anything that cannot be read as a flag list
+        keeps the long-standing key-table behaviour, so only positive evidence
+        of an older tmux selects the fallback. The result is cached because the
+        binary cannot change while this client object is alive.
+        """
+        if self._client_key_dispatch is None:
+            try:
+                usage = await self.run(["list-commands", "send-keys"])
+            except TmuxError:
+                self._client_key_dispatch = True
+            else:
+                groups = COMMAND_FLAG_PATTERN.findall(usage)
+                self._client_key_dispatch = (
+                    any("K" in group for group in groups) if groups else True
+                )
+        return self._client_key_dispatch
+
     async def set_client_ignore_size(
         self, client_pid: int, session_id: str, ignore_size: bool,
     ) -> None:
@@ -1301,6 +1361,15 @@ class TmuxClient:
         rejection_message: str,
         cleanup_buffer: str | None = None,
     ) -> str:
+        if not await self.supports_client_key_dispatch():
+            return await self._dispatch_pane_command(
+                client_pid,
+                session_id,
+                command,
+                mode_condition,
+                rejection_message=rejection_message,
+                cleanup_buffer=cleanup_buffer,
+            )
         client_name = await self._attached_client_name(client_pid, session_id)
         key_bindings = await self.run(["list-keys", "-a"])
         user_keys = await self.run(["show-options", "-s", "user-keys"])
@@ -1424,9 +1493,86 @@ class TmuxClient:
                     with contextlib.suppress(TmuxError):
                         await self.run(args)
             if cleanup_buffer is not None:
-                with contextlib.suppress(TmuxError):
-                    await self.run(["delete-buffer", "-b", cleanup_buffer])
+                await self._delete_buffer_exact(cleanup_buffer)
 
+        return self._parse_dispatch_result(
+            result, client_pid, session_id, rejection_message
+        )
+
+    async def _dispatch_pane_command(
+        self,
+        client_pid: int,
+        session_id: str,
+        command: str,
+        mode_condition: str,
+        *,
+        rejection_message: str,
+        cleanup_buffer: str | None = None,
+    ) -> str:
+        """Run a guarded client command on a tmux without `send-keys -K`.
+
+        tmux before 3.3 cannot dispatch a key into one client's command
+        context, and neither `display-message -c` nor a `list-clients` format
+        exposes another client's independently focused pane. The pane the
+        client is looking at is resolved first, then the command runs pinned to
+        that pane so the mode and identity guards still apply at execution
+        time.
+
+        The guards are kept, only re-expressed against a pane target: the
+        client's identity is verified while resolving the pane, and the pane,
+        its session and its mode are re-checked atomically inside `if-shell`.
+        The one behaviour this cannot reproduce is two consoles viewing the
+        same window with different panes focused; that dispatch targets the
+        window's active pane instead of each console's own pane.
+        """
+        pane_id = await self._attached_client_pane(client_pid, session_id)
+        if not pane_id.startswith("%") or not pane_id[1:].isdigit():
+            raise TmuxError("tmux did not return the attached client pane")
+
+        token = secrets.token_hex(12)
+        result_option = f"@muxdeck-history-{token}"
+        condition = (
+            "#{&&:"
+            f"#{{==:#{{pane_id}},{pane_id}}},"
+            "#{&&:"
+            f"#{{==:#{{session_id}},{session_id}}},"
+            f"{mode_condition}"
+            "}}"
+        )
+        # client_pid and session_id are substituted literally: a pane target
+        # cannot expand client formats, and both were just verified above.
+        success_commands = (
+            f"{command} ; "
+            f"set-option -gF {result_option} "
+            f"'ok:{client_pid}:{session_id}:#{{pane_id}}' "
+        )
+        rejected_commands = (
+            f"set-option -gF {result_option} "
+            f"'rejected:{client_pid}:{session_id}:#{{pane_id}}'"
+        )
+
+        try:
+            # if-shell without -b runs inline, so the result option is already
+            # set when this returns; no wait-for round trip is needed.
+            await self.run([
+                "if-shell", "-F", "-t", pane_id, condition,
+                success_commands, rejected_commands,
+            ])
+            result = await self.run(["show-options", "-gv", result_option])
+        finally:
+            with contextlib.suppress(TmuxError):
+                await self.run(["set-option", "-gu", result_option])
+            if cleanup_buffer is not None:
+                await self._delete_buffer_exact(cleanup_buffer)
+
+        return self._parse_dispatch_result(
+            result, client_pid, session_id, rejection_message
+        )
+
+    @staticmethod
+    def _parse_dispatch_result(
+        result: str, client_pid: int, session_id: str, rejection_message: str
+    ) -> str:
         rows = result.splitlines()
         fields = rows[0].split(":") if len(rows) == 1 else []
         if (
@@ -1440,6 +1586,18 @@ class TmuxClient:
         if not pane_id.startswith("%") or not pane_id[1:].isdigit():
             raise TmuxError("tmux did not return the attached client pane")
         return pane_id
+
+    async def _delete_buffer_exact(self, buffer_name: str) -> None:
+        """Delete one tmux buffer, never a longer name that merely starts with it.
+
+        `delete-buffer -b` resolves its argument as a prefix, so deleting
+        ``muxdeck-scroll-<token>`` would also discard a still-needed
+        ``muxdeck-scroll-<token>-before`` once the exact buffer is gone.
+        """
+        with contextlib.suppress(TmuxError):
+            existing = await self.run(["list-buffers", "-F", "#{buffer_name}"])
+            if buffer_name in existing.splitlines():
+                await self.run(["delete-buffer", "-b", buffer_name])
 
     async def _run_command_queue(self, commands: Sequence[Sequence[str]]) -> str:
         args: list[str] = []
