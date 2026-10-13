@@ -8026,6 +8026,23 @@ span.workspace-tab-group-toggle {
   transform: rotate(180deg);
 }
 
+.console-session-switcher-button {
+  width: auto;
+  gap: 5px;
+  padding: 0 7px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.console-session-history-button.console-session-switcher-button[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
 .console-identity > p {
   max-width: 55vw;
   margin: 3px 0 0;

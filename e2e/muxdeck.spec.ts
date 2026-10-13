@@ -2748,6 +2748,82 @@ test("session history works beside the title and in Focus without losing drafts"
   }
 });
 
+test("closed desktop sidebar exposes the session jumper outside Focus", async ({ page, request }, testInfo) => {
+  const first = `${sessionName}-collapsed-first`;
+  const second = `${sessionName}-collapsed-second`;
+  const tabs = [first, second];
+  for (const name of tabs) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const before = tabs.map(workspaceTmuxIdentity);
+  try {
+    for (const [name, title] of [[first, "Collapsed sidebar"], [second, "Jumper target"]]) {
+      expect((await request.put("/mux/api/session-title", { data: { session: name, title } })).ok()).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${first}?${tabs.map((name) => `tab=${encodeURIComponent(name)}`).join("&")}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
+    const shell = page.locator(".console-shell");
+    const sidebar = page.locator(".workspace-navigation-vertical");
+    const toggle = page.getByRole("button", { name: "Session tabs", exact: true });
+    const switcher = page.getByRole("button", { name: "Switch workspace session", exact: true });
+    const dialog = page.getByRole("dialog", { name: "Jump to tab", exact: true });
+    await expect(sidebar).toBeVisible();
+    await expect(switcher).toHaveCount(0);
+    await page.getByRole("button", { name: "Enter desktop terminal focus" }).click();
+    await expect(switcher).toBeVisible();
+    await page.getByRole("button", { name: "Exit desktop terminal focus" }).click();
+    await expect(switcher).toHaveCount(0);
+
+    await toggle.click();
+    await expect(sidebar).toBeHidden();
+    await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    await expect(switcher).toBeVisible();
+    await expect(switcher).toBeInViewport();
+    const titleNavigation = page.locator(".console-title-line").getByRole("group", { name: "Session navigation" });
+    await expect(titleNavigation.getByRole("button", { name: "Switch workspace session" })).toBeVisible();
+    await page.getByRole("textbox", { name: "Staged input" }).fill("Keep this collapsed-sidebar draft");
+    const inputFrames = await trackTerminalInputFrames(page);
+    await switcher.click();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await expect(switcher).toHaveAttribute("aria-expanded", "true");
+    await expect(sidebar).toBeHidden();
+    await dialog.getByRole("button", { name: "Float session jumper", exact: true }).click();
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
+    const search = dialog.getByRole("combobox");
+    await search.fill("Jumper target");
+    await search.press("Enter");
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await expect(dialog).toBeVisible();
+    await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    await expect(sidebar).toBeHidden();
+    await page.getByRole("button", { name: "Back to previous session", exact: true }).click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this collapsed-sidebar draft");
+    await dialog.getByRole("button", { name: "Close tab search", exact: true }).click();
+    await expect(switcher).toHaveAttribute("aria-expanded", "false");
+    await page.screenshot({ path: testInfo.outputPath("collapsed-sidebar-switcher-dark.png") });
+
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await page.setViewportSize({ width: 760, height: 900 });
+    await expect(switcher).toBeInViewport();
+    await expect(switcher).toHaveCSS("background-color", "rgb(233, 227, 216)");
+    await page.screenshot({ path: testInfo.outputPath("collapsed-sidebar-switcher-light.png") });
+    await toggle.click();
+    await expect(sidebar).toBeVisible();
+    await expect(switcher).toHaveCount(0);
+    await toggle.click();
+    await expect(switcher).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(switcher).toHaveCount(0);
+    expect(await inputFrames()).toBe(0);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(before);
+  } finally {
+    for (const name of tabs) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
+
 test("floating focus session jumper stays usable alongside the terminal", async ({ page, request }, testInfo) => {
   const first = `${sessionName}-jumper-first`;
   const second = `${sessionName}-jumper-second`;
@@ -2839,6 +2915,11 @@ test("floating focus session jumper stays usable alongside the terminal", async 
     await switcher.click();
     await dialog.getByRole("button", { name: "Float session jumper" }).click();
     await exitFocus.click();
+    await expect(dialog).toBeVisible();
+    // Move the floating window clear of the normal header before changing themes.
+    await move.focus();
+    await move.press("Shift+ArrowDown");
+    await move.press("Shift+ArrowDown");
     await page.getByRole("button", { name: "Light theme", exact: true }).click();
     await page.setViewportSize({ width: 760, height: 900 });
     await enterFocus.click();

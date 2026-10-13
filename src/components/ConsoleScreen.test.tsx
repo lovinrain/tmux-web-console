@@ -2388,12 +2388,61 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.send).not.toHaveBeenCalled();
   });
 
+  it("shows the title session switcher only outside Focus with the sidebar closed", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onOpenTabSearch = vi.fn();
+    const onNavigateSessionHistory = vi.fn();
+    const props = {
+      sessionName: "test", onBack: vi.fn(), onOpenTabSearch, onNavigateSessionHistory,
+      sessionHistoryBack: "earlier-session", sessionHistoryForward: "later-session",
+      sessionNavigation: <nav aria-label="Quick sessions">Workspace tabs</nav>,
+      desktopTabOrientation: "vertical" as const,
+    };
+    const bars = { sessionTabs: true, stagedInput: true, shortcuts: true };
+    const view = renderWithTheme(<ConsoleScreen {...props} barVisibility={bars} />);
+    const title = await screen.findByRole("heading", { name: "test" });
+    const terminal = screen.getByTestId("live-terminal");
+    expect(screen.queryByRole("button", { name: "Switch workspace session" })).not.toBeInTheDocument();
+
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} barVisibility={{ ...bars, sessionTabs: false }} /></ThemeProvider>);
+    const controls = within(title.parentElement!).getByRole("group", { name: "Session navigation" });
+    const switcher = within(controls).getByRole("button", { name: "Switch workspace session" });
+    expect(switcher).toHaveTextContent("Sessions");
+    expect(switcher).toHaveAttribute("aria-haspopup", "dialog");
+    expect(switcher).toHaveAttribute("aria-expanded", "false");
+    expect(switcher).toHaveAttribute("aria-keyshortcuts", "Control+Shift+;");
+    expect(fireEvent.mouseDown(switcher)).toBe(false);
+    fireEvent.click(switcher);
+    expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    fireEvent.click(within(controls).getByRole("button", { name: "Back to previous session" }));
+    fireEvent.click(within(controls).getByRole("button", { name: "Forward to next session" }));
+    expect(onNavigateSessionHistory.mock.calls).toEqual([["back"], ["forward"]]);
+    expect(screen.getByRole("main")).toHaveAttribute("data-desktop-focus", "false");
+
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} barVisibility={{ ...bars, sessionTabs: false }} tabSearchOpen /></ThemeProvider>);
+    expect(switcher).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Enter desktop terminal focus" }));
+    expect(within(title.parentElement!).queryByRole("group", { name: "Session navigation" })).not.toBeInTheDocument();
+    const focusControls = screen.getByRole("group", { name: "Desktop terminal focus controls" });
+    expect(within(focusControls).getByRole("button", { name: "Switch workspace session" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Switch workspace session" })).toHaveLength(1);
+
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} barVisibility={bars} /></ThemeProvider>);
+    expect(within(focusControls).getByRole("button", { name: "Switch workspace session" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Exit desktop terminal focus" }));
+    expect(screen.queryByRole("button", { name: "Switch workspace session" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+  });
+
   it("keeps workspace navigation available when a visited session has ended", async () => {
     vi.mocked(listSessions).mockResolvedValue([]);
+    const onOpenTabSearch = vi.fn();
     renderWithTheme(
       <ConsoleScreen
         sessionName="ended"
         onBack={vi.fn()}
+        onOpenTabSearch={onOpenTabSearch}
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
       />,
     );
@@ -2416,6 +2465,11 @@ describe("ConsoleScreen session identity", () => {
     expect(shortcutsToggle).not.toHaveAttribute("aria-controls");
     expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "ended" })).toBeVisible();
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Session tabs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch workspace session" }));
+    expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Session tabs" }));
+    expect(screen.queryByRole("button", { name: "Switch workspace session" })).not.toBeInTheDocument();
   });
 
   it("lists the coding agents recorded in this session", async () => {

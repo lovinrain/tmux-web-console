@@ -621,6 +621,44 @@ function SessionHistoryButton({
   );
 }
 
+function SessionNavigationControls({
+  back,
+  forward,
+  onNavigate,
+  onOpen,
+  open = false,
+  shortcut,
+  focus = false,
+}: {
+  back?: string | null;
+  forward?: string | null;
+  onNavigate?: (direction: "back" | "forward") => void;
+  onOpen?: () => void;
+  open?: boolean;
+  shortcut?: string;
+  focus?: boolean;
+}) {
+  const historyClass = focus
+    ? "desktop-terminal-focus-sessions desktop-terminal-session-history"
+    : "console-session-history-button";
+  return (
+    <div className={focus ? "desktop-terminal-session-navigation" : "console-session-history-navigation"}
+      role="group" aria-label="Session navigation">
+      <SessionHistoryButton direction="back" target={back} onNavigate={onNavigate} className={historyClass} />
+      {onOpen && (
+        <button type="button"
+          className={focus ? "desktop-terminal-focus-sessions" : "console-session-history-button console-session-switcher-button"}
+          aria-label="Switch workspace session" aria-haspopup="dialog" aria-expanded={open}
+          aria-keyshortcuts={shortcut} title="Switch to another session in this workspace"
+          onMouseDown={(event) => event.preventDefault()} onClick={onOpen}>
+          <ListIcon /><span>Sessions</span>
+        </button>
+      )}
+      <SessionHistoryButton direction="forward" target={forward} onNavigate={onNavigate} className={historyClass} />
+    </div>
+  );
+}
+
 export function ConsoleScreen({
   sessionName,
   embedded = false,
@@ -902,6 +940,8 @@ export function ConsoleScreen({
     ? lookupError.message
     : null;
   const visibleBars = barVisibility ?? localBarVisibility;
+  const showCollapsedSessionSwitcher = !embedded && !ephemeral && !mobileLayout
+    && !desktopTerminalFocus && !visibleBars.sessionTabs && Boolean(onOpenTabSearch);
   const visibleMobileMode = mobileMode ?? localMobileMode;
   const activeMobileFocus = workspaceOverlayOpen ? "overview" : visibleMobileMode;
   const mobileTerminalDistractionFree = mobileDistractionFreeMode === "terminal";
@@ -2186,6 +2226,14 @@ export function ConsoleScreen({
           <TerminalIcon />
           <p className="eyebrow">SESSION UNAVAILABLE</p>
           <h1>{sessionName}</h1>
+          {showCollapsedSessionSwitcher && (
+            <SessionNavigationControls
+              back={sessionHistoryBack} forward={sessionHistoryForward}
+              onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
+              onOpen={onOpenTabSearch} open={tabSearchOpen}
+              shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
+            />
+          )}
           <p>{currentLookupError}</p>
           {onRecreateSession && (
             <div className="missing-session-recovery">
@@ -2410,21 +2458,15 @@ export function ConsoleScreen({
           <div className="console-title-line">
             <h1>{session?.customTitle || sessionName}</h1>
             <span className={`agent-badge ${classification.tone}`}>{classification.label}</span>
-            {!embedded && !ephemeral && !desktopTerminalFocus && onNavigateSessionHistory && (
-              <div className="console-session-history-navigation" role="group" aria-label="Session navigation">
-                <SessionHistoryButton
-                  direction="back"
-                  target={sessionHistoryBack}
-                  onNavigate={navigateSessionHistory}
-                  className="console-session-history-button"
-                />
-                <SessionHistoryButton
-                  direction="forward"
-                  target={sessionHistoryForward}
-                  onNavigate={navigateSessionHistory}
-                  className="console-session-history-button"
-                />
-              </div>
+            {!embedded && !ephemeral && !desktopTerminalFocus
+              && (onNavigateSessionHistory || showCollapsedSessionSwitcher) && (
+              <SessionNavigationControls
+                back={sessionHistoryBack} forward={sessionHistoryForward}
+                onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
+                onOpen={showCollapsedSessionSwitcher ? onOpenTabSearch : undefined}
+                open={tabSearchOpen}
+                shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
+              />
             )}
           </div>
           <button
@@ -3026,34 +3068,12 @@ export function ConsoleScreen({
             aria-label="Desktop terminal focus controls"
           >
             {!ephemeral && onOpenTabSearch && (
-              <div className="desktop-terminal-session-navigation" role="group" aria-label="Session navigation">
-                <SessionHistoryButton
-                  direction="back"
-                  target={sessionHistoryBack}
-                  onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
-                  className="desktop-terminal-focus-sessions desktop-terminal-session-history"
-                />
-                <button
-                  type="button"
-                  className="desktop-terminal-focus-sessions"
-                  aria-label="Switch workspace session"
-                  aria-haspopup="dialog"
-                  aria-expanded={tabSearchOpen}
-                  aria-keyshortcuts={directShortcutAria(shortcutBindings["workspace-find-tab"])}
-                  title="Switch to another session in this workspace"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={onOpenTabSearch}
-                >
-                  <ListIcon />
-                  <span>Sessions</span>
-                </button>
-                <SessionHistoryButton
-                  direction="forward"
-                  target={sessionHistoryForward}
-                  onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
-                  className="desktop-terminal-focus-sessions desktop-terminal-session-history"
-                />
-              </div>
+              <SessionNavigationControls focus
+                back={sessionHistoryBack} forward={sessionHistoryForward}
+                onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
+                onOpen={onOpenTabSearch} open={tabSearchOpen}
+                shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
+              />
             )}
             {headerNotes && (
               <button
