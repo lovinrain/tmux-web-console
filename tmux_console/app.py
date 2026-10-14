@@ -1915,6 +1915,7 @@ def create_app(
                         "update",
                         "delete",
                         "sessions",
+                        "sessionMoves",
                         "groups",
                         "separators",
                         "paneLayouts",
@@ -4999,7 +5000,7 @@ def create_app(
             return json_error(str(error), 404)
         if isinstance(
             error,
-            (WorkspaceSessionRevisionConflict, WorkspaceResourceConflictError),
+            (WorkspaceSessionRevisionConflict, WorkspaceUpdateConflict, WorkspaceResourceConflictError),
         ):
             return json_error(str(error), 409)
         if isinstance(error, (TypeError, ValueError)):
@@ -5061,6 +5062,31 @@ def create_app(
             OSError,
         ) as error:
             return workspace_resource_error(error, action="add workspace sessions")
+        return web.json_response(result)
+
+    async def move_workspace_session(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request, required={"session", "direction", "sessionRevision"},
+            optional={"expectedUpdatedAt"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            kwargs: dict[str, Any] = {}
+            if "expectedUpdatedAt" in payload:
+                kwargs["expected_updated_at"] = payload["expectedUpdatedAt"]
+            result = app[WORKSPACES_KEY].move_workspace_session(
+                request.match_info["workspace_id"], session=payload["session"],
+                direction=payload["direction"], session_revision=payload["sessionRevision"],
+                **kwargs,
+            )
+        except (
+            WorkspaceStoreUnavailable, WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError, WorkspaceSessionRevisionConflict,
+            WorkspaceUpdateConflict, TypeError, ValueError, OSError,
+        ) as error:
+            return workspace_resource_error(error, action="move workspace session")
         return web.json_response(result)
 
     async def replace_workspace_sessions(request: web.Request) -> web.Response:
@@ -6861,6 +6887,10 @@ def create_app(
     app.router.add_put(
         f"{prefix}/api/workspaces/{{workspace_id}}/sessions",
         replace_workspace_sessions,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/sessions/move",
+        move_workspace_session,
     )
     app.router.add_delete(
         f"{prefix}/api/workspaces/{{workspace_id}}/sessions",

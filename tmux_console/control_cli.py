@@ -413,6 +413,11 @@ def _workspace_command(client: ControlClient, args: argparse.Namespace) -> dict[
     path = "/api/workspaces/" + _segment(args.workspace)
     if args.action == "get":
         return {"workspace": workspace}
+    if args.action == "move":
+        return client.request("POST", path + "/sessions/move", {
+            "session": args.session, "direction": args.direction,
+            **_cas(workspace, args.revision),
+        })
     if args.action in {"add", "remove"}:
         revision = workspace["sessionRevision"] if args.revision is None else args.revision
         return client.request("POST" if args.action == "add" else "DELETE", path + "/sessions",
@@ -532,13 +537,16 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("name")
     create.add_argument("sessions", nargs="*")
     create.add_argument("--active")
-    for action in ("get", "add", "remove", "parent"):
+    for action in ("get", "add", "remove", "parent", "move"):
         command = workspaces.add_parser(action)
         command.add_argument("workspace")
         if action != "get":
             command.add_argument("--revision", type=int, help="expected session rename revision")
         if action in {"add", "remove"}:
             command.add_argument("sessions", nargs="+")
+        elif action == "move":
+            command.add_argument("session")
+            command.add_argument("direction", choices=("up", "down"))
         elif action == "parent":
             command.add_argument("child")
             command.add_argument("parent", nargs="?")

@@ -214,6 +214,8 @@ muxdeckctl workspaces add WORKSPACE_ID payments-tests
 muxdeckctl workspaces parent WORKSPACE_ID payments-tests payments-leader
 muxdeckctl workspaces group add WORKSPACE_ID payments payments-tests
 muxdeckctl workspaces parent WORKSPACE_ID payments-tests --detach
+muxdeckctl workspaces move WORKSPACE_ID payments-tests up
+muxdeckctl workspaces move WORKSPACE_ID payments-tests down
 ```
 
 ### Safe retries and launch uncertainty
@@ -483,7 +485,11 @@ here; a supported native integration could improve automatic task mapping.
 
 ## Concurrent placement and reports
 
-Use granular workspace session/group endpoints for adds and removals. For
+Use granular workspace session/group endpoints for adds and removals.
+`POST /api/workspaces/{workspaceId}/sessions/move` moves one sibling branch
+up or down without replacing the whole list; `muxdeckctl workspaces move`
+supplies both version checks and does not retry mutations. See
+[Workspace sessions](API.md#workspace-sessions) for boundaries and request fields. For
 whole-workspace `PATCH`, include both `sessionRevision` and
 `expectedUpdatedAt` from the most recent snapshot. `sessionRevision` fences
 native renames and transfers across all workspaces;

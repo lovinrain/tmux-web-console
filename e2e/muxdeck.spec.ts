@@ -5549,6 +5549,10 @@ test("saved workspace survives reload and device handoff without touching tmux p
     );
     await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
 
+    // Keep automatic terminal fitting independent of workspace persistence checks.
+    await page.getByRole("button", { name: "Fit active", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Size protected", exact: true })).toBeVisible();
+    await expect(page.locator(".connection-badge")).toContainText("Live", { timeout: 10_000 });
     const beforeSaveTmuxSnapshots = orderedTabs.map(workspaceTmuxSnapshot);
     const saveWorkspace = page.getByRole("button", {
       name: "Save workspace",
@@ -5600,7 +5604,17 @@ test("saved workspace survives reload and device handoff without touching tmux p
 
     const reversedTabs = [...orderedTabs].reverse();
     const savedWorkspaceTabs = page.locator("#muxdeck-session-tabs [role='tab']");
-    await page.getByRole("button", { name: `Move ${sharedSession} tab left` }).click();
+    const snapshotResponse = await request.get(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    expect(snapshotResponse.ok()).toBe(true);
+    const { workspace: snapshot } = await snapshotResponse.json();
+    const moveResponse = await request.post(`/mux/api/workspaces/${encodeURIComponent(workspaceId)}/sessions/move`, {
+      data: {
+        session: sharedSession, direction: "up", sessionRevision: snapshot.sessionRevision,
+        expectedUpdatedAt: snapshot.updatedAt,
+      },
+    });
+    expect(moveResponse.status()).toBe(200);
+    expect((await moveResponse.json()).moved).toBe(true);
     await expect(savedWorkspaceTabs).toHaveText(reversedTabs);
     await expectRoute(
       page,

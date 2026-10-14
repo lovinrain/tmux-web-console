@@ -108,6 +108,8 @@ async def test_api_capabilities_are_machine_readable(tmp_path):
     assert payload["authentication"] == {"mode": "none"}
     assert payload["workspace"]["limits"]["tabsPerWorkspace"] == MAX_WORKSPACE_TABS
     assert "paneLayouts" in payload["resources"]["workspaces"]
+    assert "sessionMoves" in payload["resources"]["workspaces"]
+    assert payload["workspace"]["sessionMoveDirections"] == ["up", "down"]
 
 
 @pytest.mark.asyncio
@@ -176,6 +178,64 @@ async def test_granular_workspace_session_api_is_ordered_and_idempotent(tmp_path
             "activeSession": "a",
             "sessionRevision": 0,
         }
+
+
+@pytest.mark.asyncio
+async def test_workspace_move_api_returns_canonical_order_and_boundary_noop(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path)
+    original = store.create_workspace(name="Relative", tabs=["a", "b"], active_session="a")
+    route = f"/mux/api/workspaces/{original['id']}/sessions/move"
+    async with TestClient(TestServer(create_app(workspaces=store, base_path="/mux"))) as client:
+        response = await client.post(route, json={
+            "session": "b", "direction": "up", "sessionRevision": 0,
+            "expectedUpdatedAt": original["updatedAt"],
+        })
+        assert response.status == 200
+        result = await response.json()
+        assert result["moved"] is True
+        canonical = result["workspace"]
+        assert canonical["tabs"] == ["b", "a"]
+        assert canonical["activeSession"] == "a"
+        before = path.read_bytes()
+        response = await client.post(route, json={"session": "b", "direction": "up", "sessionRevision": 0})
+        assert response.status == 200
+        assert await response.json() == {"moved": False, "workspace": canonical}
+        assert path.read_bytes() == before
+        response = await client.post(route, json={
+            "session": "b", "direction": "down", "sessionRevision": 0,
+            "expectedUpdatedAt": original["updatedAt"],
+        })
+        assert response.status == 409
+        assert "workspace update conflict" in (await response.json())["error"]
+        assert path.read_bytes() == before
+    assert WorkspaceStore(path).get_workspace(original["id"]) == canonical
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("payload", "workspace_id", "status"), [
+    ({"session": "b", "sessionRevision": 0}, None, 400),
+    ({"session": "b", "direction": "left", "sessionRevision": 0}, None, 400),
+    ({"session": None, "direction": "up", "sessionRevision": 0}, None, 400),
+    ({"session": "b", "direction": {}, "sessionRevision": 0}, None, 400),
+    ({"session": "missing", "direction": "up", "sessionRevision": 0}, None, 404),
+    ({"session": "b", "direction": "up", "sessionRevision": 0}, "missing", 404),
+    ({"session": "b", "direction": "up", "sessionRevision": 1}, None, 409),
+    ({"session": "b", "direction": "up", "sessionRevision": 0, "expectedUpdatedAt": None}, None, 400),
+    ({"session": "b", "direction": "up", "sessionRevision": 0, "tabs": []}, None, 400),
+])
+async def test_workspace_move_api_rejects_invalid_requests_without_writes(tmp_path, payload, workspace_id, status):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path)
+    original = store.create_workspace(name="Relative", tabs=["a", "b"], active_session="a")
+    before = path.read_bytes()
+    route = f"/api/workspaces/{workspace_id or original['id']}/sessions/move"
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.post(route, json=payload)
+        assert response.status == status
+        assert "error" in await response.json()
+    assert path.read_bytes() == before
+    assert store.get_workspace(original["id"]) == original
 
 
 @pytest.mark.asyncio

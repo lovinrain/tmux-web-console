@@ -99,6 +99,7 @@ def workspace_api_capabilities() -> dict[str, Any]:
         },
         "groupColors": list(WORKSPACE_GROUP_COLORS),
         "sessionInsertPositions": ["start", "end", "before", "after"],
+        "sessionMoveDirections": ["up", "down"],
         "separatorPlacements": ["before", "after"],
         "paneSplitDirections": ["horizontal", "vertical"],
     }
@@ -945,6 +946,46 @@ def _organize_workspace_hierarchy(
             group = next(group for group in groups if group.id == group_id)
             ordered_groups.append(replace(group, tabs=grouped))
     return tuple(ordered), tuple(ordered_groups)
+
+
+def _move_workspace_session(
+    tabs: tuple[str, ...],
+    parents: tuple[tuple[str, str], ...],
+    groups: tuple[WorkspaceGroup, ...],
+    session: str,
+    direction: str,
+) -> tuple[tuple[str, ...], tuple[WorkspaceGroup, ...]]:
+    """Move one sibling branch, keeping families and named groups together."""
+    ordered, ordered_groups = _organize_workspace_hierarchy(tabs, parents, groups)
+    parent_map = dict(parents)
+    group = next((item for item in ordered_groups if session in item.tabs), None)
+    step = -1 if direction == "up" else 1
+    target: str | None = None
+    for index in range(ordered.index(session) + step, len(ordered) if step > 0 else -1, step):
+        candidate = ordered[index]
+        if group is not None and candidate not in group.tabs:
+            break
+        if parent_map.get(candidate) == parent_map.get(session):
+            target = candidate
+            break
+    if target is None:
+        return tabs, groups
+
+    def subtree(root: str) -> tuple[str, ...]:
+        members = {root}
+        for name in ordered:
+            if parent_map.get(name) in members:
+                members.add(name)
+        return tuple(name for name in ordered if name in members)
+
+    branch = subtree(session)
+    target_group = next((item for item in ordered_groups if target in item.tabs), None)
+    target_branch = target_group.tabs if group is None and target_group is not None else subtree(target)
+    remaining = [name for name in ordered if name not in branch]
+    insertion = remaining.index(target_branch[-1]) + 1 if step > 0 else remaining.index(target_branch[0])
+    remaining[insertion:insertion] = branch
+    moved = tuple(remaining)
+    return moved, _reconcile_workspace_groups(ordered_groups, moved)
 
 
 def _rename_workspace_groups(
@@ -2535,6 +2576,47 @@ class WorkspaceStore:
                     session_revision=validated_revision,
                 )
             return {"added": list(added), "workspace": workspace}
+
+    def move_workspace_session(
+        self,
+        workspace_id: str,
+        *,
+        session: object,
+        direction: object,
+        session_revision: object,
+        expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
+    ) -> dict[str, Any]:
+        workspace_id = _validate_workspace_id(workspace_id)
+        if not isinstance(session, str):
+            raise TypeError("session must be a string")
+        session = validate_session_name(session)
+        _validate_unicode(session, "session")
+        if not isinstance(direction, str) or direction not in {"up", "down"}:
+            raise ValueError("direction must be up or down")
+        revision = _validate_session_revision(session_revision)
+        version = (
+            _validate_timestamp(expected_updated_at, "expectedUpdatedAt")
+            if expected_updated_at is not _EXPECTED_UPDATED_AT_OMITTED else None
+        )
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(revision)
+            if version is not None and version != current.updated_at:
+                raise WorkspaceUpdateConflict(current.updated_at, version)
+            if session not in current.tabs:
+                raise WorkspaceResourceNotFoundError(f"workspace session not found: {session}")
+            tabs, groups = _move_workspace_session(
+                current.tabs, current.parents, current.groups, session, direction,
+            )
+            if tabs == current.tabs and groups == current.groups:
+                return {"moved": False, "workspace": self._workspace_dict(current)}
+            workspace = self.update_workspace(
+                workspace_id, tabs=list(tabs), update_tabs=True,
+                groups=[group.to_dict() for group in groups], update_groups=True,
+                session_revision=revision,
+            )
+            return {"moved": True, "workspace": workspace}
 
     def replace_workspace_sessions(
         self,

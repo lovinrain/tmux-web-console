@@ -316,6 +316,22 @@ def test_workspace_add_is_atomic_addition_not_replacement(monkeypatch, capsys):
     capsys.readouterr()
 
 
+@pytest.mark.parametrize(("direction", "override", "revision"), [("up", [], 7), ("down", ["--revision", "6"], 6)])
+def test_workspace_move_uses_relative_api_and_both_version_guards(monkeypatch, capsys, direction, override, revision):
+    result = {"moved": True, "workspace": WORKSPACE}
+    status, client = run_fake(monkeypatch, ["workspaces", "move", "project", "other", direction, *override],
+                              [{"workspace": WORKSPACE}, result])
+    assert status == 0
+    assert client.calls == [
+        ("GET", "/api/workspaces/project", None),
+        ("POST", "/api/workspaces/project/sessions/move", {
+            "session": "other", "direction": direction,
+            "sessionRevision": revision, "expectedUpdatedAt": 123,
+        }),
+    ]
+    assert json.loads(capsys.readouterr().out) == result
+
+
 def test_group_remove_reorders_hole_and_preserves_coverage(monkeypatch, capsys):
     workspace = copy.deepcopy(WORKSPACE)
     workspace["tabs"] = ["controller", "middle", "other"]

@@ -145,6 +145,7 @@ _ALLOWED_ROUTES = (
     ("/api/workspaces", ("GET", "HEAD", "POST")),
     ("/api/workspaces/project-1", ("GET", "HEAD", "PATCH", "DELETE")),
     ("/api/workspaces/project-1/sessions", ("GET", "HEAD", "POST", "PUT", "DELETE")),
+    ("/api/workspaces/project-1/sessions/move", ("POST",)),
     ("/api/workspaces/project-1/groups", ("GET", "HEAD", "POST")),
     ("/api/workspaces/project-1/groups/epic-1", ("GET", "HEAD", "PATCH", "DELETE")),
     ("/api/workspaces/project-1/pane-layouts", ("GET", "HEAD", "POST")),

@@ -320,6 +320,7 @@ stream, avoiding unnecessary HTTP/1.1 connection slots across open tabs.
 | --- | --- | --- |
 | `GET /api/workspaces/{workspaceId}/sessions` | None | `sessions`, `activeSession`, and `sessionRevision`. |
 | `POST /api/workspaces/{workspaceId}/sessions` | `sessions`, `sessionRevision`; optional `position`, `relativeTo`, `activeSession` | Adds missing names without duplicates and returns `added` plus the workspace. |
+| `POST /api/workspaces/{workspaceId}/sessions/move` | `session`, `direction`, `sessionRevision`; optional `expectedUpdatedAt` | Moves one sibling position up or down and returns `{moved, workspace}`. |
 | `PUT /api/workspaces/{workspaceId}/sessions` | `sessions`, `sessionRevision`; optional `activeSession` | Replaces/reorders the full tab list atomically. |
 | `DELETE /api/workspaces/{workspaceId}/sessions` | `sessions`, `sessionRevision` | Removes existing names and returns `removed` plus the workspace. |
 
@@ -347,6 +348,36 @@ curl --fail-with-body --cookie ./muxdeck.cookies \
 
 Workspace membership does not require the named session to be live. Use `GET
 /api/sessions` first when automation should add only live sessions.
+
+Move a tab one position with a server-side operation:
+
+```json
+{
+  "session": "review-b",
+  "direction": "up",
+  "sessionRevision": 7,
+  "expectedUpdatedAt": 1780000000000
+}
+```
+
+`direction` is `up` or `down`. Movement matches the sidebar: a parent carries
+its descendants, a grouped tab stays within its group, and an ungrouped tab
+passes a neighboring named group as one block. The session stays at the same
+nesting level. The active session and group membership are preserved. At the
+first or last available sibling, the response is `200` with `moved: false`
+and no state write. A missing workspace or tab returns `404`.
+
+The operation uses the current saved order under the workspace lock, persists
+the resulting order and publishes the existing workspace SSE update. Include
+`expectedUpdatedAt` from the last snapshot when the move must apply to that
+specific version; a stale workspace version or `sessionRevision` returns
+`409`. Each successful request moves once, so do not blindly retry an uncertain
+response. The CLI fetches both version checks automatically:
+
+```bash
+muxdeckctl workspaces move WORKSPACE_ID review-b up
+muxdeckctl workspaces move WORKSPACE_ID review-b down
+```
 
 ### Groups
 

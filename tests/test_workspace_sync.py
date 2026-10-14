@@ -158,9 +158,21 @@ async def test_workspace_stream_fanout_reconnect_deletion_and_cleanup(tmp_path):
         assert await read_workspace_event(second) == original
         assert broker.subscriber_count == 2
 
+        response = await client.post(f"{route}/sessions/move", json={
+            "session": "b", "direction": "up", "sessionRevision": 0,
+        })
+        assert response.status == 200
+        result = await response.json()
+        assert result["moved"] is True
+        moved = result["workspace"]
+        assert moved["tabs"] == ["b", "a"]
+        assert moved["activeSession"] == "a"
+        assert await read_workspace_event(first) == moved
+        assert await read_workspace_event(second) == moved
+
         response = await client.patch(route, json={
             "tabs": ["b"], "activeSession": "b", "sessionRevision": 0,
-            "expectedUpdatedAt": original["updatedAt"],
+            "expectedUpdatedAt": moved["updatedAt"],
         })
         assert response.status == 200
         canonical = (await response.json())["workspace"]

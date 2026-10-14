@@ -74,6 +74,7 @@ _PATTERN_ROUTES: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = tuple(
         (r"/api/panes/%25[0-9]+/(?:saved-scrollback|agent-transcript)", _READ),
         (rf"/api/workspaces/{_ID}", _READ | {"PATCH", "DELETE"}),
         (rf"/api/workspaces/{_ID}/sessions", _READ | {"POST", "PUT", "DELETE"}),
+        (rf"/api/workspaces/{_ID}/sessions/move", {"POST"}),
         (rf"/api/workspaces/{_ID}/callback-sessions", _READ | {"POST", "DELETE"}),
         (rf"/api/workspaces/{_ID}/groups", _READ | {"POST"}),
         (rf"/api/workspaces/{_ID}/groups/{_SMALL_ID}", _READ | {"PATCH", "DELETE"}),

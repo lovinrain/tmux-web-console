@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from itertools import permutations
 
@@ -25,6 +26,7 @@ from tmux_console.workspaces import (
     WorkspaceStore,
     WorkspaceStoreUnavailable,
     WorkspaceTransferConflictError,
+    WorkspaceUpdateConflict,
     _WorkspaceDirectorySyncError,
     default_workspaces_path,
     normalize_scoped_note,
@@ -110,6 +112,115 @@ def workspace_group(
         "collapsed": collapsed,
         "tabs": tabs,
     }
+
+
+@pytest.mark.parametrize(("tabs", "parents", "group_tabs", "session", "direction", "expected"), [
+    (["a", "b", "c"], {}, [], "a", "up", ["a", "b", "c"]),
+    (["a", "b", "c"], {}, [], "a", "down", ["b", "a", "c"]),
+    (["a", "b", "c"], {}, [], "b", "up", ["b", "a", "c"]),
+    (["a", "b", "c"], {}, [], "b", "down", ["a", "c", "b"]),
+    (["a", "b", "c"], {}, [], "c", "up", ["a", "c", "b"]),
+    (["a", "b", "c"], {}, [], "c", "down", ["a", "b", "c"]),
+    (["a", "child", "b", "b-child", "c"], {"child": "a", "b-child": "b"}, [],
+     "a", "down", ["b", "b-child", "a", "child", "c"]),
+    (["a", "child", "b", "b-child", "c"], {"child": "a", "b-child": "b"}, [],
+     "b", "up", ["b", "b-child", "a", "child", "c"]),
+    (["root", "a", "child", "b", "other"], {"a": "root", "child": "a", "b": "root"}, [],
+     "a", "down", ["root", "b", "a", "child", "other"]),
+    (["root", "a", "child", "b", "other"], {"a": "root", "child": "a", "b": "root"}, [],
+     "a", "up", ["root", "a", "child", "b", "other"]),
+    (["root", "a", "child", "b", "other"], {"a": "root", "child": "a", "b": "root"}, [],
+     "b", "down", ["root", "a", "child", "b", "other"]),
+    (["a", "b", "c"], {}, ["a", "b"], "b", "up", ["b", "a", "c"]),
+    (["a", "b", "c"], {}, ["a", "b"], "b", "down", ["a", "b", "c"]),
+    (["before", "a", "child", "b", "after"], {"child": "a"}, ["a", "child", "b"],
+     "before", "down", ["a", "child", "b", "before", "after"]),
+    (["before", "a", "child", "b", "after"], {"child": "a"}, ["a", "child", "b"],
+     "after", "up", ["before", "after", "a", "child", "b"]),
+    (["a", "b", "child"], {"child": "a"}, [], "b", "up", ["b", "a", "child"]),
+])
+def test_move_workspace_session_uses_one_sibling_step_and_persists(
+    tmp_path, tabs, parents, group_tabs, session, direction, expected,
+):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, clock=lambda: 10)
+    original = store.create_workspace(
+        name="Move tabs", tabs=tabs, active_session=tabs[0], parents=parents,
+        groups=[workspace_group("focus", group_tabs)] if group_tabs else [],
+    )
+    before = path.read_bytes()
+    result = store.move_workspace_session(
+        original["id"], session=session, direction=direction,
+        session_revision=original["sessionRevision"], expected_updated_at=original["updatedAt"],
+    )
+    changed = expected != tabs
+    assert result["moved"] is changed
+    workspace = result["workspace"]
+    assert workspace["tabs"] == expected
+    assert workspace["activeSession"] == original["activeSession"]
+    assert workspace.get("parents", {}) == parents
+    assert workspace["updatedAt"] == original["updatedAt"] + int(changed)
+    if group_tabs:
+        assert workspace["groups"] == [workspace_group(
+            "focus", [name for name in expected if name in group_tabs],
+        )]
+    assert WorkspaceStore(path).get_workspace(original["id"]) == workspace
+    if not changed:
+        assert path.read_bytes() == before
+
+
+def test_move_workspace_session_preserves_fold_and_other_metadata(tmp_path):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, clock=lambda: 10)
+    original = store.create_workspace(
+        name="Folded", tabs=["a", "child", "b", "c"], active_session="child",
+        parents={"child": "a"}, groups=[workspace_group("focus", ["a", "child", "b", "c"], collapsed=True)],
+        folds=[{"id": "fold", "tabs": ["a", "b"]}], separators=["a"], separators_before=["b"],
+        callback_sessions=["c"], pane_layouts=[{
+            "id": "view", "name": "View", "root": {"id": "pane", "kind": "pane", "session": "child"},
+        }],
+    )
+    store.replace_workspace_note(original["id"], "Keep this note")
+    store.replace_session_quick_links("a", [{"id": "link", "label": "", "url": "https://example.test"}])
+    before = json.loads(path.read_text())
+    workspace = store.move_workspace_session(
+        original["id"], session="b", direction="up", session_revision=0,
+    )["workspace"]
+    assert workspace["tabs"] == ["b", "a", "child", "c"]
+    assert workspace["folds"] == [{"id": "fold", "tabs": ["b", "a"]}]
+    for key in original.keys() - {"tabs", "groups", "folds", "updatedAt"}:
+        assert workspace[key] == original[key]
+    assert workspace["groups"] == [workspace_group("focus", workspace["tabs"], collapsed=True)]
+    after = json.loads(path.read_text())
+    assert {key: value for key, value in after.items() if key != "workspaces"} == {
+        key: value for key, value in before.items() if key != "workspaces"
+    }
+    assert WorkspaceStore(path).get_workspace(original["id"]) == workspace
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+def test_concurrent_relative_moves_compose_or_reject_the_stale_version(tmp_path, guarded):
+    store = WorkspaceStore(tmp_path / "workspaces.json", clock=lambda: 10)
+    original = store.create_workspace(name="Concurrent", tabs=["a", "b", "c"], active_session="a")
+    barrier = threading.Barrier(2)
+
+    def move(_):
+        barrier.wait(timeout=2)
+        fields = {"expected_updated_at": original["updatedAt"]} if guarded else {}
+        try:
+            return store.move_workspace_session(
+                original["id"], session="a", direction="down", session_revision=0, **fields,
+            )
+        except WorkspaceUpdateConflict:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(move, range(2)))
+    assert sum(result is not None for result in results) == (1 if guarded else 2)
+    canonical = store.get_workspace(original["id"])
+    assert canonical["tabs"] == (["b", "a", "c"] if guarded else ["b", "c", "a"])
+    assert canonical["updatedAt"] == original["updatedAt"] + (1 if guarded else 2)
+    assert WorkspaceStore(store.path).get_workspace(original["id"]) == canonical
 
 
 def three_pane_layout():
