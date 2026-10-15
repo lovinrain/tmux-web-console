@@ -9,6 +9,7 @@ import {
   listWorkspaces,
   listQueuedMessages,
   listSessions,
+  subscribeToSessions,
   renameSession,
   previewSessionFile,
   resolveSessionFilePath,
@@ -53,6 +54,7 @@ vi.mock("../api", () => ({
   releaseUtilityTerminal: vi.fn().mockResolvedValue(undefined),
   copySession: vi.fn(),
   listSessions: vi.fn(),
+  subscribeToSessions: vi.fn(),
   listSessionHistory: vi.fn(),
   recordSessionView: vi.fn(),
   restoreSessionHistory: vi.fn(),
@@ -176,6 +178,9 @@ function deferred<T>(): {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(subscribeToSessions).mockImplementation(() => {
+    throw new Error("Streaming unavailable in this test");
+  });
   liveTerminalState.onStateChange = null;
   liveTerminalState.onOpenFilePath = null;
   liveTerminalState.onHistoryNavigation = null;
@@ -242,6 +247,62 @@ function layOutHeader(container: HTMLElement, offscreen: HTMLElement[]) {
 }
 
 describe("ConsoleScreen session identity", () => {
+  it("switches from the cached inventory without reconnecting or blanking workspace controls", async () => {
+    const first = session("First session");
+    const second = {
+      ...session("Second session", "second"),
+      id: "$2",
+      activePaneId: "%2",
+      panes: [{ ...pane(), id: "%2", path: "/second", command: "codex", title: "Codex" }],
+    };
+    let stream!: Parameters<typeof subscribeToSessions>[0];
+    const stop = vi.fn();
+    vi.mocked(subscribeToSessions).mockImplementation((options) => {
+      stream = options;
+      return stop;
+    });
+    vi.mocked(listSessions).mockResolvedValue([first, second]);
+    const onSessionsChange = vi.fn();
+    const props = {
+      onBack: vi.fn(),
+      onSessionsChange,
+      onSessionCopied: vi.fn(),
+      sessionNavigation: <nav aria-label="Quick sessions">Workspace tabs</nav>,
+    };
+    const view = renderWithTheme(<ConsoleScreen {...props} sessionName="test" />);
+    const heading = await screen.findByRole("heading", { name: "First session" });
+    const header = heading.closest("header");
+    const navigation = screen.getByRole("navigation", { name: "Quick sessions" });
+    const shortcuts = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const copy = screen.getByRole("button", { name: "Copy sibling session" });
+    // A redundant refresh would now leave the selected session waiting indefinitely.
+    vi.mocked(listSessions).mockReturnValue(new Promise(() => {}));
+    const nextOnSessionsChange = vi.fn();
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} sessionName="second" onSessionsChange={nextOnSessionsChange} /></ThemeProvider>);
+
+    expect(screen.getByRole("heading", { name: "Second session" }).closest("header")).toBe(header);
+    expect(screen.getByRole("button", { name: "Browse files in /second" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Copy sibling session" })).toBe(copy);
+    expect(copy).toBeEnabled();
+    expect(screen.getByRole("group", { name: "Terminal input shortcuts" })).toBe(shortcuts);
+    expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBe(navigation);
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(subscribeToSessions).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+
+    act(() => stream.onSessions([first, { ...second, customTitle: "Updated second" }]));
+    expect(screen.getByRole("heading", { name: "Updated second" })).toBeVisible();
+    expect(nextOnSessionsChange).toHaveBeenCalledOnce();
+    expect(onSessionsChange).toHaveBeenCalledOnce();
+    act(() => stream.onSessions([first]));
+    expect(screen.getByText("This tmux session no longer exists.")).toBeVisible();
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} sessionName="test" /></ThemeProvider>);
+    expect(screen.getByRole("heading", { name: "First session" })).toBeVisible();
+    expect(listSessions).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("focuses an embedded xterm when its pane receives a focus request", async () => {
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       callback(0);

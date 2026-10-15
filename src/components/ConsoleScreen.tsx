@@ -26,7 +26,7 @@ import {
   type WorkspaceSessionsTransferResult,
   type RecoverableSession,
 } from "../api";
-import { subscribeToSessionInventory } from "../sessionInventory";
+import { useConsoleSession } from "../useConsoleSession";
 import {
   ArrowLeftIcon,
   CheckIcon,
@@ -776,8 +776,15 @@ export function ConsoleScreen({
     if (open && !workspaceId) onTemporaryTerminalUsed?.();
     setFloatingTerminalOpen(open);
   }, [workspaceId, onTemporaryTerminalUsed]);
-  const [loadedSession, setLoadedSession] = useState<Session | null>(null);
-  const [paneId, setPaneId] = useState<string | null>(null);
+  const { session, setSession: setLoadedSession, lookupError: currentLookupError } = useConsoleSession(
+    sessionName, sessionSnapshot, onSessionsChange,
+  );
+  const [paneSelection, setPaneSelection] = useState<{
+    session: Session | null;
+    paneId: string | null;
+  } | null>(null);
+  const paneSessionRef = useRef(session);
+  paneSessionRef.current = session;
   const [connectionSnapshot, setConnectionSnapshot] = useState<{
     sessionName: string;
     state: ConnectionState;
@@ -888,10 +895,6 @@ export function ConsoleScreen({
   const [localHistoryPanelWidth, setLocalHistoryPanelWidth] = useState(
     DEFAULT_HISTORY_PANEL_WIDTH,
   );
-  const [lookupError, setLookupError] = useState<{
-    sessionName: string;
-    message: string;
-  } | null>(null);
   const clampedDesktopTabRailWidth = clampDesktopTabRailWidth(desktopTabRailWidth);
   const consoleShellStyle = {
     "--desktop-tab-rail-width": `${clampedDesktopTabRailWidth}px`,
@@ -899,7 +902,6 @@ export function ConsoleScreen({
     "--desktop-focus-shortcuts-y": `${desktopFocusShortcutsPosition.y}px`,
   } as CSSProperties;
 
-  const session = loadedSession?.name === sessionName ? loadedSession : null;
   const selectedWorkspaceTransferSessions = workspaceTransferSessionNames
     && workspaceTransferSessionNames.length > 1
     ? [...new Set(workspaceTransferSessionNames)]
@@ -909,6 +911,11 @@ export function ConsoleScreen({
       || (name === sessionName && Boolean(session?.workspacePinned)),
   );
   const workspaceTransferSessionCount = selectedWorkspaceTransferSessions.length;
+  // A fresh inventory snapshot is authoritative. Resolve its pane during the
+  // same render so a later pane-state effect cannot close a newly opened panel.
+  const paneId = paneSelection?.session === session
+    ? paneSelection.paneId
+    : session?.activePaneId ?? null;
   const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId)
     || (session ? activePane(session) : undefined);
   const classification = classifyPane(pane);
@@ -941,9 +948,6 @@ export function ConsoleScreen({
     // reconnecting, or detecting a different foreground agent.
     tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
   }, [scrollTargetKey, connection, scrollAgentKind]);
-  const currentLookupError = lookupError?.sessionName === sessionName
-    ? lookupError.message
-    : null;
   const visibleBars = barVisibility ?? localBarVisibility;
   const showCollapsedSessionSwitcher = !embedded && !ephemeral && !mobileLayout
     && !desktopTerminalFocus && !visibleBars.sessionTabs && Boolean(onOpenTabSearch);
@@ -1520,55 +1524,18 @@ export function ConsoleScreen({
 
 
   useEffect(() => {
-    if (sessionSnapshot !== undefined) {
-      const match = sessionSnapshot?.name === sessionName ? sessionSnapshot : null;
-      if (!match) {
-        setLoadedSession(null);
-        setPaneId(null);
-        setLookupError({ sessionName, message: "This tmux session no longer exists." });
-      } else {
-        setLoadedSession(match);
-        setPaneId(match.activePaneId);
-        setLookupError(null);
-      }
-      return;
-    }
-    return subscribeToSessionInventory({
-      onSessions: (sessions) => {
-        onSessionsChange?.(sessions);
-        const match = sessions.find((item) => item.name === sessionName);
-        if (!match) {
-          setLoadedSession(null);
-          setPaneId(null);
-          setHistoryOpen(false);
-          setFilesOpen(false);
-          setTitleEditorOpen(false);
-          setRenameEditorOpen(false);
-          setTerminateTarget(null);
-          setMessagesOpen(false);
-          setSnippetsOpen(false);
-          setWorkspaceTransferOpen(false);
-          setLookupError({
-            sessionName,
-            message: "This tmux session no longer exists.",
-          });
-          return;
-        }
-        setLoadedSession(match);
-        // tmux pane/window switches can happen inside the attached terminal.
-        // Follow the inventory so header actions never target a stale pane.
-        setPaneId(match.activePaneId);
-        setLookupError(null);
-      },
-      onError: (error) => setLookupError({
-        sessionName,
-        message: error instanceof Error ? error.message : "Unable to load session",
-      }),
-    });
-  }, [onSessionsChange, sessionName, sessionSnapshot]);
+    if (session || !currentLookupError) return;
+    setHistoryOpen(false);
+    setFilesOpen(false);
+    setTitleEditorOpen(false);
+    setRenameEditorOpen(false);
+    setTerminateTarget(null);
+    setMessagesOpen(false);
+    setSnippetsOpen(false);
+    setWorkspaceTransferOpen(false);
+  }, [currentLookupError, session]);
 
   useEffect(() => {
-    setPaneId(null);
     setMobileDistractionFreeMode(null);
     setMobileTerminalFocus(false);
     setMobileFocusShortcutsOpen(false);
@@ -1668,7 +1635,10 @@ export function ConsoleScreen({
   const stateChange = useCallback((state: ConnectionState) => {
     setConnectionSnapshot({ sessionName, state });
   }, [sessionName]);
-  const paneChange = useCallback((nextPaneId: string | null) => setPaneId(nextPaneId), []);
+  const paneChange = useCallback((nextPaneId: string | null) => setPaneSelection({
+    session: paneSessionRef.current,
+    paneId: nextPaneId,
+  }), []);
   const rememberTmuxScrollTarget = useCallback(() => {
     setTmuxScrollTargets((current) => current.has(scrollTargetKey)
       ? current
@@ -3252,7 +3222,6 @@ export function ConsoleScreen({
         )}
       </div>
       <InputBar
-        key={sessionName}
         ref={inputBarRef}
         sessionName={sessionName}
         sessionId={session?.id}

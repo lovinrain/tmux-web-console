@@ -34,6 +34,55 @@ afterEach(() => {
 });
 
 describe("InputBar", () => {
+  it("keeps shortcut controls mounted while restoring each session's draft and current handlers", () => {
+    localStorage.setItem("muxdeck-terminal-draft:second", "Second session draft");
+    const ref = createRef<InputBarHandle>();
+    const nextSend = vi.fn(() => true);
+    const view = render(<InputBar {...props} ref={ref} />);
+    const dock = screen.getByRole("region", { name: "Terminal input" });
+    const shortcuts = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    const enter = within(shortcuts).getByRole("button", { name: /^Enter$/ });
+    const firstInput = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(firstInput, { target: { value: "Keep first draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Show other keys" }));
+
+    view.rerender(<InputBar {...props} sessionName="second" onSend={nextSend} ref={ref} />);
+    expect(screen.getByRole("region", { name: "Terminal input" })).toBe(dock);
+    expect(screen.getByRole("group", { name: "Terminal input shortcuts" })).toBe(shortcuts);
+    expect(within(shortcuts).getByRole("button", { name: /^Enter$/ })).toBe(enter);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).not.toBe(firstInput);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("Second session draft");
+    expect(screen.getByRole("group", { name: "Other keys" })).toBeVisible();
+    fireEvent.click(enter);
+    expect(nextSend).toHaveBeenCalledExactlyOnceWith("\r");
+    expect(props.onSend).not.toHaveBeenCalled();
+    act(() => { ref.current?.replaceDraft("Updated second draft"); });
+    expect(ref.current?.getDraft()).toBe("Updated second draft");
+
+    view.rerender(<InputBar {...props} ref={ref} />);
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep first draft");
+    expect(within(shortcuts).getByRole("button", { name: /^Enter$/ })).toBe(enter);
+    expect(localStorage.getItem("muxdeck-terminal-draft:second")).toBe("Updated second draft");
+  });
+
+  it("aborts the old composer's upload and ignores its late result after switching sessions", async () => {
+    let finish!: (value: { name: string; path: string; terminalText: string; contentType: string; size: number }) => void;
+    const onUploadAttachment = vi.fn((_file: File, _signal: AbortSignal) => new Promise<{
+      name: string; path: string; terminalText: string; contentType: string; size: number;
+    }>((resolve) => { finish = resolve; }));
+    const view = render(<InputBar {...props} onUploadAttachment={onUploadAttachment} />);
+    fireEvent.paste(screen.getByRole("textbox", { name: "Staged input" }), {
+      clipboardData: { files: [new File(["notes"], "first.txt", { type: "text/plain" })] },
+    });
+    expect(onUploadAttachment).toHaveBeenCalledOnce();
+    view.rerender(<InputBar {...props} sessionName="second" onUploadAttachment={onUploadAttachment} />);
+    expect(onUploadAttachment.mock.calls[0][1].aborted).toBe(true);
+    await act(async () => { finish({ name: "first.txt", path: "/first.txt", terminalText: "/first.txt", contentType: "text/plain", size: 5 }); });
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+    expect(screen.queryByRole("region", { name: "Uploaded files" })).not.toBeInTheDocument();
+    expect(localStorage.getItem("muxdeck-terminal-draft:second")).toBeNull();
+  });
+
   it("preserves a linked tab's own draft and its cleared state through reloads", () => {
     const key = "muxdeck-terminal-draft:test-session";
     localStorage.setItem(key, "browser default draft");

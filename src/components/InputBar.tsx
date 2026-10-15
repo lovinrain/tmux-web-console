@@ -426,37 +426,49 @@ function resizeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 48), 144)}px`;
 }
 
-export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar({
+interface SessionComposerHandle extends InputBarHandle {
+  pasteClipboard: () => Promise<void>;
+}
+
+export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar(props, ref) {
+  const composerRef = useRef<SessionComposerHandle>(null);
+  useImperativeHandle(ref, () => ({
+    loadDraft: (text, source) => composerRef.current?.loadDraft(text, source) ?? false,
+    insertText: (text) => composerRef.current?.insertText(text) ?? false,
+    replaceDraft: (text) => composerRef.current?.replaceDraft(text) ?? false,
+    getDraft: () => composerRef.current?.getDraft() ?? "",
+    focus: () => composerRef.current?.focus(),
+    blur: () => composerRef.current?.blur(),
+  }), []);
+
+  return (
+    <section
+      className="input-dock"
+      aria-label="Terminal input"
+      hidden={props.composerVisible === false && props.shortcutsVisible === false}
+    >
+      {props.shortcutPanelHeader}
+      {/* Drafts and pending uploads belong to one session; shortcut controls stay mounted. */}
+      <SessionComposer key={props.sessionName} {...props} ref={composerRef} />
+      <TerminalInputShortcuts {...props} onPaste={() => void composerRef.current?.pasteClipboard()} />
+    </section>
+  );
+});
+
+const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(function SessionComposer({
   sessionName,
   sessionId,
   idScope,
-  terminalControlId = "muxdeck-active-console",
-  scrollContext = JSON.stringify([sessionName, sessionId]),
   enabled,
   composerVisible = true,
-  shortcutsVisible = true,
-  shortcutPanelHeader,
-  preferredScrollMode,
-  preferredScrollLabel,
-  onScrollUsed,
-  onScrollLine,
-  applicationScrollProfile,
-  onScrollApplication,
-  applicationScrollPending = false,
-  returnScrollMode = preferredScrollMode,
   mobileDistractionFree = false,
   onToggleMobileDistractionFree,
   onSend,
   onSubmit,
   onAddToMemo,
   onConsumeMemo,
-  onReturnToLive,
   onFocus,
-  onRedraw,
   onRevealComposer,
-  onEditSessionTitle,
-  onRenameSession,
-  onTerminateSession,
   onOpenMessages,
   onOpenSnippets,
   onUploadAttachment,
@@ -465,7 +477,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   queuedMessageCount = 0,
 }, ref) {
   const { bindings: shortcutBindings } = useShortcutSettings();
-  const preferredLineScrollMode = preferredScrollMode ?? "tmux";
   const [initialDraftState] = useState(() => {
     const pendingHandoff = renamedSessionDraftHandoffs.get(sessionName);
     const handoff = pendingHandoff?.sessionId === sessionId ? pendingHandoff : undefined;
@@ -475,13 +486,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     };
   });
   const initialDraft = initialDraftState.draft;
-  const otherKeyPanelId = useId();
   const stagedInputId = idScope ? `${idScope}-staged-input` : "muxdeck-staged-input";
   const stagedTextareaId = idScope ? `${idScope}-staged-textarea` : "terminal-staged-input";
-  const shortcutsId = idScope ? `${idScope}-terminal-shortcuts` : "muxdeck-terminal-shortcuts";
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
-  const otherKeyPanelRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const actionPendingRef = useRef(false);
   const attachmentUploadPendingRef = useRef(false);
@@ -498,7 +506,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       : initialDraft ? "saved" : "idle",
   );
   const [actionPending, setActionPending] = useState(false);
-  const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
   const [attachmentUploadPending, setAttachmentUploadPending] = useState(false);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [stagedAttachments, setStagedAttachments] = useState<StagedAttachmentUpload[]>([]);
@@ -579,7 +586,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     getDraft: () => textareaRef.current?.value ?? initialDraft,
     focus: () => textareaRef.current?.focus(),
     blur: () => textareaRef.current?.blur(),
-  }), [initialDraft]);
+    pasteClipboard: () => pasteClipboard(),
+  }));
 
   useEffect(() => {
     onDraftChange?.(textareaRef.current?.value ?? initialDraft);
@@ -619,10 +627,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const frame = window.requestAnimationFrame(() => resizeTextarea(textarea));
     return () => window.cancelAnimationFrame(frame);
   }, []);
-
-  useEffect(() => {
-    if (!shortcutsVisible) setOtherKeyPanelOpen(false);
-  }, [shortcutsVisible]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1026,12 +1030,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const draftActionPending = actionPending || attachmentUploadPending;
 
   return (
-    <section
-      className="input-dock"
-      aria-label="Terminal input"
-      hidden={!composerVisible && !shortcutsVisible}
-    >
-      {shortcutPanelHeader}
       <div
         id={stagedInputId}
         className={attachmentDragActive ? "staged-composer attachment-drag-active" : "staged-composer"}
@@ -1309,6 +1307,51 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         </p>
       </div>
 
+  );
+});
+
+function TerminalInputShortcuts({
+  sessionName,
+  sessionId,
+  idScope,
+  terminalControlId = "muxdeck-active-console",
+  scrollContext = JSON.stringify([sessionName, sessionId]),
+  enabled,
+  shortcutsVisible = true,
+  preferredScrollMode,
+  preferredScrollLabel,
+  onScrollUsed,
+  onScrollLine,
+  applicationScrollProfile,
+  onScrollApplication,
+  applicationScrollPending = false,
+  returnScrollMode = preferredScrollMode,
+  onSend,
+  onReturnToLive,
+  onFocus,
+  onRedraw,
+  onEditSessionTitle,
+  onRenameSession,
+  onTerminateSession,
+  onOpenMessages,
+  onOpenSnippets,
+  messageCount = 0,
+  queuedMessageCount = 0,
+  onPaste,
+}: InputBarProps & { onPaste: () => void }) {
+  const { bindings: shortcutBindings } = useShortcutSettings();
+  const preferredLineScrollMode = preferredScrollMode ?? "tmux";
+  const otherKeyPanelId = useId();
+  const shortcutsId = idScope ? `${idScope}-terminal-shortcuts` : "muxdeck-terminal-shortcuts";
+  const otherKeyPanelRef = useRef<HTMLDivElement>(null);
+  const [otherKeyPanelOpen, setOtherKeyPanelOpen] = useState(false);
+
+  useEffect(() => {
+    if (!shortcutsVisible) setOtherKeyPanelOpen(false);
+  }, [shortcutsVisible]);
+
+  return (
+    <>
       <div
         id={shortcutsId}
         className="input-bar"
@@ -1544,7 +1587,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         >
           <SnippetIcon /> <span>Snippets</span>
         </button>
-        <button type="button" className="key-button action-key" onClick={() => void pasteClipboard()}>Paste to draft</button>
+        <button type="button" className="key-button action-key" onClick={onPaste}>Paste to draft</button>
       </div>
 
       {shortcutsVisible && otherKeyPanelOpen && (
@@ -1566,6 +1609,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           ))}
         </div>
       )}
-    </section>
+    </>
   );
-});
+}

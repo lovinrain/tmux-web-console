@@ -2769,6 +2769,18 @@ test("session history works beside the title and in Focus without losing drafts"
     await expect(page.locator(".connection-badge")).toContainText("Live");
     await page.getByRole("textbox", { name: "Staged input" }).fill("Keep this session draft");
 
+    const inventoryRequests: string[] = [];
+    page.on("request", (request) => {
+      if (/\/api\/sessions(?:\/stream)?$/.test(new URL(request.url()).pathname)) {
+        inventoryRequests.push(request.url());
+      }
+    });
+    const preservedControls = await page.evaluateHandle(() => (
+      [".console-shell", ".console-header", ".console-actions", ".console-session-navigation",
+        ".input-dock", "#muxdeck-terminal-shortcuts", ".console-title-line h1"]
+        .map((selector) => document.querySelector(selector))
+    ));
+
     const terminalKeydownFrameCount = await trackTerminalInputFrames(page);
 
     const shell = page.locator(".console-shell");
@@ -2796,6 +2808,27 @@ test("session history works beside the title and in Focus without losing drafts"
     await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
     await expect(shell).toHaveAttribute("data-desktop-focus", "false");
     await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
+    const nextPaint = await forward.evaluate((button) => new Promise<{
+      elapsedMs: number; title: string | null | undefined; copyReady: boolean;
+    }>((resolve) => {
+      const started = performance.now();
+      button.click();
+      requestAnimationFrame(() => resolve({
+        elapsedMs: performance.now() - started,
+        title: document.querySelector(".console-title-line h1")?.textContent,
+        copyReady: document.querySelector<HTMLButtonElement>('[aria-label="Copy sibling session"]')?.disabled === false,
+      }));
+    }));
+    expect(nextPaint.title).toBe("Focus switch target");
+    expect(nextPaint.copyReady).toBe(true);
+    expect(await preservedControls.evaluate((elements) => elements.every((element) => element?.isConnected))).toBe(true);
+    expect(inventoryRequests).toEqual([]);
+    await testInfo.attach("session-navigation-next-paint.json", {
+      body: JSON.stringify(nextPaint, null, 2), contentType: "application/json",
+    });
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await back.click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
     await page.screenshot({ path: testInfo.outputPath("session-title-history-dark.png") });
 
     await enterFocus.click();
@@ -2887,6 +2920,9 @@ test("session history works beside the title and in Focus without losing drafts"
     await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
     await expect(shell).toHaveAttribute("data-desktop-focus", "false");
     expect(await terminalKeydownFrameCount()).toBe(0);
+    expect(await preservedControls.evaluate((elements) => elements.every((element) => element?.isConnected))).toBe(true);
+    expect(inventoryRequests).toEqual([]);
+    await preservedControls.dispose();
     await page.setViewportSize({ width: 390, height: 844 });
     for (const button of [back, forward]) await expect(button).toBeInViewport();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
