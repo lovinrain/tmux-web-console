@@ -2559,7 +2559,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             <button
               type="button"
               className="workspace-tab-search-button"
-              onClick={onOpenTabSearch}
+              onClick={() => onOpenTabSearch()}
               aria-label="Search open tabs"
               aria-keyshortcuts={directShortcutAria(
                 shortcutBindings["workspace-find-tab"],

@@ -2660,6 +2660,8 @@ test("session history works beside the title and in Focus without losing drafts"
     await expect(forward).toHaveAttribute("title", `Forward to ${second}`);
     await switcher.click();
     await expect(switcher).toHaveAttribute("aria-expanded", "true");
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
+    await dialog.getByRole("button", { name: "Use modal session jumper" }).click();
     await expect(search).toBeFocused();
     await expect(dialog.getByRole("option")).toHaveCount(3);
     await expect(dialog.getByRole("option", { name: new RegExp(first) })).toContainText("Current");
@@ -2672,6 +2674,7 @@ test("session history works beside the title and in Focus without losing drafts"
     await page.screenshot({ path: testInfo.outputPath("focus-sessions-dark.png") });
 
     await switcher.click();
+    await dialog.getByRole("button", { name: "Use modal session jumper" }).click();
     await search.pressSequentially("Focus switch target");
     await dialog.getByRole("option").click();
     await expectRoute(page, `/mux/session/${second}`, tabs);
@@ -2692,6 +2695,7 @@ test("session history works beside the title and in Focus without losing drafts"
     await expectRoute(page, `/mux/session/${second}`, tabs);
     await back.click();
     await switcher.click();
+    await dialog.getByRole("button", { name: "Use modal session jumper" }).click();
     await search.fill(third);
     await page.keyboard.press("Enter");
     await expectRoute(page, `/mux/session/${third}`, tabs);
@@ -2845,8 +2849,6 @@ test("floating focus session jumper stays usable alongside the terminal", async 
     const terminal = page.locator(".xterm-helper-textarea");
     await enterFocus.click();
     await switcher.click();
-    await expect(dialog).toHaveAttribute("aria-modal", "true");
-    await dialog.getByRole("button", { name: "Float session jumper" }).click();
     await expect(dialog).toHaveAttribute("aria-modal", "false");
     await expect(page.locator(".workspace-tab-search-backdrop")).toHaveCount(0);
     await expect(search).toBeFocused();
@@ -2913,7 +2915,7 @@ test("floating focus session jumper stays usable alongside the terminal", async 
     await expect(terminal).toBeFocused();
 
     await switcher.click();
-    await dialog.getByRole("button", { name: "Float session jumper" }).click();
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
     await exitFocus.click();
     await expect(dialog).toBeVisible();
     // Move the floating window clear of the normal header before changing themes.

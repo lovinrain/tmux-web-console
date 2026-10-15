@@ -34,7 +34,7 @@ export function useWorkspaceTabSearch({
   const closeModal = useCallback(() => {
     setPresentation((current) => current.floating ? current : { ...current, open: false });
   }, []);
-  const open = useCallback(() => {
+  const open = useCallback((options?: { floating?: boolean }) => {
     if (
       !isWorkspaceRoute(getLocation().path)
       || workspaceRef.current.openSessions.length === 0
@@ -42,7 +42,8 @@ export function useWorkspaceTabSearch({
       || document.querySelector('[aria-modal="true"]')
     ) return;
     setPresentation((current) => ({
-      ...current, open: true, focusRequest: current.focusRequest + 1,
+      ...current, open: true, floating: options?.floating ?? current.floating,
+      focusRequest: current.focusRequest + 1,
     }));
   }, [getLocation, workspaceRef]);
 

@@ -33,6 +33,19 @@ describe("workspace tab search lifetime", () => {
     expect(result.current.presentation).toEqual({ open: true, floating: true, focusRequest: 3 });
   });
 
+  it("opens floating on request even after using the modal", () => {
+    const { result } = renderHook(() => useWorkspaceTabSearch(options()));
+    act(() => result.current.open({ floating: true }));
+    expect(result.current.presentation).toEqual({ open: true, floating: true, focusRequest: 1 });
+    act(() => result.current.setFloating(false));
+    act(() => result.current.close());
+    act(() => result.current.open());
+    expect(result.current.presentation).toEqual({ open: true, floating: false, focusRequest: 2 });
+    act(() => result.current.close());
+    act(() => result.current.open({ floating: true }));
+    expect(result.current.presentation).toEqual({ open: true, floating: true, focusRequest: 3 });
+  });
+
   it.each([false, true])("closes only the modal on session-history navigation, floating=%s", (floating) => {
     const props = options();
     const { result } = renderHook(() => useWorkspaceTabSearch(props));

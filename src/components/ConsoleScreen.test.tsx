@@ -1695,7 +1695,7 @@ describe("ConsoleScreen session identity", () => {
     expect(focusSessions).toHaveAttribute("aria-keyshortcuts", "Control+Shift+;");
     expect(fireEvent.mouseDown(focusSessions)).toBe(false);
     fireEvent.click(focusSessions);
-    expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    expect(onOpenTabSearch).toHaveBeenCalledExactlyOnceWith({ floating: true });
     const sessionBack = within(focusControls).getByRole("button", { name: "Back to previous session" });
     const sessionForward = within(focusControls).getByRole("button", { name: "Forward to next session" });
     expect(sessionBack).toHaveAttribute("title", "Back to earlier-session");
@@ -2413,7 +2413,7 @@ describe("ConsoleScreen session identity", () => {
     expect(switcher).toHaveAttribute("aria-keyshortcuts", "Control+Shift+;");
     expect(fireEvent.mouseDown(switcher)).toBe(false);
     fireEvent.click(switcher);
-    expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    expect(onOpenTabSearch).toHaveBeenCalledExactlyOnceWith();
     fireEvent.click(within(controls).getByRole("button", { name: "Back to previous session" }));
     fireEvent.click(within(controls).getByRole("button", { name: "Forward to next session" }));
     expect(onNavigateSessionHistory.mock.calls).toEqual([["back"], ["forward"]]);

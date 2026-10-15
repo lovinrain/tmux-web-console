@@ -150,7 +150,7 @@ interface ConsoleScreenProps {
   workspaceLinks?: ReactNode;
   callbackControl?: ReactNode;
   sessionNavigation?: ReactNode;
-  onOpenTabSearch?: () => void;
+  onOpenTabSearch?: (options?: { floating?: boolean }) => void;
   tabSearchOpen?: boolean;
   sessionHistoryBack?: string | null;
   sessionHistoryForward?: string | null;
@@ -650,7 +650,7 @@ function SessionNavigationControls({
           className={focus ? "desktop-terminal-focus-sessions" : "console-session-history-button console-session-switcher-button"}
           aria-label="Switch workspace session" aria-haspopup="dialog" aria-expanded={open}
           aria-keyshortcuts={shortcut} title="Switch to another session in this workspace"
-          onMouseDown={(event) => event.preventDefault()} onClick={onOpen}>
+          onMouseDown={(event) => event.preventDefault()} onClick={() => onOpen()}>
           <ListIcon /><span>Sessions</span>
         </button>
       )}
@@ -3071,7 +3071,7 @@ export function ConsoleScreen({
               <SessionNavigationControls focus
                 back={sessionHistoryBack} forward={sessionHistoryForward}
                 onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
-                onOpen={onOpenTabSearch} open={tabSearchOpen}
+                onOpen={() => onOpenTabSearch({ floating: true })} open={tabSearchOpen}
                 shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
               />
             )}
