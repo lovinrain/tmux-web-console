@@ -17,6 +17,7 @@ import type {
   WorkspacePaneLayout
 } from "../api";
 import {
+  AddSessionsIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -61,6 +62,7 @@ import {
 import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
 import { normalizeWorkspaceTabFolds, workspaceFoldMembers, workspaceFoldSelectionError, type WorkspaceTabFold } from "../workspaceFolds";
 import "./DeadPaneTabs.css";
+import "./WorkspaceActionToolbar.css";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
@@ -1854,6 +1856,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           aria-label="Session workspace"
           hidden={!tabsVisible}
         >
+          <div className="workspace-action-toolbar workspace-action-toolbar-primary" role="group" aria-label="Workspace actions">
           <div
             className="workspace-dashboard-actions"
             role="group"
@@ -1956,9 +1959,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   : workspacePersistenceState === "loading"
                     || workspacePersistenceState === "error"
                     ? "Wait for the workspace to finish syncing"
-                    : "Find and add running sessions without leaving this workspace"}
+                    : `Add running sessions to this workspace (${addableSessionCount} available)`}
             >
-              <PlusIcon />
+              <AddSessionsIcon />
               <span>Add sessions</span>
               {addableSessionCount > 0 && <strong>{addableSessionCount}</strong>}
             </button>
@@ -1973,7 +1976,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   aria-label="Move / Nest"
                   aria-haspopup="dialog"
                   aria-description={placementHint}
-                  title={placementHint}
+                  title={`Move / Nest: ${placementHint}`}
                   onClick={() => {
                     if (placementSession) props.onTransferSelectedSessions?.([placementSession]);
                   }}
@@ -1989,7 +1992,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   disabled={!nestingEnabled || !placementParent}
                   aria-label="Up one level"
                   aria-description={placementUpHint}
-                  title={placementUpHint}
+                  title={`Up one level: ${placementUpHint}`}
                   onClick={() => changePlacementLevel("up")}
                 >
                   <ArrowLeftIcon />
@@ -2001,7 +2004,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   disabled={!nestingEnabled || !placementPreviousSibling}
                   aria-label="Down one level"
                   aria-description={placementDownHint}
-                  title={placementDownHint}
+                  title={`Down one level: ${placementDownHint}`}
                   onClick={() => changePlacementLevel("down")}
                 >
                   <ArrowRightIcon />
@@ -2069,6 +2072,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
               </>
           )}
+          </div>
           {orientation === "vertical" && (paneLayouts.length > 0 || onCreatePaneLayout) && (
             <div className="workspace-pane-layout-heading">
               <span><GridIcon /> Pane views</span>
@@ -2509,6 +2513,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <span>Recreate {missingSessionCount}</span>
             </button>
           )}
+          {!compactViewport && onSwitchWorkspace && (
+            <WorkspaceQuickSwitcher
+              activeWorkspaceId={activeWorkspaceId}
+              activeWorkspaceName={identityName}
+              disabled={workspacePersistenceState === "loading"}
+              onSwitch={onSwitchWorkspace}
+            />
+          )}
+          <div className="workspace-action-toolbar workspace-action-toolbar-secondary" role="group" aria-label="Workspace navigation tools">
           {(showRenameWorkspaceButton || props.onMarkSessionUnread) && (
             <div className="workspace-rename-unread-actions" role="group" aria-label="Rename and unread actions">
               {showRenameWorkspaceButton && (
@@ -2547,14 +2560,6 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
             </div>
           )}
-          {!compactViewport && onSwitchWorkspace && (
-            <WorkspaceQuickSwitcher
-              activeWorkspaceId={activeWorkspaceId}
-              activeWorkspaceName={identityName}
-              disabled={workspacePersistenceState === "loading"}
-              onSwitch={onSwitchWorkspace}
-            />
-          )}
           {onOpenTabSearch && openSessions.length > 0 && (
             <button
               type="button"
@@ -2586,6 +2591,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
             aria-haspopup="dialog"
             aria-expanded={recentsOpen}
             aria-label={`Open session switcher${closedRecentCount > 0 ? `, ${closedRecentCount} recently visited` : ""}`}
+            title={`Open session switcher${closedRecentCount > 0 ? ` (${closedRecentCount} recently visited)` : ""}`}
           >
             <ListIcon />
             <span>Switch session</span>
@@ -2593,9 +2599,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           </button>
           <button type="button" className="workspace-recents-button"
             onClick={() => setSessionHistoryOpen(true)} aria-haspopup="dialog"
+            aria-label="Session history"
             title={activeWorkspaceId ? "Session history for this workspace" : "Session history: save this workspace to track its own sessions"}>
             <HistoryIcon /><span>Session history</span>
           </button>
+          </div>
           {orientation === "vertical" && (
             <div
               className="workspace-tab-rail-resize-handle"

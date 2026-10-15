@@ -21,6 +21,7 @@ import {
 } from "../shortcutSettings";
 import {
   CloseIcon,
+  CommandIcon,
   KeyboardIcon,
   SearchIcon,
   TerminalIcon,
@@ -288,7 +289,7 @@ export function WorkspaceCommandPalette({
         ) ? ` (${directShortcutLabel(shortcutBindings["command-palette"])})` : ""}`}
         onClick={open ? () => closePalette(true) : openPalette}
       >
-        <SearchIcon />
+        <CommandIcon />
         <span>Commands</span>
       </button>
       {open && createPortal(

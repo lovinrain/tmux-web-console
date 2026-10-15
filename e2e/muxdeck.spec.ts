@@ -3069,7 +3069,7 @@ test("floating focus session jumper stays usable alongside the terminal", async 
 
 test("desktop tabs switch to a persistent vertical rail without reconnecting", async ({
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(45_000);
   const railSession = `${sessionName}-vertical-tabs`;
   execFileSync("tmux", [
@@ -3123,7 +3123,12 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     const horizontalNavigationBox = await navigation.boundingBox();
     expect(horizontalNavigationBox).not.toBeNull();
     expect(horizontalNavigationBox!.width).toBeGreaterThan(1200);
-    expect(horizontalNavigationBox!.height).toBeLessThan(70);
+    const horizontalTabsBox = (await navigation.locator(".workspace-tab-viewport").boundingBox())!;
+    expect(horizontalTabsBox.height).toBe(50);
+    expect(horizontalTabsBox.width).toBe(horizontalNavigationBox!.width);
+    for (const action of await navigation.locator(".workspace-dashboard-actions, .workspace-new-session-actions, .workspace-save-button, .workspace-recents-button").all()) {
+      expect((await action.boundingBox())!.y).toBeGreaterThanOrEqual(horizontalTabsBox.y + horizontalTabsBox.height);
+    }
 
     const socketCountBeforeLayoutChange = terminalSocketCount;
     await orientationToggle.click();
@@ -3170,6 +3175,28 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     ))).toBe(true);
     expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
 
+    const workspaceActions = navigation.getByRole("group", { name: "Workspace actions", exact: true });
+    const workspaceTools = navigation.getByRole("group", { name: "Workspace navigation tools", exact: true });
+    await expect(workspaceActions).toHaveCSS("display", "grid");
+    await expect(workspaceTools).toHaveCSS("display", "grid");
+    expect((await workspaceActions.boundingBox())!.height).toBeLessThanOrEqual(80);
+    expect((await workspaceTools.boundingBox())!.height).toBeLessThanOrEqual(44);
+    for (const toolbar of [workspaceActions, workspaceTools]) {
+      for (const action of await toolbar.locator("button, a").all()) {
+        await expect(action).toHaveAccessibleName(/.+/);
+        await expect(action).toHaveAttribute("title", /.+/);
+        await expect(action.locator("svg")).toBeVisible();
+        expect((await action.boundingBox())!.height).toBe(32);
+      }
+    }
+    await expect(page.locator(".workspace-dashboard-button > span")).toBeHidden();
+    await page.screenshot({ path: testInfo.outputPath("compact-sidebar-controls-dark.png") });
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await expect(workspaceActions.getByRole("button", { name: "New session", exact: true }))
+      .toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await page.screenshot({ path: testInfo.outputPath("compact-sidebar-controls-light.png") });
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+
     await expect(resizeHandle).toBeVisible();
     await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
     const resizeHandleBox = await resizeHandle.boundingBox();
@@ -3202,13 +3229,21 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     await expect(page.locator(".workspace-new-session-button > span")).toBeHidden();
     await expect(page.locator(".workspace-save-button .workspace-identity-copy")).toBeHidden();
     await expect(page.locator(".workspace-tab-search-button > span")).toBeHidden();
-    await expect(page.locator(".workspace-recents-button > span")).toBeHidden();
+    for (const label of await page.locator(".workspace-recents-button > span").all()) {
+      await expect(label).toBeHidden();
+    }
+    for (const toolbar of [workspaceActions, workspaceTools]) {
+      expect(await toolbar.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+      for (const action of await toolbar.locator("button, a").all()) {
+        await expect(action).toBeInViewport();
+      }
+    }
     expect(await terminal.evaluate((element) => (
       element === (window as Window & { __muxdeckVerticalTabsTerminal: Element })
         .__muxdeckVerticalTabsTerminal
     ))).toBe(true);
     expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
-    await page.screenshot({ path: "artifacts/workspace-vertical-tabs-compact.png" });
+    await page.screenshot({ path: testInfo.outputPath("compact-sidebar-controls-72px.png") });
 
     await page.mouse.up();
     await expect.poll(() => page.evaluate(() => (
@@ -3218,7 +3253,7 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     await resizeHandle.press("Enter");
     await expect(navigation).not.toHaveAttribute("data-compact");
     await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
-    await expect(page.locator(".workspace-dashboard-button > span")).toBeVisible();
+    await expect(page.locator(".workspace-dashboard-button > span")).toBeHidden();
     await expect(firstCompactTab.locator(".workspace-tab-title")).toBeVisible();
     await expect(firstCompactTab.locator(".workspace-tab-compact-index")).toBeHidden();
     await expect.poll(() => page.evaluate(() => (
@@ -3250,7 +3285,7 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     ))).toBe("392");
     await expect.poll(async () => (await navigation.boundingBox())?.width).toBe(392);
     expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
-    await page.screenshot({ path: "artifacts/workspace-vertical-tabs.png" });
+    await page.screenshot({ path: testInfo.outputPath("compact-sidebar-controls-wide.png") });
 
     const activeTab = page.getByRole("tab", { name: new RegExp(`^${sessionName},`) });
     const railTab = page.getByRole("tab", { name: new RegExp(`^${railSession},`) });

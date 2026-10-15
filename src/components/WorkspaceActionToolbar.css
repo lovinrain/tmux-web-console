@@ -1,0 +1,138 @@
+/* Isolated sidebar-density experiment; horizontal and mobile controls keep their layout. */
+.workspace-action-toolbar {
+  display: contents;
+}
+
+@media (min-width: 641px) {
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
+    grid-template-columns: repeat(auto-fit, minmax(30px, 1fr));
+    grid-auto-rows: minmax(32px, auto);
+    gap: 3px;
+    padding: 4px;
+    border-bottom: 1px solid var(--preset-line);
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(
+    .workspace-dashboard-actions,
+    .workspace-new-session-actions,
+    .workspace-session-placement-controls,
+    .workspace-session-level-controls,
+    .workspace-separator-controls,
+    .workspace-rename-unread-actions,
+    .workspace-keymap
+  ) {
+    display: contents;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(button, a) {
+    position: relative;
+    display: inline-flex;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 32px;
+    min-height: 32px;
+    margin: 0;
+    padding: 0;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    color: var(--preset-text);
+    background: var(--preset-raised);
+    border: 1px solid var(--preset-line);
+    border-radius: 4px;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(button, a) > :is(span, small, kbd) {
+    display: none;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(button, a) > svg {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(button, a) > strong {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    left: auto;
+    display: grid;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    place-items: center;
+    color: var(--preset-on-accent);
+    background: var(--acid);
+    border: 1px solid var(--preset-line);
+    border-radius: 7px;
+    font-size: 7px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(button, a):is(:hover, :focus-visible):not(:disabled) {
+    color: var(--cyan);
+    background: color-mix(in srgb, var(--cyan) 10%, var(--preset-raised));
+    border-color: var(--cyan);
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(button, a):focus-visible {
+    outline: 2px solid var(--cyan);
+    outline-offset: 1px;
+    z-index: 3;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(.workspace-new-session-button, .workspace-session-placement-button) {
+    color: var(--cyan);
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar :is(.workspace-add-session-button, .workspace-quick-new-session-button, .workspace-new-session-button.active) {
+    color: var(--acid);
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar .workspace-mark-unread-button {
+    color: var(--workspace-unread-color);
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar .workspace-add-separator {
+    color: var(--amber);
+    border-style: dashed;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar button:disabled {
+    color: var(--preset-muted);
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar .workspace-separator-error {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] > .workspace-quick-switcher {
+    height: 34px;
+    min-height: 34px;
+    flex-basis: 34px;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] > .workspace-quick-switcher :is(.workspace-quick-switcher-cycle, .workspace-quick-switcher-toggle) {
+    height: 34px;
+    min-height: 34px;
+  }
+
+  @container workspace-tab-rail (max-width: 147px) {
+    html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-action-toolbar {
+      grid-template-columns: repeat(auto-fit, minmax(26px, 1fr));
+      gap: 2px;
+      padding: 2px;
+    }
+  }
+}

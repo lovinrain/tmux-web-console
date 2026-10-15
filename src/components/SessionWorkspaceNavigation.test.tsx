@@ -1771,7 +1771,10 @@ describe("SessionWorkspaceNavigation", () => {
       expect(onOpenDashboard).toHaveBeenCalledOnce();
       expect(dashboardActions.nextElementSibling).toBe(newSessionActions);
       expect(newSessionButton.nextElementSibling).toBe(quickSessionButton);
-      expect(newSessionActions.nextElementSibling).toHaveClass("workspace-tab-viewport");
+      const toolbar = screen.getByRole("group", { name: "Workspace actions" });
+      expect(toolbar).toContainElement(dashboardActions);
+      expect(toolbar).toContainElement(newSessionActions);
+      expect(toolbar.nextElementSibling).toHaveClass("workspace-tab-viewport");
       fireEvent.click(quickSessionButton);
       expect(onQuickNewSession).toHaveBeenCalledOnce();
     },
