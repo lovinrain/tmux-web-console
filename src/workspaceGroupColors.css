@@ -1,0 +1,15 @@
+/* Shared by group headers, the editor, session switchers and search results.
+   Neutral defaults must not override an explicitly selected group color. */
+:where([data-tab-group-color], .workspace-recents-new-group) {
+  --tab-group-color: #9aa39a;
+}
+
+[data-tab-group-color="gray"] { --tab-group-color: #9aa39a; }
+[data-tab-group-color="blue"] { --tab-group-color: #72a7ff; }
+[data-tab-group-color="cyan"] { --tab-group-color: #68dfd0; }
+[data-tab-group-color="green"] { --tab-group-color: #8bd17c; }
+[data-tab-group-color="yellow"] { --tab-group-color: #e2cf64; }
+[data-tab-group-color="orange"] { --tab-group-color: #f2a65a; }
+[data-tab-group-color="red"] { --tab-group-color: #ff7368; }
+[data-tab-group-color="pink"] { --tab-group-color: #f28fbd; }
+[data-tab-group-color="purple"] { --tab-group-color: #a99bff; }

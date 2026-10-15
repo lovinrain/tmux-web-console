@@ -4815,6 +4815,10 @@ test("workspace tab groups persist in the sidebar and remain manageable on mobil
     const createDialog = page.getByRole("dialog", { name: "Create a group" });
     await createDialog.getByRole("textbox", { name: "Group name" }).fill("Review lane");
     await createDialog.getByRole("radio", { name: "orange" }).check();
+    await expect(createDialog.locator('[data-tab-group-color="orange"] > span[aria-hidden="true"]'))
+      .toHaveCSS("background-color", "rgb(242, 166, 90)");
+    await expect(createDialog.locator(".workspace-group-dialog-mark"))
+      .toHaveCSS("background-color", "rgb(242, 166, 90)");
     await createDialog.getByRole("checkbox", {
       name: new RegExp(secondGroupedSession),
     }).check();
@@ -4824,6 +4828,8 @@ test("workspace tab groups persist in the sidebar and remain manageable on mobil
       has: page.getByRole("button", { name: "Collapse Review lane tab group" }),
     });
     await expect(groupBlock).toHaveAttribute("data-tab-group-color", "orange");
+    await expect(groupBlock.locator(".workspace-tab-group-color"))
+      .toHaveCSS("background-color", "rgb(242, 166, 90)");
     await expect(groupBlock.getByRole("tab")).toHaveCount(2);
     await expect.poll(async () => page.evaluate(() => {
       const url = new URL(window.location.href);
@@ -4841,6 +4847,12 @@ test("workspace tab groups persist in the sidebar and remain manageable on mobil
         tabs: [firstGroupedSession, secondGroupedSession],
       }],
     });
+
+    await page.screenshot({ path: "artifacts/workspace-tab-groups-dark.png" });
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(groupBlock.locator(".workspace-tab-group-color"))
+      .toHaveCSS("background-color", "rgb(242, 166, 90)");
 
     // The active session is grouped: creating another group should choose the
     // ungrouped tab, preserving the original group and its members.
@@ -4909,10 +4921,16 @@ test("workspace tab groups persist in the sidebar and remain manageable on mobil
 
     const editDialog = page.getByRole("dialog", { name: "Edit Review lane" });
     await editDialog.getByRole("textbox", { name: "Group name" }).fill("Release lane");
+    await editDialog.getByRole("radio", { name: "cyan" }).check();
+    await expect(editDialog.locator(".workspace-group-dialog-mark"))
+      .toHaveCSS("background-color", "rgb(104, 223, 208)");
     await editDialog.getByRole("button", { name: "Save group" }).click();
     await expect(page.getByRole("dialog", { name: "Switch sessions" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit Release lane tab group" }))
       .toBeVisible();
+    await expect(overview.getByRole("button", { name: "Edit Release lane tab group" })
+      .locator('span[aria-hidden="true"]'))
+      .toHaveCSS("background-color", "rgb(104, 223, 208)");
     await page.screenshot({ path: "artifacts/workspace-tab-groups-mobile.png" });
 
     await page.getByRole("button", { name: "Close session switcher" }).click();
@@ -4926,7 +4944,17 @@ test("workspace tab groups persist in the sidebar and remain manageable on mobil
       const value = new URL(window.location.href).searchParams.get("tab-group");
       return value ? JSON.parse(value).name : null;
     })).toBe("Release lane");
+    const restoredGroupDot = page.locator(
+      `[data-workspace-tab-group-id="${firstGroupId}"] .workspace-tab-group-color`,
+    );
+    await expect(restoredGroupDot).toHaveCSS("background-color", "rgb(104, 223, 208)");
     await page.screenshot({ path: "artifacts/workspace-tab-groups-desktop.png" });
+    const orientationToggle = page.getByRole("group", { name: "Console bars" })
+      .getByRole("button", { name: "Vertical session tabs" });
+    await expect(orientationToggle).toHaveAttribute("aria-pressed", "true");
+    await orientationToggle.click();
+    await expect(orientationToggle).toHaveAttribute("aria-pressed", "false");
+    await expect(restoredGroupDot).toHaveCSS("background-color", "rgb(104, 223, 208)");
 
     await page.getByRole("button", { name: "All sessions" }).click();
     await expect(page.locator("main.dashboard-shell")).toBeVisible();

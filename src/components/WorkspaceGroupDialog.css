@@ -68,7 +68,6 @@
 }
 
 .workspace-group-dialog-mark {
-  --tab-group-color: #8b9388;
   display: grid;
   width: 44px;
   height: 44px;
@@ -170,7 +169,6 @@
 }
 
 .workspace-group-palette label {
-  --tab-group-color: #8b9388;
   position: relative;
   cursor: pointer;
 }
@@ -337,16 +335,6 @@
   border: 1px solid rgba(255, 115, 104, 0.25);
   border-radius: 6px;
 }
-
-[data-tab-group-color="gray"] { --tab-group-color: #9aa39a; }
-[data-tab-group-color="blue"] { --tab-group-color: #72a7ff; }
-[data-tab-group-color="cyan"] { --tab-group-color: #68dfd0; }
-[data-tab-group-color="green"] { --tab-group-color: #8bd17c; }
-[data-tab-group-color="yellow"] { --tab-group-color: #e2cf64; }
-[data-tab-group-color="orange"] { --tab-group-color: #f2a65a; }
-[data-tab-group-color="red"] { --tab-group-color: #ff7368; }
-[data-tab-group-color="pink"] { --tab-group-color: #f28fbd; }
-[data-tab-group-color="purple"] { --tab-group-color: #a99bff; }
 
 @media (max-width: 640px) {
   .workspace-group-backdrop {

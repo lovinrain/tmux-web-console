@@ -3609,7 +3609,6 @@ a:focus-visible {
 }
 
 .workspace-tab-group {
-  --tab-group-color: #9aa39a;
   position: relative;
   display: flex;
   height: 44px;
@@ -5984,11 +5983,6 @@ span.workspace-tab-group-toggle {
   border: 1px solid #2d352b;
   border-radius: 5px;
   scrollbar-color: #465040 transparent;
-}
-
-.workspace-recents-tab-group,
-.workspace-recents-new-group {
-  --tab-group-color: #9aa39a;
 }
 
 .workspace-recents-tab-group,
