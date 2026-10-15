@@ -2335,7 +2335,7 @@ test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", 
 
 test("desktop terminal focus fills the viewport without replacing the live session", async ({
   page,
-}) => {
+}, testInfo) => {
   test.setTimeout(45_000);
   let terminalSocketCount = 0;
   page.on("websocket", (socket) => {
@@ -2348,6 +2348,29 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
     timeout: 10_000,
   });
   await expect.poll(() => terminalSocketCount).toBe(1);
+
+  const header = page.locator(".console-header");
+  await expect(header).toHaveCSS("display", "grid");
+  for (const width of [1440, 2048]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect((await header.boundingBox())!.height).toBeLessThanOrEqual(width >= 2000 ? 64 : 104);
+    const controls = header.locator(".console-actions");
+    for (const control of await controls.locator("button, a").all()) {
+      await expect(control).toHaveAccessibleName(/.+/);
+      await expect(control).toHaveAttribute("title", /.+/);
+      await expect(control.locator("svg").first()).toBeVisible();
+      expect((await control.boundingBox())!.height).toBe(32);
+    }
+    await expect(header.getByRole("button", { name: /^Work links/ })).toBeInViewport();
+    await expect(header.getByRole("button", { name: "Choose themes", exact: true })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`compact-console-header-${width}-dark.png`) });
+  }
+  await header.getByRole("button", { name: "Light theme", exact: true }).click();
+  await expect(header.getByRole("button", { name: "Pane scrollback", exact: true }))
+    .toHaveCSS("background-color", "rgb(255, 253, 248)");
+  await page.screenshot({ path: testInfo.outputPath("compact-console-header-light.png") });
+  await header.getByRole("button", { name: "Light theme", exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   const terminalKeydownFrameCount = await trackTerminalInputFrames(page);
 
@@ -7230,9 +7253,9 @@ test("desktop sticky notes autosave and remain isolated by scope", async ({
       .toContainText("Primary session handoff");
     await page.screenshot({ path: "artifacts/scoped-sticky-notes-desktop.png" });
 
-    // A window this narrow cannot show every control, so the ones it drops have
-    // to stay reachable - with their content - in the tray.
-    await page.setViewportSize({ width: 1280, height: 900 });
+    // The compact actions fit a laptop; squeeze them further to exercise the
+    // fallback panel and verify it restores the full labels and previews.
+    await page.setViewportSize({ width: 672, height: 900 });
     const trayToggle = page.getByRole("button", { name: /Show all console controls/ });
     await expect(trayToggle).toBeVisible();
     await trayToggle.click();

@@ -271,6 +271,31 @@ export function EyeOffIcon(props: IconProps) {
   );
 }
 
+export function EyeIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3 12s3-7 9-7 9 7 9 7-3 7-9 7-9-7-9-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.7" />
+    </IconBase>
+  );
+}
+
+export function LinkIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m9 15 6-6M8 17l-1 1a4.2 4.2 0 0 1-6-6l5-5a4.2 4.2 0 0 1 6 0m0 10a4.2 4.2 0 0 0 6 0l5-5a4.2 4.2 0 0 0-6-6l-1 1" transform="translate(1 0) scale(.92)" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
+export function UnlinkIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m8 16-1 1a4.2 4.2 0 0 1-6-6l4-4m11 1 1-1a4.2 4.2 0 0 1 6 6l-4 4M8 3v3M3 8h3M16 21v-3M21 16h-3M3 3l18 18" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
 export function GridIcon(props: IconProps) {
   return (
     <IconBase {...props}>

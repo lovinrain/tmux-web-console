@@ -45,6 +45,7 @@ import {
   MoveIcon,
   PinIcon,
   RefreshIcon,
+  ShieldIcon,
   TerminalIcon,
   TrashIcon,
   WindowCopyIcon,
@@ -131,6 +132,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { TimeZoneSelect } from "./TimeZoneSelect";
 import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
 import "./FocusStickyNotes.css";
+import "./ConsoleHeaderCompact.css";
 
 interface ConsoleScreenProps {
   sessionName: string;
@@ -2462,7 +2464,7 @@ export function ConsoleScreen({
           <ExpandIcon /><span>Focus</span>
         </button>}
       </nav>}
-      <header className="console-header" ref={consoleHeaderRef}>
+      <header className={embedded || ephemeral ? "console-header" : "console-header console-header-compact"} ref={consoleHeaderRef}>
         {!embedded && !ephemeral && <div
           className="console-dashboard-navigation"
           role="group"
@@ -2599,10 +2601,13 @@ export function ConsoleScreen({
               <button
                 type="button"
                 className={ignoreSize ? "size-mode protected" : "size-mode"}
+                aria-label={ignoreSize ? "Size protected" : "Fit active"}
+                aria-pressed={ignoreSize}
                 onClick={() => setIgnoreSize((current) => !current)}
                 title={ignoreSize ? "This browser will not resize the shared tmux window" : "The focused browser controls the shared tmux window size; other views follow"}
               >
-                {ignoreSize ? "Size protected" : "Fit active"}
+                {ignoreSize ? <ShieldIcon width={16} height={16} /> : <ExpandIcon width={16} height={16} />}
+                <span>{ignoreSize ? "Size protected" : "Fit active"}</span>
               </button>
               <button type="button" className="history-button" onClick={() => setHistoryOpen(true)} disabled={!pane} aria-label="Pane scrollback"
                 aria-keyshortcuts={directShortcutAria(shortcutBindings["terminal-scrollback"])}

@@ -1,0 +1,282 @@
+/* Keep the desktop header experiment separate from mobile, embedded panes and Focus. */
+@media (min-width: 1025px),
+  (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  html[data-theme][data-palette] .console-shell[data-desktop-focus="false"] > .console-header-compact {
+    display: grid;
+    min-height: 0;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: minmax(40px, auto) 32px;
+    align-items: center;
+    gap: 6px 8px;
+    padding: 7px 10px;
+    background: var(--preset-canvas);
+    border-color: var(--preset-line);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact:has(.workspace-header-widgets) {
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, min(48%, 560px));
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .console-dashboard-navigation {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .console-dashboard-navigation .icon-button {
+    width: 32px;
+    height: 32px;
+    background: var(--preset-raised);
+    border-color: var(--preset-line);
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .console-dashboard-navigation svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .console-identity {
+    min-width: 0;
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .work-links-control {
+    min-width: 0;
+    max-width: 192px;
+    grid-column: 3;
+    grid-row: 1;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .work-links-control .work-links-toggle {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    justify-content: center;
+    padding: 0;
+    color: var(--cyan);
+    background: var(--preset-raised);
+    border-color: var(--preset-line);
+    border-radius: 4px;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .work-links-control > .work-link-badges {
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .work-links-control .work-link-badge {
+    flex: 0 0 auto;
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .console-header-tray-toggle {
+    position: absolute;
+    right: 10px;
+    bottom: 7px;
+    width: 32px;
+    height: 32px;
+    color: var(--preset-text);
+    background: var(--preset-raised);
+    border-color: var(--preset-line);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .workspace-header-widgets {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact :is(.scoped-sticky-note, .workspace-timer-card, .host-pulse-card) {
+    height: 40px;
+    min-height: 40px;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .scoped-sticky-notes-label {
+    display: none;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions {
+    width: 100%;
+    min-width: 0;
+    height: 38px;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: 4px;
+    margin: -3px 0;
+    padding: 3px 0;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact:has(> .console-header-tray-toggle) .console-actions {
+    width: calc(100% - 40px);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(
+    .size-mode, .history-button, .copy-session-button, .split-workspace-button,
+    .workspace-pin-button, .callback-session-toggle, .workspace-transfer-button,
+    .account-link, .theme-toggle, .theme-chooser-button, .grok-theme-stage
+  ) {
+    position: relative;
+    display: inline-flex;
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    flex: 0 0 32px;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    color: var(--preset-text);
+    background: var(--preset-raised);
+    border: 1px solid var(--preset-line);
+    border-radius: 4px;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(button, a) > svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(button, a) > span:not(.copy-session-child-icon),
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .time-zone-select > span,
+  html[data-theme][data-palette] .console-header-compact .work-links-toggle > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact :is(.copy-session-label, .split-action-label) {
+    display: none;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact :is(.copy-session-control, .copy-session-actions, .split-action-group, .split-action-options, .fork-sync-controls, .theme-controls) {
+    display: inline-flex;
+    width: auto;
+    min-width: 0;
+    height: 32px;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+    color: var(--cyan);
+    background: transparent;
+    border: 0;
+    overflow: visible;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .connection-badge {
+    height: 30px;
+    flex: 0 0 auto;
+    padding: 0 7px;
+    font-size: 8px;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .time-zone-select {
+    display: block;
+    width: 118px;
+    height: 32px;
+    flex: 0 0 118px;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .time-zone-select select {
+    height: 32px;
+    min-height: 32px;
+    color: var(--preset-text);
+    background: var(--preset-raised);
+    border-color: var(--preset-line);
+    font-size: 8px;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(.copy-session-button, .workspace-transfer-button) {
+    color: var(--cyan);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions .split-workspace-button {
+    color: var(--acid);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(.size-mode.protected, .workspace-pin-button.active) {
+    color: var(--acid);
+    background: color-mix(in srgb, var(--acid) 10%, var(--preset-raised));
+    border-color: var(--acid);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions .callback-session-toggle.active {
+    color: var(--preset-on-accent);
+    background: var(--amber);
+    border-color: var(--amber);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(button, a):hover:not(:disabled),
+  html[data-theme][data-palette] .console-header-compact .work-links-toggle:is(:hover, [aria-expanded="true"]) {
+    border-color: var(--cyan);
+    box-shadow: inset 0 0 0 1px var(--cyan);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .fork-sync-status {
+    padding: 3px 5px;
+    font-size: 8px;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .fork-sync-problem {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .workspace-views-button > strong,
+  html[data-theme][data-palette] .console-header-compact .work-links-toggle > .work-links-count {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    display: block;
+    min-width: 14px;
+    height: 14px;
+    padding: 2px 3px;
+    color: var(--preset-on-accent);
+    background: var(--acid);
+    border: 1px solid var(--preset-line);
+    border-radius: 7px;
+    font-size: 7px;
+    font-variant-numeric: tabular-nums;
+    line-height: 8px;
+  }
+
+  html[data-theme][data-palette] .console-header-compact :is(button, a, select):focus-visible {
+    outline: 2px solid var(--cyan);
+    outline-offset: -2px;
+  }
+}
+
+@media (min-width: 2000px) {
+  html[data-theme][data-palette] .console-shell[data-desktop-focus="false"][data-console-header-tray="false"] > .console-header-compact:has(.workspace-header-widgets) {
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 400px) minmax(0, max-content);
+    grid-template-rows: minmax(40px, auto);
+  }
+
+  html[data-theme][data-palette] .console-shell[data-desktop-focus="false"][data-console-header-tray="false"] > .console-header-compact:has(.workspace-header-widgets) .console-actions {
+    grid-column: 5;
+    grid-row: 1;
+  }
+}

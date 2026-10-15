@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ApiRequestError } from "../api";
 import { formatTimestamp, useDisplayTimeZone } from "../timeZone";
 import type { Session } from "../types";
+import { LinkIcon } from "../icons";
 import {
   addWorkLink, getWorkLinkContext, removeWorkLink, updateWorkLink, updateWorkLinkConfig,
   WORK_LINK_PROVIDERS, WORK_LINK_PROVIDER_LABELS,
@@ -221,7 +222,9 @@ export function SessionWorkLinks({ session }: { session: Session }) {
   const links = context?.links.filter((link) => context.config.providers[link.provider].enabled) ?? [];
   return <>
     <span className="work-links-control"><button ref={button} type="button" className="work-links-toggle" aria-expanded={open} aria-haspopup="dialog"
-      onClick={() => toggle(!open)}>Work links{session.workLinks?.length ? ` (${session.workLinks.length})` : ""}</button>
+      title={`Work links for ${session.customTitle || session.name}`}
+      onClick={() => toggle(!open)}><LinkIcon width={16} height={16} /><span>Work links{session.workLinks?.length ? ` (${session.workLinks.length})` : ""}</span>
+      {Boolean(session.workLinks?.length) && <strong className="work-links-count" aria-hidden="true">{session.workLinks?.length}</strong>}</button>
     <WorkLinkBadges links={session.workLinks} linked /></span>
     {open && createPortal(<aside ref={panel} className="work-links-panel" role="dialog" aria-label={`Work links for ${session.name}`}
       style={position ? { left: position.x, top: position.y, bottom: "auto", right: "auto" } : undefined}

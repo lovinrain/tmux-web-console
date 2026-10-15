@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { RefreshIcon } from "../icons";
+import { EyeIcon, RefreshIcon, UnlinkIcon } from "../icons";
 import type { WorkspaceViewsController } from "../useWorkspaceViews";
 import { WorkspaceViewsDialog } from "./WorkspaceViewsDialog";
 import "./ForkSyncControls.css";
@@ -49,18 +49,18 @@ export function ForkSyncControls({ active, linked = active, available, href, pre
       {linked && (
           <button type="button" className="split-workspace-button fork-sync-unlink-button"
             aria-label="Unlink this browser tab" title="Keep this view and continue navigating independently" onClick={unlink}>
-            Unlink
+            <UnlinkIcon width={16} height={16} /><span>Unlink</span>
           </button>
       )}
       {views?.available && (
         <button type="button" className="split-workspace-button workspace-views-button"
           aria-label="Manage workspace views" aria-haspopup="dialog"
-          title="See attached views and disconnect those affecting the shared terminal size"
+          title={`See attached views and disconnect those affecting the shared terminal size (${count} attached)`}
           onClick={() => { views.refresh(); setShowViews(true); }}>
-          Views {views.loading ? "…" : views.error ? "?" : count}
+          <EyeIcon width={16} height={16} /><span>Views</span> <strong>{views.loading ? "…" : views.error ? "?" : count}</strong>
         </button>
       )}
-      {problem && <span className="fork-sync-problem" role="status">{problem}</span>}
+      {problem && <span className="fork-sync-problem" role="status" title={problem}>{problem}</span>}
       {showViews && views?.available && <WorkspaceViewsDialog controller={views} onClose={closeViews} />}
     </span>
   );
