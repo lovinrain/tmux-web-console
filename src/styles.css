@@ -15598,7 +15598,7 @@ html.history-resizing * {
     display: grid;
     min-width: 0;
     min-height: var(--mobile-console-focus-height);
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 5px;
     padding: max(5px, env(safe-area-inset-top, 0px)) max(7px, env(safe-area-inset-right, 0px)) 5px max(7px, env(safe-area-inset-left, 0px));
     background:
@@ -15609,7 +15609,7 @@ html.history-resizing * {
   }
 
   .console-shell[data-ephemeral="true"] .mobile-console-focus {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     padding-right: var(--ephemeral-marker-inset);
   }
 

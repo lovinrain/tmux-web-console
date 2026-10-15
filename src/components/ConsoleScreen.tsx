@@ -104,6 +104,7 @@ import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { ScrollControlIcon } from "./ScrollControlIcon";
 import { ScrollButton } from "./ScrollButton";
+import { MobileTerminalFocusControls } from "./MobileTerminalFocusControls";
 import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
@@ -836,6 +837,8 @@ export function ConsoleScreen({
   const [mobileDistractionFreeMode, setMobileDistractionFreeMode] = useState<
     MobileConsoleMode | null
   >(null);
+  const [mobileTerminalFocus, setMobileTerminalFocus] = useState(false);
+  const [mobileFocusShortcutsOpen, setMobileFocusShortcutsOpen] = useState(false);
   const [desktopCopyMode, setDesktopCopyMode] = useState(false);
   const [applicationScrollTargets, setApplicationScrollTargets] = useState<Set<string>>(() => new Set());
   const [tmuxScrollTargets, setTmuxScrollTargets] = useState<Set<string>>(() => new Set());
@@ -947,6 +950,10 @@ export function ConsoleScreen({
   const mobileTerminalDistractionFree = mobileDistractionFreeMode === "terminal";
   const mobileInputDistractionFree = mobileDistractionFreeMode === "input";
   const mobileDistractionFree = mobileDistractionFreeMode === activeMobileFocus;
+  const mobileTerminalFocusActive = mobileLayout && mobileTerminalFocus
+    && mobileTerminalDistractionFree && activeMobileFocus === "terminal" && !embedded;
+  const floatingFocusShortcutsOpen = (desktopTerminalFocus && desktopFocusShortcutsOpen)
+    || (mobileTerminalFocusActive && mobileFocusShortcutsOpen);
   const visibleHistoryPanelWidth = historyPanelWidth ?? localHistoryPanelWidth;
   const memorandumCount = session?.memorandumCount ?? session?.queuedMessageCount ?? 0;
   const queuedMemorandumCount = session?.queuedMessageCount ?? 0;
@@ -1297,6 +1304,8 @@ export function ConsoleScreen({
 
   const selectMobileFocus = useCallback((focus: "overview" | MobileConsoleMode) => {
     if (ephemeral && focus === "overview") return;
+    setMobileTerminalFocus(false);
+    setMobileFocusShortcutsOpen(false);
     setMobileDistractionFreeMode(null);
     if (focus === "overview") {
       inputBarRef.current?.blur();
@@ -1330,7 +1339,7 @@ export function ConsoleScreen({
   }, [desktopTerminalFocus]);
 
   useEffect(() => {
-    if (!desktopTerminalFocus || !desktopFocusShortcutsOpen) return;
+    if (!floatingFocusShortcutsOpen) return;
     let frame = 0;
     const keepPanelInViewport = () => {
       window.cancelAnimationFrame(frame);
@@ -1355,8 +1364,7 @@ export function ConsoleScreen({
       window.visualViewport?.removeEventListener("scroll", keepPanelInViewport);
     };
   }, [
-    desktopFocusShortcutsOpen,
-    desktopTerminalFocus,
+    floatingFocusShortcutsOpen,
     moveDesktopFocusShortcutsBy,
   ]);
 
@@ -1560,6 +1568,8 @@ export function ConsoleScreen({
   useEffect(() => {
     setPaneId(null);
     setMobileDistractionFreeMode(null);
+    setMobileTerminalFocus(false);
+    setMobileFocusShortcutsOpen(false);
     setDesktopCopyMode(false);
     // Keep the chosen desktop view while moving between workspace sessions.
     setDesktopFocusShortcutsOpen(false);
@@ -1586,6 +1596,8 @@ export function ConsoleScreen({
   useEffect(() => {
     if (!workspaceOverlayOpen) return;
     setMobileDistractionFreeMode(null);
+    setMobileTerminalFocus(false);
+    setMobileFocusShortcutsOpen(false);
     setDesktopCopyMode(false);
     setDesktopTerminalFocus(false);
     setDesktopFocusShortcutsOpen(false);
@@ -1606,6 +1618,14 @@ export function ConsoleScreen({
       && activeMobileFocus !== mobileDistractionFreeMode
     ) setMobileDistractionFreeMode(null);
   }, [activeMobileFocus, mobileDistractionFreeMode]);
+
+  useEffect(() => {
+    if (mobileLayout || !mobileTerminalFocus) return;
+    setMobileTerminalFocus(false);
+    setMobileFocusShortcutsOpen(false);
+    setMobileDistractionFreeMode(null);
+    resetDesktopFocusShortcutsPosition();
+  }, [mobileLayout, mobileTerminalFocus, resetDesktopFocusShortcutsPosition]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -1823,6 +1843,20 @@ export function ConsoleScreen({
     }
     setMobileDistractionFreeMode(next ? "terminal" : null);
   }, [mobileDistractionFreeMode]);
+  const enterMobileTerminalFocus = useCallback(() => {
+    if (!mobileLayout || embedded) return;
+    selectMobileFocus("terminal");
+    setHistoryOpen(false);
+    setTitleEditorOpen(false);
+    setRenameEditorOpen(false);
+    setTerminateTarget(null);
+    setMessagesOpen(false);
+    setSnippetsOpen(false);
+    resetDesktopFocusShortcutsPosition();
+    setMobileDistractionFreeMode("terminal");
+    setMobileTerminalFocus(true);
+    setMobileFocusShortcutsOpen(true);
+  }, [embedded, mobileLayout, resetDesktopFocusShortcutsPosition, selectMobileFocus]);
   const toggleMobileInputDistractionFree = useCallback(() => {
     const next = mobileDistractionFreeMode !== "input";
     if (next) {
@@ -2325,6 +2359,8 @@ export function ConsoleScreen({
       data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
       data-mobile-focus={activeMobileFocus}
       data-mobile-distraction-free={mobileDistractionFree ? "true" : "false"}
+      data-mobile-terminal-focus={mobileTerminalFocusActive ? "true" : "false"}
+      data-mobile-focus-shortcuts={mobileFocusShortcutsOpen ? "true" : "false"}
       data-desktop-copy-mode={desktopCopyMode ? "true" : "false"}
       data-desktop-focus={desktopTerminalFocus ? "true" : "false"}
       data-desktop-focus-shortcuts={desktopFocusShortcutsOpen ? "true" : "false"}
@@ -2416,6 +2452,15 @@ export function ConsoleScreen({
             <span className="mobile-console-focus-attention" aria-hidden="true" />
           )}
         </button>
+        {mobileLayout && <button type="button" className="mobile-console-focus-button focus"
+          aria-label="Enter mobile focus"
+          aria-controls={activeConsoleId}
+          aria-pressed={mobileTerminalFocusActive}
+          disabled={!session}
+          onClick={enterMobileTerminalFocus}
+        >
+          <ExpandIcon /><span>Focus</span>
+        </button>}
       </nav>}
       <header className="console-header" ref={consoleHeaderRef}>
         {!embedded && !ephemeral && <div
@@ -3061,6 +3106,14 @@ export function ConsoleScreen({
             <span>{mobileTerminalDistractionFree ? "Exit" : "Focus"}</span>
           </button>
         </nav>
+        {mobileTerminalFocusActive && <MobileTerminalFocusControls
+          terminalControlId={activeConsoleId}
+          shortcutsControlId={shortcutsControlId}
+          shortcutsOpen={mobileFocusShortcutsOpen}
+          onToggleShortcuts={() => setMobileFocusShortcutsOpen((open) => !open)}
+          onInput={() => selectMobileFocus("input")}
+          onExit={() => selectMobileFocus("terminal")}
+        />}
         {desktopTerminalFocus && (
           <div
             className="desktop-terminal-focus-actions"
@@ -3201,16 +3254,18 @@ export function ConsoleScreen({
         idScope={idScope}
         terminalControlId={activeConsoleId}
         enabled={connection === "live"}
-        composerVisible={visibleBars.stagedInput || visibleMobileMode === "input"}
+        composerVisible={!mobileTerminalFocusActive && (visibleBars.stagedInput || visibleMobileMode === "input")}
         shortcutsVisible={
-          visibleBars.shortcuts
+          mobileTerminalFocusActive ? mobileFocusShortcutsOpen : visibleBars.shortcuts
           || visibleMobileMode === "input"
           || (desktopTerminalFocus && desktopFocusShortcutsOpen)
         }
-        shortcutPanelHeader={desktopTerminalFocus && desktopFocusShortcutsOpen ? (
+        shortcutPanelHeader={floatingFocusShortcutsOpen ? (
           <button
             type="button"
-            className="desktop-focus-shortcuts-drag-handle"
+            className={mobileTerminalFocusActive
+              ? "desktop-focus-shortcuts-drag-handle mobile-focus-shortcuts-drag-handle"
+              : "desktop-focus-shortcuts-drag-handle"}
             aria-label="Move floating button panel"
             title="Drag to move. Use arrow keys; hold Shift for larger steps. Enter resets the position."
             onPointerDown={startDesktopFocusShortcutsDrag}
@@ -3221,10 +3276,10 @@ export function ConsoleScreen({
             onKeyDown={moveDesktopFocusShortcutsFromKeyboard}
           >
             <MoveIcon />
-            <span>Move panel</span>
-            <span className="desktop-focus-shortcuts-drag-hint" aria-hidden="true">
+            <span>{mobileTerminalFocusActive ? "Move buttons" : "Move panel"}</span>
+            {!mobileTerminalFocusActive && <span className="desktop-focus-shortcuts-drag-hint" aria-hidden="true">
               Drag / arrows <kbd>Enter</kbd> resets
-            </span>
+            </span>}
           </button>
         ) : undefined}
         preferredScrollMode={preferredScrollMode}

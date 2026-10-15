@@ -2100,6 +2100,57 @@ describe("ConsoleScreen session identity", () => {
     );
   });
 
+  it("opens mobile Focus with floating buttons while preserving drafts and bar preferences", async () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: query.startsWith("(max-width: 640px)"),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })));
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onBarVisibilityChange = vi.fn();
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
+      barVisibility={{ sessionTabs: false, stagedInput: false, shortcuts: false }}
+      onBarVisibilityChange={onBarVisibilityChange}
+    />);
+
+    await screen.findByRole("heading", { name: "test" });
+    const shell = screen.getByRole("main");
+    const terminal = screen.getByTestId("live-terminal");
+    const draft = screen.getByLabelText("Staged input", { selector: "textarea" });
+    fireEvent.input(draft, { target: { value: "Keep this mobile draft" } });
+    act(() => liveTerminalState.onStateChange?.("live"));
+    const focus = screen.getByRole("button", { name: "Enter mobile focus" });
+    fireEvent.click(focus);
+
+    expect(shell).toHaveAttribute("data-mobile-terminal-focus", "true");
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "true");
+    expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    expect(draft.closest(".staged-composer")).toHaveAttribute("hidden");
+    const shortcuts = screen.getByRole("group", { name: "Terminal input shortcuts" });
+    expect(screen.getByRole("button", { name: "Move floating button panel" })).toBeInTheDocument();
+    fireEvent.click(within(shortcuts).getByRole("button", { name: "Tab" }));
+    expect(liveTerminalHandle.send).toHaveBeenCalledExactlyOnceWith("\t");
+
+    const controls = screen.getByRole("group", { name: "Mobile terminal focus controls" });
+    fireEvent.click(within(controls).getByRole("button", { name: "Hide mobile terminal buttons" }));
+    expect(screen.queryByRole("group", { name: "Terminal input shortcuts" })).not.toBeInTheDocument();
+    fireEvent.click(within(controls).getByRole("button", { name: "Show mobile terminal buttons" }));
+    expect(screen.getByRole("group", { name: "Terminal input shortcuts" })).toBeInTheDocument();
+    fireEvent.click(within(controls).getByRole("button", { name: "Exit mobile terminal focus" }));
+    expect(shell).toHaveAttribute("data-mobile-terminal-focus", "false");
+    expect(shell).toHaveAttribute("data-mobile-distraction-free", "false");
+    expect(screen.queryByRole("group", { name: "Mobile terminal focus controls" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Terminal input shortcuts" })).not.toBeInTheDocument();
+    expect(onBarVisibilityChange).not.toHaveBeenCalled();
+
+    fireEvent.click(focus);
+    fireEvent.click(screen.getByRole("button", { name: "Open staged input" }));
+    expect(shell).toHaveAttribute("data-mobile-terminal-focus", "false");
+    expect(shell).toHaveAttribute("data-mobile-focus", "input");
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this mobile draft");
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+  });
+
   it("uses raw and tmux history controls and exits distraction-free mode for input", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(

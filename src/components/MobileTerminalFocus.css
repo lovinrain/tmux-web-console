@@ -1,0 +1,152 @@
+@media (max-width: 640px),
+  (max-width: 1024px) and (pointer: coarse),
+  (max-width: 1024px) and (max-height: 500px) {
+  .console-shell .mobile-console-focus-button {
+    gap: 4px;
+    padding-inline: 4px;
+    font-size: 9px;
+  }
+
+  .console-shell .mobile-console-focus-button svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] > .terminal-coordinate,
+  .console-shell[data-mobile-terminal-focus="true"] .terminal-view-controls {
+    display: none !important;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] > .terminal-view {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] .terminal-stage,
+  .console-shell[data-mobile-terminal-focus="true"] .terminal-host {
+    padding: 0;
+  }
+
+  .mobile-terminal-focus-actions {
+    position: absolute;
+    z-index: 8;
+    top: max(8px, env(safe-area-inset-top, 0px));
+    right: max(8px, env(safe-area-inset-right, 0px));
+    display: flex;
+    max-width: calc(100% - 16px);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 5px;
+  }
+
+  .console-shell[data-ephemeral="true"] .mobile-terminal-focus-actions {
+    right: var(--ephemeral-marker-inset);
+  }
+
+  .mobile-terminal-focus-actions button {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 6px 9px;
+    color: var(--paper);
+    background: var(--ink-raised);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 3px 12px #0003;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .mobile-terminal-focus-actions button:hover,
+  .mobile-terminal-focus-actions button:focus-visible {
+    border-color: var(--cyan);
+    outline: 2px solid var(--cyan);
+    outline-offset: 2px;
+  }
+
+  .mobile-terminal-focus-actions svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"][data-mobile-focus="terminal"][data-mobile-focus-shortcuts="true"] > .input-dock {
+    position: absolute;
+    z-index: 8;
+    bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    left: 50%;
+    display: flex !important;
+    width: min(360px, calc(100% - 24px));
+    max-height: min(44dvh, 320px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--ink-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 8px 30px #0005;
+    transform: translate(
+      calc(-50% + var(--desktop-focus-shortcuts-x, 0px)),
+      var(--desktop-focus-shortcuts-y, 0px)
+    );
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] .mobile-focus-shortcuts-drag-handle {
+    position: sticky;
+    z-index: 2;
+    top: 0;
+    display: flex;
+    min-height: 44px;
+    flex: 0 0 44px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    color: var(--paper);
+    background: var(--ink-raised);
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .mobile-focus-shortcuts-drag-handle svg {
+    width: 16px;
+    height: 16px;
+    color: var(--cyan);
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] > .input-dock > .input-bar {
+    width: 100%;
+    min-height: 0;
+    flex-wrap: wrap;
+    padding: 8px;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] > .input-dock .key-button {
+    min-height: 44px;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] > .input-dock > .other-key-panel {
+    width: 100%;
+    flex-shrink: 0;
+    grid-template-columns: repeat(4, minmax(44px, 1fr));
+    justify-content: stretch;
+    overflow: visible;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] .other-key-panel-label {
+    grid-column: 1 / -1;
+  }
+
+  .console-shell[data-mobile-terminal-focus="true"] > .input-dock .live-key,
+  .console-shell[data-mobile-terminal-focus="true"] > .input-dock .redraw-key {
+    display: inline-flex;
+  }
+}

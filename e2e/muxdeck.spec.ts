@@ -2604,6 +2604,128 @@ test("desktop terminal focus fills the viewport without replacing the live sessi
   expect(page.url()).toBe(urlBeforeFocus);
 });
 
+test("mobile Focus floats shortcut buttons without changing desktop focus", async ({ browser }, testInfo) => {
+  test.setTimeout(45_000);
+  const mobileContext = await browser.newContext({
+    viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+  });
+  const mobilePage = await mobileContext.newPage();
+  let terminalSocketCount = 0;
+  mobilePage.on("websocket", (socket) => {
+    if (socket.url().includes("/ws/terminal")) terminalSocketCount += 1;
+  });
+  try {
+    await authenticatePage(mobilePage);
+    await mobilePage.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(mobilePage.locator(".connection-badge")).toContainText("Live");
+    const identity = workspaceTmuxIdentity(sessionName);
+    const inputFrames = await trackTerminalInputFrames(mobilePage,
+      ["keydown", "pointerdown", "pointermove", "pointerup", "click"]);
+    const shell = mobilePage.locator(".console-shell");
+    const navigation = mobilePage.getByRole("navigation", { name: "Mobile console focus" });
+    const focus = navigation.getByRole("button", { name: "Enter mobile focus" });
+    const panel = mobilePage.locator(".input-dock");
+    const controls = mobilePage.getByRole("group", { name: "Mobile terminal focus controls" });
+    const terminalStage = mobilePage.locator(".terminal-stage");
+    const terminalElement = mobilePage.locator(".terminal-host .xterm");
+    await terminalElement.evaluate((element) => {
+      Object.defineProperty(window, "__mobileFocusTerminal", { value: element });
+    });
+    await navigation.getByRole("button", { name: "Input", exact: true }).click();
+    const draft = mobilePage.getByRole("textbox", { name: "Staged input" });
+    await draft.fill("Keep this mobile Focus draft");
+    const url = mobilePage.url();
+    const socketCount = terminalSocketCount;
+    await focus.click();
+
+    await expect(shell).toHaveAttribute("data-mobile-terminal-focus", "true");
+    await expect(shell).toHaveAttribute("data-desktop-focus", "false");
+    await expect(navigation).toBeHidden();
+    await expect(mobilePage.locator(".console-header")).toBeHidden();
+    await expect(mobilePage.locator(".terminal-view-controls")).toBeHidden();
+    await expect(draft).toBeHidden();
+    await expect(controls).toBeVisible();
+    await expect(panel).toHaveCSS("position", "absolute");
+    await expect(panel).toBeInViewport();
+    await expect(panel.getByRole("button", { name: "Tab", exact: true })).toBeVisible();
+    const fullTerminal = (await terminalStage.boundingBox())!;
+    const shellBox = (await shell.boundingBox())!;
+    expect(Math.abs(fullTerminal.height - shellBox.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(fullTerminal.y - shellBox.y)).toBeLessThanOrEqual(1);
+
+    const cdp = await mobileContext.newCDPSession(mobilePage);
+    const beforeMove = (await panel.boundingBox())!;
+    const move = (await panel.getByRole("button", { name: "Move floating button panel" }).boundingBox())!;
+    const point = { x: move.x + 36, y: move.y + 22 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove", touchPoints: [{ ...point, y: point.y - 100 }],
+    });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(async () => (await panel.boundingBox())!.y).toBeLessThan(beforeMove.y - 70);
+    await mobilePage.screenshot({ path: testInfo.outputPath("mobile-focus-dark.png") });
+
+    await controls.getByRole("button", { name: "Hide mobile terminal buttons" }).click();
+    await expect(panel).toBeHidden();
+    expect(await terminalStage.boundingBox()).toEqual(fullTerminal);
+    await controls.getByRole("button", { name: "Show mobile terminal buttons" }).click();
+    await expect(panel).toBeVisible();
+    await controls.getByRole("button", { name: "Open staged input" }).click();
+    await expect(draft).toBeVisible();
+    await expect(draft).toHaveValue("Keep this mobile Focus draft");
+    await expect(shell).toHaveAttribute("data-mobile-terminal-focus", "false");
+    await focus.click();
+    await mobilePage.getByRole("button", { name: "Light theme", exact: true, includeHidden: true }).first()
+      .evaluate((button: HTMLButtonElement) => button.click());
+    await expect(mobilePage.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(panel).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await expect(controls.getByRole("button").first()).toHaveCSS("color", "rgb(34, 38, 31)");
+    await mobilePage.setViewportSize({ width: 320, height: 700 });
+    await panel.getByRole("button", { name: "Show other keys" }).click();
+    const lastKey = panel.locator(".other-key-panel .key-button").last();
+    await lastKey.scrollIntoViewIfNeeded();
+    await expect(lastKey).toBeInViewport();
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await mobilePage.screenshot({ path: testInfo.outputPath("mobile-focus-light-narrow.png") });
+    await mobilePage.setViewportSize({ width: 844, height: 390 });
+    await expect(shell).toHaveAttribute("data-mobile-terminal-focus", "true");
+    await expect(panel).toBeInViewport();
+    const rotatedPanel = (await panel.boundingBox())!;
+    expect(rotatedPanel.x).toBeGreaterThanOrEqual(11);
+    expect(rotatedPanel.y).toBeGreaterThanOrEqual(11);
+    expect(rotatedPanel.x + rotatedPanel.width).toBeLessThanOrEqual(833);
+    expect(rotatedPanel.y + rotatedPanel.height).toBeLessThanOrEqual(379);
+    for (const button of await controls.getByRole("button").all()) {
+      await expect(button).toBeInViewport();
+      const box = (await button.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    await mobilePage.screenshot({ path: testInfo.outputPath("mobile-focus-light-landscape.png") });
+    await controls.getByRole("button", { name: "Exit mobile terminal focus" }).click();
+    await expect(navigation).toBeVisible();
+    await expect(mobilePage.locator(".terminal-view-controls")).toBeVisible();
+    await expect(panel).toBeHidden();
+    await focus.click();
+    await mobilePage.setViewportSize({ width: 1440, height: 900 });
+    await expect(shell).toHaveAttribute("data-mobile-terminal-focus", "false");
+    await expect(shell).toHaveAttribute("data-mobile-distraction-free", "false");
+    await expect(controls).toHaveCount(0);
+    await expect(focus).toHaveCount(0);
+    await expect(mobilePage.getByRole("button", { name: "Enter desktop terminal focus" })).toBeVisible();
+    await expect(mobilePage.locator(".console-header")).toBeVisible();
+    expect(await terminalElement.evaluate((element) => (
+      element === (window as Window & { __mobileFocusTerminal: Element }).__mobileFocusTerminal
+    ))).toBe(true);
+    expect(terminalSocketCount).toBe(socketCount);
+    expect(mobilePage.url()).toBe(url);
+    expect(workspaceTmuxIdentity(sessionName)).toBe(identity);
+    expect(await inputFrames()).toBe(0);
+  } finally {
+    await mobileContext.close();
+  }
+});
+
 test("session history works beside the title and in Focus without losing drafts", async ({
   page, request,
 }, testInfo) => {
