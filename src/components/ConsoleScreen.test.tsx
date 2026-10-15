@@ -2439,7 +2439,7 @@ describe("ConsoleScreen session identity", () => {
     expect(liveTerminalHandle.send).not.toHaveBeenCalled();
   });
 
-  it("shows the title session switcher only outside Focus with the sidebar closed", async () => {
+  it("opens the title session switcher floating only outside Focus with the sidebar closed", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     const onOpenTabSearch = vi.fn();
     const onNavigateSessionHistory = vi.fn();
@@ -2464,7 +2464,7 @@ describe("ConsoleScreen session identity", () => {
     expect(switcher).toHaveAttribute("aria-keyshortcuts", "Control+Shift+;");
     expect(fireEvent.mouseDown(switcher)).toBe(false);
     fireEvent.click(switcher);
-    expect(onOpenTabSearch).toHaveBeenCalledExactlyOnceWith();
+    expect(onOpenTabSearch).toHaveBeenCalledExactlyOnceWith({ floating: true });
     fireEvent.click(within(controls).getByRole("button", { name: "Back to previous session" }));
     fireEvent.click(within(controls).getByRole("button", { name: "Forward to next session" }));
     expect(onNavigateSessionHistory.mock.calls).toEqual([["back"], ["forward"]]);
@@ -2518,7 +2518,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("heading", { name: "ended" })).toBeVisible();
     fireEvent.click(within(toolbar).getByRole("button", { name: "Session tabs" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch workspace session" }));
-    expect(onOpenTabSearch).toHaveBeenCalledOnce();
+    expect(onOpenTabSearch).toHaveBeenCalledExactlyOnceWith({ floating: true });
     fireEvent.click(within(toolbar).getByRole("button", { name: "Session tabs" }));
     expect(screen.queryByRole("button", { name: "Switch workspace session" })).not.toBeInTheDocument();
   });

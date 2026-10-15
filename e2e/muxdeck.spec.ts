@@ -2874,7 +2874,7 @@ test("session history works beside the title and in Focus without losing drafts"
   }
 });
 
-test("closed desktop sidebar exposes the session jumper outside Focus", async ({ page, request }, testInfo) => {
+test("closed desktop sidebar opens the floating session jumper outside Focus by default", async ({ page, request }, testInfo) => {
   const first = `${sessionName}-collapsed-first`;
   const second = `${sessionName}-collapsed-second`;
   const tabs = [first, second];
@@ -2912,11 +2912,9 @@ test("closed desktop sidebar exposes the session jumper outside Focus", async ({
     await page.getByRole("textbox", { name: "Staged input" }).fill("Keep this collapsed-sidebar draft");
     const inputFrames = await trackTerminalInputFrames(page);
     await switcher.click();
-    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
     await expect(switcher).toHaveAttribute("aria-expanded", "true");
     await expect(sidebar).toBeHidden();
-    await dialog.getByRole("button", { name: "Float session jumper", exact: true }).click();
-    await expect(dialog).toHaveAttribute("aria-modal", "false");
     const search = dialog.getByRole("combobox");
     await search.fill("Jumper target");
     await search.press("Enter");
@@ -2927,6 +2925,11 @@ test("closed desktop sidebar exposes the session jumper outside Focus", async ({
     await page.getByRole("button", { name: "Back to previous session", exact: true }).click();
     await expectRoute(page, `/mux/session/${first}`, tabs);
     await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this collapsed-sidebar draft");
+    await dialog.getByRole("button", { name: "Use modal session jumper", exact: true }).click();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    await dialog.getByRole("button", { name: "Close tab search", exact: true }).click();
+    await switcher.click();
+    await expect(dialog).toHaveAttribute("aria-modal", "false");
     await dialog.getByRole("button", { name: "Close tab search", exact: true }).click();
     await expect(switcher).toHaveAttribute("aria-expanded", "false");
     await page.screenshot({ path: testInfo.outputPath("collapsed-sidebar-switcher-dark.png") });

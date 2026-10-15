@@ -2264,7 +2264,7 @@ export function ConsoleScreen({
             <SessionNavigationControls
               back={sessionHistoryBack} forward={sessionHistoryForward}
               onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
-              onOpen={onOpenTabSearch} open={tabSearchOpen}
+              onOpen={() => onOpenTabSearch?.({ floating: true })} open={tabSearchOpen}
               shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
             />
           )}
@@ -2508,7 +2508,7 @@ export function ConsoleScreen({
               <SessionNavigationControls
                 back={sessionHistoryBack} forward={sessionHistoryForward}
                 onNavigate={onNavigateSessionHistory ? navigateSessionHistory : undefined}
-                onOpen={showCollapsedSessionSwitcher ? onOpenTabSearch : undefined}
+                onOpen={showCollapsedSessionSwitcher ? () => onOpenTabSearch?.({ floating: true }) : undefined}
                 open={tabSearchOpen}
                 shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
               />
