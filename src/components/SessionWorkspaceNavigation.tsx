@@ -27,9 +27,11 @@ import {
   EditIcon,
   ExternalLinkIcon,
   FolderIcon,
+  FolderPlusIcon,
   GridIcon,
   HistoryIcon,
   ListIcon,
+  PaneViewIcon,
   PlusIcon,
   SaveIcon,
   SearchIcon,
@@ -1834,6 +1836,32 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       : undefined,
   });
 
+  const newGroupButton = canCreateGroup && (
+    <button
+      type="button"
+      className="workspace-new-group-button"
+      onClick={(event) => openGroupDialog(null, activeSession, event.currentTarget)}
+      aria-label="Create tab group"
+      title="Create tab group"
+    >
+      {orientation === "vertical" ? <FolderPlusIcon /> : <PlusIcon />}
+      <span>New group</span>
+    </button>
+  );
+  const foldTabsButton = onFoldTabs && openSessions.length > 1 && (
+    <button type="button" className="workspace-new-group-button workspace-fold-selection-toggle"
+      aria-label="Select tabs to fold" aria-pressed={foldSelectionMode}
+      disabled={workspacePersistenceState === "loading" || workspacePersistenceState === "error"}
+      title="Select any sibling tabs, including nonadjacent tabs, and fold them into one placeholder"
+      onClick={() => {
+        setSelectedWorkspaceTabs([]);
+        setDeadTabsOnlySelected(false);
+        setFoldSelectionMode((current) => !current);
+      }}>
+      <FolderIcon className="workspace-fold-icon" /><span>Fold tabs</span>
+    </button>
+  );
+
   return (
     <>
       <div
@@ -2072,23 +2100,31 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               )}
               </>
           )}
-          </div>
-          {orientation === "vertical" && (paneLayouts.length > 0 || onCreatePaneLayout) && (
-            <div className="workspace-pane-layout-heading">
-              <span><GridIcon /> Pane views</span>
+          {orientation === "vertical" && (
+            <>
+              {newGroupButton}
+              {foldTabsButton}
               {onCreatePaneLayout && (
                 <button
                   type="button"
+                  className="workspace-create-pane-layout-button"
                   disabled={paneLayoutsBusy || paneLayouts.length >= 16}
                   onClick={() => void onCreatePaneLayout()}
                   aria-label="Create multi-pane view"
-                  title="Create a named, saved multi-pane view"
+                  title={paneLayoutsBusy
+                    ? "Saving pane views"
+                    : paneLayouts.length >= 16
+                      ? "Workspace already has the maximum 16 pane views"
+                      : "Create a named, saved multi-pane view"}
                 >
-                  <PlusIcon />
+                  <PaneViewIcon />
+                  <span>Pane view</span>
+                  {paneLayouts.length > 0 && <strong>{paneLayouts.length}</strong>}
                 </button>
               )}
-            </div>
+            </>
           )}
+          </div>
           {nestingEnabled && workspaceTabDrag?.sessionNames.length === 1 && !workspaceTabDrag.groupId && (
             <div className="workspace-tab-root-drop" role="group" aria-label="Top level drop target"
               data-drop-active={workspaceTabDrag.target?.kind === "root" ? "true" : undefined}
@@ -2253,35 +2289,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   </div>
                 );
               })}
-              {canCreateGroup && (
-                <button
-                  type="button"
-                  className="workspace-new-group-button"
-                  onClick={(event) => openGroupDialog(
-                    null,
-                    activeSession,
-                    event.currentTarget,
-                  )}
-                  aria-label="Create tab group"
-                  title="Create tab group"
-                >
-                  <PlusIcon />
-                  <span>New group</span>
-                </button>
-              )}
-              {onFoldTabs && openSessions.length > 1 && (
-                <button type="button" className="workspace-new-group-button workspace-fold-selection-toggle"
-                  aria-label="Select tabs to fold" aria-pressed={foldSelectionMode}
-                  disabled={workspacePersistenceState === "loading" || workspacePersistenceState === "error"}
-                  title="Select any sibling tabs, including nonadjacent tabs, and fold them into one placeholder"
-                  onClick={() => {
-                    setSelectedWorkspaceTabs([]);
-                    setDeadTabsOnlySelected(false);
-                    setFoldSelectionMode((current) => !current);
-                  }}>
-                  <FolderIcon className="workspace-fold-icon" /><span>Fold tabs</span>
-                </button>
-              )}
+              {orientation !== "vertical" && newGroupButton}
+              {orientation !== "vertical" && foldTabsButton}
               {paneLayouts.map((paneLayout) => {
                 const active = paneLayout.id === activePaneLayoutId;
                 const assignedCount = assignedPaneSessionCount(paneLayout.root);
@@ -2457,6 +2466,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               </button>
             </div>
           )}
+          <div className="workspace-context-toolbar" role="group" aria-label="Workspace status and navigation">
           {workspacePersistenceState === "unsaved" ? onSaveWorkspace && (
             <button
               ref={saveButtonRef}
@@ -2510,7 +2520,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               title={`Recreate ${missingSessionCount} missing ${missingSessionCount === 1 ? "shell" : "shells"}`}
             >
               <TerminalIcon />
-              <span>Recreate {missingSessionCount}</span>
+              <span>Recreate</span>
+              <strong>{missingSessionCount}</strong>
             </button>
           )}
           {!compactViewport && onSwitchWorkspace && (
@@ -2521,6 +2532,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               onSwitch={onSwitchWorkspace}
             />
           )}
+          </div>
           <div className="workspace-action-toolbar workspace-action-toolbar-secondary" role="group" aria-label="Workspace navigation tools">
           {(showRenameWorkspaceButton || props.onMarkSessionUnread) && (
             <div className="workspace-rename-unread-actions" role="group" aria-label="Rename and unread actions">

@@ -16222,51 +16222,6 @@ html.history-resizing * {
   }
 }
 
-.workspace-pane-layout-heading {
-  display: flex;
-  min-height: 30px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 8px 8px 0;
-  padding: 4px 5px 4px 9px;
-  color: #82bcb3;
-  background: rgba(104, 223, 208, 0.045);
-  border: 1px solid rgba(104, 223, 208, 0.18);
-  border-radius: 4px;
-  font-family: "JetBrains Mono Variable", monospace;
-  font-size: 8px;
-  font-weight: 750;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.workspace-pane-layout-heading > span,
-.workspace-pane-layout-heading button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.workspace-pane-layout-heading button {
-  width: 25px;
-  height: 23px;
-  justify-content: center;
-  padding: 0;
-  color: var(--cyan);
-  background: #16201c;
-  border: 1px solid rgba(104, 223, 208, 0.25);
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.workspace-pane-layout-heading button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.workspace-pane-layout-heading svg,
 .workspace-pane-layout-icon svg {
   width: 13px;
 }

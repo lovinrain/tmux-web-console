@@ -238,7 +238,7 @@ export function WorkspaceQuickSwitcher({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls="muxdeck-workspace-quick-switcher"
-        title={`Switch workspace - ${activeWorkspaceName}`}
+        title={`Switch workspace - ${activeWorkspaceName} (${positionLabel})`}
       >
         <GridIcon />
         <span>Switch</span>

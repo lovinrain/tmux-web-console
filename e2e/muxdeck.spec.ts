@@ -3177,15 +3177,23 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
 
     const workspaceActions = navigation.getByRole("group", { name: "Workspace actions", exact: true });
     const workspaceTools = navigation.getByRole("group", { name: "Workspace navigation tools", exact: true });
+    const workspaceContext = navigation.getByRole("group", { name: "Workspace status and navigation", exact: true });
     await expect(workspaceActions).toHaveCSS("display", "grid");
     await expect(workspaceTools).toHaveCSS("display", "grid");
+    await expect(workspaceContext).toHaveCSS("display", "grid");
     expect((await workspaceActions.boundingBox())!.height).toBeLessThanOrEqual(80);
     expect((await workspaceTools.boundingBox())!.height).toBeLessThanOrEqual(44);
-    for (const toolbar of [workspaceActions, workspaceTools]) {
+    expect((await workspaceContext.boundingBox())!.height).toBeLessThanOrEqual(44);
+    for (const name of ["Create tab group", "Select tabs to fold", "Create multi-pane view"]) {
+      await expect(workspaceActions.getByRole("button", { name, exact: true })).toBeVisible();
+    }
+    await expect(navigation.locator(".workspace-pane-layout-heading")).toHaveCount(0);
+    await expect(navigation.locator(".workspace-identity-state")).toBeHidden();
+    for (const toolbar of [workspaceActions, workspaceContext, workspaceTools]) {
       for (const action of await toolbar.locator("button, a").all()) {
         await expect(action).toHaveAccessibleName(/.+/);
         await expect(action).toHaveAttribute("title", /.+/);
-        await expect(action.locator("svg")).toBeVisible();
+        await expect(action.locator("svg").first()).toBeVisible();
         expect((await action.boundingBox())!.height).toBe(32);
       }
     }
@@ -3232,7 +3240,7 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     for (const label of await page.locator(".workspace-recents-button > span").all()) {
       await expect(label).toBeHidden();
     }
-    for (const toolbar of [workspaceActions, workspaceTools]) {
+    for (const toolbar of [workspaceActions, workspaceContext, workspaceTools]) {
       expect(await toolbar.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
       for (const action of await toolbar.locator("button, a").all()) {
         await expect(action).toBeInViewport();
@@ -6444,13 +6452,13 @@ test("global session pin deduplicates saved, inherited, and future workspaces", 
 test("desktop quick switcher moves between adjacent saved workspaces in one tab", async ({
   page,
   request,
-}) => {
+}, testInfo) => {
   const workspaceIds: string[] = [];
-  const createWorkspace = async (name: string): Promise<string> => {
+  const createWorkspace = async (name: string, tabs = [sessionName]): Promise<string> => {
     const response = await request.post("/mux/api/workspaces", {
       data: {
         name,
-        tabs: [sessionName],
+        tabs,
         groups: [],
         activeSession: sessionName,
       },
@@ -6465,10 +6473,21 @@ test("desktop quick switcher moves between adjacent saved workspaces in one tab"
   const alphaName = `${prefix} A`;
   const middleName = `${prefix} B`;
   const zuluName = `${prefix} C`;
+  const missingSession = `${sessionName}-quick-switch-missing`;
 
   try {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", missingSession, "bash", "--noprofile", "--norc"]);
+    await expect.poll(async () => {
+      const inventory = await (await request.get("/mux/api/sessions")).json();
+      return inventory.sessions.some((session: { name: string }) => session.name === missingSession);
+    }).toBe(true);
+    execFileSync("tmux", [...tmux, "kill-session", "-t", `=${missingSession}`]);
+    await expect.poll(async () => {
+      const inventory = await (await request.get("/mux/api/sessions")).json();
+      return inventory.recoverableSessions.some((session: { name: string }) => session.name === missingSession);
+    }).toBe(true);
     const alphaId = await createWorkspace(alphaName);
-    const middleId = await createWorkspace(middleName);
+    const middleId = await createWorkspace(middleName, [sessionName, missingSession]);
     const zuluId = await createWorkspace(zuluName);
 
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -6492,6 +6511,21 @@ test("desktop quick switcher moves between adjacent saved workspaces in one tab"
     await expect.poll(() => new URL(page.url()).searchParams.get("workspace"))
       .toBe(middleId);
     await expect(page.getByTitle(`${middleName} - Saved`)).toBeVisible();
+
+    await page.getByRole("button", { name: "Vertical session tabs", exact: true }).click();
+    const workspaceContext = page.getByRole("group", { name: "Workspace status and navigation", exact: true });
+    expect((await workspaceContext.boundingBox())!.height).toBeLessThanOrEqual(44);
+    await expect(workspaceContext.getByRole("status", { name: "Workspace saved automatically" })).toBeVisible();
+    const recreate = workspaceContext.getByRole("button", { name: "Recreate 1 missing shell in this workspace", exact: true });
+    await expect(recreate).toHaveAttribute("title", "Recreate 1 missing shell");
+    await expect(recreate.locator("strong")).toHaveText("1");
+    await expect(recreate.locator("span")).toBeHidden();
+    expect((await recreate.boundingBox())!.height).toBe(32);
+    await page.screenshot({ path: testInfo.outputPath("compact-saved-workspace-footer-dark.png") });
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    await expect(recreate).toHaveCSS("background-color", "rgb(255, 253, 248)");
+    await page.screenshot({ path: testInfo.outputPath("compact-saved-workspace-footer-light.png") });
+    await page.getByRole("button", { name: "Light theme", exact: true }).click();
 
     await page.getByRole("button", { name: "Choose workspace" }).click();
     const dialog = page.getByRole("dialog", { name: "Switch workspace" });

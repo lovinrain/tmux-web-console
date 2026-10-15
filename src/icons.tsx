@@ -293,6 +293,15 @@ export function AddSessionsIcon(props: IconProps) {
   );
 }
 
+export function PaneViewIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M10 4v16M10 11h11M15.5 13.5v4M13.5 15.5h4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </IconBase>
+  );
+}
+
 export function CommandIcon(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -383,6 +392,14 @@ export function FolderIcon(props: IconProps) {
     <IconBase {...props}>
       <path d="M3.5 6.5h6l2 2h9v10h-17v-12Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
       <path d="M3.5 9h17" stroke="currentColor" strokeWidth="1.8" />
+    </IconBase>
+  );
+}
+
+export function FolderPlusIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3.5 6.5h6l2 2h9v10h-17v-12ZM12 11v5M9.5 13.5h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </IconBase>
   );
 }

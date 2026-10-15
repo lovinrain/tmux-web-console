@@ -332,7 +332,7 @@ describe("SessionWorkspaceNavigation", () => {
     })).toBeDisabled();
   });
 
-  it("shows saved pane views beside sessions and can create or open one", () => {
+  it.each(["horizontal", "vertical"] as const)("shows saved pane views beside sessions and can create or open one in %s tabs", (orientation) => {
     const onCreatePaneLayout = vi.fn();
     const onSelectPaneLayout = vi.fn();
     const shortcutActions: ShortcutActionId[] = [];
@@ -343,6 +343,7 @@ describe("SessionWorkspaceNavigation", () => {
     render(
       <SessionWorkspaceNavigation
         {...navigationProps({
+          orientation,
           paneLayouts: [{
             id: "review-wall",
             name: "Review wall",
@@ -367,7 +368,11 @@ describe("SessionWorkspaceNavigation", () => {
     expect(paneTab).toHaveAttribute("aria-controls", "muxdeck-workspace-pane-board");
     fireEvent.click(paneTab);
     expect(onSelectPaneLayout).toHaveBeenCalledWith("review-wall");
-    fireEvent.click(screen.getByRole("button", { name: "Create multi-pane view" }));
+    const create = screen.getByRole("button", { name: "Create multi-pane view" });
+    expect(screen.getByRole(orientation === "vertical" ? "group" : "tablist", {
+      name: orientation === "vertical" ? "Workspace actions" : "Session workspace tabs",
+    })).toContainElement(create);
+    fireEvent.click(create);
     expect(onCreatePaneLayout).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("button", { name: "Open shortcut window" }));
