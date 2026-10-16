@@ -725,24 +725,13 @@ export function moveWorkspaceSession(
 
 export function expandWorkspaceTabSelection(
   openSessions: readonly string[],
-  groups: readonly WorkspaceTabGroup[],
   sessionNames: readonly string[],
   parents?: WorkspaceSessionParents,
 ): string[] {
   const openSet = new Set(openSessions);
   const selected = new Set(sessionNames.filter((sessionName) => openSet.has(sessionName)));
-  let previousSize = -1;
-  while (previousSize !== selected.size) {
-    previousSize = selected.size;
-    for (const sessionName of selected) {
-      workspaceSubtree(sessionName, openSessions, parents).forEach((name) => selected.add(name));
-    }
-    for (const group of groups) {
-      if (!group.tabs.some((sessionName) => selected.has(sessionName))) continue;
-      group.tabs.forEach((sessionName) => {
-        if (openSet.has(sessionName)) selected.add(sessionName);
-      });
-    }
+  for (const sessionName of [...selected]) {
+    workspaceSubtree(sessionName, openSessions, parents).forEach((name) => selected.add(name));
   }
   return openSessions.filter((sessionName) => selected.has(sessionName));
 }
@@ -755,7 +744,6 @@ export function moveWorkspaceSessions(
   if (!Number.isInteger(targetIndex)) return workspace;
   const selectedTabs = expandWorkspaceTabSelection(
     workspace.openSessions,
-    workspace.groups,
     sessionNames,
     workspace.parents,
   );
@@ -765,13 +753,15 @@ export function moveWorkspaceSessions(
   const remainingTabs = workspace.openSessions.filter((sessionName) => !selected.has(sessionName));
   let insertionIndex = Math.max(0, Math.min(targetIndex, remainingTabs.length));
 
-  // A caller cannot split a non-selected named group. Snap to the side the
-  // selected block approaches from if an insertion lands inside one.
+  // Reorder a subset within its own group, but do not insert unrelated tabs
+  // between another group's remaining members.
   const firstSelectedIndex = workspace.openSessions.indexOf(selectedTabs[0]);
   for (const group of workspace.groups) {
-    if (selected.has(group.tabs[0])) continue;
-    const start = remainingTabs.indexOf(group.tabs[0]);
-    const end = start + group.tabs.length;
+    if (selectedTabs.every((name) => group.tabs.includes(name))) continue;
+    const remainingMembers = group.tabs.filter((name) => !selected.has(name));
+    if (remainingMembers.length === 0) continue;
+    const start = remainingTabs.indexOf(remainingMembers[0]);
+    const end = start + remainingMembers.length;
     if (start < 0 || insertionIndex <= start || insertionIndex >= end) continue;
     const originalGroupStart = workspace.openSessions.indexOf(group.tabs[0]);
     insertionIndex = originalGroupStart > firstSelectedIndex ? end : start;
@@ -794,10 +784,17 @@ export function moveWorkspaceSessions(
     ...remainingTabs.slice(insertionIndex),
   ], workspace.parents);
   if (sameSessions(openSessions, workspace.openSessions)) return workspace;
+  const groups = workspace.groups.map((group) => {
+    const indices = group.tabs.map((name) => openSessions.indexOf(name));
+    if (Math.max(...indices) - Math.min(...indices) + 1 === group.tabs.length) return group;
+    // Only selected members leave a group when moved elsewhere. Preserve its
+    // identity, color and unselected members rather than dropping the group.
+    return { ...group, tabs: group.tabs.filter((name) => !selected.has(name)) };
+  });
   return {
     ...workspace,
     openSessions,
-    groups: normalizeWorkspaceTabGroups(workspace.groups, openSessions),
+    groups: normalizeWorkspaceTabGroups(groups, openSessions),
   };
 }
 

@@ -1261,8 +1261,11 @@ tray; drag any selected tab to move the complete set while preserving its
 relative order. The tray also offers up/down (or left/right) buttons; the arrows
 on a selected tab move the complete selection too. The selection remains active
 after moving, and the tray controls remain available when per-tab Actions are hidden.
-Named groups are atomic, so selecting one member selects and
-moves the whole group, including when the group is collapsed. A normal tab click,
+Group membership does not expand the selection: individual tabs and ranges
+inside a group select only those tabs, including a selected parent's descendants.
+Reordering within a group preserves its membership; moving a selected subset
+elsewhere leaves the unselected members in their original group. Drag a group
+header to move the whole group, including when collapsed. A normal tab click,
 the tray's close button, or Escape clears the browser-local selection. Selection
 itself is intentionally temporary, while a completed move updates the URL and
 synchronizes the new order to a saved workspace.

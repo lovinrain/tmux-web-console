@@ -2288,6 +2288,85 @@ describe("SessionWorkspaceNavigation", () => {
       .not.toBeInTheDocument();
   });
 
+  it("selects individual group members for bulk actions and retains the selection after group updates", () => {
+    const group = {
+      id: "workers", name: "Workers", color: "green" as const, collapsed: false,
+      tabs: ["alpha", "beta", "archive", "zulu"],
+    };
+    const props = navigationProps({
+      openSessions: group.tabs, groups: [group],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onTabSelectionChange: vi.fn(),
+      onTransferSelectedSessions: vi.fn(), onBulkSessionAction: vi.fn(),
+      onFoldTabs: vi.fn(), onSessionTerminated: vi.fn(),
+    });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const beta = screen.getByRole("tab", { name: /^beta, Workers group/ });
+    const archive = screen.getByRole("tab", { name: /^Archived deploy, Workers group/ });
+    fireEvent.click(beta, { ctrlKey: true });
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["beta"]);
+    fireEvent.click(archive, { metaKey: true });
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["beta", "archive"]);
+    fireEvent.click(beta, { ctrlKey: true });
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["archive"]);
+    fireEvent.keyDown(beta, { key: " ", ctrlKey: true });
+    fireEvent.click(archive, { shiftKey: true });
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["beta", "archive"]);
+    expect(screen.getAllByRole("tab", { name: /selected for moving/ })).toHaveLength(2);
+    expect(beta.closest(".workspace-tab-group")).not.toHaveAttribute("data-tab-move-selected");
+    expect(props.onSelect).not.toHaveBeenCalled();
+
+    view.rerender(<SessionWorkspaceNavigation {...props} groups={[{ ...group, color: "cyan" }]} />);
+    expect(props.onTabSelectionChange).toHaveBeenLastCalledWith(["beta", "archive"]);
+    fireEvent.click(screen.getByRole("button", { name: "Move or copy 2 selected sessions to a workspace" }));
+    expect(props.onTransferSelectedSessions).toHaveBeenCalledExactlyOnceWith(["beta", "archive"]);
+    fireEvent.click(screen.getByRole("button", { name: "Close 2 selected tabs" }));
+    expect(props.onBulkSessionAction).toHaveBeenLastCalledWith("close", ["beta", "archive"]);
+    fireEvent.click(screen.getByRole("button", { name: "End 2 selected sessions" }));
+    expect(props.onBulkSessionAction).toHaveBeenLastCalledWith("end", ["beta", "archive"]);
+    fireEvent.click(screen.getByRole("button", { name: "Fold selected tabs" }));
+    expect(props.onFoldTabs).toHaveBeenCalledExactlyOnceWith(["beta", "archive"]);
+  });
+
+  it.each(["horizontal", "vertical"] as const)("drags only selected group members within and outside their group in %s tabs", (orientation) => {
+    let workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "archive", "zulu", "outside"], recentSessions: [],
+      groups: [{ id: "workers", name: "Workers", color: "green", collapsed: false, tabs: ["alpha", "beta", "archive", "zulu"] }],
+    };
+    function Harness() {
+      const [state, setState] = useState(workspace);
+      return <SessionWorkspaceNavigation {...navigationProps({
+        ...state, sessions: [...sessions, session({ name: "outside" })], orientation,
+        onMoveTab: vi.fn(),
+        onMoveTabs: (names, index) => setState((current) => {
+          workspace = moveWorkspaceSessions(current, names, index);
+          return workspace;
+        }),
+      })} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("tab", { name: /^beta, Workers group/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("tab", { name: /^Archived deploy, Workers group/ }), { ctrlKey: true });
+    const dragAfter = (targetName: RegExp) => {
+      const source = screen.getByRole("tab", { name: /^beta,/ });
+      const target = screen.getByRole("tab", { name: targetName }).closest<HTMLElement>(".workspace-tab")!;
+      const dataTransfer = dragDataTransfer();
+      mockElementBounds(target, { left: 100, top: 100, width: 100, height: 40 });
+      fireEvent.dragStart(source, { dataTransfer });
+      expect(dataTransfer.setData).toHaveBeenCalledWith("application/x-muxdeck-tabs", JSON.stringify(["beta", "archive"]));
+      fireEvent.dragOver(target, { dataTransfer, clientX: 195, clientY: 138 });
+      fireEvent.drop(target, { dataTransfer, clientX: 195, clientY: 138 });
+    };
+    dragAfter(/^Zulu shell,/);
+    expect(workspace.openSessions).toEqual(["alpha", "zulu", "beta", "archive", "outside"]);
+    expect(workspace.groups[0].tabs).toEqual(["alpha", "zulu", "beta", "archive"]);
+    dragAfter(/^outside,/);
+    expect(workspace.openSessions).toEqual(["alpha", "zulu", "outside", "beta", "archive"]);
+    expect(workspace.groups).toEqual([{
+      id: "workers", name: "Workers", color: "green", collapsed: false, tabs: ["alpha", "zulu"],
+    }]);
+    expect(screen.getByRole("group", { name: "2 tabs selected for moving" })).toBeVisible();
+  });
+
   it("drags a separator between groups without selecting or reordering tabs", () => {
     const props = navigationProps({
       orientation: "vertical", openSessions: ["alpha", "beta", "zulu"],

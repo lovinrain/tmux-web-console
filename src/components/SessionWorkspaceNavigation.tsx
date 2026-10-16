@@ -518,7 +518,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         : selectedRange;
     } else {
       workspaceTabSelectionAnchorRef.current = sessionName;
-      const unit = expandWorkspaceTabSelection(openSessions, foldSelectionMode ? [] : groups, [sessionName], sessionParents);
+      const unit = expandWorkspaceTabSelection(openSessions, [sessionName], sessionParents);
       const current = new Set(selectedWorkspaceTabs);
       const remove = unit.every((name) => current.has(name));
       candidates = remove
@@ -526,7 +526,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         : [...selectedWorkspaceTabs, ...unit];
     }
 
-    const next = expandWorkspaceTabSelection(openSessions, foldSelectionMode ? [] : groups, candidates, sessionParents);
+    const next = expandWorkspaceTabSelection(openSessions, candidates, sessionParents);
     setSelectedWorkspaceTabs(next);
     setReorderAnnouncement(next.length === 0
       ? "Tab move selection cleared."
@@ -536,7 +536,6 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     activeSession,
     desktopTabMultiSelectEnabled,
     foldSelectionMode,
-    groups,
     openSessions,
     selectedWorkspaceTabs,
     sessionParents,
@@ -570,10 +569,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       // A respawned pane removes its session from this selection on refresh.
       const next = deadTabsOnlySelected
         ? current.filter((name) => deadSessionTabs.includes(name))
-        : expandWorkspaceTabSelection(openSessions, foldSelectionMode ? [] : groups, current, sessionParents);
+        : expandWorkspaceTabSelection(openSessions, current, sessionParents);
       return sameSessionNames(current, next) ? current : next;
     });
-  }, [deadSessionTabs, deadTabsOnlySelected, desktopTabMultiSelectEnabled, foldSelectionMode, groups, openSessions, sessionParents]);
+  }, [deadSessionTabs, deadTabsOnlySelected, desktopTabMultiSelectEnabled, openSessions, sessionParents]);
 
   const selectDeadSessionTabs = () => {
     setDeadTabsOnlySelected(true);
@@ -696,17 +695,21 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       const selected = new Set(sourceSessionNames);
       if (selected.has(targetSessionName)) return null;
       const targetGroup = groupsBySession.get(targetSessionName);
+      const wholeGroupTarget = targetGroup
+        && (workspaceTabDragGroupRef.current
+          || !sourceSessionNames.every((name) => targetGroup.tabs.includes(name)))
+        ? targetGroup : undefined;
       const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
-      const blockStart = targetGroup
-        ? openSessions.indexOf(targetGroup.tabs[0])
+      const blockStart = wholeGroupTarget
+        ? openSessions.indexOf(wholeGroupTarget.tabs[0])
         : targetIndex;
-      const blockEnd = targetGroup
-        ? openSessions.indexOf(targetGroup.tabs.at(-1)!)
+      const blockEnd = wholeGroupTarget
+        ? openSessions.indexOf(wholeGroupTarget.tabs.at(-1)!)
         : targetIndex;
       const boundaryIndex = edge === "before" ? blockStart : blockEnd + 1;
       return {
-        kind: targetGroup ? "group" : "tab",
-        id: targetGroup?.id ?? targetSessionName,
+        kind: wholeGroupTarget ? "group" : "tab",
+        id: wholeGroupTarget?.id ?? targetSessionName,
         edge,
         targetIndex: openSessions
           .slice(0, boundaryIndex)

@@ -4097,8 +4097,9 @@ test("bulk selection closes tabs safely and ends sessions only after confirmatio
   const names = [`${sessionName}-bulk-a`, `${sessionName}-bulk-b`];
   for (const name of names) execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
   const tabs = [sessionName, ...names];
+  const group = { id: "bulk", name: "Bulk group", color: "blue", collapsed: false, tabs };
   const response = await request.post("/mux/api/workspaces", {
-    data: { name: "Bulk action test", tabs, groups: [], activeSession: sessionName },
+    data: { name: "Bulk action test", tabs, groups: [group], activeSession: sessionName },
   });
   expect(response.ok()).toBe(true);
   const workspaceId = (await response.json()).workspace.id;
@@ -4111,6 +4112,9 @@ test("bulk selection closes tabs safely and ends sessions only after confirmatio
     await expect(page.locator(".connection-badge")).toContainText("Live");
     await page.getByRole("button", { name: "Vertical session tabs" }).click();
     await selectHelpers();
+    await expect(page.locator('.workspace-tab[data-tab-move-selected="true"]')).toHaveCount(2);
+    await expect(page.getByRole("tab", { name: new RegExp(`^${sessionName},`) }).locator(".."))
+      .not.toHaveAttribute("data-tab-move-selected");
     await page.getByRole("button", { name: "Close 2 selected tabs" }).click();
     let dialog = page.getByRole("alertdialog", { name: "Close 2 selected tabs?" });
     await expect(dialog).toContainText("keep running");
@@ -4122,18 +4126,20 @@ test("bulk selection closes tabs safely and ends sessions only after confirmatio
     expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
     await expect.poll(async () => {
       const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
-      return (await response.json()).workspace.tabs;
-    }).toEqual([sessionName]);
+      const workspace = (await response.json()).workspace;
+      return { tabs: workspace.tabs, groups: workspace.groups };
+    }).toEqual({ tabs: [sessionName], groups: [{ ...group, tabs: [sessionName] }] });
     const history = await request.get(`/mux/api/session-history?workspace=${workspaceId}&recycled=1`);
     const entries = (await history.json()).entries;
     for (const name of names) expect(entries.some((entry: { name: string }) => entry.name === name)).toBe(true);
 
-    await page.goto(`/mux/session/${sessionName}${tabs.map((name, index) => `${index ? "&" : "?"}tab=${name}`).join("")}`);
+    await page.goto(`/mux/session/${sessionName}?${tabs.map((name) => `tab=${name}`).join("&")}&tab-group=${encodeURIComponent(JSON.stringify(group))}`);
     await expect(page.locator(".connection-badge")).toContainText("Live");
     await selectHelpers();
     await page.getByRole("button", { name: "End 2 selected sessions" }).click();
     dialog = page.getByRole("alertdialog", { name: "End 2 selected sessions?" });
     for (const name of names) await expect(dialog).toContainText(name);
+    await expect(dialog.getByRole("list", { name: "Selected sessions" }).getByRole("listitem")).toHaveCount(2);
     await expect(dialog).toContainText("across all workspaces");
     await page.screenshot({ path: "artifacts/bulk-session-confirmation.png" });
     expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
@@ -4657,28 +4663,55 @@ test("workspace tabs split, copy, and move into isolated browser windows", async
   }
 });
 
-test("sidebar selection arrows move tabs together without losing selection", async ({ page }) => {
-  const helpers = [`${sessionName}-move-a`, `${sessionName}-move-b`];
+test("sidebar selection arrows move partial group selections and preserve saved membership", async ({ page, request }, testInfo) => {
+  const helpers = ["a", "b", "c", "d"].map((suffix) => `${sessionName}-move-${suffix}`);
   for (const name of helpers) {
     execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
   }
+  const tabs = [sessionName, ...helpers];
+  const selected = [helpers[1], helpers[3]];
+  const group = { id: "workers", name: "Workers", color: "cyan", collapsed: false, tabs: helpers };
+  const created = await request.post("/mux/api/workspaces", {
+    data: { name: "Partial group move", tabs, groups: [group], activeSession: sessionName },
+  });
+  expect(created.ok()).toBe(true);
+  const workspaceId = (await created.json()).workspace.id;
+  const identities = tabs.map(workspaceTmuxIdentity);
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`/mux/session/${sessionName}?tab=${sessionName}&tab=${helpers[0]}&tab=${helpers[1]}`);
+    await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}${tabs.map((name) => `&tab=${name}`).join("")}`);
     await page.getByRole("button", { name: "Vertical session tabs" }).click();
-    for (const name of helpers) {
+    for (const name of selected) {
       await page.locator(`[data-workspace-session-name="${name}"] [role="tab"]`).click({ modifiers: ["Control"] });
     }
+    await expect(page.locator('.workspace-tab[data-tab-move-selected="true"]')).toHaveCount(2);
     await page.getByRole("button", { name: "Move selected tabs up" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
-      .toEqual([...helpers, sessionName]);
+      .toEqual([sessionName, ...selected, helpers[0], helpers[2]]);
+    await expect.poll(() => new URL(page.url()).searchParams.getAll("tab-group").map((value) => JSON.parse(value)))
+      .toEqual([{ ...group, tabs: [...selected, helpers[0], helpers[2]] }]);
+    await page.getByRole("button", { name: "Move selected tabs up" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
+      .toEqual([...selected, sessionName, helpers[0], helpers[2]]);
     await expect(page.getByRole("group", { name: "2 tabs selected for moving" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Move selected tabs up" })).toBeDisabled();
-    await page.screenshot({ path: "artifacts/workspace-multiselect-arrows.png" });
+    await page.screenshot({ path: testInfo.outputPath("workspace-partial-group-selection.png") });
     await page.getByRole("button", { name: "Move selected tabs down" }).click();
+    const finalTabs = [sessionName, ...selected, helpers[0], helpers[2]];
+    const finalGroups = [{ ...group, tabs: [helpers[0], helpers[2]] }];
     await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
-      .toEqual([sessionName, ...helpers]);
+      .toEqual(finalTabs);
+    await expect.poll(async () => {
+      const saved = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      const workspace = (await saved.json()).workspace;
+      return { tabs: workspace.tabs, groups: workspace.groups };
+    }).toEqual({ tabs: finalTabs, groups: finalGroups });
+    await page.reload();
+    await expectRoute(page, `/mux/session/${sessionName}`, finalTabs, { workspace: workspaceId });
+    await expect(page.locator('[data-workspace-tab-group-id="workers"] [role="tab"]')).toHaveCount(2);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
   } finally {
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
     for (const name of helpers) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
   }
 });

@@ -966,7 +966,10 @@ merely to test that the application itself has no login.
     tab groups intact, and writes the resulting order to the URL or saved
     workspace without changing the active session. In both top and side tabs,
     Shift-click a range, Ctrl/Cmd-click individual tabs, and drag the selection;
-    confirm its relative order is preserved and any selected group moves whole.
+    confirm its relative order is preserved and selecting part of a named group
+    does not select its other members. Reorder that subset within its group, then
+    move it outside and confirm the unselected members retain their group.
+    Drag a group header to confirm the whole group still moves together.
 14. On desktop, the workspace timer opens as a draggable floating window, runs
     both countdown and stopwatch modes, keeps a pinned window visible across
     session switches, and restores its browser-local state per saved workspace.

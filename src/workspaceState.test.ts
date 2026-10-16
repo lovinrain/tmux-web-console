@@ -33,6 +33,7 @@ import {
   workspaceSessionTreeOrder,
   workspaceTabsFromSearch,
   type SessionWorkspaceState,
+  type WorkspaceTabGroup,
 } from "./workspaceState";
 
 describe("workspace tab URL state", () => {
@@ -478,7 +479,7 @@ describe("session workspace state", () => {
     expect(moveWorkspaceSessions(workspace, ["beta"], Number.NaN)).toBe(workspace);
   });
 
-  it("expands partial group selections and never splits an unselected group", () => {
+  it("moves only selected group members and never splits an unselected group", () => {
     const workspace: SessionWorkspaceState = {
       openSessions: ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
       recentSessions: [],
@@ -502,17 +503,22 @@ describe("session workspace state", () => {
 
     const movedGroupAndTab = moveWorkspaceSessions(workspace, ["gamma", "zeta"], 0);
     expect(movedGroupAndTab.openSessions).toEqual([
-      "beta",
       "gamma",
       "zeta",
       "alpha",
+      "beta",
       "delta",
       "epsilon",
     ]);
     expect(movedGroupAndTab.groups.map((group) => group.tabs)).toEqual([
-      ["beta", "gamma"],
+      ["beta"],
       ["delta", "epsilon"],
     ]);
+    expect(movedGroupAndTab.groups[0]).toEqual({ ...workspace.groups[0], tabs: ["beta"] });
+
+    const wholeGroupAndTab = moveWorkspaceSessions(workspace, ["beta", "gamma", "zeta"], 0);
+    expect(wholeGroupAndTab.openSessions).toEqual(["beta", "gamma", "zeta", "alpha", "delta", "epsilon"]);
+    expect(wholeGroupAndTab.groups).toEqual(workspace.groups);
 
     const snappedAfterReview = moveWorkspaceSessions(workspace, ["alpha"], 3);
     expect(snappedAfterReview.openSessions).toEqual([
@@ -524,6 +530,41 @@ describe("session workspace state", () => {
       "zeta",
     ]);
     expect(snappedAfterReview.groups).toEqual(workspace.groups);
+  });
+
+  it.each([
+    { target: 0, tabs: ["beta", "delta", "head", "alpha", "gamma", "tail"], members: ["alpha", "gamma"] },
+    { target: 1, tabs: ["head", "beta", "delta", "alpha", "gamma", "tail"], members: ["beta", "delta", "alpha", "gamma"] },
+    { target: 2, tabs: ["head", "alpha", "beta", "delta", "gamma", "tail"], members: ["alpha", "beta", "delta", "gamma"] },
+    { target: 3, tabs: ["head", "alpha", "gamma", "beta", "delta", "tail"], members: ["alpha", "gamma", "beta", "delta"] },
+    { target: 4, tabs: ["head", "alpha", "gamma", "tail", "beta", "delta"], members: ["alpha", "gamma"] },
+  ])("preserves group membership when a partial selection moves within its group, target $target", ({ target, tabs, members }) => {
+    const group: WorkspaceTabGroup = {
+      id: "workers", name: "Workers", color: "cyan", collapsed: false,
+      tabs: ["alpha", "beta", "gamma", "delta"],
+    };
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["head", ...group.tabs, "tail"], recentSessions: ["beta", "head"], groups: [group],
+    };
+    const moved = moveWorkspaceSessions(workspace, ["delta", "beta"], target);
+    expect(moved.openSessions).toEqual(tabs);
+    expect(moved.groups).toEqual([{ ...group, tabs: members }]);
+    expect(moved.recentSessions).toBe(workspace.recentSessions);
+  });
+
+  it("selects a nested branch without including unrelated members of its group", () => {
+    const group: WorkspaceTabGroup = {
+      id: "workers", name: "Workers", color: "blue", collapsed: false,
+      tabs: ["parent", "child", "grandchild", "sibling"],
+    };
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["outside", ...group.tabs], recentSessions: [], groups: [group],
+      parents: { child: "parent", grandchild: "child" },
+    };
+    const moved = moveWorkspaceSessions(workspace, ["parent"], 0);
+    expect(moved.openSessions).toEqual(["parent", "child", "grandchild", "outside", "sibling"]);
+    expect(moved.groups).toEqual([{ ...group, tabs: ["sibling"] }]);
+    expect(moved.parents).toEqual(workspace.parents);
   });
 
   it("stable-sorts non-working tabs before working tabs without changing visit history", () => {
