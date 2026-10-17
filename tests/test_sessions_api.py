@@ -3592,10 +3592,25 @@ async def test_callback_stream_fans_out_initial_and_mutated_snapshots(tmp_path):
 async def test_sessions_stream_shares_one_sampler_across_clients_and_stops_last(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(app_module, "SESSION_STREAM_SAMPLE_SECONDS", 0.2)
+    monkeypatch.setattr(app_module, "SESSION_STREAM_SAMPLE_SECONDS", 60)
     monkeypatch.setattr(app_module, "SESSION_STREAM_HEARTBEAT_SECONDS", 0.01)
     session = make_session()
     tmux = FakeTmux([[session]])
+    release_snapshot = asyncio.Event()
+    list_sessions = tmux.list_sessions
+
+    async def deferred_snapshot():
+        await release_snapshot.wait()
+        return await list_sessions()
+
+    async def read_session_event(response):
+        async with asyncio.timeout(1):
+            record = await read_sse_record(response)
+            while record.startswith(":"):
+                record = await read_sse_record(response)
+            return record
+
+    monkeypatch.setattr(tmux, "list_sessions", deferred_snapshot)
     detector = FakeAgentStateDetector([{session.name: AgentState("working", "active")}])
     application = create_app(
         tmux=tmux,
@@ -3612,9 +3627,13 @@ async def test_sessions_stream_shares_one_sampler_across_clients_and_stops_last(
             client.get("/api/sessions/stream"),
             client.get("/api/sessions/stream"),
         )
+        # A slow initial snapshot legitimately sends heartbeats before data.
+        heartbeats = await asyncio.gather(read_sse_record(first_response), read_sse_record(second_response))
+        assert heartbeats == [": heartbeat\n\n", ": heartbeat\n\n"]
+        release_snapshot.set()
         first, second = await asyncio.gather(
-            read_sse_record(first_response),
-            read_sse_record(second_response),
+            read_session_event(first_response),
+            read_session_event(second_response),
         )
 
         assert event_payload(first) == event_payload(second)
@@ -3637,6 +3656,7 @@ async def test_sessions_stream_shares_one_sampler_across_clients_and_stops_last(
         await asyncio.sleep(0.03)
         assert tmux.list_calls == calls_after_disconnect
     finally:
+        release_snapshot.set()
         await client.close()
 
 
