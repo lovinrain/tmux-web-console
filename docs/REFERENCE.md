@@ -1366,8 +1366,11 @@ and measured swap-in/out rates. Both views include a disk usage bar with used,
 total, and available space for `/`. Disk percentages exclude filesystem-reserved
 space from the available capacity; disk utilization at 85% raises the host status
 to Elevated, and 95% to Critical. Unavailable disk statistics leave CPU and memory
-usable. The chart can select 15-minute, one-hour, or
-24-hour history, while Pause stops that browser's sampling. The title strip moves
+usable. Both views also show host download and upload rates in bytes per second,
+with a shared-scale traffic history and the measured interface names. Hover the
+compact card to see the latest rates without expanding it. These show observed
+traffic, not a percentage of the connection's maximum speed. The chart can select
+15-minute, one-hour, or 24-hour history, while Pause stops that browser's sampling. The title strip moves
 the panel, the corner grip resizes it, and both also support arrow-key operation.
 Open, pinned, paused, view, range, position, and size state are browser-local and
 isolated by saved workspace ID. An unpinned panel closes on a session switch; a
@@ -1378,11 +1381,16 @@ Host instrumentation is request-driven. A desktop card makes one initial request
 then five-second requests and history collection occur only while its floating
 panel is open, visible, and unpaused. The backend reads aggregate and per-core
 `/proc/stat`, `/proc/meminfo`, optional `/proc/pressure/memory`, and optional swap
-counters from `/proc/vmstat`, plus filesystem capacity from `statvfs` for `/`,
-when the API is requested. This reads filesystem counters without scanning files
+counters from `/proc/vmstat`, network byte counters from `/proc/net/dev`, plus
+filesystem capacity from `statvfs` for `/`, when the API is requested. This reads filesystem counters without scanning files
 or creating a disk-usage archive. A short cache and lock
 coalesce near-simultaneous browser requests. The first request takes two closely
-spaced counter reads so CPU and swap rates need not wait five seconds. The bounded
+spaced counter reads so CPU, swap, and network rates need not wait five seconds.
+Network traffic uses hardware interfaces, falling back to default-route interfaces
+on virtual-only hosts, avoiding duplicate bridge/veth and loopback counts. Missing
+network counters leave the other metrics usable. Counter resets, interface changes,
+and sampling gaps longer than 15 seconds reset the network baseline; reopening after
+an idle gap takes two fresh reads instead of showing a long-term average. The bounded
 24-hour in-memory ring returns at most 180 chart points; gaps remain gaps when no
 panel is actively viewing the host, and history is intentionally not written to
 disk. `GET /api/host-metrics?range=15m|1h|24h` performs this on-demand collection.

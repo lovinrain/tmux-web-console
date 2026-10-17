@@ -55,6 +55,12 @@ function snapshot(range: HostMetricsSnapshot["range"] = "15m"): HostMetricsSnaps
         availableBytes: 260 * gib,
         usedPercent: 48,
       },
+      network: {
+        interfaces: ["ens3"],
+        receiveBytesPerSecond: 2.25 * 1024 ** 2,
+        transmitBytesPerSecond: 128 * 1024,
+        intervalSeconds: 5,
+      },
     },
     history: [
       {
@@ -62,18 +68,21 @@ function snapshot(range: HostMetricsSnapshot["range"] = "15m"): HostMetricsSnaps
         cpuPercent: 18,
         cpuCores: [8, 35, 72, 4, 19, 41, 12, 22],
         memoryUsedBytes: 21.8 * gib,
+        network: { receiveBytesPerSecond: 1024 ** 2, transmitBytesPerSecond: 64 * 1024 },
       },
       {
         observedAt: 2,
         cpuPercent: 35,
         cpuCores: [16, 53, 96, 9, 42, 71, 24, 58],
         memoryUsedBytes: 22.1 * gib,
+        network: { receiveBytesPerSecond: 3 * 1024 ** 2, transmitBytesPerSecond: 256 * 1024 },
       },
       {
         observedAt: 3,
         cpuPercent: 27,
         cpuCores: [12, 48, 91, 7, 33, 62, 18, 45],
         memoryUsedBytes: 22.4 * gib,
+        network: { receiveBytesPerSecond: 2.25 * 1024 ** 2, transmitBytesPerSecond: 128 * 1024 },
       },
     ],
   };
@@ -117,6 +126,7 @@ describe("HostPulse", () => {
     await waitFor(() => expect(card).toHaveTextContent("27%"));
     expect(card).toHaveTextContent("72%");
     expect(card).toHaveTextContent("DISK48%");
+    expect(card).toHaveAttribute("title", expect.stringContaining("download 2.25 MB/s, upload 128 KB/s"));
     expect(getHostMetrics).toHaveBeenCalledWith("15m", expect.any(AbortSignal));
 
     fireEvent.click(card);
@@ -132,6 +142,13 @@ describe("HostPulse", () => {
       .toHaveAttribute("aria-valuenow", "48");
     expect(within(disk).getByText("240.0 GB / 500.0 GB")).toBeInTheDocument();
     expect(within(disk).getByText("260.0 GB")).toBeInTheDocument();
+    const network = within(panel).getByRole("region", { name: "Network bandwidth" });
+    expect(within(network).getByText("ens3")).toBeInTheDocument();
+    expect(within(network).getByText("2.25 MB/s")).toBeInTheDocument();
+    expect(within(network).getByText("128 KB/s")).toBeInTheDocument();
+    expect(within(network).getByRole("img", {
+      name: "Download and upload history, shared scale up to 3.00 MB/s",
+    })).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Overview" }))
       .toHaveAttribute("aria-pressed", "true");
   });
@@ -159,6 +176,7 @@ describe("HostPulse", () => {
     expect(within(panel).getByText("ACTIVE SWAP I/O")).toBeInTheDocument();
     expect(within(panel).getByText("1.50 MB/s")).toBeInTheDocument();
     expect(within(panel).getByRole("region", { name: "Disk usage" })).toBeInTheDocument();
+    expect(within(panel).getByRole("region", { name: "Network bandwidth" })).toHaveTextContent("2.25 MB/s");
     expect(storedPulse().panel.mode).toBe("details");
   });
 
@@ -189,6 +207,51 @@ describe("HostPulse", () => {
     expect(card).toHaveTextContent("DISK--");
     fireEvent.click(card);
     expect(screen.getByText("Disk usage unavailable")).toBeInTheDocument();
+  });
+
+  it.each([null, undefined])("keeps other metrics usable when network data is %s", async (network) => {
+    const data = snapshot();
+    data.latest.network = network;
+    vi.mocked(getHostMetrics).mockResolvedValue(data);
+    renderPulse();
+
+    const card = screen.getByRole("button", { name: "Show host metrics" });
+    await waitFor(() => expect(card).toHaveTextContent("27%"));
+    expect(card).toHaveTextContent("DISK48%");
+    fireEvent.click(card);
+    expect(screen.getByRole("region", { name: "Network bandwidth" }))
+      .toHaveTextContent("Network bandwidth unavailable");
+  });
+
+  it("distinguishes an unmeasured network baseline from zero traffic", async () => {
+    const data = snapshot();
+    data.latest.network = {
+      interfaces: ["eth0"], receiveBytesPerSecond: null, transmitBytesPerSecond: null,
+      intervalSeconds: null,
+    };
+    vi.mocked(getHostMetrics).mockResolvedValue(data);
+    renderPulse();
+    await waitFor(() => expect(getHostMetrics).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Show host metrics" }));
+
+    const network = screen.getByRole("region", { name: "Network bandwidth" });
+    expect(network).toHaveTextContent("Measuring network speed…");
+    expect(within(network).getAllByText("--")).toHaveLength(2);
+  });
+
+  it("leaves gaps in network history when measurements are unavailable", async () => {
+    const data = snapshot();
+    data.history[1].network = null;
+    vi.mocked(getHostMetrics).mockResolvedValue(data);
+    renderPulse();
+    await waitFor(() => expect(getHostMetrics).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Show host metrics" }));
+
+    const graph = screen.getByRole("img", { name: /Download and upload history/ });
+    for (const path of graph.querySelectorAll("path")) {
+      expect(path.getAttribute("d")?.match(/M/g)).toHaveLength(2);
+      expect(path.getAttribute("d")).not.toContain("L");
+    }
   });
 
   it("samples once for the closed card and polls only while the panel is live", async () => {

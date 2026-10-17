@@ -1320,6 +1320,7 @@ html[data-theme="light"] .host-pulse-panel-header h2 {
 html[data-theme="light"] .host-pulse-metrics article,
 html[data-theme="light"] .host-pulse-details,
 html[data-theme="light"] .host-pulse-disk-section,
+html[data-theme="light"] .host-pulse-network-section,
 html[data-theme="light"] .host-pulse-core-section,
 html[data-theme="light"] .host-pulse-pressure-section {
   background: rgba(250, 253, 251, 0.88);
@@ -1374,6 +1375,7 @@ html[data-theme="light"] .host-pulse-metrics article > header {
 }
 
 html[data-theme="light"] .host-pulse-disk-section > header,
+html[data-theme="light"] .host-pulse-network-section > header,
 html[data-theme="light"] .host-pulse-disk-stats small {
   color: #5f776b;
 }
@@ -1387,7 +1389,8 @@ html[data-theme="light"] .host-pulse-footnote {
 
 html[data-theme="light"] .host-pulse-metrics article > output,
 html[data-theme="light"] .host-pulse-details strong,
-html[data-theme="light"] .host-pulse-disk-section strong {
+html[data-theme="light"] .host-pulse-disk-section strong,
+html[data-theme="light"] .host-pulse-network-rates output {
   color: #263b33;
 }
 
@@ -1401,6 +1404,10 @@ html[data-theme="light"] .host-pulse-disk-bar {
 }
 
 html[data-theme="light"] .host-pulse-details > span + span {
+  border-color: #d2ddd7;
+}
+
+html[data-theme="light"] .host-pulse-network-history {
   border-color: #d2ddd7;
 }
 

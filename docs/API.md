@@ -177,7 +177,7 @@ array with `PATCH /api/workspaces/{workspaceId}`.
 | --- | --- |
 | `GET /api/capabilities` | Machine-readable API version, base path, auth mode, resource families, enums, and limits. |
 | `GET /api/health` | tmux connectivity check; returns `ok` and the live session count. |
-| `GET /api/host-metrics?range=15m` | On-demand CPU, per-core, memory, PSI, swap, and process-host snapshot. `range` is `15m`, `1h`, or `24h`. |
+| `GET /api/host-metrics?range=15m` | On-demand CPU, per-core, memory, PSI, swap, disk, and network snapshot. `range` is `15m`, `1h`, or `24h`. `latest.network` includes interface names, receive/transmit bytes per second, and the measured interval; unavailable counters or unmeasured rates are nullable. History includes receive/transmit rates. |
 
 Example:
 

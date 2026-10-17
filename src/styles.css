@@ -9163,7 +9163,8 @@ html.workspace-timer-moving * {
   border-radius: inherit;
 }
 
-.host-pulse-disk-section {
+.host-pulse-disk-section,
+.host-pulse-network-section {
   display: grid;
   flex: 0 0 auto;
   gap: 8px;
@@ -9174,6 +9175,7 @@ html.workspace-timer-moving * {
 }
 
 .host-pulse-disk-section > header,
+.host-pulse-network-section > header,
 .host-pulse-disk-stats {
   display: flex;
   align-items: center;
@@ -9182,6 +9184,7 @@ html.workspace-timer-moving * {
 }
 
 .host-pulse-disk-section > header,
+.host-pulse-network-section > header,
 .host-pulse-disk-stats small {
   color: #6f8579;
   font-size: 7px;
@@ -9213,6 +9216,66 @@ html.workspace-timer-moving * {
   overflow: hidden;
   background: #1c2b23;
   border-radius: 9px;
+}
+
+.host-pulse-network-section > header small {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-pulse-network-rates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.host-pulse-network-rates > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.host-pulse-network-rates small {
+  font-size: 7px;
+  font-weight: 780;
+}
+
+.host-pulse-network-rates output {
+  color: #dcebe3;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.host-pulse-network-rates .download {
+  color: var(--host-accent);
+}
+
+.host-pulse-network-rates .upload {
+  color: var(--host-secondary);
+}
+
+.host-pulse-network-history {
+  width: 100%;
+  height: 28px;
+  border-bottom: 1px solid #2a3a31;
+}
+
+.host-pulse-network-history path {
+  fill: none;
+  stroke: var(--host-accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.host-pulse-network-history .transmitBytesPerSecond {
+  stroke: var(--host-secondary);
+  stroke-dasharray: 3 2;
 }
 
 .host-pulse-details {

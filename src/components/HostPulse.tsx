@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import {
   getHostMetrics,
   type HostMetricRange,
+  type HostMetricPoint,
   type HostMetricsSnapshot,
 } from "../api";
 import { CloseIcon, HostPulseIcon, PinIcon } from "../icons";
@@ -311,6 +312,39 @@ function CoreTrace({ values }: { values: Array<number | null> }) {
   );
 }
 
+function NetworkHistory({ history }: { history: HostMetricPoint[] }) {
+  const maximum = Math.max(1, ...history.flatMap((point) => [
+    point.network?.receiveBytesPerSecond ?? 0,
+    point.network?.transmitBytesPerSecond ?? 0,
+  ]));
+  return (
+    <svg
+      className="host-pulse-network-history"
+      viewBox="0 0 100 28"
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={`Download and upload history, shared scale up to ${formatRate(maximum)}`}
+    >
+      {(["receiveBytesPerSecond", "transmitBytesPerSecond"] as const).map((key) => {
+        let connected = false;
+        const path = history.map((point, index) => {
+          const value = point.network?.[key];
+          if (value === undefined || value === null || !Number.isFinite(value)) {
+            connected = false;
+            return "";
+          }
+          const x = index / Math.max(1, history.length - 1) * 100;
+          const y = 27 - Math.max(0, value) / maximum * 26;
+          const segment = `${connected ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`;
+          connected = true;
+          return segment;
+        }).join(" ");
+        return <path key={key} className={key} d={path} />;
+      })}
+    </svg>
+  );
+}
+
 export function HostPulse({
   sessionName,
   workspaceId = null,
@@ -584,6 +618,9 @@ export function HostPulse({
     : snapshot ? 0 : null;
   const tone = snapshotTone(snapshot, error);
   const disk = snapshot?.latest.disk ?? null;
+  const network = snapshot?.latest.network ?? null;
+  const download = formatRate(network?.receiveBytesPerSecond ?? null);
+  const upload = formatRate(network?.transmitBytesPerSecond ?? null);
   const cpuValues = useMemo(
     () => snapshot?.history.map((point) => point.cpuPercent) ?? [],
     [snapshot?.history],
@@ -837,6 +874,29 @@ export function HostPulse({
               : "Waiting for a disk sample"}</p>
           )}
         </section>
+        <section className="host-pulse-network-section" aria-label="Network bandwidth">
+          <header>
+            <span>NETWORK</span>
+            <small title={network?.interfaces.join(", ")}>{network?.interfaces.join(" + ") ?? "--"}</small>
+          </header>
+          {network ? (
+            <>
+              <div className="host-pulse-network-rates" aria-live="polite">
+                <span className="download"><small>↓ DOWNLOAD</small><output>{download}</output></span>
+                <span className="upload"><small>↑ UPLOAD</small><output>{upload}</output></span>
+              </div>
+              {network.intervalSeconds === null ? (
+                <p className="host-pulse-detail-empty">Measuring network speed…</p>
+              ) : (
+                <NetworkHistory history={snapshot?.history ?? []} />
+              )}
+            </>
+          ) : (
+            <p className="host-pulse-detail-empty">{snapshot
+              ? "Network bandwidth unavailable"
+              : "Waiting for a network sample"}</p>
+          )}
+        </section>
         <footer className="host-pulse-footer">
           <div role="group" aria-label="Host metric history range">
             {(["15m", "1h", "24h"] as const).map((range) => (
@@ -884,7 +944,7 @@ export function HostPulse({
         className={`host-pulse-card ${tone}${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}`}
         aria-label={panel.open ? "Hide host metrics" : "Show host metrics"}
         aria-expanded={panel.open}
-        title={`Host Pulse: CPU ${percent(snapshot?.latest.cpuPercent ?? null)}, memory ${percent(memoryPercent)}, disk / ${percent(disk?.usedPercent ?? null)}`}
+        title={`Host Pulse: CPU ${percent(snapshot?.latest.cpuPercent ?? null)}, memory ${percent(memoryPercent)}, disk / ${percent(disk?.usedPercent ?? null)}, download ${download}, upload ${upload}`}
         onClick={() => updatePanel((current) => current.open
           ? { ...current, open: false, pinned: false }
           : { ...current, open: true })}

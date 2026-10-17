@@ -63,6 +63,29 @@ class DiskUsage:
 
 
 @dataclass(frozen=True)
+class NetworkInterfaceCounters:
+    name: str
+    received_bytes: int
+    transmitted_bytes: int
+
+
+@dataclass(frozen=True)
+class NetworkUsage:
+    interfaces: tuple[str, ...]
+    receive_bytes_per_second: float | None
+    transmit_bytes_per_second: float | None
+    interval_seconds: float | None
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "interfaces": list(self.interfaces),
+            "receiveBytesPerSecond": self.receive_bytes_per_second,
+            "transmitBytesPerSecond": self.transmit_bytes_per_second,
+            "intervalSeconds": self.interval_seconds,
+        }
+
+
+@dataclass(frozen=True)
 class HostCounters:
     cpu_total: int
     cpu_idle: int
@@ -80,6 +103,7 @@ class HostCounters:
     swap_out_pages: int | None = None
     page_size_bytes: int = 4096
     disk_usage: DiskUsage | None = None
+    network_interfaces: tuple[NetworkInterfaceCounters, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +124,7 @@ class HostMetricSample:
     cpu_count: int
     hostname: str
     disk_usage: DiskUsage | None = None
+    network_usage: NetworkUsage | None = None
 
     def latest_payload(self) -> dict[str, Any]:
         pressure = None
@@ -130,6 +155,7 @@ class HostMetricSample:
             "swapOutBytesPerSecond": self.swap_out_bytes_per_second,
             "loadAverage": list(self.load_average),
             "disk": self.disk_usage.payload() if self.disk_usage is not None else None,
+            "network": self.network_usage.payload() if self.network_usage is not None else None,
         }
 
 
@@ -230,12 +256,75 @@ def _read_optional_disk_usage(path: Path) -> DiskUsage | None:
     )
 
 
+def _default_route_interfaces(route_path: Path, ipv6_route_path: Path) -> set[str]:
+    interfaces: set[str] = set()
+    for path, ipv6 in ((route_path, False), (ipv6_route_path, True)):
+        try:
+            content = path.read_text(encoding="ascii")
+        except (OSError, UnicodeError):
+            continue
+        for line in content.splitlines():
+            parts = line.split()
+            try:
+                if ipv6:
+                    if len(parts) != 10 or parts[0] != "0" * 32 or parts[1] != "00":
+                        continue
+                    name, flags = parts[9], int(parts[8], 16)
+                else:
+                    if len(parts) < 8 or parts[1] != "00000000" or parts[7] != "00000000":
+                        continue
+                    name, flags = parts[0], int(parts[3], 16)
+            except ValueError:
+                continue
+            if name != "lo" and flags & 1 and not flags & 0x200:
+                interfaces.add(name)
+    return interfaces
+
+
+def _read_optional_network_counters(
+    dev_path: Path,
+    interfaces_path: Path,
+    route_path: Path,
+    ipv6_route_path: Path,
+) -> tuple[NetworkInterfaceCounters, ...] | None:
+    try:
+        content = dev_path.read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        return None
+    counters: dict[str, NetworkInterfaceCounters] = {}
+    for line in content.splitlines():
+        name, separator, raw = line.rpartition(":")
+        name = name.strip()
+        values = raw.split()
+        if not separator or not name or name == "lo" or len(values) < 16:
+            continue
+        try:
+            received, transmitted = int(values[0]), int(values[8])
+        except ValueError:
+            continue
+        if received >= 0 and transmitted >= 0:
+            counters[name] = NetworkInterfaceCounters(name, received, transmitted)
+
+    # Count traffic at one layer: hardware NICs on hosts, routed NICs in containers.
+    # Summing bridges, veth pairs and loopback too would count the same bytes again.
+    try:
+        physical = {name for name in counters if (interfaces_path / name / "device").exists()}
+    except OSError:
+        physical = set()
+    selected = physical or _default_route_interfaces(route_path, ipv6_route_path)
+    return tuple(counters[name] for name in sorted(selected) if name in counters) or None
+
+
 def read_linux_host_counters(
     stat_path: Path = Path("/proc/stat"),
     meminfo_path: Path = Path("/proc/meminfo"),
     pressure_path: Path = Path("/proc/pressure/memory"),
     vmstat_path: Path = Path("/proc/vmstat"),
     disk_path: Path = Path("/"),
+    net_dev_path: Path = Path("/proc/net/dev"),
+    net_interfaces_path: Path = Path("/sys/class/net"),
+    net_route_path: Path = Path("/proc/net/route"),
+    net_ipv6_route_path: Path = Path("/proc/net/ipv6_route"),
 ) -> HostCounters:
     aggregate: tuple[int, int] | None = None
     cores: list[tuple[int, tuple[int, int]]] = []
@@ -292,6 +381,9 @@ def read_linux_host_counters(
         swap_out_pages=swap_out_pages,
         page_size_bytes=max(1, page_size),
         disk_usage=_read_optional_disk_usage(disk_path),
+        network_interfaces=_read_optional_network_counters(
+            net_dev_path, net_interfaces_path, net_route_path, net_ipv6_route_path,
+        ),
     )
 
 
@@ -342,6 +434,7 @@ class HostMetricsSampler:
         self._previous_cpu: tuple[int, int] | None = None
         self._previous_cpu_cores: tuple[tuple[int, int], ...] = ()
         self._previous_swap: tuple[float, int, int] | None = None
+        self._previous_network: tuple[float, tuple[NetworkInterfaceCounters, ...]] | None = None
         self._last_sample_monotonic: float | None = None
         self._sample_lock = asyncio.Lock()
         self._last_error: str | None = None
@@ -397,6 +490,44 @@ class HostMetricsSampler:
                 counters.swap_out_pages,
             )
 
+        network_usage: NetworkUsage | None = None
+        interfaces = counters.network_interfaces
+        if interfaces:
+            receive_rate: float | None = None
+            transmit_rate: float | None = None
+            interval: float | None = None
+            if self._previous_network is not None:
+                previous_at, previous_interfaces = self._previous_network
+                elapsed = sampled_monotonic - previous_at
+                if (
+                    0 < elapsed <= self.sample_seconds * 3
+                    and tuple(item.name for item in interfaces)
+                    == tuple(item.name for item in previous_interfaces)
+                    and all(
+                        current.received_bytes >= previous.received_bytes
+                        and current.transmitted_bytes >= previous.transmitted_bytes
+                        for current, previous in zip(interfaces, previous_interfaces)
+                    )
+                ):
+                    receive_rate = round(sum(
+                        current.received_bytes - previous.received_bytes
+                        for current, previous in zip(interfaces, previous_interfaces)
+                    ) / elapsed, 2)
+                    transmit_rate = round(sum(
+                        current.transmitted_bytes - previous.transmitted_bytes
+                        for current, previous in zip(interfaces, previous_interfaces)
+                    ) / elapsed, 2)
+                    interval = round(elapsed, 3)
+            network_usage = NetworkUsage(
+                interfaces=tuple(item.name for item in interfaces),
+                receive_bytes_per_second=receive_rate,
+                transmit_bytes_per_second=transmit_rate,
+                interval_seconds=interval,
+            )
+            self._previous_network = (sampled_monotonic, interfaces)
+        else:
+            self._previous_network = None
+
         sample = HostMetricSample(
             observed_at=observed_at,
             cpu_percent=cpu_percent,
@@ -420,6 +551,7 @@ class HostMetricsSampler:
             cpu_count=counters.cpu_count,
             hostname=counters.hostname,
             disk_usage=counters.disk_usage,
+            network_usage=network_usage,
         )
         self._history.append(sample)
         self._last_sample_monotonic = sampled_monotonic
@@ -438,12 +570,14 @@ class HostMetricsSampler:
                 and self._monotonic() - sampled_at < self._request_cache_seconds
             )
             if not cache_fresh:
-                first_sample = not self._history
+                needs_baseline = (
+                    sampled_at is None
+                    or self._monotonic() - sampled_at > self.sample_seconds * 3
+                )
                 sample = await self._sample_once_unlocked()
                 if (
-                    first_sample
+                    needs_baseline
                     and sample is not None
-                    and sample.cpu_percent is None
                     and self._bootstrap_seconds > 0
                 ):
                     await asyncio.sleep(self._bootstrap_seconds)
@@ -498,6 +632,21 @@ class HostMetricsSampler:
                 core_values.append(
                     round(sum(values) / len(values), 2) if values else None
                 )
+            network_values = [
+                sample.network_usage for sample in chunk if sample.network_usage is not None
+            ]
+            network_rates: dict[str, float | None] | None = None
+            if network_values:
+                network_rates = {}
+                for key, attribute in (
+                    ("receiveBytesPerSecond", "receive_bytes_per_second"),
+                    ("transmitBytesPerSecond", "transmit_bytes_per_second"),
+                ):
+                    rates = [
+                        rate for sample in network_values
+                        if (rate := getattr(sample, attribute)) is not None
+                    ]
+                    network_rates[key] = round(sum(rates) / len(rates), 2) if rates else None
             points.append(
                 {
                     "observedAt": round(chunk[-1].observed_at, 3),
@@ -510,6 +659,7 @@ class HostMetricsSampler:
                     "memoryUsedBytes": round(
                         sum(sample.memory_used_bytes for sample in chunk) / len(chunk)
                     ),
+                    "network": network_rates,
                 }
             )
         return points

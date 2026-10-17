@@ -12,8 +12,10 @@ from tmux_console.host_metrics import (
     DiskUsage,
     HostCounters,
     HostMetricsSampler,
+    NetworkInterfaceCounters,
     PressureAverages,
     _read_optional_disk_usage,
+    _read_optional_network_counters,
     read_linux_host_counters,
 )
 
@@ -28,6 +30,7 @@ def counters(
     pressure_full: PressureAverages | None = None,
     swap_in_pages: int | None = None,
     swap_out_pages: int | None = None,
+    network_interfaces: tuple[NetworkInterfaceCounters, ...] | None = None,
 ) -> HostCounters:
     return HostCounters(
         cpu_total=total,
@@ -46,14 +49,29 @@ def counters(
         swap_out_pages=swap_out_pages,
         page_size_bytes=4096,
         disk_usage=DiskUsage("/", 10_000, 6_000, 3_000),
+        network_interfaces=network_interfaces,
     )
 
 
-def test_reads_linux_cpu_memory_pressure_and_swap_counters(tmp_path, monkeypatch):
+def net_dev_line(name: str, received: int, transmitted: int) -> str:
+    return f"{name}: {received} 0 0 0 0 0 0 0 {transmitted} 0 0 0 0 0 0 0\n"
+
+
+def test_reads_linux_cpu_memory_pressure_swap_and_network_counters(tmp_path, monkeypatch):
     stat_path = tmp_path / "stat"
     meminfo_path = tmp_path / "meminfo"
     pressure_path = tmp_path / "pressure"
     vmstat_path = tmp_path / "vmstat"
+    net_dev_path = tmp_path / "net-dev"
+    net_interfaces_path = tmp_path / "interfaces"
+    (net_interfaces_path / "ens3" / "device").mkdir(parents=True)
+    net_dev_path.write_text(
+        net_dev_line("lo", 1_000_000, 1_000_000)
+        + net_dev_line("ens3", 12_000, 34_000)
+        + net_dev_line("docker0", 90_000, 80_000)
+        + net_dev_line("veth123", 80_000, 90_000),
+        encoding="ascii",
+    )
     stat_path.write_text(
         "cpu  100 5 20 800 30 2 3 4 0 0\n"
         "cpu1 20 0 10 160 10 0 0 0\n"
@@ -86,6 +104,10 @@ def test_reads_linux_cpu_memory_pressure_and_swap_counters(tmp_path, monkeypatch
         meminfo_path,
         pressure_path,
         vmstat_path,
+        net_dev_path=net_dev_path,
+        net_interfaces_path=net_interfaces_path,
+        net_route_path=tmp_path / "missing-route",
+        net_ipv6_route_path=tmp_path / "missing-ipv6-route",
     )
 
     assert result.cpu_total == 964
@@ -104,6 +126,70 @@ def test_reads_linux_cpu_memory_pressure_and_swap_counters(tmp_path, monkeypatch
     assert result.cpu_count == 2
     assert result.hostname == "mux-host"
     assert result.disk_usage == DiskUsage("/", 10_000, 6_000, 3_000)
+    assert result.network_interfaces == (NetworkInterfaceCounters("ens3", 12_000, 34_000),)
+
+
+@pytest.mark.parametrize(
+    ("physical", "ipv4", "ipv6", "expected"),
+    [
+        (["ens3", "ens4"], "docker0 00000000 00000000 0001 0 0 0 00000000", "", ["ens3", "ens4"]),
+        ([], "eth0 00000000 01000000 0003 0 0 0 00000000", "", ["eth0"]),
+        ([], "", f"{'0' * 32} 00 {'0' * 32} 00 {'0' * 32} 00000400 0 0 00000003 eth0", ["eth0"]),
+        ([], "eth0 00000000 01000000 0002 0 0 0 00000000", "", []),
+        ([], "eth0 00000000 01000000 0201 0 0 0 00000000", "", []),
+        ([], "eth0 00000000 01000000 bad-flags 0 0 0 00000000", "", []),
+        ([], "eth0 0000000A 01000000 0003 0 0 0 000000FF", "", []),
+        ([], "lo 00000000 00000000 0001 0 0 0 00000000", "", []),
+    ],
+)
+def test_network_uses_one_interface_layer_with_routed_fallback(
+    tmp_path, physical, ipv4, ipv6, expected,
+):
+    dev = tmp_path / "dev"
+    route = tmp_path / "route"
+    ipv6_route = tmp_path / "ipv6-route"
+    interfaces = tmp_path / "interfaces"
+    for name in physical:
+        (interfaces / name / "device").mkdir(parents=True)
+    dev.write_text("".join(
+        net_dev_line(name, 100, 200)
+        for name in ["lo", "ens3", "ens4", "eth0", "docker0", "veth123"]
+    ) + "invalid: not-a-counter\n", encoding="ascii")
+    route.write_text(ipv4, encoding="ascii")
+    ipv6_route.write_text(ipv6, encoding="ascii")
+
+    result = _read_optional_network_counters(dev, interfaces, route, ipv6_route)
+
+    assert [item.name for item in result or ()] == expected
+
+
+def test_unavailable_or_malformed_network_counters_are_optional(tmp_path):
+    dev = tmp_path / "dev"
+    arguments = (dev, tmp_path / "interfaces", tmp_path / "route", tmp_path / "ipv6-route")
+    assert _read_optional_network_counters(*arguments) is None
+    (tmp_path / "interfaces" / "eth0" / "device").mkdir(parents=True)
+    dev.write_text(net_dev_line("eth0", -1, 100), encoding="ascii")
+    assert _read_optional_network_counters(*arguments) is None
+    dev.write_text(net_dev_line("eth0", 100, 200).replace("100", "invalid"), encoding="ascii")
+    assert _read_optional_network_counters(*arguments) is None
+    dev.write_bytes(b"\xff")
+    assert _read_optional_network_counters(*arguments) is None
+
+
+def test_network_route_fallback_when_sysfs_access_is_denied(tmp_path, monkeypatch):
+    dev = tmp_path / "dev"
+    route = tmp_path / "route"
+    dev.write_text(net_dev_line("eth0", 100, 200), encoding="ascii")
+    route.write_text("eth0 00000000 01000000 0003 0 0 0 00000000", encoding="ascii")
+
+    def denied(_path):
+        raise PermissionError("sysfs unavailable")
+
+    monkeypatch.setattr(Path, "exists", denied)
+
+    assert _read_optional_network_counters(
+        dev, tmp_path / "interfaces", route, tmp_path / "ipv6-route",
+    ) == (NetworkInterfaceCounters("eth0", 100, 200),)
 
 
 @pytest.mark.parametrize(
@@ -154,6 +240,7 @@ def test_missing_linux_pressure_sources_do_not_hide_core_metrics(tmp_path):
         tmp_path / "missing-pressure",
         tmp_path / "missing-vmstat",
         tmp_path / "missing-disk",
+        net_dev_path=tmp_path / "missing-net-dev",
     )
 
     assert result.cpu_count == 2
@@ -162,6 +249,7 @@ def test_missing_linux_pressure_sources_do_not_hide_core_metrics(tmp_path):
     assert result.swap_in_pages is None
     assert result.swap_out_pages is None
     assert result.disk_usage is None
+    assert result.network_interfaces is None
 
 
 @pytest.mark.asyncio
@@ -182,6 +270,7 @@ async def test_sampler_calculates_per_core_cpu_swap_rates_and_downsamples_histor
             pressure_full=PressureAverages(0.25, 0.1, 0.05),
             swap_in_pages=100 + index * 2,
             swap_out_pages=200 + index,
+            network_interfaces=(NetworkInterfaceCounters("ens3", index * 1000, index * 2000),),
         )
 
     sampler = HostMetricsSampler(
@@ -207,9 +296,75 @@ async def test_sampler_calculates_per_core_cpu_swap_rates_and_downsamples_histor
     assert snapshot["latest"]["swapInBytesPerSecond"] == 1638.4
     assert snapshot["latest"]["swapOutBytesPerSecond"] == 819.2
     assert snapshot["latest"]["memoryPressure"]["some"]["avg10"] == 1.5
+    assert snapshot["latest"]["network"] == {
+        "interfaces": ["ens3"],
+        "receiveBytesPerSecond": 200.0,
+        "transmitBytesPerSecond": 400.0,
+        "intervalSeconds": 5.0,
+    }
     assert 1 < len(snapshot["history"]) <= 180
     assert snapshot["history"][-1]["cpuPercent"] == 80.0
     assert snapshot["history"][-1]["cpuCores"] == [80.0, 20.0]
+    assert snapshot["history"][-1]["network"] == {
+        "receiveBytesPerSecond": 200.0,
+        "transmitBytesPerSecond": 400.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_network_rates_reset_safely_after_counter_changes_missing_data_and_idle_gaps():
+    current = {"now": 0.0, "interfaces": None}
+    sampler = HostMetricsSampler(
+        reader=lambda: counters(1_000, 700, network_interfaces=current["interfaces"]),
+        clock=lambda: 1_700_000_000 - current["now"],  # Wall-clock adjustments cannot change rates.
+        monotonic=lambda: current["now"],
+    )
+    cases = [
+        (0, (NetworkInterfaceCounters("ens3", 1_000, 2_000),), (None, None)),
+        (5, (NetworkInterfaceCounters("ens3", 6_000, 4_500),), (1_000, 500)),
+        (5, (NetworkInterfaceCounters("ens3", 6_000, 4_500),), (None, None)),
+        (10, (NetworkInterfaceCounters("ens3", 500, 600),), (None, None)),
+        (15, (NetworkInterfaceCounters("ens3", 500, 600),), (0, 0)),
+        (20, (NetworkInterfaceCounters("ens3", 5_500, 1_100), NetworkInterfaceCounters("ens4", 100, 100)), (None, None)),
+        (25, None, None),
+        (30, (NetworkInterfaceCounters("ens3", 7_000, 2_000),), (None, None)),
+        (90, (NetworkInterfaceCounters("ens3", 50_000, 10_000),), (None, None)),
+        (95, (NetworkInterfaceCounters("ens3", 55_000, 11_000),), (1_000, 200)),
+    ]
+    for now, interfaces, expected in cases:
+        current.update(now=now, interfaces=interfaces)
+        sample = await sampler.sample_once()
+        assert sample is not None
+        payload = sample.latest_payload()["network"]
+        if expected is None:
+            assert payload is None
+        else:
+            assert (payload["receiveBytesPerSecond"], payload["transmitBytesPerSecond"]) == expected
+
+
+@pytest.mark.asyncio
+async def test_reopening_after_idle_bootstraps_a_current_network_rate():
+    state = {"now": 0.0, "reads": 0}
+
+    def read():
+        state["reads"] += 1
+        state["now"] += 0.2
+        return counters(1_000 + state["reads"] * 100, 700, network_interfaces=(
+            NetworkInterfaceCounters("ens3", round(state["now"] * 1_000), round(state["now"] * 2_000)),
+        ))
+
+    sampler = HostMetricsSampler(
+        reader=read, bootstrap_seconds=0.001,
+        clock=lambda: state["now"], monotonic=lambda: state["now"],
+    )
+    await sampler.collect_snapshot()
+    state["now"] += 60 * 60
+    snapshot = await sampler.collect_snapshot()
+
+    assert state["reads"] == 4
+    assert snapshot["latest"]["network"]["receiveBytesPerSecond"] == 1_000
+    assert snapshot["latest"]["network"]["transmitBytesPerSecond"] == 2_000
+    assert snapshot["latest"]["network"]["intervalSeconds"] == 0.2
 
 
 @pytest.mark.asyncio

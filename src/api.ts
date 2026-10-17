@@ -322,6 +322,17 @@ export interface HostMetricPoint {
   cpuPercent: number | null;
   cpuCores: Array<number | null>;
   memoryUsedBytes: number;
+  network?: HostNetworkRates | null;
+}
+
+export interface HostNetworkRates {
+  receiveBytesPerSecond: number | null;
+  transmitBytesPerSecond: number | null;
+}
+
+export interface HostNetworkUsage extends HostNetworkRates {
+  interfaces: string[];
+  intervalSeconds: number | null;
 }
 
 export interface HostPressureAverages {
@@ -351,6 +362,7 @@ export interface HostMetricLatest extends HostMetricPoint {
   swapOutBytesPerSecond: number | null;
   loadAverage: [number, number, number];
   disk?: HostDiskUsage | null;
+  network?: HostNetworkUsage | null;
 }
 
 export interface HostMetricsSnapshot {
