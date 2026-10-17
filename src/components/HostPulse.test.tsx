@@ -48,6 +48,13 @@ function snapshot(range: HostMetricsSnapshot["range"] = "15m"): HostMetricsSnaps
       swapInBytesPerSecond: 1.5 * 1024 ** 2,
       swapOutBytesPerSecond: 512 * 1024,
       loadAverage: [1.71, 2.37, 2.52],
+      disk: {
+        path: "/",
+        totalBytes: 500 * gib,
+        usedBytes: 240 * gib,
+        availableBytes: 260 * gib,
+        usedPercent: 48,
+      },
     },
     history: [
       {
@@ -109,6 +116,7 @@ describe("HostPulse", () => {
     const card = screen.getByRole("button", { name: "Show host metrics" });
     await waitFor(() => expect(card).toHaveTextContent("27%"));
     expect(card).toHaveTextContent("72%");
+    expect(card).toHaveTextContent("DISK48%");
     expect(getHostMetrics).toHaveBeenCalledWith("15m", expect.any(AbortSignal));
 
     fireEvent.click(card);
@@ -119,6 +127,11 @@ describe("HostPulse", () => {
     expect(within(panel).getByText("22.4 GB")).toBeInTheDocument();
     expect(within(panel).getByText("8.9 GB")).toBeInTheDocument();
     expect(within(panel).getByText("26.0 GB / 64.0 GB")).toBeInTheDocument();
+    const disk = within(panel).getByRole("region", { name: "Disk usage" });
+    expect(within(disk).getByRole("meter", { name: "Disk usage for /" }))
+      .toHaveAttribute("aria-valuenow", "48");
+    expect(within(disk).getByText("240.0 GB / 500.0 GB")).toBeInTheDocument();
+    expect(within(disk).getByText("260.0 GB")).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Overview" }))
       .toHaveAttribute("aria-pressed", "true");
   });
@@ -145,7 +158,37 @@ describe("HostPulse", () => {
     expect(within(panel).getByText("41%")).toBeInTheDocument();
     expect(within(panel).getByText("ACTIVE SWAP I/O")).toBeInTheDocument();
     expect(within(panel).getByText("1.50 MB/s")).toBeInTheDocument();
+    expect(within(panel).getByRole("region", { name: "Disk usage" })).toBeInTheDocument();
     expect(storedPulse().panel.mode).toBe("details");
+  });
+
+  it.each([
+    { usedPercent: 84, tone: "nominal" },
+    { usedPercent: 85, tone: "warm" },
+    { usedPercent: 95, tone: "critical" },
+  ])("includes $usedPercent% disk usage in host health ($tone)", async ({ usedPercent, tone }) => {
+    const data = snapshot();
+    data.latest.disk!.usedPercent = usedPercent;
+    vi.mocked(getHostMetrics).mockResolvedValue(data);
+    renderPulse();
+
+    const card = screen.getByRole("button", { name: "Show host metrics" });
+    await waitFor(() => expect(card).toHaveClass(tone));
+    expect(card).toHaveTextContent(`DISK${usedPercent}%`);
+  });
+
+  it.each([null, undefined])("keeps CPU and memory usable when disk data is %s", async (disk) => {
+    const data = snapshot();
+    data.latest.disk = disk;
+    vi.mocked(getHostMetrics).mockResolvedValue(data);
+    renderPulse();
+
+    const card = screen.getByRole("button", { name: "Show host metrics" });
+    await waitFor(() => expect(card).toHaveTextContent("27%"));
+    expect(card).toHaveTextContent("72%");
+    expect(card).toHaveTextContent("DISK--");
+    fireEvent.click(card);
+    expect(screen.getByText("Disk usage unavailable")).toBeInTheDocument();
   });
 
   it("samples once for the closed card and polls only while the panel is live", async () => {

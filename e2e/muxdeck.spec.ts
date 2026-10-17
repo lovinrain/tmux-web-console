@@ -7642,14 +7642,27 @@ test("desktop Host Pulse samples the server and persists its pinned workspace pa
     const card = page.locator(".host-pulse-card");
     await expect(card).toBeVisible();
     await expect(card).toContainText("MEMORY");
+    await expect(card).toContainText("DISK");
     await expect(card).toContainText(/\d+%/, { timeout: 10_000 });
     await card.click();
 
     const pulse = page.getByRole("dialog", { name: "Host Pulse" });
     await expect(pulse).toBeVisible();
     await expect(pulse.getByText("LOAD AVERAGE")).toBeVisible();
-    await expect(pulse.getByText("AVAILABLE")).toBeVisible();
+    await expect(pulse.locator(".host-pulse-details").getByText("AVAILABLE")).toBeVisible();
     await expect(pulse.getByText("SWAP")).toBeVisible();
+    const disk = pulse.getByRole("region", { name: "Disk usage" });
+    await expect(disk.getByText("USED / TOTAL")).toBeVisible();
+    await expect(disk.getByText("AVAILABLE")).toBeVisible();
+    const diskMeter = disk.getByRole("meter", { name: "Disk usage for /" });
+    await expect(diskMeter).toHaveAttribute("aria-valuenow", /^\d+(\.\d+)?$/);
+    expect(await disk.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await pulse.screenshot({ path: "artifacts/host-pulse-disk-dark.png", animations: "disabled" });
+    const themeToggle = page.getByRole("button", { name: "Light theme", exact: true });
+    await themeToggle.click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await pulse.screenshot({ path: "artifacts/host-pulse-disk-light.png", animations: "disabled" });
+    await themeToggle.click();
     await pulse.getByRole("button", { name: "Details" }).click();
     const cores = pulse.getByRole("region", { name: "Per-core CPU utilization" });
     await expect(cores).toBeVisible();

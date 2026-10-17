@@ -1355,12 +1355,16 @@ not alter tmux or the server-side workspace record. The selected timer scope is
 remembered in that browser.
 
 `Host Pulse` is the adjacent desktop server-health card. It always shows the
-latest aggregate CPU and memory percentages; selecting it opens a non-modal panel
-with an `Overview` and `Details` switch. Overview retains the aggregate CPU and
+latest aggregate CPU, memory, and root-filesystem disk percentages; selecting it
+opens a non-modal panel with an `Overview` and `Details` switch. Overview retains the aggregate CPU and
 memory charts, one/five/fifteen-minute load average, available RAM, and swap use.
 Details shows every logical core with its current load and trace, RAM used and
 headroom, Linux memory PSI `some` and `full` stall averages, swap utilization,
-and measured swap-in/out rates. The chart can select 15-minute, one-hour, or
+and measured swap-in/out rates. Both views include a disk usage bar with used,
+total, and available space for `/`. Disk percentages exclude filesystem-reserved
+space from the available capacity; disk utilization at 85% raises the host status
+to Elevated, and 95% to Critical. Unavailable disk statistics leave CPU and memory
+usable. The chart can select 15-minute, one-hour, or
 24-hour history, while Pause stops that browser's sampling. The title strip moves
 the panel, the corner grip resizes it, and both also support arrow-key operation.
 Open, pinned, paused, view, range, position, and size state are browser-local and
@@ -1372,7 +1376,9 @@ Host instrumentation is request-driven. A desktop card makes one initial request
 then five-second requests and history collection occur only while its floating
 panel is open, visible, and unpaused. The backend reads aggregate and per-core
 `/proc/stat`, `/proc/meminfo`, optional `/proc/pressure/memory`, and optional swap
-counters from `/proc/vmstat` when the API is requested. A short cache and lock
+counters from `/proc/vmstat`, plus filesystem capacity from `statvfs` for `/`,
+when the API is requested. This reads filesystem counters without scanning files
+or creating a disk-usage archive. A short cache and lock
 coalesce near-simultaneous browser requests. The first request takes two closely
 spaced counter reads so CPU and swap rates need not wait five seconds. The bounded
 24-hour in-memory ring returns at most 180 chart points; gaps remain gaps when no

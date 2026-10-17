@@ -21,7 +21,7 @@ const DESKTOP_HOST_QUERY = "(min-width: 1025px), (min-width: 641px) and (min-hei
 const HOST_POLL_MS = 5_000;
 const PANEL_MARGIN = 12;
 const DEFAULT_PANEL_WIDTH = 442;
-const DEFAULT_PANEL_HEIGHT = 386;
+const DEFAULT_PANEL_HEIGHT = 500;
 const MIN_PANEL_WIDTH = 360;
 const MIN_PANEL_HEIGHT = 330;
 const MOVE_STEP = 12;
@@ -251,8 +251,9 @@ function snapshotTone(snapshot: HostMetricsSnapshot | null, error: string | null
     : 0;
   const cpu = snapshot.latest.cpuPercent ?? 0;
   const pressure = snapshot.latest.memoryPressure?.some?.avg10 ?? 0;
-  if (cpu >= 92 || memoryPercent >= 94 || pressure >= 20) return "critical";
-  if (cpu >= 78 || memoryPercent >= 86 || pressure >= 5) return "warm";
+  const diskPercent = snapshot.latest.disk?.usedPercent ?? 0;
+  if (cpu >= 92 || memoryPercent >= 94 || pressure >= 20 || diskPercent >= 95) return "critical";
+  if (cpu >= 78 || memoryPercent >= 86 || pressure >= 5 || diskPercent >= 85) return "warm";
   return "nominal";
 }
 
@@ -582,6 +583,7 @@ export function HostPulse({
     ? snapshot.latest.swapUsedBytes / snapshot.latest.swapTotalBytes * 100
     : snapshot ? 0 : null;
   const tone = snapshotTone(snapshot, error);
+  const disk = snapshot?.latest.disk ?? null;
   const cpuValues = useMemo(
     () => snapshot?.history.map((point) => point.cpuPercent) ?? [],
     [snapshot?.history],
@@ -805,6 +807,36 @@ export function HostPulse({
             </section>
           </div>
         )}
+        <section className="host-pulse-disk-section" aria-label="Disk usage">
+          <header>
+            <span>DISK <small>{disk?.path ?? "/"}</small></span>
+            <strong>{percent(disk?.usedPercent ?? null)}</strong>
+          </header>
+          {disk ? (
+            <>
+              <div
+                className="host-pulse-disk-bar"
+                role="meter"
+                aria-label={`Disk usage for ${disk.path}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={disk.usedPercent}
+              >
+                <span style={{ width: `${Math.max(0, Math.min(100, disk.usedPercent))}%` }} />
+              </div>
+              <div className="host-pulse-disk-stats">
+                <span><small>USED / TOTAL</small><strong>
+                  {formatBytes(disk.usedBytes)} / {formatBytes(disk.totalBytes)}
+                </strong></span>
+                <span><small>AVAILABLE</small><strong>{formatBytes(disk.availableBytes)}</strong></span>
+              </div>
+            </>
+          ) : (
+            <p className="host-pulse-detail-empty">{snapshot
+              ? "Disk usage unavailable"
+              : "Waiting for a disk sample"}</p>
+          )}
+        </section>
         <footer className="host-pulse-footer">
           <div role="group" aria-label="Host metric history range">
             {(["15m", "1h", "24h"] as const).map((range) => (
@@ -852,7 +884,7 @@ export function HostPulse({
         className={`host-pulse-card ${tone}${panel.open ? " window-open" : ""}${panel.pinned ? " window-pinned" : ""}`}
         aria-label={panel.open ? "Hide host metrics" : "Show host metrics"}
         aria-expanded={panel.open}
-        title={`Host Pulse: CPU ${percent(snapshot?.latest.cpuPercent ?? null)}, memory ${percent(memoryPercent)}`}
+        title={`Host Pulse: CPU ${percent(snapshot?.latest.cpuPercent ?? null)}, memory ${percent(memoryPercent)}, disk / ${percent(disk?.usedPercent ?? null)}`}
         onClick={() => updatePanel((current) => current.open
           ? { ...current, open: false, pinned: false }
           : { ...current, open: true })}
@@ -860,6 +892,7 @@ export function HostPulse({
         <span className="host-pulse-card-icon"><HostPulseIcon /></span>
         <span><small>CPU</small><strong>{percent(snapshot?.latest.cpuPercent ?? null)}</strong></span>
         <span><small>MEMORY</small><strong>{percent(memoryPercent)}</strong></span>
+        <span><small>DISK</small><strong>{percent(disk?.usedPercent ?? null)}</strong></span>
         {(panel.pinned || panel.paused) && (
           <em aria-hidden="true">{panel.pinned ? "PIN" : "PAUSE"}</em>
         )}

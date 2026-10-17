@@ -1319,6 +1319,7 @@ html[data-theme="light"] .host-pulse-panel-header h2 {
 
 html[data-theme="light"] .host-pulse-metrics article,
 html[data-theme="light"] .host-pulse-details,
+html[data-theme="light"] .host-pulse-disk-section,
 html[data-theme="light"] .host-pulse-core-section,
 html[data-theme="light"] .host-pulse-pressure-section {
   background: rgba(250, 253, 251, 0.88);
@@ -1372,6 +1373,11 @@ html[data-theme="light"] .host-pulse-metrics article > header {
   color: #5f776b;
 }
 
+html[data-theme="light"] .host-pulse-disk-section > header,
+html[data-theme="light"] .host-pulse-disk-stats small {
+  color: #5f776b;
+}
+
 html[data-theme="light"] .host-pulse-metrics article > header small,
 html[data-theme="light"] .host-pulse-details small,
 html[data-theme="light"] .host-pulse-footer > span,
@@ -1380,7 +1386,8 @@ html[data-theme="light"] .host-pulse-footnote {
 }
 
 html[data-theme="light"] .host-pulse-metrics article > output,
-html[data-theme="light"] .host-pulse-details strong {
+html[data-theme="light"] .host-pulse-details strong,
+html[data-theme="light"] .host-pulse-disk-section strong {
   color: #263b33;
 }
 
@@ -1388,7 +1395,8 @@ html[data-theme="light"] .host-pulse-sparkline path {
   stroke: #dce5df;
 }
 
-html[data-theme="light"] .host-pulse-memory-bar {
+html[data-theme="light"] .host-pulse-memory-bar,
+html[data-theme="light"] .host-pulse-disk-bar {
   background: #d8e2dc;
 }
 

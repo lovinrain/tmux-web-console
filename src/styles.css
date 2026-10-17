@@ -9155,11 +9155,64 @@ html.workspace-timer-moving * {
   border-radius: 9px;
 }
 
-.host-pulse-memory-bar span {
+.host-pulse-memory-bar span,
+.host-pulse-disk-bar span {
   display: block;
   height: 100%;
   background: linear-gradient(90deg, var(--host-accent), var(--host-secondary));
   border-radius: inherit;
+}
+
+.host-pulse-disk-section {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 9px 10px;
+  background: rgba(3, 9, 6, 0.7);
+  border: 1px solid color-mix(in srgb, var(--host-accent) 17%, #2c3e34);
+  border-radius: 4px;
+}
+
+.host-pulse-disk-section > header,
+.host-pulse-disk-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.host-pulse-disk-section > header,
+.host-pulse-disk-stats small {
+  color: #6f8579;
+  font-size: 7px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+}
+
+.host-pulse-disk-section > header small {
+  margin-left: 5px;
+}
+
+.host-pulse-disk-section strong {
+  color: #dcebe3;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.host-pulse-disk-stats > span {
+  display: grid;
+  gap: 3px;
+}
+
+.host-pulse-disk-stats > span:last-child {
+  text-align: right;
+}
+
+.host-pulse-disk-bar {
+  height: 5px;
+  overflow: hidden;
+  background: #1c2b23;
+  border-radius: 9px;
 }
 
 .host-pulse-details {
@@ -11975,12 +12028,12 @@ button[data-hold-scroll="true"] {
     --host-accent: var(--cyan);
     position: relative;
     display: grid;
-    width: 132px;
-    min-width: 112px;
+    width: 168px;
+    min-width: 148px;
     height: 46px;
     min-height: 46px;
-    grid-template-columns: 25px repeat(2, minmax(0, 1fr));
-    flex: 0 1 132px;
+    grid-template-columns: 25px repeat(3, minmax(0, 1fr));
+    flex: 0 1 168px;
     align-items: stretch;
     padding: 0;
     overflow: hidden;
@@ -14349,10 +14402,10 @@ html.history-resizing * {
   }
 
   .host-pulse-card {
-    width: 92px;
-    min-width: 84px;
-    grid-template-columns: 21px repeat(2, minmax(0, 1fr));
-    flex-basis: 92px;
+    width: 120px;
+    min-width: 110px;
+    grid-template-columns: 21px repeat(3, minmax(0, 1fr));
+    flex-basis: 120px;
   }
 
   .host-pulse-card small {

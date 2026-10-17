@@ -330,6 +330,14 @@ export interface HostPressureAverages {
   avg300: number;
 }
 
+export interface HostDiskUsage {
+  path: string;
+  totalBytes: number;
+  usedBytes: number;
+  availableBytes: number;
+  usedPercent: number;
+}
+
 export interface HostMetricLatest extends HostMetricPoint {
   memoryTotalBytes: number;
   memoryAvailableBytes: number;
@@ -342,6 +350,7 @@ export interface HostMetricLatest extends HostMetricPoint {
   swapInBytesPerSecond: number | null;
   swapOutBytesPerSecond: number | null;
   loadAverage: [number, number, number];
+  disk?: HostDiskUsage | null;
 }
 
 export interface HostMetricsSnapshot {

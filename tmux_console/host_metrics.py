@@ -4,6 +4,7 @@ import asyncio
 import logging
 import math
 import os
+import shutil
 import socket
 import time
 from collections import deque
@@ -43,6 +44,25 @@ class PressureAverages:
 
 
 @dataclass(frozen=True)
+class DiskUsage:
+    path: str
+    total_bytes: int
+    used_bytes: int
+    available_bytes: int
+
+    def payload(self) -> dict[str, Any]:
+        usable_bytes = self.used_bytes + self.available_bytes
+        return {
+            "path": self.path,
+            "totalBytes": self.total_bytes,
+            "usedBytes": self.used_bytes,
+            "availableBytes": self.available_bytes,
+            "usedPercent": round(100 * self.used_bytes / usable_bytes, 2)
+            if usable_bytes > 0 else 0.0,
+        }
+
+
+@dataclass(frozen=True)
 class HostCounters:
     cpu_total: int
     cpu_idle: int
@@ -59,6 +79,7 @@ class HostCounters:
     swap_in_pages: int | None = None
     swap_out_pages: int | None = None
     page_size_bytes: int = 4096
+    disk_usage: DiskUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +99,7 @@ class HostMetricSample:
     load_average: tuple[float, float, float]
     cpu_count: int
     hostname: str
+    disk_usage: DiskUsage | None = None
 
     def latest_payload(self) -> dict[str, Any]:
         pressure = None
@@ -107,6 +129,7 @@ class HostMetricSample:
             "swapInBytesPerSecond": self.swap_in_bytes_per_second,
             "swapOutBytesPerSecond": self.swap_out_bytes_per_second,
             "loadAverage": list(self.load_average),
+            "disk": self.disk_usage.payload() if self.disk_usage is not None else None,
         }
 
 
@@ -192,11 +215,27 @@ def _read_optional_swap_counters(vmstat_path: Path) -> tuple[int | None, int | N
     return values.get("pswpin"), values.get("pswpout")
 
 
+def _read_optional_disk_usage(path: Path) -> DiskUsage | None:
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return None
+    if usage.total <= 0:
+        return None
+    return DiskUsage(
+        path=str(path),
+        total_bytes=usage.total,
+        used_bytes=max(0, min(usage.total, usage.used)),
+        available_bytes=max(0, min(usage.total, usage.free)),
+    )
+
+
 def read_linux_host_counters(
     stat_path: Path = Path("/proc/stat"),
     meminfo_path: Path = Path("/proc/meminfo"),
     pressure_path: Path = Path("/proc/pressure/memory"),
     vmstat_path: Path = Path("/proc/vmstat"),
+    disk_path: Path = Path("/"),
 ) -> HostCounters:
     aggregate: tuple[int, int] | None = None
     cores: list[tuple[int, tuple[int, int]]] = []
@@ -252,6 +291,7 @@ def read_linux_host_counters(
         swap_in_pages=swap_in_pages,
         swap_out_pages=swap_out_pages,
         page_size_bytes=max(1, page_size),
+        disk_usage=_read_optional_disk_usage(disk_path),
     )
 
 
@@ -379,6 +419,7 @@ class HostMetricsSampler:
             load_average=counters.load_average,
             cpu_count=counters.cpu_count,
             hostname=counters.hostname,
+            disk_usage=counters.disk_usage,
         )
         self._history.append(sample)
         self._last_sample_monotonic = sampled_monotonic

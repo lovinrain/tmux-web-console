@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.app import create_app
 from tmux_console.host_metrics import (
+    DiskUsage,
     HostCounters,
     HostMetricsSampler,
     PressureAverages,
+    _read_optional_disk_usage,
     read_linux_host_counters,
 )
 
@@ -41,6 +45,7 @@ def counters(
         swap_in_pages=swap_in_pages,
         swap_out_pages=swap_out_pages,
         page_size_bytes=4096,
+        disk_usage=DiskUsage("/", 10_000, 6_000, 3_000),
     )
 
 
@@ -71,6 +76,10 @@ def test_reads_linux_cpu_memory_pressure_and_swap_counters(tmp_path, monkeypatch
     monkeypatch.setattr("tmux_console.host_metrics.os.getloadavg", lambda: (0.5, 1.0, 1.5))
     monkeypatch.setattr("tmux_console.host_metrics.os.sysconf", lambda _key: 8192)
     monkeypatch.setattr("tmux_console.host_metrics.socket.gethostname", lambda: "mux-host")
+    monkeypatch.setattr(
+        "tmux_console.host_metrics.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=10_000, used=6_000, free=3_000),
+    )
 
     result = read_linux_host_counters(
         stat_path,
@@ -94,6 +103,40 @@ def test_reads_linux_cpu_memory_pressure_and_swap_counters(tmp_path, monkeypatch
     assert result.load_average == (0.5, 1.0, 1.5)
     assert result.cpu_count == 2
     assert result.hostname == "mux-host"
+    assert result.disk_usage == DiskUsage("/", 10_000, 6_000, 3_000)
+
+
+@pytest.mark.parametrize(
+    ("total", "used", "available", "expected_percent"),
+    [
+        (10_000, 6_000, 3_000, 66.67),
+        (10_000, 10_000, 0, 100.0),
+        (10_000, 10_000, -100, 100.0),
+        (10_000, 0, 10_000, 0.0),
+        (0, 0, 0, None),
+    ],
+)
+def test_disk_usage_handles_reserved_full_empty_and_unavailable_filesystems(
+    monkeypatch, total, used, available, expected_percent,
+):
+    monkeypatch.setattr(
+        "tmux_console.host_metrics.shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=total, used=used, free=available),
+    )
+
+    result = _read_optional_disk_usage(Path("/"))
+
+    if expected_percent is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result.payload() == {
+            "path": "/",
+            "totalBytes": total,
+            "usedBytes": used,
+            "availableBytes": max(0, available),
+            "usedPercent": expected_percent,
+        }
 
 
 def test_missing_linux_pressure_sources_do_not_hide_core_metrics(tmp_path):
@@ -110,6 +153,7 @@ def test_missing_linux_pressure_sources_do_not_hide_core_metrics(tmp_path):
         meminfo_path,
         tmp_path / "missing-pressure",
         tmp_path / "missing-vmstat",
+        tmp_path / "missing-disk",
     )
 
     assert result.cpu_count == 2
@@ -117,6 +161,7 @@ def test_missing_linux_pressure_sources_do_not_hide_core_metrics(tmp_path):
     assert result.memory_pressure_full is None
     assert result.swap_in_pages is None
     assert result.swap_out_pages is None
+    assert result.disk_usage is None
 
 
 @pytest.mark.asyncio
@@ -201,6 +246,13 @@ async def test_host_metrics_api_samples_only_on_request_and_caches_rapid_request
         assert payload["collectionMode"] == "on-demand"
         assert payload["latest"]["cpuPercent"] == 75.0
         assert payload["latest"]["cpuCores"] == [80.0]
+        assert payload["latest"]["disk"] == {
+            "path": "/",
+            "totalBytes": 10_000,
+            "usedBytes": 6_000,
+            "availableBytes": 3_000,
+            "usedPercent": 66.67,
+        }
         assert current["reads"] == 2
 
         cached = await client.get("/api/host-metrics")
