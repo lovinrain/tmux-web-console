@@ -27,6 +27,7 @@ interface WorkspaceGroupDialogProps {
   sessions: readonly Session[];
   groupId?: string | null;
   initialSession?: string | null;
+  initialSessions?: readonly string[];
   onSave: (group: WorkspaceTabGroup) => void;
   onDelete: (groupId: string) => void;
   onClose: () => void;
@@ -51,6 +52,7 @@ export function WorkspaceGroupDialog({
   sessions,
   groupId = null,
   initialSession = null,
+  initialSessions,
   onSave,
   onDelete,
   onClose,
@@ -65,6 +67,7 @@ export function WorkspaceGroupDialog({
   );
   const [selectedTabs, setSelectedTabs] = useState<Set<string>>(() => {
     if (existing) return new Set(existing.tabs);
+    if (initialSessions) return new Set(initialSessions.filter((tab) => openSessions.includes(tab)));
     // Moving the active group's last tab makes creation look like a rename.
     // Only suggest an ungrouped tab; moving grouped tabs must be explicit.
     const groupedTabs = new Set(groups.flatMap((group) => group.tabs));

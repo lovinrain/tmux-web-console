@@ -72,7 +72,7 @@ describe("WorkspaceGroupDialog", () => {
         groups={[]}
         openSessions={["alpha", "beta"]}
         sessions={sessions}
-        initialSession="beta"
+        initialSessions={["beta", "alpha", "missing", "beta"]}
         onSave={onSave}
         onDelete={vi.fn()}
         onClose={onClose}
@@ -82,12 +82,13 @@ describe("WorkspaceGroupDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "Create a group" });
     const create = within(dialog).getByRole("button", { name: "Create group" });
     expect(create).toBeDisabled();
+    expect(within(dialog).getByRole("checkbox", { name: /alpha/i })).toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: /beta/i })).toBeChecked();
 
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Group name" }), {
       target: { value: "Release lane" },
     });
     fireEvent.click(within(dialog).getByRole("radio", { name: "orange" }));
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: /alpha/i }));
     fireEvent.click(create);
 
     expect(onSave).toHaveBeenCalledOnce();

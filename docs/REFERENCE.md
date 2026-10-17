@@ -1443,17 +1443,22 @@ accessible 44px-or-larger controls, alongside reorder, terminate, and close, so
 the actions remain available on compact and touch layouts.
 
 `New group` in the scrollable tab strip opens the group editor for a required
-name, one of nine colors, and one or more open tabs. It initially selects the
-active tab only if that tab is ungrouped, otherwise the first ungrouped tab.
-When all tabs already belong to groups, choose tabs explicitly; creating a group
-never moves existing members by default. Moving a group's last member removes
+name, one of nine colors, and one or more open tabs. When tabs are selected, the
+editor starts with those tabs checked, including selected members of existing
+groups. With no selection it suggests the active tab if ungrouped, otherwise the
+first ungrouped tab; if all tabs are grouped, choose members explicitly.
+Moving a group's last member removes
 that empty group. A group stays contiguous and
 moves as one block; member-tab arrows only reorder within that group, while an
 ungrouped tab moves across a neighboring group atomically. The group chip can
 collapse every member, including an active parent or child. Folding keeps the
 current console open; the group header highlights its active session and names
 it in the tooltip. Drag the header to move the whole group with its nested
-sessions, or use its existing move arrows. Editing membership
+sessions, or use its existing move arrows. Drop selected tabs (or one tab) on a
+group name to add them to that group, including a collapsed group. The header
+outline highlights a membership drop; edge markers still indicate reordering.
+Unselected source members and the destination's name, color and collapse state
+are preserved, as are nested session families. Editing membership
 can move tabs between groups, while `Ungroup tabs` removes only the grouping and
 never closes a tmux session. Mobile Overview repeats New/Edit group access, and
 adds whole-group up/down controls. Tab groups are a multi-tab-view concern: the

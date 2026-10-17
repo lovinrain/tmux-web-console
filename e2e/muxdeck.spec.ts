@@ -5184,6 +5184,90 @@ test("sidebar separators save with a temporary workspace and can be removed afte
   }
 });
 
+test("selected tabs create a group and join a collapsed group when dragged onto its name", async ({ page, request }, testInfo) => {
+  const helpers = ["a", "b", "c", "d", "e"].map((suffix) => `${sessionName}-group-selection-${suffix}`);
+  for (const name of helpers) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const tabs = [sessionName, ...helpers];
+  const selected = [helpers[0], helpers[2]];
+  const original = { id: "original", name: "Original", color: "green", collapsed: false, tabs: helpers.slice(0, 3) };
+  const target = { id: "target", name: "Target", color: "cyan", collapsed: true, tabs: helpers.slice(3) };
+  const created = await request.post("/mux/api/workspaces", {
+    data: { name: "Selection grouping", tabs, groups: [original, target], activeSession: sessionName },
+  });
+  expect(created.ok()).toBe(true);
+  const workspaceId = (await created.json()).workspace.id;
+  const identities = tabs.map(workspaceTmuxIdentity);
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?workspace=${workspaceId}${tabs.map((name) => `&tab=${name}`).join("")}`);
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    for (const name of selected) {
+      await page.locator(`[data-workspace-session-name="${name}"] [role="tab"]`).click({ modifiers: ["Control"] });
+    }
+    await page.getByRole("button", { name: "Create tab group" }).click();
+    const dialog = page.getByRole("dialog", { name: "Create a group" });
+    await expect(dialog.getByRole("checkbox", { checked: true })).toHaveCount(2);
+    for (const name of selected) await expect(dialog.getByRole("checkbox", { name: new RegExp(name) })).toBeChecked();
+    await expect(dialog.getByRole("checkbox", { name: new RegExp(helpers[1]) })).not.toBeChecked();
+    await dialog.getByRole("textbox", { name: "Group name" }).fill("Selected work");
+    await dialog.getByRole("radio", { name: "purple" }).check();
+    await dialog.getByRole("button", { name: "Create group" }).click();
+    const selectedGroup = page.locator("[data-workspace-tab-group-id]").filter({
+      has: page.getByRole("button", { name: "Collapse Selected work tab group" }),
+    });
+    await expect(selectedGroup.getByRole("tab")).toHaveCount(2);
+    await expect(page.locator('[data-workspace-tab-group-id="original"] [role="tab"]')).toHaveCount(1);
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      return (await response.json()).workspace.groups.map((group: { name: string; tabs: string[] }) => ({ name: group.name, tabs: group.tabs }));
+    }).toEqual([
+      { name: "Selected work", tabs: selected },
+      { name: "Original", tabs: [helpers[1]] },
+      { name: "Target", tabs: helpers.slice(3) },
+    ]);
+
+    const header = page.getByRole("button", { name: "Expand Target tab group" });
+    const targetGroup = page.locator('[data-workspace-tab-group-id="target"]');
+    const terminalFrames = await trackTerminalInputFrames(page, ["dragstart", "dragover", "drop"]);
+    const source = page.locator(`[data-workspace-session-name="${selected[0]}"] [role="tab"]`);
+    const sourceBounds = (await source.boundingBox())!;
+    const targetBounds = (await header.boundingBox())!;
+    await page.mouse.move(sourceBounds.x + sourceBounds.width / 2, sourceBounds.y + sourceBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(sourceBounds.x + sourceBounds.width / 2 + 8, sourceBounds.y + sourceBounds.height / 2, { steps: 3 });
+    await page.mouse.move(targetBounds.x + targetBounds.width / 2, targetBounds.y + targetBounds.height / 2, { steps: 12 });
+    await page.mouse.move(targetBounds.x + targetBounds.width / 2 + 1, targetBounds.y + targetBounds.height / 2);
+    await expect(targetGroup).toHaveAttribute("data-tab-drop-into", "true");
+    await expect(targetGroup).not.toHaveAttribute("data-tab-drop-edge");
+    await expect(header.locator("..")).toHaveCSS("outline-width", "2px");
+    await page.getByRole("navigation", { name: "Session workspace" })
+      .screenshot({ path: testInfo.outputPath("group-membership-drop.png") });
+    await page.mouse.up();
+    const finalTabs = [sessionName, helpers[1], ...selected, ...helpers.slice(3)];
+    const finalGroups = [{ ...original, tabs: [helpers[1]] }, { ...target, tabs: [...selected, ...target.tabs] }];
+    await expect.poll(async () => {
+      const response = await request.get(`/mux/api/workspaces/${workspaceId}`);
+      const workspace = (await response.json()).workspace;
+      return { tabs: workspace.tabs, groups: workspace.groups };
+    }).toEqual({ tabs: finalTabs, groups: finalGroups });
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await expect(selectedGroup).toHaveCount(0);
+    expect(await terminalFrames()).toBe(0);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expectRoute(page, `/mux/session/${sessionName}`, finalTabs, { workspace: workspaceId });
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await header.click();
+    await expect(targetGroup.getByRole("tab")).toHaveCount(4);
+    expect(tabs.map(workspaceTmuxIdentity)).toEqual(identities);
+  } finally {
+    await page.mouse.up();
+    await request.delete(`/mux/api/workspaces/${workspaceId}`);
+    for (const name of helpers) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
+
 test("workspace tab groups persist in the sidebar and remain manageable on mobile", async ({ page }) => {
   test.setTimeout(60_000);
   const firstGroupedSession = `${sessionName}-group-one`;

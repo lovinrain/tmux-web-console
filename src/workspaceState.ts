@@ -912,6 +912,21 @@ export function setWorkspaceTabGroup(
   });
 }
 
+/** Add members using the destination's current metadata and membership. */
+export function addWorkspaceTabsToGroup(
+  workspace: SessionWorkspaceState,
+  sessionNames: readonly string[],
+  groupId: string,
+): SessionWorkspaceState {
+  const group = workspace.groups.find((candidate) => candidate.id === groupId);
+  if (!group) return workspace;
+  const additions = sessionNames.filter((name) => (
+    workspace.openSessions.includes(name) && !group.tabs.includes(name)
+  ));
+  if (additions.length === 0) return workspace;
+  return setWorkspaceTabGroup(workspace, { ...group, tabs: [...group.tabs, ...additions] });
+}
+
 export function removeWorkspaceTabGroup(
   workspace: SessionWorkspaceState,
   groupId: string,

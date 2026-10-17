@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addWorkspaceTabsToGroup,
   clearClosedWorkspaceHistory,
   closeWorkspaceSession,
   createSessionWorkspace,
@@ -742,6 +743,27 @@ describe("session workspace state", () => {
     expect(grouped.recentSessions).toBe(workspace.recentSessions);
   });
 
+  it("adds a partial selection to an existing group and preserves unselected members and destination metadata", () => {
+    const workspace: SessionWorkspaceState = {
+      openSessions: ["alpha", "beta", "gamma", "delta", "gap", "target", "new-member"],
+      recentSessions: ["alpha"],
+      groups: [
+        { id: "source", name: "Source", color: "cyan", collapsed: false, tabs: ["alpha", "beta", "gamma", "delta"] },
+        { id: "target", name: "Renamed target", color: "purple", collapsed: true, tabs: ["target", "new-member"] },
+      ],
+    };
+    const result = addWorkspaceTabsToGroup(workspace, ["gamma", "alpha", "missing", "alpha", "target"], "target");
+    expect(result.openSessions).toEqual(["beta", "delta", "gap", "alpha", "gamma", "target", "new-member"]);
+    expect(result.groups).toEqual([
+      { ...workspace.groups[0], tabs: ["beta", "delta"] },
+      { ...workspace.groups[1], tabs: ["alpha", "gamma", "target", "new-member"] },
+    ]);
+    expect(result.recentSessions).toBe(workspace.recentSessions);
+    expect(addWorkspaceTabsToGroup(result, ["alpha", "gamma"], "target")).toBe(result);
+    expect(addWorkspaceTabsToGroup(workspace, ["alpha"], "deleted-group")).toBe(workspace);
+    expect(addWorkspaceTabsToGroup(workspace, ["missing"], "target")).toBe(workspace);
+  });
+
   it("does not split the remaining members when regrouping a middle tab", () => {
     const workspace: SessionWorkspaceState = {
       openSessions: ["alpha", "beta", "gamma", "delta"],
@@ -1101,6 +1123,11 @@ describe("nested workspace sessions", () => {
     expect(moveWorkspaceTabGroup(grouped, "family", 1).openSessions)
       .toEqual(["other", "other-child", "parent", "child", "grandchild", "sibling"]);
     expect(moveWorkspaceTabGroup(grouped, "family", 1).parents).toEqual(workspace.parents);
+    const target = { id: "target", name: "Target", color: "blue" as const, collapsed: true,
+      tabs: ["other", "other-child"] };
+    const joined = addWorkspaceTabsToGroup({ ...grouped, groups: [...grouped.groups, target] }, ["child"], "target");
+    expect(joined.groups).toEqual([{ ...target, tabs: workspace.openSessions }]);
+    expect(joined.parents).toEqual(workspace.parents);
   });
 
   it("round-trips a folded group move with complete trees through the existing URL format", () => {

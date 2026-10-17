@@ -2333,6 +2333,62 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onFoldTabs).toHaveBeenCalledExactlyOnceWith(["beta", "archive"]);
   });
 
+  it("creates a new group from the selected tabs, including members of another group", () => {
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "archive", "zulu"],
+      groups: [{ id: "workers", name: "Workers", color: "green", collapsed: false, tabs: ["alpha", "beta"] }],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onSaveTabGroup: vi.fn(),
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    fireEvent.click(screen.getByRole("tab", { name: /^beta,/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("tab", { name: /^Archived deploy,/ }), { ctrlKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Create tab group" }));
+    const dialog = screen.getByRole("dialog", { name: "Create a group" });
+    expect(within(dialog).getByRole("checkbox", { name: /alpha/i })).not.toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: /beta/i })).toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: /archive/i })).toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: /zulu/i })).not.toBeChecked();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Group name" }), { target: { value: "Selected work" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create group" }));
+    expect(props.onSaveTabGroup).toHaveBeenCalledExactlyOnceWith({
+      id: expect.any(String), name: "Selected work", color: "blue", collapsed: false, tabs: ["beta", "archive"],
+    });
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { orientation: "vertical" as const, collapsed: true },
+    { orientation: "horizontal" as const, collapsed: false },
+  ])("adds selected tabs when dropped on a group name: %j", ({ orientation, collapsed }) => {
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "archive", "zulu"], orientation,
+      groups: [
+        { id: "workers", name: "Workers", color: "green", collapsed: false, tabs: ["alpha", "beta", "archive"] },
+        { id: "target", name: "Target", color: "cyan", collapsed, tabs: ["zulu"] },
+      ],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onAddTabsToGroup: vi.fn(),
+      onToggleTabGroup: vi.fn(), onReparentSession: vi.fn(),
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const beta = screen.getByRole("tab", { name: /^beta,/ });
+    fireEvent.click(beta, { ctrlKey: true });
+    fireEvent.click(screen.getByRole("tab", { name: /^Archived deploy,/ }), { ctrlKey: true });
+    const header = screen.getByRole("button", { name: `${collapsed ? "Expand" : "Collapse"} Target tab group` });
+    const target = header.closest<HTMLElement>("[data-workspace-tab-group-id]")!;
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(beta, { dataTransfer });
+    fireEvent.dragOver(header, { clientX: 150, clientY: 120, dataTransfer });
+    expect(target).toHaveAttribute("data-tab-drop-into", "true");
+    expect(target).not.toHaveAttribute("data-tab-drop-edge");
+    fireEvent.drop(header, { clientX: 150, clientY: 120, dataTransfer });
+    expect(props.onAddTabsToGroup).toHaveBeenCalledExactlyOnceWith(["beta", "archive"], "target");
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
+    expect(props.onReparentSession).not.toHaveBeenCalled();
+    expect(props.onToggleTabGroup).not.toHaveBeenCalled();
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(target).not.toHaveAttribute("data-tab-drop-into");
+  });
+
   it.each(["horizontal", "vertical"] as const)("drags only selected group members within and outside their group in %s tabs", (orientation) => {
     let workspace: SessionWorkspaceState = {
       openSessions: ["alpha", "beta", "archive", "zulu", "outside"], recentSessions: [],
@@ -2371,6 +2427,49 @@ describe("SessionWorkspaceNavigation", () => {
       id: "workers", name: "Workers", color: "green", collapsed: false, tabs: ["alpha", "zulu"],
     }]);
     expect(screen.getByRole("group", { name: "2 tabs selected for moving" })).toBeVisible();
+  });
+
+  it("ignores group-header drops from another workspace, foreign drags and existing members", () => {
+    const props = navigationProps({
+      activeWorkspaceId: "first", openSessions: ["alpha", "beta", "archive", "zulu"],
+      groups: [{ id: "target", name: "Target", color: "cyan", collapsed: false, tabs: ["zulu"] }],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onAddTabsToGroup: vi.fn(), onToggleTabGroup: vi.fn(),
+    });
+    const view = render(<SessionWorkspaceNavigation {...props} />);
+    const header = screen.getByRole("button", { name: "Collapse Target tab group" });
+    const target = header.closest<HTMLElement>("[data-workspace-tab-group-id]")!;
+    const dataTransfer = dragDataTransfer();
+    fireEvent.drop(header, { dataTransfer });
+    fireEvent.dragStart(screen.getByRole("tab", { name: /^Zulu shell,/ }), { dataTransfer });
+    fireEvent.dragOver(header, { dataTransfer });
+    expect(target).not.toHaveAttribute("data-tab-drop-into");
+    fireEvent.drop(header, { dataTransfer });
+    fireEvent.dragStart(screen.getByRole("tab", { name: /^beta,/ }), { dataTransfer });
+    fireEvent.dragOver(header, { dataTransfer });
+    expect(target).toHaveAttribute("data-tab-drop-into", "true");
+    view.rerender(<SessionWorkspaceNavigation {...props} activeWorkspaceId="second" />);
+    expect(target).not.toHaveAttribute("data-tab-drop-into");
+    fireEvent.drop(header, { dataTransfer });
+    expect(props.onAddTabsToGroup).not.toHaveBeenCalled();
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
+  });
+
+  it.each<Partial<NavigationProps>>([
+    { workspacePersistenceState: "loading" }, { workspacePersistenceState: "error" }, { separatorsBusy: true },
+  ])("blocks group membership drops while synchronization is unavailable: %j", (overrides) => {
+    const props = navigationProps({
+      groups: [{ id: "target", name: "Target", color: "cyan", collapsed: true, tabs: ["beta"] }],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onAddTabsToGroup: vi.fn(), onToggleTabGroup: vi.fn(), ...overrides,
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const header = screen.getByRole("button", { name: "Expand Target tab group" });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(screen.getByRole("tab", { name: /^Alpha control,/ }), { dataTransfer });
+    fireEvent.dragOver(header, { dataTransfer });
+    expect(header.closest("[data-workspace-tab-group-id]")).not.toHaveAttribute("data-tab-drop-into");
+    fireEvent.drop(header, { dataTransfer });
+    expect(props.onAddTabsToGroup).not.toHaveBeenCalled();
+    expect(props.onMoveTabs).not.toHaveBeenCalled();
   });
 
   it("drags a separator between groups without selecting or reordering tabs", () => {
@@ -2576,6 +2675,7 @@ describe("SessionWorkspaceNavigation", () => {
       sessionParents: { zulu: "beta" },
       groups: [{ id: "workers", name: "Workers", color: "green", collapsed: true, tabs: ["beta", "zulu"] }],
       onMoveTab: vi.fn(), onMoveTabs, onToggleTabGroup: vi.fn(), onReparentSession: vi.fn(), orientation,
+      onAddTabsToGroup: vi.fn(),
     });
     render(<SessionWorkspaceNavigation {...props} />);
     const header = screen.getByRole("button", { name: "Expand Workers tab group" });
@@ -2595,7 +2695,29 @@ describe("SessionWorkspaceNavigation", () => {
     expect(props.onReparentSession).not.toHaveBeenCalled();
     expect(props.onSelect).not.toHaveBeenCalled();
     expect(props.onToggleTabGroup).not.toHaveBeenCalled();
+    expect(props.onAddTabsToGroup).not.toHaveBeenCalled();
     expect(group).not.toHaveAttribute("data-tab-dragging");
+  });
+
+  it("keeps whole-group header drags as reorders when dropped on another group name", () => {
+    const props = navigationProps({
+      openSessions: ["alpha", "beta", "zulu"],
+      groups: [
+        { id: "source", name: "Source", color: "green", collapsed: true, tabs: ["alpha", "beta"] },
+        { id: "target", name: "Target", color: "cyan", collapsed: true, tabs: ["zulu"] },
+      ],
+      onMoveTab: vi.fn(), onMoveTabs: vi.fn(), onAddTabsToGroup: vi.fn(), onToggleTabGroup: vi.fn(),
+    });
+    render(<SessionWorkspaceNavigation {...props} />);
+    const source = screen.getByRole("button", { name: "Expand Source tab group" });
+    const target = screen.getByRole("button", { name: "Expand Target tab group" });
+    const dataTransfer = dragDataTransfer();
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(target, { clientX: 100, clientY: 100, dataTransfer });
+    expect(target.closest("[data-workspace-tab-group-id]")).not.toHaveAttribute("data-tab-drop-into");
+    fireEvent.drop(target, { clientX: 100, clientY: 100, dataTransfer });
+    expect(props.onMoveTabs).toHaveBeenCalledExactlyOnceWith(["alpha", "beta"], 1);
+    expect(props.onAddTabsToGroup).not.toHaveBeenCalled();
   });
 
   it("moves a one-session group as a block without nesting or promoting it", () => {

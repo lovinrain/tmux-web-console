@@ -142,6 +142,7 @@ import {
   searchWithSavedWorkspaceId,
   searchWithWorkspaceState,
   setWorkspaceTabGroup,
+  addWorkspaceTabsToGroup,
   setWorkspaceTabGroupCollapsed,
   sessionAfterClose,
   stableSortWorkspaceSessionsByWorkingState,
@@ -3237,6 +3238,10 @@ function AppRoutes() {
     commitWorkspaceStructure(setWorkspaceTabGroup(workspaceRef.current, group));
   }, [commitWorkspaceStructure]);
 
+  const addTabsToGroup = useCallback((sessionNames: string[], groupId: string) => {
+    commitWorkspaceStructure(addWorkspaceTabsToGroup(workspaceRef.current, sessionNames, groupId));
+  }, [commitWorkspaceStructure]);
+
   const foldSessionTabs = useCallback((sessionNames: string[]) => {
     commitWorkspaceStructure(foldWorkspaceTabs(workspaceRef.current, sessionNames, crypto.randomUUID()));
   }, [commitWorkspaceStructure]);
@@ -4805,6 +4810,7 @@ function AppRoutes() {
           !desktopTabActionsVisible,
         )}
         onSaveTabGroup={saveTabGroup}
+        onAddTabsToGroup={addTabsToGroup}
         onDeleteTabGroup={deleteTabGroup}
         onToggleTabGroup={toggleTabGroup}
         onMoveTabGroup={moveTabGroup}
@@ -5068,6 +5074,7 @@ function AppRoutes() {
               !desktopTabActionsVisible,
             )}
             onSaveTabGroup={saveTabGroup}
+            onAddTabsToGroup={addTabsToGroup}
             onDeleteTabGroup={deleteTabGroup}
             onToggleTabGroup={toggleTabGroup}
             onMoveTabGroup={moveTabGroup}
@@ -5160,6 +5167,7 @@ function AppRoutes() {
               !desktopTabActionsVisible,
             )}
             onSaveTabGroup={saveTabGroup}
+            onAddTabsToGroup={addTabsToGroup}
             onDeleteTabGroup={deleteTabGroup}
             onToggleTabGroup={toggleTabGroup}
             onMoveTabGroup={moveTabGroup}

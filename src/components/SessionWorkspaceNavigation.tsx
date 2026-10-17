@@ -65,6 +65,7 @@ import { MAX_WORKSPACE_TABS } from "../workspaceValidation";
 import { normalizeWorkspaceTabFolds, workspaceFoldMembers, workspaceFoldSelectionError, type WorkspaceTabFold } from "../workspaceFolds";
 import "./DeadPaneTabs.css";
 import "./WorkspaceActionToolbar.css";
+import "./WorkspaceGroupDrop.css";
 import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
@@ -95,7 +96,7 @@ type WorkspaceTabDropEdge = "before" | "after";
 const EMPTY_WORKSPACE_FOLDS: WorkspaceTabFold[] = [];
 
 interface WorkspaceTabDragTarget {
-  kind: "tab" | "group" | "nest" | "root";
+  kind: "tab" | "group" | "nest" | "root" | "join-group";
   id: string;
   edge: WorkspaceTabDropEdge;
   targetIndex: number;
@@ -195,6 +196,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onToggleTabActions,
     onOpenTabInNewWindow,
     onSaveTabGroup,
+    onAddTabsToGroup,
     onDeleteTabGroup,
     onToggleTabGroup,
     onMoveTabGroup,
@@ -310,6 +312,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const [groupDialog, setGroupDialog] = useState<{
     groupId: string | null;
     initialSession: string | null;
+    initialSessions?: string[];
   } | null>(null);
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
@@ -397,6 +400,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     && !deadTabsOnlySelected
     && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error"
     && !separatorsBusy;
+  const groupJoinEnabled = groupDragEnabled && Boolean(onAddTabsToGroup);
   const separatorDragEnabled = Boolean(props.onCrossSeparator && orientation === "vertical"
     && !compactViewport && tabsVisible && !separatorsBusy
     && workspacePersistenceState !== "loading" && workspacePersistenceState !== "error");
@@ -595,7 +599,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   }, []);
 
   useEffect(() => {
-    if (workspaceTabDragGroupRef.current) finishWorkspaceTabDrag();
+    if (workspaceTabDragSessionsRef.current.length > 0) finishWorkspaceTabDrag();
   }, [activeWorkspaceId, finishWorkspaceTabDrag]);
 
   const clearWorkspaceTabDropTarget = useCallback(() => {
@@ -740,6 +744,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     element: HTMLElement,
     clientX: number,
     clientY: number,
+    intoGroup = false,
   ): WorkspaceTabDragTarget | null => {
     const sourceSessionNames = workspaceTabDragSessionsRef.current;
     const sourceSessionName = sourceSessionNames[0];
@@ -748,6 +753,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const groupStart = openSessions.indexOf(group.tabs[0]);
     const groupEnd = openSessions.indexOf(group.tabs.at(-1)!);
     if (sourceIndex < 0 || groupStart < 0 || groupEnd < groupStart) return null;
+
+    if (intoGroup && !workspaceTabDragGroupRef.current && onAddTabsToGroup) {
+      if (!groupJoinEnabled || sourceSessionNames.every((name) => group.tabs.includes(name))) return null;
+      return { kind: "join-group", id: group.id, edge: "after", targetIndex: groupEnd + 1 };
+    }
 
     const edge = workspaceTabDropEdge(element, clientX, clientY, orientation);
     const boundaryIndex = edge === "before" ? groupStart : groupEnd + 1;
@@ -774,7 +784,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         openSessions.length,
       ),
     };
-  }, [groupsBySession, openSessions, orientation]);
+  }, [groupJoinEnabled, groupsBySession, onAddTabsToGroup, openSessions, orientation]);
 
   const nudgeWorkspaceTabViewport = useCallback((
     element: HTMLElement,
@@ -828,20 +838,26 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const dragOverWorkspaceTabGroup = useCallback((
     event: ReactDragEvent<HTMLDivElement>,
     group: WorkspaceTabGroup,
+    intoGroup = false,
   ) => {
     const target = groupDragTarget(
       group,
       event.currentTarget,
       event.clientX,
       event.clientY,
+      intoGroup,
     );
-    if (!target) return;
+    if (!target) {
+      clearWorkspaceTabDropTarget();
+      if (workspaceTabDragSessionsRef.current.length > 0) event.stopPropagation();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
     previewWorkspaceTabDrop(target);
     nudgeWorkspaceTabViewport(event.currentTarget, event.clientX, event.clientY);
-  }, [groupDragTarget, nudgeWorkspaceTabViewport, previewWorkspaceTabDrop]);
+  }, [clearWorkspaceTabDropTarget, groupDragTarget, nudgeWorkspaceTabViewport, previewWorkspaceTabDrop]);
 
   const commitWorkspaceTabDrop = useCallback((target: WorkspaceTabDragTarget) => {
     const sourceGroupId = workspaceTabDragGroupRef.current;
@@ -851,6 +867,18 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       ? openSessions.indexOf(sourceSessionName)
       : -1;
     finishWorkspaceTabDrag();
+    if (target.kind === "join-group") {
+      if (sourceGroupId || !groupJoinEnabled || !onAddTabsToGroup) return;
+      const group = groups.find((candidate) => candidate.id === target.id);
+      if (!group) return;
+      try {
+        onAddTabsToGroup(sourceSessionNames, group.id);
+        setReorderAnnouncement(`${sourceSessionNames.length} ${sourceSessionNames.length === 1 ? "tab added" : "tabs added"} to ${group.name} group.`);
+      } catch (error) {
+        setReorderAnnouncement(error instanceof Error ? error.message : "Unable to add tabs to this group.");
+      }
+      return;
+    }
     if (target.kind === "nest" || target.kind === "root") {
       if (sourceGroupId || !nestingEnabled || !sourceSessionName || sourceSessionNames.length !== 1 || !onReparentSession) return;
       try {
@@ -903,7 +931,9 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     );
   }, [
     finishWorkspaceTabDrag,
+    groupJoinEnabled,
     groups,
+    onAddTabsToGroup,
     onMoveTab,
     onMoveTabs,
     onReparentSession,
@@ -932,18 +962,26 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const dropOnWorkspaceTabGroup = useCallback((
     event: ReactDragEvent<HTMLDivElement>,
     group: WorkspaceTabGroup,
+    intoGroup = false,
   ) => {
     const target = groupDragTarget(
       group,
       event.currentTarget,
       event.clientX,
       event.clientY,
+      intoGroup,
     );
-    if (!target) return;
+    if (!target) {
+      if (intoGroup && workspaceTabDragSessionsRef.current.length > 0) {
+        event.stopPropagation();
+        finishWorkspaceTabDrag();
+      }
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     commitWorkspaceTabDrop(target);
-  }, [commitWorkspaceTabDrop, groupDragTarget]);
+  }, [commitWorkspaceTabDrop, finishWorkspaceTabDrag, groupDragTarget]);
 
   useEffect(() => {
     const draggedSessions = workspaceTabDragSessionsRef.current;
@@ -1404,7 +1442,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   ) => {
     if (!onSaveTabGroup) return;
     groupDialogTriggerRef.current = trigger ?? null;
-    setGroupDialog({ groupId, initialSession });
+    setGroupDialog({
+      groupId, initialSession,
+      initialSessions: groupId === null && orderedSelection.length > 0 ? [...orderedSelection] : undefined,
+    });
   };
 
   const closeGroupDialog = () => {
@@ -2180,6 +2221,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   groupActive ? `Active session: ${tabTitle(activeSession!, sessionsByName)}.` : "",
                   uncheckedCount ? `${uncheckedCount} unread ${uncheckedCount === 1 ? "session" : "sessions"}.` : "",
                   groupDragEnabled ? "Drag this header to move the whole group, including nested sessions." : "",
+                  groupJoinEnabled ? "Drop session tabs here to add them to this group." : "",
                 ].filter(Boolean).join(" ");
                 const dropEdge = workspaceTabDrag?.target?.kind === "group"
                   && workspaceTabDrag.target.id === group.id
@@ -2199,6 +2241,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                     data-tab-group-color={group.color}
                     data-tab-move-selected={selectedForMove ? "true" : undefined}
                     data-tab-drop-edge={dropEdge}
+                    data-tab-drop-into={workspaceTabDrag?.target?.kind === "join-group"
+                      && workspaceTabDrag.target.id === group.id ? "true" : undefined}
                     key={group.id}
                     onDragOver={desktopTabDragEnabled
                       ? (event) => dragOverWorkspaceTabGroup(event, group)
@@ -2207,7 +2251,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                       ? (event) => dropOnWorkspaceTabGroup(event, group)
                       : undefined}
                   >
-                    <div className="workspace-tab-group-chip">
+                    <div className="workspace-tab-group-chip"
+                      onDragOver={desktopTabDragEnabled && onAddTabsToGroup
+                        ? (event) => dragOverWorkspaceTabGroup(event, group, true) : undefined}
+                      onDrop={desktopTabDragEnabled && onAddTabsToGroup
+                        ? (event) => dropOnWorkspaceTabGroup(event, group, true) : undefined}>
                       {onToggleTabGroup ? (
                         <button
                           type="button"
@@ -2764,6 +2812,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           sessions={sessions}
           groupId={groupDialog.groupId}
           initialSession={groupDialog.initialSession}
+          initialSessions={groupDialog.initialSessions}
           onSave={onSaveTabGroup}
           onDelete={(groupId) => onDeleteTabGroup?.(groupId)}
           onClose={closeGroupDialog}

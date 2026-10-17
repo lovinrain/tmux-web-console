@@ -48,6 +48,7 @@ export interface SessionWorkspaceNavigationProps {
     mode: OpenTabInNewWindowMode,
   ) => OpenTabInNewWindowResult;
   onSaveTabGroup?: (group: WorkspaceTabGroup) => void;
+  onAddTabsToGroup?: (sessionNames: string[], groupId: string) => void;
   onDeleteTabGroup?: (groupId: string) => void;
   onToggleTabGroup?: (groupId: string, collapsed: boolean) => void;
   onMoveTabGroup?: (groupId: string, direction: -1 | 1) => void;

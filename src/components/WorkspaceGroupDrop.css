@@ -1,0 +1,5 @@
+.workspace-tab-group[data-tab-drop-into="true"] > .workspace-tab-group-chip {
+  outline: 2px solid var(--tab-group-color, var(--cyan));
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--tab-group-color, var(--cyan)) 18%, transparent);
+}
