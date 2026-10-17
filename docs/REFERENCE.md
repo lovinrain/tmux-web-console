@@ -794,8 +794,10 @@ still running. Muxdeck also captures settled-title Grok panes and reads their
 current input controls, activity footer, and attached Tasks panel. An animated
 `Run` row means `Command running`; other active task rows keep the session
 `Working`. Completed task rows and historical transcript text do not count as
-live work. A captured idle input prompt is required for Ready; an unavailable
-or unrecognized screen remains Unclear.
+live work. A captured idle input prompt is required for Ready, including Grok
+1.0.62's complete model-labelled input box when shortcut hints are hidden.
+That box must end the screen, apart from an optional Grok version label;
+an unavailable or unrecognized screen remains Unclear.
 
 GitHub Copilot CLI is recognized by the standalone `copilot` command. The
 official npm launcher keeps `node` as tmux's foreground command while it runs the

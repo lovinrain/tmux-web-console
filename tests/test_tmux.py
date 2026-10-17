@@ -1703,6 +1703,11 @@ GROK_IDLE_SCREEN = (
     "  ╰──── Grok 4.7 Fast ──────╯\n"
     "  Shift+Tab:mode  │  Ctrl+.:shortcuts\n"
 )
+GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS = (
+    "  ╭─────────────────────────╮\n"
+    "  │ ❯                      │\n"
+    "  ╰─────────── grok-4.5 ────╯\n"
+)
 GROK_COMMAND_SCREEN = (
     "  ◆ Task started: Deploy sample service\n\n"
     "  ⠸ Deploy sample service… 37s       5m13s ⇣192k [stop]\n"
@@ -1721,6 +1726,9 @@ def test_grok_agent_state_uses_live_titles_and_captured_idle_prompts():
     )
 
     assert classify_agent_state(working, now=1000).name == "working"
+    assert classify_agent_state(
+        working, visible_screen=GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS, now=1000,
+    ).name == "working"
     assert (
         classify_agent_state(
             working,
@@ -1753,13 +1761,27 @@ def test_grok_agent_state_uses_live_titles_and_captured_idle_prompts():
     )
 
 
+@pytest.mark.parametrize("footer", ["", "  Grok Build  1.0.62\n"])
+def test_grok_idle_composer_without_shortcuts_reports_ready(footer: str):
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Review Grok support - grok"),
+        visible_screen=GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS + footer,
+        now=1000,
+    )
+
+    assert state.name == "waiting_human"
+
+
 @pytest.mark.parametrize("frame", ["⋅", ":", "⸬", "⁙"])
-def test_grok_running_terminal_tasks_outrank_a_settled_title(frame: str):
+@pytest.mark.parametrize("input_screen", [GROK_IDLE_SCREEN, GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS])
+def test_grok_running_terminal_tasks_outrank_a_settled_title(frame: str, input_screen: str):
     # Observed live: Grok settles its title and removes Ctrl+C while the Run
     # task, its elapsed counter, and the current [stop] spinner remain active.
     state = classify_agent_state(
         agent_pane(command="grok", title="Deploy sample service - grok"),
-        visible_screen=GROK_COMMAND_SCREEN.replace("⁙ Run", f"{frame} Run"),
+        visible_screen=GROK_COMMAND_SCREEN.replace("⁙ Run", f"{frame} Run").replace(
+            GROK_IDLE_SCREEN, input_screen,
+        ),
         now=1000,
     )
 
@@ -1830,7 +1852,12 @@ def test_grok_completed_tasks_and_quoted_activity_do_not_hide_an_idle_prompt():
     assert state.name == "waiting_human"
 
 
-@pytest.mark.parametrize("screen", [None, "", "Task complete"])
+@pytest.mark.parametrize("screen", [
+    None, "", "Task complete",
+    GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS.split("\n", 1)[1],
+    GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS.replace("grok-4.5", "a quoted box"),
+    GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS + "  ◆ More transcript after a quoted prompt\n",
+])
 def test_grok_requires_a_recognized_screen_before_reporting_ready(screen: str | None):
     state = classify_agent_state(
         agent_pane(command="grok", title="Review sample service - grok"),

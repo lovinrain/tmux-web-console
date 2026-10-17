@@ -1,13 +1,16 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import {
   test,
@@ -513,6 +516,88 @@ test("light theme persists across dashboard, snippets, overlays, and console", a
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#151914");
   expect(await page.evaluate(() => window.localStorage.getItem("muxdeck-theme"))).toBe("dark");
+});
+
+test("Grok completion without shortcut hints shows ready and unread until opened", async ({ page, request }) => {
+  const grokSession = `${sessionName}-grok-attention`;
+  const fakeGrokDir = `/tmp/${grokSession}-bin`;
+  const fakeGrok = `${fakeGrokDir}/grok`;
+  const outputPipe = `${fakeGrokDir}/output`;
+  let writer: number | undefined;
+  const composer = "  ╭─────────────────────────╮\r\n  │ ❯                      │\r\n  ╰─────────── grok-4.5 ────╯\r\n";
+  const status = async () => {
+    const response = await request.get("/mux/api/sessions");
+    expect(response.ok()).toBe(true);
+    const sessions = (await response.json()).sessions as Array<{
+      name: string; agentState: string;
+      readyAttention: { latestReadyEvent: number; lastCheckedEvent: number };
+    }>;
+    return sessions.find((session) => session.name === grokSession);
+  };
+
+  try {
+    mkdirSync(fakeGrokDir, { recursive: true });
+    copyFileSync("/bin/cat", fakeGrok);
+    chmodSync(fakeGrok, 0o700);
+    execFileSync("mkfifo", [outputPipe]);
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", grokSession, fakeGrok, outputPipe]);
+    writer = openSync(outputPipe, "w");
+    writeSync(writer, `\x1b[2J\x1b[H\x1b]0;⠸ - Test notification - grok\x07${composer}  Ctrl+c:cancel\r\n`);
+    await expect.poll(async () => (await status())?.agentState).toBe("working");
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${sessionName}&tab=${grokSession}`);
+    await page.getByRole("button", { name: "Vertical session tabs" }).click();
+    const tab = page.getByRole("tab", { name: new RegExp(`^${grokSession},`) });
+    const row = tab.locator("..");
+    await expect(tab.locator(".workspace-state-dot.working")).toBeVisible();
+    await expect(row).not.toHaveAttribute("data-ready-unchecked");
+
+    // A real Grok 1.0.62 composer can omit both shortcut hints when idle.
+    writeSync(writer, `\x1b[2J\x1b[H\x1b]0;Test notification - grok\x07${composer}\r\n  Grok Build  1.0.62\r\n`);
+    await expect(tab.locator(".workspace-state-dot.waiting_human")).toBeVisible();
+    await expect(row).toHaveAttribute("data-ready-unchecked", "true");
+    const attention = (await status())!.readyAttention;
+    expect(attention.latestReadyEvent).toBeGreaterThan(attention.lastCheckedEvent);
+
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") await page.getByRole("button", { name: "Light theme", exact: true }).click();
+      const colors = await tab.evaluate((element) => {
+        const dot = element.querySelector(".workspace-state-dot")!;
+        const title = element.querySelector(".workspace-tab-title")!;
+        const probe = document.createElement("span");
+        probe.style.backgroundColor = "var(--amber)";
+        element.append(probe);
+        const expected = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        const titleStyle = getComputedStyle(title);
+        return {
+          dot: getComputedStyle(dot).backgroundColor, expected,
+          title: titleStyle.color, border: titleStyle.borderColor,
+          borderWidth: titleStyle.borderTopWidth, weight: titleStyle.fontWeight,
+        };
+      });
+      expect(colors.dot).toBe(colors.expected);
+      expect(colors.borderWidth).toBe("1px");
+      expect(colors.border).toBe(colors.title);
+      expect(colors.weight).toBe("700");
+      await page.screenshot({ path: `artifacts/grok-completion-${theme}.png` });
+    }
+
+    await tab.click();
+    await expect(row).not.toHaveAttribute("data-ready-unchecked");
+    await expect.poll(async () => (await status())?.readyAttention.lastCheckedEvent)
+      .toBe(attention.latestReadyEvent);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(tab.locator(".workspace-state-dot.waiting_human")).toBeVisible();
+    await expect(row).not.toHaveAttribute("data-ready-unchecked");
+  } finally {
+    if (writer !== undefined) closeSync(writer);
+    try {
+      execFileSync("tmux", [...tmux, "kill-session", "-t", `=${grokSession}`], { stdio: "ignore" });
+    } catch { /* The disposable cat process can exit when its pipe closes. */ }
+    rmSync(fakeGrokDir, { force: true, recursive: true });
+  }
 });
 
 test("Grok theme matching stages a reviewed command before writing to tmux", async ({ page }) => {

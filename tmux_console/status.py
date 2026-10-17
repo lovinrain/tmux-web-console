@@ -136,6 +136,12 @@ GROK_PROMPT_PATTERN = re.compile(r"^\s*│\s*❯(?:\s|$)")
 GROK_INPUT_FOOTER_PATTERN = re.compile(
     r"\bShift\+Tab:mode\b.*\bCtrl\+\.:shortcuts\b", re.IGNORECASE
 )
+GROK_MODEL_BORDER_PATTERN = re.compile(
+    r"^\s*╰─+[^╯]*\bgrok[ -]\d[^╯]*╯\s*$", re.IGNORECASE
+)
+GROK_VERSION_FOOTER_PATTERN = re.compile(
+    r"\s*Grok Build\s+\d+(?:\.\d+){1,2}(?:[-+]\S+)?\s*", re.IGNORECASE
+)
 GROK_RUNNING_CONTROL_PATTERN = re.compile(
     r"\b(?:Ctrl\+c:cancel|Enter:queue)\b", re.IGNORECASE
 )
@@ -533,7 +539,15 @@ def _grok_screen_state(screen: str) -> AgentState | None:
         # current footer, including when the transcript quotes an old spinner.
         if line.lstrip().startswith(("◆", "┃", "│ ❯")):
             break
-    if GROK_INPUT_FOOTER_PATTERN.search(controls):
+    # Grok 1.0.62 can omit the shortcut hints. Its complete, model-labelled
+    # composer still identifies an idle prompt. Require it at the screen's end
+    # (apart from the version label), so a quoted prompt cannot imply readiness.
+    quiet_composer = (
+        top < prompt
+        and GROK_MODEL_BORDER_PATTERN.fullmatch(lines[bottom])
+        and (not controls.strip() or GROK_VERSION_FOOTER_PATTERN.fullmatch(controls))
+    )
+    if GROK_INPUT_FOOTER_PATTERN.search(controls) or quiet_composer:
         return AgentState("waiting_human", "Grok is paused at its input prompt")
     return None
 
