@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
-import { closeWorkspaceFold, recoverWorkspaceFoldSession, type FoldSessionFence, type SavedWorkspace } from "./api";
+import { closeWorkspaceFold, deleteWorkspaceFold, recoverWorkspaceFoldSession, type FoldDeleteSessionFence, type FoldSessionFence, type SavedWorkspace } from "./api";
 import { SessionTerminateDialog } from "./components/SessionTerminateDialog";
+import { sessionHasOnlyDeadPanes } from "./sessionLifecycle";
 import type { Session } from "./types";
 import { foldWorkspaceTabs, workspaceFoldMembers } from "./workspaceFolds";
 import type { SessionWorkspaceState } from "./workspaceState";
@@ -15,18 +16,21 @@ interface Props {
   refreshInventory: () => Promise<void>;
 }
 
-interface CloseRequest {
+interface FoldRequest {
+  mode: "close" | "delete";
   workspaceId: string;
   foldId: string;
   tabs: string[];
   names: string[];
-  sessions: FoldSessionFence[];
+  sessions: FoldDeleteSessionFence[];
+  runningCount: number;
+  deadCount: number;
 }
 
 export function useWorkspaceFoldActions({ workspaceId, disabledReason, getWorkspace, getSessions,
   captureSavedWorkspace, onWorkspaceUpdated, refreshInventory }: Props) {
-  const [request, setRequest] = useState<CloseRequest | null>(null);
-  const foldAndClose = useCallback((names: string[], existingId?: string) => {
+  const [request, setRequest] = useState<FoldRequest | null>(null);
+  const requestAction = useCallback((mode: "close" | "delete", names: string[], existingId?: string) => {
     if (!workspaceId || disabledReason) return;
     const state = getWorkspace();
     const id = existingId ?? crypto.randomUUID();
@@ -36,16 +40,23 @@ export function useWorkspaceFoldActions({ workspaceId, disabledReason, getWorksp
     const members = workspaceFoldMembers(fold, state.openSessions, state.parents);
     const live = new Map(getSessions().map((session) => [session.name, session]));
     const snapshots = new Map((fold.closedSessions ?? []).map((item) => [item.name, item]));
-    const sessions = members.flatMap((name): FoldSessionFence[] => {
+    const sessions = members.flatMap((name): FoldDeleteSessionFence[] => {
       const session = live.get(name);
       const snapshot = snapshots.get(name);
       return session ? [{ name, sessionId: session.id, sessionCreated: session.created,
-        serverStarted: session.serverStarted, serverPid: session.serverPid }]
+        serverStarted: session.serverStarted, serverPid: session.serverPid,
+        ...(mode === "delete" && sessionHasOnlyDeadPanes(session) ? { onlyDeadPanes: true as const } : {}) }]
+        : mode === "delete" ? [{ name, sessionId: null }]
         : snapshot ? [{ name, sessionId: snapshot.sessionId, sessionCreated: snapshot.sessionCreated,
           serverStarted: snapshot.serverStarted, serverPid: snapshot.serverPid }] : [];
     });
-    setRequest({ workspaceId, foldId: id, tabs: [...fold.tabs], names: members, sessions });
+    const present = members.flatMap((name) => live.has(name) ? [live.get(name)!] : []);
+    const deadCount = present.filter(sessionHasOnlyDeadPanes).length;
+    setRequest({ mode, workspaceId, foldId: id, tabs: [...fold.tabs], names: members, sessions,
+      runningCount: present.length - deadCount, deadCount });
   }, [workspaceId, disabledReason, getWorkspace, getSessions]);
+  const foldAndClose = useCallback((names: string[], existingId?: string) => requestAction("close", names, existingId), [requestAction]);
+  const deleteFold = useCallback((foldId: string) => requestAction("delete", [], foldId), [requestAction]);
 
   const apply = async () => {
     if (!request) return;
@@ -55,10 +66,13 @@ export function useWorkspaceFoldActions({ workspaceId, disabledReason, getWorksp
     const saved = await captureSavedWorkspace();
     if (saved.id !== request.workspaceId) throw new Error("Workspace changed; reselect sessions in the intended workspace.");
     try {
-      const result = await closeWorkspaceFold(saved, request.foldId, request.tabs, request.sessions);
+      const result = request.mode === "delete"
+        ? await deleteWorkspaceFold(saved, request.foldId, request.tabs, request.sessions)
+        : await closeWorkspaceFold(saved, request.foldId, request.tabs,
+          request.sessions.filter((item): item is FoldSessionFence => item.sessionId !== null));
       onWorkspaceUpdated(result.workspace);
       const failures = Object.entries(result.failures);
-      if (failures.length) throw new Error(`${result.closed.length} closed; ${failures.length} failed. Recovery metadata was saved.\n${failures.map(([name, error]) => `${name}: ${error}`).join("\n")}`);
+      if (failures.length) throw new Error(`${result.closed.length} closed; ${failures.length} failed. Recovery metadata was saved.${request.mode === "delete" ? " The fold was kept; retry to finish deleting it." : ""}\n${failures.map(([name, error]) => `${name}: ${error}`).join("\n")}`);
     } finally {
       // Also refresh after a lost response: committed metadata arrives by SSE,
       // and an exact-identity retry can safely finish the remaining closures.
@@ -73,16 +87,28 @@ export function useWorkspaceFoldActions({ workspaceId, disabledReason, getWorksp
     finally { await refreshInventory(); }
   }, [captureSavedWorkspace, workspaceId, refreshInventory]);
 
+  const deleting = request?.mode === "delete";
   const confirmation = request && <SessionTerminateDialog sessionName="" sessionTitle={null}
-    heading={`Fold and close ${request.names.length} sessions?`} confirmLabel="Fold and close"
-    pendingLabel="Saving metadata and closing sessions…" onClose={() => setRequest(null)} onTerminate={apply}
+    heading={deleting ? `Delete fold and ${request.names.length} tabs?` : `Fold and close ${request.names.length} sessions?`}
+    confirmLabel={deleting ? request.runningCount > 0 ? "Archive and delete" : "Delete fold" : "Fold and close"}
+    pendingLabel={deleting ? "Archiving and deleting fold…" : "Saving metadata and closing sessions…"}
+    onClose={() => setRequest(null)} onTerminate={apply}
     description={<>
+      {deleting ? <>
+        <p>This removes the fold and its {request.names.length} session tabs from this workspace.
+          Session history, saved directories and recorded coding conversations remain available in History.</p>
+        {request.runningCount > 0 && <p>{request.runningCount} running session{request.runningCount === 1 ? "" : "s"} will be archived before closing.
+          All windows, panes and running processes in these sessions will end. Other workspaces viewing them will see them closed.</p>}
+        {request.deadCount > 0 && <p>{request.deadCount} dead tmux session{request.deadCount === 1 ? "" : "s"} will also be removed.</p>}
+        {request.runningCount + request.deadCount === 0 && <p>All sessions are already closed. They will stay closed.</p>}
+      </> : <>
       <p>This saves each session’s directory, title and latest recorded coding conversation before closing tmux.
         The fold stays in this workspace with recovery options.</p>
       <p>All windows, panes and running processes in these sessions will end. Other workspaces viewing them will see them closed.</p>
-      <ul className="bulk-session-targets" aria-label="Sessions to fold and close">
+      </>}
+      <ul className="bulk-session-targets" aria-label={deleting ? "Sessions in fold to delete" : "Sessions to fold and close"}>
         {request.names.map((name) => <li key={name}><strong>{name}</strong></li>)}
       </ul>
     </>} />;
-  return { foldAndClose, recover, confirmation };
+  return { foldAndClose, deleteFold, recover, confirmation };
 }

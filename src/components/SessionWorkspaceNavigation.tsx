@@ -2690,6 +2690,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         onPreview={onSelect} onClose={closeFoldPreview}
         onUnfold={onUnfoldTabs ? () => onUnfoldTabs(previewFold.id) : undefined}
         onFoldAndClose={props.onFoldAndCloseTabs ? () => props.onFoldAndCloseTabs?.(previewFold.tabs, previewFold.id) : undefined}
+        onDelete={props.onDeleteFold ? () => props.onDeleteFold?.(previewFold.id) : undefined}
         closeDisabledReason={props.foldCloseDisabledReason}
         onRecover={props.onRecoverFoldSession ? (name, mode) => props.onRecoverFoldSession!(previewFold.id, name, mode) : undefined} />}
 

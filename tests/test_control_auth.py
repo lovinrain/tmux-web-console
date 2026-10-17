@@ -114,6 +114,7 @@ def test_control_and_callback_secret_collision_detection_rereads_files(tmp_path:
 
 
 _ALLOWED_ROUTES = (
+    ("/api/workspaces/project-1/folds/fold-1", ("DELETE",)),
     ("/api/health", ("GET", "HEAD")),
     ("/api/capabilities", ("GET", "HEAD")),
     ("/api/work-links/config", ("GET", "HEAD", "PATCH")),

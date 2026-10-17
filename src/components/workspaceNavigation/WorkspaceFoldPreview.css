@@ -23,6 +23,8 @@
   color: var(--paper); background: transparent; font: inherit; font-size: 12px; cursor: pointer;
 }
 .workspace-fold-preview button:hover:not(:disabled) { border-color: var(--accent); }
+.workspace-fold-preview button.danger-button { color: #fff4f2; background: #a9362d; border-color: #d95a50; }
+.workspace-fold-preview button.danger-button:hover:not(:disabled) { background: #c34338; border-color: #ff8176; }
 .workspace-fold-preview button:disabled { opacity: .45; cursor: default; }
 .workspace-fold-preview button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .workspace-fold-preview .title-close { width: 30px; height: 30px; padding: 4px; }

@@ -3958,7 +3958,7 @@ function AppRoutes() {
 
   const captureSavedWorkspaceForFold = useCallback(async () => {
     const id = savedWorkspaceIdFromSearch(currentLocation().search);
-    if (!id || hydratedWorkspaceIdRef.current !== id) throw new Error("Save and open this workspace before fold-and-close.");
+    if (!id || hydratedWorkspaceIdRef.current !== id) throw new Error("Save and open this workspace before archiving or deleting a fold.");
     workspaceActivityCommit.current();
     while (workspaceActivityInFlight.current?.workspaceId === id
       || queuedWorkspaceActivities.current.some((snapshot) => snapshot.workspaceId === id)) {
@@ -3980,7 +3980,7 @@ function AppRoutes() {
   const getFoldSessions = useCallback(() => knownSessionsRef.current, []);
   const receiveFoldWorkspace = useCallback((saved: SavedWorkspace) => receiveWorkspaceSnapshot.current(saved), []);
   const foldCloseDisabledReason = workspacePersistenceState === "unsaved"
-    ? "Save this workspace before fold-and-close so recovery metadata is retained."
+    ? "Save this workspace before archiving or deleting a fold so recovery metadata is retained."
     : workspacePersistenceState !== "saved" ? "Wait for this workspace to finish syncing." : null;
   const foldActions = useWorkspaceFoldActions({
     workspaceId: hydratedWorkspaceId, disabledReason: foldCloseDisabledReason,
@@ -4781,6 +4781,7 @@ function AppRoutes() {
         onFoldTabs={foldSessionTabs}
         onUnfoldTabs={unfoldSessionTabs}
         onFoldAndCloseTabs={foldActions.foldAndClose}
+        onDeleteFold={foldActions.deleteFold}
         foldCloseDisabledReason={foldCloseDisabledReason}
         onRecoverFoldSession={foldActions.recover}
         sessions={knownSessions}
@@ -5043,6 +5044,7 @@ function AppRoutes() {
             onFoldTabs={foldSessionTabs}
             onUnfoldTabs={unfoldSessionTabs}
             onFoldAndCloseTabs={foldActions.foldAndClose}
+            onDeleteFold={foldActions.deleteFold}
             foldCloseDisabledReason={foldCloseDisabledReason}
             onRecoverFoldSession={foldActions.recover}
             sessions={knownSessions}
@@ -5134,6 +5136,7 @@ function AppRoutes() {
             onFoldTabs={foldSessionTabs}
             onUnfoldTabs={unfoldSessionTabs}
             onFoldAndCloseTabs={foldActions.foldAndClose}
+            onDeleteFold={foldActions.deleteFold}
             foldCloseDisabledReason={foldCloseDisabledReason}
             onRecoverFoldSession={foldActions.recover}
             sessions={knownSessions}

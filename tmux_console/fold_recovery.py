@@ -34,6 +34,7 @@ from .tmux import (
 from .workspace_folds import FoldSessionSnapshot, _members, validate_workspace_folds
 from .workspaces import (
     WorkspaceNotFoundError,
+    WorkspaceResourceConflictError,
     WorkspaceSessionRevisionConflict,
     WorkspaceStore,
     WorkspaceStoreUnavailable,
@@ -67,7 +68,7 @@ def register_fold_recovery_routes(
     def error_response(error: Exception) -> web.Response:
         if isinstance(error, (WorkspaceNotFoundError, RecoveryRecordNotFoundError)):
             status = 404
-        elif isinstance(error, (WorkspaceUpdateConflict, WorkspaceSessionRevisionConflict, TmuxSessionIdentityChangedError)):
+        elif isinstance(error, (WorkspaceUpdateConflict, WorkspaceSessionRevisionConflict, WorkspaceResourceConflictError, TmuxSessionIdentityChangedError)):
             status = 409
         elif isinstance(error, (WorkspaceStoreUnavailable, SessionRegistryUnavailable, TmuxError)):
             status = 503
@@ -75,7 +76,7 @@ def register_fold_recovery_routes(
             status = 400
         return web.json_response({"error": str(error)}, status=status)
 
-    async def close_fold(request: web.Request) -> web.Response:
+    async def archive_fold(request: web.Request, *, deleting: bool = False) -> web.Response:
         try:
             payload = await request.json()
             required = {"tabs", "sessions", "sessionRevision", "expectedUpdatedAt"}
@@ -84,7 +85,16 @@ def register_fold_recovery_routes(
             if not isinstance(payload["sessions"], list) or not payload["sessions"]:
                 raise ValueError("sessions must contain the confirmed native identities")
             confirmed: dict[str, dict[str, Any]] = {}
+            dead_only: set[str] = set()
             for item in payload["sessions"]:
+                if deleting and isinstance(item, dict) and set(item) == {"name", "sessionId"} and item["sessionId"] is None:
+                    if not isinstance(item["name"], str) or not item["name"] or item["name"] in confirmed:
+                        raise ValueError("sessions must contain unique session names")
+                    confirmed[item["name"]] = item
+                    continue
+                only_dead = deleting and isinstance(item, dict) and item.get("onlyDeadPanes") is True
+                if only_dead:
+                    item = {key: value for key, value in item.items() if key != "onlyDeadPanes"}
                 if not isinstance(item, dict) or set(item) != {"name", *IDENTITY_FIELDS} or not isinstance(item["name"], str):
                     raise ValueError("sessions must contain complete native identities")
                 if item["name"] in confirmed:
@@ -94,6 +104,8 @@ def register_fold_recovery_routes(
                 if any(type(item[field]) is not int or item[field] <= 0 for field in IDENTITY_FIELDS[1:]):
                     raise ValueError("invalid native session identity")
                 confirmed[item["name"]] = item
+                if only_dead:
+                    dead_only.add(item["name"])
             async with session_lock:
                 workspace = workspaces.get_workspace(request.match_info["workspace_id"])
                 if payload["expectedUpdatedAt"] != workspace["updatedAt"]:
@@ -102,6 +114,14 @@ def register_fold_recovery_routes(
                     raise WorkspaceSessionRevisionConflict(workspace["sessionRevision"], payload["sessionRevision"])
                 fold_id = request.match_info["fold_id"]
                 old = next((fold for fold in workspace.get("folds", []) if fold["id"] == fold_id), None)
+                if deleting and old is None:
+                    # A lost successful response can be retried after the workspace
+                    # stream has removed every confirmed tab. Never touch tmux here.
+                    if not set(confirmed).intersection(workspace["tabs"]):
+                        return web.json_response({"workspace": workspace, "closed": [], "failures": {}, "deleted": True})
+                    raise WorkspaceNotFoundError("Fold not found; refresh this workspace")
+                if deleting and old and old["tabs"] != payload["tabs"]:
+                    raise WorkspaceResourceConflictError("Fold changed; preview it again before deleting")
                 candidate = {"id": fold_id, "tabs": payload["tabs"]}
                 if old and old.get("closedSessions"):
                     candidate["closedSessions"] = old["closedSessions"]
@@ -115,6 +135,8 @@ def register_fold_recovery_routes(
                 )]
                 if set(confirmed) != set(members):
                     raise ValueError("confirmed sessions must include every folded branch and descendant")
+                if deleting and set(members).intersection(workspaces.list_pinned_sessions()):
+                    raise WorkspaceResourceConflictError("Unpin this fold's globally pinned sessions before deleting it")
                 live = await tmux.list_sessions()
                 by_name = {session.name: session for session in live}
                 previous = {item["name"]: item for item in candidate.get("closedSessions", [])}
@@ -123,17 +145,31 @@ def register_fold_recovery_routes(
                     current = by_name.get(name)
                     if current and session_fence(current) != confirmed[name]:
                         raise TmuxSessionIdentityChangedError(f"Session {name} changed; refresh before closing it")
+                    if current and name in dead_only and (not current.panes or any(not pane.dead for pane in current.panes)):
+                        raise TmuxSessionIdentityChangedError(f"Session {name} is running again; preview the fold before deleting")
+                    if deleting and not current and confirmed[name]["sessionId"] is None:
+                        continue
                     if not current and (name not in previous or any(previous[name][field] != confirmed[name][field] for field in IDENTITY_FIELDS)):
                         raise TmuxSessionIdentityChangedError(f"Session {name} is no longer live; no sessions were closed")
                 targets = [by_name[name] for name in members if name in by_name]
-                detected = await references.detect_sessions(targets)
-                recovered = await reference_recovery.recover_sessions(targets, prune_cache=False)
+                detected = await references.detect_sessions(targets) if targets else {}
+                recovered = await reference_recovery.recover_sessions(targets, prune_cache=False) if targets else {}
                 registry.reconcile(live, detected, recovered_references=recovered)
                 snapshots: list[dict[str, Any]] = []
                 for name in members:
                     target = by_name.get(name)
                     if target is None:
-                        snapshots.append(previous[name])
+                        if name in previous:
+                            snapshot = previous[name]
+                            if deleting:
+                                # The fold must never be the last copy of recovery metadata.
+                                try:
+                                    history = registry.get_history(snapshot["historyId"])
+                                except RecoveryRecordNotFoundError as error:
+                                    raise WorkspaceResourceConflictError(f"Saved history for {name} is missing; the fold was kept to preserve its recovery metadata") from error
+                                if (history["tmux_id"], history["created"], history["server_started"], history["server_pid"]) != tuple(snapshot[field] for field in IDENTITY_FIELDS):
+                                    raise WorkspaceResourceConflictError(f"Saved history for {name} changed; the fold was kept")
+                            snapshots.append(snapshot)
                         continue
                     history_id = registry.observe_history(target, detected.get(name), recovered_references=recovered)
                     history = registry.get_history(history_id)
@@ -145,11 +181,13 @@ def register_fold_recovery_routes(
                         sessionId=target.id, sessionCreated=target.created, serverStarted=target.server_started,
                         serverPid=target.server_pid, savedAt=int(time.time()),
                     ).to_dict())
-                candidate["closedSessions"] = snapshots
+                if snapshots:
+                    candidate["closedSessions"] = snapshots
                 # A failed atomic write ends here, with every tmux session untouched.
-                saved = workspaces.update_workspace(workspace["id"], folds=all_folds, update_folds=True,
-                                                     session_revision=payload["sessionRevision"],
-                                                     expected_updated_at=payload["expectedUpdatedAt"])
+                saved = workspace if deleting and not targets else workspaces.update_workspace(
+                    workspace["id"], folds=all_folds, update_folds=True,
+                    session_revision=payload["sessionRevision"], expected_updated_at=payload["expectedUpdatedAt"],
+                )
                 registry.record_history_titles({name: titles.get_title(name) for name in members})
                 registry.sync_history_workspaces(workspaces.list_workspaces())
                 closed: list[str] = [name for name in members if name not in by_name]
@@ -160,6 +198,10 @@ def register_fold_recovery_routes(
                             await asyncio.wait_for(scrollback.sample([target], force=True), 3)
                         except (TimeoutError, TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable):
                             LOGGER.warning("Unable to save final pane output before fold-and-close")
+                        if target.name in dead_only:
+                            current = await tmux.get_session(target.name)
+                            if session_fence(current) != confirmed[target.name] or not current.panes or any(not pane.dead for pane in current.panes):
+                                raise TmuxSessionIdentityChangedError(f"Session {target.name} changed or is running again; preview the fold before deleting")
                         await tmux.terminate_session(target.id, target.created, target.server_started, target.server_pid)
                         snapshot = next(item for item in snapshots if item["name"] == target.name)
                         registry.mark_history(snapshot["historyId"], ended=True)
@@ -168,11 +210,35 @@ def register_fold_recovery_routes(
                     except (TmuxError, ValueError, SessionRegistryUnavailable) as error:
                         failures[target.name] = str(error)
                 notify_sessions()
-                return web.json_response({"workspace": saved, "closed": closed, "failures": failures})
+                result: dict[str, Any] = {"workspace": saved, "closed": closed, "failures": failures}
+                if deleting:
+                    result["deleted"] = False
+                    if not failures:
+                        # Other pages may edit organization while tmux is closing. Only
+                        # remove the confirmed fold; preserve unrelated intervening edits.
+                        latest = workspaces.get_workspace(workspace["id"])
+                        latest_fold = next((fold for fold in latest.get("folds", []) if fold["id"] == fold_id), None)
+                        expected_fold = candidate if targets else old
+                        if latest_fold != expected_fold or set(members) != _members(
+                            tuple(candidate["tabs"]), tuple(latest["tabs"]), latest.get("parents", {}),
+                        ):
+                            raise WorkspaceResourceConflictError("Fold changed while sessions closed. History was retained; refresh before deleting")
+                        result["workspace"] = workspaces.remove_workspace_sessions(
+                            workspace["id"], sessions=members, session_revision=payload["sessionRevision"],
+                            expected_updated_at=latest["updatedAt"],
+                        )["workspace"]
+                        result["deleted"] = True
+                return web.json_response(result)
         except (ValueError, TypeError, RecursionError, WorkspaceNotFoundError, WorkspaceStoreUnavailable,
-                WorkspaceUpdateConflict, WorkspaceSessionRevisionConflict, SessionRegistryUnavailable,
+                WorkspaceUpdateConflict, WorkspaceSessionRevisionConflict, WorkspaceResourceConflictError, SessionRegistryUnavailable,
                 RecoveryRecordNotFoundError, TmuxError) as error:
             return error_response(error)
+
+    async def close_fold(request: web.Request) -> web.Response:
+        return await archive_fold(request)
+
+    async def delete_fold(request: web.Request) -> web.Response:
+        return await archive_fold(request, deleting=True)
 
     async def recover_fold_session(request: web.Request) -> web.Response:
         try:
@@ -237,5 +303,6 @@ def register_fold_recovery_routes(
             return error_response(error)
 
     route = f"{prefix}/api/workspaces/{{workspace_id}}/folds/{{fold_id}}"
+    app.router.add_delete(route, delete_fold)
     app.router.add_post(f"{route}/close", close_fold)
     app.router.add_post(f"{route}/recover", recover_fold_session)

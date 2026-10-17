@@ -125,11 +125,12 @@ describe("SessionWorkspaceNavigation", () => {
       sessionId: "$1", sessionCreated: 100, serverStarted: 90, serverPid: 10, savedAt: 110 };
     const onRecover = vi.fn().mockResolvedValue(undefined);
     const onUnfold = vi.fn();
+    const onDelete = vi.fn();
     render(<SessionWorkspaceNavigation {...navigationProps({
       activeSession: "alpha", openSessions: ["alpha", "beta"], sessions: [],
       folds: [{ id: "saved", tabs: ["alpha", "beta"], closedSessions: [snapshot,
         { ...snapshot, name: "beta", sessionId: "$2", agentType: null, agentSessionId: null }] }],
-      onUnfoldTabs: onUnfold, onRecoverFoldSession: onRecover,
+      onUnfoldTabs: onUnfold, onRecoverFoldSession: onRecover, onDeleteFold: onDelete,
     })} />);
     fireEvent.click(screen.getByRole("tab", { name: "Preview fold of 2 sessions" }));
     const preview = screen.getByRole("dialog", { name: "Fold preview" });
@@ -140,6 +141,11 @@ describe("SessionWorkspaceNavigation", () => {
     expect(onRecover).toHaveBeenNthCalledWith(2, "saved", "beta", "shell");
     expect(onUnfold).not.toHaveBeenCalled();
     expect(screen.getByRole("tab", { name: "Preview fold of 2 sessions" })).toBeInTheDocument();
+    await waitFor(() => expect(within(preview).getByRole("button", { name: "Delete fold" })).toBeEnabled());
+    fireEvent.click(within(preview).getByRole("button", { name: "Delete fold" }));
+    expect(onDelete).toHaveBeenCalledWith("saved");
+    expect(screen.queryByRole("dialog", { name: "Fold preview" })).not.toBeInTheDocument();
+    expect(onUnfold).not.toHaveBeenCalled();
   });
 
   it("explains incompatible fold selection and cancels without changing the active session", () => {

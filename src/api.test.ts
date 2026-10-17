@@ -10,6 +10,8 @@ import {
   createWorkspace,
   deleteQueuedMessage,
   deleteWorkspace,
+  deleteWorkspaceFold,
+  type SavedWorkspace,
   forgetRecoverableSession,
   undoForgetRecoverableSession,
   downloadSessionFileEntries,
@@ -78,6 +80,21 @@ import {
   listWorkspaces,
 } from "./api";
 import type { Session } from "./types";
+
+it("deletes a fold with workspace versions and explicit live or missing session fences", async () => {
+  const workspace = { id: "workspace/one", sessionRevision: 3, updatedAt: 42 } as SavedWorkspace;
+  const sessions = [{ name: "closed", sessionId: null },
+    { name: "live", sessionId: "$1", sessionCreated: 10, serverStarted: 9, serverPid: 123 }];
+  const result = { workspace, closed: ["closed", "live"], deleted: true, failures: {} };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), {
+    headers: { "Content-Type": "application/json" },
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(deleteWorkspaceFold(workspace, "fold/one", ["closed", "live"], sessions)).resolves.toEqual(result);
+  expect(fetchMock).toHaveBeenCalledWith(`${BASE_PATH}/api/workspaces/workspace%2Fone/folds/fold%2Fone`, expect.objectContaining({
+    method: "DELETE", body: JSON.stringify({ tabs: ["closed", "live"], sessions, sessionRevision: 3, expectedUpdatedAt: 42 }),
+  }));
+});
 
 it("persists a read marker for the full native identity and keeps it alive on page exit", async () => {
   const live = {

@@ -1,6 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import type { SavedWorkspace } from "../src/api";
+import type { Session } from "../src/types";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
 
 const socket = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
@@ -185,3 +186,75 @@ test("nested folds sync across browser profiles while keeping each selected sess
     await secondContext.close();
   }
 });
+
+for (const contents of ["mixed", "closed"] as const) {
+  test(`deleting a ${contents} saved fold preserves history and syncs without recovering closed sessions`, async ({ page, context }) => {
+    const targets = ["a", "b", "c"].map((name) => `fold-delete-${process.pid}-${contents}-${name}`);
+    const sentinel = `fold-delete-${process.pid}-${contents}-sentinel`;
+    const ownNames = [...targets, sentinel];
+    for (const name of ownNames) execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+    try {
+      const response = await context.request.post("/mux/api/workspaces", { data: {
+        name: `Delete ${contents} fold`, tabs: ownNames, activeSession: targets[0], folds: [{ id: "delete", tabs: targets }],
+      } });
+      expect(response.ok()).toBe(true);
+      let workspace = (await response.json()).workspace as SavedWorkspace;
+      workspaceIds.push(workspace.id);
+      const inventory = (await (await context.request.get("/mux/api/sessions")).json()).sessions as Session[];
+      const sessions = targets.map((name) => {
+        const current = inventory.find((session) => session.name === name)!;
+        return { name, sessionId: current.id, sessionCreated: current.created,
+          serverStarted: current.serverStarted, serverPid: current.serverPid };
+      });
+      const closing = await context.request.post(`/mux/api/workspaces/${workspace.id}/folds/delete/close`, { data: {
+        tabs: targets, sessions, sessionRevision: workspace.sessionRevision, expectedUpdatedAt: workspace.updatedAt,
+      } });
+      expect(closing.ok()).toBe(true);
+      workspace = (await closing.json()).workspace as SavedWorkspace;
+      const archivedIds = workspace.folds![0].closedSessions!.map((snapshot) => snapshot.historyId);
+      if (contents === "mixed") {
+        for (const name of targets.slice(0, 2)) expect((await context.request.post(
+          `/mux/api/workspaces/${workspace.id}/folds/delete/recover`, { data: { session: name, mode: "shell" } },
+        )).ok()).toBe(true);
+        const recovered = (await (await context.request.get("/mux/api/sessions")).json()).sessions as Session[];
+        const deadPane = recovered.find((session) => session.name === targets[1])!.panes[0].id;
+        execFileSync("tmux", [...tmux, "set-option", "-w", "-t", deadPane, "remain-on-exit", "on"]);
+        execFileSync("tmux", [...tmux, "respawn-pane", "-k", "-t", deadPane, "true"]);
+      }
+      const unexpectedRecoveries: string[] = [];
+      context.on("request", (request) => {
+        if (new URL(request.url()).pathname.endsWith("/recover")) unexpectedRecoveries.push(request.url());
+      });
+      const second = await context.newPage();
+      await page.goto(`/mux/session/${targets[0]}?workspace=${workspace.id}`);
+      await second.goto(`/mux/session/${sentinel}?workspace=${workspace.id}`);
+      const fold = page.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true });
+      await fold.click();
+      const preview = page.getByRole("dialog", { name: "Fold preview", exact: true });
+      await expect(preview).toContainText(contents === "mixed" ? "1 running · 1 dead" : "0 running");
+      await preview.getByRole("button", { name: "Delete fold", exact: true }).click();
+      const confirm = page.getByRole("alertdialog", { name: "Delete fold and 3 tabs?", exact: true });
+      await expect(confirm).toContainText("remain available in History");
+      await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(fold).toBeVisible();
+      await fold.click();
+      await preview.getByRole("button", { name: "Delete fold", exact: true }).click();
+      await page.screenshot({ path: test.info().outputPath(`delete-${contents}-confirmation-light.png`) });
+      await confirm.getByRole("button", { name: contents === "mixed" ? "Archive and delete" : "Delete fold", exact: true }).click();
+      await expect(confirm).toBeHidden();
+      for (const view of [page, second]) {
+        await expect(view.getByRole("tab", { name: "Preview fold of 3 sessions", exact: true })).toHaveCount(0);
+        await expect.poll(() => visibleNames(view)).toEqual([sentinel]);
+        await view.reload();
+        await expect.poll(() => visibleNames(view)).toEqual([sentinel]);
+      }
+      expect(unexpectedRecoveries).toEqual([]);
+      const history = (await (await context.request.get(`/mux/api/session-history?workspace=${workspace.id}&recycled=1`)).json()).entries;
+      expect(history.map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining(archivedIds));
+      for (const name of targets) expect(spawnSync("tmux", [...tmux, "has-session", "-t", `=${name}`]).status).not.toBe(0);
+      expect(spawnSync("tmux", [...tmux, "has-session", "-t", `=${sentinel}`]).status).toBe(0);
+    } finally {
+      for (const name of ownNames) spawnSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+    }
+  });
+}

@@ -536,6 +536,11 @@ Recovery can recreate a shell or explicitly resume a supported local coding
 conversation. It restores one pane, not previous process state or pane layouts.
 No transcripts are copied and the session registry remains schema 5. Versions
 through 15 retain their live folds without closed-session snapshots.
+Deleting a fold archives live contents before closing them and removes its member
+tabs only from that workspace. Closed-only deletion never recovers sessions.
+History and recovery records remain available; partial failures retain the fold.
+This also uses schemas 16/5 and requires backend and frontend together, without a
+migration. See [Workspace folds](docs/WORKSPACE_FOLDS.md) for behavior and the API.
 Each record permits an 80-character name, at most 256 unique ordered
 tabs, at most 16 disjoint contiguous tab groups whose names are at most 40
 characters, and at most 16 quick links; the global common shelf and each

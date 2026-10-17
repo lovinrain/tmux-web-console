@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { agentDisplayLabel, agentResumeCommand } from "../../agentResume";
 import { acquireBodyScrollLock } from "../../bodyScrollLock";
-import { ArrowRightIcon, CloseIcon, HistoryIcon, TerminalIcon } from "../../icons";
+import { ArrowRightIcon, CloseIcon, HistoryIcon, TerminalIcon, TrashIcon } from "../../icons";
+import { sessionHasOnlyDeadPanes } from "../../sessionLifecycle";
 import type { Session } from "../../types";
 import type { WorkspaceTabFold, WorkspaceFoldSnapshot } from "../../workspaceFolds";
 import { SessionHistoryDialog } from "../SessionHistoryDialog";
@@ -17,6 +18,7 @@ interface Props {
   onPreview: (name: string) => void;
   onUnfold?: () => void;
   onFoldAndClose?: () => void;
+  onDelete?: () => void;
   closeDisabledReason?: string | null;
   onRecover?: (name: string, mode: "shell" | "agent") => Promise<void>;
   onClose: () => void;
@@ -28,7 +30,7 @@ export function foldSnapshotCanResume(snapshot: WorkspaceFoldSnapshot | undefine
 }
 
 export function WorkspaceFoldPreview({ fold, members, sessions, activeSession, workspaceId,
-  onPreview, onUnfold, onFoldAndClose, closeDisabledReason, onRecover, onClose }: Props) {
+  onPreview, onUnfold, onFoldAndClose, onDelete, closeDisabledReason, onRecover, onClose }: Props) {
   const dialog = useRef<HTMLDivElement>(null);
   const origin = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const inFlight = useRef(false);
@@ -39,7 +41,9 @@ export function WorkspaceFoldPreview({ fold, members, sessions, activeSession, w
   const descriptionId = useId();
   const saved = new Map((fold.closedSessions ?? []).map((item) => [item.name, item]));
   const missing = members.filter((name) => !sessions.has(name) && saved.has(name));
-  const liveCount = members.filter((name) => sessions.has(name)).length;
+  const present = members.flatMap((name) => sessions.has(name) ? [sessions.get(name)!] : []);
+  const deadCount = present.filter(sessionHasOnlyDeadPanes).length;
+  const liveCount = present.length - deadCount;
 
   useEffect(() => {
     if (historyName) return;
@@ -94,7 +98,7 @@ export function WorkspaceFoldPreview({ fold, members, sessions, activeSession, w
         <h2 id={headingId}>Fold preview</h2></div>
         <button type="button" className="title-close" disabled={Boolean(busy)} onClick={onClose} aria-label="Close fold preview"><CloseIcon /></button>
       </header>
-      <p id={descriptionId}>{members.length} sessions · {liveCount} running. Preview opens a session while keeping this fold intact.
+      <p id={descriptionId}>{members.length} sessions · {liveCount} running{deadCount > 0 ? ` · ${deadCount} dead` : ""}. Preview opens a session while keeping this fold intact.
         {fold.closedSessions && " Closed sessions can be recovered individually or together."}</p>
       {fold.closedSessions && <p className="workspace-fold-resume-note">Resume reopens the latest recorded coding conversation.
         Running commands, unsaved terminal state and other panes are not restored.</p>}
@@ -134,9 +138,12 @@ export function WorkspaceFoldPreview({ fold, members, sessions, activeSession, w
             onClick={() => void recover(missing, "agent")}>Recover all + coding</button>
         </>}
         {onUnfold && <button type="button" disabled={Boolean(busy)} onClick={() => { onClose(); onUnfold(); }}><ArrowRightIcon />Unfold</button>}
-        {onFoldAndClose && liveCount > 0 && <button type="button" className="danger-button" disabled={Boolean(busy) || Boolean(closeDisabledReason)}
+        {onFoldAndClose && present.length > 0 && <button type="button" className="danger-button" disabled={Boolean(busy) || Boolean(closeDisabledReason)}
           title={closeDisabledReason ?? "Save metadata, then close every session in this fold"}
           onClick={() => { onClose(); onFoldAndClose(); }}>Fold and close</button>}
+        {onDelete && <button type="button" className="danger-button" disabled={Boolean(busy) || Boolean(closeDisabledReason)}
+          title={closeDisabledReason ?? "Archive live sessions, then remove this fold and its tabs; keep session history"}
+          onClick={() => { onClose(); onDelete(); }}><TrashIcon />Delete fold</button>}
       </footer>
     </div>
   </div>;

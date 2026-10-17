@@ -12,9 +12,9 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.agent_reference import AgentReference, AgentReferenceDetector
 from tmux_console.app import create_app
-from tmux_console.fold_recovery import agent_resume_argv, session_fence
+from tmux_console.fold_recovery import IDENTITY_FIELDS, agent_resume_argv, session_fence
 from tmux_console.metadata import SessionTitleStore
-from tmux_console.session_registry import SessionRegistry
+from tmux_console.session_registry import RecoveryRecordNotFoundError, SessionRegistry
 from tmux_console.tmux import TmuxClient, TmuxError
 from tmux_console.workspaces import WorkspaceStore, WorkspaceStoreUnavailable
 
@@ -234,6 +234,233 @@ async def test_unavailable_agent_recovery_leaves_the_session_closed_and_shell_re
     assert name not in {session.name for session in await tmux.list_sessions()}
     response = await client.post(f"{url}/recover", json={"session": name, "mode": "shell"})
     assert response.status == 201
+
+
+@pytest.fixture
+def delete_fold_env(fold_env):
+    _tmux, _client, store, _registry, workspace, *_ = fold_env
+    store.update_workspace(workspace["id"], folds=[{"id": "saved", "tabs": ["a", "b"]}],
+                           update_folds=True, session_revision=workspace["sessionRevision"])
+    return fold_env
+
+
+async def delete_saved_fold(env, **overrides):
+    _tmux, client, store, _registry, workspace, url, confirmed, *_ = env
+    current = store.get_workspace(workspace["id"])
+    payload = {"tabs": ["a", "b"], "sessions": confirmed,
+               "sessionRevision": current["sessionRevision"], "expectedUpdatedAt": current["updatedAt"], **overrides}
+    return await client.delete(url, json=payload)
+
+
+@pytest.mark.asyncio
+async def test_delete_archives_live_contents_before_closure_and_retains_history_and_other_workspaces(delete_fold_env, monkeypatch, tmp_path):
+    tmux, _client, store, registry, workspace, _url, _confirmed, *_ = delete_fold_env
+    other = store.create_workspace(name="Other workspace", tabs=["a", "child", "sentinel"], active_session="a")
+    store.update_workspace(workspace["id"], groups=[{"id": "family", "name": "Family", "color": "blue",
+                           "collapsed": False, "tabs": ["root", "a", "child", "gap", "b"]}], update_groups=True,
+                           separators=["a", "gap"], update_separators=True, session_revision=workspace["sessionRevision"])
+    sentinel = session_fence(await tmux.get_session("sentinel"))
+    terminate = tmux.terminate_session
+    archived = []
+
+    async def guarded_terminate(*identity):
+        saved = WorkspaceStore(store.path).get_workspace(workspace["id"])
+        snapshots = saved["folds"][0]["closedSessions"]
+        assert [item["name"] for item in snapshots] == ["a", "child", "b"]
+        assert snapshots[0]["agentSessionId"] == AGENT_ID
+        for item in snapshots:
+            history = registry.get_history(item["historyId"])
+            assert history["directory"] == str(tmp_path)
+            assert history["tmux_id"] == item["sessionId"]
+        archived[:] = snapshots
+        await terminate(*identity)
+
+    monkeypatch.setattr(tmux, "terminate_session", guarded_terminate)
+    response = await delete_saved_fold(delete_fold_env)
+    assert response.status == 200, await response.text()
+    result = await response.json()
+    assert result["deleted"] and not result["failures"]
+    saved = WorkspaceStore(store.path).get_workspace(workspace["id"])
+    assert saved["tabs"] == ["root", "gap", "sentinel"] and not saved.get("folds")
+    assert saved["parents"] == {"gap": "root"}
+    assert saved["groups"][0]["tabs"] == ["root", "gap"] and saved["separators"] == ["gap"]
+    assert saved["activeSession"] == "root"
+    assert store.get_workspace(other["id"]) == other
+    assert session_fence(await tmux.get_session("sentinel")) == sentinel
+    history = registry.list_history(workspace_id=workspace["id"], recycled=True)["entries"]
+    assert {item["id"] for item in history} == {item["historyId"] for item in archived}
+    recorded = next(item for item in history if item["name"] == "a")
+    assert recorded["title"] == "Recorded title" and recorded["agentSessionId"] == AGENT_ID
+    assert any(item["id"] == workspace["id"] and not item["present"] for item in recorded["workspaces"])
+    assert {item.name for item in registry.reconcile(await tmux.list_sessions())} >= {"a", "child", "b"}
+
+
+@pytest.mark.parametrize("previously_saved", [False, True])
+@pytest.mark.asyncio
+async def test_delete_closed_only_fold_does_not_recover_or_terminate_any_session(delete_fold_env, monkeypatch, previously_saved):
+    tmux, _client, store, registry, workspace, _url, confirmed, close, refs = delete_fold_env
+    if previously_saved:
+        assert (await close()).status == 200
+    else:
+        for item in confirmed:
+            await tmux.terminate_session(*(item[field] for field in IDENTITY_FIELDS))
+    before = {session.name: session_fence(session) for session in await tmux.list_sessions()}
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Closed fold deletion must not recover sessions, scan agent processes or close tmux")
+
+    monkeypatch.setattr(tmux, "create_session", unexpected)
+    monkeypatch.setattr(tmux, "terminate_session", unexpected)
+    monkeypatch.setattr(refs, "detect_sessions", unexpected)
+    response = await delete_saved_fold(delete_fold_env, sessions=[{"name": item["name"], "sessionId": None} for item in confirmed])
+    assert response.status == 200, await response.text()
+    assert (await response.json())["deleted"]
+    assert store.get_workspace(workspace["id"])["tabs"] == ["root", "gap", "sentinel"]
+    assert {session.name: session_fence(session) for session in await tmux.list_sessions()} == before
+    assert {item["name"] for item in registry.list_history(workspace_id=workspace["id"], recycled=True)["entries"]} >= {"a", "child", "b"}
+
+
+@pytest.mark.parametrize("changed", ["version", "revision", "identity", "descendants", "resurrected", "respawned", "pinned", "roots"])
+@pytest.mark.asyncio
+async def test_delete_refuses_stale_or_incomplete_confirmation_without_closing_anything(delete_fold_env, changed):
+    tmux, _client, store, _registry, workspace, _url, confirmed, *_ = delete_fold_env
+    before = {session.name: session_fence(session) for session in await tmux.list_sessions()}
+    payload = {"sessions": [dict(item) for item in confirmed]}
+    if changed == "version":
+        payload["expectedUpdatedAt"] = store.get_workspace(workspace["id"])["updatedAt"] - 1
+    elif changed == "revision":
+        payload["sessionRevision"] = workspace["sessionRevision"] + 1
+    elif changed == "identity":
+        payload["sessions"][0]["serverPid"] += 1
+    elif changed == "descendants":
+        store.update_workspace(workspace["id"], parents={"a": "root", "child": "a", "gap": "a", "b": "root"},
+                               update_parents=True, session_revision=workspace["sessionRevision"])
+    elif changed == "resurrected":
+        payload["sessions"][0] = {"name": "a", "sessionId": None}
+    elif changed == "respawned":
+        payload["sessions"][0]["onlyDeadPanes"] = True
+    elif changed == "pinned":
+        store.set_session_workspace_pinned("a", True)
+    else:
+        payload["tabs"] = ["a", "gap"]
+    response = await delete_saved_fold(delete_fold_env, **payload)
+    assert response.status == (400 if changed == "descendants" else 409), await response.text()
+    assert {session.name: session_fence(session) for session in await tmux.list_sessions()} == before
+    assert not store.get_workspace(workspace["id"])["folds"][0].get("closedSessions")
+
+
+@pytest.mark.asyncio
+async def test_delete_preserves_fold_when_it_holds_the_only_remaining_recovery_snapshot(delete_fold_env, monkeypatch):
+    _tmux, _client, store, registry, workspace, _url, confirmed, close, *_ = delete_fold_env
+    assert (await close()).status == 200
+    before = store.get_workspace(workspace["id"])
+
+    def missing(history_id):
+        raise RecoveryRecordNotFoundError(history_id)
+
+    monkeypatch.setattr(registry, "get_history", missing)
+    response = await delete_saved_fold(delete_fold_env, sessions=[{"name": item["name"], "sessionId": None} for item in confirmed])
+    assert response.status == 409
+    assert "kept to preserve its recovery metadata" in (await response.json())["error"]
+    assert store.get_workspace(workspace["id"]) == before
+
+
+@pytest.mark.parametrize("failure", ["archive", "remove"])
+@pytest.mark.asyncio
+async def test_delete_storage_failures_preserve_the_fold_and_recovery_metadata(delete_fold_env, monkeypatch, failure):
+    tmux, _client, store, registry, workspace, *_ = delete_fold_env
+    before = {session.name: session_fence(session) for session in await tmux.list_sessions()}
+
+    def fail(*args, **kwargs):
+        raise WorkspaceStoreUnavailable("simulated full disk")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(store, "update_workspace" if failure == "archive" else "remove_workspace_sessions", fail)
+        response = await delete_saved_fold(delete_fold_env)
+    assert response.status == 503, await response.text()
+    saved = store.get_workspace(workspace["id"])
+    assert saved["tabs"] == workspace["tabs"] and saved["folds"]
+    if failure == "archive":
+        assert {session.name: session_fence(session) for session in await tmux.list_sessions()} == before
+    else:
+        assert all(registry.get_history(item["historyId"]) for item in saved["folds"][0]["closedSessions"])
+        response = await delete_saved_fold(delete_fold_env)
+        assert response.status == 200 and (await response.json())["deleted"]
+
+
+@pytest.mark.asyncio
+async def test_delete_partial_failure_keeps_fold_and_retry_only_closes_remaining_sessions(delete_fold_env, monkeypatch):
+    tmux, _client, store, _registry, workspace, _url, confirmed, *_ = delete_fold_env
+    terminate = tmux.terminate_session
+    attempts = []
+
+    async def fail_once(*identity):
+        attempts.append(identity[0])
+        if identity[0] == confirmed[-1]["sessionId"] and attempts.count(identity[0]) == 1:
+            raise TmuxError("simulated close failure")
+        await terminate(*identity)
+
+    monkeypatch.setattr(tmux, "terminate_session", fail_once)
+    response = await delete_saved_fold(delete_fold_env)
+    result = await response.json()
+    assert response.status == 200 and not result["deleted"] and set(result["failures"]) == {"b"}
+    assert len(store.get_workspace(workspace["id"])["folds"][0]["closedSessions"]) == 3
+    response = await delete_saved_fold(delete_fold_env)
+    assert response.status == 200 and (await response.json())["deleted"]
+    assert attempts.count(confirmed[0]["sessionId"]) == 1 and attempts.count(confirmed[-1]["sessionId"]) == 2
+    # Replaying a successful request must not terminate a same-name replacement.
+    await tmux.create_shell_session("a", str(store.path.parent))
+    replacement = session_fence(await tmux.get_session("a"))
+    response = await delete_saved_fold(delete_fold_env)
+    assert response.status == 200 and (await response.json())["deleted"]
+    assert session_fence(await tmux.get_session("a")) == replacement
+
+
+@pytest.mark.parametrize("change", ["unrelated", "membership"])
+@pytest.mark.asyncio
+async def test_delete_preserves_concurrent_workspace_changes(delete_fold_env, monkeypatch, change):
+    tmux, _client, store, _registry, workspace, *_ = delete_fold_env
+    terminate = tmux.terminate_session
+    changed = False
+
+    async def edit_during_close(*identity):
+        nonlocal changed
+        await terminate(*identity)
+        if not changed:
+            changed = True
+            kwargs = {"name": "Renamed during deletion", "update_name": True} if change == "unrelated" else {
+                "parents": {"a": "root", "child": "a", "gap": "a", "b": "root"}, "update_parents": True,
+                "session_revision": workspace["sessionRevision"],
+            }
+            store.update_workspace(workspace["id"], **kwargs)
+
+    monkeypatch.setattr(tmux, "terminate_session", edit_during_close)
+    response = await delete_saved_fold(delete_fold_env)
+    assert response.status == (200 if change == "unrelated" else 409), await response.text()
+    saved = store.get_workspace(workspace["id"])
+    if change == "unrelated":
+        assert saved["name"] == "Renamed during deletion" and not saved.get("folds")
+    else:
+        assert saved["folds"] and saved["tabs"] == workspace["tabs"]
+    assert (await tmux.get_session("gap")).name == "gap"
+
+
+@pytest.mark.asyncio
+async def test_delete_archives_and_removes_dead_tmux_containers(delete_fold_env):
+    tmux, _client, _store, registry, workspace, _url, confirmed, *_ = delete_fold_env
+    for item in confirmed:
+        target = await tmux.get_session(item["name"])
+        await tmux.run(["set-option", "-w", "-t", target.active_pane.id, "remain-on-exit", "on"])
+        await tmux.run(["respawn-pane", "-k", "-t", target.active_pane.id, "true"])
+        for _ in range(50):
+            if (await tmux.get_session(item["name"])).active_pane.dead:
+                break
+            await asyncio.sleep(.01)
+        assert (await tmux.get_session(item["name"])).active_pane.dead
+    response = await delete_saved_fold(delete_fold_env, sessions=[{**item, "onlyDeadPanes": True} for item in confirmed])
+    assert response.status == 200 and (await response.json())["deleted"]
+    assert not {"a", "child", "b"}.intersection(session.name for session in await tmux.list_sessions())
+    assert {item["name"] for item in registry.list_history(workspace_id=workspace["id"], recycled=True)["entries"]} >= {"a", "child", "b"}
 
 
 @pytest.mark.parametrize(("agent", "expected"), [

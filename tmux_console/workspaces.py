@@ -2668,6 +2668,7 @@ class WorkspaceStore:
         *,
         sessions: object,
         session_revision: object,
+        expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
     ) -> dict[str, Any]:
         workspace_id = _validate_workspace_id(workspace_id)
         validated_sessions = validate_workspace_tabs(sessions)
@@ -2704,6 +2705,7 @@ class WorkspaceStore:
                 active_session=next_active,
                 update_active_session=True,
                 session_revision=validated_revision,
+                expected_updated_at=expected_updated_at,
             )
             return {"removed": list(removed), "workspace": workspace}
 

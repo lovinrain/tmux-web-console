@@ -137,6 +137,17 @@ export interface FoldSessionFence {
   serverPid: number;
 }
 
+export type FoldDeleteSessionFence = (FoldSessionFence & { onlyDeadPanes?: true }) | { name: string; sessionId: null };
+
+export function deleteWorkspaceFold(workspace: SavedWorkspace, foldId: string, tabs: string[], sessions: FoldDeleteSessionFence[]): Promise<{
+  workspace: SavedWorkspace; closed: string[]; failures: Record<string, string>; deleted: boolean;
+}> {
+  return jsonRequest(`/api/workspaces/${encodeURIComponent(workspace.id)}/folds/${encodeURIComponent(foldId)}`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tabs, sessions, sessionRevision: workspace.sessionRevision, expectedUpdatedAt: workspace.updatedAt }),
+  });
+}
+
 export function closeWorkspaceFold(workspace: SavedWorkspace, foldId: string, tabs: string[], sessions: FoldSessionFence[]): Promise<{
   workspace: SavedWorkspace; closed: string[]; failures: Record<string, string>;
 }> {
