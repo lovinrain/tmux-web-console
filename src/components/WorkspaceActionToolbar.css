@@ -135,6 +135,55 @@
     margin: 0;
   }
 
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status {
+    display: grid;
+    width: 100%;
+    min-height: 0;
+    height: auto;
+    flex: 0 0 auto;
+    grid-template-columns: repeat(auto-fit, minmax(28px, 1fr));
+    grid-auto-rows: 32px;
+    align-items: stretch;
+    justify-content: stretch;
+    gap: 3px;
+    margin: 0 0 6px;
+    padding: 3px 1px;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status-count {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status > small,
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status > button > span {
+    display: none;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status > button {
+    display: inline-flex;
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    margin: 0;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status > button > svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+  }
+
+  html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-tab-selection-status > button > .workspace-fold-icon {
+    width: 20px;
+    height: 20px;
+    flex-basis: 20px;
+  }
+
   html[data-theme][data-palette] .workspace-navigation-vertical[data-orientation="vertical"] .workspace-context-toolbar {
     display: grid;
     width: 100%;

@@ -4685,6 +4685,63 @@ test("sidebar selection arrows move partial group selections and preserve saved 
       await page.locator(`[data-workspace-session-name="${name}"] [role="tab"]`).click({ modifiers: ["Control"] });
     }
     await expect(page.locator('.workspace-tab[data-tab-move-selected="true"]')).toHaveCount(2);
+    const selection = page.getByRole("group", { name: "2 tabs selected for moving" });
+    const navigation = page.getByRole("navigation", { name: "Session workspace" });
+    const resizeHandle = page.getByRole("separator", { name: "Resize vertical session tabs" });
+    for (const width of [288, 176, 72]) {
+      await resizeHandle.focus();
+      await resizeHandle.press("Home");
+      for (let current = 72; current < width; current += 8) await resizeHandle.press("ArrowRight");
+      await expect(resizeHandle).toHaveAttribute("aria-valuenow", String(width));
+      if (width === 176) await page.getByRole("button", { name: "Light theme", exact: true }).click();
+      const geometry = await selection.evaluate((element) => {
+        const rect = (node: Element) => {
+          const { x, y, width, height, right, bottom } = node.getBoundingClientRect();
+          return { x, y, width, height, right, bottom };
+        };
+        const bounds = rect(element);
+        const controls = Array.from(element.children)
+          .filter((node) => getComputedStyle(node).display !== "none")
+          .map((node) => {
+            const bounds = rect(node);
+            const icon = node.querySelector("svg");
+            return {
+              label: node.getAttribute("aria-label") ?? node.textContent,
+              ...bounds,
+              icon: icon ? rect(icon) : null,
+              receivesPointer: !(node instanceof HTMLButtonElement) || node.disabled
+                || node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)),
+            };
+          });
+        const context = element.nextElementSibling!;
+        return { bounds, controls, context: rect(context) };
+      });
+      writeFileSync(testInfo.outputPath(`selection-layout-${width}.json`), JSON.stringify(geometry, null, 2));
+      await navigation.screenshot({ path: testInfo.outputPath(`selection-layout-${width}.png`) });
+      for (const control of geometry.controls) {
+        expect(control.x, control.label ?? "selection control").toBeGreaterThanOrEqual(geometry.bounds.x - 1);
+        expect(control.right, control.label ?? "selection control").toBeLessThanOrEqual(geometry.bounds.right + 1);
+        expect(control.y, control.label ?? "selection control").toBeGreaterThanOrEqual(geometry.bounds.y - 1);
+        expect(control.bottom, control.label ?? "selection control").toBeLessThanOrEqual(geometry.bounds.bottom + 1);
+        expect(control.receivesPointer, control.label ?? "selection control").toBe(true);
+        if (control.icon) {
+          expect(control.icon.x).toBeGreaterThanOrEqual(control.x - 1);
+          expect(control.icon.right).toBeLessThanOrEqual(control.right + 1);
+          expect(control.icon.y).toBeGreaterThanOrEqual(control.y - 1);
+          expect(control.icon.bottom).toBeLessThanOrEqual(control.bottom + 1);
+        }
+      }
+      for (const [index, first] of geometry.controls.entries()) {
+        for (const second of geometry.controls.slice(index + 1)) {
+          const overlapX = Math.min(first.right, second.right) - Math.max(first.x, second.x);
+          const overlapY = Math.min(first.bottom, second.bottom) - Math.max(first.y, second.y);
+          expect(overlapX > 1 && overlapY > 1, `${first.label} overlaps ${second.label}`).toBe(false);
+        }
+      }
+      expect(geometry.context.y).toBeGreaterThanOrEqual(geometry.bounds.bottom - 1);
+      if (width === 176) await page.getByRole("button", { name: "Light theme", exact: true }).click();
+    }
+    await resizeHandle.press("Enter");
     await page.getByRole("button", { name: "Move selected tabs up" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.getAll("tab"))
       .toEqual([sessionName, ...selected, helpers[0], helpers[2]]);
