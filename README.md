@@ -60,6 +60,12 @@ Browse and preview project files without leaving the session.
 Keep your plan and handoff notes next to the terminal, with named pages and
 separate scopes.
 
+Use **Capture** to crop terminal screenshots into any note, save selected text,
+or keep both. Notes also accept pasted images and offer local OCR. Storage
+warnings and automatic image expiry keep old captures bounded; images from
+ended sessions expire after seven days unless kept, while text remains.
+See [Capture to sticky notes](docs/NOTE_CAPTURES.md) for controls and retention.
+
 ![Pinned workspace and session notebooks with named pages beside the terminal](docs/images/muxdeck-sticky-notes.png)
 
 ### Callback list

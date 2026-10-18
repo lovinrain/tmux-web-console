@@ -32,6 +32,8 @@ import {
   TrashIcon,
 } from "../icons";
 import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
+import { NoteClips, NoteStorageButton, useNoteStorage } from "./NoteClips";
+import { NOTE_CAPTURE_OPEN, rememberCapturePage, type NoteCaptureDestination, type NoteCaptureTargetUsage } from "../noteCaptures";
 
 export const MAX_SCOPED_NOTE_PAGES = 128;
 export const MAX_SCOPED_NOTE_PAGE_NAME_LENGTH = 80;
@@ -170,6 +172,9 @@ interface StickyNoteEditorProps {
   editorKey: string;
   scope: NoteScope;
   scopeName: string;
+  identity: string;
+  sourceSessionName: string;
+  workspaceId: string | null;
   notebook: ScopedNoteNotebook;
   pinned: boolean;
   position: FloatingNotePosition;
@@ -486,6 +491,7 @@ function StickyNoteCard({
   open,
   pinned,
   onToggle,
+  captureUsage,
 }: {
   scope: NoteScope;
   snapshot: NoteSnapshot;
@@ -493,6 +499,7 @@ function StickyNoteCard({
   open: boolean;
   pinned: boolean;
   onToggle: () => void;
+  captureUsage?: NoteCaptureTargetUsage;
 }) {
   const label = scope === "common"
     ? "Common"
@@ -503,7 +510,10 @@ function StickyNoteCard({
     ? "Loading"
     : snapshot.error
       ? "Unavailable"
-      : disabledReason || notebookPreview(snapshot.notebook);
+      : disabledReason || (captureUsage?.endedImages
+        ? `⚠ ${captureUsage.endedImages} images from ended sessions`
+        : captureUsage?.captures ? `${captureUsage.captures} captures · ${notebookPreview(snapshot.notebook)}`
+          : notebookPreview(snapshot.notebook));
   const disabled = snapshot.loading || Boolean(snapshot.error) || Boolean(disabledReason);
   const savedCharacters = disabled ? null : snapshot.notebook.pages.reduce(
     (total, page) => total + page.content.length, 0,
@@ -511,7 +521,7 @@ function StickyNoteCard({
   const savedCharactersDescription = savedCharacters === null
     ? undefined
     : `${savedCharacters.toLocaleString()} saved ${savedCharacters === 1 ? "character" : "characters"} across all pages`;
-  const hasContent = notebookHasContent(snapshot.notebook);
+  const hasContent = notebookHasContent(snapshot.notebook) || Boolean(captureUsage?.captures);
   const hasNotebook = hasContent || snapshot.notebook.pages.length > 1;
   const windowState = pinned ? "PIN" : open ? "OPEN" : null;
   const actionLabel = open
@@ -523,6 +533,7 @@ function StickyNoteCard({
       type="button"
       className={[
         "scoped-sticky-note",
+        captureUsage?.endedImages ? "has-storage-warning" : "",
         scope,
         hasNotebook ? "has-note" : "empty",
         snapshot.error ? "error" : "",
@@ -565,6 +576,9 @@ function StickyNoteEditor({
   editorKey,
   scope,
   scopeName,
+  identity,
+  sourceSessionName,
+  workspaceId,
   notebook,
   pinned,
   position,
@@ -629,6 +643,9 @@ function StickyNoteEditor({
     draft.pages.findIndex((page) => page.id === selectedPageId),
   );
   const selectedPage = draft.pages[selectedIndex] ?? draft.pages[0];
+  useEffect(() => {
+    rememberCapturePage({ scope, target: identity, pageId: selectedPage.id });
+  }, [scope, identity, selectedPage.id]);
   const pageNameRef = useRef(selectedPage.name);
   const [pageName, setPageName] = useState(selectedPage.name);
 
@@ -1330,7 +1347,14 @@ function StickyNoteEditor({
             </div>
           </aside>
         )}
-        <div className="scoped-note-page-canvas">
+        <div className="scoped-note-page-canvas" onPaste={(event) => {
+          const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+          if (!files.length) return;
+          event.preventDefault(); event.stopPropagation();
+          window.dispatchEvent(new CustomEvent("muxdeck:note-image-paste", {
+            detail: { destination: { scope, target: identity, pageId: selectedPage.id }, files },
+          }));
+        }}>
           <label className="scoped-note-textarea-label" htmlFor={textareaId}>
             Note
           </label>
@@ -1341,6 +1365,8 @@ function StickyNoteEditor({
             placeholder="Pin a reminder, command, handoff, or next step..."
             onChange={(event) => updateSelectedPageContent(event.target.value)}
           />
+          <NoteClips destination={{ scope, target: identity, pageId: selectedPage.id }}
+            sourceSessionName={sourceSessionName} workspaceId={workspaceId} />
         </div>
       </div>
 
@@ -1366,6 +1392,7 @@ function StickyNoteEditor({
           type="button"
           className="secondary-button"
           disabled={!selectedPage.content || closing}
+          title="Clear this page's text; captures have their own delete actions"
           onClick={() => {
             updateSelectedPageContent("");
             textareaRef.current?.focus();
@@ -1419,6 +1446,7 @@ export function ScopedStickyNotes({
   workspaceName = null,
 }: ScopedStickyNotesProps) {
   const desktop = useDesktopScopedNotes();
+  const noteStorage = useNoteStorage(desktop);
   const focusNotesHost = useContext(FocusStickyNotesContext);
   const [defaultSize, setDefaultSize] = useNoteDefaultSize();
   const windowWorkspaceIdentity = noteWorkspaceIdentity(workspaceId, sessionName);
@@ -1608,7 +1636,7 @@ export function ScopedStickyNotes({
         error: null,
       };
 
-  const openEditor = useCallback((scope: NoteScope, restoreOnly = false) => {
+  const openEditor = useCallback((scope: NoteScope, restoreOnly = false, requestedPageId?: string) => {
     if (!desktop) return;
     const identity = scope === "common"
       ? "common"
@@ -1628,7 +1656,7 @@ export function ScopedStickyNotes({
     if (restoreOnly && !preference.open) return;
     const size = preferredFloatingNoteSize(preference, restoreOnly ? "remember" : defaultSize);
     const position = preferredFloatingNotePosition(scope, preference, size);
-    const selectedPageId = snapshot.notebook.pages[0].id;
+    const selectedPageId = snapshot.notebook.pages.find((page) => page.id === requestedPageId)?.id ?? snapshot.notebook.pages[0].id;
     writeNoteWindowPreference(key, {
       open: true,
       floating: true,
@@ -1657,7 +1685,8 @@ export function ScopedStickyNotes({
     };
     setOpenEditors((current) => (
       current.some((candidate) => candidate.key === key)
-        ? current
+        ? requestedPageId ? current.map((candidate) => candidate.key === key
+          ? { ...candidate, selectedPageId, sidebarOpen: true } : candidate) : current
         : [...current, editor]
     ));
     if (!restoreOnly) setActiveEditorKey(key);
@@ -1738,6 +1767,16 @@ export function ScopedStickyNotes({
   const sessionEditor = editorForScope("session");
 
   useEffect(() => {
+    const handle = (event: Event) => {
+      const destination = (event as CustomEvent<NoteCaptureDestination>).detail;
+      const expected = destination.scope === "common" ? "common" : destination.scope === "workspace" ? workspaceId : sessionName;
+      if (destination.target === expected) openEditor(destination.scope, false, destination.pageId);
+    };
+    window.addEventListener(NOTE_CAPTURE_OPEN, handle);
+    return () => window.removeEventListener(NOTE_CAPTURE_OPEN, handle);
+  }, [openEditor, sessionName, workspaceId]);
+
+  useEffect(() => {
     if (!focusNotesHost) return;
     const frame = window.requestAnimationFrame(() => {
       const target = focusNotesHost.querySelector<HTMLButtonElement>("button:not(:disabled)");
@@ -1752,6 +1791,7 @@ export function ScopedStickyNotes({
         <StickyNoteCard
           scope="common"
           snapshot={common}
+          captureUsage={noteStorage.storage?.summary.targets[JSON.stringify(["common", "common"])]}
           open={Boolean(commonEditor)}
           pinned={commonEditor?.pinned ?? false}
           onToggle={() => commonEditor
@@ -1761,6 +1801,7 @@ export function ScopedStickyNotes({
         <StickyNoteCard
           scope="workspace"
           snapshot={currentWorkspace}
+          captureUsage={noteStorage.storage?.summary.targets[JSON.stringify(["workspace", workspaceId])]}
           disabledReason={workspaceId ? undefined : "Save workspace first"}
           open={Boolean(workspaceEditor)}
           pinned={workspaceEditor?.pinned ?? false}
@@ -1771,12 +1812,14 @@ export function ScopedStickyNotes({
         <StickyNoteCard
           scope="session"
           snapshot={currentSession}
+          captureUsage={noteStorage.storage?.summary.targets[JSON.stringify(["session", sessionName])]}
           open={Boolean(sessionEditor)}
           pinned={sessionEditor?.pinned ?? false}
           onToggle={() => sessionEditor
             ? closeEditor(sessionEditor)
             : openEditor("session")}
         />
+        <NoteStorageButton storage={noteStorage.storage} error={noteStorage.error} />
       </section>
   );
 
@@ -1789,6 +1832,9 @@ export function ScopedStickyNotes({
           editorKey={editor.key}
           scope={editor.scope}
           scopeName={editor.scopeName}
+          identity={editor.identity}
+          sourceSessionName={sessionName}
+          workspaceId={workspaceId}
           notebook={editor.notebook}
           pinned={editor.pinned}
           position={editor.position}

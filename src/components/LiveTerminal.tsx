@@ -25,6 +25,7 @@ import {
   type TerminalSubmissionTerminator,
 } from "../terminalInput";
 import { TerminalFileLinkProvider } from "../terminalFileLinks";
+import { captureTerminal, type TerminalCaptureSnapshot } from "../terminalCapture";
 import { TERMINAL_PALETTE_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import { useOptionalTheme } from "../theme";
 import type { ConnectionState } from "../types";
@@ -40,6 +41,7 @@ export interface ApplicationScrollResult {
 }
 
 export interface LiveTerminalHandle {
+  capture: () => Promise<TerminalCaptureSnapshot>;
   send: (data: string) => boolean;
   paste: (data: string) => boolean;
   submit: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
@@ -67,6 +69,7 @@ interface LiveTerminalProps {
   onStateChange: (state: ConnectionState) => void;
   onPaneChange: (paneId: string | null) => void;
   onHistoryNavigation?: (action: TerminalHistoryAction, result: TerminalHistoryResult) => void;
+  onSelectionChange?: (text: string) => void;
 }
 
 interface TerminalAttachmentFeedback {
@@ -144,6 +147,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     onStateChange,
     onPaneChange,
     onHistoryNavigation,
+    onSelectionChange,
   }, ref) {
     const themeContext = useOptionalTheme();
     const palette = themeContext?.theme === theme
@@ -152,6 +156,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const terminalTheme = TERMINAL_PALETTE_THEMES[palette];
     const hostRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
+    const selectionCallbackRef = useRef(onSelectionChange);
+    selectionCallbackRef.current = onSelectionChange;
     const codexThemeRef = useRef<ReturnType<typeof attachCodexComposerTheme> | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const onViewEvictedRef = useRef(onViewEvicted);
@@ -445,6 +451,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     }, [layoutRefreshToken]);
 
     useImperativeHandle(ref, () => ({
+      capture: () => captureTerminal(terminalRef.current),
       send(data: string) {
         if (socketRef.current?.readyState === WebSocket.OPEN) {
           try {
@@ -631,6 +638,9 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       terminal.loadAddon(fit);
       terminal.open(hostRef.current);
       terminalRef.current = terminal;
+      const selection = terminal.onSelectionChange(() => {
+        selectionCallbackRef.current?.(terminal.getSelection());
+      });
       let suppressTerminalInput = false;
       terminalElement = terminal.element;
       terminal.loadAddon(new WebLinksAddon(activateTerminalLink, {
@@ -1016,6 +1026,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         codexThemeRef.current?.dispose();
         codexThemeRef.current = null;
         terminal.dispose();
+        selection.dispose();
+        selectionCallbackRef.current?.("");
         terminalRef.current = null;
       };
     }, [identity, ignoreSize, onPaneChange, onStateChange, session, viewId, viewScope, viewGroup]);

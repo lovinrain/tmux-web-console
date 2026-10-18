@@ -59,6 +59,7 @@ interface InputBarProps {
   composerVisible?: boolean;
   shortcutsVisible?: boolean;
   shortcutPanelHeader?: ReactNode;
+  additionalShortcuts?: ReactNode;
   preferredScrollMode?: AgentScrollMode;
   preferredScrollLabel?: string;
   onScrollUsed?: (mode: AgentScrollMode) => void;
@@ -1318,6 +1319,7 @@ function TerminalInputShortcuts({
   scrollContext = JSON.stringify([sessionName, sessionId]),
   enabled,
   shortcutsVisible = true,
+  additionalShortcuts,
   preferredScrollMode,
   preferredScrollLabel,
   onScrollUsed,
@@ -1359,6 +1361,7 @@ function TerminalInputShortcuts({
         aria-label="Terminal input shortcuts"
         hidden={!shortcutsVisible}
       >
+        {additionalShortcuts}
         <button
           type="button"
           className={queuedMessageCount > 0 ? "key-button memo-key has-queued" : "key-button memo-key"}

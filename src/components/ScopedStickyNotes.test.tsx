@@ -17,6 +17,7 @@ import {
 } from "../api";
 import { renderWithTheme } from "../test-utils";
 import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
+import { getNoteCaptureStorage, listNoteCaptures, openCapturedNote } from "../noteCaptures";
 import {
   DEFAULT_SCOPED_NOTE_WINDOW_HEIGHT,
   DEFAULT_SCOPED_NOTE_WINDOW_WIDTH,
@@ -40,6 +41,12 @@ vi.mock("../api", () => ({
   replaceSessionNotebook: vi.fn(),
   replaceWorkspaceNote: vi.fn(),
   replaceWorkspaceNotebook: vi.fn(),
+}));
+
+vi.mock("../noteCaptures", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../noteCaptures")>(),
+  getNoteCaptureStorage: vi.fn(),
+  listNoteCaptures: vi.fn(),
 }));
 
 function notebook(content: string): ScopedNoteNotebook {
@@ -104,6 +111,12 @@ beforeEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.resetAllMocks();
+  vi.mocked(listNoteCaptures).mockResolvedValue([]);
+  vi.mocked(getNoteCaptureStorage).mockResolvedValue({
+    summary: { usedBytes: 0, limitBytes: 256 * 1024 ** 2, unreferencedBytes: 0,
+      imageCount: 0, endedImageCount: 0, endedBytes: 0, warning: "normal", retentionDays: 7, targets: {} },
+    captures: [], ocrAvailable: true,
+  });
   window.localStorage.clear();
   document.body.style.overflow = "";
   document.documentElement.classList.remove(
@@ -150,6 +163,21 @@ beforeEach(() => {
 });
 
 describe("ScopedStickyNotes", () => {
+  it("opens a captured page in an existing editor without losing an unsaved note draft", async () => {
+    vi.mocked(getCommonNotebook).mockResolvedValue({ pages: [
+      { id: "main", name: "Page 1", content: "Original note" },
+      { id: "captures", name: "Captures", content: "Destination page" },
+    ] });
+    await renderLoadedNotes();
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    fireEvent.change(within(editor).getByRole("textbox", { name: "Note" }), { target: { value: "Pending note draft" } });
+    act(() => openCapturedNote({ scope: "common", target: "common", pageId: "captures" }));
+    expect(within(editor).getByRole("textbox", { name: "Note" })).toHaveValue("Destination page");
+    fireEvent.click(within(editor).getByRole("button", { name: /Page 1/ }));
+    expect(within(editor).getByRole("textbox", { name: "Note" })).toHaveValue("Pending note draft");
+  });
+
   it("moves scope cards into Focus without remounting an open editor or losing its draft", async () => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -201,6 +229,7 @@ describe("ScopedStickyNotes", () => {
       "Edit common note",
       "Edit workspace note",
       "Edit session note",
+      "Manage note image storage",
     ]);
     expect(cards[0]).toHaveTextContent("Shared checklist");
     expect(cards[1]).toHaveTextContent("Workspace plan");

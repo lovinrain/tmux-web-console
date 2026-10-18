@@ -96,6 +96,8 @@ export default defineConfig({
     env: {
       MUXDECK_LAUNCH_REQUESTS_FILE: launchRequestsFile,
       MUXDECK_WORK_LINKS_FILE: workLinksFile,
+      MUXDECK_NOTE_CAPTURES_FILE: `/tmp/muxdeck-playwright-${runId}-note-captures.sqlite3`,
+      MUXDECK_NOTE_IMAGES_DIR: `/tmp/muxdeck-playwright-${runId}-note-images`,
       MUXDECK_CONTROL_TOKEN_FILE: "",
       MUXDECK_SUBMITTED_MESSAGES_FILE: submittedMessagesFile,
       MUXDECK_SCROLLBACK_FILE: scrollbackFile,

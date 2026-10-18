@@ -131,6 +131,7 @@ import {
 import { ThemeToggle } from "./ThemeToggle";
 import { TimeZoneSelect } from "./TimeZoneSelect";
 import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
+import { NoteCaptureControls } from "./NoteCaptureControls";
 import "./FocusStickyNotes.css";
 import "./ConsoleHeaderCompact.css";
 
@@ -268,6 +269,7 @@ const MOBILE_CONSOLE_LAYOUT_QUERY = [
 // Cards the widget row can clip: sticky notes, countdown, host pulse, callbacks.
 const HEADER_WIDGET_SELECTOR = [
   ".scoped-sticky-note",
+  ".note-storage-button",
   ".workspace-timer-card",
   ".host-pulse-card",
   ".workspace-callback-card",
@@ -742,6 +744,7 @@ export function ConsoleScreen({
   const headerTrayToggleRef = useRef<HTMLButtonElement>(null);
   const headerTrayPanelRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<LiveTerminalHandle>(null);
+  const [noteSelection, setNoteSelection] = useState("");
   const inputBarRef = useRef<InputBarHandle>(null);
   const floatingInputRef = useRef<FloatingStagedInputHandle>(null);
   const floatingTerminalRef = useRef<FloatingTerminalHandle>(null);
@@ -2872,6 +2875,7 @@ export function ConsoleScreen({
           ignoreSize={ignoreSize}
           layoutSuspended={mobileInputDistractionFree}
           browserCopyMode={desktopCopyMode}
+          onSelectionChange={setNoteSelection}
           layoutRefreshToken={[
             activeMobileFocus,
             mobileDistractionFree ? "focus" : "standard",
@@ -3103,6 +3107,8 @@ export function ConsoleScreen({
                 shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
               />
             )}
+            {!ephemeral && session && <NoteCaptureControls focus session={session} workspaceId={workspaceId}
+              terminal={terminalRef} selectedText={noteSelection} />}
             {headerNotes && (
               <button
                 type="button"
@@ -3228,6 +3234,9 @@ export function ConsoleScreen({
         idScope={idScope}
         terminalControlId={activeConsoleId}
         enabled={connection === "live"}
+        additionalShortcuts={!mobileLayout && !desktopTerminalFocus && !ephemeral && session
+          ? <NoteCaptureControls session={session} workspaceId={workspaceId} terminal={terminalRef} selectedText={noteSelection} />
+          : undefined}
         composerVisible={!mobileTerminalFocusActive && (visibleBars.stagedInput || visibleMobileMode === "input")}
         shortcutsVisible={
           mobileTerminalFocusActive ? mobileFocusShortcutsOpen : visibleBars.shortcuts

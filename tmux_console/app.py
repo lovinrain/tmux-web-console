@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import secrets
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -137,6 +138,11 @@ from .messages import (
     validate_session_name,
 )
 from .metadata import SessionTitleStore, normalize_tags, normalize_title
+from .note_capture_api import (
+    NoteCaptureService,
+    create_note_capture_service,
+    register_note_capture_routes,
+)
 from .pty_bridge import PtyBridge, clamp_size
 from .scrollback import (
     ScrollbackRecorder,
@@ -272,6 +278,7 @@ HTML_PREVIEW_ROUTE_NAME = "html-preview-asset"
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
 WORK_LINKS_KEY = web.AppKey("work_links", WorkLinkStore)
+NOTE_CAPTURES_KEY = web.AppKey("note_captures", NoteCaptureService)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 AGENT_RECOVERY_KEY = web.AppKey("agent_recovery", AgentReferenceRecovery)
 AGENT_TRANSCRIPTS_KEY = web.AppKey("agent_transcripts", AgentTranscriptReader)
@@ -1300,6 +1307,7 @@ def create_app(
     app[HOST_METRICS_KEY] = host_metrics or HostMetricsSampler()
     app[SESSION_REGISTRY_KEY] = session_registry or SessionRegistry()
     app[WORK_LINKS_KEY] = work_links or WorkLinkStore(default_work_links_path(app[SESSION_REGISTRY_KEY].path))
+    app[NOTE_CAPTURES_KEY] = create_note_capture_service(app[SESSION_REGISTRY_KEY].path, app[WORKSPACES_KEY])
     launch_requests_path = Path(os.environ.get(
         "MUXDECK_LAUNCH_REQUESTS_FILE",
         str(app[SESSION_REGISTRY_KEY].path.with_name("launch-requests.sqlite3")),
@@ -1524,6 +1532,10 @@ def create_app(
                     LOGGER.warning("Unable to refresh conversation IDs for submitted messages")
                 if live is not None:
                     try:
+                        await asyncio.to_thread(application[NOTE_CAPTURES_KEY].maintain, live)
+                    except (OSError, ValueError, sqlite3.Error):
+                        LOGGER.warning("Unable to maintain note capture storage")
+                    try:
                         await application[SCROLLBACK_RECORDER_KEY].sample(live)
                     except (TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable):
                         LOGGER.warning("Unable to capture saved scrollback")
@@ -1542,6 +1554,7 @@ def create_app(
                 await task
             await asyncio.to_thread(application[SUBMITTED_MESSAGES_KEY].close)
             await asyncio.to_thread(application[SCROLLBACK_KEY].close)
+            await asyncio.to_thread(application[NOTE_CAPTURES_KEY].store.close)
 
     app.cleanup_ctx.append(submitted_message_lifecycle)
 
@@ -6708,6 +6721,8 @@ def create_app(
     app.router.add_post(f"{prefix}/api/workspace-views/{{view_id}}/resume", resume_workspace_view)
     register_work_link_routes(app, prefix, app[WORK_LINKS_KEY], app[TMUX_KEY],
                               app[SESSION_REGISTRY_KEY], app[SESSION_RENAME_LOCK_KEY])
+    register_note_capture_routes(app, prefix, app[NOTE_CAPTURES_KEY],
+                                 app[TMUX_KEY], app[SESSION_RENAME_LOCK_KEY])
     register_fold_recovery_routes(
         app, prefix, tmux=app[TMUX_KEY], registry=app[SESSION_REGISTRY_KEY],
         workspaces=app[WORKSPACES_KEY], references=app[AGENT_REFERENCES_KEY],

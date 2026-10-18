@@ -140,6 +140,8 @@ vi.mock("@xterm/xterm", () => ({
       return { dispose: vi.fn() };
     }
     onScroll() { return { dispose: vi.fn() }; }
+    onSelectionChange() { return { dispose: vi.fn() }; }
+    getSelection() { return ""; }
   },
 }));
 

@@ -465,6 +465,23 @@ ignore it. It does not upgrade existing state schemas. No provider credentials,
 public routes, or polling jobs are required. Deploy backend and frontend together.
 See [Work links](docs/WORK_LINKS.md) for configuration and agent discovery.
 
+Sticky-note captures use a separate schema-1 `note-captures.sqlite3` beside the
+session registry (`MUXDECK_NOTE_CAPTURES_FILE`) and private `note-images/` beside
+that database (`MUXDECK_NOTE_IMAGES_DIR`). Back up both together while stopping
+only Muxdeck: use SQLite's backup API for the database and a private copy of the
+image directory without following symlinks. Include them in state migrations,
+preserve them on rollback, and exclude them from routine deployment-artifact
+cleanup and source archives. Keep the database/images mode `0600` and directory
+mode `0700`. Existing schemas are unchanged; older releases ignore these stores.
+Default image storage is 256 MiB, overridden by `MUXDECK_NOTE_IMAGES_MAX_BYTES`.
+Across all note scopes, images expire seven days after their source session is
+observed ended unless kept; text remains. `MUXDECK_NOTE_IMAGE_RETENTION_DAYS`
+overrides that default. Warnings appear in note cards and the storage manager.
+The Python runtime requires Pillow; optional local OCR additionally requires
+`tesseract-ocr` with English language data. Deploy backend and frontend together;
+no additional service or public route is needed. See
+[Capture to sticky notes](docs/NOTE_CAPTURES.md) for limits and cleanup behavior.
+
 Programmatic launch idempotency uses a separate private
 `launch-requests.sqlite3`, overridden by `MUXDECK_LAUNCH_REQUESTS_FILE`, beside
 the configured recovery registry. Schema version 1 stores request fingerprints,
@@ -1251,6 +1268,7 @@ tree:
    pre-upgrade copies of all six JSON state files, all configured SQLite
    databases (including `launch-requests.sqlite3`), plus the upload directory
    when it exists; preserve private credentials separately;
+   include `note-captures.sqlite3` and its matching `note-images/` when present;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;

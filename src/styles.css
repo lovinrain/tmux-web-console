@@ -10227,7 +10227,7 @@ html.host-pulse-resizing * {
   white-space: nowrap;
 }
 
-.scoped-note-sheet.floating .scoped-note-page-canvas textarea {
+.scoped-note-sheet.floating .scoped-note-page-canvas > textarea {
   width: calc(100% - 8px);
   height: calc(100% - 4px);
   min-height: 0;
