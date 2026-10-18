@@ -236,7 +236,7 @@ describe("SessionWorkspaceNavigation", () => {
     });
     const view = render(<SessionWorkspaceNavigation {...props} />);
     const button = screen.getByRole("button", { name: "Mark as unread" });
-    const actions = screen.getByRole("group", { name: "Rename and unread actions" });
+    const actions = screen.getByRole("group", { name: "Workspace and current tab actions" });
     expect(within(actions).getByRole("button", { name: "Mark as unread" })).toBe(button);
     expect(within(actions).getByRole("button", { name: "Rename workspace Review" })).toBeVisible();
     expect(button).toHaveAccessibleDescription(/Alpha control/);
@@ -261,6 +261,80 @@ describe("SessionWorkspaceNavigation", () => {
     expect(screen.getByRole("button", { name: "Mark as unread" })).toBeDisabled();
     view.rerender(<SessionWorkspaceNavigation {...props} activeSession="ended" openSessions={["ended"]} />);
     expect(screen.getByRole("button", { name: "Mark as unread" })).toBeDisabled();
+  });
+
+  it("keeps current-tab position controls beside unread when tab actions are hidden", () => {
+    const props = navigationProps({
+      orientation: "vertical", tabActionsVisible: false, onMarkSessionUnread: vi.fn(),
+    });
+    const onMoveTab = vi.fn();
+    function ReorderWorkspace() {
+      const [state, setState] = useState<SessionWorkspaceState>({
+        openSessions: ["alpha", "child", "beta", "zulu"], recentSessions: [], groups: [],
+        parents: { child: "alpha" },
+      });
+      return <SessionWorkspaceNavigation {...props} {...state} sessionParents={state.parents}
+        onMoveTab={(name, target) => {
+          onMoveTab(name, target);
+          setState((current) => moveWorkspaceSession(current, name, target));
+        }} />;
+    }
+    render(<ReorderWorkspace />);
+    const actions = screen.getByRole("group", { name: "Workspace and current tab actions" });
+    const up = within(actions).getByRole("button", { name: "Move current tab up" });
+    const down = within(actions).getByRole("button", { name: "Move current tab down" });
+    expect(within(actions).getByRole("button", { name: "Mark as unread" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Move Alpha control tab down" })).not.toBeInTheDocument();
+    expect(up).toBeDisabled();
+    expect(down).toHaveAccessibleDescription(/Alpha control.*keep nested sessions together/);
+    down.focus();
+    fireEvent.click(down);
+    expect(onMoveTab).toHaveBeenLastCalledWith("alpha", 2);
+    expect(screen.getAllByRole("tab").map((tab) => tab.querySelector(".workspace-tab-title")?.textContent))
+      .toEqual(["beta", "Alpha control", "child", "Zulu shell"]);
+    expect(down).toHaveFocus();
+    fireEvent.click(down);
+    expect(screen.getAllByRole("tab").map((tab) => tab.querySelector(".workspace-tab-title")?.textContent))
+      .toEqual(["beta", "Zulu shell", "Alpha control", "child"]);
+    expect(down).toBeDisabled();
+    expect(up).toHaveFocus();
+    fireEvent.click(up);
+    expect(onMoveTab).toHaveBeenLastCalledWith("alpha", 1);
+    expect(up).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Alpha control, Needs input" }))
+      .toHaveAttribute("aria-selected", "true");
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onCloseTab).not.toHaveBeenCalled();
+  });
+
+  it("moves the focused pane tab within its group and disables unavailable current-tab moves", () => {
+    const props = navigationProps({
+      activeSession: null, orientation: "vertical", tabActionsVisible: false,
+      openSessions: ["alpha", "beta", "zulu"], onMoveTab: vi.fn(),
+      groups: [{ id: "workers", name: "Workers", color: "blue", collapsed: true, tabs: ["beta", "zulu"] }],
+    });
+    const focusedNavigation = (overrides: Partial<NavigationProps> = {}) => (
+      <ActivePaneSessionContext.Provider value="beta">
+        <SessionWorkspaceNavigation {...props} {...overrides} />
+      </ActivePaneSessionContext.Provider>
+    );
+    const view = render(focusedNavigation());
+    expect(screen.getByRole("button", { name: "Move current tab up" })).toBeDisabled();
+    const down = screen.getByRole("button", { name: "Move current tab down" });
+    expect(down).toHaveAccessibleDescription(/beta down/);
+    fireEvent.click(down);
+    expect(props.onMoveTab).toHaveBeenCalledExactlyOnceWith("beta", 2);
+    expect(props.onSelect).not.toHaveBeenCalled();
+    for (const overrides of [
+      { workspacePersistenceState: "loading" }, { workspacePersistenceState: "error" },
+      { separatorsBusy: true }, { newSessionActive: true },
+    ] satisfies Partial<NavigationProps>[]) {
+      view.rerender(focusedNavigation(overrides));
+      expect(screen.getByRole("button", { name: "Move current tab up" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Move current tab down" })).toBeDisabled();
+    }
+    view.rerender(<SessionWorkspaceNavigation {...props} />);
+    expect(screen.getByRole("button", { name: "Move current tab down" })).toBeDisabled();
   });
 
   it("exposes unchecked status on tabs and collapsed groups without acknowledging move selection or expansion", () => {
@@ -2531,7 +2605,7 @@ describe("SessionWorkspaceNavigation", () => {
   it("moves an adjacent tab across a separator with arrows or drag without changing tab order", () => {
     const onCrossSeparator = vi.fn();
     const props = navigationProps({ orientation: "vertical", separators: ["alpha"], onCrossSeparator, onMoveTab: vi.fn(), onMoveTabs: vi.fn() });
-    render(<SessionWorkspaceNavigation {...props} />);
+    const view = render(<SessionWorkspaceNavigation {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Move beta tab up" }));
     expect(onCrossSeparator).toHaveBeenLastCalledWith({ from: { name: "alpha", side: "after" }, to: { name: "beta", side: "after" } });
     expect(props.onMoveTab).not.toHaveBeenCalled();
@@ -2543,6 +2617,11 @@ describe("SessionWorkspaceNavigation", () => {
     expect(separator).toHaveAttribute("data-crossing", "true");
     fireEvent.drop(separator, { dataTransfer });
     expect(onCrossSeparator).toHaveBeenCalledTimes(2);
+    view.rerender(<SessionWorkspaceNavigation {...props} activeSession="beta" tabActionsVisible={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Move current tab up" }));
+    expect(onCrossSeparator).toHaveBeenCalledTimes(3);
+    expect(onCrossSeparator).toHaveBeenLastCalledWith({ from: { name: "alpha", side: "after" }, to: { name: "beta", side: "after" } });
+    expect(props.onMoveTab).not.toHaveBeenCalled();
     expect(props.onMoveTabs).not.toHaveBeenCalled();
   });
 
@@ -2554,6 +2633,9 @@ describe("SessionWorkspaceNavigation", () => {
     expect(up).toBeEnabled();
     fireEvent.click(up);
     expect(props.onCrossSeparator).toHaveBeenCalledWith({ from: { name: "alpha", side: "before" }, to: { name: "beta", side: "after" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move current tab up" }));
+    expect(props.onCrossSeparator).toHaveBeenCalledTimes(2);
+    expect(props.onCrossSeparator).toHaveBeenLastCalledWith({ from: { name: "alpha", side: "before" }, to: { name: "beta", side: "after" } });
     expect(props.onMoveTabs).not.toHaveBeenCalled();
   });
 

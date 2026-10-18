@@ -286,6 +286,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const reorderFocusIntent = useRef<{
     sessionName: string;
     direction: "previous" | "next";
+    source?: "tab" | "toolbar";
   } | null>(null);
   const groupReorderFocusIntent = useRef<{
     groupId: string;
@@ -486,6 +487,26 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     if (!separatorsBusy) props.onCrossSeparator?.(crossing);
     return true;
   };
+  const tabMoveControls = (sessionName: string, group?: WorkspaceTabGroup) => {
+    const selectedDrag = selectedWorkspaceTabSet.has(sessionName)
+      && selectedWorkspaceTabs.length > 1 && !deadTabsOnlySelected;
+    const previousMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, -1);
+    const nextMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, 1);
+    const crossingNames = selectedDrag ? orderedSelection : [sessionName];
+    const canMovePrevious = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "previous")) || (selectedDrag && onMoveTabs
+      ? selectionMoveTargets.previous >= 0 : previousMoveIndex >= 0));
+    const canMoveNext = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "next")) || (selectedDrag && onMoveTabs
+      ? selectionMoveTargets.next >= 0 : nextMoveIndex >= 0));
+    return { selectedDrag, previousMoveIndex, nextMoveIndex, canMovePrevious, canMoveNext };
+  };
+  const currentTabMoveControls = placementSessionAvailable && placementSession
+    ? tabMoveControls(placementSession, groups.find((group) => group.tabs.includes(placementSession)))
+    : null;
+  const currentTabMoveDisabledReason = !currentTabMoveControls
+    ? "Select a session tab to change its position"
+    : workspacePersistenceState === "loading" || workspacePersistenceState === "error" || separatorsBusy
+      ? "Wait for the workspace to finish syncing"
+      : null;
 
   const clearWorkspaceTabSelection = useCallback((announce = true) => {
     setDeadTabsOnlySelected(false);
@@ -1300,9 +1321,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         const tab = Array.from(
           navigationRef.current?.querySelectorAll<HTMLElement>(".workspace-tab") ?? [],
         ).find((item) => item.dataset.workspaceSessionName === intent.sessionName);
-        const controls = Array.from(
-          tab?.querySelectorAll<HTMLButtonElement>(".workspace-tab-move") ?? [],
-        );
+        const controlContainer = intent.source === "toolbar" ? navigationRef.current : tab;
+        const controls = Array.from(controlContainer?.querySelectorAll<HTMLButtonElement>(
+          intent.source === "toolbar" ? ".workspace-current-tab-move" : ".workspace-tab-move",
+        ) ?? []);
         const preferred = controls[intent.direction === "previous" ? 0 : 1];
         const target = preferred && !preferred.disabled
           ? preferred
@@ -1382,10 +1404,15 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     );
   };
 
-  const moveQuickTab = (sessionName: string, title: string, targetIndex: number) => {
+  const moveQuickTab = (
+    sessionName: string,
+    title: string,
+    targetIndex: number,
+    source: "tab" | "toolbar" = "tab",
+  ) => {
     if (selectedWorkspaceTabSet.has(sessionName) && orderedSelection.length > 1 && onMoveTabs) {
       const direction = targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next";
-      reorderFocusIntent.current = { sessionName, direction };
+      reorderFocusIntent.current = { sessionName, direction, source };
       moveSelectedTabs(direction);
       return;
     }
@@ -1395,11 +1422,23 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     reorderFocusIntent.current = {
       sessionName,
       direction: targetIndex < openSessions.indexOf(sessionName) ? "previous" : "next",
+      source,
     };
     onMoveTab(sessionName, targetIndex);
     setReorderAnnouncement(
       `${title} moved to position ${resultIndex + 1} of ${openSessions.length}.`,
     );
+  };
+
+  const moveCurrentTab = (direction: "previous" | "next") => {
+    if (!placementSession || !currentTabMoveControls || currentTabMoveDisabledReason) return;
+    const previous = direction === "previous";
+    if (!(previous ? currentTabMoveControls.canMovePrevious : currentTabMoveControls.canMoveNext)) return;
+    const targetIndex = previous
+      ? currentTabMoveControls.previousMoveIndex : currentTabMoveControls.nextMoveIndex;
+    moveQuickTab(placementSession, tabTitle(placementSession, sessionsByName),
+      targetIndex >= 0 ? targetIndex : openSessions.indexOf(placementSession) + (previous ? -1 : 1),
+      "toolbar");
   };
 
   const workspaceTabKeyDown = (
@@ -1617,14 +1656,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     const active = !newSessionActive && sessionName === activeSession;
     const readyUnchecked = props.uncheckedReadySessions?.has(sessionName) ?? false;
     const selectedForMove = selectedWorkspaceTabSet.has(sessionName);
-    const selectedDrag = selectedForMove && selectedWorkspaceTabs.length > 1 && !deadTabsOnlySelected;
-    const previousMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, -1);
-    const nextMoveIndex = tabMoveTargetIndex(openSessions, group, sessionParents, sessionName, 1);
-    const crossingNames = selectedDrag ? orderedSelection : [sessionName];
-    const canMovePrevious = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "previous")) || (selectedDrag && onMoveTabs
-      ? selectionMoveTargets.previous >= 0 : previousMoveIndex >= 0));
-    const canMoveNext = !separatorsBusy && (Boolean(separatorCrossing(crossingNames, "next")) || (selectedDrag && onMoveTabs
-      ? selectionMoveTargets.next >= 0 : nextMoveIndex >= 0));
+    const { selectedDrag, previousMoveIndex, nextMoveIndex, canMovePrevious, canMoveNext }
+      = tabMoveControls(sessionName, group);
     const canDragTab = desktopTabDragEnabled && !deadTabsOnlySelected && (
       nestingEnabled || (selectedDrag && onMoveTabs)
         ? true
@@ -2585,8 +2618,8 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           )}
           </div>
           <div className="workspace-action-toolbar workspace-action-toolbar-secondary" role="group" aria-label="Workspace navigation tools">
-          {(showRenameWorkspaceButton || props.onMarkSessionUnread) && (
-            <div className="workspace-rename-unread-actions" role="group" aria-label="Rename and unread actions">
+          {(showRenameWorkspaceButton || props.onMarkSessionUnread || onMoveTab) && (
+            <div className="workspace-rename-unread-actions" role="group" aria-label="Workspace and current tab actions">
               {showRenameWorkspaceButton && (
                 <button
                   ref={renameButtonRef}
@@ -2621,6 +2654,34 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   <span>{unreadLabel}</span>
                 </button>
               )}
+              {onMoveTab && (["previous", "next"] as const).map((direction) => {
+                const previous = direction === "previous";
+                const label = orientation === "vertical"
+                  ? previous ? "up" : "down" : previous ? "left" : "right";
+                const canMove = !currentTabMoveDisabledReason && (previous
+                  ? currentTabMoveControls?.canMovePrevious : currentTabMoveControls?.canMoveNext);
+                const targetTitle = currentTabMoveControls?.selectedDrag
+                  ? `${orderedSelection.length} selected tabs`
+                  : placementSession ? tabTitle(placementSession, sessionsByName) : "Current tab";
+                const hint = currentTabMoveDisabledReason ?? (canMove
+                  ? `Move ${targetTitle} ${label} one position; keep nested sessions together`
+                  : `Cannot move ${targetTitle} ${label} beyond its level or group boundary`);
+                return (
+                  <button key={direction} type="button"
+                    className="workspace-session-placement-button workspace-current-tab-move"
+                    disabled={!canMove}
+                    aria-label={`Move current tab ${label}`}
+                    aria-description={hint}
+                    title={hint}
+                    onClick={() => moveCurrentTab(direction)}
+                  >
+                    {orientation === "vertical"
+                      ? previous ? <ArrowUpIcon /> : <ArrowDownIcon />
+                      : previous ? <ArrowLeftIcon /> : <ArrowRightIcon />}
+                    <span>Move {label}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
           {onOpenTabSearch && openSessions.length > 0 && (

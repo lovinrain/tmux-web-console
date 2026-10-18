@@ -3325,6 +3325,12 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     await expect(workspaceActions).toHaveCSS("display", "grid");
     await expect(workspaceTools).toHaveCSS("display", "grid");
     await expect(workspaceContext).toHaveCSS("display", "grid");
+    const moveCurrentUp = workspaceTools.getByRole("button", { name: "Move current tab up", exact: true });
+    const moveCurrentDown = workspaceTools.getByRole("button", { name: "Move current tab down", exact: true });
+    const currentTabActions = workspaceTools.getByRole("group", { name: "Workspace and current tab actions" });
+    await expect(currentTabActions.getByRole("button", { name: "Mark as unread", exact: true })).toBeVisible();
+    await expect(moveCurrentUp).toBeDisabled();
+    await expect(moveCurrentDown).toBeEnabled();
     expect((await workspaceActions.boundingBox())!.height).toBeLessThanOrEqual(80);
     expect((await workspaceTools.boundingBox())!.height).toBeLessThanOrEqual(44);
     expect((await workspaceContext.boundingBox())!.height).toBeLessThanOrEqual(44);
@@ -3401,6 +3407,18 @@ test("desktop tabs switch to a persistent vertical rail without reconnecting", a
     await expect.poll(() => page.evaluate(() => (
       window.localStorage.getItem("muxdeck-desktop-tab-rail-width")
     ))).toBe("72");
+
+    // Current-tab shortcuts stay usable after the row's arrows disappear.
+    await expect(moveCurrentUp).toBeVisible();
+    await expect(moveCurrentDown).toBeVisible();
+    await moveCurrentDown.click();
+    await expectRoute(page, `/mux/session/${sessionName}`, [railSession, sessionName]);
+    await expect(moveCurrentDown).toBeDisabled();
+    await expect(moveCurrentUp).toBeFocused();
+    await moveCurrentUp.click();
+    await expectRoute(page, `/mux/session/${sessionName}`, [sessionName, railSession]);
+    await expect(moveCurrentDown).toBeFocused();
+    expect(terminalSocketCount).toBe(socketCountBeforeLayoutChange);
 
     await resizeHandle.press("Enter");
     await expect(navigation).not.toHaveAttribute("data-compact");
