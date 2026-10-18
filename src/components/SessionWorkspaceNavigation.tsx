@@ -30,7 +30,9 @@ import {
   FolderPlusIcon,
   GridIcon,
   HistoryIcon,
+  IndentIcon,
   ListIcon,
+  OutdentIcon,
   PaneViewIcon,
   PlusIcon,
   SaveIcon,
@@ -2097,10 +2099,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   disabled={!nestingEnabled || !placementParent}
                   aria-label="Up one level"
                   aria-description={placementUpHint}
-                  title={`Up one level: ${placementUpHint}`}
+                  title={`Up one nesting level (outdent): ${placementUpHint}`}
                   onClick={() => changePlacementLevel("up")}
                 >
-                  <ArrowLeftIcon />
+                  <OutdentIcon />
                   <span>Up</span>
                 </button>
                 <button
@@ -2109,10 +2111,10 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
                   disabled={!nestingEnabled || !placementPreviousSibling}
                   aria-label="Down one level"
                   aria-description={placementDownHint}
-                  title={`Down one level: ${placementDownHint}`}
+                  title={`Down one nesting level (indent): ${placementDownHint}`}
                   onClick={() => changePlacementLevel("down")}
                 >
-                  <ArrowRightIcon />
+                  <IndentIcon />
                   <span>Down</span>
                 </button>
               </div>

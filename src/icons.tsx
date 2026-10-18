@@ -60,6 +60,22 @@ export function ArrowRightIcon(props: IconProps) {
   );
 }
 
+export function OutdentIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3 5h18M11 10h10M11 15h10M3 20h18M6 9l-3 3 3 3M3 12h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
+export function IndentIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3 5h18M11 10h10M11 15h10M3 20h18M5 9l3 3-3 3M3 12h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function PauseIcon(props: IconProps) {
   return (
     <IconBase {...props}>
