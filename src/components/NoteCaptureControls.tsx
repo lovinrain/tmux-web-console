@@ -8,7 +8,7 @@ import {
 import type { Session } from "../types";
 import { cropCapture, type CaptureRectangle, type TerminalCaptureSnapshot } from "../terminalCapture";
 import type { LiveTerminalHandle } from "./LiveTerminal";
-import { CloseIcon, MemoIcon } from "../icons";
+import { CaptureIcon, CloseIcon } from "../icons";
 import { useNoteDialog } from "./useNoteDialog";
 import "./NoteCaptures.css";
 
@@ -135,9 +135,9 @@ export function NoteCaptureControls({ session, workspaceId, terminal, selectedTe
       width: Math.abs(first.x - end.x), height: Math.abs(first.y - end.y) };
   };
   return <>
-    <button type="button" className={focus ? "desktop-terminal-focus-input" : "key-button"}
+    <button type="button" className={`${focus ? "desktop-terminal-focus-input" : "key-button"} note-capture-trigger`}
       aria-label="Capture to notes" title="Capture a screenshot or selected text into a sticky note"
-      onMouseDown={(event) => event.preventDefault()} onClick={() => begin("image")}><MemoIcon /><span>Capture</span></button>
+      onMouseDown={(event) => event.preventDefault()} onClick={() => begin("image")}><CaptureIcon /></button>
     {selectedText && <button type="button" className={focus ? "desktop-terminal-focus-input" : "key-button"}
       aria-label="Add selected text to note" onMouseDown={(event) => event.preventDefault()}
       onClick={() => begin("text")}>＋ Text</button>}

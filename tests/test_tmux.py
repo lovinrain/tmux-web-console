@@ -1708,6 +1708,12 @@ GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS = (
     "  │ ❯                      │\n"
     "  ╰─────────── grok-4.5 ────╯\n"
 )
+GROK_IDLE_SCREEN_BROWSE_MODE = (
+    "  ╭───────────────────────────────────────────────────╮\n"
+    "  │ ❯ Build anything                                  │\n"
+    "  ╰──── Grok 4.7 Fast (xhigh) · always-approve ─────────╯\n\n"
+    "  Space:prompt  │  Enter:open  │  Ctrl+e:expand thinking  │  Ctrl+.:shortcuts\n"
+)
 GROK_COMMAND_SCREEN = (
     "  ◆ Task started: Deploy sample service\n\n"
     "  ⠸ Deploy sample service… 37s       5m13s ⇣192k [stop]\n"
@@ -1772,8 +1778,26 @@ def test_grok_idle_composer_without_shortcuts_reports_ready(footer: str):
     assert state.name == "waiting_human"
 
 
+@pytest.mark.parametrize("screen", [
+    "  Help improve Grok                 [Opt out] [Opt in]\n"
+    "  Off by default. Change anytime via settings.\n"
+    "  Read Terms and Privacy Policy.\n\n" + GROK_IDLE_SCREEN_BROWSE_MODE,
+    GROK_IDLE_SCREEN_BROWSE_MODE.replace("  │  ", "\n  │  ") + "\n" * 40,
+], ids=["consent-notice", "wrapped-footer"])
+def test_grok_idle_browse_mode_composer_reports_ready(screen: str):
+    state = classify_agent_state(
+        agent_pane(command="grok", title="Review sample service - grok"),
+        visible_screen=screen,
+        now=1000,
+    )
+
+    assert state.name == "waiting_human"
+
+
 @pytest.mark.parametrize("frame", ["⋅", ":", "⸬", "⁙"])
-@pytest.mark.parametrize("input_screen", [GROK_IDLE_SCREEN, GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS])
+@pytest.mark.parametrize("input_screen", [
+    GROK_IDLE_SCREEN, GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS, GROK_IDLE_SCREEN_BROWSE_MODE,
+], ids=["input-mode", "no-shortcuts", "browse-mode"])
 def test_grok_running_terminal_tasks_outrank_a_settled_title(frame: str, input_screen: str):
     # Observed live: Grok settles its title and removes Ctrl+C while the Run
     # task, its elapsed counter, and the current [stop] spinner remain active.
@@ -1857,6 +1881,9 @@ def test_grok_completed_tasks_and_quoted_activity_do_not_hide_an_idle_prompt():
     GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS.split("\n", 1)[1],
     GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS.replace("grok-4.5", "a quoted box"),
     GROK_IDLE_SCREEN_WITHOUT_SHORTCUTS + "  ◆ More transcript after a quoted prompt\n",
+    GROK_IDLE_SCREEN_BROWSE_MODE.split("  ╭", 1)[1].split("\n", 1)[1],
+    GROK_IDLE_SCREEN_BROWSE_MODE.replace("Grok 4.7 Fast", "a quoted box"),
+    GROK_IDLE_SCREEN_BROWSE_MODE + "  ◆ More transcript after a quoted prompt\n",
 ])
 def test_grok_requires_a_recognized_screen_before_reporting_ready(screen: str | None):
     state = classify_agent_state(

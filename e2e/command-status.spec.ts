@@ -41,14 +41,14 @@ while True:
     if state != previous or (state in {"working", "command"} and now - last_render >= 1):
         if provider == "grok":
             title = "⠸ - Waiting for response… - grok" if state == "working" else "Fixture task - grok"
-            footer = "Shift+Tab:mode │ Ctrl+.:shortcuts"
+            footer = "Space:prompt │ Enter:open │ Ctrl+e:expand thinking │ Ctrl+.:shortcuts"
             activity = "◆ Finished the task\\n"
             if state == "working":
                 activity = "⠸ Waiting for response… 2s      5m ⇣192k [stop]\\n"
                 footer = "Shift+Tab:mode │ Ctrl+c:cancel │ Ctrl+.:shortcuts"
             elif state == "command":
                 activity = "⠸ Deploy fixture service… 37s      5m ⇣192k [stop]\\n▾ Tasks 1\\n⁙ Run Deploy fixture service 39s\\n"
-            screen = activity + "╭────────────────────────╮\\n│ ❯                     │\\n╰─── Grok 4.7 Fast ───────╯\\n" + footer
+            screen = activity + "╭───────────────────────────────────────────────────╮\\n│ ❯ Build anything                                  │\\n╰──── Grok 4.7 Fast (xhigh) · always-approve ─────────╯\\n" + footer
         else:
             title = "◐ Fixture thinking" if state == "working" else "✳ Fixture ready"
             footer = "⏵⏵ bypass permissions on (shift+tab to cycle)"
@@ -262,7 +262,11 @@ test("Grok background commands with settled titles stay busy and highlight only 
 
   writeFileSync(join(fixtureDirectory, `${grokSession}.state`), "ready");
   await expect.poll(readState).toBe("waiting_human");
+  await expect(grokTab.locator(".workspace-state-dot")).toHaveClass(/waiting_human/);
+  await expect(grokTab.locator(".workspace-state-dot")).toHaveCSS("background-color", "rgb(255, 182, 72)");
   await expect(grokTab).toHaveAttribute("data-ready-unchecked", "true", { timeout: 10_000 });
+  await expect(grokTab.locator(".workspace-tab-title")).toHaveCSS("border-top-style", "solid");
+  await expect(grokTab.locator(".workspace-tab-title")).toHaveCSS("font-weight", "700");
   await expect(callbackRow(page, grokSession).locator(".workspace-callback-status")).toHaveText("Ready for review");
   await expect(page.locator(".workspace-callback-card small")).toHaveText(["Global 1/1", "Local 1/1"]);
   await page.screenshot({ path: testInfo.outputPath("grok-task-finished-unchecked.png"), animations: "disabled" });

@@ -39,6 +39,19 @@ test("crop to notes, OCR, pasted images, reload and ended-source storage managem
   await page.goto(url(source));
   await expect(page.locator(".connection-badge")).toContainText("Live");
   await expect(page.locator(".xterm-rows")).toContainText("CAPTURE WORKFLOW");
+  const captureTrigger = page.getByRole("button", { name: "Capture to notes", exact: true });
+  const expectCompactCapture = async () => {
+    const icon = await captureTrigger.locator("svg").boundingBox();
+    expect(icon).not.toBeNull();
+    expect(icon!.width).toBeLessThanOrEqual(18);
+    expect(icon!.height).toBeLessThanOrEqual(18);
+    expect((await captureTrigger.boundingBox())!.width).toBeLessThanOrEqual(48);
+  };
+  for (const theme of ["dark", "light"]) {
+    if (await page.locator("html").getAttribute("data-theme") !== theme) await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+    await expectCompactCapture();
+    await captureTrigger.screenshot({ path: info.outputPath(`capture-trigger-${theme}.png`) });
+  }
   await page.getByRole("button", { name: "Capture to notes", exact: true }).click();
   const capture = page.getByRole("dialog", { name: "Capture to notes", exact: true });
   await expect(capture.getByRole("button", { name: "Capture visible pane" })).toBeEnabled();
@@ -112,6 +125,7 @@ test("crop to notes, OCR, pasted images, reload and ended-source storage managem
   await expect(page.getByRole("textbox", { name: "Text to capture" })).toHaveValue(/CAPTURE/);
   await page.getByRole("button", { name: "Cancel note capture" }).click();
   await page.getByRole("button", { name: "Enter desktop terminal focus" }).click();
+  await expectCompactCapture();
   await page.getByRole("button", { name: "Capture to notes", exact: true }).click();
   await expect(capture.getByRole("button", { name: "Capture visible pane" })).toBeEnabled();
   await page.keyboard.press("Escape");

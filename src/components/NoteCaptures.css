@@ -1,3 +1,16 @@
+.note-capture-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.note-capture-trigger > svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
 .note-capture-overlay,
 .note-storage-panel,
 .note-clips,

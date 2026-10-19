@@ -28,6 +28,14 @@ export function UnreadIcon(props: IconProps) {
   );
 }
 
+export function CaptureIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5M9 12h6M12 9v6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function PageUpIcon(props: IconProps) {
   return (
     <IconBase {...props}>

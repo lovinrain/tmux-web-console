@@ -136,6 +136,12 @@ GROK_PROMPT_PATTERN = re.compile(r"^\s*│\s*❯(?:\s|$)")
 GROK_INPUT_FOOTER_PATTERN = re.compile(
     r"\bShift\+Tab:mode\b.*\bCtrl\+\.:shortcuts\b", re.IGNORECASE
 )
+GROK_BROWSE_FOOTER_PATTERN = re.compile(
+    r"\s*Space:prompt\s*[│|]\s*Enter:open"
+    r"(?:\s*[│|]\s*Ctrl\+e:expand thinking)?"
+    r"\s*[│|]\s*Ctrl\+\.:shortcuts\s*",
+    re.IGNORECASE,
+)
 GROK_MODEL_BORDER_PATTERN = re.compile(
     r"^\s*╰─+[^╯]*\bgrok[ -]\d[^╯]*╯\s*$", re.IGNORECASE
 )
@@ -542,12 +548,18 @@ def _grok_screen_state(screen: str) -> AgentState | None:
     # Grok 1.0.62 can omit the shortcut hints. Its complete, model-labelled
     # composer still identifies an idle prompt. Require it at the screen's end
     # (apart from the version label), so a quoted prompt cannot imply readiness.
-    quiet_composer = (
+    complete_composer = (
         top < prompt
-        and GROK_MODEL_BORDER_PATTERN.fullmatch(lines[bottom])
-        and (not controls.strip() or GROK_VERSION_FOOTER_PATTERN.fullmatch(controls))
+        and bool(GROK_MODEL_BORDER_PATTERN.fullmatch(lines[bottom]))
     )
-    if GROK_INPUT_FOOTER_PATTERN.search(controls) or quiet_composer:
+    quiet_composer = complete_composer and (
+        not controls.strip() or GROK_VERSION_FOOTER_PATTERN.fullmatch(controls)
+    )
+    # Browsing the completed transcript replaces the input-mode hints with
+    # navigation keys. Require the whole footer below a complete composer so
+    # quoted UI or later transcript text cannot become a false Ready signal.
+    browse_composer = complete_composer and GROK_BROWSE_FOOTER_PATTERN.fullmatch(controls)
+    if GROK_INPUT_FOOTER_PATTERN.search(controls) or quiet_composer or browse_composer:
         return AgentState("waiting_human", "Grok is paused at its input prompt")
     return None
 
