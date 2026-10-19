@@ -66,6 +66,11 @@ warnings and automatic image expiry keep old captures bounded; images from
 ended sessions expire after seven days unless kept, while text remains.
 See [Capture to sticky notes](docs/NOTE_CAPTURES.md) for controls and retention.
 
+On desktop, **Send & keep view** sends a follow-up question while holding the
+visible terminal as a temporary image. The agent keeps working; choose **Back to
+live** when ready. Normal sending stays unchanged. See
+[Keep the reading view](docs/HELD_TERMINAL_VIEW.md).
+
 ![Pinned workspace and session notebooks with named pages beside the terminal](docs/images/muxdeck-sticky-notes.png)
 
 ### Callback list

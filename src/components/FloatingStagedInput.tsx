@@ -63,6 +63,8 @@ interface FloatingStagedInputProps {
   onChange: (value: string) => boolean;
   onOpenFullInput: () => void;
   onPanelStateChange?: (state: FloatingStagedInputPanelState) => void;
+  onSendKeepingView?: () => Promise<boolean>;
+  sendKeepingViewEnabled?: boolean;
 }
 
 function floatingInputViewport(): { width: number; height: number } {
@@ -197,6 +199,8 @@ export const FloatingStagedInput = forwardRef<
   onChange,
   onOpenFullInput,
   onPanelStateChange,
+  onSendKeepingView,
+  sendKeepingViewEnabled = true,
 }, ref) {
   const desktop = useDesktopFloatingInput();
   const headingId = useId();
@@ -215,6 +219,10 @@ export const FloatingStagedInput = forwardRef<
   }
   const [store, setStore] = useState<FloatingInputStore>(initialStoreRef.current);
   const [draftRejected, setDraftRejected] = useState(false);
+  const [sendPending, setSendPending] = useState(false);
+  const [sendError, setSendError] = useState(false);
+  const sendRequestRef = useRef(0);
+  const sendingRef = useRef(false);
   const previousSessionRef = useRef({ identity: renderIdentity, sessionName });
 
   useEffect(() => {
@@ -249,6 +257,10 @@ export const FloatingStagedInput = forwardRef<
       });
     }
     setDraftRejected(false);
+    sendRequestRef.current += 1;
+    sendingRef.current = false;
+    setSendPending(false);
+    setSendError(false);
     previousSessionRef.current = { identity: renderIdentity, sessionName };
   }, [renderIdentity, sessionName]);
 
@@ -467,6 +479,7 @@ export const FloatingStagedInput = forwardRef<
           value={value}
           maxLength={MAX_DRAFT_LENGTH}
           rows={6}
+          readOnly={sendPending}
           inputMode="text"
           autoCapitalize="off"
           autoCorrect="off"
@@ -479,16 +492,37 @@ export const FloatingStagedInput = forwardRef<
           }}
         />
         <div className="floating-staged-input-meta" role="status" aria-live="polite">
-          <span>{draftRejected
+          <span>{sendError ? "Sending was not confirmed; your staged draft is kept."
+            : sendPending ? "Keeping the view and sending..."
+            : draftRejected
             ? "The staged draft is busy; your last edit was not applied."
             : "Mirrors this session's saved staged draft."}</span>
           <span>{value.length.toLocaleString()} / {MAX_DRAFT_LENGTH.toLocaleString()}</span>
         </div>
         <div className="floating-staged-input-actions">
+          {onSendKeepingView && <button
+            type="button"
+            aria-label="Send & keep view"
+            title="Keep the visible terminal as a snapshot and send this draft followed by Enter"
+            disabled={!sendKeepingViewEnabled || !value || sendPending}
+            onClick={async () => {
+              if (sendingRef.current) return;
+              const request = ++sendRequestRef.current;
+              sendingRef.current = true;
+              setSendPending(true);
+              setSendError(false);
+              let accepted = false;
+              try { accepted = await onSendKeepingView(); } catch { /* Keep the draft. */ }
+              if (request !== sendRequestRef.current) return;
+              sendingRef.current = false;
+              setSendPending(false);
+              setSendError(!accepted);
+            }}
+          ><PinIcon /><span>Send & keep view</span></button>}
           <button
             type="button"
             className="floating-staged-input-clear"
-            disabled={!value}
+            disabled={!value || sendPending}
             onClick={() => {
               if (!window.confirm("Discard this staged input?")) return;
               const accepted = onChange("");

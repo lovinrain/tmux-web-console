@@ -34,6 +34,36 @@ afterEach(() => {
 });
 
 describe("InputBar", () => {
+  it("keeps view holding opt-in and preserves the existing Shift+Enter submission", async () => {
+    const onSubmitKeepingView = vi.fn(async () => true);
+    const view = render(<InputBar {...props} />);
+    expect(screen.queryByRole("button", { name: "Send & keep view" })).not.toBeInTheDocument();
+    view.rerender(<InputBar {...props} onSubmitKeepingView={onSubmitKeepingView} />);
+    const input = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(input, { target: { value: "normal question" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith("normal question", "enter"));
+    expect(onSubmitKeepingView).not.toHaveBeenCalled();
+    await waitFor(() => expect(input).toHaveValue(""));
+    fireEvent.input(input, { target: { value: "question while reading" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send & keep view" }));
+    await waitFor(() => expect(onSubmitKeepingView).toHaveBeenCalledExactlyOnceWith("question while reading", "enter"));
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(props.onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("retains the draft without falling back to normal sending if keeping the view fails", async () => {
+    const onSubmitKeepingView = vi.fn(async () => false);
+    render(<InputBar {...props} onSubmitKeepingView={onSubmitKeepingView} />);
+    const input = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(input, { target: { value: "keep this question" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send & keep view" }));
+    await waitFor(() => expect(input).not.toHaveAttribute("readonly"));
+    expect(input).toHaveValue("keep this question");
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
   it("keeps shortcut controls mounted while restoring each session's draft and current handlers", () => {
     localStorage.setItem("muxdeck-terminal-draft:second", "Second session draft");
     const ref = createRef<InputBarHandle>();

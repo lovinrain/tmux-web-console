@@ -47,7 +47,7 @@ export interface LiveTerminalHandle {
   submit: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
   focus: () => void;
   redraw: () => boolean;
-  navigateHistory: (action: TerminalHistoryAction) => boolean;
+  navigateHistory: (action: TerminalHistoryAction, notify?: boolean) => boolean;
   scrollApplication: (direction: "up" | "down", profile: ApplicationScrollProfile) => Promise<ApplicationScrollResult>;
   jumpToLive: () => void;
 }
@@ -484,13 +484,14 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       redraw() {
         return redrawRef.current?.() ?? false;
       },
-      navigateHistory(action) {
+      navigateHistory(action, notify = true) {
         const socket = socketRef.current;
         if (socket?.readyState !== WebSocket.OPEN) return false;
         const requests = historyRequestsRef.current.get(socket) ?? [];
         // The server replies in request order. Capture the callback now so an
         // ACK cannot update a different session after the view switches.
-        requests.push({ action, onResult: historyNavigationRef.current });
+        // Quiet exits prepare a submission without the UI's application-scroll fallback.
+        requests.push({ action, onResult: notify ? historyNavigationRef.current : undefined });
         historyRequestsRef.current.set(socket, requests);
         try {
           socket.send(JSON.stringify({ type: "history", action }));

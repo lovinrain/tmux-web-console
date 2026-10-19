@@ -1,0 +1,104 @@
+.terminal-view > .held-terminal-live {
+  width: 100%;
+  height: 100%;
+}
+
+.held-terminal-live > .terminal-stage {
+  width: 100%;
+  height: 100%;
+}
+
+.held-terminal-view {
+  --held-bg: #152019;
+  --held-fg: #e4f0e7;
+  --held-muted: #a3b6a8;
+  --held-border: #425747;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--held-fg);
+  background: var(--held-bg);
+}
+
+html[data-theme="light"] .held-terminal-view {
+  --held-bg: #f8fcf9;
+  --held-fg: #233d2d;
+  --held-muted: #526e5c;
+  --held-border: #adc4b3;
+}
+
+.held-terminal-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--held-border);
+}
+
+.held-terminal-label {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.held-terminal-label strong,
+.held-terminal-header button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+/* Focus keeps its existing toolbar at the top of the terminal. */
+.console-shell[data-desktop-focus="true"] .held-terminal-header {
+  order: 1;
+  border-bottom: 0;
+  border-top: 1px solid var(--held-border);
+}
+
+.held-terminal-label strong {
+  overflow-wrap: anywhere;
+}
+
+.held-terminal-label > span,
+.held-terminal-status {
+  font-size: 10px;
+  color: var(--held-muted);
+}
+
+.held-terminal-header button {
+  color: var(--held-fg);
+  border-color: var(--held-border);
+  background: var(--held-bg);
+}
+
+.held-terminal-status[data-working="true"] {
+  color: var(--amber);
+}
+
+.held-terminal-header svg,
+.composer-send-keep-view > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.held-terminal-image-viewport {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.held-terminal-image-viewport img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+}

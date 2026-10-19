@@ -27,6 +27,7 @@ import {
   type RecoverableSession,
 } from "../api";
 import { useConsoleSession } from "../useConsoleSession";
+import { useHeldTerminalView } from "../useHeldTerminalView";
 import {
   ArrowLeftIcon,
   CheckIcon,
@@ -132,6 +133,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { TimeZoneSelect } from "./TimeZoneSelect";
 import { FocusStickyNotesContext } from "./FocusStickyNotesContext";
 import { NoteCaptureControls } from "./NoteCaptureControls";
+import { HeldTerminalView } from "./HeldTerminalView";
 import "./FocusStickyNotes.css";
 import "./ConsoleHeaderCompact.css";
 
@@ -176,6 +178,7 @@ interface ConsoleScreenProps {
   onHistoryPanelWidthChange?: (width: number) => void;
   onSessionsChange?: (sessions: Session[]) => void;
   onSessionUpdate?: (session: Session) => void;
+  onSessionRead?: (sessionName: string) => void;
   onWorkspacePinChange?: (
     sessionName: string,
     pinned: boolean,
@@ -704,6 +707,7 @@ export function ConsoleScreen({
   onHistoryPanelWidthChange,
   onSessionsChange,
   onSessionUpdate,
+  onSessionRead,
   onWorkspacePinChange,
   callbackSessionActive = false,
   callbackSessionBusy = false,
@@ -944,6 +948,10 @@ export function ConsoleScreen({
   const connection = connectionSnapshot.sessionName === sessionName
     ? connectionSnapshot.state
     : "connecting";
+  const heldView = useHeldTerminalView(terminalRef, JSON.stringify([
+    workspaceId, sessionName, session?.id, session?.created,
+    session?.serverStarted, session?.serverPid, pane?.id,
+  ]), connection === "live" && !forkSync?.views?.paused);
   const activeScrollTargetRef = useRef({ scrollTargetKey, connection, applicationReturnMode });
   activeScrollTargetRef.current = { scrollTargetKey, connection, applicationReturnMode };
   useEffect(() => {
@@ -1692,6 +1700,10 @@ export function ConsoleScreen({
     }
   }, [forgetTmuxScrollTarget, rememberTmuxScrollTarget, scrollTargetKey, updatePendingTmuxScroll]);
   const returnToLiveTerminal = useCallback(() => {
+    if (heldView.snapshot) {
+      heldView.release();
+      onSessionRead?.(sessionName);
+    }
     tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
     setApplicationScrollMessage(null);
     if (returnScrollMode === "application") {
@@ -1700,8 +1712,12 @@ export function ConsoleScreen({
       terminalRef.current?.navigateHistory("exit");
     }
     terminalRef.current?.jumpToLive();
-    terminalRef.current?.focus();
-  }, [returnScrollMode]);
+    if (heldView.snapshot) {
+      window.requestAnimationFrame(() => {
+        if (activeScrollTargetRef.current.scrollTargetKey === scrollTargetKey) terminalRef.current?.focus();
+      });
+    } else terminalRef.current?.focus();
+  }, [heldView.snapshot, heldView.release, onSessionRead, returnScrollMode, scrollTargetKey, sessionName]);
   const trackScrollUsed = useCallback((mode: AgentScrollMode) => {
     scrollActionVersionRef.current += 1;
     setApplicationScrollMessage(null);
@@ -2860,12 +2876,17 @@ export function ConsoleScreen({
         </aside>
       )}
 
+      {heldView.error && <aside className="copy-new-error" role="alert">
+        <span>{heldView.error}</span><button type="button" onClick={heldView.release}>Dismiss</button>
+      </aside>}
+
       {sessionNavigation && (
         <div key="session-navigation" className="console-session-navigation">{sessionNavigation}</div>
       )}
 
       <div className="terminal-coordinate top-left">{pane ? `${pane.width}x${pane.height}` : "--x--"}</div>
       <div className="terminal-view">
+        <div className="held-terminal-live" inert={heldView.snapshot ? true : undefined}>
         {forkSync?.views?.paused ? <WorkspaceViewDisconnected onRejoin={forkSync.views.resume} /> : <LiveTerminal
           ref={terminalRef}
           session={sessionName}
@@ -2891,6 +2912,9 @@ export function ConsoleScreen({
           onPaneChange={paneChange}
           onHistoryNavigation={historyNavigation}
         />}
+        </div>
+        {heldView.snapshot && <HeldTerminalView snapshot={heldView.snapshot} sessionName={sessionName}
+          agentState={session?.agentState ?? "unknown"} connection={connection} onReturnToLive={returnToLiveTerminal} />}
         <nav className="terminal-view-controls" aria-label="Terminal view controls">
           <ScrollButton
             type="button"
@@ -3275,9 +3299,12 @@ export function ConsoleScreen({
         applicationScrollPending={applicationScrollPendingTargets.has(scrollTargetKey)}
         returnScrollMode={returnScrollMode}
         onSend={(data) => terminalRef.current?.send(data) ?? false}
-        onSubmit={(data, terminator) => (
-          terminalRef.current?.submit(data, terminator) ?? Promise.resolve(false)
-        )}
+        onSubmit={(data, terminator) => {
+          const terminal = terminalRef.current;
+          if (heldView.snapshot && !terminal?.navigateHistory("exit", false)) return Promise.resolve(false);
+          return terminal?.submit(data, terminator) ?? Promise.resolve(false);
+        }}
+        onSubmitKeepingView={session && !mobileLayout ? heldView.submitKeepingView : undefined}
         onAddToMemo={session ? addDraftToMemo : undefined}
         onConsumeMemo={session ? consumeStagedMemo : undefined}
         onReturnToLive={returnToLiveTerminal}
@@ -3330,6 +3357,8 @@ export function ConsoleScreen({
         onChange={replaceFloatingDraft}
         onOpenFullInput={revealAndFocusComposer}
         onPanelStateChange={setFloatingInputPanelState}
+        onSendKeepingView={session ? () => inputBarRef.current?.sendKeepingView() ?? Promise.resolve(false) : undefined}
+        sendKeepingViewEnabled={connection === "live"}
       />}
       {fileBrowserTarget && (
         <SessionFilesPanel

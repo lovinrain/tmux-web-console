@@ -18,6 +18,7 @@ import {
   AttachmentIcon,
   KeyboardIcon,
   MemoIcon,
+  PinIcon,
   RefreshIcon,
   SnippetIcon,
   TerminalIcon,
@@ -72,6 +73,7 @@ interface InputBarProps {
   onToggleMobileDistractionFree?: () => void;
   onSend: (data: string) => boolean;
   onSubmit: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
+  onSubmitKeepingView?: (data: string, terminator: TerminalSubmissionTerminator) => Promise<boolean>;
   onAddToMemo?: (data: string) => Promise<void>;
   onConsumeMemo?: (source: MemoDraftSource) => Promise<void>;
   onReturnToLive: () => void;
@@ -101,6 +103,7 @@ export interface InputBarHandle {
   getDraft: () => string;
   focus: () => void;
   blur: () => void;
+  sendKeepingView: () => Promise<boolean>;
 }
 
 interface TerminalKey {
@@ -440,6 +443,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     getDraft: () => composerRef.current?.getDraft() ?? "",
     focus: () => composerRef.current?.focus(),
     blur: () => composerRef.current?.blur(),
+    sendKeepingView: () => composerRef.current?.sendKeepingView() ?? Promise.resolve(false),
   }), []);
 
   return (
@@ -466,6 +470,7 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
   onToggleMobileDistractionFree,
   onSend,
   onSubmit,
+  onSubmitKeepingView,
   onAddToMemo,
   onConsumeMemo,
   onFocus,
@@ -588,6 +593,7 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
     focus: () => textareaRef.current?.focus(),
     blur: () => textareaRef.current?.blur(),
     pasteClipboard: () => pasteClipboard(),
+    sendKeepingView: () => sendDraft("enter", true),
   }));
 
   useEffect(() => {
@@ -837,7 +843,7 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
     }
   };
 
-  const sendDraft = async (terminator: TerminalSubmissionTerminator) => {
+  const sendDraft = async (terminator: TerminalSubmissionTerminator, keepView = false): Promise<boolean> => {
     const textarea = textareaRef.current;
     if (
       !textarea
@@ -845,20 +851,20 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
       || !enabled
       || actionPendingRef.current
       || attachmentUploadPendingRef.current
-    ) return;
+    ) return false;
     if (composingRef.current) {
       textarea.blur();
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     }
     const submitted = textarea.value;
-    if (!submitted) return;
+    if (!submitted || (keepView && !onSubmitKeepingView)) return false;
     actionPendingRef.current = true;
     setActionPending(true);
     setStatus("sending");
     textarea.readOnly = true;
     let accepted = false;
     try {
-      accepted = await onSubmit(submitted, terminator);
+      accepted = await (keepView ? onSubmitKeepingView! : onSubmit)(submitted, terminator);
     } catch {
       accepted = false;
     }
@@ -868,7 +874,7 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
       setActionPending(false);
       setStatus("unconfirmed");
       textarea.focus();
-      return;
+      return false;
     }
 
     const memoSource = memoSourceRef.current?.text === submitted
@@ -893,6 +899,7 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
     clearAttachmentPreviews();
     resizeTextarea(textarea);
     textarea.focus();
+    return true;
   };
 
   const addDraftToMemo = async () => {
@@ -1218,6 +1225,18 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
                 <kbd>Shift</kbd><span>+</span><kbd>Enter</kbd>
               </span>
             </button>
+            {onSubmitKeepingView && <button
+              type="button"
+              className="secondary-button composer-send-keep-view"
+              aria-label="Send & keep view"
+              title="Keep a snapshot of the visible terminal, then send staged input followed by Enter"
+              disabled={!enabled || !draftLength || draftActionPending}
+              onClick={() => void sendDraft("enter", true)}
+            >
+              <PinIcon />
+              <span className="composer-action-label-full" aria-hidden="true">Send & keep view</span>
+              <span className="composer-action-label-compact" aria-hidden="true">Hold</span>
+            </button>}
             <button
               type="button"
               className={queuedMessageCount > 0

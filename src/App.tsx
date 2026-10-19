@@ -4889,6 +4889,7 @@ function AppRoutes() {
             workspaceName={workspaceName}
             onBack={exitWorkspacePaneView}
             onSessionUpdate={updateKnownSession}
+            onSessionRead={checkSessionReady}
             onWorkspacePinChange={sessionWorkspacePinChanged}
             callbackSessionActive={workspaceCallbackSessions.includes(sessionName)}
             callbackSessionBusy={workspaceCallbackBusy}
@@ -5011,6 +5012,7 @@ function AppRoutes() {
         onHistoryPanelWidthChange={setHistoryPanelWidth}
         onSessionsChange={replaceKnownSessions}
         onSessionUpdate={updateKnownSession}
+        onSessionRead={checkSessionReady}
         onWorkspacePinChange={sessionWorkspacePinChanged}
         callbackSessionActive={workspaceCallbackSessions.includes(sessionName)}
         callbackSessionBusy={workspaceCallbackBusy}
