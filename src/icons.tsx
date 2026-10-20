@@ -220,6 +220,17 @@ export function WindowCopyIcon(props: IconProps) {
   );
 }
 
+export function ForkIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="6" cy="5" r="2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="18" cy="5" r="2" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="12" cy="19" r="2" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M6 7v2a6 6 0 0 0 6 6m6-8v2a6 6 0 0 1-6 6v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </IconBase>
+  );
+}
+
 export function KeyboardIcon(props: IconProps) {
   return (
     <IconBase {...props}>

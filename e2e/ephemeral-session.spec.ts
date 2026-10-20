@@ -120,7 +120,7 @@ test("split to ephemeral tab shares only the active session and never saves work
 
   const [child] = await Promise.all([
     context.waitForEvent("page"),
-    page.getByRole("button", { name: "Split to ephemeral tab", exact: true }).click(),
+    page.getByRole("button", { name: "Open terminal-only tab", exact: true }).click(),
   ]);
   await expect(child).toHaveURL(`/mux/session/${sessionNames[0]}?ephemeral=1`);
   expect(await child.evaluate(() => window.opener === null)).toBe(true);

@@ -89,8 +89,8 @@ URL reloads, saved-workspace reloads, and updates from another browser tab.
 Moving a parent moves its subtree; closing its tab keeps its children open and
 promotes them one level. Named groups keep whole session trees together.
 
-`Space` (`Split workspace` in its tooltip) is the non-mutating browser-workspace counterpart beside that
-control. With multiple tabs selected using Shift-click or Ctrl/Cmd-click, it
+`Temp workspace` (grid icon), beside that control, opens an existing session in
+a separate temporary workspace. With multiple tabs selected using Shift-click or Ctrl/Cmd-click, it
 opens that selection in its existing tab order; the button shows the selected
 count. Otherwise it opens the current native session alone. The active session
 stays focused if selected; otherwise the first selected tab receives focus.
@@ -100,7 +100,7 @@ until its own `Save workspace` action is used; splitting never creates, copies,
 renames, resizes, or sends input to a tmux session. A blocked pop-up leaves the
 source unchanged and produces a dismissible error.
 
-`Tab` (`Split to ephemeral tab` in its tooltip), immediately beside `Space`, opens the
+`Terminal only` (terminal icon), immediately beside `Temp workspace`, opens the
 current session in a lighter session-only page. It always uses the active
 session, regardless of other selected tabs. The page has no tab sidebar,
 workspace Overview, save controls, pins, transfers, or workspace widgets.
@@ -115,13 +115,19 @@ another shell. `Close tab` only detaches this browser; explicit `End` still
 requires confirmation to terminate the session. Blocked pop-ups show an error
 in the source page.
 
-`Fork`, beside `Space` and `Tab`, opens the exact current URL in a new browser
-tab, preserving its session, workspace, query parameters, and fragment. The
-original page stays open. A saved workspace remains the same shared workspace.
+`Independent tab` (branching icon, previously `Fork`) opens the current view in a
+new browser tab, preserving its session, workspace, other query parameters, and
+fragment while removing focus-sync membership. Each tab chooses its sessions
+and panels separately. A saved workspace remains the same shared workspace.
 
-All three actions share one bordered control with an always-visible `Split` caption.
-They use distinct icons when the header is narrow; hover reveals the full action
-and explanation. Their complete accessible labels remain available.
+`Synced tab` (chain-link icon, previously `Fork-sync`) opens a linked workspace
+tab. Session and panel selection stay in sync; themes and controls stay separate.
+See [Fork-sync](FORK_SYNC.md) for scope and shared-terminal behavior.
+
+These four actions share the `Open view` control. The compact header shows their
+distinct icons; hover reveals the action name and explanation. Complete labels
+appear in the control panel and remain available to screen readers. All four
+reuse existing terminal sessions; `Copy` creates a new session.
 
 The desktop tab-selection bar also provides `Close tabs` and `End sessions`.
 Retained tmux sessions whose panes have all exited show a gray title, gray status

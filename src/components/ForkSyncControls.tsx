@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { EyeIcon, RefreshIcon, UnlinkIcon } from "../icons";
+import { EyeIcon, LinkIcon, UnlinkIcon } from "../icons";
 import type { WorkspaceViewsController } from "../useWorkspaceViews";
 import { WorkspaceViewsDialog } from "./WorkspaceViewsDialog";
 import "./ForkSyncControls.css";
@@ -28,21 +28,21 @@ export function ForkSyncControls({ active, linked = active, available, href, pre
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Fork-sync current view in a new browser tab"
-          title="Open a linked tab. Selecting a session or pane view in either tab updates both; appearance stays independent."
+          aria-label="Open synced workspace tab"
+          title="Synced tab: open this workspace in a new browser tab. Session and panel selection stay in sync; themes and controls stay separate."
           onClick={(event) => { event.currentTarget.href = prepareFork(); onFork?.(); }}
           onContextMenu={(event) => { event.currentTarget.href = prepareFork(); }}
           onAuxClick={(event) => {
             if (event.button === 1) { event.currentTarget.href = prepareFork(); onFork?.(); }
           }}
         >
-          <RefreshIcon /><span>Fork-sync</span>
+          <LinkIcon /><span>Synced tab</span>
         </a>
       ) : (
         <button type="button" className="split-workspace-button" disabled
-          aria-label="Fork-sync current view in a new browser tab"
+          aria-label="Open synced workspace tab"
           title={problem ?? "Open a session or pane view before linking tabs"}>
-          <RefreshIcon /><span>Fork-sync</span>
+          <LinkIcon /><span>Synced tab</span>
         </button>
       )}
       {active && <span className="fork-sync-status" role="status" title="Session and pane view selections are linked in this browser">Synced</span>}

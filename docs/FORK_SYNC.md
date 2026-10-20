@@ -1,6 +1,6 @@
 # Fork-sync
 
-On desktop, use **Split → Fork-sync** to open a linked browser tab. Selecting a
+On desktop, use **Open view → Synced tab** (chain-link icon) to open a linked browser tab. Selecting a
 session or a Pane view in either tab updates the other, including the active
 sidebar tab. Selecting a pane within a Pane view also shares its highlight.
 Temporary Pane views carry their current layout to the linked tab and can be
@@ -12,8 +12,8 @@ Received selections preserve keyboard focus. Terminal input is sent only by the
 tab where it was entered; receiving a selection never replays commands.
 
 **Unlink** lets the current tab continue independently while keeping its view and
-appearance. **Fork** opens an independent tab, including when used in a linked
-view. Additional Fork-sync tabs join the same group. Closing the original tab
+appearance. **Independent tab** (branching icon) opens an independent tab, including when used in a linked
+view. Additional **Synced tab** views join the same group. Closing the original tab
 does not stop the remaining linked tabs from working together.
 
 Linked tabs must use the same browser profile and Muxdeck origin. Selection

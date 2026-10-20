@@ -36,6 +36,7 @@ import {
   ExpandIcon,
   ExternalLinkIcon,
   FolderIcon,
+  ForkIcon,
   GridIcon,
   ClockIcon,
   CloseIcon,
@@ -2626,8 +2627,8 @@ export function ConsoleScreen({
                 />
               )}
               {!ephemeral && !mobileLayout && (onSplitWorkspace || onSplitEphemeralTab) && (
-                <div className="split-action-group" role="group" aria-label="Split">
-                  <span className="split-action-label" aria-hidden="true">Split</span>
+                <div className="split-action-group" role="group" aria-label="Open another view">
+                  <span className="split-action-label" aria-hidden="true">Open view</span>
                   <div className="split-action-options">
                     {onSplitWorkspace && (
                       <button
@@ -2635,28 +2636,28 @@ export function ConsoleScreen({
                         className="split-workspace-button"
                         disabled={!session}
                         aria-label={splitWorkspaceSelectionCount > 1
-                          ? `Split ${splitWorkspaceSelectionCount} selected sessions into a new temporary workspace`
-                          : `Split ${sessionName} into a new temporary workspace`}
+                          ? `Open ${splitWorkspaceSelectionCount} selected sessions in a temporary workspace`
+                          : `Open ${sessionName} in a temporary workspace`}
                         title={splitWorkspaceSelectionCount > 1
-                          ? `Split workspace: open ${splitWorkspaceSelectionCount} selected sessions in a new temporary workspace window; keep their tab order and leave this workspace unchanged`
-                          : "Split workspace: open this session alone in a new temporary workspace window"}
+                          ? `Temporary workspace: open ${splitWorkspaceSelectionCount} selected sessions in a new window with its own tab list; keep their tab order. Uses the same live terminals.`
+                          : "Temporary workspace: open this session in a new window with its own workspace tab list. Uses the same live terminal."}
                         onClick={splitIntoNewWorkspace}
                       >
                         <GridIcon />
-                        <span>Space{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
+                        <span>Temp workspace{splitWorkspaceSelectionCount > 1 ? ` (${splitWorkspaceSelectionCount})` : ""}</span>
                       </button>
                     )}
                     {onSplitEphemeralTab && (
                       <button
                         type="button"
                         className="split-workspace-button split-ephemeral-tab-button"
-                        aria-label="Split to ephemeral tab"
+                        aria-label="Open terminal-only tab"
                         disabled={!session}
-                        title="Split to ephemeral tab: open only this session, without workspace controls"
+                        title="Terminal-only tab: open this existing session in a new browser tab without the workspace sidebar or tools."
                         onClick={splitIntoEphemeralTab}
                       >
-                        <ExternalLinkIcon />
-                        <span>Tab</span>
+                        <TerminalIcon />
+                        <span>Terminal only</span>
                       </button>
                     )}
                     <a
@@ -2664,16 +2665,16 @@ export function ConsoleScreen({
                       href={independentForkHref(window.location.href)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      aria-label="Fork current view in a new browser tab"
-                      title="Fork: open this view in an independent browser tab"
+                      aria-label="Open independent workspace tab"
+                      title="Independent tab: open this workspace in a new browser tab. Choose sessions and panels separately; terminal sessions are shared."
                       onClick={(event) => { event.currentTarget.href = independentForkHref(window.location.href); recordViewActivity("fork"); }}
                       onAuxClick={(event) => {
                         event.currentTarget.href = independentForkHref(window.location.href);
                         if (event.button === 1) recordViewActivity("fork");
                       }}
                     >
-                      <WindowCopyIcon />
-                      <span>Fork</span>
+                      <ForkIcon />
+                      <span>Independent tab</span>
                     </a>
                     {forkSync && <ForkSyncControls {...forkSync} onFork={() => recordViewActivity("fork")} />}
                   </div>

@@ -46,7 +46,7 @@ async function showControl(page: Page, name: string): Promise<void> {
 }
 
 async function forkSync(page: Page): Promise<Page> {
-  const name = "Fork-sync current view in a new browser tab";
+  const name = "Open synced workspace tab";
   await showControl(page, name);
   const opened = page.context().waitForEvent("page");
   await page.getByRole("link", { name, exact: true }).first().click();
@@ -66,6 +66,9 @@ async function selectTheme(page: Page, name: string): Promise<void> {
 
 test("linked tabs share session and panel selection while appearance, normal forks and unlink stay independent", async ({ page, context }, testInfo) => {
   test.setTimeout(60_000);
+  // Three tabs exhaust the local HTTP/1 fixture's six connections with SSE.
+  // Use session polling here; session-stream delivery has separate coverage.
+  await context.route("**/api/sessions/stream", (route) => route.abort());
   const created = await context.request.post("/mux/api/workspaces", {
     data: {
       name: "Fork-sync browser fixture", tabs: sessions, activeSession: sessions[0], groups: [],
@@ -116,9 +119,9 @@ test("linked tabs share session and panel selection while appearance, normal for
 
   await expect(page.locator("#terminal-staged-input")).toHaveValue("source tab draft");
   await expect(follower.locator("#terminal-staged-input")).toHaveValue("linked tab draft");
-  await showControl(follower, "Fork current view in a new browser tab");
+  await showControl(follower, "Open independent workspace tab");
   const ordinaryOpened = context.waitForEvent("page");
-  await follower.getByRole("link", { name: "Fork current view in a new browser tab" }).click();
+  await follower.getByRole("link", { name: "Open independent workspace tab" }).click();
   const ordinary = await ordinaryOpened;
   await expect(sessionTab(ordinary, sessions[2])).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".workspace-views-button").first()).toHaveText("Views 3");
@@ -232,7 +235,7 @@ test("a browser without BroadcastChannel can unlink a pasted sync URL", async ({
     Object.defineProperty(window, "BroadcastChannel", { configurable: true, value: undefined });
   });
   await page.goto(`/mux/session/${sessions[0]}?tab=${sessions[0]}&fork-sync=unsupported`);
-  const control = page.getByRole("button", { name: "Fork-sync current view in a new browser tab" });
+  const control = page.getByRole("button", { name: "Open synced workspace tab" });
   if (!await control.isVisible()) await page.getByRole("button", { name: /Show all console controls/ }).click();
   await expect(control).toBeDisabled();
   await page.getByRole("button", { name: "Unlink this browser tab" }).click();

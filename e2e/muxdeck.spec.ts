@@ -4391,12 +4391,12 @@ test("Fork preserves the current view and split workspace opens the selected tab
     await page.getByRole("button", { name: "Vertical session tabs" }).click();
     await page.getByRole("tab", { name: new RegExp(`^${second},`) }).click({ modifiers: ["Control"] });
     await page.getByRole("tab", { name: new RegExp(`^${first},`) }).click({ modifiers: ["Control"] });
-    const button = page.getByRole("button", { name: "Split 2 selected sessions into a new temporary workspace" });
-    await expect(button).toHaveText("Space (2)");
+    const button = page.getByRole("button", { name: "Open 2 selected sessions in a temporary workspace" });
+    await expect(button).toHaveText("Temp workspace (2)");
     const identities = tabs.map(workspaceTmuxIdentity);
     const sourceUrl = page.url();
     const forkPopup = context.waitForEvent("page");
-    await page.getByRole("link", { name: "Fork current view in a new browser tab" }).click();
+    await page.getByRole("link", { name: "Open independent workspace tab" }).click();
     forked = await forkPopup;
     await expect(forked).toHaveURL(sourceUrl);
     await expect(forked.locator(".connection-badge")).toContainText("Live");
@@ -4476,7 +4476,7 @@ test("workspace tabs split, copy, and move into isolated browser windows", async
     const [openedSplit] = await Promise.all([
       page.context().waitForEvent("page"),
       page.getByRole("button", {
-        name: `Split ${helperSession} into a new temporary workspace`,
+        name: `Open ${helperSession} in a temporary workspace`,
       }).click(),
     ]);
     splitPage = openedSplit;
@@ -4673,7 +4673,7 @@ test("workspace tabs split, copy, and move into isolated browser windows", async
 
     await page.setViewportSize({ width: 390, height: 664 });
     await expect(page.getByRole("button", {
-      name: `Split ${helperSession} into a new temporary workspace`,
+      name: `Open ${helperSession} in a temporary workspace`,
     })).toHaveCount(0);
     await page.getByRole("navigation", { name: "Mobile console focus" })
       .getByRole("button", { name: "Overview" })

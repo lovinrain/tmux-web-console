@@ -2992,14 +2992,14 @@ describe("ConsoleScreen session identity", () => {
     );
 
     const split = await screen.findByRole("button", {
-      name: "Split test into a new temporary workspace",
+      name: "Open test in a temporary workspace",
     });
     expect(split).toHaveAttribute(
       "title",
-      "Split workspace: open this session alone in a new temporary workspace window",
+      "Temporary workspace: open this session in a new window with its own workspace tab list. Uses the same live terminal.",
     );
     const copyNew = screen.getByRole("button", { name: "Copy sibling session" });
-    expect(copyNew.closest('[role="group"]')?.nextElementSibling).toBe(screen.getByRole("group", { name: "Split" }));
+    expect(copyNew.closest('[role="group"]')?.nextElementSibling).toBe(screen.getByRole("group", { name: "Open another view" }));
 
     fireEvent.click(split);
     expect(onSplitWorkspace).toHaveBeenCalledWith("test");
@@ -3020,8 +3020,8 @@ describe("ConsoleScreen session identity", () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
       onSplitWorkspace={vi.fn()} splitWorkspaceSelectionCount={3} />);
-    const split = await screen.findByRole("button", { name: "Split 3 selected sessions into a new temporary workspace" });
-    expect(split).toHaveTextContent("Space (3)");
+    const split = await screen.findByRole("button", { name: "Open 3 selected sessions in a temporary workspace" });
+    expect(split).toHaveTextContent("Temp workspace (3)");
     expect(split).toHaveAttribute("title", expect.stringContaining("keep their tab order"));
   });
 
@@ -3041,16 +3041,16 @@ describe("ConsoleScreen session identity", () => {
       />,
     );
     await waitFor(() => expect(screen.getByRole("button", {
-      name: "Split to ephemeral tab",
+      name: "Open terminal-only tab",
     })).toBeEnabled());
     const splitWorkspace = screen.getByRole("button", {
-      name: "Split test into a new temporary workspace",
+      name: "Open test in a temporary workspace",
     });
     const splitEphemeral = screen.getByRole("button", {
-      name: "Split to ephemeral tab",
+      name: "Open terminal-only tab",
     });
-    const splitGroup = screen.getByRole("group", { name: "Split" });
-    expect(splitGroup).toHaveTextContent("Split");
+    const splitGroup = screen.getByRole("group", { name: "Open another view" });
+    expect(splitGroup).toHaveTextContent("Open view");
     expect(within(splitGroup).getAllByRole("button")).toEqual([splitWorkspace, splitEphemeral]);
     expect(splitWorkspace.nextElementSibling).toBe(splitEphemeral);
 
@@ -3075,7 +3075,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("new workspace window");
   });
 
-  it("forks the exact current URL beside Space and Tab without invoking a split", async () => {
+  it("opens the exact current view independently beside the temporary workspace and terminal-only actions", async () => {
     const originalUrl = window.location.href;
     const originalState = window.history.state;
     const onSplitWorkspace = vi.fn();
@@ -3085,12 +3085,12 @@ describe("ConsoleScreen session identity", () => {
       window.history.replaceState(null, "", "/mux/session/test?workspace=saved&tab=test&tab=other#view");
       renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
         onSplitWorkspace={onSplitWorkspace} onSplitEphemeralTab={onSplitEphemeralTab} />);
-      const fork = await screen.findByRole("link", { name: "Fork current view in a new browser tab" });
-      expect(fork).toHaveTextContent("Fork");
+      const fork = await screen.findByRole("link", { name: "Open independent workspace tab" });
+      expect(fork).toHaveTextContent("Independent tab");
       expect(fork).toHaveAttribute("href", window.location.href);
       expect(fork).toHaveAttribute("target", "_blank");
       expect(fork).toHaveAttribute("rel", "noopener noreferrer");
-      expect(screen.getByRole("button", { name: "Split to ephemeral tab" }).nextElementSibling).toBe(fork);
+      expect(screen.getByRole("button", { name: "Open terminal-only tab" }).nextElementSibling).toBe(fork);
       // URL edits can occur between renders; activation must use the latest URL.
       const next = new URL("/mux/session/test?tab=test&tab=other&parent=other%3Atest#new-view", originalUrl).href;
       window.history.replaceState(null, "", next);
@@ -3110,7 +3110,7 @@ describe("ConsoleScreen session identity", () => {
     vi.mocked(recordSessionView).mockRejectedValue(new Error("Registry unavailable"));
     const split = vi.fn().mockReturnValue("opened");
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onSplitEphemeralTab={split} />);
-    const button = await screen.findByRole("button", { name: "Split to ephemeral tab" });
+    const button = await screen.findByRole("button", { name: "Open terminal-only tab" });
     await waitFor(() => expect(button).toBeEnabled());
     fireEvent.click(button);
     expect(split).toHaveBeenCalledOnce();
@@ -3153,7 +3153,7 @@ describe("ConsoleScreen session identity", () => {
     expect(screen.getByRole("button", { name: "Metadata for test" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Raw terminal Page Up" })).toBeVisible();
     expect(screen.queryByText(/Workspace sidebar|Workspace links|Workspace notes/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy sibling session|Copy child session|Split to ephemeral tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /workspace|callback|Session tabs|Overview|Copy sibling session|Copy child session|Open terminal-only tab/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Sessions and workspaces navigation" })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Session navigation" })).not.toBeInTheDocument();
     expect(container.querySelector(".console-session-navigation")).toBeNull();
