@@ -11,6 +11,7 @@ describe("agent scroll recommendations", () => {
     ["copilot", "application"],
     ["cursor", "tmux"],
     ["grok", "application"],
+    ["dsh-tui", "application"],
     ["shells", "tmux"],
     ["other", "tmux"],
   ] as const)("recommends %s scrolling using %s", (kind, expected) => {
@@ -22,7 +23,7 @@ describe("agent scroll recommendations", () => {
     expect(applicationScrollProfile("codex")).toBe("codex");
     expect(applicationScrollProfile("copilot")).toBe("copilot");
     expect(applicationScrollProfile("grok")).toBe("grok");
-    for (const kind of ["cursor", "shells", "other"] as const) {
+    for (const kind of ["cursor", "dsh-tui", "shells", "other"] as const) {
       expect(applicationScrollProfile(kind)).toBe("wheel");
     }
   });

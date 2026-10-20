@@ -58,6 +58,7 @@ export const CALLBACK_AGENT_OPTIONS = [
   { value: "copilot", label: "Copilot" },
   { value: "cursor", label: "Cursor" },
   { value: "grok", label: "Grok" },
+  { value: "dsh-tui", label: "DSH TUI" },
   { value: "shells", label: "Shells" },
   { value: "other", label: "Other / unknown" },
 ] as const;
@@ -177,7 +178,7 @@ function optionValue<T extends string>(
 
 function validCollapsedGroupKey(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 2048 || /[\u0000-\u001f\u007f]/u.test(value)) return false;
-  return /^(status:(ready|working|waiting|unknown|ended|on-hold)|agent:(claude|codex|copilot|cursor|grok|shells|multiple|other)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
+  return /^(status:(ready|working|waiting|unknown|ended|on-hold)|agent:(claude|codex|copilot|cursor|grok|dsh-tui|shells|multiple|other)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
 }
 
 export function validateCallbackListViewPreferences(value: unknown): CallbackListViewPreferences {

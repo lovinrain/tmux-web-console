@@ -627,6 +627,12 @@ html[data-theme="light"] .agent-badge.grok {
   border-color: #a9cbe7;
 }
 
+html[data-theme="light"] .agent-badge.dsh-tui {
+  color: #354bad;
+  background: #e5eaff;
+  border-color: #b3bff0;
+}
+
 html[data-theme="light"] .agent-badge.shell {
   color: #006c63;
   background: #dcefeb;

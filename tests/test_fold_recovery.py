@@ -23,9 +23,10 @@ AGENT_ID = "12345678-1234-1234-1234-123456789012"
 
 class References(AgentReferenceDetector):
     identifier = AGENT_ID
+    agent_type = "codex"
 
     async def detect_sessions(self, sessions):
-        return {session.name: AgentReference("codex", self.identifier) for session in sessions if session.name == "a"}
+        return {session.name: AgentReference(self.agent_type, self.identifier) for session in sessions if session.name == "a"}
 
 
 @pytest.fixture
@@ -61,7 +62,8 @@ async def fold_env(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_metadata_is_durable_before_any_session_closes_and_survives_legacy_writes(fold_env, monkeypatch, tmp_path):
+@pytest.mark.parametrize("agent_type", ["codex", "dsh-tui"])
+async def test_metadata_is_durable_before_any_session_closes_and_survives_legacy_writes(fold_env, monkeypatch, tmp_path, agent_type):
     tmux, _client, store, registry, workspace, _url, _confirmed, close, refs = fold_env
     sentinel = session_fence(await tmux.get_session("sentinel"))
     terminate = tmux.terminate_session
@@ -74,11 +76,13 @@ async def test_metadata_is_durable_before_any_session_closes_and_survives_legacy
         assert snapshots[0]["directory"] == str(tmp_path)
         assert snapshots[0]["title"] == "Recorded title"
         assert snapshots[0]["agentSessionId"] == refs.identifier
+        assert snapshots[0]["agentType"] == agent_type
         assert all(item["historyId"] for item in snapshots)
         seen.append(identity[0])
         await terminate(*identity)
 
     monkeypatch.setattr(tmux, "terminate_session", guarded_terminate)
+    refs.agent_type = agent_type
     refs.identifier = "87654321-1234-1234-1234-123456789012"
     response = await close()
     assert response.status == 200, await response.text()

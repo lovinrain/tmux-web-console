@@ -4,6 +4,7 @@ import openaiMark from "../assets/agent-brands/openai.svg";
 import grokMark from "../assets/agent-brands/grok.svg";
 import cursorMark from "../assets/agent-brands/cursor.svg";
 import copilotMark from "../assets/agent-brands/githubcopilot.svg";
+import deepseekMark from "../assets/agent-brands/deepseek.svg";
 import { paneCommandKind, type SessionKind } from "../sessionDashboardModel";
 import type { Session } from "../types";
 import "./SessionAgentIcon.css";
@@ -14,6 +15,7 @@ const BRAND_MARKS: Partial<Record<SessionKind, string>> = {
   copilot: copilotMark,
   cursor: cursorMark,
   grok: grokMark,
+  "dsh-tui": deepseekMark,
 };
 
 const LABELS: Record<SessionKind, string> = {
@@ -22,6 +24,7 @@ const LABELS: Record<SessionKind, string> = {
   copilot: "GitHub Copilot",
   cursor: "Cursor",
   grok: "Grok",
+  "dsh-tui": "DSH TUI",
   shells: "Shell",
   other: "Process",
 };

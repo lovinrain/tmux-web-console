@@ -232,11 +232,13 @@ describe("callback list view", () => {
         activePaneId: "%2", panes: [pane("bash"), pane("codex", { id: "%2" })],
       }) }),
       entry("copilot", { session: session("copilot", { panes: [pane("node", { title: "GitHub Copilot" })] }) }),
+      entry("dsh-tui", { session: session("dsh-tui", { panes: [pane("node", { title: "✦ 🐋 Review fixture" })] }) }),
       entry("metadata", { session: session("metadata", { agentType: "claude", panes: [pane("codex")] }) }),
       entry("fallback", { session: session("fallback", { activePaneId: "%absent", panes: [pane("bash")] }) }),
     ];
     expect(view(entries, { agent: "codex" })).toEqual(["active"]);
     expect(view(entries, { agent: "copilot" })).toEqual(["copilot"]);
+    expect(view(entries, { agent: "dsh-tui" })).toEqual(["dsh-tui"]);
     expect(view(entries, { agent: "claude" })).toEqual(["metadata"]);
     expect(view(entries, { agent: "shells" })).toEqual(["fallback"]);
   });
@@ -332,6 +334,7 @@ describe("callback list grouping", () => {
       }),
       entry("shell", { session: session("shell", { panes: [pane("bash")] }) }),
       entry("grok", { session: session("grok", { agentType: "grok" }) }),
+      entry("dsh-tui", { session: session("dsh-tui", { agentType: "dsh-tui" }) }),
       entry("cursor", { session: session("cursor", { agentType: "cursor" }) }),
       entry("copilot", { session: session("copilot", { panes: [pane("node", { title: "GitHub Copilot" })] }) }),
       entry("codex", { session: session("codex", {
@@ -341,9 +344,9 @@ describe("callback list grouping", () => {
     ];
     const groups = groupCallbacks(entries, "agent");
     expect(groups.map((group) => group.label))
-      .toEqual(["Claude", "Codex", "Copilot", "Cursor", "Grok", "Shells", "Multiple agents", "Other / unknown"]);
+      .toEqual(["Claude", "Codex", "Copilot", "Cursor", "Grok", "DSH TUI", "Shells", "Multiple agents", "Other / unknown"]);
     expect(groups.map((group) => group.entries.map((row) => row.name)))
-      .toEqual([["claude"], ["codex"], ["copilot"], ["cursor"], ["grok"], ["shell"], ["mixed"], ["unknown"]]);
+      .toEqual([["claude"], ["codex"], ["copilot"], ["cursor"], ["grok"], ["dsh-tui"], ["shell"], ["mixed"], ["unknown"]]);
   });
 
   it("keeps mixed-agent rows once when filtered by any of their agents", () => {

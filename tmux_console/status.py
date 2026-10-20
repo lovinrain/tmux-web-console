@@ -11,7 +11,7 @@ from .tmux import Pane, Session, TmuxClient, TmuxError
 AgentStateName = Literal[
     "working", "running_command", "waiting_human", "waiting_command", "unknown", "other"
 ]
-AgentType = Literal["claude", "codex", "copilot", "cursor", "grok"]
+AgentType = Literal["claude", "codex", "copilot", "cursor", "grok", "dsh-tui"]
 COMMAND_WAIT_PATTERN = re.compile(
     r"^\s*(?:[•●✻✽✶✳✢\u2801-\u28ff]\s+)?waiting for "
     r"(?P<kind>background terminals?|agents?)"
@@ -75,8 +75,14 @@ COPILOT_DECISION_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 COPILOT_FOOTER_LINES = 6
+DSH_TUI_COMMANDS = frozenset({"dsh-tui", "dst"})
+# The npm launcher delegates to dsh and keeps a Node foreground process.
+# dsh-TUI 0.16 publishes this branded OSC title for both idle and working turns.
+DSH_TUI_RUNTIME_COMMANDS = frozenset({"node", "dsh"})
+DSH_TUI_TITLE_PATTERN = re.compile(r"^[⠂⠐✦] 🐋(?: |$)")
 AGENT_COMMANDS = (
-    frozenset({"claude", "codex", "grok", COPILOT_COMMAND}) | CURSOR_COMMANDS
+    frozenset({"claude", "codex", "grok", COPILOT_COMMAND})
+    | CURSOR_COMMANDS | DSH_TUI_COMMANDS
 )
 # Claude Code 2.1.233 uses the circle-halves spinner in tmux titles. Older
 # Claude, Codex, and Grok versions use braille frames instead.
@@ -422,6 +428,13 @@ def _is_copilot_pane(command: str, title: str) -> bool:
     )
 
 
+def _is_dsh_tui_pane(command: str, title: str) -> bool:
+    return command in DSH_TUI_COMMANDS or (
+        command in DSH_TUI_RUNTIME_COMMANDS
+        and bool(DSH_TUI_TITLE_PATTERN.match(title.strip()))
+    )
+
+
 def classify_agent_type(pane: Pane | None) -> AgentType | None:
     if pane is None or pane.dead:
         return None
@@ -436,6 +449,8 @@ def classify_agent_type(pane: Pane | None) -> AgentType | None:
         return "cursor"
     if _is_copilot_pane(command, pane.title):
         return "copilot"
+    if _is_dsh_tui_pane(command, pane.title):
+        return "dsh-tui"
     return None
 
 
@@ -600,9 +615,10 @@ def classify_agent_state(
 
     command = pane.command.lower()
     copilot_pane = _is_copilot_pane(command, pane.title)
-    if command not in AGENT_COMMANDS and not copilot_pane:
+    dsh_tui_pane = _is_dsh_tui_pane(command, pane.title)
+    if command not in AGENT_COMMANDS and not copilot_pane and not dsh_tui_pane:
         return AgentState(
-            "other", "No Claude, Codex, Copilot, Cursor, or Grok activity signal"
+            "other", "No Claude, Codex, Copilot, Cursor, Grok, or DSH TUI activity signal"
         )
     if command in CURSOR_COMMANDS:
         return _classify_cursor_state(pane, visible_screen, now)
@@ -610,6 +626,12 @@ def classify_agent_state(
         return _classify_copilot_state(pane, visible_screen, now)
     if command == "grok":
         return _classify_grok_state(pane, visible_screen, now)
+    if dsh_tui_pane:
+        title = pane.title.strip()
+        if not DSH_TUI_TITLE_PATTERN.match(title):
+            return AgentState("unknown", "DSH TUI title state signal is not recognized")
+        if title.startswith("✦"):
+            return AgentState("waiting_human", "DSH TUI is idle at its input prompt")
 
     if command == "claude" and visible_screen:
         if _claude_has_background_shell(visible_screen):

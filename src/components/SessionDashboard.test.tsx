@@ -1118,7 +1118,7 @@ describe("session classification", () => {
     expect(container.querySelector(".session-list")).not.toBeInTheDocument();
   });
 
-  it("keeps Cursor, Copilot, and Grok sessions under their own and the Agents chips", async () => {
+  it("keeps supported agent sessions under their own and the Agents chips", async () => {
     vi.mocked(listSessions).mockResolvedValue([
       session({ name: "cursor-one", id: "$1", panes: [pane({ command: "agent" })] }),
       session({
@@ -1133,6 +1133,7 @@ describe("session classification", () => {
         id: "$5",
         panes: [pane({ command: "node", title: "GitHub Copilot dashboard" })],
       }),
+      session({ name: "dsh-one", id: "$6", panes: [pane({ command: "node", title: "✦ 🐋 Review fixture" })] }),
     ]);
     renderWithTheme(<SessionDashboard onOpen={vi.fn()} />);
 
@@ -1142,6 +1143,7 @@ describe("session classification", () => {
     expect(screen.getByRole("button", { name: "Open copilot-one" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open grok-one" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Open codex-one" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open dsh-one" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Open node-lookalike" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /^cursor$/i }));
@@ -1164,6 +1166,13 @@ describe("session classification", () => {
     expect(screen.queryByRole("button", { name: "Open cursor-one" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open copilot-one" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open codex-one" })).not.toBeInTheDocument();
+
+    const dshFilter = screen.getByRole("button", { name: /^DSH TUI$/ });
+    fireEvent.click(dshFilter);
+    expect(dshFilter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Open dsh-one" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open grok-one" })).not.toBeInTheDocument();
+    expect(screen.getByText("DSH TUI", { selector: ".agent-badge" })).toHaveClass("dsh-tui");
   });
 
   it("hydrates filters, grouping, view, and ordered sorting from the URL", async () => {

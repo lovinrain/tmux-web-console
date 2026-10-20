@@ -19,6 +19,7 @@ const sessions = {
   ready: `muxdeck-ready-${process.pid}`,
 };
 const grokSession = `muxdeck-grok-command-${process.pid}`;
+const dshTuiSession = `muxdeck-dsh-tui-${process.pid}`;
 const createdSessions: string[] = [];
 const workspaceIds: string[] = [];
 
@@ -31,7 +32,8 @@ import sys
 import time
 
 provider = sys.argv[2] if len(sys.argv) > 2 else "claude"
-assert ctypes.CDLL(None).prctl(15, provider.encode(), 0, 0, 0) == 0
+process_name = "node" if provider == "dsh-tui" else provider
+assert ctypes.CDLL(None).prctl(15, process_name.encode(), 0, 0, 0) == 0
 state_file = pathlib.Path(sys.argv[1])
 previous = None
 last_render = 0
@@ -49,6 +51,9 @@ while True:
             elif state == "command":
                 activity = "⠸ Deploy fixture service… 37s      5m ⇣192k [stop]\\n▾ Tasks 1\\n⁙ Run Deploy fixture service 39s\\n"
             screen = activity + "╭───────────────────────────────────────────────────╮\\n│ ❯ Build anything                                  │\\n╰──── Grok 4.7 Fast (xhigh) · always-approve ─────────╯\\n" + footer
+        elif provider == "dsh-tui":
+            title = ("⠂" if state == "working" else "✦") + " 🐋 Fixture task"
+            screen = "DSH TUI fixture"
         else:
             title = "◐ Fixture thinking" if state == "working" else "✳ Fixture ready"
             footer = "⏵⏵ bypass permissions on (shift+tab to cycle)"
@@ -84,6 +89,13 @@ test.beforeAll(() => {
     "bash", "--noprofile", "--norc", "-c", 'exec -a grok python3 "$@"', "grok", script, grokStateFile, "grok",
   ]);
   createdSessions.push(grokSession);
+  const dshStateFile = join(fixtureDirectory, `${dshTuiSession}.state`);
+  writeFileSync(dshStateFile, "working");
+  execFileSync("tmux", [
+    ...tmux, "new-session", "-d", "-s", dshTuiSession, "-x", "160", "-y", "30",
+    "bash", "--noprofile", "--norc", "-c", 'exec -a node python3 "$@"', "node", script, dshStateFile, "dsh-tui",
+  ]);
+  createdSessions.push(dshTuiSession);
 });
 
 test.beforeEach(async ({ context }) => {
@@ -127,6 +139,33 @@ test.afterAll(() => {
 function card(page: Page, name: string): Locator {
   return page.locator(".session-card").filter({ has: page.getByRole("heading", { name, exact: true }) });
 }
+
+test("DSH TUI's Node launcher appears as an agent and streams its completed turn", async ({ page, context }) => {
+  const readAgent = async () => {
+    const response = await context.request.get("/mux/api/sessions");
+    const body = await response.json();
+    const session = body.sessions.find((item: { name: string }) => item.name === dshTuiSession);
+    return { type: session?.agentType, state: session?.agentState };
+  };
+  await expect.poll(readAgent).toEqual({ type: "dsh-tui", state: "working" });
+  await page.goto("/mux/");
+  await page.getByRole("button", { name: /^agents$/i }).click();
+  await expect(card(page, dshTuiSession).locator(".agent-badge")).toHaveText("DSH TUI");
+  await expect(card(page, dshTuiSession).locator(".state-badge")).toHaveText("Working");
+  await page.getByRole("button", { name: "DSH TUI", exact: true }).click();
+  await expect(card(page, dshTuiSession)).toBeVisible();
+  await expect(card(page, sessions.working)).toHaveCount(0);
+
+  await page.goto(`/mux/session/${dshTuiSession}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live");
+  await expect(page.locator('.session-agent-icon[data-agent-kind="dsh-tui"]').first())
+    .toHaveAttribute("title", "DSH TUI");
+  await expect(tab(page, dshTuiSession).locator(".workspace-state-dot")).toHaveClass(/working/);
+  writeFileSync(join(fixtureDirectory, `${dshTuiSession}.state`), "ready");
+  await expect.poll(readAgent).toEqual({ type: "dsh-tui", state: "waiting_human" });
+  await expectStreamState(page, dshTuiSession, "waiting_human");
+  await expect(tab(page, dshTuiSession).locator(".workspace-state-dot")).toHaveClass(/waiting_human/);
+});
 
 function tab(page: Page, name: string): Locator {
   return page.locator(`.workspace-tab[data-workspace-session-name="${name}"]`);

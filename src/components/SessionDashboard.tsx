@@ -141,6 +141,7 @@ const KIND_FILTERS: SessionKindFilter[] = [
   "copilot",
   "cursor",
   "grok",
+  "dsh-tui",
   "shells",
 ];
 const STATE_GROUP_ORDER = [...SESSION_STATE_ORDER];
@@ -187,6 +188,8 @@ export function classifyPane(pane?: Pane): { label: string; tone: string } {
       return { label: "Cursor", tone: "cursor" };
     case "grok":
       return { label: "Grok", tone: "grok" };
+    case "dsh-tui":
+      return { label: "DSH TUI", tone: "dsh-tui" };
     case "shells":
       return { label: "Shell", tone: "shell" };
     default:
@@ -1073,7 +1076,7 @@ export function SessionDashboard({
         <p className="section-index">01 / SELECT</p>
         <h2>Pick up where<br />the agents left off.</h2>
         <div className="intro-copy">
-          <p>Open any running Claude, Codex, Copilot, Cursor, Grok, or shell session. Output stays live; input goes straight to its tmux client.</p>
+          <p>Open any running Claude, Codex, Copilot, Cursor, Grok, DSH TUI, or shell session. Output stays live; input goes straight to its tmux client.</p>
           {onResumeWorkspace && workspaceReturnSession && workspaceTabCount > 0 && (
             <button
               type="button"
@@ -1154,7 +1157,7 @@ export function SessionDashboard({
                 onClick={() => updateRoute({ ...route, kind: item })}
                 aria-pressed={filter === item}
               >
-                {item}
+                {item === "dsh-tui" ? "DSH TUI" : item}
               </button>
             ))}
           </div>

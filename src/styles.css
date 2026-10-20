@@ -1790,6 +1790,12 @@ a:focus-visible {
   border-color: rgba(117, 184, 255, 0.22);
 }
 
+.agent-badge.dsh-tui {
+  color: #8ba8ff;
+  background: rgba(139, 168, 255, 0.09);
+  border-color: rgba(139, 168, 255, 0.24);
+}
+
 .agent-badge.shell {
   color: var(--cyan);
   background: rgba(104, 223, 208, 0.07);

@@ -8,6 +8,7 @@ export const AGENT_DISPLAY_LABELS: Record<string, string> = {
   copilot: "Copilot",
   cursor: "Cursor",
   grok: "Grok",
+  "dsh-tui": "DSH TUI",
 };
 
 export function agentDisplayLabel(agentType: RecoveryAgentType): string {

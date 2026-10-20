@@ -69,6 +69,7 @@ function recoveryAgentLabel(agentType: RecoverableSession["agentType"]): string 
     case "copilot": return "Copilot";
     case "cursor": return "Cursor";
     case "grok": return "Grok";
+    case "dsh-tui": return "DSH TUI";
     default: return "Shell";
   }
 }
@@ -84,6 +85,7 @@ function agentLabel(session: Session, pane: Pane | undefined): string {
     case "copilot": return "Copilot";
     case "cursor": return "Cursor";
     case "grok": return "Grok";
+    case "dsh-tui": return "DSH TUI";
     case "shells": return "Shell";
     default: return pane?.command || "Session";
   }

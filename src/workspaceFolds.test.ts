@@ -79,9 +79,9 @@ describe("workspace tab folds", () => {
     expect(visited.recentSessions[0]).toBe("a-child");
   });
 
-  it("keeps recovery snapshots through navigation, URL round trips, renames and concurrent browser saves", () => {
+  it.each(["codex", "dsh-tui"] as const)("keeps %s recovery snapshots through navigation, URL round trips, renames and concurrent browser saves", (agentType) => {
     const snapshot = { name: "a", historyId: "12345678-1234-1234-1234-123456789012", directory: "/private/project",
-      title: "Saved title", agentType: "codex" as const, agentSessionId: "87654321-1234-1234-1234-123456789012",
+      title: "Saved title", agentType, agentSessionId: "87654321-1234-1234-1234-123456789012",
       sessionId: "$1", sessionCreated: 100, serverStarted: 90, serverPid: 10, savedAt: 110 };
     const state = foldWorkspaceTabs(tree(), ["a", "b"], "fold");
     state.folds![0].closedSessions = [snapshot];

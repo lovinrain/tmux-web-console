@@ -28,7 +28,7 @@ export interface RecoverableSession {
   id: string;
   name: string;
   directory: string;
-  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
+  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | "dsh-tui" | null;
   agentSessionId: string | null;
   firstSeenAt: number;
   lastSeenAt: number;

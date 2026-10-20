@@ -41,7 +41,11 @@ when you disconnect.
   UI or API; status refresh is off until enabled.
 
 Agent status detection supports Claude Code, Codex, GitHub Copilot CLI, Cursor
-Agent, and Grok Build. Ambiguous activity appears as **Unclear**.
+Agent, Grok Build, and DSH TUI (`dsh-tui` / `dst`). DSH TUI's branded Node/dsh
+launcher is recognized from its whale title; spinning titles indicate work and
+the settled star indicates an idle prompt. Ambiguous or stale activity appears
+as **Unclear**. DSH TUI native transcript reading and automatic conversation
+recovery are not supported.
 
 [Muxpilot](docs/muxpilot/README.md) adds a main-agent workflow using Multica's
 existing board, visible workers, and durable local recovery records. See its

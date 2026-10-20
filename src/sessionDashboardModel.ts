@@ -15,6 +15,7 @@ export type SessionKindFilter =
   | "copilot"
   | "cursor"
   | "grok"
+  | "dsh-tui"
   | "shells";
 export type SessionKind =
   | "claude"
@@ -22,6 +23,7 @@ export type SessionKind =
   | "copilot"
   | "cursor"
   | "grok"
+  | "dsh-tui"
   | "shells"
   | "other";
 export type SessionStateFilter = "any" | AgentState;
@@ -78,11 +80,16 @@ const KIND_FILTERS = new Set<SessionKindFilter>([
   "copilot",
   "cursor",
   "grok",
+  "dsh-tui",
   "shells",
 ]);
-const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "copilot", "cursor", "grok"]);
+const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "copilot", "cursor", "grok", "dsh-tui"]);
 /** The Cursor CLI installs as `cursor-agent` plus a bare `agent` symlink. */
 const CURSOR_PANE_COMMANDS = new Set(["agent", "cursor", "cursor-agent"]);
+const DSH_TUI_PANE_COMMANDS = new Set(["dsh-tui", "dst"]);
+const DSH_TUI_RUNTIME_COMMANDS = new Set(["node", "dsh"]);
+// Match the installed launcher's branded OSC title without classifying arbitrary Node apps.
+const DSH_TUI_TITLE_PATTERN = /^[⠂⠐✦] 🐋(?: |$)/u;
 const SHELL_PANE_COMMANDS = new Set(["bash", "zsh", "fish", "sh"]);
 const STATE_FILTERS = new Set<SessionStateFilter>(["any", ...SESSION_STATE_ORDER]);
 const VIEW_MODES = new Set<SessionViewMode>(["cards", "list"]);
@@ -146,6 +153,7 @@ function parseKind(value: string | null): SessionKindFilter {
   const normalized = value.toLowerCase();
   if (normalized === "agent") return "agents";
   if (normalized === "cursor-agent") return "cursor";
+  if (normalized === "dst") return "dsh-tui";
   if (normalized === "shell") return "shells";
   return KIND_FILTERS.has(normalized as SessionKindFilter)
     ? normalized as SessionKindFilter
@@ -389,6 +397,10 @@ export function paneCommandKind(command: string, title = ""): SessionKind {
   ) return "copilot";
   if (CURSOR_PANE_COMMANDS.has(normalized)) return "cursor";
   if (normalized === "grok") return "grok";
+  if (
+    DSH_TUI_PANE_COMMANDS.has(normalized)
+    || (DSH_TUI_RUNTIME_COMMANDS.has(normalized) && DSH_TUI_TITLE_PATTERN.test(title.trim()))
+  ) return "dsh-tui";
   if (SHELL_PANE_COMMANDS.has(normalized)) return "shells";
   return "other";
 }

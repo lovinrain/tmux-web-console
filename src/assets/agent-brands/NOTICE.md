@@ -19,3 +19,9 @@ Retrieved 2026-09-21 (UTC):
   LobeHub Icons, commit `e3c0b0544a918f1f7ad4b2a6355f68bf89a87a97`:
   https://github.com/lobehub/lobe-icons/tree/e3c0b0544a918f1f7ad4b2a6355f68bf89a87a97/packages/static-svg/icons.
   MIT license reproduced in `LICENSE-lobe-icons.txt`.
+
+Retrieved 2026-10-20 (UTC):
+
+- `deepseek.svg`: DeepSeek's whale mark from the same LobeHub Icons commit
+  and static SVG directory linked above. MIT license reproduced in
+  `LICENSE-lobe-icons.txt`.

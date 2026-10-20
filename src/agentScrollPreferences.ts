@@ -15,6 +15,7 @@ const AGENT_SCROLL_MODE: Readonly<Record<SessionKind, AgentScrollMode>> = {
   copilot: "application",
   cursor: "tmux",
   grok: "application",
+  "dsh-tui": "application",
   shells: "tmux",
   other: "tmux",
 };

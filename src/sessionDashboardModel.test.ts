@@ -7,6 +7,7 @@ import {
   filterRecoverableSessions,
   filterSessions,
   groupSessionsByTag,
+  paneCommandKind,
   parseSessionDashboardSearch,
   serializeSessionDashboardSearch,
   sessionDisplayTitle,
@@ -110,6 +111,8 @@ describe("session dashboard URL state", () => {
     );
     expect(canonicalizeSessionDashboardSearch("?kind=GROK")).toBe("?kind=grok");
     expect(canonicalizeSessionDashboardSearch("?kind=COPILOT")).toBe("?kind=copilot");
+    expect(canonicalizeSessionDashboardSearch("?kind=DSH-TUI")).toBe("?kind=dsh-tui");
+    expect(canonicalizeSessionDashboardSearch("?kind=dst")).toBe("?kind=dsh-tui");
     for (const state of ["running_command", "command-running"]) {
       expect(canonicalizeSessionDashboardSearch(`?state=${state}`)).toBe(
         "?state=running_command",
@@ -218,6 +221,23 @@ describe("ordered session sorting", () => {
 });
 
 describe("session dashboard filters", () => {
+  it.each([
+    ["dsh-tui", "", "dsh-tui"],
+    ["DST", "", "dsh-tui"],
+    ["node", "✦ 🐋 Review fixture", "dsh-tui"],
+    ["NODE", "⠂ 🐋 Review fixture", "dsh-tui"],
+    ["dsh", "⠐ 🐋 Review fixture", "dsh-tui"],
+    ["node", "dsh-tui", "other"],
+    ["node", "✦ 🐋ish", "other"],
+    ["node", "⠸ 🐋 Review fixture", "other"],
+    ["node", "✦ Review 🐋 fixture", "other"],
+    ["dsh", "Another profile", "other"],
+    ["bash", "✦ 🐋 Previous agent", "shells"],
+    ["dsh-tui-helper", "✦ 🐋 Review fixture", "other"],
+  ] as const)("classifies %s with title %s as %s", (command, title, expected) => {
+    expect(paneCommandKind(command, title)).toBe(expected);
+  });
+
   it("applies the parsed kind, state, and text query to the active pane", () => {
     const sessions = [
       session({
@@ -238,7 +258,7 @@ describe("session dashboard filters", () => {
     expect(filterSessions(sessions, route).map((item) => item.name)).toEqual(["one"]);
   });
 
-  it("treats Cursor, Copilot, and Grok panes as agents under their own chips and Agents", () => {
+  it("treats supported agent panes as agents under their own chips and Agents", () => {
     const sessions = [
       session({ name: "cursor-one", panes: [pane({ command: "agent" })] }),
       session({ name: "cursor-two", id: "$2", panes: [pane({ command: "cursor-agent" })] }),
@@ -268,6 +288,8 @@ describe("session dashboard filters", () => {
       session({ name: "grok-one", id: "$10", panes: [pane({ command: "grok" })] }),
       session({ name: "tunnel", id: "$11", panes: [pane({ command: "ngrok" })] }),
       session({ name: "shell-one", id: "$12", panes: [pane({ command: "bash" })] }),
+      session({ name: "dsh-one", id: "$13", panes: [pane({ command: "dsh-tui" })] }),
+      session({ name: "dsh-node", id: "$14", panes: [pane({ command: "node", title: "✦ 🐋 Review fixture" })] }),
     ];
     const names = (search: string) =>
       filterSessions(sessions, parseSessionDashboardSearch(search)).map((item) => item.name);
@@ -282,6 +304,8 @@ describe("session dashboard filters", () => {
       "copilot-node-exact",
       "copilot-node-suffix",
       "grok-one",
+      "dsh-one",
+      "dsh-node",
     ]);
     expect(names("?kind=codex")).toEqual(["codex-one"]);
     expect(names("?kind=copilot")).toEqual([
@@ -290,6 +314,7 @@ describe("session dashboard filters", () => {
       "copilot-node-suffix",
     ]);
     expect(names("?kind=grok")).toEqual(["grok-one"]);
+    expect(names("?kind=dsh-tui")).toEqual(["dsh-one", "dsh-node"]);
     expect(names("?kind=shells")).toEqual(["wrong-command", "shell-one"]);
   });
 

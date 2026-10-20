@@ -7,7 +7,11 @@ from typing import cast
 
 import pytest
 
-from tmux_console.status import AgentStateDetector, classify_agent_state
+from tmux_console.status import (
+    AgentStateDetector,
+    classify_agent_state,
+    classify_agent_type,
+)
 from tmux_console.tmux import (
     CLIENT_IDENTITY_FORMAT,
     CREATED_SESSION_FORMAT,
@@ -1962,6 +1966,57 @@ def test_npm_copilot_is_recognized_from_its_exact_node_title_suffix(title: str):
     )
 
     assert state.name == "working"
+
+
+@pytest.mark.parametrize("command", ["dsh-tui", "dst", "node", "dsh"])
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [("✦", "waiting_human"), ("⠂", "working"), ("⠐", "working")],
+)
+def test_dsh_tui_uses_its_branded_title_for_agent_type_and_turn_state(
+    command: str, frame: str, expected: str,
+):
+    pane = agent_pane(command=command, title=f"{frame} 🐋 Review fixture")
+
+    assert classify_agent_type(pane) == "dsh-tui"
+    assert classify_agent_state(pane, now=1000).name == expected
+
+
+@pytest.mark.parametrize("command", ["dsh-tui", "dst"])
+def test_dsh_tui_without_a_known_title_is_an_agent_with_unclear_state(command: str):
+    pane = agent_pane(command=command, title="host")
+
+    assert classify_agent_type(pane) == "dsh-tui"
+    assert classify_agent_state(pane, now=1000).name == "unknown"
+
+
+def test_dsh_tui_stale_spinner_and_dead_pane_do_not_report_live_work():
+    pane = agent_pane(command="node", title="⠐ 🐋 Review fixture", activity=900)
+    assert classify_agent_state(pane, now=1000).name == "unknown"
+    ended = replace(pane, dead=True)
+    assert classify_agent_state(ended, now=1000).name == "unknown"
+    assert classify_agent_type(ended) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "title"),
+    [
+        ("node", "dsh-tui"),
+        ("node", "✦ 🐋ish"),
+        ("node", "🐋 Review fixture"),
+        ("node", "⠸ 🐋 Review fixture"),
+        ("node", "✦ Review 🐋 fixture"),
+        ("bash", "✦ 🐋 Previous agent"),
+        ("dsh", "Another profile"),
+        ("dsh-tui-helper", "✦ 🐋 Review fixture"),
+    ],
+)
+def test_dsh_tui_recognition_does_not_claim_unrelated_processes(
+    command: str, title: str,
+):
+    pane = agent_pane(command=command, title=title)
+    assert classify_agent_type(pane) is None
+    assert classify_agent_state(pane, now=1000).name == "other"
 
 
 def test_copilot_detects_selection_prompts_as_needing_input():

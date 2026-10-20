@@ -60,7 +60,7 @@ export interface Session {
   /** Shared by native session identity across all browsers and workspaces. */
   readyAttention?: SessionAttention;
   /** Passive recovery metadata only; never an instruction to resume an agent. */
-  agentType?: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
+  agentType?: "claude" | "codex" | "copilot" | "cursor" | "grok" | "dsh-tui" | null;
   agentSessionId?: string | null;
   customTitle: string | null;
   tags: SessionTag[];

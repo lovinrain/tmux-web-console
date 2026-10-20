@@ -84,6 +84,7 @@ export function paneLabel(pane?: Pane): string {
     case "copilot": return "Copilot";
     case "cursor": return "Cursor";
     case "grok": return "Grok";
+    case "dsh-tui": return "DSH TUI";
     case "shells": return "Shell";
     default: return pane?.command || "Process";
   }

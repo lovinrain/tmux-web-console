@@ -14,7 +14,7 @@ export interface WorkspaceFoldSnapshot {
   historyId: string;
   directory: string;
   title: string | null;
-  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | null;
+  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | "dsh-tui" | null;
   agentSessionId: string | null;
   sessionId: string;
   sessionCreated: number;
@@ -32,7 +32,7 @@ export function isWorkspaceFoldSnapshot(value: unknown): value is WorkspaceFoldS
     && typeof item.historyId === "string" && UUID.test(item.historyId)
     && typeof item.directory === "string" && item.directory.startsWith("/") && item.directory.length <= 4096
     && (item.title === null || typeof item.title === "string")
-    && (item.agentType === null || ["claude", "codex", "copilot", "cursor", "grok"].includes(item.agentType as string))
+    && (item.agentType === null || ["claude", "codex", "copilot", "cursor", "grok", "dsh-tui"].includes(item.agentType as string))
     && (item.agentSessionId === null || (item.agentType !== null && typeof item.agentSessionId === "string"
       && item.agentSessionId.length > 0 && item.agentSessionId.length <= 256))
     && typeof item.sessionId === "string" && /^\$\d+$/.test(item.sessionId)

@@ -40,7 +40,7 @@ def validate_fold_snapshot(value: object) -> FoldSessionSnapshot:
         raise ValueError("closedSessions.sessionId is invalid")
     if value["title"] is not None and (not isinstance(value["title"], str) or len(value["title"]) > 4096):
         raise ValueError("closedSessions.title is invalid")
-    if value["agentType"] not in {None, "claude", "codex", "copilot", "cursor", "grok"}:
+    if value["agentType"] not in {None, "claude", "codex", "copilot", "cursor", "grok", "dsh-tui"}:
         raise ValueError("closedSessions.agentType is invalid")
     agent_id = value["agentSessionId"]
     if agent_id is not None and (not isinstance(agent_id, str) or not 0 < len(agent_id) <= 256

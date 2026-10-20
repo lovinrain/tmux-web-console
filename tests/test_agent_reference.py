@@ -158,13 +158,24 @@ def test_codex_discovery_follows_volta_and_node_to_the_native_process(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_detector_keeps_agent_type_when_no_reference_id_is_visible(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("command", "title", "agent_type"),
+    [
+        ("cursor-agent", "", "cursor"),
+        ("dsh-tui", "", "dsh-tui"),
+        ("dst", "", "dsh-tui"),
+        ("node", "✦ 🐋 Review fixture", "dsh-tui"),
+    ],
+)
+async def test_detector_keeps_agent_type_when_no_reference_id_is_visible(
+    tmp_path: Path, command: str, title: str, agent_type: str,
+):
     proc_root = tmp_path / "proc"
-    process(proc_root, 100, ["cursor-agent"])
+    process(proc_root, 100, [command])
     detector = AgentReferenceDetector(proc_root=proc_root)
 
-    assert await detector.detect_sessions([session(pane(command="cursor-agent"))]) == {
-        "agent": AgentReference("cursor", None)
+    assert await detector.detect_sessions([session(pane(command=command, title=title))]) == {
+        "agent": AgentReference(agent_type, None)
     }
 
 
