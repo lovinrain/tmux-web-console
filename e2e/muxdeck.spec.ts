@@ -6506,11 +6506,14 @@ async function withPaneView(
   }
 }
 
-test("desktop pane view keeps embedded input controls flush and visible", async ({
+test("desktop pane view keeps input controls flush and shares staged-input visibility", async ({
   page, request,
 }) => {
-  await withPaneView(page, request, async () => {
+  await withPaneView(page, request, async ({ leftSession }) => {
     const consoles = page.locator(".embedded-console");
+    // Wrapped shortcut rows need room before checking that the whole dock fits.
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.evaluate(() => document.fonts.ready);
     const metrics = await consoles.evaluateAll((elements) => elements.map((root) => {
       const dock = root.querySelector<HTMLElement>(":scope > .input-dock");
       const composer = dock?.querySelector<HTMLElement>(".staged-composer");
@@ -6523,6 +6526,7 @@ test("desktop pane view keeps embedded input controls flush and visible", async 
       return {
         blankBelowDock: Math.abs(rootBounds.bottom - dockBounds.bottom),
         dockOverflow: dock.scrollHeight - dock.clientHeight,
+        composerHorizontalOverflow: composer.scrollWidth - composer.clientWidth,
         composerInsideDock: composerBounds.top >= dockBounds.top - 1
           && composerBounds.bottom <= dockBounds.bottom + 1,
         inputBarInsideDock: inputBarBounds.top >= dockBounds.top - 1
@@ -6533,9 +6537,42 @@ test("desktop pane view keeps embedded input controls flush and visible", async 
     for (const metric of metrics) {
       expect(metric.blankBelowDock).toBeLessThanOrEqual(1);
       expect(metric.dockOverflow).toBeLessThanOrEqual(1);
+      expect(metric.composerHorizontalOverflow).toBeLessThanOrEqual(1);
       expect(metric.composerInsideDock).toBe(true);
       expect(metric.inputBarInsideDock).toBe(true);
     }
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const left = consoles.nth(0);
+    const right = consoles.nth(1);
+    await left.getByRole("textbox", { name: "Staged input", exact: true }).fill("Left draft stays here");
+    await right.getByRole("textbox", { name: "Staged input", exact: true }).fill("Right draft stays here");
+    await left.getByRole("button", { name: "Hide staged input", exact: true }).click();
+    for (const console of [left, right]) {
+      await expect(console.locator(".staged-composer")).toBeHidden();
+      await expect(console.getByRole("button", { name: "Staged input", exact: true }))
+        .toHaveAttribute("aria-pressed", "false");
+    }
+    await right.getByRole("button", { name: "Staged input", exact: true }).click();
+    await expect(left.getByRole("textbox", { name: "Staged input", exact: true })).toHaveValue("Left draft stays here");
+    await expect(right.getByRole("textbox", { name: "Staged input", exact: true })).toHaveValue("Right draft stays here");
+    await right.getByRole("button", { name: "Hide staged input", exact: true }).click();
+
+    await page.locator(`.workspace-tab[data-workspace-session-name="${leftSession}"]`).getByRole("tab").click();
+    await expect(page.locator(".embedded-console")).toHaveCount(0);
+    await expect(page.locator(".staged-composer")).toBeHidden();
+    await page.getByRole("button", { name: "Staged input", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Staged input", exact: true })).toHaveValue("Left draft stays here");
+    await page.locator(".workspace-tab[data-workspace-pane-layout-id]").getByRole("tab").click();
+    await expect(consoles).toHaveCount(2);
+    await expect(left.getByRole("textbox", { name: "Staged input", exact: true })).toHaveValue("Left draft stays here");
+    await expect(right.getByRole("textbox", { name: "Staged input", exact: true })).toHaveValue("Right draft stays here");
+
+    await page.locator(`.workspace-tab[data-workspace-session-name="${leftSession}"]`).getByRole("tab").click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("navigation", { name: "Mobile console focus" }).getByRole("button", { name: "Input", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Staged input", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Hide staged input", exact: true })).toHaveCount(0);
   });
 });
 

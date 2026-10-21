@@ -4877,6 +4877,8 @@ function AppRoutes() {
             sessionName={sessionName}
             embedded
             instanceId={`${paneLayout.id}-${paneId}`}
+            barVisibility={{ stagedInput: consoleBars.stagedInput }}
+            onBarVisibilityChange={setConsoleBarVisibility}
             keyboardShortcutsEnabled={active}
             onActivate={onActivate}
             terminalFocusRequest={focusRequestToken}

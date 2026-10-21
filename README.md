@@ -32,6 +32,9 @@ when you disconnect.
 - **Real terminals, comfortable input.** Use direct keyboard input or compose
   a prompt before sending it. Reuse snippets, keep session memos, attach files on
   desktop, and switch between terminal and input focus on mobile.
+  On desktop, **Hide** beside the staged-input heading hides the composer across
+  all sessions and split panes in that workspace view. **View → Input** restores
+  it with each session's draft intact.
 - **Context beyond scrollback.** Read local agent transcripts, search submitted
   Claude Code/Codex messages, and revisit saved output and session history.
   Launch and control agents through the authenticated API and `muxdeckctl`.

@@ -7357,7 +7357,8 @@ span.workspace-tab-group-toggle {
 }
 
 .composer-snippet-trigger,
-.composer-attachment-trigger {
+.composer-attachment-trigger,
+.composer-hide-trigger {
   display: inline-flex;
   min-height: 26px;
   align-items: center;
@@ -7378,6 +7379,20 @@ span.workspace-tab-group-toggle {
   color: #ffd18a;
   background: rgba(255, 174, 66, 0.07);
   border-color: rgba(255, 183, 77, 0.24);
+}
+
+.composer-hide-trigger {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted);
+  background: transparent;
+  border-color: currentColor;
+}
+
+.composer-hide-trigger:hover,
+.composer-hide-trigger:focus-visible {
+  color: inherit;
+  background: rgba(141, 152, 138, 0.1);
 }
 
 .composer-snippet-trigger:hover,
@@ -7403,7 +7418,8 @@ span.workspace-tab-group-toggle {
 }
 
 .composer-snippet-trigger svg,
-.composer-attachment-trigger svg {
+.composer-attachment-trigger svg,
+.composer-hide-trigger svg {
   width: 13px;
   height: 13px;
 }
@@ -15618,6 +15634,7 @@ html.history-resizing * {
 
   .composer-snippet-trigger,
   .composer-attachment-trigger,
+  .composer-hide-trigger,
   .composer-attachment-drop,
   .composer-attachment-tray,
   .composer-attachment-status {

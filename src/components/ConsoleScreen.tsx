@@ -167,7 +167,7 @@ interface ConsoleScreenProps {
   onMobileModeChange?: (mode: MobileConsoleMode) => void;
   onOpenWorkspaceOverview?: () => void;
   onCloseWorkspaceOverview?: () => void;
-  barVisibility?: ConsoleBarVisibility;
+  barVisibility?: Partial<ConsoleBarVisibility>;
   onBarVisibilityChange?: (bar: ConsoleBar, visible: boolean) => void;
   desktopTabOrientation?: WorkspaceTabOrientation;
   onDesktopTabOrientationChange?: (orientation: WorkspaceTabOrientation) => void;
@@ -960,10 +960,11 @@ export function ConsoleScreen({
     // reconnecting, or detecting a different foreground agent.
     tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
   }, [scrollTargetKey, connection, scrollAgentKind]);
-  const visibleBars = barVisibility ?? localBarVisibility;
+  const visibleBars = { ...localBarVisibility, ...barVisibility };
   const showCollapsedSessionSwitcher = !embedded && !ephemeral && !mobileLayout
     && !desktopTerminalFocus && !visibleBars.sessionTabs && Boolean(onOpenTabSearch);
   const visibleMobileMode = mobileMode ?? localMobileMode;
+  const mobileInputVisible = mobileLayout && visibleMobileMode === "input";
   const activeMobileFocus = workspaceOverlayOpen ? "overview" : visibleMobileMode;
   const mobileTerminalDistractionFree = mobileDistractionFreeMode === "terminal";
   const mobileInputDistractionFree = mobileDistractionFreeMode === "input";
@@ -1112,12 +1113,12 @@ export function ConsoleScreen({
   }, [onSessionUpdate, onWorkspacePinChange, session, workspacePinSource]);
 
   const setBarVisible = useCallback((bar: ConsoleBar, visible: boolean) => {
-    if (onBarVisibilityChange) {
+    if (onBarVisibilityChange && (barVisibility === undefined || barVisibility[bar] !== undefined)) {
       onBarVisibilityChange(bar, visible);
       return;
     }
     setLocalBarVisibility((current) => ({ ...current, [bar]: visible }));
-  }, [onBarVisibilityChange]);
+  }, [barVisibility, onBarVisibilityChange]);
 
   const updateDesktopFocusShortcutsPosition = useCallback((
     position: DesktopFocusShortcutsPosition,
@@ -2347,7 +2348,7 @@ export function ConsoleScreen({
       data-ephemeral={ephemeral ? "true" : undefined}
       style={consoleShellStyle}
       onPointerDownCapture={onActivate}
-      data-composer-visible={visibleBars.stagedInput || visibleMobileMode === "input"}
+      data-composer-visible={visibleBars.stagedInput || mobileInputVisible}
       data-shortcuts-visible={visibleBars.shortcuts || visibleMobileMode === "input"}
       data-mobile-focus={activeMobileFocus}
       data-mobile-distraction-free={mobileDistractionFree ? "true" : "false"}
@@ -3262,7 +3263,11 @@ export function ConsoleScreen({
         additionalShortcuts={!mobileLayout && !desktopTerminalFocus && !ephemeral && session
           ? <NoteCaptureControls session={session} workspaceId={workspaceId} terminal={terminalRef} selectedText={noteSelection} />
           : undefined}
-        composerVisible={!mobileTerminalFocusActive && (visibleBars.stagedInput || visibleMobileMode === "input")}
+        composerVisible={!mobileTerminalFocusActive && (visibleBars.stagedInput || mobileInputVisible)}
+        onHideComposer={mobileLayout ? undefined : () => {
+          setBarVisible("stagedInput", false);
+          terminalRef.current?.focus();
+        }}
         shortcutsVisible={
           mobileTerminalFocusActive ? mobileFocusShortcutsOpen : visibleBars.shortcuts
           || visibleMobileMode === "input"

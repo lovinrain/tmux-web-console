@@ -332,11 +332,11 @@ vi.mock("./components/ConsoleScreen", () => ({
     onMobileModeChange?: (mode: "terminal" | "input") => void;
     onOpenWorkspaceOverview?: () => void;
     onCloseWorkspaceOverview?: () => void;
-    barVisibility?: {
+    barVisibility?: Partial<{
       sessionTabs: boolean;
       stagedInput: boolean;
       shortcuts: boolean;
-    };
+    }>;
     onBarVisibilityChange?: (
       bar: "sessionTabs" | "stagedInput" | "shortcuts",
       visible: boolean,
@@ -409,6 +409,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       ["stagedInput", "Staged input", "muxdeck-staged-input"],
       ["shortcuts", "Terminal shortcut buttons", "muxdeck-terminal-shortcuts"],
     ] as const;
+    const visibleBars = { sessionTabs: true, stagedInput: true, shortcuts: true, ...barVisibility };
     return (
       <main
         aria-label="Console"
@@ -455,9 +456,9 @@ vi.mock("./components/ConsoleScreen", () => ({
               key={bar}
               type="button"
               aria-label={label}
-              aria-pressed={barVisibility[bar]}
+              aria-pressed={visibleBars[bar]}
               aria-controls={controls}
-              onClick={() => onBarVisibilityChange(bar, !barVisibility[bar])}
+              onClick={() => onBarVisibilityChange(bar, !visibleBars[bar])}
             >
               {label}
             </button>
@@ -498,10 +499,10 @@ vi.mock("./components/ConsoleScreen", () => ({
           />
         </label>
         {sessionNavigation}
-        <section id="muxdeck-staged-input" hidden={!barVisibility.stagedInput}>
+        <section id="muxdeck-staged-input" hidden={!visibleBars.stagedInput}>
           Staged input surface
         </section>
-        <div id="muxdeck-terminal-shortcuts" hidden={!barVisibility.shortcuts}>
+        <div id="muxdeck-terminal-shortcuts" hidden={!visibleBars.shortcuts}>
           Terminal shortcut surface
         </div>
         {renameWarning && (

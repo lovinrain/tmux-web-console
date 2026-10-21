@@ -80,6 +80,7 @@ interface InputBarProps {
   onFocus: () => void;
   onRedraw?: () => void;
   onRevealComposer?: () => void;
+  onHideComposer?: () => void;
   onEditSessionTitle?: () => void;
   onRenameSession?: () => void;
   onTerminateSession?: () => void;
@@ -475,6 +476,7 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
   onConsumeMemo,
   onFocus,
   onRevealComposer,
+  onHideComposer,
   onOpenMessages,
   onOpenSnippets,
   onUploadAttachment,
@@ -1092,6 +1094,19 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
               }}
             />
           </div>
+          {onHideComposer && (
+            <button
+              type="button"
+              className="composer-hide-trigger"
+              aria-label="Hide staged input"
+              aria-controls={stagedInputId}
+              title="Hide staged input throughout this workspace. Use View → Input to show it again."
+              onClick={onHideComposer}
+            >
+              <CloseIcon />
+              <span>Hide</span>
+            </button>
+          )}
           <div
             className="composer-mobile-controls"
             role="group"

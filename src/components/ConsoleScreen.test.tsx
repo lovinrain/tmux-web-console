@@ -2174,6 +2174,7 @@ describe("ConsoleScreen session identity", () => {
     />);
 
     await screen.findByRole("heading", { name: "test" });
+    expect(screen.queryByRole("button", { name: "Hide staged input" })).not.toBeInTheDocument();
     const shell = screen.getByRole("main");
     const terminal = screen.getByTestId("live-terminal");
     const draft = screen.getByLabelText("Staged input", { selector: "textarea" });
@@ -2383,7 +2384,7 @@ describe("ConsoleScreen session identity", () => {
     expect(stagedInput).toHaveValue("queue\tthis exact draft");
   });
 
-  it("toggles console regions independently and keeps their toolbar available", async () => {
+  it("hides staged input from its heading and keeps the toolbar available to restore it", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(
       <ConsoleScreen
@@ -2419,8 +2420,13 @@ describe("ConsoleScreen session identity", () => {
     expect(keys).toBePressed();
     expect(keys).toHaveAttribute("aria-controls", "muxdeck-terminal-shortcuts");
 
-    fireEvent.click(input);
+    const draft = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(draft, { target: { value: "Keep this hidden draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Hide staged input" }));
     expect(input).not.toBePressed();
+    expect(liveTerminalHandle.focus).toHaveBeenCalled();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox", { name: "Staged input" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Terminal input shortcuts" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
@@ -2445,10 +2451,38 @@ describe("ConsoleScreen session identity", () => {
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this hidden draft");
     expect(screen.queryByRole("group", { name: "Terminal input shortcuts" }))
       .not.toBeInTheDocument();
     expect(tabs).not.toBePressed();
     expect(keys).not.toBePressed();
+  });
+
+  it("keeps unspecified pane controls local when staged input is controlled by the workspace", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onBarVisibilityChange = vi.fn();
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
+      embedded instanceId="workspace-left"
+      barVisibility={{ stagedInput: false }}
+      onBarVisibilityChange={onBarVisibilityChange}
+    />);
+    await screen.findByRole("heading", { name: "test" });
+    const toolbar = screen.getByRole("group", { name: "Console bars" });
+    const keys = within(toolbar).getByRole("button", { name: "Terminal shortcut buttons" });
+    fireEvent.click(keys);
+    expect(keys).not.toBePressed();
+    expect(onBarVisibilityChange).not.toHaveBeenCalled();
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Staged input" }));
+    expect(onBarVisibilityChange).toHaveBeenLastCalledWith("stagedInput", true);
+  });
+
+  it("hides desktop staged input even when the remembered mobile mode is input", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} mobileMode="input" />);
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Hide staged input" }));
+    expect(screen.queryByRole("textbox", { name: "Staged input" })).not.toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveAttribute("data-composer-visible", "false");
   });
 
   it("places session history beside the title and navigates without entering Focus", async () => {
