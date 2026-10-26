@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,6 +139,55 @@ test.afterAll(() => {
 function card(page: Page, name: string): Locator {
   return page.locator(".session-card").filter({ has: page.getByRole("heading", { name, exact: true }) });
 }
+
+test("end when finished can be cancelled and ends a real agent session with the page closed", async ({ page, context }, testInfo) => {
+  test.setTimeout(60_000);
+  const name = `muxdeck-auto-end-${process.pid}`;
+  const stateFile = join(fixtureDirectory, `${name}.state`);
+  writeFileSync(stateFile, "working");
+  execFileSync("tmux", [
+    ...tmux, "new-session", "-d", "-s", name, "-x", "160", "-y", "30",
+    "bash", "--noprofile", "--norc", "-c", 'exec -a claude python3 "$@"', "claude",
+    join(fixtureDirectory, "render_claude.py"), stateFile,
+  ]);
+  const readSession = async () => {
+    const response = await context.request.get("/mux/api/sessions");
+    return (await response.json()).sessions.find((item: { name: string }) => item.name === name);
+  };
+  try {
+    await expect.poll(async () => (await readSession())?.agentState).toBe("working");
+    await page.goto(`/mux/session/${name}`);
+    const callback = page.getByRole("button", { name: `Add ${name} to callback list`, exact: true });
+    const button = page.getByRole("button", { name: `End ${name} when finished`, exact: true });
+    await expect(button).toBeEnabled();
+    expect(await callback.evaluate((element) => element.nextElementSibling?.classList.contains("end-when-finished-toggle"))).toBe(true);
+    await button.click();
+    const cancel = page.getByRole("button", { name: `Cancel ending ${name} when finished`, exact: true });
+    await expect(cancel).toHaveAttribute("aria-pressed", "true");
+    await cancel.click();
+    await expect(button).toHaveAttribute("aria-pressed", "false");
+    writeFileSync(stateFile, "ready");
+    await expect.poll(async () => (await readSession())?.agentState).toBe("waiting_human");
+    await expect(callback).toBeVisible();
+    expect((await readSession()).endWhenFinished).toBe(false);
+
+    writeFileSync(stateFile, "working");
+    await expect.poll(async () => (await readSession())?.agentState).toBe("working");
+    await button.click();
+    await expect(cancel).toHaveAttribute("aria-pressed", "true");
+    await page.reload();
+    await expect(cancel).toHaveAttribute("aria-pressed", "true");
+    await page.screenshot({ path: testInfo.outputPath("end-when-finished.png"), fullPage: true });
+    const callbacks = await context.request.get("/mux/api/callback-sessions");
+    expect((await callbacks.json()).callbackSessions).not.toContain(name);
+    await page.close();
+    writeFileSync(stateFile, "ready");
+    await expect.poll(async () => (await readSession())?.name, { timeout: 20_000 }).toBeUndefined();
+    expect(spawnSync("tmux", [...tmux, "has-session", "-t", `=${name}`]).status).toBe(1);
+  } finally {
+    spawnSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
 
 test("DSH TUI's Node launcher appears as an agent and streams its completed turn", async ({ page, context }) => {
   const readAgent = async () => {

@@ -19,6 +19,7 @@ import {
   renameSession,
   uploadSessionAttachment,
   updateSessionDetails,
+  updateSessionEndWhenFinished,
   updateSessionWorkspacePin,
   updateSessionTags,
   updateSessionTitle,
@@ -64,6 +65,7 @@ import {
   type OverflowCandidate,
 } from "../headerOverflow";
 import { paneCommandKind } from "../sessionDashboardModel";
+import { sessionReadyIdentity } from "../sessionReadyAttention";
 import { CTRL_END_SEQUENCE } from "../terminalInput";
 import { resolveTerminalFileLinkPath } from "../terminalFileLinks";
 import {
@@ -841,6 +843,12 @@ export function ConsoleScreen({
     sessionName: string;
     message: string;
   } | null>(null);
+  const endWhenFinishedBusyRef = useRef(false);
+  const [endWhenFinishedBusy, setEndWhenFinishedBusy] = useState(false);
+  const [endWhenFinishedError, setEndWhenFinishedError] = useState<{
+    identity: string;
+    message: string;
+  } | null>(null);
   const [workspaceTransferOpen, setWorkspaceTransferOpen] = useState(false);
   const [ignoreSize, setIgnoreSize] = useState(false);
   const [localBarVisibility, setLocalBarVisibility] = useState(
@@ -1072,6 +1080,33 @@ export function ConsoleScreen({
       : "Muxdeck could not open the ephemeral tab. Try again.";
     setSplitEphemeralError({ sessionName: sourceName, message });
   }, [ephemeral, mobileLayout, onSplitEphemeralTab, recordViewActivity, session]);
+
+  const toggleEndWhenFinished = useCallback(async () => {
+    if (!session || endWhenFinishedBusyRef.current) return;
+    endWhenFinishedBusyRef.current = true;
+    const source = session;
+    const identity = sessionReadyIdentity(source);
+    setEndWhenFinishedBusy(true);
+    setEndWhenFinishedError(null);
+    try {
+      const result = await updateSessionEndWhenFinished(source, !source.endWhenFinished);
+      const currentSession = paneSessionRef.current;
+      if (currentSession && sessionReadyIdentity(currentSession) === identity) {
+        setLoadedSession((current) => current && sessionReadyIdentity(current) === identity
+          ? { ...current, endWhenFinished: result.endWhenFinished }
+          : current);
+        onSessionUpdate?.({ ...currentSession, endWhenFinished: result.endWhenFinished });
+      }
+    } catch (error) {
+      setEndWhenFinishedError({
+        identity,
+        message: error instanceof Error ? error.message : "Unable to schedule the session end",
+      });
+    } finally {
+      endWhenFinishedBusyRef.current = false;
+      setEndWhenFinishedBusy(false);
+    }
+  }, [session, setLoadedSession, onSessionUpdate]);
 
   const toggleWorkspacePin = useCallback(async () => {
     if (workspacePinSource !== null || !session) return;
@@ -2728,6 +2763,25 @@ export function ConsoleScreen({
                   <span>{callbackSessionActive ? "Watching" : "Callback"}</span>
                 </button>
               )}
+              {!ephemeral && onToggleCallbackSession && (
+                <button
+                  type="button"
+                  className={`callback-session-toggle end-when-finished-toggle${session?.endWhenFinished ? " active" : ""}`}
+                  aria-label={session?.endWhenFinished
+                    ? `Cancel ending ${sessionName} when finished`
+                    : `End ${sessionName} when finished`}
+                  aria-pressed={Boolean(session?.endWhenFinished)}
+                  aria-busy={endWhenFinishedBusy}
+                  disabled={!session || endWhenFinishedBusy}
+                  title={session?.endWhenFinished
+                    ? "This session will end when work finishes. Click to cancel."
+                    : "Automatically end this session after its current or next work finishes, even with this page closed"}
+                  onClick={() => void toggleEndWhenFinished()}
+                >
+                  <CloseIcon />
+                  <span>{session?.endWhenFinished ? "End scheduled" : "End when finished"}</span>
+                </button>
+              )}
               {!ephemeral && onSessionWorkspaceTransfer && (
                 <button
                   type="button"
@@ -2843,6 +2897,13 @@ export function ConsoleScreen({
         <aside className="copy-new-error workspace-pin-error" role="alert">
           <span>Workspace pin failed: {workspacePinError.message}</span>
           <button type="button" onClick={() => setWorkspacePinError(null)}>Dismiss</button>
+        </aside>
+      )}
+
+      {session && endWhenFinishedError?.identity === sessionReadyIdentity(session) && (
+        <aside className="copy-new-error" role="alert">
+          <span>End when finished failed: {endWhenFinishedError.message}</span>
+          <button type="button" onClick={() => setEndWhenFinishedError(null)}>Dismiss</button>
         </aside>
       )}
 

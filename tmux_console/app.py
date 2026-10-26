@@ -151,6 +151,7 @@ from .scrollback import (
     default_scrollback_path,
     session_identity,
 )
+from .session_completion import SessionCompletionMonitor
 from .session_registry import (
     RecoveryRecord,
     RecoveryRecordNotFoundError,
@@ -277,6 +278,7 @@ HTML_PREVIEW_GRANT_REQUEST_KEY = web.RequestKey("html_preview_grant", HtmlPrevie
 HTML_PREVIEW_ROUTE_NAME = "html-preview-asset"
 HOST_METRICS_KEY = web.AppKey("host_metrics", HostMetricsSampler)
 SESSION_REGISTRY_KEY = web.AppKey("session_registry", SessionRegistry)
+SESSION_COMPLETION_KEY = web.AppKey("session_completion", SessionCompletionMonitor)
 WORK_LINKS_KEY = web.AppKey("work_links", WorkLinkStore)
 NOTE_CAPTURES_KEY = web.AppKey("note_captures", NoteCaptureService)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
@@ -1329,6 +1331,35 @@ def create_app(
     app[AGENT_RECOVERY_KEY] = AgentReferenceRecovery(app[TMUX_KEY], app[AGENT_TRANSCRIPTS_KEY])
     app[TRANSCRIPT_READ_LIMIT_KEY] = asyncio.Semaphore(3)
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
+
+    async def terminate_observed_session(target: Session) -> None:
+        """Shared termination path; callers hold the native-session mutation lock."""
+        references = await app[AGENT_REFERENCES_KEY].detect_sessions([target])
+        registry = app[SESSION_REGISTRY_KEY]
+        history_id = registry.observe_history(target, references.get(target.name))
+        registry.record_history_titles({target.name: app[TITLES_KEY].get_title(target.name)})
+        registry.sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
+        recovery_state_changed = registry.set_recovery_for_identity(
+            target.name, target.id, target.created, target.server_started, target.server_pid, False,
+        )
+        try:
+            await asyncio.wait_for(app[SCROLLBACK_RECORDER_KEY].sample([target], force=True), 3)
+        except (TimeoutError, TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable):
+            LOGGER.warning("Unable to save final pane output before session termination")
+        try:
+            await app[TMUX_KEY].terminate_session(
+                target.id, target.created, target.server_started, target.server_pid,
+            )
+        except (ValueError, TmuxError):
+            if recovery_state_changed:
+                with contextlib.suppress(SessionRegistryUnavailable):
+                    registry.set_recovery_for_identity(
+                        target.name, target.id, target.created, target.server_started, target.server_pid, True,
+                    )
+            raise
+        registry.mark_history(history_id, ended=True)
+
+    app[SESSION_COMPLETION_KEY] = SessionCompletionMonitor(app[TMUX_KEY], terminate_observed_session)
     forgotten_sessions: dict[str, ForgottenSession] = {}
     forgotten_session_timers: dict[str, asyncio.TimerHandle] = {}
 
@@ -1528,8 +1559,9 @@ def create_app(
                                                  if pane.id in other_references],
                                 recovered_references=recovered,
                             )
-                except (TmuxError, SessionRegistryUnavailable):
-                    LOGGER.warning("Unable to refresh conversation IDs for submitted messages")
+                        await application[SESSION_COMPLETION_KEY].check(live)
+                except (TmuxError, SessionRegistryUnavailable, WorkspaceStoreUnavailable):
+                    LOGGER.warning("Unable to maintain session history and completion actions")
                 if live is not None:
                     try:
                         await asyncio.to_thread(application[NOTE_CAPTURES_KEY].maintain, live)
@@ -3634,6 +3666,39 @@ def create_app(
             path_required=True,
         )
 
+    async def set_session_end_when_finished(request: web.Request) -> web.Response:
+        try:
+            session_name = validate_tmux_session_name(request.match_info["session"])
+            payload = await request.json()
+            fields = {"sessionId", "sessionCreated", "serverStarted", "serverPid", "enabled"}
+            if not isinstance(payload, dict) or set(payload) != fields:
+                raise ValueError("session identity and enabled are required")
+            if not isinstance(payload["sessionId"], str):
+                raise TypeError("sessionId must be a string")
+            validate_tmux_session_id(payload["sessionId"])
+            for field in ("sessionCreated", "serverStarted", "serverPid"):
+                if type(payload[field]) is not int or not 0 < payload[field] <= 9007199254740991:
+                    raise ValueError(f"{field} must be a positive safe integer")
+            if type(payload["enabled"]) is not bool:
+                raise TypeError("enabled must be a boolean")
+            async with app[SESSION_RENAME_LOCK_KEY]:
+                target = await app[TMUX_KEY].get_session(session_name)
+                if (target.id, target.created, target.server_started, target.server_pid) != (
+                    payload["sessionId"], payload["sessionCreated"], payload["serverStarted"], payload["serverPid"],
+                ):
+                    raise TmuxSessionIdentityChangedError("session identity changed; refresh before scheduling its end")
+                await app[SESSION_COMPLETION_KEY].set_enabled(target, payload["enabled"])
+            history_capture_wake.set()
+            return web.json_response({"endWhenFinished": payload["enabled"]})
+        except (ValueError, TypeError, RecursionError) as error:
+            return json_error(str(error), 400)
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except TmuxSessionIdentityChangedError as error:
+            return json_error(str(error), 409)
+        except TmuxError as error:
+            return json_error(str(error), 503)
+
     async def terminate_session(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
         try:
@@ -3744,75 +3809,13 @@ def create_app(
                 )
 
             try:
-                references = await app[AGENT_REFERENCES_KEY].detect_sessions([target])
-                history_id = app[SESSION_REGISTRY_KEY].observe_history(target, references.get(target.name))
-                app[SESSION_REGISTRY_KEY].record_history_titles({target.name: app[TITLES_KEY].get_title(target.name)})
-                app[SESSION_REGISTRY_KEY].sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
-                recovery_state_changed = app[
-                    SESSION_REGISTRY_KEY
-                ].set_recovery_for_identity(
-                    session_name,
-                    session_id,
-                    session_created,
-                    server_started,
-                    server_pid,
-                    False,
-                )
-            except (SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
-                return json_error(str(error), 503)
-
-            try:
-                # Preserve the last visible output before an explicit console
-                # termination, without making an archive failure block it.
-                await asyncio.wait_for(app[SCROLLBACK_RECORDER_KEY].sample([target], force=True), 3)
-            except (TimeoutError, TmuxError, SessionRegistryUnavailable, ScrollbackStoreUnavailable):
-                LOGGER.warning("Unable to save final pane output before session termination")
-
-            try:
-                await app[TMUX_KEY].terminate_session(
-                    session_id,
-                    session_created,
-                    server_started,
-                    server_pid,
-                )
+                await terminate_observed_session(target)
             except ValueError as error:
-                if recovery_state_changed:
-                    with contextlib.suppress(SessionRegistryUnavailable):
-                        app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
-                            session_name,
-                            session_id,
-                            session_created,
-                            server_started,
-                            server_pid,
-                            True,
-                        )
                 return json_error(str(error), 400)
             except TmuxSessionIdentityChangedError as error:
-                if recovery_state_changed:
-                    with contextlib.suppress(SessionRegistryUnavailable):
-                        app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
-                            session_name,
-                            session_id,
-                            session_created,
-                            server_started,
-                            server_pid,
-                            True,
-                        )
                 return json_error(str(error), 409)
-            except TmuxError as error:
-                if recovery_state_changed:
-                    with contextlib.suppress(SessionRegistryUnavailable):
-                        app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
-                            session_name,
-                            session_id,
-                            session_created,
-                            server_started,
-                            server_pid,
-                            True,
-                        )
+            except (TmuxError, SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
                 return json_error(str(error), 503)
-
-            app[SESSION_REGISTRY_KEY].mark_history(history_id, ended=True)
         return web.Response(status=204)
 
     async def rename_session(request: web.Request) -> web.Response:
@@ -6835,6 +6838,9 @@ def create_app(
         save_session_file_content,
     )
     app.router.add_delete(f"{prefix}/api/sessions/{session_segment}", terminate_session)
+    app.router.add_put(
+        f"{prefix}/api/sessions/{session_segment}/end-when-finished", set_session_end_when_finished,
+    )
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/attention", update_session_attention,
     )

@@ -913,6 +913,23 @@ export async function terminateSession(
   });
 }
 
+export function updateSessionEndWhenFinished(
+  session: Session,
+  enabled: boolean,
+): Promise<{ endWhenFinished: boolean }> {
+  return jsonRequest(`/api/sessions/${encodeURIComponent(session.name)}/end-when-finished`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: session.id,
+      sessionCreated: session.created,
+      serverStarted: session.serverStarted,
+      serverPid: session.serverPid,
+      enabled,
+    }),
+  });
+}
+
 export interface SessionRenameResult {
   previousSession: string;
   session: string;

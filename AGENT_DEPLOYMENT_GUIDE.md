@@ -1323,6 +1323,14 @@ decision for the current page, including page-exit requests. It never strips
 the check on `409`. Reload after the backend upgrade to clear that compatibility
 decision and restore guarded writes.
 
+### Automatic session completion
+
+The **End when finished** console control requires the updated backend and
+frontend together. Requests are native-session options, bound to the full tmux
+identity, and use the existing background history sampler. No state-schema
+migration is needed. Requests survive a Muxdeck restart; older rollback releases
+ignore them. See [automatic session completion](docs/SESSION_COMPLETION.md).
+
 ### Trusted controller setup
 
 `muxdeckctl` is installed with the Python package and talks to the existing

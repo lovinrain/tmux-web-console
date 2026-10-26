@@ -14,6 +14,7 @@ import {
   previewSessionFile,
   resolveSessionFilePath,
   updateSessionDetails,
+  updateSessionEndWhenFinished,
   updateSessionWorkspacePin,
   updateQueuedMessage,
   updateSessionTags,
@@ -73,6 +74,7 @@ vi.mock("../api", () => ({
   sessionFilePdfUrl: vi.fn(() => "/mux/files/pdf"),
   renameSession: vi.fn(),
   updateSessionDetails: vi.fn(),
+  updateSessionEndWhenFinished: vi.fn(),
   updateSessionWorkspacePin: vi.fn(),
   listWorkspaces: vi.fn(),
   updateSessionStar: vi.fn(),
@@ -175,6 +177,65 @@ function deferred<T>(): {
   });
   return { promise, resolve };
 }
+
+describe("end session when finished", () => {
+  it("schedules and cancels beside Callback without adding to the callback list", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    vi.mocked(updateSessionEndWhenFinished)
+      .mockResolvedValueOnce({ endWhenFinished: true })
+      .mockResolvedValueOnce({ endWhenFinished: false });
+    const onToggleCallbackSession = vi.fn();
+    const onSessionUpdate = vi.fn();
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
+      onToggleCallbackSession={onToggleCallbackSession} onSessionUpdate={onSessionUpdate} />);
+    const button = await screen.findByRole("button", { name: "End test when finished" });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Add test to callback list" }).nextElementSibling).toBe(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+    expect(button).toHaveTextContent("End scheduled");
+    expect(updateSessionEndWhenFinished).toHaveBeenNthCalledWith(1, session(), true);
+    expect(onSessionUpdate).toHaveBeenCalledWith({ ...session(), endWhenFinished: true });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "false"));
+    expect(updateSessionEndWhenFinished).toHaveBeenNthCalledWith(2, { ...session(), endWhenFinished: true }, false);
+    expect(onToggleCallbackSession).not.toHaveBeenCalled();
+  });
+
+  it("prevents duplicate requests and reports a failed schedule without activating", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const request = deferred<{ endWhenFinished: boolean }>();
+    vi.mocked(updateSessionEndWhenFinished).mockReturnValueOnce(request.promise)
+      .mockRejectedValueOnce(new Error("Session identity changed"));
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} onToggleCallbackSession={vi.fn()} />);
+    const button = await screen.findByRole("button", { name: "End test when finished" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(updateSessionEndWhenFinished).toHaveBeenCalledOnce();
+    await act(async () => request.resolve({ endWhenFinished: false }));
+    fireEvent.click(button);
+    expect(await screen.findByRole("alert")).toHaveTextContent("End when finished failed: Session identity changed");
+    expect(button).toHaveAttribute("aria-pressed", "false");
+    expect(button).toBeEnabled();
+  });
+
+  it("does not apply an old scheduling response to a replacement session", async () => {
+    const source = session();
+    const replacement = { ...source, id: "$2", created: 2 };
+    const request = deferred<{ endWhenFinished: boolean }>();
+    vi.mocked(updateSessionEndWhenFinished).mockReturnValue(request.promise);
+    const onSessionUpdate = vi.fn();
+    const props = { sessionName: "test", onBack: vi.fn(), onToggleCallbackSession: vi.fn(), onSessionUpdate };
+    const view = renderWithTheme(<ConsoleScreen {...props} sessionSnapshot={source} />);
+    fireEvent.click(screen.getByRole("button", { name: "End test when finished" }));
+    view.rerender(<ThemeProvider><ConsoleScreen {...props} sessionSnapshot={replacement} /></ThemeProvider>);
+    await act(async () => request.resolve({ endWhenFinished: true }));
+    expect(screen.getByRole("button", { name: "End test when finished" })).toHaveAttribute("aria-pressed", "false");
+    expect(onSessionUpdate).not.toHaveBeenCalled();
+  });
+});
 
 beforeEach(() => {
   vi.resetAllMocks();

@@ -82,6 +82,11 @@ live** when ready. Normal sending stays unchanged. See
 
 ### Callback list
 
+Next to **Callback**, **End when finished** schedules the current session to end
+after its current or next work finishes. Click **End scheduled** to cancel. The
+request survives page reloads and service restarts and continues with the page
+closed. See [automatic session completion](docs/SESSION_COMPLETION.md) for details.
+
 Use a row's pause button to put a callback **On hold** before removing it.
 Held entries stay visible in gray with their messages intact, are excluded from
 Ready counts, and can be filtered or grouped by status. Take an entry off hold to

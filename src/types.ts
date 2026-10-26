@@ -59,6 +59,8 @@ export interface Session {
   agentStateChangedAt: number;
   /** Shared by native session identity across all browsers and workspaces. */
   readyAttention?: SessionAttention;
+  /** Ends this native session after its current or next observed work finishes. */
+  endWhenFinished?: boolean;
   /** Passive recovery metadata only; never an instruction to resume an agent. */
   agentType?: "claude" | "codex" | "copilot" | "cursor" | "grok" | "dsh-tui" | null;
   agentSessionId?: string | null;

@@ -48,6 +48,7 @@ PANE_FORMAT_FIELDS = (
     "pane_pid",
     "pane_dead_status",
     "@muxdeck_exit_status",
+    "@muxdeck_end_when_finished",
 )
 PANE_FORMAT = FORMAT_FIELD_SEPARATOR.join(f"#{{{name}}}" for name in PANE_FORMAT_FIELDS)
 CREATED_SESSION_FORMAT = "\t".join(
@@ -243,6 +244,24 @@ def validate_tmux_session_id(value: str) -> str:
     return value
 
 
+def _session_identity_condition(
+    session_id: str, session_created: int, server_started: int, server_pid: int,
+) -> str:
+    validate_tmux_session_id(session_id)
+    for name, value in (
+        ("session_created", session_created),
+        ("server_started", server_started),
+        ("server_pid", server_pid),
+    ):
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    return (
+        f"#{{&&:#{{==:#{{session_created}},{session_created}}},"
+        f"#{{&&:#{{==:#{{start_time}},{server_started}}},"
+        f"#{{==:#{{pid}},{server_pid}}}}}}}"
+    )
+
+
 def validate_tmux_pane_id(value: str) -> str:
     if not TMUX_PANE_ID_PATTERN.fullmatch(value):
         raise ValueError("invalid tmux pane id")
@@ -378,6 +397,7 @@ class Session:
     server_pid: int = 0
     activity: int = 0
     panes: list[Pane] = field(default_factory=list)
+    end_when_finished: str = ""
 
     @property
     def identity(self) -> str:
@@ -403,6 +423,7 @@ class Session:
             "serverStarted": self.server_started,
             "serverPid": self.server_pid,
             "identity": self.identity,
+            "endWhenFinished": bool(self.end_when_finished),
             "activity": self.activity,
             "activePaneId": self.active_pane.id if self.active_pane else None,
             "panes": [pane.to_dict() for pane in self.panes],
@@ -447,6 +468,11 @@ def parse_sessions(output: str) -> list[Session]:
                 server_pid=_as_int(row["pid"]),
             )
             sessions[name] = session
+            finish_option = row["@muxdeck_end_when_finished"]
+            for mode in ("waiting", "working"):
+                if finish_option == f"{session.identity}:{mode}":
+                    session.end_when_finished = mode
+                    break
 
         pane = Pane(
             id=row["pane_id"],
@@ -940,6 +966,23 @@ class TmuxClient:
             raise TmuxError(f"tmux did not report {command} capabilities")
         return usage
 
+    async def set_end_when_finished(self, session: Session, mode: str) -> None:
+        if mode not in {"", "waiting", "working"}:
+            raise ValueError("invalid end-when-finished mode")
+        condition = _session_identity_condition(
+            session.id, session.created, session.server_started, session.server_pid,
+        )
+        value = f"{session.identity}:{mode}" if mode else "off"
+        output = await self.run([
+            "if-shell", "-F", "-t", session.id, condition,
+            f"set-option -t {session.id} @muxdeck_end_when_finished {value}",
+            f"display-message -p {TERMINATE_IDENTITY_MISMATCH}",
+        ])
+        if output.strip() == TERMINATE_IDENTITY_MISMATCH:
+            raise TmuxSessionIdentityChangedError(
+                "tmux session identity changed; refresh before scheduling its end"
+            )
+
     async def terminate_session(
         self,
         session_id: str,
@@ -947,30 +990,8 @@ class TmuxClient:
         server_started: int,
         server_pid: int,
     ) -> None:
-        session_id = validate_tmux_session_id(session_id)
-        if (
-            isinstance(session_created, bool)
-            or not isinstance(session_created, int)
-            or session_created <= 0
-        ):
-            raise ValueError("session_created must be a positive integer")
-        if (
-            isinstance(server_started, bool)
-            or not isinstance(server_started, int)
-            or server_started <= 0
-        ):
-            raise ValueError("server_started must be a positive integer")
-        if (
-            isinstance(server_pid, bool)
-            or not isinstance(server_pid, int)
-            or server_pid <= 0
-        ):
-            raise ValueError("server_pid must be a positive integer")
-
-        identity_condition = (
-            f"#{{&&:#{{==:#{{session_created}},{session_created}}},"
-            f"#{{&&:#{{==:#{{start_time}},{server_started}}},"
-            f"#{{==:#{{pid}},{server_pid}}}}}}}"
+        identity_condition = _session_identity_condition(
+            session_id, session_created, server_started, server_pid,
         )
         try:
             output = await self.run(

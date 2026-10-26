@@ -77,9 +77,49 @@ def pane_row(**overrides: str) -> str:
         "pane_pid": "4321",
         "pane_dead_status": "",
         "@muxdeck_exit_status": "",
+        "@muxdeck_end_when_finished": "",
     }
     values.update(overrides)
     return OUTPUT_FIELD_SEPARATOR.join(values[field] for field in PANE_FORMAT_FIELDS)
+
+
+@pytest.mark.parametrize("option,mode", [
+    ("$7:1700000000:1699999900:4242:waiting", "waiting"),
+    ("$7:1700000000:1699999900:4242:working", "working"),
+    ("off", ""), ("working", ""),
+    ("$8:1700000000:1699999900:4242:working", ""),
+    ("$7:1700000001:1699999900:4242:working", ""),
+    ("$7:1700000000:1699999901:4242:working", ""),
+    ("$7:1700000000:1699999900:4243:working", ""),
+])
+def test_completion_request_is_bound_to_every_native_identity_field(option, mode):
+    session = parse_sessions(pane_row(**{"@muxdeck_end_when_finished": option}))[0]
+    assert session.end_when_finished == mode
+    assert session.to_dict()["endWhenFinished"] is bool(mode)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["waiting", "working", ""])
+async def test_completion_option_is_set_under_an_atomic_identity_guard(mode):
+    client = RecordingRunTmux("")
+    session = parse_sessions(pane_row())[0]
+    await client.set_end_when_finished(session, mode)
+    command = client.calls[0]
+    assert command[:4] == ["if-shell", "-F", "-t", "$7"]
+    assert command[4] == (
+        "#{&&:#{==:#{session_created},1700000000},"
+        "#{&&:#{==:#{start_time},1699999900},#{==:#{pid},4242}}}"
+    )
+    value = f"{session.identity}:{mode}" if mode else "off"
+    assert command[5] == f"set-option -t $7 @muxdeck_end_when_finished {value}"
+    assert command[6] == f"display-message -p {TERMINATE_IDENTITY_MISMATCH}"
+
+
+@pytest.mark.asyncio
+async def test_completion_option_reports_an_atomic_identity_race():
+    client = RecordingRunTmux(TERMINATE_IDENTITY_MISMATCH)
+    with pytest.raises(TmuxSessionIdentityChangedError):
+        await client.set_end_when_finished(parse_sessions(pane_row())[0], "working")
 
 
 @pytest.mark.asyncio
