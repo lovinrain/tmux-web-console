@@ -1571,8 +1571,9 @@ observed tmux session under a stable Muxdeck UUID. Its reconstruction fields are
 the native name, last active-pane working directory, last-seen tmux identity,
 and first/last observation times. The registry can also retain the latest
 recognized coding-agent type and a passively discovered conversation/session ID.
-Those agent fields are identification references only: Muxdeck does not build,
-display, or execute an agent resume command from them.
+Those agent fields identify recorded conversations. Supported agents offer a
+copyable directory-and-resume command in recovery cards and Session Metadata;
+copying it does not execute it. Ordinary shell recreation never starts an agent.
 
 When a registered, recovery-enabled identity is absent from the live tmux
 inventory, the landing page lists it under `Missing after restart`. The same
