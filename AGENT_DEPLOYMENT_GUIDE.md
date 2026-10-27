@@ -1207,6 +1207,13 @@ python3 scripts/check_deployment.py snapshot \
   --service muxdeck.service --output "$MUXDEPLOY_EVIDENCE/before.json"
 ```
 
+For a frontend-only update, add `--frontend-only` to `snapshot`. This mode permits
+tmux to share the service cgroup because no process may be restarted. Verification
+requires the original Muxdeck PID and application directory to remain unchanged,
+in addition to the tmux identity checks. Replace only the staged static assets;
+this mode never authorizes a backend, service, or release-path change. The default
+mode retains the strict pre-restart cgroup check.
+
 After the update, use that baseline and a fresh report directory:
 
 ```bash

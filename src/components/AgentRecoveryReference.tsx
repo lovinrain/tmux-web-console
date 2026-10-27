@@ -10,6 +10,7 @@ interface AgentRecoveryReferenceProps {
   sessionName: string;
   agentType: RecoveryAgentType;
   agentSessionId: string | null;
+  directory?: string;
   /** Compact omits the caveat line, for dense card layouts. */
   compact?: boolean;
 }
@@ -35,11 +36,12 @@ export function AgentRecoveryReference({
   sessionName,
   agentType,
   agentSessionId,
+  directory,
   compact = false,
 }: AgentRecoveryReferenceProps) {
   const [copied, setCopied] = useState<"idle" | "done" | "manual">("idle");
   const manualRef = useRef<HTMLInputElement>(null);
-  const command = agentResumeCommand(agentType, agentSessionId);
+  const command = agentResumeCommand(agentType, agentSessionId, directory);
 
   useEffect(() => {
     if (copied !== "done") return;

@@ -362,6 +362,12 @@ time is distinct from when Muxdeck first observed the session. Creation lineage
 is recorded for new sessions from this version onward; older sessions and shells
 created outside Muxdeck show an unknown origin rather than a guessed one.
 Each recreated shell has its own start time and links to its earlier identity.
+For supported recorded agents, each agent card offers a copyable command such as
+`cd -- '/work/project' && codex resume <session-id>`. The saved directory and ID
+are shell-quoted as needed. Copying never launches a process; paste the command
+into a terminal to reopen that conversation. If clipboard access is unavailable,
+the complete command appears in a selectable field. Agents without a recorded
+ID or a verified resume form keep their reference metadata without a command.
 
 Browser view activity records successful `Space`/`Tab` splits and `Fork`
 requests made in that session's header. These open views of the same native

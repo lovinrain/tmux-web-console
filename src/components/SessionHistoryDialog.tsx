@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { listSessionHistory, restoreSessionHistory, type SessionHistoryEntry } from "../api";
 import { CloseIcon, HistoryIcon, RefreshIcon, SearchIcon } from "../icons";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
-import { agentDisplayLabel } from "../agentResume";
+import { AGENT_RESUME_CAVEAT, type RecoveryAgentType } from "../agentResume";
+import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
 import { AgentTranscript } from "./AgentTranscript";
@@ -152,7 +153,7 @@ function SessionHistoryContent({ workspaceId = null, workspaceName, sessionName 
       <p className="session-history-explainer">{sessionName
         ? `Session start, creation origin and coding agents recorded in ${sessionName}, including earlier shells under this name. `
         : workspaceId ? `Previously associated with ${workspaceName || "this workspace"}. ` : "Closed tabs and ended or missing sessions. "}
-        Browse local agent transcripts, saved output and submitted messages, reopen a running session, or explicitly create a fresh shell. Recreating a shell does not restore its running processes.</p>
+        Copy a command to change to the saved directory and resume a recorded agent. Browse local agent transcripts, saved output and submitted messages, reopen a running session, or explicitly create a fresh shell. Recreating a shell does not restore its running processes.</p>
       <form className="session-history-search" onSubmit={(event) => { event.preventDefault(); resetPage(); setSearch(query.trim()); setRevision((current) => current + 1); }}>
         <SearchIcon /><input ref={input} aria-label="Search session history" placeholder="Session name, old name, directory, or agent ID" maxLength={256} value={query} onChange={(event) => setQuery(event.target.value)} />
         <button type="submit" disabled={Boolean(busy)}>Search</button>
@@ -192,17 +193,20 @@ function SessionHistoryContent({ workspaceId = null, workspaceName, sessionName 
           <h3 className="session-metadata-heading">Agent history</h3>
           {entry.agents?.length
             ? <div className="session-history-agents" aria-label={`Agents that ran in ${entry.name}`}>
-                {entry.agents.map((agent) => <span key={`${agent.agentType}:${agent.agentSessionId ?? ""}`}
+                {entry.agents.map((agent) => <div key={`${agent.agentType}:${agent.agentSessionId ?? ""}`}
                   title={`First seen ${date(agent.firstSeenAt)} / Last seen ${date(agent.lastSeenAt)}`}>
-                  <span className={`agent-badge ${agent.agentType}`}>{agentDisplayLabel(
-                    agent.agentType as Parameters<typeof agentDisplayLabel>[0],
-                  )}</span>
-                  {agent.agentSessionId
-                    ? <code>{agent.agentSessionId}</code>
-                    : <em>no session id recorded</em>}
-                </span>)}
+                  <AgentRecoveryReference sessionName={entry.name}
+                    agentType={agent.agentType as RecoveryAgentType}
+                    agentSessionId={agent.agentSessionId} directory={entry.directory} compact />
+                </div>)}
               </div>
-            : <p className="session-history-agent">{entry.agentType || "Agent not detected"}{entry.agentSessionId && <> / Reference ID: <code>{entry.agentSessionId}</code></>}</p>}
+            : entry.agentType || entry.agentSessionId
+              ? <AgentRecoveryReference sessionName={entry.name}
+                  agentType={entry.agentType as RecoveryAgentType}
+                  agentSessionId={entry.agentSessionId} directory={entry.directory} compact />
+              : <p className="session-history-agent">Agent not detected</p>}
+          {(entry.agentSessionId || entry.agents?.some((agent) => agent.agentSessionId)) &&
+            <p className="agent-recovery-caveat">{AGENT_RESUME_CAVEAT}</p>}
           {Boolean(entry.viewEvents?.length) && <details className="session-metadata-views">
             <summary>Browser view activity ({entry.viewEvents!.length})</summary>
             <p>Split and Fork open another view of the same session. Latest 100 actions are retained.</p>

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listSessionHistory, listSubmittedMessages, loadSavedScrollback, loadAgentTranscript, restoreSessionHistory, type SessionHistoryEntry } from "../api";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 
@@ -15,8 +15,31 @@ beforeEach(() => {
   vi.mocked(listSessionHistory).mockResolvedValue({ entries: [entry], nextOffset: null });
   vi.mocked(restoreSessionHistory).mockResolvedValue({ session: entry.name, sessionId: "$2", created: true });
 });
+afterEach(() => { Reflect.deleteProperty(navigator, "clipboard"); });
 
 describe("SessionHistoryDialog", () => {
+  it("copies a directory and resume command for the chosen historical agent", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const agents = [
+      { agentType: "claude", agentSessionId: "claude-id", firstSeenAt: 100, lastSeenAt: 150 },
+      { agentType: "codex", agentSessionId: "codex-id", firstSeenAt: 150, lastSeenAt: 200 },
+    ];
+    vi.mocked(listSessionHistory).mockResolvedValue({ entries: [{ ...entry, agents }], nextOffset: null });
+    const onOpenSession = vi.fn();
+    render(<SessionHistoryDialog sessionName={entry.name} onClose={vi.fn()} onOpenSession={onOpenSession} />);
+    for (const [id, invocation] of [["claude-id", "claude -r"], ["codex-id", "codex resume"]]) {
+      const command = `cd -- '/work/project' && ${invocation} ${id}`;
+      const code = await screen.findByText(command);
+      fireEvent.click(within(code.parentElement!).getByRole("button", { name: "Copy resume command for named-agent" }));
+      await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(command));
+      expect(within(code.parentElement!).getByRole("button")).toHaveTextContent("Copied");
+    }
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(restoreSessionHistory).not.toHaveBeenCalled();
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
   it("shows native start, copy lineage and browser activity alongside agent history", async () => {
     vi.mocked(listSessionHistory).mockResolvedValue({ entries: [{ ...entry, createdAt: 90,
       origin: { kind: "copy", recordedAt: 95, sourceHistoryId: "parent", sourceName: "source-session", placement: "child" },
@@ -41,6 +64,7 @@ describe("SessionHistoryDialog", () => {
     await screen.findByText("Not recorded for this session");
     expect(screen.getByText("Started").nextElementSibling).toHaveTextContent("Not recorded");
     expect(screen.queryByText(/Browser view activity/)).not.toBeInTheDocument();
+    expect(screen.getByText("cd -- '/work/project' && codex resume reference-id")).toBeVisible();
   });
 
   it("opens saved output for an ended session without recreating its shell", async () => {

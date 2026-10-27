@@ -60,7 +60,7 @@ def systemctl(scope):
     return ["systemctl", "--user"] if scope == "user" else ["systemctl"]
 
 
-def snapshot(service, scope="system", log_file=None):
+def snapshot(service, scope="system", log_file=None, *, frontend_only=False):
     require(
         bool(re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", service)),
         "Invalid service name",
@@ -110,12 +110,13 @@ def snapshot(service, scope="system", log_file=None):
     require(bool(group) and group != "/", "Missing Muxdeck cgroup")
     tmux_groups = Path(f"/proc/{fields[0]}/cgroup").read_text().splitlines()
     require(bool(tmux_groups), "Missing tmux cgroup")
+    shares_cgroup = any(
+        line.split(":", 2)[-1] == group
+        or line.split(":", 2)[-1].startswith(group + "/")
+        for line in tmux_groups
+    )
     require(
-        not any(
-            line.split(":", 2)[-1] == group
-            or line.split(":", 2)[-1].startswith(group + "/")
-            for line in tmux_groups
-        ),
+        frontend_only or not shares_cgroup,
         "tmux belongs to the Muxdeck cgroup; deployment must stop for review",
     )
     panes = sorted(
@@ -143,6 +144,10 @@ def snapshot(service, scope="system", log_file=None):
         not base or bool(re.fullmatch(r"/[A-Za-z0-9_/-]+", base)), "Invalid base path"
     )
     extra = {"scope": "user"} if scope == "user" else {}
+    if frontend_only:
+        # Static assets can be replaced without signalling either process.
+        # Verification must prove the web process and release path stayed put.
+        extra.update(frontendOnly=True, tmuxSharesServiceCgroup=shares_cgroup)
     if log_file is not None:
         # A service whose output goes to a private file instead of a readable
         # journal is checked from the bytes appended after this baseline.
@@ -234,9 +239,12 @@ def compare(before, after, *, allow_added_panes=False, allow_command_changes=Fal
                     "afterCommand": new["command"],
                 }
             )
+    identity_fields = ["bootId", "service", "origin", "basePath", "authMode", "tmux"]
+    if before.get("frontendOnly"):
+        identity_fields += ["mainPid", "appDir"]
     identity_changes = [
         key
-        for key in ("bootId", "service", "origin", "basePath", "authMode", "tmux")
+        for key in identity_fields
         if before[key] != after[key]
     ]
     comparison = {
@@ -500,6 +508,11 @@ def main(argv=None):
         help="private file receiving the service output when its journal is unreadable",
     )
     before.add_argument("--output", type=Path, required=True)
+    before.add_argument(
+        "--frontend-only",
+        action="store_true",
+        help="Record an assets-only update; verification requires the service PID and app directory to remain unchanged, and no restart is permitted",
+    )
     after = sub.add_parser(
         "verify", help="Compare a baseline and check the deployed service"
     )
@@ -524,7 +537,8 @@ def main(argv=None):
         if args.action == "snapshot":
             with report.phase("Record service and tmux identities"):
                 current = snapshot(
-                    args.service, "user" if args.user else "system", args.log_file
+                    args.service, "user" if args.user else "system", args.log_file,
+                    **({"frontend_only": True} if args.frontend_only else {}),
                 )
                 private_write(args.output, json.dumps(current, indent=2) + "\n")
             print(f"Baseline saved: {len(current['panes'])} panes", flush=True)
@@ -536,7 +550,12 @@ def main(argv=None):
             require(isinstance(baseline, dict), "Baseline must contain an object")
             require(baseline.get("version") == 1, "Unsupported baseline version")
             scope = baseline.get("scope", "system")
-            current = snapshot(baseline["service"], scope)
+            frontend_only = baseline.get("frontendOnly", False)
+            require(isinstance(frontend_only, bool), "Invalid frontend-only baseline mode")
+            current = snapshot(
+                baseline["service"], scope,
+                **({"frontend_only": True} if frontend_only else {}),
+            )
             comparison = compare(
                 baseline,
                 current,
@@ -546,6 +565,9 @@ def main(argv=None):
             report.data["checks"]["paneComparison"] = comparison
             report.data["checks"]["panesPreserved"] = comparison["preservedCount"]
             report.data["checks"]["mainPid"] = current["mainPid"]
+            if frontend_only:
+                report.data["checks"]["serviceNotRestarted"] = True
+                report.data["checks"]["tmuxSharesServiceCgroup"] = current["tmuxSharesServiceCgroup"]
         with report.phase("Check installed frontend"):
             asset = frontend(current, args.expected_dist)
             report.data["checks"]["stagedFrontendCompared"] = (

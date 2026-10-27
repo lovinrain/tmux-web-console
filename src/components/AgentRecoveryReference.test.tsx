@@ -39,20 +39,23 @@ describe("AgentRecoveryReference", () => {
       .toHaveTextContent("Copied");
   });
 
-  it("falls back to manual selection when the clipboard is unavailable", async () => {
+  it.each(["unavailable", "denied"])("falls back to manual selection when the clipboard is %s", async (clipboard) => {
     // A console reached over plain HTTP has no secure context.
-    setClipboard(undefined);
+    setClipboard(clipboard === "denied"
+      ? { writeText: vi.fn().mockRejectedValue(new Error("Permission denied")) }
+      : undefined);
     render(<AgentRecoveryReference
       sessionName="jo_main"
       agentType="codex"
       agentSessionId={ID}
+      directory="/work/a project"
     />);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy resume command for jo_main" }));
     const manual = await screen.findByRole("textbox", {
       name: "Resume command for jo_main, select and copy manually",
     });
-    expect(manual).toHaveValue(`codex resume ${ID}`);
+    expect(manual).toHaveValue(`cd -- '/work/a project' && codex resume ${ID}`);
   });
 
   it("still names the agent when no session id was recorded", () => {

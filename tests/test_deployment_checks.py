@@ -100,6 +100,23 @@ def test_snapshot_rejects_unsafe_restart_or_wrong_socket(
         checks.snapshot("muxdeck.service")
 
 
+def test_frontend_only_snapshot_records_shared_cgroup_without_authorizing_restart(monkeypatch):
+    fake_service(monkeypatch, group="/system.slice/muxdeck.service")
+    current = checks.snapshot("muxdeck.service", frontend_only=True)
+    assert current["frontendOnly"] is True
+    assert current["tmuxSharesServiceCgroup"] is True
+    assert current["mainPid"] == 50
+    assert current["panes"] == baseline()["panes"]
+
+
+@pytest.mark.parametrize("key", ["mainPid", "appDir"])
+def test_frontend_only_update_rejects_a_service_restart_or_release_path_change(key):
+    before = {**baseline(), "frontendOnly": True}
+    checks.compare(before, deepcopy(before))
+    with pytest.raises(checks.CheckError, match=key):
+        checks.compare(before, {**before, key: "changed"})
+
+
 @pytest.mark.parametrize(
     "key", ["bootId", "service", "origin", "basePath", "authMode", "tmux", "panes"]
 )
@@ -381,6 +398,26 @@ def setup_verifier(monkeypatch, tmp_path):
         "--output-dir",
         str(tmp_path / "report"),
     ]
+
+
+def test_frontend_only_mode_survives_cli_snapshot_and_verification(monkeypatch, tmp_path):
+    args = setup_verifier(monkeypatch, tmp_path)
+    before = Path(args[2])
+    before.unlink()
+    modes = []
+
+    def snapshot(service, scope="system", log_file=None, *, frontend_only=False):
+        modes.append(frontend_only)
+        return {**baseline(), "frontendOnly": True, "tmuxSharesServiceCgroup": True}
+
+    monkeypatch.setattr(checks, "snapshot", snapshot)
+    assert checks.main(["snapshot", "--frontend-only", "--output", str(before)]) == 0
+    assert json.loads(before.read_text())["frontendOnly"] is True
+    assert checks.main(args) == 0
+    assert modes == [True, True]
+    result = json.loads((tmp_path / "report/verification.json").read_text())
+    assert result["checks"]["serviceNotRestarted"] is True
+    assert result["checks"]["tmuxSharesServiceCgroup"] is True
 
 
 def test_verify_writes_private_timed_report_and_progress(monkeypatch, tmp_path, capsys):

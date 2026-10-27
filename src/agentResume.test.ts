@@ -10,6 +10,31 @@ describe("agentResumeCommand", () => {
     expect(agentResumeCommand("grok", id)).toBe(`grok -r ${id}`);
   });
 
+  it.each([
+    ["claude", "claude -r"],
+    ["codex", "codex resume"],
+    ["cursor", "cursor-agent --resume"],
+    ["grok", "grok -r"],
+  ] as const)("changes directory before resuming %s", (agent, invocation) => {
+    expect(agentResumeCommand(agent, "recorded-id", "/work/project"))
+      .toBe(`cd -- '/work/project' && ${invocation} recorded-id`);
+  });
+
+  it.each([
+    ["/work/a project", "'/work/a project'"],
+    ["/work/O'Brien", "'/work/O'\\''Brien'"],
+    ["/work/$HOME; $(echo literal)", "'/work/$HOME; $(echo literal)'"],
+    ["-project", "'-project'"],
+  ])("quotes the saved directory %s as a literal shell argument", (directory, quoted) => {
+    expect(agentResumeCommand("codex", "recorded-id", directory))
+      .toBe(`cd -- ${quoted} && codex resume recorded-id`);
+  });
+
+  it("quotes shell metacharacters in recorded IDs", () => {
+    expect(agentResumeCommand("claude", "id'; echo literal", "/work/project"))
+      .toBe("cd -- '/work/project' && claude -r 'id'\\''; echo literal'");
+  });
+
   it("offers no command without a recorded id", () => {
     expect(agentResumeCommand("claude", null)).toBeNull();
     expect(agentResumeCommand(null, null)).toBeNull();

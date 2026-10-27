@@ -178,6 +178,45 @@ function sessionIdentity(name: string): string {
   ], { encoding: "utf8" }).trim();
 }
 
+test("session metadata copies a directory and selected agent resume command", async ({ page, context }) => {
+  const identity = sessionIdentity(sourceName);
+  const directory = "/work/Agent's project";
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.route("**/mux/api/session-history?*", (route) => route.fulfill({ json: {
+    entries: [{
+      id: "metadata-copy-history", name: sourceName, title: null, names: [sourceName],
+      directory, directoryAvailable: true, agentType: "codex", agentSessionId: "codex-id",
+      firstSeenAt: 100, lastSeenAt: 200, state: "live", endedAt: null, tabClosedAt: null,
+      workspaces: [], agents: [
+        { agentType: "claude", agentSessionId: "claude-id", firstSeenAt: 100, lastSeenAt: 150 },
+        { agentType: "codex", agentSessionId: "codex-id", firstSeenAt: 150, lastSeenAt: 200 },
+      ],
+    }], nextOffset: null,
+  } }));
+  await page.goto(`/mux/session/${sourceName}?tab=${sourceName}`);
+  await page.getByRole("button", { name: `Metadata for ${sourceName}`, exact: true }).click();
+  const metadata = page.getByRole("dialog", { name: `Metadata for ${sourceName}`, exact: true });
+  const claudeCommand = "cd -- '/work/Agent'\\''s project' && claude -r claude-id";
+  const claude = metadata.locator(".agent-recovery-reference").filter({ hasText: "claude-id" });
+  await expect(claude.locator(".agent-recovery-command code")).toHaveText(claudeCommand);
+  await claude.getByRole("button", { name: `Copy resume command for ${sourceName}` }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(claudeCommand);
+  await expect(claude.getByRole("button")).toHaveText("Copied");
+
+  // Browsers without clipboard permission still offer the full command selected.
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+  const codex = metadata.locator(".agent-recovery-reference").filter({ hasText: "codex-id" });
+  await codex.getByRole("button", { name: `Copy resume command for ${sourceName}` }).click();
+  const manual = codex.getByRole("textbox", { name: `Resume command for ${sourceName}, select and copy manually` });
+  const codexCommand = "cd -- '/work/Agent'\\''s project' && codex resume codex-id";
+  await expect(manual).toHaveValue(codexCommand);
+  expect(await manual.evaluate((input: HTMLInputElement) => (
+    input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0)
+  ))).toBe(codexCommand);
+  await page.screenshot({ path: join(reviewDirectory, "session-metadata-resume.png") });
+  expect(sessionIdentity(sourceName)).toBe(identity);
+});
+
 test("copies preserve sibling or child placement through save, reload, and another browser tab", async ({
   page, context,
 }) => {

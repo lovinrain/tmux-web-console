@@ -2306,6 +2306,7 @@ export function ConsoleScreen({
                     sessionName={sessionName}
                     agentType={sessionRecovery.agentType}
                     agentSessionId={sessionRecovery.agentSessionId}
+                    directory={sessionRecovery.directory}
                   />
                   {!sessionRecovery.directoryAvailable && (
                     <p className="recovery-directory-warning">

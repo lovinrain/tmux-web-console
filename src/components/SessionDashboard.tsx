@@ -1296,6 +1296,7 @@ export function SessionDashboard({
                     sessionName={recovery.name}
                     agentType={recovery.agentType}
                     agentSessionId={recovery.agentSessionId}
+                    directory={recovery.directory}
                     compact
                   />
                   {!recovery.directoryAvailable && (

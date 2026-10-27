@@ -26,15 +26,21 @@ export function agentDisplayLabel(agentType: RecoveryAgentType): string {
 export function agentResumeCommand(
   agentType: RecoveryAgentType,
   sessionId: string | null,
+  directory?: string,
 ): string | null {
   if (!sessionId) return null;
+  // Keep recorded values literal when the command is pasted into a shell.
+  const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+  const id = /^[A-Za-z0-9_-]+$/.test(sessionId) ? sessionId : quote(sessionId);
+  let command: string;
   switch (agentType) {
-    case "claude": return `claude -r ${sessionId}`;
-    case "codex": return `codex resume ${sessionId}`;
-    case "cursor": return `cursor-agent --resume ${sessionId}`;
-    case "grok": return `grok -r ${sessionId}`;
+    case "claude": command = `claude -r ${id}`; break;
+    case "codex": command = `codex resume ${id}`; break;
+    case "cursor": command = `cursor-agent --resume ${id}`; break;
+    case "grok": command = `grok -r ${id}`; break;
     default: return null;
   }
+  return directory ? `cd -- ${quote(directory)} && ${command}` : command;
 }
 
 /** Resume restores the conversation only, never the work that was in flight. */
