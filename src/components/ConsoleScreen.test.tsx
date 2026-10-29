@@ -448,8 +448,7 @@ describe("ConsoleScreen session identity", () => {
   });
 
   it("opens the desktop CWD browser and stages its path without sending", async () => {
-    vi.mocked(listSessions).mockResolvedValue([session()]);
-    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    renderWithTheme(<ConsoleScreen sessionName="test" sessionSnapshot={session()} onBack={vi.fn()} />);
 
     const cwd = await screen.findByRole("button", { name: "Browse files in /work" });
     expect(cwd).toHaveAttribute("aria-expanded", "false");
