@@ -277,6 +277,7 @@ vi.mock("./components/NewSessionScreen", () => ({
 
 vi.mock("./components/ConsoleScreen", () => ({
   DEFAULT_CONSOLE_BAR_VISIBILITY: {
+    header: true,
     sessionTabs: true,
     stagedInput: true,
     shortcuts: true,
@@ -295,7 +296,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onMobileModeChange = () => undefined,
     onOpenWorkspaceOverview,
     onCloseWorkspaceOverview,
-    barVisibility = { sessionTabs: true, stagedInput: true, shortcuts: true },
+    barVisibility = { header: true, sessionTabs: true, stagedInput: true, shortcuts: true },
     onBarVisibilityChange = () => undefined,
     desktopTabOrientation = "horizontal",
     onDesktopTabOrientationChange = () => undefined,
@@ -333,12 +334,13 @@ vi.mock("./components/ConsoleScreen", () => ({
     onOpenWorkspaceOverview?: () => void;
     onCloseWorkspaceOverview?: () => void;
     barVisibility?: Partial<{
+      header: boolean;
       sessionTabs: boolean;
       stagedInput: boolean;
       shortcuts: boolean;
     }>;
     onBarVisibilityChange?: (
-      bar: "sessionTabs" | "stagedInput" | "shortcuts",
+      bar: "header" | "sessionTabs" | "stagedInput" | "shortcuts",
       visible: boolean,
     ) => void;
     desktopTabOrientation?: "horizontal" | "vertical";
@@ -405,11 +407,12 @@ vi.mock("./components/ConsoleScreen", () => ({
     recreateConsoleSession = onRecreateSession ?? null;
     forgetConsoleSession = onForgetSession ?? null;
     const bars = [
+      ["header", "Console header", "muxdeck-console-header"],
       ["sessionTabs", "Session tabs", "muxdeck-session-tabs"],
       ["stagedInput", "Staged input", "muxdeck-staged-input"],
       ["shortcuts", "Terminal shortcut buttons", "muxdeck-terminal-shortcuts"],
     ] as const;
-    const visibleBars = { sessionTabs: true, stagedInput: true, shortcuts: true, ...barVisibility };
+    const visibleBars = { header: true, sessionTabs: true, stagedInput: true, shortcuts: true, ...barVisibility };
     return (
       <main
         aria-label="Console"
@@ -3331,6 +3334,7 @@ describe("App routing", () => {
 
     const terminalMode = screen.getByRole("button", { name: "Terminal" });
     const inputMode = screen.getByRole("button", { name: /^Input$/ });
+    const headerToggle = screen.getByRole("button", { name: "Console header" });
     const tabsToggle = screen.getByRole("button", { name: "Session tabs" });
     const inputToggle = screen.getByRole("button", { name: "Staged input" });
     const shortcutsToggle = screen.getByRole("button", {
@@ -3343,14 +3347,17 @@ describe("App routing", () => {
     fireEvent.click(inputMode);
     expect(inputMode).toBePressed();
     expect(window.location.href).toBe(routeBeforeToggles);
+    expect(headerToggle).toBePressed();
     expect(tabsToggle).toBePressed();
     expect(inputToggle).toBePressed();
     expect(shortcutsToggle).toBePressed();
     fireEvent.click(tabsToggle);
     fireEvent.click(inputToggle);
     fireEvent.click(shortcutsToggle);
+    fireEvent.click(headerToggle);
 
     expect(window.location.href).toBe(routeBeforeToggles);
+    expect(headerToggle).not.toBePressed();
     expect(tabsToggle).not.toBePressed();
     expect(inputToggle).not.toBePressed();
     expect(shortcutsToggle).not.toBePressed();
@@ -3377,6 +3384,7 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open second session" }));
 
     expect(screen.getByRole("button", { name: /^Input$/ })).toBePressed();
+    expect(screen.getByRole("button", { name: "Console header" })).not.toBePressed();
     expect(screen.getByRole("button", { name: "Session tabs" })).not.toBePressed();
     expect(screen.getByRole("button", { name: "Staged input" })).not.toBePressed();
     expect(screen.getByRole("button", {
@@ -3392,6 +3400,7 @@ describe("App routing", () => {
 
     expect(screen.getByRole("button", { name: "Terminal" })).toBePressed();
     expect(screen.getByRole("button", { name: /^Input$/ })).not.toBePressed();
+    expect(screen.getByRole("button", { name: "Console header" })).toBePressed();
     expect(screen.getByRole("button", { name: "Session tabs" })).toBePressed();
     expect(screen.getByRole("button", { name: "Staged input" })).toBePressed();
     expect(screen.getByRole("button", {
@@ -3400,6 +3409,24 @@ describe("App routing", () => {
     expect(screen.getByRole("navigation", { name: "Session workspace" })).toBeVisible();
     expect(document.getElementById("muxdeck-staged-input")).toBeVisible();
     expect(document.getElementById("muxdeck-terminal-shortcuts")).toBeVisible();
+  });
+
+  it.each([
+    [undefined, true],
+    ["hidden", true],
+    [false, false],
+  ])("loads header visibility %j without changing existing bar preferences", (header, expected) => {
+    window.localStorage.setItem("muxdeck-console-bar-visibility", JSON.stringify({
+      header, sessionTabs: false, stagedInput: false, shortcuts: false,
+    }));
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Open test session" }));
+
+    expect(screen.getByRole("button", { name: "Console header" }))
+      .toHaveAttribute("aria-pressed", String(expected));
+    for (const name of ["Session tabs", "Staged input", "Terminal shortcut buttons"]) {
+      expect(screen.getByRole("button", { name })).not.toBePressed();
+    }
   });
 
   it("defaults malformed desktop tab orientation to horizontal", () => {

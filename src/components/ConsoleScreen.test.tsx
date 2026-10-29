@@ -2523,7 +2523,7 @@ describe("ConsoleScreen session identity", () => {
     expect(tabs).toHaveAttribute("title", "Show session tabs (Ctrl+Shift+S)");
     expect(workspaceLinks).toBeVisible();
     expect(within(screen.getByRole("group", { name: "Console bars" }))
-      .getAllByRole("button")).toHaveLength(9);
+      .getAllByRole("button")).toHaveLength(10);
 
     fireEvent.click(input);
     expect(screen.getByRole("textbox", { name: "Staged input" })).toBeVisible();
@@ -2532,6 +2532,60 @@ describe("ConsoleScreen session identity", () => {
       .not.toBeInTheDocument();
     expect(tabs).not.toBePressed();
     expect(keys).not.toBePressed();
+  });
+
+  it("hides and restores the header without replacing the terminal or losing notes and drafts", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    renderWithTheme(<ConsoleScreen
+      sessionName="test"
+      onBack={vi.fn()}
+      headerNotes={<input aria-label="Header note" defaultValue="Keep this note" />}
+      sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
+    />);
+
+    const heading = await screen.findByRole("heading", { name: "test" });
+    const header = heading.closest("header")!;
+    const toolbar = screen.getByRole("group", { name: "Console bars" });
+    const toggle = within(toolbar).getByRole("button", { name: "Console header" });
+    const terminal = screen.getByTestId("live-terminal");
+    const note = screen.getByRole("textbox", { name: "Header note" });
+    const draft = screen.getByRole("textbox", { name: "Staged input" });
+    fireEvent.input(draft, { target: { value: "Keep this draft" } });
+    fireEvent.input(note, { target: { value: "Edited note" } });
+    expect(toggle).toBePressed();
+    expect(toggle).toHaveAttribute("aria-controls", header.id);
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide console header" }));
+
+    expect(header).not.toBeVisible();
+    expect(toggle).not.toBePressed();
+    expect(toggle).toHaveAttribute("title", "Show console header");
+    expect(toolbar).toBeVisible();
+    expect(draft).toBeVisible();
+    expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
+    expect(liveTerminalHandle.focus).toHaveBeenCalled();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.submit).not.toHaveBeenCalled();
+
+    fireEvent.click(toggle);
+
+    expect(header).toBeVisible();
+    expect(toggle).toBePressed();
+    expect(screen.getByTestId("live-terminal")).toBe(terminal);
+    expect(screen.getByRole("textbox", { name: "Header note" })).toBe(note);
+    expect(note).toHaveValue("Edited note");
+    expect(draft).toHaveValue("Keep this draft");
+  });
+
+  it("routes the header hide control through workspace view settings", async () => {
+    vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onBarVisibilityChange = vi.fn();
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()}
+      barVisibility={{ header: true }} onBarVisibilityChange={onBarVisibilityChange}
+    />);
+    await screen.findByRole("heading", { name: "test" });
+    fireEvent.click(screen.getByRole("button", { name: "Hide console header" }));
+    expect(onBarVisibilityChange).toHaveBeenCalledWith("header", false);
   });
 
   it("keeps unspecified pane controls local when staged input is controlled by the workspace", async () => {

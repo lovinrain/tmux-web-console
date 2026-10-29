@@ -52,6 +52,11 @@ On wider screens, the header exposes two sizing modes:
 
 Tmux cannot render the same pane at two independent responsive sizes.
 
+On desktop, `Hide` at the right of the upper button panel hides the console
+header and gives its space to the terminal. Use `View → Header` to restore it.
+This display choice follows the other View settings and leaves notes and the
+live terminal mounted. Mobile keeps its usual navigation and header behavior.
+
 When the desktop header runs out of room, `All console controls` opens a compact
 panel with Workspace tools, Session actions, and Preferences sections. Notes and
 widgets stay aligned, full action labels are shown, and short windows scroll

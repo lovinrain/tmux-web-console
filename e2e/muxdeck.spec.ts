@@ -2460,6 +2460,73 @@ test("workspace name stays in the top-left toolbar for saved and temporary works
   }
 });
 
+test("desktop header hides and restores while preserving the live terminal and mobile navigation", async ({
+  page,
+}, testInfo) => {
+  let terminalSocketCount = 0;
+  page.on("websocket", (socket) => {
+    if (socket.url().includes("/ws/terminal")) terminalSocketCount += 1;
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+  await expect(page.locator(".connection-badge")).toContainText("Live");
+  const header = page.locator("#muxdeck-console-header");
+  const toolbar = page.getByRole("group", { name: "Console bars" });
+  const toggle = toolbar.getByRole("button", { name: "Console header", exact: true });
+  const hide = header.getByRole("button", { name: "Hide console header", exact: true });
+  const terminal = page.locator(".terminal-host .xterm");
+  const originalTerminal = await terminal.elementHandle();
+  const draft = page.getByRole("textbox", { name: "Staged input", exact: true });
+  await draft.fill("Keep this draft when the header is hidden");
+  const inputFrameCount = await trackTerminalInputFrames(page, ["click", "keydown"]);
+
+  for (const orientation of ["horizontal", "vertical"]) {
+    if (orientation === "vertical") {
+      await toolbar.getByRole("button", { name: "Vertical session tabs" }).click();
+    }
+    const before = (await terminal.boundingBox())!;
+    const headerHeight = (await header.boundingBox())!.height;
+    await hide.click();
+    await expect(header).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(toolbar).toBeVisible();
+    await expect(draft).toHaveValue("Keep this draft when the header is hidden");
+    await expect.poll(async () => (await terminal.boundingBox())!.height)
+      .toBeGreaterThanOrEqual(before.height + headerHeight - 1);
+    await page.screenshot({ path: testInfo.outputPath(`header-hidden-${orientation}.png`) });
+
+    if (orientation === "horizontal") {
+      await toolbar.getByRole("button", { name: "Enter desktop terminal focus" }).click();
+      await page.getByRole("button", { name: "Exit desktop terminal focus" }).click();
+      await expect(header).toBeHidden();
+    }
+    await toggle.click();
+    await expect(header).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  }
+
+  await header.getByRole("button", { name: "Light theme", exact: true }).click();
+  await page.setViewportSize({ width: 672, height: 900 });
+  await expect(hide).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("header-hide-control-light.png") });
+  await header.getByRole("button", { name: /Show all console controls/ }).click();
+  await expect(page.getByRole("group", { name: "All console controls" })).toBeVisible();
+  await hide.click();
+  await expect(header).toBeHidden();
+  await expect(page.getByRole("group", { name: "All console controls" })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(header).toBeVisible();
+  await expect(page.getByRole("button", { name: "Hide console header" })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Mobile console focus" })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(header).toBeHidden();
+  await toggle.click();
+  await expect(header).toBeVisible();
+  expect(await terminal.evaluate((element, original) => element === original, originalTerminal)).toBe(true);
+  expect(terminalSocketCount).toBe(1);
+  expect(await inputFrameCount()).toBe(0);
+});
+
 test("desktop terminal focus fills the viewport without replacing the live session", async ({
   page,
 }, testInfo) => {

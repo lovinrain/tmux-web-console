@@ -7358,7 +7358,8 @@ span.workspace-tab-group-toggle {
 
 .composer-snippet-trigger,
 .composer-attachment-trigger,
-.composer-hide-trigger {
+.composer-hide-trigger,
+.console-header-hide-trigger {
   display: inline-flex;
   min-height: 26px;
   align-items: center;
@@ -7381,7 +7382,8 @@ span.workspace-tab-group-toggle {
   border-color: rgba(255, 183, 77, 0.24);
 }
 
-.composer-hide-trigger {
+.composer-hide-trigger,
+.console-header-hide-trigger {
   flex-shrink: 0;
   margin-left: auto;
   color: var(--muted);
@@ -7390,7 +7392,9 @@ span.workspace-tab-group-toggle {
 }
 
 .composer-hide-trigger:hover,
-.composer-hide-trigger:focus-visible {
+.composer-hide-trigger:focus-visible,
+.console-header-hide-trigger:hover,
+.console-header-hide-trigger:focus-visible {
   color: inherit;
   background: rgba(141, 152, 138, 0.1);
 }
@@ -7419,7 +7423,8 @@ span.workspace-tab-group-toggle {
 
 .composer-snippet-trigger svg,
 .composer-attachment-trigger svg,
-.composer-hide-trigger svg {
+.composer-hide-trigger svg,
+.console-header-hide-trigger svg {
   width: 13px;
   height: 13px;
 }
@@ -7850,7 +7855,7 @@ span.workspace-tab-group-toggle {
   }
 
   .console-bar-toolbar.has-workspace-links .console-bar-toggle-group {
-    grid-template-columns: repeat(3, minmax(48px, 56px));
+    grid-auto-columns: minmax(48px, 56px);
   }
 
   .console-bar-toolbar.has-workspace-links .console-bar-toggle {
@@ -7861,7 +7866,8 @@ span.workspace-tab-group-toggle {
 
 .console-bar-toggle-group {
   display: grid;
-  grid-template-columns: repeat(3, minmax(64px, 76px));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(64px, 76px);
   gap: 4px;
 }
 
@@ -11600,6 +11606,14 @@ button[data-hold-scroll="true"] {
 
 @media (min-width: 1025px),
   (min-width: 641px) and (min-height: 501px) and (pointer: fine) {
+  .console-shell[data-desktop-focus="false"][data-header-visible="false"] {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .console-shell.has-session-navigation[data-desktop-focus="false"][data-header-visible="false"] {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
   .input-bar {
     flex-wrap: wrap;
     overflow-x: visible;
@@ -12513,6 +12527,10 @@ button[data-hold-scroll="true"] {
   .console-shell.has-session-navigation[data-desktop-focus="false"][data-desktop-tabs="vertical"][data-session-tabs-visible="true"] {
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .console-shell.has-session-navigation[data-desktop-focus="false"][data-desktop-tabs="vertical"][data-session-tabs-visible="true"][data-header-visible="false"] {
+    grid-template-rows: auto 0 minmax(0, 1fr) auto;
   }
 
   .console-shell.has-session-navigation[data-desktop-focus="false"][data-desktop-tabs="vertical"][data-session-tabs-visible="true"] > .console-bar-toolbar {

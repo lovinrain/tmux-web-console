@@ -177,7 +177,12 @@ function storedConsoleBars(): ConsoleBarVisibility {
     if (stored && typeof stored === "object") {
       const bars = stored as Record<string, unknown>;
       if (typeof bars.sessionTabs === "boolean" && typeof bars.stagedInput === "boolean"
-        && typeof bars.shortcuts === "boolean") return bars as unknown as ConsoleBarVisibility;
+        && typeof bars.shortcuts === "boolean") return {
+          header: typeof bars.header === "boolean" ? bars.header : true,
+          sessionTabs: bars.sessionTabs,
+          stagedInput: bars.stagedInput,
+          shortcuts: bars.shortcuts,
+        };
     }
   } catch { /* Use the normal bars if the tab-local snapshot is unavailable. */ }
   return DEFAULT_CONSOLE_BAR_VISIBILITY;

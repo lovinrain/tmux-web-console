@@ -75,13 +75,23 @@
 
   html[data-theme][data-palette] .console-header-compact > .console-header-tray-toggle {
     position: absolute;
-    right: 10px;
+    right: 82px;
     bottom: 7px;
     width: 32px;
     height: 32px;
     color: var(--preset-text);
     background: var(--preset-raised);
     border-color: var(--preset-line);
+  }
+
+  html[data-theme][data-palette] .console-header-compact > .console-header-hide-trigger {
+    position: absolute;
+    right: 10px;
+    bottom: 7px;
+    height: 32px;
+    margin: 0;
+    color: var(--muted);
+    background: var(--preset-raised);
   }
 
   html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .workspace-header-widgets {
@@ -102,7 +112,7 @@
   }
 
   html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions {
-    width: 100%;
+    width: calc(100% - 72px);
     min-width: 0;
     height: 38px;
     grid-column: 1 / -1;
@@ -113,7 +123,7 @@
   }
 
   html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact:has(> .console-header-tray-toggle) .console-actions {
-    width: calc(100% - 40px);
+    width: calc(100% - 112px);
   }
 
   html[data-theme][data-palette] .console-shell[data-console-header-tray="false"] > .console-header-compact .console-actions :is(
@@ -266,6 +276,10 @@
   html[data-theme][data-palette] .console-header-compact :is(button, a, select):focus-visible {
     outline: 2px solid var(--cyan);
     outline-offset: -2px;
+  }
+
+  html[data-theme][data-palette] .console-shell > .console-header[hidden] {
+    display: none;
   }
 }
 

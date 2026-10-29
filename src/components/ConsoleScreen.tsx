@@ -241,6 +241,7 @@ export interface SessionRenameWarning {
 }
 
 export interface ConsoleBarVisibility {
+  header: boolean;
   sessionTabs: boolean;
   stagedInput: boolean;
   shortcuts: boolean;
@@ -251,6 +252,7 @@ export type ConsoleBar = keyof ConsoleBarVisibility;
 export type MobileConsoleMode = "terminal" | "input";
 
 export const DEFAULT_CONSOLE_BAR_VISIBILITY: ConsoleBarVisibility = {
+  header: true,
   sessionTabs: true,
   stagedInput: true,
   shortcuts: true,
@@ -367,6 +369,12 @@ const CONSOLE_BARS: Array<{
   controls: string;
 }> = [
   {
+    bar: "header",
+    label: "Console header",
+    shortLabel: "Header",
+    controls: "muxdeck-console-header",
+  },
+  {
     bar: "sessionTabs",
     label: "Session tabs",
     shortLabel: "Tabs",
@@ -474,6 +482,7 @@ function ConsoleBarToolbar({
           if (hideSessionTabs && bar === "sessionTabs") return null;
           const visible = visibility[bar];
           const available = availability?.[bar] ?? true;
+          if (bar === "header" && !available) return null;
           const controlId = bar === "stagedInput"
             ? stagedInputControlId
             : bar === "shortcuts"
@@ -987,6 +996,8 @@ export function ConsoleScreen({
     tmuxScrollResetVersionRef.current = ++scrollActionVersionRef.current;
   }, [scrollTargetKey, connection, scrollAgentKind]);
   const visibleBars = { ...localBarVisibility, ...barVisibility };
+  const canHideHeader = !embedded && !ephemeral && !mobileLayout;
+  const headerVisible = !canHideHeader || visibleBars.header;
   const showCollapsedSessionSwitcher = !embedded && !ephemeral && !mobileLayout
     && !desktopTerminalFocus && !visibleBars.sessionTabs && Boolean(onOpenTabSearch);
   const visibleMobileMode = mobileMode ?? localMobileMode;
@@ -1446,7 +1457,7 @@ export function ConsoleScreen({
     const header = consoleHeaderRef.current;
     // An open tray gives its controls a panel of their own, so the header's
     // measurements no longer say anything about what it could not show.
-    if (!header || headerTrayOpen) return;
+    if (!header || header.hidden || headerTrayOpen) return;
     const boxOf = (element: Element): OverflowBox => {
       const rect = element.getBoundingClientRect();
       return { left: rect.left, right: rect.right, width: rect.width };
@@ -1479,7 +1490,7 @@ export function ConsoleScreen({
   }, [headerTrayOpen]);
 
   useEffect(() => {
-    if (mobileLayout || embedded) {
+    if (mobileLayout || embedded || !headerVisible) {
       setHiddenHeaderControlCount(0);
       return;
     }
@@ -1512,6 +1523,7 @@ export function ConsoleScreen({
     callbackSessionActive,
     connection,
     embedded,
+    headerVisible,
     measureHeaderOverflow,
     mobileLayout,
     pane?.command,
@@ -1542,8 +1554,8 @@ export function ConsoleScreen({
   }, []);
 
   useEffect(() => {
-    if (mobileLayout || embedded) setHeaderTrayOpen(false);
-  }, [embedded, mobileLayout]);
+    if (mobileLayout || embedded || !headerVisible) setHeaderTrayOpen(false);
+  }, [embedded, headerVisible, mobileLayout]);
 
   useEffect(() => {
     if (!headerTrayOpen) return;
@@ -2277,6 +2289,7 @@ export function ConsoleScreen({
           workspaceId={workspaceId}
           showWorkspaceIdentity={!embedded}
           availability={{
+            header: false,
             sessionTabs: Boolean(sessionNavigation),
             stagedInput: false,
             shortcuts: false,
@@ -2415,6 +2428,7 @@ export function ConsoleScreen({
       data-desktop-focus={desktopTerminalFocus ? "true" : "false"}
       data-desktop-focus-shortcuts={desktopFocusShortcutsOpen ? "true" : "false"}
       data-console-header-tray={headerTrayOpen ? "true" : "false"}
+      data-header-visible={headerVisible ? "true" : "false"}
       data-scroll-agent={scrollAgentKind}
       data-scroll-mode={preferredScrollMode}
       data-desktop-tabs={desktopTabOrientation}
@@ -2428,7 +2442,7 @@ export function ConsoleScreen({
         workspaceId={workspaceId}
         showWorkspaceIdentity={!embedded && !ephemeral}
         hideSessionTabs={ephemeral}
-        availability={{ sessionTabs: Boolean(sessionNavigation) }}
+        availability={{ header: canHideHeader, sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
         workspaceLinks={workspaceLinks}
         callbackControl={callbackControl}
@@ -2515,7 +2529,12 @@ export function ConsoleScreen({
           <ExpandIcon /><span>Focus</span>
         </button>}
       </nav>}
-      <header className={embedded || ephemeral ? "console-header" : "console-header console-header-compact"} ref={consoleHeaderRef}>
+      <header
+        id={embedded ? undefined : "muxdeck-console-header"}
+        className={embedded || ephemeral ? "console-header" : "console-header console-header-compact"}
+        ref={consoleHeaderRef}
+        hidden={!headerVisible}
+      >
         {!embedded && !ephemeral && <div
           className="console-dashboard-navigation"
           role="group"
@@ -2888,6 +2907,22 @@ export function ConsoleScreen({
           key={`${session.id}:${session.created}:${session.serverStarted}:${session.serverPid}`}
           session={session}
         />}
+        {canHideHeader && (
+          <button
+            type="button"
+            className="console-header-hide-trigger"
+            aria-label="Hide console header"
+            aria-controls="muxdeck-console-header"
+            title="Hide the upper button panel. Use View → Header to show it again."
+            onClick={() => {
+              setBarVisible("header", false);
+              terminalRef.current?.focus();
+            }}
+          >
+            <CloseIcon />
+            <span>Hide</span>
+          </button>
+        )}
       </header>
 
       {copySessionError?.sourceName === sessionName && (
