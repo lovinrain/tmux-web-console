@@ -2418,6 +2418,48 @@ test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", 
   }
 });
 
+test("workspace name stays in the top-left toolbar for saved and temporary workspaces", async ({
+  page,
+  request,
+}, testInfo) => {
+  const workspaceName = "Release coordination room with a deliberately long workspace name";
+  const response = await request.post("/mux/api/workspaces", {
+    data: { name: workspaceName, tabs: [sessionName], groups: [], activeSession: sessionName },
+  });
+  expect(response.ok()).toBe(true);
+  const { workspace } = await response.json();
+  const workspaceIdentity = page.getByRole("group", { name: "Current workspace" });
+  const consoleBars = page.getByRole("group", { name: "Console bars" });
+
+  try {
+    await page.goto(`/mux/session/${sessionName}?workspace=${encodeURIComponent(workspace.id)}`);
+    await expect(workspaceIdentity).toHaveText(workspaceName);
+    await expect(workspaceIdentity).toHaveAttribute("title", workspaceName);
+    for (const width of [1440, 672]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(workspaceIdentity).toBeInViewport();
+      const bounds = (await workspaceIdentity.boundingBox())!;
+      expect(bounds.x).toBeLessThanOrEqual(12);
+      expect(bounds.y).toBeLessThanOrEqual(16);
+      expect(bounds.width).toBeLessThanOrEqual(230);
+      await expect(workspaceIdentity.locator("strong")).toHaveCSS("text-overflow", "ellipsis");
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await consoleBars.getByRole("button", { name: "Vertical session tabs" }).click();
+    await consoleBars.getByRole("button", { name: "Session tabs", exact: true }).click();
+    await expect(page.getByRole("navigation", { name: "Session workspace" })).toBeHidden();
+    await expect(workspaceIdentity).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("saved-workspace-top-left.png") });
+
+    await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
+    await expect(workspaceIdentity).toHaveText("Temporary workspace");
+    await expect(workspaceIdentity).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("temporary-workspace-top-left.png") });
+  } finally {
+    await request.delete(`/mux/api/workspaces/${encodeURIComponent(workspace.id)}`);
+  }
+});
+
 test("desktop terminal focus fills the viewport without replacing the live session", async ({
   page,
 }, testInfo) => {

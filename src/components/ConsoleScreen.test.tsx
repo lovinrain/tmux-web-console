@@ -411,6 +411,7 @@ describe("ConsoleScreen session identity", () => {
       name: "Sessions and workspaces navigation",
     })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Session navigation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Current workspace" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Staged input" }))
       .toHaveAttribute("id", "muxdeck-pane-layout-left-staged-textarea");
   });
@@ -750,7 +751,7 @@ describe("ConsoleScreen session identity", () => {
     }
   });
 
-  it("uses the saved workspace and display names in the browser tab title", async () => {
+  it("keeps the workspace identity in the toolbar and browser title through renames and temporary navigation", async () => {
     vi.mocked(listSessions).mockResolvedValue([session("Release review")]);
     const view = renderWithTheme(
       <ConsoleScreen
@@ -764,6 +765,11 @@ describe("ConsoleScreen session identity", () => {
     await waitFor(() => {
       expect(document.title).toBe("Incident room - Release review");
     });
+    const workspaceIdentity = screen.getByRole("group", { name: "Current workspace" });
+    expect(workspaceIdentity).toHaveTextContent("Incident room");
+    expect(workspaceIdentity).toHaveAttribute("title", "Incident room");
+    expect(screen.getByRole("group", { name: "Console bars" }).firstElementChild)
+      .toBe(workspaceIdentity);
 
     view.rerender(
       <ThemeProvider>
@@ -777,6 +783,8 @@ describe("ConsoleScreen session identity", () => {
     await waitFor(() => {
       expect(document.title).toBe("Release train - Release review");
     });
+    expect(workspaceIdentity).toHaveTextContent("Release train");
+    expect(workspaceIdentity).toHaveAttribute("title", "Release train");
 
     view.rerender(
       <ThemeProvider>
@@ -786,6 +794,14 @@ describe("ConsoleScreen session identity", () => {
     await waitFor(() => {
       expect(document.title).toBe("Release review - Muxdeck");
     });
+    expect(workspaceIdentity).toHaveTextContent("Temporary workspace");
+
+    view.rerender(
+      <ThemeProvider>
+        <ConsoleScreen sessionName="test" workspaceId="opening" onBack={vi.fn()} />
+      </ThemeProvider>,
+    );
+    expect(workspaceIdentity).toHaveTextContent("Opening workspace");
   });
 
   it("offers exclusive mobile purposes without remounting the terminal or losing a draft", async () => {

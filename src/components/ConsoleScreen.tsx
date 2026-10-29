@@ -333,6 +333,9 @@ function clampDelta(value: number, minimum: number, maximum: number): number {
 
 interface ConsoleBarToolbarProps {
   visibility: ConsoleBarVisibility;
+  workspaceName?: string | null;
+  workspaceId?: string | null;
+  showWorkspaceIdentity?: boolean;
   hideSessionTabs?: boolean;
   availability?: Partial<Record<ConsoleBar, boolean>>;
   onChange: (bar: ConsoleBar, visible: boolean) => void;
@@ -407,6 +410,9 @@ function WorkspaceNewTabLink({ focus = false }: { focus?: boolean }) {
 
 function ConsoleBarToolbar({
   visibility,
+  workspaceName,
+  workspaceId,
+  showWorkspaceIdentity = false,
   hideSessionTabs = false,
   availability,
   onChange,
@@ -438,6 +444,8 @@ function ConsoleBarToolbar({
   const floatingInputShortcut = directShortcutLabel(
     shortcutBindings["view-floating-input"],
   );
+  const workspaceIdentity = workspaceName?.trim()
+    || (workspaceId ? "Opening workspace" : "Temporary workspace");
   return (
     <div
       className={workspaceLinks
@@ -446,7 +454,17 @@ function ConsoleBarToolbar({
       role="group"
       aria-label="Console bars"
     >
-      <span className="console-bar-toolbar-label" aria-hidden="true">VIEW</span>
+      {showWorkspaceIdentity ? (
+        <div
+          className="console-workspace-identity"
+          role="group"
+          aria-label="Current workspace"
+          title={workspaceIdentity}
+        >
+          <GridIcon />
+          <strong>{workspaceIdentity}</strong>
+        </div>
+      ) : <span className="console-bar-toolbar-label" aria-hidden="true">VIEW</span>}
       {workspaceLinks && (
         <div className="console-bar-toolbar-links">{workspaceLinks}</div>
       )}
@@ -2255,6 +2273,9 @@ export function ConsoleScreen({
         {ephemeral && <EphemeralTabMarker />}
         {!ephemeral && <ConsoleBarToolbar
           visibility={visibleBars}
+          workspaceName={workspaceName}
+          workspaceId={workspaceId}
+          showWorkspaceIdentity={!embedded}
           availability={{
             sessionTabs: Boolean(sessionNavigation),
             stagedInput: false,
@@ -2403,6 +2424,9 @@ export function ConsoleScreen({
       {ephemeral && <EphemeralTabMarker />}
       <ConsoleBarToolbar
         visibility={visibleBars}
+        workspaceName={workspaceName}
+        workspaceId={workspaceId}
+        showWorkspaceIdentity={!embedded && !ephemeral}
         hideSessionTabs={ephemeral}
         availability={{ sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}
