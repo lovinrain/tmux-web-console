@@ -25,7 +25,9 @@ when you disconnect.
   shares one browser-local layout across scopes and workspaces.
 - **Workspaces for many sessions.** Save ordered tabs, colored groups, nested
   sessions, quick links, and multi-pane layouts. Resume on another device and
-  receive workspace changes live across open browser tabs.
+  receive workspace changes live across open browser tabs. Large layouts use a
+  browser-only URL fragment so HTTP request-size limits do not break reloads
+  or copied links.
 - **Linked views with separate controls.** [Fork-sync](docs/FORK_SYNC.md) keeps
   session and Pane-view selection in step across browser tabs while each tab
   keeps its own theme, toolbar layout, and staged input.

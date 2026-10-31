@@ -1437,6 +1437,7 @@ itself in commands, logs, screenshots, documentation, or source control.
 
 | Symptom | Likely cause | Safe checks/fix |
 | --- | --- | --- |
+| `Got more than 8190 bytes when reading` on a workspace page | A legacy URL sends the whole tab/group/tree/fold layout in the HTTP query | Open the saved workspace using only its `workspace=` identifier plus any dashboard filters, then reload the updated frontend. The client moves oversized layout metadata into a browser-only URL fragment. Deploying this frontend fix requires no service or tmux restart. |
 | `ModuleNotFoundError: tmux_console` | Stale/broken copied venv or package not installed | Recreate the exact release venv, run `pip install -e .`, and test import from `/`. |
 | Vite rejects Node | Node is below `20.19.0` or below `22.12.0` on Node 22 | Install an approved compatible Node release, then run `npm ci` again. |
 | Health is 503 / `no server running` | Wrong run user/socket, missing tmux server, wrong `TMUX_TMPDIR` | Repeat section 4.3 as the service user; do not start or kill tmux unless explicitly requested. |

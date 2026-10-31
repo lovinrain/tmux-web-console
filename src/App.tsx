@@ -1,4 +1,5 @@
 import { foldWorkspaceTabs, normalizeWorkspaceTabFolds, sameWorkspaceTabFolds, unfoldWorkspaceTabs, withWorkspaceTabFolds, type WorkspaceTabFold } from "./workspaceFolds";
+import { workspaceHref, workspaceSearchFromLocation } from "./workspaceUrl";
 import {
   useCallback,
   useEffect,
@@ -521,11 +522,11 @@ function currentLocation(): MuxLocation {
   const relative = BASE_PATH && path.startsWith(BASE_PATH)
     ? path.slice(BASE_PATH.length) || "/"
     : path;
-  return { path: relative, search: window.location.search };
+  return { path: relative, search: workspaceSearchFromLocation(window.location) };
 }
 
-function targetUrl(path: string, search = window.location.search): string {
-  return `${BASE_PATH}${path === "/" ? "/" : path}${search}`;
+function targetUrl(path: string, search = currentLocation().search): string {
+  return workspaceHref(`${BASE_PATH}${path === "/" ? "/" : path}`, search, window.location.hash);
 }
 
 function withoutRecentsEntry(state: unknown): Record<string, unknown> {

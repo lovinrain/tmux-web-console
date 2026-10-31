@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import type { Session } from "../src/types";
 import type { GlobalCallbackSnapshot, SavedWorkspace } from "../src/api";
 import { E2E_AUTH_PASSWORD, E2E_AUTH_USERNAME } from "./authFixture";
+import { searchWithWorkspaceState } from "../src/workspaceState";
+import { workspaceHref, workspaceSearchFromLocation } from "../src/workspaceUrl";
 
 // Missing session names exercise workspace behavior without creating or touching tmux.
 const workspaceIds: string[] = [];
@@ -83,6 +85,99 @@ async function finishLayout(page: Page): Promise<void> {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   }));
 }
+
+test("oversized saved workspace links reload, share, and persist edits with short HTTP requests", async ({
+  page, context,
+}) => {
+  const tabs = Array.from({ length: 96 }, (_, index) => (
+    `missing-large-workspace-${index}-${"long-session-".repeat(3)}`
+  ));
+  const groups = [{ id: "large", name: "Large", color: "blue", collapsed: false, tabs }];
+  const parents = Object.fromEntries(tabs.slice(1).map((name) => [name, tabs[0]]));
+  const folds = [{ id: "large-fold", tabs: tabs.slice(2, 4) }];
+  const response = await context.request.post("/mux/api/workspaces", {
+    data: { name: "Large URL regression", tabs, groups, parents, folds, activeSession: tabs[0] },
+  });
+  expect(response.ok()).toBe(true);
+  const workspace = (await response.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  const initial = searchWithWorkspaceState(`?workspace=${workspace.id}`, tabs, workspace.groups ?? [], parents, folds);
+  expect(initial.length).toBeGreaterThan(8190);
+
+  const documents: string[] = [];
+  context.on("request", (request) => {
+    if (request.resourceType() === "document") documents.push(request.url());
+  });
+  await page.goto(`/mux/session/${tabs[0]}?workspace=${workspace.id}`);
+  await expect(page.locator(".workspace-saved-indicator.saved")).toHaveCount(1);
+  await expect(tabRows(page)).toHaveCount(tabs.length - 2);
+  await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.has("tab")).toBe(false);
+  expect(workspaceSearchFromLocation(new URL(page.url()))).toContain("tab-parent=");
+  await page.reload();
+  await expect(tabRows(page)).toHaveCount(tabs.length - 2);
+
+  const secondPage = await context.newPage();
+  await secondPage.goto(page.url());
+  await expect(tabRows(secondPage)).toHaveCount(tabs.length - 2);
+  await closeTab(page, tabs[4]);
+  const remaining = tabs.filter((name) => name !== tabs[4]);
+  await expect(tabRows(secondPage)).toHaveCount(remaining.length - 2);
+  await expect.poll(async () => (await readWorkspace(context.request, workspace.id)).tabs).toEqual(remaining);
+  await secondPage.reload();
+  await expect(tabRows(secondPage)).toHaveCount(remaining.length - 2);
+  for (const href of documents) {
+    const url = new URL(href);
+    expect(url.pathname.length + url.search.length).toBeLessThan(8190);
+  }
+});
+
+test("oversized temporary workspace links preserve their tree and folds on reload and sharing", async ({
+  page, context,
+}) => {
+  const tabs = Array.from({ length: 96 }, (_, index) => (
+    `missing-large-temporary-${index}-${"long-session-".repeat(3)}`
+  ));
+  const groups = [{ id: "temporary", name: "Temporary", color: "green" as const, collapsed: false, tabs }];
+  const parents = Object.fromEntries(tabs.slice(1).map((name) => [name, tabs[0]]));
+  const folds = [{ id: "temporary-fold", tabs: tabs.slice(2, 4) }];
+  const search = searchWithWorkspaceState("?view=list", tabs, groups, parents, folds);
+  const href = workspaceHref(`/mux/session/${tabs[0]}`, search);
+  const socket = process.env.MUXDECK_PLAYWRIGHT_TMUX_SOCKET;
+  if (!socket?.startsWith("muxdeck-playwright-")) throw new Error("Disposable test socket required");
+  // Fork controls require a live selected session; the rest stay metadata-only.
+  execFileSync("tmux", ["-L", socket, "new-session", "-d", "-s", tabs[5], "bash", "--noprofile", "--norc"]);
+  try {
+    expect(search.length).toBeGreaterThan(8190);
+    await page.goto(href);
+    await expect(tabRows(page)).toHaveCount(tabs.length - 2);
+    await expect(tabRow(page, tabs[5])).toHaveAttribute("data-session-depth", "1");
+    await expect(page.getByRole("tab", { name: "Preview fold of 2 sessions", exact: true })).toBeVisible();
+    await tabRow(page, tabs[5]).getByRole("tab").click();
+    await page.reload();
+    await expect(tabRows(page)).toHaveCount(tabs.length - 2);
+    await expect(tabRow(page, tabs[5]).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+    const [secondPage] = await Promise.all([
+      context.waitForEvent("page"),
+      page.getByRole("link", { name: "Open independent workspace tab", exact: true }).click(),
+    ]);
+    await expect(tabRows(secondPage)).toHaveCount(tabs.length - 2);
+    expect(new URL(secondPage.url()).pathname.length + new URL(secondPage.url()).search.length).toBeLessThan(8190);
+    const [syncedPage] = await Promise.all([
+      context.waitForEvent("page"),
+      page.getByRole("link", { name: "Open synced workspace tab", exact: true }).click(),
+    ]);
+    await expect(tabRows(syncedPage)).toHaveCount(tabs.length - 2);
+    expect(new URL(syncedPage.url()).searchParams.has("fork-sync")).toBe(true);
+    expect(new URL(syncedPage.url()).pathname.length + new URL(syncedPage.url()).search.length).toBeLessThan(8190);
+    await syncedPage.getByRole("button", { name: "Unlink this browser tab", exact: true }).click();
+    await expect.poll(() => new URL(syncedPage.url()).searchParams.has("fork-sync")).toBe(false);
+    await expect(tabRows(syncedPage)).toHaveCount(tabs.length - 2);
+  } finally {
+    await Promise.all(context.pages().map((browserPage) => browserPage.close()));
+    execFileSync("tmux", ["-L", socket, "kill-session", "-t", `=${tabs[5]}`]);
+  }
+});
 
 test("session read and unread sync between independent browsers and override stale laptop history", async ({
   page, context, browser,

@@ -10,6 +10,7 @@ import {
   type ForkSyncSelection,
 } from "./forkSync";
 import { enableLocalViewPreferences } from "./viewPreferences";
+import { workspaceHref, workspaceSearchFromLocation } from "./workspaceUrl";
 
 const UNLINKED_PREFIX = "muxdeck-fork-sync-unlinked:";
 
@@ -102,11 +103,11 @@ export function useForkSync(
         version: 1, sequence: (previous?.sequence ?? 0) + 1, sender, updatedAt: Date.now(), selection: current,
       }, storage);
     }
-    const nextSearch = searchWithForkSyncGroup(window.location.search, nextGroup);
+    const nextSearch = searchWithForkSyncGroup(workspaceSearchFromLocation(window.location), nextGroup);
     onSearchChange(nextSearch);
     enableLocalViewPreferences();
     const destination = new URL(window.location.href);
-    destination.search = nextSearch;
+    destination.href = new URL(workspaceHref(destination.pathname, nextSearch, destination.hash), destination).href;
     return destination.href;
   }, [group, newGroup, onSearchChange, sender, supported, paused]);
 
@@ -117,12 +118,14 @@ export function useForkSync(
     peer.current?.close();
     peer.current = null;
     enableLocalViewPreferences();
-    onSearchChange(searchWithForkSyncGroup(window.location.search, null));
+    onSearchChange(searchWithForkSyncGroup(workspaceSearchFromLocation(window.location), null));
     setNewGroup(newForkSyncId());
   }, [group, onSearchChange]);
 
   const destination = new URL(window.location.href);
-  destination.search = searchWithForkSyncGroup(search, group ?? newGroup);
+  destination.href = new URL(workspaceHref(
+    destination.pathname, searchWithForkSyncGroup(search, group ?? newGroup), destination.hash,
+  ), destination).href;
   return {
     linked: Boolean(group),
     active: Boolean(group) && supported && problem === null && !paused,

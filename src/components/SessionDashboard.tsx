@@ -75,6 +75,7 @@ import {
   type WorkspaceTabGroup,
 } from "../workspaceState";
 import { searchWithForkSyncGroup } from "../forkSync";
+import { workspaceHref, workspaceSearchFromLocation } from "../workspaceUrl";
 import { AppTabs } from "./AppTabs";
 import { stageSessionDraft } from "./InputBar";
 import { MessageQueueDialog } from "./MessageQueueDialog";
@@ -258,23 +259,26 @@ function persistDashboardPreferences(route: SessionDashboardRouteState): void {
 }
 
 function replaceDashboardUrl(route: SessionDashboardRouteState): void {
-  const openSessions = workspaceTabsFromSearch(window.location.search);
-  const dashboardSearch = serializeSessionDashboardSearch(route, window.location.search);
+  const currentSearch = workspaceSearchFromLocation(window.location);
+  const openSessions = workspaceTabsFromSearch(currentSearch);
+  const dashboardSearch = serializeSessionDashboardSearch(route, currentSearch);
   const search = searchWithWorkspaceTabs(dashboardSearch, openSessions);
-  const target = `${window.location.pathname}${search}${window.location.hash}`;
+  const target = workspaceHref(window.location.pathname, search, window.location.hash);
   window.history.replaceState(window.history.state, "", target);
 }
 
 function isolatedWorkspaceHref(href: string): string {
   const url = new URL(href, window.location.href);
-  url.search = isolatedWorkspaceSearch(url.search);
-  if (url.origin === window.location.origin) return `${url.pathname}${url.search}${url.hash}`;
+  const search = isolatedWorkspaceSearch(workspaceSearchFromLocation(url));
+  const target = workspaceHref(url.pathname, search, url.hash);
+  if (url.origin === window.location.origin) return target;
+  url.href = new URL(target, url).href;
   return url.toString();
 }
 
 function sessionConsoleHref(sessionName: string): string {
-  const search = isolatedWorkspaceSearch(window.location.search);
-  return `${BASE_PATH}/session/${encodeURIComponent(sessionName)}${search}`;
+  const search = isolatedWorkspaceSearch(workspaceSearchFromLocation(window.location));
+  return workspaceHref(`${BASE_PATH}/session/${encodeURIComponent(sessionName)}`, search);
 }
 
 function recoveryItemsFromSessions(sessions: Session[]): RecoverableSession[] {
@@ -296,14 +300,14 @@ function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
     : "/";
   const search = searchWithSavedWorkspaceId(
     searchWithWorkspaceState(
-      searchWithForkSyncGroup(window.location.search, null),
+      searchWithForkSyncGroup(workspaceSearchFromLocation(window.location), null),
       workspace.tabs,
       workspace.groups ?? [],
       workspace.parents ?? {},
     ),
     workspace.id,
   );
-  return `${BASE_PATH}${path}${search}`;
+  return workspaceHref(`${BASE_PATH}${path}`, search);
 }
 
 function SessionWorkspaceMembership({
