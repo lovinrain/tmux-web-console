@@ -347,11 +347,23 @@ def _open_reference_paths(
         return []
 
     matches: list[tuple[int, str, str]] = []
+    held_matches: list[tuple[int, str, str]] = []
     for descriptor in descriptors:
         try:
             target = os.readlink(descriptor.path)
         except OSError:
             continue
+        if agent_type == "copilot":
+            path = Path(target)
+            identifier = path.parent.name
+            # Copilot closes events.jsonl between writes but holds this file open.
+            if (
+                path.name == f"inuse.{process_id}.hold"
+                and path.parent.parent.name == "session-state"
+                and UUID_PATTERN.fullmatch(identifier)
+            ):
+                held_matches.append((0, target, identifier.lower()))
+                continue
         if not _path_matches_agent(target, agent_type):
             continue
         if agent_type == "codex":
@@ -374,7 +386,7 @@ def _open_reference_paths(
         except OSError:
             modified_ns = 0
         matches.append((modified_ns, target, identifiers[-1].lower()))
-    return matches
+    return held_matches or matches
 
 
 def discover_agent_session_id(
@@ -406,6 +418,9 @@ def discover_agent_session_id(
                 return registered
         candidates = _open_reference_paths(proc_root, process_id, agent_type)
         if candidates:
+            if agent_type == "copilot" and Path(candidates[0][1]).name == f"inuse.{process_id}.hold":
+                held_ids = {identifier for _, _, identifier in candidates}
+                return next(iter(held_ids)) if len(held_ids) == 1 else None
             # Breadth-first traversal encounters the foreground agent before
             # any nested workers. Do not let a newer subagent file replace the
             # foreground conversation reference.

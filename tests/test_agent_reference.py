@@ -13,6 +13,7 @@ from tmux_console.agent_reference import (
     AgentReferenceDetector,
     discover_agent_session_id,
 )
+from tmux_console.session_registry import SessionRegistry
 from tmux_console.tmux import Pane, Session
 
 
@@ -86,6 +87,104 @@ def test_discovers_an_explicit_resume_id_when_no_file_is_open(tmp_path: Path, ag
         agent,
         proc_root=proc_root,
     ) == agent_id
+
+
+async def test_copilot_hold_reference_survives_registry_restart(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    parent = process(proc_root, 100, ["/bin/bash"])
+    child = process(proc_root, 101, ["copilot"])
+    (parent / "task/100/children").write_text("101", encoding="ascii")
+    identifier = "ABCDEFAB-1234-4234-8234-1234567890AB"
+    hold = tmp_path / "copilot/session-state" / identifier / "inuse.101.hold"
+    hold.parent.mkdir(parents=True)
+    hold.touch()
+    (child / "fd/9").symlink_to(hold)
+    live = session(pane(command="copilot"))
+    references = await AgentReferenceDetector(proc_root=proc_root).detect_sessions([live])
+
+    assert references == {"agent": AgentReference("copilot", identifier.lower())}
+    database = tmp_path / "sessions.sqlite3"
+    registry = SessionRegistry(database)
+    try:
+        assert registry.reconcile([live], references) == []
+    finally:
+        registry.close()
+
+    restarted = SessionRegistry(database)
+    try:
+        recovered = restarted.reconcile([])
+        assert len(recovered) == 1
+        assert recovered[0].agent_type == "copilot"
+        assert recovered[0].agent_session_id == identifier.lower()
+    finally:
+        restarted.close()
+
+
+def test_copilot_hold_tracks_resume_without_borrowing_other_conversations(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    old = "11111111-1111-4111-8111-111111111111"
+    current = "22222222-2222-4222-8222-222222222222"
+    worker = "33333333-3333-4333-8333-333333333333"
+    resumed = "44444444-4444-4444-8444-444444444444"
+    root = process(proc_root, 100, ["copilot", "--resume", old])
+    (root / "task/100/children").write_text("101", encoding="ascii")
+    process(proc_root, 101, ["copilot", "--resume", worker])
+    sessions = tmp_path / "copilot/session-state"
+    unrelated = sessions / worker / "events.jsonl"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("{}\n", encoding="utf-8")
+    (root / "fd/8").symlink_to(unrelated)
+    hold = sessions / current / "inuse.100.hold"
+    hold.parent.mkdir(parents=True)
+    hold.touch()
+    os.utime(hold, ns=(1, 1))
+    (root / "fd/9").symlink_to(hold)
+
+    assert discover_agent_session_id(pane(command="copilot"), "copilot", proc_root=proc_root) == current
+
+    (root / "fd/9").unlink()
+    next_hold = sessions / resumed / "inuse.100.hold"
+    next_hold.parent.mkdir(parents=True)
+    next_hold.touch()
+    (root / "fd/9").symlink_to(next_hold)
+
+    assert discover_agent_session_id(pane(command="copilot"), "copilot", proc_root=proc_root) == resumed
+
+
+@pytest.mark.parametrize(
+    ("filename", "identifier", "directory"),
+    [
+        ("inuse.101.hold", "11111111-1111-4111-8111-111111111111", "session-state"),
+        ("inuse.100.lock", "11111111-1111-4111-8111-111111111111", "session-state"),
+        ("inuse.100.hold", "not-a-uuid", "session-state"),
+        ("inuse.100.hold", "11111111-1111-4111-8111-111111111111", "files"),
+    ],
+)
+def test_copilot_rejects_unowned_or_invalid_hold_files(
+    tmp_path: Path, filename: str, identifier: str, directory: str,
+):
+    proc_root = tmp_path / "proc"
+    root = process(proc_root, 100, ["copilot"])
+    hold = tmp_path / "copilot" / directory / identifier / filename
+    hold.parent.mkdir(parents=True)
+    hold.touch()
+    (root / "fd/9").symlink_to(hold)
+
+    assert discover_agent_session_id(pane(command="copilot"), "copilot", proc_root=proc_root) is None
+
+
+def test_copilot_does_not_guess_between_multiple_held_conversations(tmp_path: Path):
+    proc_root = tmp_path / "proc"
+    old = "11111111-1111-4111-8111-111111111111"
+    other = "22222222-2222-4222-8222-222222222222"
+    root = process(proc_root, 100, ["copilot", "--resume", old])
+    for number, identifier in [(9, old), (10, other)]:
+        hold = tmp_path / "copilot/session-state" / identifier / "inuse.100.hold"
+        hold.parent.mkdir(parents=True)
+        hold.touch()
+        (root / "fd" / str(number)).symlink_to(hold)
+
+    assert discover_agent_session_id(pane(command="copilot"), "copilot", proc_root=proc_root) is None
 
 
 def test_foreground_reference_wins_over_a_newer_nested_agent(tmp_path: Path):

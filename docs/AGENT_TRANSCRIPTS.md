@@ -83,6 +83,13 @@ access and reusing a tmux name does not merge conversations. Claude's existing
 reference detector uses PID registrations when available, with legacy detection
 for older versions.
 
+Copilot keeps its current `session-state/ID/inuse.PID.hold` file open even when
+it closes `events.jsonl` between writes. The detector uses the hold belonging
+to the exact CLI process before old resume arguments or unrelated open
+transcripts. Multiple distinct holds in one process remain unidentified rather
+than guessing a conversation. These references use the existing persistent
+session registry and require no state-schema migration.
+
 After Codex exits, Muxdeck can recover IDs from its explicit reconnect messages
 in the retained pane output. Background observation and opening Session history
 perform this recovery. The capture is limited to the last 2,000 terminal rows
