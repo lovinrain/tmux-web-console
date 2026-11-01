@@ -60,25 +60,68 @@ def systemctl(scope):
     return ["systemctl", "--user"] if scope == "user" else ["systemctl"]
 
 
-def snapshot(service, scope="system", log_file=None, *, frontend_only=False):
+def process_start_ticks(pid, proc_root=Path("/proc")):
+    require(type(pid) is int and pid > 0, "Invalid console process PID")
+    raw = (proc_root / str(pid) / "stat").read_text()
+    try:
+        ticks = int(raw[raw.rindex(")") + 2:].split()[19])
+    except (ValueError, IndexError) as error:
+        raise CheckError("Missing console process start identity") from error
+    require(ticks > 0, "Missing console process start identity")
+    return ticks
+
+
+def standalone_process(service, pid, proc_root=Path("/proc")):
+    ticks = process_start_ticks(pid, proc_root)
+    process = proc_root / str(pid)
+    require(process.stat().st_uid == os.geteuid(), "Run this check as the console owner")
+    args = [os.fsdecode(arg) for arg in (process / "cmdline").read_bytes().split(b"\0") if arg]
+    python = bool(args) and Path(args[0]).name.startswith("python")
+    module = python and args[1:3] in (["-m", "tmux_console"], ["-m", "tmux_console.app"])
+    script = bool(args) and (
+        Path(args[0]).name == "muxdeck"
+        or python and len(args) > 1 and Path(args[1]).name == "muxdeck"
+    )
+    require(module or script, "PID is not a Muxdeck server process")
+    groups = (process / "cgroup").read_text().splitlines()
+    require(bool(groups), "Missing console process cgroup")
+    require(
+        not any(part.endswith(".service") for line in groups
+                for part in line.split(":", 2)[-1].split("/")),
+        "Systemd-managed processes require service KillMode/cgroup checks",
+    )
+    return {
+        "Id": service,
+        "MainPID": str(pid),
+        "WorkingDirectory": os.readlink(process / "cwd"),
+        "processStartTicks": ticks,
+    }, process
+
+
+def snapshot(service, scope="system", log_file=None, *, frontend_only=False, process_pid=None):
     require(
         bool(re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", service)),
         "Invalid service name",
     )
-    properties = command(
-        systemctl(scope)
-        + [
-            "show",
-            service,
-            "--no-pager",
-            "--property=Id,MainPID,ActiveState,KillMode,ControlGroup,WorkingDirectory",
-        ]
-    )
-    facts = dict(line.split("=", 1) for line in properties.splitlines() if "=" in line)
-    require(facts.get("ActiveState") == "active", "Muxdeck service is not active")
-    require(
-        facts.get("KillMode") == "process", "KillMode must be process before deployment"
-    )
+    if scope == "process":
+        require(log_file is not None, "Standalone process checks require a private log file")
+        facts, process = standalone_process(service, process_pid)
+    else:
+        require(process_pid is None, "Process PID requires standalone process scope")
+        properties = command(
+            systemctl(scope)
+            + [
+                "show",
+                service,
+                "--no-pager",
+                "--property=Id,MainPID,ActiveState,KillMode,ControlGroup,WorkingDirectory",
+            ]
+        )
+        facts = dict(line.split("=", 1) for line in properties.splitlines() if "=" in line)
+        require(facts.get("ActiveState") == "active", "Muxdeck service is not active")
+        require(
+            facts.get("KillMode") == "process", "KillMode must be process before deployment"
+        )
     pid = int(facts.get("MainPID", "0"))
     require(pid > 0, "Muxdeck has no running main process")
     process = Path(f"/proc/{pid}")
@@ -106,19 +149,27 @@ def snapshot(service, scope="system", log_file=None, *, frontend_only=False):
         len(fields) == 3 and fields[0].isdigit() and bool(fields[1]),
         "Incomplete tmux identity",
     )
-    group = facts.get("ControlGroup", "")
-    require(bool(group) and group != "/", "Missing Muxdeck cgroup")
-    tmux_groups = Path(f"/proc/{fields[0]}/cgroup").read_text().splitlines()
-    require(bool(tmux_groups), "Missing tmux cgroup")
-    shares_cgroup = any(
-        line.split(":", 2)[-1] == group
-        or line.split(":", 2)[-1].startswith(group + "/")
-        for line in tmux_groups
-    )
-    require(
-        frontend_only or not shares_cgroup,
-        "tmux belongs to the Muxdeck cgroup; deployment must stop for review",
-    )
+    shares_cgroup = None
+    if scope == "process":
+        require(pid != int(fields[0]), "Console PID must not be the tmux server")
+        require(
+            Path(f"/proc/{fields[0]}").stat().st_uid == os.geteuid(),
+            "Console and tmux must have the same owner",
+        )
+    else:
+        group = facts.get("ControlGroup", "")
+        require(bool(group) and group != "/", "Missing Muxdeck cgroup")
+        tmux_groups = Path(f"/proc/{fields[0]}/cgroup").read_text().splitlines()
+        require(bool(tmux_groups), "Missing tmux cgroup")
+        shares_cgroup = any(
+            line.split(":", 2)[-1] == group
+            or line.split(":", 2)[-1].startswith(group + "/")
+            for line in tmux_groups
+        )
+        require(
+            frontend_only or not shares_cgroup,
+            "tmux belongs to the Muxdeck cgroup; deployment must stop for review",
+        )
     panes = sorted(
         command(
             tmux
@@ -143,7 +194,13 @@ def snapshot(service, scope="system", log_file=None, *, frontend_only=False):
     require(
         not base or bool(re.fullmatch(r"/[A-Za-z0-9_/-]+", base)), "Invalid base path"
     )
-    extra = {"scope": "user"} if scope == "user" else {}
+    extra = {"scope": scope} if scope != "system" else {}
+    if scope == "process":
+        require(
+            process_start_ticks(pid) == facts["processStartTicks"],
+            "Console process changed during the snapshot",
+        )
+        extra.update(processStartTicks=facts["processStartTicks"], pidOnlyRestart=True)
     if frontend_only:
         # Static assets can be replaced without signalling either process.
         # Verification must prove the web process and release path stayed put.
@@ -242,11 +299,15 @@ def compare(before, after, *, allow_added_panes=False, allow_command_changes=Fal
     identity_fields = ["bootId", "service", "origin", "basePath", "authMode", "tmux"]
     if before.get("frontendOnly"):
         identity_fields += ["mainPid", "appDir"]
+        if before.get("scope") == "process":
+            identity_fields.append("processStartTicks")
     identity_changes = [
         key
         for key in identity_fields
         if before[key] != after[key]
     ]
+    if before.get("scope", "system") != after.get("scope", "system"):
+        identity_changes.append("scope")
     comparison = {
         "baselineCount": len(original),
         "currentCount": len(current),
@@ -499,8 +560,13 @@ def main(argv=None):
         "snapshot", help="Record service and pane identities before deployment"
     )
     before.add_argument("--service", default="muxdeck.service")
-    before.add_argument(
+    manager = before.add_mutually_exclusive_group()
+    manager.add_argument(
         "--user", action="store_true", help="the service is a systemd --user unit"
+    )
+    manager.add_argument(
+        "--process-pid", type=int,
+        help="Explicit standalone console PID; only PID-bound signals may be used",
     )
     before.add_argument(
         "--log-file",
@@ -521,6 +587,10 @@ def main(argv=None):
     after.add_argument("--public-origin", action="append", default=[])
     after.add_argument("--expected-dist", type=Path)
     after.add_argument(
+        "--process-pid", type=int,
+        help="Current standalone console PID for a process-scoped baseline",
+    )
+    after.add_argument(
         "--allow-added-panes",
         action="store_true",
         help="Accept added panes after reviewing user activity; all original pane identities must remain unchanged",
@@ -537,8 +607,11 @@ def main(argv=None):
         if args.action == "snapshot":
             with report.phase("Record service and tmux identities"):
                 current = snapshot(
-                    args.service, "user" if args.user else "system", args.log_file,
+                    args.service,
+                    "process" if args.process_pid is not None else "user" if args.user else "system",
+                    args.log_file,
                     **({"frontend_only": True} if args.frontend_only else {}),
+                    **({"process_pid": args.process_pid} if args.process_pid is not None else {}),
                 )
                 private_write(args.output, json.dumps(current, indent=2) + "\n")
             print(f"Baseline saved: {len(current['panes'])} panes", flush=True)
@@ -552,9 +625,22 @@ def main(argv=None):
             scope = baseline.get("scope", "system")
             frontend_only = baseline.get("frontendOnly", False)
             require(isinstance(frontend_only, bool), "Invalid frontend-only baseline mode")
+            process_options = {}
+            if scope == "process":
+                require(
+                    args.process_pid is not None and baseline.get("pidOnlyRestart") is True,
+                    "Standalone verification requires the current explicit process PID",
+                )
+                process_options = {
+                    "process_pid": args.process_pid,
+                    "log_file": Path(baseline["logFile"]),
+                }
+            else:
+                require(args.process_pid is None, "Process PID requires a process-scoped baseline")
             current = snapshot(
                 baseline["service"], scope,
                 **({"frontend_only": True} if frontend_only else {}),
+                **process_options,
             )
             comparison = compare(
                 baseline,

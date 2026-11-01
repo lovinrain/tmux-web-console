@@ -31,7 +31,8 @@ is locked by `package-lock.json`, while Python currently allows compatible
    until the replacement passes all validation gates.
 8. Restart only `muxdeck.service` during a normal deployment. Validate Caddy
    before reloading it. Do not restart Caddy when a reload is sufficient.
-9. Before restarting Muxdeck, prove the restart cannot take tmux with it: confirm
+9. Before restarting a systemd-managed Muxdeck, prove the restart cannot take
+   tmux with it: confirm
    `systemctl show muxdeck -p KillMode` reports `process`, and that no tmux server
    appears under `systemctl status muxdeck`. A frontend-only change needs no
    restart - rebuild `dist/` instead. See section 13.
@@ -1240,6 +1241,18 @@ Do not run `systemd-analyze --user verify` against a live user manager: on
 systemd 250 it can replace the manager's private socket, after which
 `systemctl --user` fails until the manager re-executes (`kill -s RTMIN+25
 <user-manager-pid>`).
+
+For an explicitly authorized restart of an existing standalone console on a
+host without systemd, use `snapshot --process-pid PID --log-file PRIVATE_LOG`
+and verify with `verify --process-pid NEW_PID`. This checks the owning UID,
+Muxdeck command, process start ticks, tmux identities, and the existing private
+log. It rejects service-managed cgroups rather than bypassing their KillMode
+checks. Recheck the recorded boot ID and process start ticks before each signal;
+signal only that exact console PID, never its process group, container, tmux
+server, or panes. The checker is read-only and does not authorize a restart.
+Preserve the original launch arguments/environment privately in memory, retain
+rollback code and state backups, and verify the existing auth mode, loopback
+binding, base path, and socket. Do not record credential values.
 
 Every phase prints its start, result, and elapsed time immediately. Commands
 have an eight-second timeout; HTTP requests have a five-second timeout. There

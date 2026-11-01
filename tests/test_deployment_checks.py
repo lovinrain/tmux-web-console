@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import threading
 from copy import deepcopy
@@ -81,6 +82,104 @@ def test_snapshot_uses_service_socket_without_exposing_environment(monkeypatch):
     assert current["panes"] == baseline()["panes"]
     assert "do-not-report" not in json.dumps(current)
     assert "PRIVATE_TOKEN" not in json.dumps(current)
+
+
+def standalone_fixture(tmp_path, *, args=None, group="/container", ticks=12345):
+    root = tmp_path / "proc"
+    process = root / "50"
+    process.mkdir(parents=True)
+    (process / "stat").write_text(
+        "50 (muxdeck worker) S 1 " + " ".join(["0"] * 17) + f" {ticks} 0\n"
+    )
+    (process / "cmdline").write_bytes(
+        b"\0".join(arg.encode() for arg in (args or ["python3", "-m", "tmux_console.app"]))
+    )
+    (process / "cgroup").write_text(f"0::{group}\n")
+    (process / "cwd").symlink_to("/app")
+    return root
+
+
+def test_standalone_process_records_pid_start_identity_without_a_service_manager(tmp_path):
+    root = standalone_fixture(tmp_path)
+    facts, process = checks.standalone_process("muxdeck.service", 50, root)
+    assert facts["MainPID"] == "50"
+    assert facts["processStartTicks"] == 12345
+    assert facts["WorkingDirectory"] == "/app"
+    assert process == root / "50"
+
+
+@pytest.mark.parametrize(
+    "options,message",
+    [
+        ({"args": ["tmux", "-m", "tmux_console.app"]}, "not a Muxdeck"),
+        ({"args": ["python3", "-m", "another.app"]}, "not a Muxdeck"),
+        ({"group": "/system.slice/muxdeck.service"}, "Systemd-managed"),
+        ({"group": "/system.slice/muxdeck.service/child"}, "Systemd-managed"),
+        ({"ticks": 0}, "start identity"),
+    ],
+)
+def test_standalone_checks_cannot_bypass_server_or_service_identity(tmp_path, options, message):
+    root = standalone_fixture(tmp_path, **options)
+    with pytest.raises(checks.CheckError, match=message):
+        checks.standalone_process("muxdeck.service", 50, root)
+
+
+def test_standalone_process_rejects_another_owner(tmp_path, monkeypatch):
+    root = standalone_fixture(tmp_path)
+    uid = os.geteuid()
+    monkeypatch.setattr(checks.os, "geteuid", lambda: uid + 1)
+    with pytest.raises(checks.CheckError, match="console owner"):
+        checks.standalone_process("muxdeck.service", 50, root)
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_process_snapshot_requires_a_stable_pid_and_keeps_environment_private(monkeypatch, changed):
+    calls = fake_service(monkeypatch)
+    monkeypatch.setattr(
+        checks, "standalone_process",
+        lambda service, pid: (
+            {"Id": service, "MainPID": str(pid), "WorkingDirectory": "/app", "processStartTicks": 12345},
+            Path("/proc") / str(pid),
+        ),
+    )
+    monkeypatch.setattr(checks, "process_start_ticks", lambda pid: 54321 if changed else 12345)
+    monkeypatch.setattr(checks, "private_log", lambda path: SimpleNamespace(st_size=42))
+    if changed:
+        with pytest.raises(checks.CheckError, match="changed during"):
+            checks.snapshot("muxdeck.service", "process", Path("/private.log"), process_pid=50)
+    else:
+        current = checks.snapshot("muxdeck.service", "process", Path("/private.log"), process_pid=50)
+        assert current["scope"] == "process"
+        assert current["processStartTicks"] == 12345
+        assert current["pidOnlyRestart"] is True
+        assert current["logOffset"] == 42
+        assert len(calls) == 2
+        assert "do-not-report" not in json.dumps(current)
+        assert "PRIVATE_TOKEN" not in json.dumps(current)
+
+
+def test_standalone_snapshot_requires_logs_and_never_targets_tmux(monkeypatch):
+    fake_service(monkeypatch)
+    with pytest.raises(checks.CheckError, match="private log"):
+        checks.snapshot("muxdeck.service", "process", process_pid=50)
+    monkeypatch.setattr(
+        checks, "standalone_process",
+        lambda service, pid: (
+            {"Id": service, "MainPID": "42", "WorkingDirectory": "/app", "processStartTicks": 12345},
+            Path("/proc/42"),
+        ),
+    )
+    with pytest.raises(checks.CheckError, match="must not be the tmux"):
+        checks.snapshot("muxdeck.service", "process", Path("/private.log"), process_pid=42)
+
+
+def test_process_baselines_do_not_relax_scope_or_frontend_incarnation_checks():
+    before = {**baseline(), "scope": "process", "processStartTicks": 12345, "frontendOnly": True}
+    checks.compare(before, deepcopy(before))
+    with pytest.raises(checks.CheckError, match="scope"):
+        checks.compare(before, {**before, "scope": "system"})
+    with pytest.raises(checks.CheckError, match="processStartTicks"):
+        checks.compare(before, {**before, "processStartTicks": 54321})
 
 
 @pytest.mark.parametrize(
@@ -519,17 +618,29 @@ def test_private_service_log_counts_only_output_after_the_baseline(tmp_path):
         checks.log_file_errors(log, offset)
 
 
-def test_verify_uses_the_baseline_scope_and_service_log(monkeypatch, tmp_path):
+@pytest.mark.parametrize("scope", ["user", "process"])
+def test_verify_uses_the_baseline_scope_and_service_log(monkeypatch, tmp_path, scope):
     log = tmp_path / "muxdeck.log"
     log.write_text("")
     log.chmod(0o600)
     args = setup_verifier(monkeypatch, tmp_path)
-    recorded = {**baseline(), "scope": "user", "logFile": str(log), "logOffset": 0}
+    recorded = {**baseline(), "scope": scope, "logFile": str(log), "logOffset": 0}
+    if scope == "process":
+        recorded.update(processStartTicks=12345, pidOnlyRestart=True)
+        args += ["--process-pid", "99"]
     Path(args[2]).write_text(json.dumps(recorded))
     scopes = []
-    monkeypatch.setattr(checks, "snapshot", lambda service, scope="system": scopes.append(scope) or baseline())
+    def snapshot(service, scope="system", **kwargs):
+        scopes.append(scope)
+        current = {**baseline(), "scope": scope}
+        if scope == "process":
+            assert kwargs == {"process_pid": 99, "log_file": log}
+            current.update(mainPid=99, processStartTicks=54321, pidOnlyRestart=True)
+        return current
+    monkeypatch.setattr(checks, "snapshot", snapshot)
     monkeypatch.setattr(checks, "journal", lambda *args: pytest.fail("journal is unreadable here"))
     assert checks.main(args) == 0
     result = json.loads((tmp_path / "report" / "verification.json").read_text())
-    assert scopes == ["user"]
+    assert scopes == [scope]
+    assert result["checks"]["mainPid"] == (99 if scope == "process" else 50)
     assert result["checks"]["journal"]["source"] == "service log file"
