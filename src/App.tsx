@@ -87,6 +87,8 @@ import { WorkspaceTimer } from "./components/WorkspaceTimer";
 import { HostPulse } from "./components/HostPulse";
 import { WorkspaceCallbackList } from "./components/WorkspaceCallbackList";
 import { mergeCallbackSnapshot } from "./callbackSnapshots";
+import { useCallbackNotifications } from "./useCallbackNotifications";
+import { CallbackNotifications } from "./components/CallbackNotifications";
 import { WorkspaceQuickLinks } from "./components/WorkspaceQuickLinks";
 import { WorkspacePaneBoard } from "./components/WorkspacePaneBoard";
 import {
@@ -913,6 +915,7 @@ function AppRoutes() {
     sessionRevision: 0,
   });
   const [globalCallbackBusy, setGlobalCallbackBusy] = useState(false);
+  const [callbacksLoaded, setCallbacksLoaded] = useState(false);
   const workspaceCallbackSessionsRef = useRef<string[]>(workspaceCallbackSessions);
   workspaceCallbackSessionsRef.current = workspaceCallbackSessions;
   const globalCallbackSnapshotRef = useRef<GlobalCallbackSnapshot>(globalCallbackSnapshot);
@@ -1104,6 +1107,7 @@ function AppRoutes() {
     const merged = mergeCallbackSnapshot(globalCallbackSnapshotRef.current, snapshot);
     globalCallbackSnapshotRef.current = merged;
     setGlobalCallbackSnapshot(merged);
+    setCallbacksLoaded(true);
 
     // A callback event also carries the saved workspace queues. Keep the local
     // workspace scope aligned when another browser tab changes this workspace.
@@ -4526,8 +4530,21 @@ function AppRoutes() {
     setWorkspaceSyncProblem(null);
   };
 
+  const callbackNotifications = useCallbackNotifications({
+    sessions: knownSessions,
+    snapshot: globalCallbackSnapshot,
+    callbacksLoaded,
+    workspaceSessionNames: locationWorkspaceId && hydratedWorkspaceId !== locationWorkspaceId
+      ? [] : workspace.openSessions,
+    workspaceCallbackSessions: locationWorkspaceId && hydratedWorkspaceId !== locationWorkspaceId
+      ? [] : workspaceCallbackSessions,
+    workspaceName,
+    workspaceKey: locationWorkspaceId ?? temporaryTerminalKey,
+  });
+
   const withWorkspaceSyncNotice = (content: ReactNode) => (
     <>
+      <CallbackNotifications items={callbackNotifications.notifications} onDismiss={callbackNotifications.dismiss} />
       <ForgetUndoNotifications items={pendingForgets} onUndo={undoForgottenSession} onExpire={expireForgottenSession} />
       {foldActions.confirmation}
       {bulkSessionAction && <BulkSessionActionsDialog
@@ -4691,6 +4708,8 @@ function AppRoutes() {
       onSetSessionHold={updateCallbackSessionHold}
       onReviewMessage={reviewAgentCallbackMessage}
       onSelectSession={dashboard ? openSession : switchSession}
+      notificationScope={callbackNotifications.scope}
+      onNotificationScopeChange={callbackNotifications.setScope}
     />
   );
 
@@ -4763,6 +4782,8 @@ function AppRoutes() {
           onSetSessionHold={updateCallbackSessionHold}
           onReviewMessage={reviewAgentCallbackMessage}
           onSelectSession={switchSession}
+          notificationScope={callbackNotifications.scope}
+          onNotificationScopeChange={callbackNotifications.setScope}
         />
       </div>
     ) : <div className="workspace-header-widgets">{renderCallbackList("")}</div>;

@@ -214,6 +214,71 @@ test("agent reports reach both tabs, review independently, and remain readable a
   expect((await cleared.json()).onHoldSessions).not.toContain(sessionName);
 });
 
+test("callback notifications filter the current workspace, include all sessions when selected, and dismiss without review", async ({
+  page, context,
+}, testInfo) => {
+  const localName = `notification-local-${randomUUID()}`;
+  const otherName = `notification-other-${randomUUID()}`;
+  const response = await context.request.post("/mux/api/workspaces", {
+    data: { name: "Notification review", tabs: [localName], activeSession: localName },
+  });
+  expect(response.ok()).toBe(true);
+  const workspace = (await response.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  await page.goto(`/mux/?workspace=${workspace.id}`);
+  await expect(page.getByRole("heading", { name: workspace.name, exact: true })).toBeVisible();
+  const bell = page.getByRole("button", { name: "Callback notifications", exact: true });
+  const notices = page.getByRole("region", { name: "Callback notifications", exact: true });
+  await bell.click();
+  const settings = page.getByRole("dialog", { name: "Callback notifications", exact: true });
+  await expect(settings.getByRole("radio", { name: /^Off/ })).toBeChecked();
+  await settings.getByRole("radio", { name: /^This workspace/ }).check();
+  await settings.screenshot({ path: testInfo.outputPath("callback-notification-settings.png") });
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  const publish = async (sessionName: string, message: string) => {
+    const posted = await agentRequest.post("/mux/api/callback-messages", {
+      data: { sessionName, message, agentType: "codex", cwd: "/tmp/notification-fixture", requestId: randomUUID() },
+    });
+    expect(posted.status()).toBe(201);
+    const callback = (await posted.json()).callback as CallbackMessage;
+    callbackIds.push(callback.id);
+    return callback;
+  };
+  await publish(otherName, "A callback outside the current workspace.");
+  const local = await publish(localName, "The local workspace task is ready for review.");
+  const toast = notices.getByRole("article", { name: `${localName}: New callback`, exact: true });
+  await expect(toast).toBeVisible();
+  await expect(notices.getByRole("article")).toHaveCount(1);
+  await expect(toast).toContainText(workspace.name);
+  await expect(page.getByRole("dialog", { name: "Callback list", exact: true })).toHaveCount(0);
+  await toast.hover();
+  await toast.screenshot({ path: testInfo.outputPath("callback-notification-dark.png") });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await toast.screenshot({ path: testInfo.outputPath("callback-notification-light.png") });
+  await toast.click();
+  await expect(notices.getByRole("article")).toHaveCount(0);
+  const pending = await agentRequest.get("/mux/api/callback-messages?status=pending");
+  expect((await pending.json()).messages).toContainEqual(expect.objectContaining({ id: local.id, reviewedAt: null }));
+
+  await bell.click();
+  await settings.getByRole("radio", { name: /^All sessions/ }).check();
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  await publish(otherName, "A new callback from another workspace.");
+  await expect(notices.getByRole("article", { name: `${otherName}: New callback`, exact: true })).toBeVisible();
+  await page.reload();
+  await expect(bell).toHaveAttribute("data-enabled", "true");
+  await bell.click();
+  await expect(settings.getByRole("radio", { name: /^All sessions/ })).toBeChecked();
+  await expect(notices.getByRole("article")).toHaveCount(0);
+  await settings.getByRole("radio", { name: /^Off/ }).check();
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  await publish(localName, "A callback received with notifications switched off.");
+  await page.getByRole("button", { name: "Show callback list", exact: true }).click();
+  await expect(page.getByText("A callback received with notifications switched off.", { exact: true })).toBeVisible();
+  await expect(notices.getByRole("article")).toHaveCount(0);
+});
+
 test("a script credential can read callbacks but cannot inspect or control sessions", async ({ playwright, baseURL }) => {
   expect((await agentRequest.get("/mux/api/callback-messages?status=all")).ok()).toBe(true);
   expect((await agentRequest.get("/mux/api/sessions")).status()).toBe(403);

@@ -25,7 +25,7 @@ test.beforeEach(async ({ context }) => {
 });
 
 /** Deterministic API and stream fixtures: never create or control live sessions. */
-async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000)): Promise<void> {
+async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000)): Promise<Session[]> {
   const session = (name: string, customTitle: string, agentState: Session["agentState"],
     agentType: Session["agentType"], age = 0): Session => ({
     name, customTitle, agentState, agentType, agentStateChangedAt: now - age,
@@ -121,6 +121,7 @@ async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000))
     }
     return route.continue();
   });
+  return sessions;
 }
 
 async function openPanel(page: Page, workspaceId = currentWorkspaceId): Promise<Locator> {
@@ -145,6 +146,31 @@ async function expandFilters(panel: Locator): Promise<void> {
   const more = panel.getByRole("button", { name: "More callback filters", exact: true });
   if (await more.getAttribute("aria-expanded") !== "true") await more.click();
 }
+
+test("callback notifications show session readiness and endings while the callback list stays closed", async ({ page }) => {
+  const sessions = await installCallbacks(page);
+  const panel = await openPanel(page);
+  await page.getByRole("button", { name: "Close callback list", exact: true }).click();
+  const bell = page.getByRole("button", { name: "Callback notifications", exact: true });
+  await bell.click();
+  const settings = page.getByRole("dialog", { name: "Callback notifications", exact: true });
+  await settings.getByRole("radio", { name: /^Watched callbacks/ }).check();
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  sessions[0] = { ...sessions[0], agentState: "waiting_human", agentStateChangedAt: sessions[0].agentStateChangedAt + 1 };
+  const notices = page.getByRole("region", { name: "Callback notifications", exact: true });
+  const ready = notices.getByRole("article", { name: "bravo-work: Ready for review", exact: true });
+  await expect(ready).toBeVisible({ timeout: 10_000 });
+  await expect(ready).toContainText("Bravo worker");
+  await expect(panel).toHaveCount(0);
+  await ready.getByRole("button", { name: "Dismiss notification from bravo-work" }).click();
+  sessions.splice(0, 1);
+  const ended = notices.getByRole("article", { name: "bravo-work: Session ended", exact: true });
+  await expect(ended).toBeVisible({ timeout: 10_000 });
+  await expect(ended).toContainText("Bravo worker");
+  await ended.click();
+  await page.getByRole("button", { name: "Show callback list", exact: true }).click();
+  await expect(panel.locator(".workspace-callback-item")).toHaveCount(queue.length);
+});
 
 test.describe("callback display time zones", () => {
   test.use({ timezoneId: "Asia/Tokyo", locale: "en-US" });
@@ -526,7 +552,9 @@ test("callback status shares the top console toolbar and Escape closes its windo
     await watch.scrollIntoViewIfNeeded();
     await expect(watch).toHaveAttribute("aria-pressed", "true");
     await expect(watch.locator("span")).toHaveText("Watching");
-    expect((await watch.locator("span").boundingBox())!.width).toBeGreaterThan(35);
+    // The compact header intentionally uses an icon; its accessible name and
+    // pressed state retain the Watching meaning without a visible text label.
+    expect((await watch.boundingBox())!.width).toBe(32);
     const contrast = await watch.evaluate((element) => {
       const luminance = (color: string) => {
         const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map((channel) => {
@@ -542,6 +570,13 @@ test("callback status shares the top console toolbar and Escape closes its windo
     expect(contrast).toBeGreaterThanOrEqual(4.5);
     await watch.screenshot({ path: testInfo.outputPath(`callback-watching-${theme}.png`) });
   }
+  const bell = toolbar.getByRole("button", { name: "Callback notifications", exact: true });
+  await bell.click();
+  const notifications = page.getByRole("dialog", { name: "Callback notifications", exact: true });
+  await notifications.getByRole("radio", { name: /^This workspace/ }).check();
+  await page.keyboard.press("Escape");
+  await expect(notifications).toHaveCount(0);
+  await expect(bell).toBeFocused();
   await watch.click();
   const add = page.getByRole("button", { name: "Add bravo-work to callback list", exact: true });
   await expect(add).toHaveAttribute("aria-pressed", "false");

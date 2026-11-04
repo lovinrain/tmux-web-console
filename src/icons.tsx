@@ -28,6 +28,15 @@ export function UnreadIcon(props: IconProps) {
   );
 }
 
+export function BellIcon({ muted = false, ...props }: IconProps & { muted?: boolean }) {
+  return (
+    <IconBase {...props}>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      {muted && <path d="m3 3 18 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />}
+    </IconBase>
+  );
+}
+
 export function CaptureIcon(props: IconProps) {
   return (
     <IconBase {...props}>

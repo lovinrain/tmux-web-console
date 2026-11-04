@@ -1,0 +1,132 @@
+html .workspace-callback-status-control:has(> .callback-notification-toggle) > button.workspace-callback-card {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+html .workspace-callback-status-control > button.callback-notification-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 6px;
+  margin-left: -1px;
+  color: var(--muted);
+  background: var(--ink-raised);
+  border: 1px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+}
+html .workspace-callback-status-control > button.callback-notification-toggle[data-enabled="true"] { color: var(--amber); }
+html .workspace-callback-status-control > button.callback-notification-toggle:is(:hover, [aria-expanded="true"]) {
+  background: var(--ink-soft);
+  border-color: var(--muted);
+}
+.callback-notification-toggle > svg { width: 16px; height: 16px; }
+.callback-notification-toggle > i {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+.callback-notification-settings {
+  position: fixed;
+  z-index: 1250;
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 12px;
+  color: var(--paper);
+  background: var(--ink-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px #0005;
+  font: 12px/1.45 "Space Grotesk Variable", sans-serif;
+}
+.callback-notification-settings header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.callback-notification-settings h2 { margin: 0; font-size: 15px; }
+.callback-notification-settings fieldset { display: grid; gap: 5px; padding: 0; margin: 12px 0; border: 0; }
+.callback-notification-settings legend { padding: 0; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
+.callback-notification-settings label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.callback-notification-settings label:is(:hover, [data-selected="true"]) { background: var(--ink-soft); border-color: var(--line); }
+.callback-notification-settings input { flex: 0 0 auto; margin: 3px 0 0; accent-color: var(--amber); }
+.callback-notification-settings label strong { display: block; font-size: 12px; font-weight: 650; }
+.callback-notification-settings small { display: block; color: var(--muted); font-size: 11px; }
+.callback-notification-settings p { margin: 10px 0; color: var(--muted); font-size: 11px; }
+.callback-notification-settings button, .callback-toast button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.callback-notification-settings button:hover, .callback-toast button:hover { color: var(--paper); background: var(--ink-soft); border-color: var(--line); }
+.callback-notification-settings button svg, .callback-toast button svg { width: 16px; height: 16px; }
+html .callback-notification-toggle:focus-visible, .callback-notification-settings :focus-visible, .callback-toast button:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+.callback-notifications {
+  position: fixed;
+  z-index: 1200;
+  top: calc(64px + env(safe-area-inset-top, 0px));
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+  max-height: calc(100dvh - 88px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  pointer-events: none;
+}
+.callback-toast {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 12px;
+  color: var(--paper);
+  background: var(--ink-raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: 7px;
+  box-shadow: 0 8px 26px #0005;
+  font: 12px/1.5 "Space Grotesk Variable", sans-serif;
+  pointer-events: auto;
+  cursor: pointer;
+  animation: callback-toast-in 160ms ease-out;
+  transition: opacity 250ms ease, transform 250ms ease;
+}
+.callback-toast[data-kind="ended"] { border-left-color: var(--red); }
+.callback-toast.leaving { opacity: 0; transform: translateX(12px); }
+.callback-toast-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.callback-toast-kind { display: block; margin-bottom: 4px; color: var(--amber); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+.callback-toast[data-kind="ended"] .callback-toast-kind { color: var(--red); }
+.callback-toast-content > strong { display: block; font-size: 14px; }
+.callback-toast-source { display: block; color: var(--muted); font-size: 11px; }
+.callback-toast p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 6px 0 0; color: var(--muted); white-space: pre-line; }
+@keyframes callback-toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .callback-toast { animation: none; transition: none; } }
+@media (max-width: 640px) { .callback-toast button { min-width: 36px; min-height: 36px; } }

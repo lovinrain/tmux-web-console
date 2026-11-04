@@ -97,6 +97,16 @@ across callback scopes and browsers and survive reloads and service restarts.
 
 See which agents are ready, read their reports, and review them from one queue.
 
+Click the **bell beside Callbacks** in the title bar to enable floating
+notifications for **Watched callbacks**, **This workspace**, or **All sessions**
+across every workspace. Notifications start **Off** and remember your choice
+in this browser. New reports, finished work, and ended sessions appear by name;
+existing callbacks are not replayed when you enable notifications or reload.
+Notices fade after eight seconds, pause while hovered, focused, or in a hidden
+browser tab, and dismiss when clicked or closed. Dismissing a notice leaves its
+callback available for review. On-hold entries stay quiet. These notices appear
+inside Muxdeck while the page is open.
+
 Session tabs also show a blue background when observed work becomes ready
 and you have not checked the session since. Open the tab by
 clicking it or using session navigation to clear that indicator; a tab that was
