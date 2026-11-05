@@ -129,6 +129,21 @@ describe("callback notification events", () => {
     expect(second[0].id).not.toBe(first[0].id);
   });
 
+  it("identifies the same readiness event across tabs with different scopes and completion histories", () => {
+    const global = watch();
+    const local = watch();
+    const context = { workspaceSessionNames: ["worker"], workspaceCallbackSessions: [] };
+    global(input({ ...context, sessions: [session("worker"), session("other")] }));
+    local(input({ ...context, scope: "workspace", sessions: [session("worker"), session("other")] }));
+    global(input({ ...context, sessions: [session("worker"), session("other", "waiting_human", 11)] }));
+    local(input({ ...context, scope: "workspace", sessions: [session("worker"), session("other", "waiting_human", 11)] }));
+    const finished = { ...session("worker", "waiting_human", 12), readyAttention: { latestReadyEvent: 3, lastCheckedEvent: 0 } };
+    const first = global(input({ ...context, sessions: [finished, session("other", "waiting_human", 11)] }));
+    const second = local(input({ ...context, scope: "workspace", sessions: [finished, session("other", "waiting_human", 11)] }));
+    expect(first[0].id).toBe(second[0].id);
+    expect(first[0].id).toContain("event:3");
+  });
+
   it("suppresses held entries without replaying them when resumed", () => {
     const observe = watch();
     observe(input());

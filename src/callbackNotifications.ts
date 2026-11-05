@@ -7,6 +7,9 @@ import {
 import type { Session } from "./types";
 
 export const CALLBACK_NOTIFICATION_STORAGE_KEY = `muxdeck.callback-notifications.v1:${import.meta.env.BASE_URL}`;
+export const CALLBACK_NOTIFICATION_DISMISS_PREFIX = `muxdeck.callback-notification-dismissed.v1:${import.meta.env.BASE_URL}:`;
+export const CALLBACK_NOTIFICATION_DISMISS_RETENTION = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_CALLBACK_NOTIFICATION_DISMISSALS = 256;
 export const CALLBACK_NOTIFICATION_DURATION = 8_000;
 export const CALLBACK_NOTIFICATION_FADE = 250;
 export const MAX_CALLBACK_NOTIFICATIONS = 4;
@@ -48,11 +51,11 @@ export interface CallbackNotificationObservation {
   sessions: ReadonlyMap<string, Session>;
   attention: SessionReadyAttentionState;
   messageSequence: number | null;
-  readySequence: number;
+  workingAt: ReadonlyMap<string, number>;
 }
 
 export function initialCallbackNotificationObservation(): CallbackNotificationObservation {
-  return { sessions: new Map(), attention: {}, messageSequence: null, readySequence: 0 };
+  return { sessions: new Map(), attention: {}, messageSequence: null, workingAt: new Map() };
 }
 
 /** Observe every scope, including Off, so enabling or switching never replays old events. */
@@ -64,6 +67,13 @@ export function observeCallbackNotifications(
   const current = new Map(sessions.map((session) => [sessionReadyIdentity(session), session]));
   const byName = new Map(sessions.map((session) => [session.name, session]));
   const attention = observeSessionReadyAttention(previous.attention, sessions);
+  const workingAt = new Map([...previous.workingAt].filter(([identity]) => current.has(identity)));
+  for (const [identity, session] of current) {
+    if ((session.agentState === "working" || session.agentState === "running_command")
+      && session.agentStateChangedAt >= (previous.attention[identity]?.stateChangedAt ?? 0)) {
+      workingAt.set(identity, attention[identity].stateChangedAt);
+    }
+  }
   const messages = snapshot.callbackMessages ?? [];
   const workspaceNames = new Set([...input.workspaceSessionNames, ...input.workspaceCallbackSessions]);
   const watched = new Set([
@@ -104,7 +114,6 @@ export function observeCallbackNotifications(
     messageSequence = Math.max(messageSequence ?? 0, ...messages.map((message) => message.sequence));
   }
   const notifications: CallbackNotification[] = [];
-  let readySequence = previous.readySequence;
   for (const message of reports.values()) {
     const live = byName.get(message.sessionName);
     // A report for an ended native identity must not borrow a replacement's title.
@@ -120,8 +129,13 @@ export function observeCallbackNotifications(
     if (!before || !eligible(session.name) || reports.has(session.name)) continue;
     const ready = after.latestReadyEvent > before.latestReadyEvent
       || before.awaitingReady && after.state === "other" && after !== before;
+    // A page-local counter differs across workspaces. Use the shared ready
+    // marker, or the work/finish timestamps on older servers and shell commands.
+    const event = session.agentState === "waiting_human" && session.readyAttention
+      ? `event:${session.readyAttention.latestReadyEvent}`
+      : `work:${workingAt.get(identity) ?? before.stateChangedAt}`;
     if (ready) notifications.push(notification(session.name, session, {
-      id: `ready:${identity}:${++readySequence}`, kind: "ready",
+      id: `ready:${identity}:${after.state}:${after.stateChangedAt}:${event}`, kind: "ready",
       label: session.agentState === "waiting_human" ? "Ready for review" : "Finished working",
       detail: "Work has finished or is waiting for your input.",
     }));
@@ -133,5 +147,5 @@ export function observeCallbackNotifications(
       detail: "This session is no longer available.",
     }));
   }
-  return { observation: { sessions: current, attention, messageSequence, readySequence }, notifications };
+  return { observation: { sessions: current, attention, messageSequence, workingAt }, notifications };
 }

@@ -104,7 +104,9 @@ in this browser. New reports, finished work, and ended sessions appear by name;
 existing callbacks are not replayed when you enable notifications or reload.
 Notices fade after eight seconds, pause while hovered, focused, or in a hidden
 browser tab, and dismiss when clicked or closed. Dismissing a notice leaves its
-callback available for review. On-hold entries stay quiet. These notices appear
+callback available for review. Closing a notice also dismisses that same notice
+in other open Muxdeck workspace tabs in this browser; later reports still appear.
+On-hold entries stay quiet. These notices appear
 inside Muxdeck while the page is open.
 
 Session tabs also show a blue background when observed work becomes ready

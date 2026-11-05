@@ -279,6 +279,56 @@ test("callback notifications filter the current workspace, include all sessions 
   await expect(notices.getByRole("article")).toHaveCount(0);
 });
 
+test("closing a callback notification clears it from other open workspaces and leaves later reports visible", async ({ page, context }) => {
+  const sessionName = `notification-shared-${randomUUID()}`;
+  const workspaces: SavedWorkspace[] = [];
+  for (const name of ["First notification workspace", "Second notification workspace"]) {
+    const response = await context.request.post("/mux/api/workspaces", {
+      data: { name, tabs: [sessionName], activeSession: sessionName },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as SavedWorkspace;
+    workspaces.push(workspace);
+    workspaceIds.push(workspace.id);
+  }
+  await page.goto(`/mux/?workspace=${workspaces[0].id}`);
+  await expect(page.getByRole("heading", { name: workspaces[0].name, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Callback notifications", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Callback notifications", exact: true });
+  await settings.getByRole("radio", { name: /^All sessions/ }).check();
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  const other = await context.newPage();
+  await other.goto(`/mux/?workspace=${workspaces[1].id}`);
+  await expect(other.getByRole("heading", { name: workspaces[1].name, exact: true })).toBeVisible();
+  await expect(other.getByRole("button", { name: "Callback notifications", exact: true })).toHaveAttribute("data-enabled", "true");
+  const publish = async (message: string) => {
+    const posted = await agentRequest.post("/mux/api/callback-messages", {
+      data: { sessionName, message, agentType: "codex", cwd: "/tmp/shared-dismissal-fixture", requestId: randomUUID() },
+    });
+    expect(posted.status()).toBe(201);
+    const report = (await posted.json()).callback as CallbackMessage;
+    callbackIds.push(report.id);
+    return report;
+  };
+  const notices = (current: Page) => current.getByRole("region", { name: "Callback notifications", exact: true });
+  const report = await publish("The first shared notification is ready.");
+  for (const current of [page, other]) {
+    await expect(notices(current).getByRole("article")).toContainText(report.message);
+    await notices(current).getByRole("article").hover();
+  }
+  await page.getByRole("button", { name: `Dismiss notification from ${sessionName}`, exact: true }).click();
+  for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
+  const pending = await agentRequest.get("/mux/api/callback-messages?status=pending");
+  expect((await pending.json()).messages).toContainEqual(expect.objectContaining({ id: report.id, reviewedAt: null }));
+  const later = await publish("A later callback from the same session still appears.");
+  for (const current of [page, other]) {
+    await expect(notices(current).getByRole("article")).toContainText(later.message);
+    await notices(current).getByRole("article").hover();
+  }
+  await notices(other).getByRole("article").click();
+  for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
+});
+
 test("a script credential can read callbacks but cannot inspect or control sessions", async ({ playwright, baseURL }) => {
   expect((await agentRequest.get("/mux/api/callback-messages?status=all")).ok()).toBe(true);
   expect((await agentRequest.get("/mux/api/sessions")).status()).toBe(403);

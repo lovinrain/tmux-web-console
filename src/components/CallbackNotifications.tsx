@@ -11,16 +11,17 @@ import "./CallbackNotifications.css";
 interface Props {
   items: readonly CallbackNotification[];
   onDismiss: (id: string) => void;
+  onExpire: (id: string) => void;
 }
 
-function CallbackToast({ item, onDismiss }: { item: CallbackNotification; onDismiss: Props["onDismiss"] }) {
+function CallbackToast({ item, onDismiss, onExpire }: { item: CallbackNotification } & Omit<Props, "items">) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [hidden, setHidden] = useState(() => document.hidden);
   const [leaving, setLeaving] = useState(false);
   const remaining = useRef(CALLBACK_NOTIFICATION_DURATION);
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
+  const expireRef = useRef(onExpire);
+  expireRef.current = onExpire;
   const paused = hovered || focused || hidden;
 
   useEffect(() => {
@@ -32,7 +33,7 @@ function CallbackToast({ item, onDismiss }: { item: CallbackNotification; onDism
     if (paused) { setLeaving(false); return; }
     const started = Date.now();
     const fade = window.setTimeout(() => setLeaving(true), Math.max(0, remaining.current - CALLBACK_NOTIFICATION_FADE));
-    const expire = window.setTimeout(() => dismissRef.current(item.id), remaining.current);
+    const expire = window.setTimeout(() => expireRef.current(item.id), remaining.current);
     return () => {
       window.clearTimeout(fade);
       window.clearTimeout(expire);
@@ -63,9 +64,9 @@ function CallbackToast({ item, onDismiss }: { item: CallbackNotification; onDism
   </article>;
 }
 
-export function CallbackNotifications({ items, onDismiss }: Props) {
+export function CallbackNotifications({ items, onDismiss, onExpire }: Props) {
   return createPortal(<aside className="callback-notifications" role="region" aria-label="Callback notifications"
     aria-live="polite" aria-relevant="additions" aria-atomic="false">
-    {items.map((item) => <CallbackToast key={item.id} item={item} onDismiss={onDismiss} />)}
+    {items.map((item) => <CallbackToast key={item.id} item={item} onDismiss={onDismiss} onExpire={onExpire} />)}
   </aside>, document.body);
 }

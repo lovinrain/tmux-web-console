@@ -38,7 +38,8 @@ describe("callback notification controls", () => {
   it("shows literal reports and fades after eight seconds without consuming time while hovered or focused", () => {
     vi.useFakeTimers();
     const dismiss = vi.fn();
-    render(<CallbackNotifications items={[item]} onDismiss={dismiss} />);
+    const expire = vi.fn();
+    render(<CallbackNotifications items={[item]} onDismiss={dismiss} onExpire={expire} />);
     const toast = screen.getByRole("article", { name: "worker: New callback" });
     expect(toast).toHaveTextContent("Release check");
     expect(toast).toHaveTextContent("Launch room");
@@ -58,13 +59,14 @@ describe("callback notification controls", () => {
     expect(toast).toHaveClass("leaving");
     expect(dismiss).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(250));
-    expect(dismiss).toHaveBeenCalledExactlyOnceWith(item.id);
+    expect(expire).toHaveBeenCalledExactlyOnceWith(item.id);
+    expect(dismiss).not.toHaveBeenCalled();
   });
 
   it("pauses while the browser tab is hidden and supports click or keyboard dismissal", () => {
     vi.useFakeTimers();
     const dismiss = vi.fn();
-    render(<CallbackNotifications items={[item]} onDismiss={dismiss} />);
+    render(<CallbackNotifications items={[item]} onDismiss={dismiss} onExpire={vi.fn()} />);
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     fireEvent(document, new Event("visibilitychange"));
     act(() => vi.advanceTimersByTime(60_000));

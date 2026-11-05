@@ -4544,7 +4544,8 @@ function AppRoutes() {
 
   const withWorkspaceSyncNotice = (content: ReactNode) => (
     <>
-      <CallbackNotifications items={callbackNotifications.notifications} onDismiss={callbackNotifications.dismiss} />
+      <CallbackNotifications items={callbackNotifications.notifications} onDismiss={callbackNotifications.dismiss}
+        onExpire={callbackNotifications.expire} />
       <ForgetUndoNotifications items={pendingForgets} onUndo={undoForgottenSession} onExpire={expireForgottenSession} />
       {foldActions.confirmation}
       {bulkSessionAction && <BulkSessionActionsDialog
