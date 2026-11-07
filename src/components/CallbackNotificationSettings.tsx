@@ -1,15 +1,17 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BellIcon, CloseIcon } from "../icons";
-import { CALLBACK_NOTIFICATION_SCOPES, type CallbackNotificationScope } from "../callbackNotifications";
+import { CALLBACK_NOTIFICATION_SCOPES, type CallbackNotificationScope, type MutedCallbackSession } from "../callbackNotifications";
 import "./CallbackNotifications.css";
 
 interface Props {
   scope: CallbackNotificationScope;
   onChange: (scope: CallbackNotificationScope) => void;
+  mutedSessions?: readonly MutedCallbackSession[];
+  onUnmuteSession?: (identity: string) => void;
 }
 
-export function CallbackNotificationSettings({ scope, onChange }: Props) {
+export function CallbackNotificationSettings({ scope, onChange, mutedSessions = [], onUnmuteSession }: Props) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 48, left: 12 });
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -34,6 +36,8 @@ export function CallbackNotificationSettings({ scope, onChange }: Props) {
       });
     };
     positionMenu();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(positionMenu);
+    if (menuRef.current) observer?.observe(menuRef.current);
     menuRef.current?.querySelector<HTMLInputElement>("input:checked")?.focus({ preventScroll: true });
     const outside = (event: PointerEvent) => {
       const target = event.target as Node;
@@ -43,6 +47,7 @@ export function CallbackNotificationSettings({ scope, onChange }: Props) {
     window.addEventListener("resize", positionMenu);
     window.addEventListener("scroll", positionMenu, true);
     return () => {
+      observer?.disconnect();
       window.removeEventListener("pointerdown", outside);
       window.removeEventListener("resize", positionMenu);
       window.removeEventListener("scroll", positionMenu, true);
@@ -74,6 +79,19 @@ export function CallbackNotificationSettings({ scope, onChange }: Props) {
           <span><strong>{option.label}</strong><small>{option.description}</small></span>
         </label>)}
       </fieldset>
+      <section className="callback-notification-muted" aria-labelledby={`${id}-muted-heading`}>
+        <h3 id={`${id}-muted-heading`}>Muted sessions <span>{mutedSessions.length}</span></h3>
+        {mutedSessions.length ? <ul>
+          {mutedSessions.map((session) => <li key={session.identity}>
+            <div><strong>{session.title}</strong>
+              {session.title !== session.sessionName && <small>{session.sessionName}</small>}
+            </div>
+            <button type="button" aria-label={`Re-enable notifications for ${session.sessionName}`}
+              disabled={!onUnmuteSession} onClick={() => onUnmuteSession?.(session.identity)}>Re-enable</button>
+          </li>)}
+        </ul> : <p>No muted sessions.</p>}
+        <small>Muted sessions stay quiet until re-enabled. Closed sessions are removed automatically.</small>
+      </section>
       <p>Floating notices for new reports, finished work, and ended sessions. They fade after 8 seconds; hover or focus to pause. Click a notice to dismiss it.</p>
       <small>Saved for this browser. Callbacks stay in the list for review.</small>
     </section>, document.body)}

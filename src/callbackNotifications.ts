@@ -8,6 +8,7 @@ import type { Session } from "./types";
 
 export const CALLBACK_NOTIFICATION_STORAGE_KEY = `muxdeck.callback-notifications.v1:${import.meta.env.BASE_URL}`;
 export const CALLBACK_NOTIFICATION_DISMISS_PREFIX = `muxdeck.callback-notification-dismissed.v1:${import.meta.env.BASE_URL}:`;
+export const CALLBACK_NOTIFICATION_MUTE_PREFIX = `muxdeck.callback-notification-muted.v1:${import.meta.env.BASE_URL}:`;
 export const CALLBACK_NOTIFICATION_DISMISS_RETENTION = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_CALLBACK_NOTIFICATION_DISMISSALS = 256;
 export const CALLBACK_NOTIFICATION_DURATION = 8_000;
@@ -30,11 +31,18 @@ export function parseCallbackNotificationScope(value: unknown): CallbackNotifica
 export interface CallbackNotification {
   id: string;
   sessionName: string;
+  sessionIdentity: string | null;
   title: string;
   kind: "message" | "ready" | "ended";
   label: string;
   detail: string;
   workspace: string;
+}
+
+export interface MutedCallbackSession {
+  identity: string;
+  sessionName: string;
+  title: string;
 }
 
 export interface CallbackNotificationInput {
@@ -96,7 +104,8 @@ export function observeCallbackNotifications(
   const notification = (
     name: string, session: Session | undefined, rest: Pick<CallbackNotification, "id" | "kind" | "label" | "detail">,
   ): CallbackNotification => ({
-    ...rest, sessionName: name, title: session?.customTitle?.trim() || name, workspace: workspaceLabel(name),
+    ...rest, sessionName: name, sessionIdentity: session ? sessionReadyIdentity(session) : null,
+    title: session?.customTitle?.trim() || name, workspace: workspaceLabel(name),
   });
 
   // The initial snapshot is history. The sequence fence also ignores reconnect

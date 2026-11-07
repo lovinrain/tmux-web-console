@@ -83,6 +83,15 @@ html .workspace-callback-status-control > button.callback-notification-toggle:is
 }
 .callback-notification-settings button:hover, .callback-toast button:hover { color: var(--paper); background: var(--ink-soft); border-color: var(--line); }
 .callback-notification-settings button svg, .callback-toast button svg { width: 16px; height: 16px; }
+.callback-notification-muted { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.callback-notification-muted h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 12px; }
+.callback-notification-muted h3 span { color: var(--muted); font-weight: 400; }
+.callback-notification-muted ul { display: grid; gap: 6px; max-height: 180px; overflow: auto; margin: 0 0 8px; padding: 0; list-style: none; }
+.callback-notification-muted li { display: flex; align-items: center; gap: 8px; padding: 6px; background: var(--ink-soft); border-radius: 5px; }
+.callback-notification-muted li > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.callback-notification-muted li strong { display: block; font-size: 12px; }
+.callback-notification-muted button, .callback-toast button.callback-toast-mute { width: auto; height: auto; min-height: 28px; padding: 4px 8px; border-color: var(--line); font: inherit; font-size: 11px; }
+.callback-toast button.callback-toast-mute { margin-top: 8px; }
 html .callback-notification-toggle:focus-visible, .callback-notification-settings :focus-visible, .callback-toast button:focus-visible {
   outline: 2px solid var(--amber);
   outline-offset: 2px;

@@ -965,6 +965,7 @@ function AppRoutes() {
   const [dismissedWorkspaceSyncProblem, setDismissedWorkspaceSyncProblem] =
     useState<WorkspaceSyncProblem | null>(null);
   const [knownSessions, setKnownSessions] = useState<Session[]>([]);
+  const [sessionInventoryLoaded, setSessionInventoryLoaded] = useState(false);
   const { uncheckedReadySessions, checkSessionReady, markSessionUnread } = useSessionReadyAttention(knownSessions);
   const [recoverableSessions, setRecoverableSessions] = useState<RecoverableSession[]>([]);
   const [pendingForgets, setPendingForgets] = useState<PendingForget[]>([]);
@@ -1308,9 +1309,11 @@ function AppRoutes() {
     setWorkspaceSyncProblem(null);
 
     try {
+      let receivedSessionInventory = false;
       const [savedWorkspace, sessions] = await Promise.all([
         getWorkspace(workspaceId),
-        listSessions().catch(() => knownSessionsRef.current),
+        listSessions().then((sessions) => { receivedSessionInventory = true; return sessions; })
+          .catch(() => knownSessionsRef.current),
       ]);
       if (
         !appMounted.current
@@ -1342,6 +1345,7 @@ function AppRoutes() {
       setWorkspacePaneLayouts(restoredPaneLayouts);
       knownSessionsRef.current = currentSessions;
       setKnownSessions(currentSessions);
+      if (receivedSessionInventory) setSessionInventoryLoaded(true);
       const hydratedRecoverable = attachedRecoverableSessions(sessions);
       if (hydratedRecoverable) setRecoverableSessions(hydratedRecoverable);
       failedWorkspaceActivity.current = null;
@@ -3941,6 +3945,7 @@ function AppRoutes() {
     knownSessionsRef.current = currentSessions;
     setKnownSessions(currentSessions);
     syncLocation();
+    setSessionInventoryLoaded(true);
   }, [syncLocation]);
 
   const refreshSessionInventory = useCallback(async () => {
@@ -3954,6 +3959,7 @@ function AppRoutes() {
     );
     knownSessionsRef.current = currentSessions;
     setKnownSessions(currentSessions);
+    setSessionInventoryLoaded(true);
   }, []);
 
   const recreateWorkspaceSession = useCallback(async (
@@ -4534,6 +4540,7 @@ function AppRoutes() {
 
   const callbackNotifications = useCallbackNotifications({
     sessions: knownSessions,
+    sessionsLoaded: sessionInventoryLoaded,
     snapshot: globalCallbackSnapshot,
     callbacksLoaded,
     workspaceSessionNames: locationWorkspaceId && hydratedWorkspaceId !== locationWorkspaceId
@@ -4547,7 +4554,7 @@ function AppRoutes() {
   const withWorkspaceSyncNotice = (content: ReactNode) => (
     <>
       <CallbackNotifications items={callbackNotifications.notifications} onDismiss={callbackNotifications.dismiss}
-        onExpire={callbackNotifications.expire} />
+        onExpire={callbackNotifications.expire} onMuteSession={callbackNotifications.muteSession} />
       <ForgetUndoNotifications items={pendingForgets} onUndo={undoForgottenSession} onExpire={expireForgottenSession} />
       {foldActions.confirmation}
       {bulkSessionAction && <BulkSessionActionsDialog
@@ -4722,6 +4729,8 @@ function AppRoutes() {
       onSelectSession={dashboard ? openSession : switchSession}
       notificationScope={callbackNotifications.scope}
       onNotificationScopeChange={callbackNotifications.setScope}
+      notificationMutedSessions={callbackNotifications.mutedSessions}
+      onNotificationSessionUnmute={callbackNotifications.unmuteSession}
     />
   );
 
@@ -4796,6 +4805,8 @@ function AppRoutes() {
           onSelectSession={switchSession}
           notificationScope={callbackNotifications.scope}
           onNotificationScopeChange={callbackNotifications.setScope}
+          notificationMutedSessions={callbackNotifications.mutedSessions}
+          onNotificationSessionUnmute={callbackNotifications.unmuteSession}
         />
       </div>
     ) : <div className="workspace-header-widgets">{renderCallbackList("")}</div>;

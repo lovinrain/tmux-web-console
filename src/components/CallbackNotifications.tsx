@@ -12,9 +12,10 @@ interface Props {
   items: readonly CallbackNotification[];
   onDismiss: (id: string) => void;
   onExpire: (id: string) => void;
+  onMuteSession: (identity: string) => void;
 }
 
-function CallbackToast({ item, onDismiss, onExpire }: { item: CallbackNotification } & Omit<Props, "items">) {
+function CallbackToast({ item, onDismiss, onExpire, onMuteSession }: { item: CallbackNotification } & Omit<Props, "items">) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [hidden, setHidden] = useState(() => document.hidden);
@@ -58,15 +59,21 @@ function CallbackToast({ item, onDismiss, onExpire }: { item: CallbackNotificati
         {[item.title !== item.sessionName ? item.sessionName : "", item.workspace].filter(Boolean).join(" · ")}
       </small>}
       <p>{item.detail}</p>
+      {item.sessionIdentity !== null && item.kind !== "ended" && <button type="button" className="callback-toast-mute"
+        aria-label={`Mute notifications from ${item.sessionName}`} title="Mute future notifications from this session"
+        onClick={(event) => { event.stopPropagation(); onMuteSession(item.sessionIdentity!); }}>
+        Do not notify anymore
+      </button>}
     </div>
     <button type="button" aria-label={`Dismiss notification from ${item.sessionName}`}
       onClick={(event) => { event.stopPropagation(); onDismiss(item.id); }}><CloseIcon /></button>
   </article>;
 }
 
-export function CallbackNotifications({ items, onDismiss, onExpire }: Props) {
+export function CallbackNotifications({ items, onDismiss, onExpire, onMuteSession }: Props) {
   return createPortal(<aside className="callback-notifications" role="region" aria-label="Callback notifications"
     aria-live="polite" aria-relevant="additions" aria-atomic="false">
-    {items.map((item) => <CallbackToast key={item.id} item={item} onDismiss={onDismiss} onExpire={onExpire} />)}
+    {items.map((item) => <CallbackToast key={item.id} item={item} onDismiss={onDismiss} onExpire={onExpire}
+      onMuteSession={onMuteSession} />)}
   </aside>, document.body);
 }

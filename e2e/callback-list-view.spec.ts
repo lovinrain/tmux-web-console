@@ -25,7 +25,7 @@ test.beforeEach(async ({ context }) => {
 });
 
 /** Deterministic API and stream fixtures: never create or control live sessions. */
-async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000)): Promise<Session[]> {
+async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000), sharedSessions?: Session[]): Promise<Session[]> {
   const session = (name: string, customTitle: string, agentState: Session["agentState"],
     agentType: Session["agentType"], age = 0): Session => ({
     name, customTitle, agentState, agentType, agentStateChangedAt: now - age,
@@ -40,7 +40,7 @@ async function installCallbacks(page: Page, now = Math.floor(Date.now() / 1000))
       history_size: 0, history_limit: 2000, alternate_on: false, dead: false, activity: now,
     }],
   });
-  const sessions = [
+  const sessions = sharedSessions ?? [
     session("bravo-work", "Bravo worker", "working", "codex"),
     session("alpha-ready", "Alpha review", "waiting_human", "claude", 600),
     session("charlie-ready", "Charlie review", "waiting_human", "copilot", 1200),
@@ -170,6 +170,75 @@ test("callback notifications show session readiness and endings while the callba
   await ended.click();
   await page.getByRole("button", { name: "Show callback list", exact: true }).click();
   await expect(panel.locator(".workspace-callback-item")).toHaveCount(queue.length);
+});
+
+test("session notification mutes persist, share between tabs, re-enable, and disappear when the session closes", async ({
+  page, context,
+}, testInfo) => {
+  test.setTimeout(60_000);
+  const sessions = await installCallbacks(page);
+  const panel = await openPanel(page);
+  const other = await context.newPage();
+  await installCallbacks(other, sessions[0].activity, sessions);
+  const otherPanel = await openPanel(other);
+  const bell = page.getByRole("button", { name: "Callback notifications", exact: true });
+  const settings = page.getByRole("dialog", { name: "Callback notifications", exact: true });
+  const otherBell = other.getByRole("button", { name: "Callback notifications", exact: true });
+  const otherSettings = other.getByRole("dialog", { name: "Callback notifications", exact: true });
+  const notices = (current: Page) => current.getByRole("region", { name: "Callback notifications", exact: true });
+  const ready = (current: Page) => notices(current).getByRole("article", { name: "bravo-work: Ready for review", exact: true });
+  const mutedRow = (currentSettings: Locator) => currentSettings.getByRole("button", { name: "Re-enable notifications for bravo-work", exact: true });
+  const workerRow = otherPanel.locator(".workspace-callback-item").filter({ hasText: "Bravo worker" });
+  const changeState = async (state: Session["agentState"]) => {
+    sessions[0] = { ...sessions[0], agentState: state, agentStateChangedAt: sessions[0].agentStateChangedAt + 1 };
+    await expect(workerRow.getByText(state === "working" ? "Working" : "Ready for review", { exact: true }))
+      .toBeVisible({ timeout: 10_000 });
+  };
+  await bell.click();
+  await settings.getByRole("radio", { name: /^Watched callbacks/ }).check();
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  await expect(otherBell).toHaveAttribute("data-enabled", "true");
+  await changeState("waiting_human");
+  for (const current of [page, other]) await expect(ready(current)).toBeVisible({ timeout: 10_000 });
+  await ready(page).hover();
+  await ready(page).screenshot({ path: testInfo.outputPath("session-mute-notice.png") });
+  await ready(page).getByRole("button", { name: "Mute notifications from bravo-work", exact: true }).click();
+  for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
+  await expect(panel.locator(".workspace-callback-item")).toHaveCount(queue.length);
+  await otherBell.click();
+  await expect(mutedRow(otherSettings)).toBeVisible();
+  await page.reload();
+  await expect(bell).toHaveAttribute("data-enabled", "true");
+  await bell.click();
+  await expect(mutedRow(settings)).toBeVisible();
+  await settings.screenshot({ path: testInfo.outputPath("muted-session-settings.png") });
+  await changeState("working");
+  await changeState("waiting_human");
+  for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
+  await mutedRow(otherSettings).click();
+  await expect(mutedRow(settings)).toHaveCount(0);
+  for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
+  await settings.getByRole("button", { name: "Close notification settings" }).click();
+  await otherSettings.getByRole("button", { name: "Close notification settings" }).click();
+  await changeState("working");
+  await changeState("waiting_human");
+  for (const current of [page, other]) await expect(ready(current)).toBeVisible({ timeout: 10_000 });
+  await ready(page).getByRole("button", { name: "Mute notifications from bravo-work", exact: true }).click();
+  await bell.click();
+  await otherBell.click();
+  await expect(mutedRow(settings)).toBeVisible();
+  await expect(mutedRow(otherSettings)).toBeVisible();
+  const closedInventories = Promise.all([page, other].map((current) => current.waitForResponse((response) => (
+    /\/api\/sessions(?:\/stream)?$/.test(new URL(response.url()).pathname)
+  ))));
+  sessions.splice(0, 1);
+  await closedInventories;
+  for (const currentSettings of [settings, otherSettings]) {
+    await expect(mutedRow(currentSettings)).toHaveCount(0);
+    await expect(currentSettings.getByText("No muted sessions.", { exact: true })).toBeVisible();
+  }
+  for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
+  await other.close();
 });
 
 test.describe("callback display time zones", () => {

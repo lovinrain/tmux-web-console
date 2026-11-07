@@ -24,7 +24,7 @@ import {
 import type { CallbackCustomGroup, CallbackMessage, GlobalCallbackSnapshot, SaveCallbackGroupInput } from "../api";
 import { CallbackGroupEditor } from "./CallbackGroupEditor";
 import { CallbackNotificationSettings } from "./CallbackNotificationSettings";
-import type { CallbackNotificationScope } from "../callbackNotifications";
+import type { CallbackNotificationScope, MutedCallbackSession } from "../callbackNotifications";
 import { TimeZoneSelect } from "./TimeZoneSelect";
 import { formatTimestamp, FULL_TIMESTAMP_FORMAT, SHORT_TIMESTAMP_FORMAT, useDisplayTimeZone } from "../timeZone";
 import "./WorkspaceCallbackMessages.css";
@@ -123,6 +123,8 @@ interface WorkspaceCallbackListProps {
   onSelectSession: (sessionName: string) => void;
   notificationScope?: CallbackNotificationScope;
   onNotificationScopeChange?: (scope: CallbackNotificationScope) => void;
+  notificationMutedSessions?: readonly MutedCallbackSession[];
+  onNotificationSessionUnmute?: (identity: string) => void;
 }
 
 export type CallbackScope = "global" | "workspace";
@@ -323,6 +325,8 @@ export function WorkspaceCallbackList({
   onSelectSession,
   notificationScope,
   onNotificationScopeChange,
+  notificationMutedSessions,
+  onNotificationSessionUnmute,
 }: WorkspaceCallbackListProps) {
   const { timeZone } = useDisplayTimeZone();
   const { bindings: shortcutBindings } = useShortcutSettings();
@@ -1400,7 +1404,8 @@ export function WorkspaceCallbackList({
       <div className="workspace-callback-status-control">
         {summaryButton}
         {notificationScope !== undefined && onNotificationScopeChange && <CallbackNotificationSettings
-          scope={notificationScope} onChange={onNotificationScopeChange} />}
+          scope={notificationScope} onChange={onNotificationScopeChange}
+          mutedSessions={notificationMutedSessions} onUnmuteSession={onNotificationSessionUnmute} />}
       </div>
       {floatingPanel && createPortal(floatingPanel, document.body)}
     </>

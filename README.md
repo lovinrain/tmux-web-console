@@ -106,6 +106,11 @@ Notices fade after eight seconds, pause while hovered, focused, or in a hidden
 browser tab, and dismiss when clicked or closed. Dismissing a notice leaves its
 callback available for review. Closing a notice also dismisses that same notice
 in other open Muxdeck workspace tabs in this browser; later reports still appear.
+Choose **Do not notify anymore** on a live session's notice to mute future
+notifications from that session across this browser's workspace tabs. The bell
+menu lists **Muted sessions** with a **Re-enable** button. Mutes survive reloads
+and session renames, expire when the session closes, and do not carry over to
+a new session with the same name. Re-enabling applies to future events.
 On-hold entries stay quiet. These notices appear
 inside Muxdeck while the page is open.
 
