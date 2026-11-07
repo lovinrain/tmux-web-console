@@ -14,7 +14,14 @@ from the tool payload. Unmarked assistant text stays visible so a provider witho
 completion metadata does not lose its answers.
 
 **First prompt** and **Latest loaded reply** navigate the loaded conversation.
-**Load later messages** continues through it. Filtering happens before page limits,
+**Auto-load later messages** is enabled by default: approaching the bottom loads
+the next page while preserving the reading position. Its setting is remembered
+in this browser. **Load later messages** also remains available for manual paging.
+**View top** and **View bottom** scroll within the loaded view. **Transcript start**
+and **Transcript end** reach the beginning and end of the selected conversation.
+Reaching an unloaded end reads the full transcript with progress and **Stop loading**,
+then shows a 60-message window at the destination. **Load earlier messages** and
+automatic or manual later paging extend that window. Filtering happens before page limits,
 and the browser automatically continues past bounded windows of metadata, so
 setup instructions or tool chatter do not occupy the whole first page. Very large
 empty scans offer **Continue searching**. **Copy loaded transcript** copies the
@@ -25,6 +32,24 @@ text** shows the original text; switching formats does not reload the conversati
 Copying preserves the original Markdown in either format. Text stays selectable;
 embedded HTML and scripts are skipped, remote images become text placeholders,
 and links open separately. Activity remains literal text.
+
+**Search transcript** searches the whole conversation by default, including
+messages outside the loaded view; **Loaded messages** limits search to the current
+window. Choose **Exact phrase**, **All words** (in any order), or **Fuzzy** for
+abbreviations and small spelling mistakes, such as `dply` for “deploy.” **Match case**,
+**Whole words**, and the message-type selector refine results. Activity types become
+available with **Show activity**. Matches are highlighted in formatted and plain
+text; navigating a match reveals its surrounding messages and opens its activity
+group when needed. **Ctrl/Cmd+F** focuses search, **Enter** selects the next matching
+message, and **Shift+Enter** selects the previous one; the arrow buttons also wrap
+through results. Copy and export preserve original message text and the activity
+choice. Large searches run in small batches so typing remains responsive.
+
+Full-transcript navigation and search share the export reader's bounds: 32 MiB of
+message text, 50,000 messages, and 2,000 page requests. Progress and **Stop loading**
+are available while reading; a limit or changed/unavailable source leaves loaded
+messages available with an explicit error. Refresh, conversation changes, and
+closing history clear the cached full transcript and cancel pending reads.
 
 **Export Markdown** downloads the complete selected conversation, including
 messages that have not been loaded on screen. **Export PDF** opens the complete

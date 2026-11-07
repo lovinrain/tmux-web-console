@@ -14,6 +14,7 @@ if (!socketName?.startsWith("muxdeck-playwright-") || !transcriptsDirectory?.sta
 const tmux = ["-L", socketName];
 
 test("Transcript formats the first Codex prompt and replies, separates recorded output, and closes on Escape", async ({ page, context }, testInfo) => {
+  test.setTimeout(60_000);
   const directory = mkdtempSync(join(tmpdir(), "muxdeck-transcript-fixture-"));
   const identifier = randomUUID();
   const name = `transcript-${process.pid}`;
@@ -41,7 +42,7 @@ test("Transcript formats the first Codex prompt and replies, separates recorded 
     message('<send_user_message_question_reply>[{"question":"Which export format?","answer":"Markdown and PDF","questionItemId":"internal-id"}]</send_user_message_question_reply>', "user"),
     message("Checking files in a progress update", "assistant", "commentary"),
     { type: "response_item", payload: { type: "function_call_output", output: "Detailed tool output" } },
-    ...Array.from({ length: 52 }, (_, index) => message(index === 0 ? formattedReply : `Saved answer ${index + 1}`))];
+    ...Array.from({ length: 132 }, (_, index) => message(index === 0 ? formattedReply : `Saved answer ${index + 1}`))];
   writeFileSync(transcript, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
   writeFileSync(fakeCodex, `#!/usr/bin/python3
 import ctypes, sys, time
@@ -78,22 +79,22 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     await expect(page.locator(".agent-transcript")).toContainText("Markdown and PDF");
     await expect(page.locator(".agent-transcript")).not.toContainText("send_user_message_question_reply");
     // Export must resolve all pages, including the final reply not loaded in UI.
-    await expect(page.getByText("Saved answer 52", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("Saved answer 132", { exact: true })).not.toBeVisible();
     const downloadReady = page.waitForEvent("download");
     await page.getByRole("button", { name: "Export Markdown", exact: true }).click();
     const download = await downloadReady;
     expect(download.suggestedFilename()).toMatch(/\.md$/);
     const exported = readFileSync((await download.path())!, "utf8");
-    expect(exported).toContain("Saved answer 52");
+    expect(exported).toContain("Saved answer 132");
     expect(exported).toContain(formattedReply);
     expect(exported).toContain("Your answer:\nMarkdown and PDF");
     expect(exported).not.toContain("Detailed tool output");
-    await expect(page.getByText("Saved answer 52", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("Saved answer 132", { exact: true })).not.toBeVisible();
     const popupReady = page.waitForEvent("popup");
     await page.getByRole("button", { name: "Export PDF", exact: true }).click();
     const printable = await popupReady;
     await expect(printable.getByRole("button", { name: "Print / Save as PDF" })).toBeVisible();
-    await expect(printable.getByText("Saved answer 52", { exact: true })).toBeVisible();
+    await expect(printable.getByText("Saved answer 132", { exact: true })).toBeVisible();
     await expect(printable.getByRole("heading", { name: "A readable reply" })).toBeVisible();
     expect(await printable.evaluate(() => window.opener)).toBeNull();
     await printable.evaluate(() => { window.print = () => { document.body.dataset.printRequested = "yes"; }; });
@@ -112,10 +113,50 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     expect(terminalInputs.slice(inputBeforeEscape)).toEqual([]);
     await page.getByRole("button", { name: "Pane scrollback" }).click();
     await expect(page.getByRole("heading", { name: "A readable reply" })).toBeVisible();
-    await page.getByRole("button", { name: "Load later messages" }).click();
-    await page.getByRole("button", { name: "Latest loaded reply" }).click();
-    await expect(page.getByText("Saved answer 52", { exact: true })).toBeInViewport();
-    await page.getByRole("button", { name: "First prompt", exact: true }).click();
+    const viewport = page.locator(".agent-transcript-messages");
+    const autoLoad = page.getByRole("checkbox", { name: "Auto-load later messages" });
+    await expect(autoLoad).toBeChecked();
+    const bottomBeforePaging = await viewport.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      return element.scrollTop;
+    });
+    await expect(page.getByText("Saved answer 52", { exact: true })).toBeAttached();
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(bottomBeforePaging + 20);
+    await autoLoad.uncheck();
+    await page.getByRole("button", { name: "View top", exact: true }).click();
+    expect(await viewport.evaluate((element) => element.scrollTop)).toBe(0);
+    await page.getByRole("button", { name: "View bottom", exact: true }).click();
+    expect(await viewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+    await page.getByRole("button", { name: "Transcript end", exact: true }).click();
+    await expect(page.getByText("Saved answer 132", { exact: true })).toBeInViewport();
+    await expect(viewport.locator(".agent-transcript-message")).toHaveCount(60);
+    await expect(page.getByRole("button", { name: "Load earlier messages", exact: true })).toBeAttached();
+    await page.getByRole("button", { name: "Transcript start", exact: true }).click();
+    await expect(page.getByText("The original request before the terminal buffer")).toBeInViewport();
+    const inputBeforeSearch = terminalInputs.length;
+    await page.keyboard.press("Control+f");
+    const search = page.getByRole("searchbox", { name: "Search transcript", exact: true });
+    await expect(search).toBeFocused();
+    await search.fill("Saved answer 132");
+    await expect(page.getByText("1 matching message · whole transcript", { exact: true })).toBeVisible();
+    await page.getByRole("combobox", { name: "Transcript search scope" }).selectOption("loaded");
+    await expect(page.getByText("No matching messages · loaded messages", { exact: true })).toBeVisible();
+    await page.getByRole("combobox", { name: "Transcript search scope" }).selectOption("full");
+    await search.fill("sved anser 132");
+    await page.getByRole("combobox", { name: "Transcript search mode" }).selectOption("fuzzy");
+    await expect(page.getByText("1 matching message · whole transcript", { exact: true })).toBeVisible();
+    await search.press("Enter");
+    await expect(viewport.locator('[data-search-current="true"]')).toContainText("Saved answer 132");
+    await expect(viewport.locator('[data-search-current="true"] mark').first()).toBeInViewport();
+    await expect(search).toBeFocused();
+    await page.getByRole("combobox", { name: "Transcript search mode" }).selectOption("words");
+    await search.fill("132 answer Saved");
+    await expect(page.getByText("1 matching message · whole transcript", { exact: true })).toBeVisible();
+    expect(terminalInputs.slice(inputBeforeSearch)).toEqual([]);
+    await page.getByRole("button", { name: "Clear search", exact: true }).click();
+    await expect(viewport.locator("mark")).toHaveCount(0);
+    await autoLoad.check();
+    await page.getByRole("button", { name: "Transcript start", exact: true }).click();
     await expect(page.getByText("The original request before the terminal buffer")).toBeInViewport();
     await expect(page.getByRole("button", { name: "Copy loaded transcript" })).toBeEnabled();
     await page.screenshot({ path: testInfo.outputPath("conversation-dark.png"), animations: "disabled" });
@@ -138,7 +179,14 @@ subprocess.run(['codex', sys.argv[1], sys.argv[2]], executable='/usr/bin/python3
     await expect(page.getByText("The original request before the terminal buffer")).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator(".agent-transcript-messages").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await viewport.evaluate((element) => element.clientHeight)).toBeGreaterThan(120);
     await page.screenshot({ path: testInfo.outputPath("conversation-mobile.png"), animations: "disabled" });
+    await page.getByRole("searchbox", { name: "Search transcript", exact: true }).fill("Saved answer 132");
+    await expect(page.getByText("1 matching message · whole transcript", { exact: true })).toBeVisible();
+    await page.getByRole("searchbox", { name: "Search transcript", exact: true }).press("Enter");
+    await expect(viewport.locator('[data-search-current="true"] mark').first()).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("conversation-mobile-search.png"), animations: "disabled" });
+    await page.getByRole("button", { name: "Clear search", exact: true }).click();
 
     await page.getByRole("tab", { name: "Scrollback", exact: true }).click();
     await expect(page.locator(".history-scroll")).toContainText("Earlier messages are available");

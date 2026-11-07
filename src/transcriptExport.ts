@@ -28,6 +28,7 @@ export async function collectTranscript(
   view: TranscriptView,
   signal: AbortSignal,
   onProgress: (count: number) => void,
+  purpose: "export" | "browse" = "export",
 ): Promise<TranscriptExport> {
   const messages: AgentTranscriptMessage[] = [];
   const ids = new Set<string>();
@@ -51,7 +52,9 @@ export async function collectTranscript(
       if (ids.has(message.id)) continue;
       bytes += encoder.encode(message.text).byteLength;
       if (bytes > MAX_EXPORT_BYTES || messages.length >= MAX_EXPORT_MESSAGES) {
-        throw new Error("This conversation exceeds the export limit (32 MiB or 50,000 messages). No incomplete file was saved.");
+        throw new Error(purpose === "export"
+          ? "This conversation exceeds the export limit (32 MiB or 50,000 messages). No incomplete file was saved."
+          : "This conversation exceeds the full-transcript limit (32 MiB or 50,000 messages). Use loaded-message navigation and search.");
       }
       ids.add(message.id);
       messages.push(message);
@@ -63,7 +66,8 @@ export async function collectTranscript(
     cursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
-  throw new Error("The transcript exceeded the export scan limit. No incomplete file was saved.");
+  throw new Error(purpose === "export" ? "The transcript exceeded the export scan limit. No incomplete file was saved."
+    : "The transcript exceeded the full-transcript scan limit. Use loaded-message navigation and search.");
 }
 
 export function transcriptKind(message: AgentTranscriptMessage) {

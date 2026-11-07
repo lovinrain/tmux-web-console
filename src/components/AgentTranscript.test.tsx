@@ -18,6 +18,7 @@ const page = (messages: AgentTranscriptMessage[], extra: Partial<AgentTranscript
 
 beforeEach(() => {
   vi.resetAllMocks();
+  localStorage.clear();
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
 });
 
@@ -50,6 +51,13 @@ describe("AgentTranscript", () => {
     fireEvent.click(screen.getByRole("button", { name: "Formatted" }));
     await screen.findByRole("heading", { name: "Release notes" });
     expect(loadAgentTranscript).toHaveBeenCalledOnce();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search transcript" }), { target: { value: "formatted" } });
+    await waitFor(() => expect(document.querySelector("strong mark")).toHaveTextContent("formatted"));
+    expect(document.querySelector("img, script")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Plain text" }));
+    expect(document.querySelector(".agent-transcript-plain mark")).toHaveTextContent("formatted");
+    fireEvent.click(screen.getByRole("button", { name: "Copy loaded transcript" }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith(`Assistant\n${markdown}`));
   });
 
   it("pages through prompts and replies, expands activity, and copies selectable text without rendering HTML", async () => {
@@ -122,6 +130,11 @@ describe("AgentTranscript", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load later messages" }));
     await screen.findByRole("alert");
     expect(screen.getByText("Original")).toBeVisible();
+    const viewport = screen.getByLabelText("Transcript messages");
+    Object.defineProperties(viewport, { clientHeight: { configurable: true, value: 200 }, scrollHeight: { configurable: true, value: 1000 } });
+    viewport.scrollTop = 800;
+    fireEvent.scroll(viewport);
+    expect(loadAgentTranscript).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("button", { name: "Refresh transcript" }));
     await screen.findByText("Refreshed conversation");
     expect(screen.queryByText("Original")).not.toBeInTheDocument();
@@ -147,6 +160,203 @@ describe("AgentTranscript", () => {
     vi.mocked(loadAgentTranscript).mockResolvedValueOnce(page([message("first", "First prompt after metadata")]));
     fireEvent.click(screen.getByRole("button", { name: "Continue searching" }));
     await screen.findByText("First prompt after metadata");
+  });
+
+  it("auto-loads at the bottom by default without duplicate requests or moving a reader who scrolls away", async () => {
+    let finish!: (value: AgentTranscriptPage) => void;
+    const first = message("first", "First saved prompt");
+    vi.mocked(loadAgentTranscript).mockResolvedValueOnce(page([first], { nextCursor: "later" }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(<AgentTranscript target={{ paneId: "%1" }} />);
+    await screen.findByText("First saved prompt");
+    expect(screen.getByRole("checkbox", { name: "Auto-load later messages" })).toBeChecked();
+    const viewport = screen.getByLabelText("Transcript messages");
+    Object.defineProperties(viewport, { clientHeight: { configurable: true, value: 200 }, scrollHeight: { configurable: true, value: 1000 } });
+    viewport.scrollTop = 400;
+    fireEvent.scroll(viewport);
+    expect(loadAgentTranscript).toHaveBeenCalledOnce();
+    viewport.scrollTop = 700;
+    fireEvent.scroll(viewport);
+    fireEvent.scroll(viewport);
+    expect(loadAgentTranscript).toHaveBeenCalledTimes(2);
+    viewport.scrollTop = 100;
+    await act(async () => finish(page([first, message("later", "A later reply", "assistant")])));
+    expect(screen.getAllByText("First saved prompt")).toHaveLength(1);
+    expect(screen.getByText("A later reply")).toBeInTheDocument();
+    expect(viewport.scrollTop).toBe(100);
+  });
+
+  it("remembers disabling auto-load while retaining manual paging", async () => {
+    vi.mocked(loadAgentTranscript).mockImplementation(async (_target, _source, cursor) => cursor
+      ? page([message("later", "Manual later reply", "assistant")]) : page([message("first", "First prompt")], { nextCursor: "later" }));
+    const first = render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("First prompt");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Auto-load later messages" }));
+    first.unmount();
+    render(<AgentTranscript target={{ historyId: "another-history" }} />);
+    await screen.findByText("First prompt");
+    expect(screen.getByRole("checkbox", { name: "Auto-load later messages" })).not.toBeChecked();
+    const viewport = screen.getByLabelText("Transcript messages");
+    Object.defineProperties(viewport, { clientHeight: { configurable: true, value: 200 }, scrollHeight: { configurable: true, value: 1000 } });
+    viewport.scrollTop = 800;
+    fireEvent.scroll(viewport);
+    expect(loadAgentTranscript).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "Load later messages" }));
+    await screen.findByText("Manual later reply");
+    expect(loadAgentTranscript).toHaveBeenCalledTimes(3);
+  });
+
+  it("jumps to the full end in a bounded window and distinguishes view edges from transcript edges", async () => {
+    const entries = Array.from({ length: 180 }, (_, index) => message(`entry-${index}`, `Entry ${index}`, index ? "assistant" : "user"));
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page(entries.slice(0, 2), { nextCursor: "later" }));
+    vi.mocked(collectTranscript).mockResolvedValue({ source, messages: entries, view: "conversation", notices: [], exportedAt: 0 });
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("Entry 0");
+    fireEvent.click(screen.getByRole("button", { name: "Transcript end" }));
+    await screen.findByText("Entry 179");
+    expect(document.activeElement).toHaveAttribute("data-message-id", "entry-179");
+    expect(screen.queryByText("Entry 0")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".agent-transcript-message")).toHaveLength(60);
+    expect(screen.getByText("Messages 121–180 of 180")).toBeInTheDocument();
+    const viewport = screen.getByLabelText("Transcript messages");
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 5000 });
+    fireEvent.click(screen.getByRole("button", { name: "View bottom" }));
+    expect(viewport.scrollTop).toBe(5000);
+    fireEvent.click(screen.getByRole("button", { name: "View top" }));
+    expect(viewport.scrollTop).toBe(0);
+    expect(screen.queryByText("Entry 0")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+    await screen.findByText("Entry 60");
+    fireEvent.click(screen.getByRole("button", { name: "Transcript start" }));
+    await screen.findByText("Entry 0");
+    expect(document.querySelectorAll(".agent-transcript-message")).toHaveLength(60);
+    expect(screen.queryByRole("button", { name: "Load earlier messages" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load later messages" }));
+    await screen.findByText("Entry 119");
+    fireEvent.click(screen.getByRole("button", { name: "Transcript end" }));
+    await screen.findByText("Entry 179");
+    expect(collectTranscript).toHaveBeenCalledOnce();
+    expect(collectTranscript).toHaveBeenCalledWith({ historyId: "history" }, source.key, "conversation", expect.any(AbortSignal), expect.any(Function), "browse");
+  });
+
+  it("searches beyond loaded messages, reveals bounded context, and navigates with Enter and Shift+Enter", async () => {
+    const entries = Array.from({ length: 180 }, (_, index) => message(`entry-${index}`, [140, 170].includes(index) ? `Needle result ${index}` : `Entry ${index}`, "assistant"));
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page(entries.slice(0, 2), { nextCursor: "later" }));
+    vi.mocked(collectTranscript).mockResolvedValue({ source, messages: entries, view: "conversation", notices: [], exportedAt: 0 });
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("Entry 0");
+    const input = screen.getByRole("searchbox", { name: "Search transcript" });
+    fireEvent.keyDown(screen.getByLabelText("Transcript messages"), { key: "f", ctrlKey: true });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "needle" } });
+    await screen.findByText("2 matching messages · whole transcript");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector('[data-message-id="entry-140"]')).toHaveAttribute("data-search-current", "true"));
+    expect(screen.getByText("1 of 2 matching messages · whole transcript")).toBeInTheDocument();
+    expect(document.querySelector('[data-message-id="entry-140"] mark')).toHaveTextContent("Needle");
+    expect(document.querySelectorAll(".agent-transcript-message")).toHaveLength(60);
+    expect(input).toHaveFocus();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    await waitFor(() => expect(document.querySelector('[data-message-id="entry-170"]')).toHaveAttribute("data-search-current", "true"));
+    expect(screen.getByText("2 of 2 matching messages · whole transcript")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(document.querySelector("mark")).toBeNull();
+    expect(document.querySelector('[data-search-current="true"]')).toBeNull();
+    expect(collectTranscript).toHaveBeenCalledOnce();
+  });
+
+  it("wires fuzzy and type filters and opens collapsed activity for a matching result", async () => {
+    const entries = [message("prompt", "Please deploy"), { ...message("tool", "Missing deployment flag", "tool"), kind: "tool" as const }, message("reply", "Deploy the new release", "assistant")];
+    vi.mocked(loadAgentTranscript).mockImplementation(async (_target, _source, _cursor, _signal, view) => page(view === "all" ? entries : [entries[0], entries[2]]));
+    render(<AgentTranscript target={{ paneId: "%1" }} />);
+    await screen.findByText("Please deploy");
+    const input = screen.getByRole("searchbox", { name: "Search transcript" });
+    fireEvent.change(input, { target: { value: "dply" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Transcript search mode" }), { target: { value: "fuzzy" } });
+    expect(screen.getByText("2 matching messages · whole transcript")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Transcript search message type" }), { target: { value: "response" } });
+    expect(screen.getByText("1 matching message · whole transcript")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next transcript match" }));
+    expect(document.querySelector('[data-message-id="reply"]')).toHaveAttribute("data-search-current", "true");
+    expect(document.querySelector('[data-message-id="prompt"] mark')).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show activity" }));
+    await screen.findByText("Activity · 1 entry", { selector: "summary" });
+    fireEvent.change(input, { target: { value: "missing" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Transcript search message type" }), { target: { value: "tool" } });
+    expect(document.querySelector(".agent-transcript-activity")).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "Next transcript match" }));
+    expect(document.querySelector(".agent-transcript-activity")).toHaveAttribute("open");
+    expect(document.querySelector('[data-message-id="tool"] mark')).toHaveTextContent("Missing");
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show activity" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Transcript search message type" })).toHaveValue("all"));
+  });
+
+  it.each(["stop", "source switch"])("ignores late full-transcript results after %s", async (action) => {
+    let finish!: (value: Awaited<ReturnType<typeof collectTranscript>>) => void;
+    vi.mocked(loadAgentTranscript).mockResolvedValueOnce(page([message("first", "Original conversation")], { sources: [source, other], nextCursor: "later" }))
+      .mockResolvedValueOnce(page([message("other", "Other conversation")], { sources: [source, other], selectedSource: other.key }));
+    vi.mocked(collectTranscript).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("Original conversation");
+    fireEvent.click(screen.getByRole("button", { name: "Transcript end" }));
+    await waitFor(() => expect(collectTranscript).toHaveBeenCalledOnce());
+    const signal = vi.mocked(collectTranscript).mock.calls[0][3];
+    if (action === "stop") fireEvent.click(screen.getByRole("button", { name: "Stop loading" }));
+    else {
+      fireEvent.change(screen.getByRole("combobox", { name: "Transcript conversation" }), { target: { value: other.key } });
+      await screen.findByText("Other conversation");
+    }
+    expect(signal.aborted).toBe(true);
+    await act(async () => finish({ source, messages: [message("late", "Late stale reply")], view: "conversation", notices: [], exportedAt: 0 }));
+    expect(screen.queryByText("Late stale reply")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop loading" })).not.toBeInTheDocument();
+  });
+
+  it("discards an older batched search as soon as the query changes", async () => {
+    const entries = Array.from({ length: 500 }, (_, index) => message(`entry-${index}`, index === 499 ? "New needle" : `Old result ${index}`, "assistant"));
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page(entries.slice(0, 2), { nextCursor: "later" }));
+    vi.mocked(collectTranscript).mockResolvedValue({ source, messages: entries, view: "conversation", notices: [], exportedAt: 0 });
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("Old result 0");
+    fireEvent.click(screen.getByRole("button", { name: "Transcript end" }));
+    await screen.findByText("New needle");
+    const input = screen.getByRole("searchbox", { name: "Search transcript" });
+    fireEvent.change(input, { target: { value: "Old" } });
+    expect(screen.getByText(/matching messages · whole transcript · searching the rest/)).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "New" } });
+    await screen.findByText("1 matching message · whole transcript");
+    expect(document.querySelectorAll('[data-search-match="true"]')).toHaveLength(1);
+    expect(document.querySelector('[data-message-id="entry-499"] mark')).toHaveTextContent("New");
+  });
+
+  it("stops a paging cycle and preserves the previously loaded messages", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValueOnce(page([message("first", "First saved prompt")], { nextCursor: "a" }))
+      .mockResolvedValueOnce(page([message("second", "Second saved reply", "assistant")], { nextCursor: "b" }))
+      .mockResolvedValueOnce(page([message("invalid", "Invalid cycle reply", "assistant")], { nextCursor: "a" }));
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("First saved prompt");
+    fireEvent.click(screen.getByRole("button", { name: "Load later messages" }));
+    await screen.findByText("Second saved reply");
+    fireEvent.click(screen.getByRole("button", { name: "Load later messages" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("paging stopped advancing");
+    expect(screen.getByText("First saved prompt")).toBeInTheDocument();
+    expect(screen.getByText("Second saved reply")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid cycle reply")).not.toBeInTheDocument();
+    expect(loadAgentTranscript).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps loaded search available when full-transcript reading fails", async () => {
+    vi.mocked(loadAgentTranscript).mockResolvedValue(page([message("first", "Loaded needle")], { nextCursor: "later" }));
+    vi.mocked(collectTranscript).mockRejectedValue(new Error("This conversation exceeds the full-transcript limit."));
+    render(<AgentTranscript target={{ historyId: "history" }} />);
+    await screen.findByText("Loaded needle");
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search transcript" }), { target: { value: "needle" } });
+    await screen.findByRole("alert");
+    expect(screen.getByText("1 matching message · loaded messages")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Transcript search scope" }), { target: { value: "loaded" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next transcript match" }));
+    expect(document.querySelector('[data-message-id="first"]')).toHaveAttribute("data-search-current", "true");
+    expect(collectTranscript).toHaveBeenCalledOnce();
   });
 
   it("exports the whole selected conversation with progress, activity scope, and a named download", async () => {

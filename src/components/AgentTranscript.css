@@ -1,4 +1,4 @@
-.agent-transcript { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; padding: 16px 20px; gap: 12px; color: var(--paper); }
+.agent-transcript { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; padding: 16px 20px; gap: 12px; color: var(--paper); }
 .agent-transcript p { margin: 0; font-size: 12px; line-height: 1.6; }
 .agent-transcript-controls, .agent-transcript-actions, .agent-transcript-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .agent-transcript-controls > button { margin-left: auto; }
@@ -14,7 +14,26 @@
 .agent-transcript-format button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .agent-transcript-tools { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .agent-transcript-tools input { accent-color: var(--cyan); }
-.agent-transcript-messages { flex: 1; min-height: 80px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 12px; background: var(--ink); padding: 20px; scrollbar-gutter: stable; }
+.agent-transcript-auto-compact { display: none; }
+.agent-transcript-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.agent-transcript-navigation-set { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.agent-transcript-navigation-set > span { color: var(--muted); font-size: 11px; }
+.agent-transcript-navigation button { padding: 5px 9px; font-size: 11px; }
+.agent-transcript-search { display: grid; gap: 8px; min-width: 0; }
+.agent-transcript-search-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.agent-transcript-search-row > input { flex: 1; min-width: 0; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--paper); background: var(--ink); font: inherit; font-size: 12px; }
+.agent-transcript-search-row > input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.agent-transcript-search-row > button { flex-shrink: 0; padding: 6px 9px; font-size: 11px; }
+.agent-transcript-search-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); }
+.agent-transcript-search-options label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; }
+.agent-transcript-search-options select { min-width: 0; max-width: 100%; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--paper); background: var(--ink); font: inherit; }
+.agent-transcript-search-options input { accent-color: var(--cyan); }
+.agent-transcript-search p, .agent-transcript-range { color: var(--muted); font-size: 11px; }
+.agent-transcript-progress { color: var(--cyan); }
+.agent-transcript-earlier { margin-bottom: 20px; }
+.agent-transcript-message mark { padding: 0; border-radius: 2px; color: var(--paper); background: color-mix(in srgb, var(--amber) 35%, var(--ink-raised)); }
+.agent-transcript-message[data-search-current="true"] { outline: 2px solid var(--amber); outline-offset: 2px; }
+.agent-transcript-messages { flex: 1; min-height: 80px; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; border: 1px solid var(--line); border-radius: 12px; background: var(--ink); padding: 20px; scrollbar-gutter: stable; }
 .agent-transcript-message { margin: 0 0 24px; padding: 18px; min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--ink-raised); }
 .agent-transcript-message[data-kind="prompt"] { margin-left: 24px; background: color-mix(in srgb, var(--amber) 7%, var(--ink-raised)); border-color: color-mix(in srgb, var(--amber) 24%, var(--line)); }
 .agent-transcript-message[data-kind="response"] .agent-transcript-message-heading strong { color: var(--cyan); }
@@ -62,6 +81,12 @@
 .session-history-entry > .agent-transcript { height: min(65dvh, 640px); padding: 12px 0 0; margin-top: 12px; border-top: 1px solid var(--line); }
 @media (max-width: 640px) {
   .agent-transcript { padding: 12px; gap: 10px; }
+  .agent-transcript-description, .agent-transcript-auto-full { display: none; }
+  .agent-transcript-auto-compact { display: inline; }
+  .agent-transcript-options { gap: 8px 5px; }
+  .agent-transcript-navigation-set { flex: 1 0 100%; }
+  .agent-transcript-navigation-set > span { width: 76px; }
+  .agent-transcript-actions { flex-shrink: 0; max-height: 104px; overflow-y: auto; }
   .agent-transcript-messages { padding: 12px; }
   .agent-transcript-message { padding: 14px; margin-bottom: 18px; }
   .agent-transcript-message[data-kind="prompt"] { margin-left: 8px; }
