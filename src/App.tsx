@@ -23,6 +23,7 @@ import {
   listSessions,
   recordClosedSessionTab,
   recreateSession,
+  renameSession,
   replaceGlobalCallbackSessions,
   reviewGlobalCallbackSession,
   reviewCallbackMessage,
@@ -76,6 +77,7 @@ import { DEFAULT_HISTORY_PANEL_WIDTH } from "./components/HistoryPanel";
 import { NewSessionScreen } from "./components/NewSessionScreen";
 import { BulkSessionActionsDialog, type BulkSessionAction, type BulkSessionTarget } from "./components/BulkSessionActionsDialog";
 import { SessionWorkspaceTransferDialog } from "./components/SessionWorkspaceTransferDialog";
+import { handoffRenamedSessionDraft } from "./components/InputBar";
 import {
   WorkspaceRecreateDialog,
   type WorkspaceRecreateTarget,
@@ -4566,6 +4568,15 @@ function AppRoutes() {
               throw new Error("Workspace changed; choose a session in the intended workspace.");
             }
             reparentSessionTab(name, parent);
+          }}
+          onRenameSession={async (session, name) => {
+            const currentSession = knownSessionsRef.current.find((item) => item.name === session.name);
+            if (!currentSession || !hasSessionIdentity(currentSession, session)) {
+              throw new Error("This tmux session is no longer available. Reopen Move / Nest to try again.");
+            }
+            const result = await renameSession(session.name, name);
+            handoffRenamedSessionDraft(session.name, result.session, session.id);
+            renameOpenSession(session.name, result.session, session.id, result.warnings);
           }}
           onClose={() => setBulkWorkspaceTransfer(null)}
           onTransfer={async (sessionNames, destinationId, operation, revision, parent) => {

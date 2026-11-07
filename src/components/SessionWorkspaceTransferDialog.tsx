@@ -15,6 +15,7 @@ import { acquireBodyScrollLock } from "../bodyScrollLock";
 import type { Session } from "../types";
 import type { SessionWorkspaceState } from "../workspaceState";
 import { SessionPlacementDialog } from "./SessionPlacementDialog";
+import { SessionRenameDialog } from "./SessionRenameDialog";
 import {
   CloseIcon,
   RefreshIcon,
@@ -31,6 +32,7 @@ export interface SessionWorkspaceTransferDialogProps {
   sourceWorkspace?: SessionWorkspaceState;
   sessions?: readonly Session[];
   onReparentSession?: (sessionName: string, parentName: string | null) => void | Promise<void>;
+  onRenameSession?: (session: Session, name: string) => Promise<void>;
   onClose: () => void;
   onTransfer: (
     sessionNames: string[],
@@ -56,8 +58,22 @@ function tabCountLabel(count: number): string {
 }
 
 export function SessionWorkspaceTransferDialog(props: SessionWorkspaceTransferDialogProps) {
+  const [renameTarget, setRenameTarget] = useState<Session | null>(null);
+  const onRenameSession = props.onRenameSession;
+  if (renameTarget && onRenameSession) {
+    return <SessionRenameDialog sessionName={renameTarget.name}
+      onClose={() => setRenameTarget(null)}
+      onRename={async (name) => {
+        await onRenameSession(renameTarget, name);
+        props.onClose();
+      }} />;
+  }
   if (props.sessionNames.length === 1 && props.sourceWorkspace && props.onReparentSession) {
     return <SessionPlacementDialog {...props} key={props.sessionNames[0]}
+      onRequestRenameSession={props.onRenameSession ? () => {
+        const session = props.sessions?.find((item) => item.name === props.sessionNames[0]);
+        if (session) setRenameTarget(session);
+      } : undefined}
       sourceWorkspace={props.sourceWorkspace} onReparentSession={props.onReparentSession} />;
   }
   return <WorkspaceTransferDialog {...props} />;

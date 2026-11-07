@@ -1227,7 +1227,6 @@ describe("InputBar", () => {
       "handoff-source",
       "handoff-destination",
       "$same-session",
-      "old handoff",
     )).toBe("migrated");
     vi.spyOn(window, "confirm").mockReturnValue(true);
     expect(stageSessionDraft("handoff-destination", "newer staged draft")).toBe("staged");

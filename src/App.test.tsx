@@ -29,6 +29,7 @@ import {
   type WorkspaceSessionTransferOperation,
   type WorkspaceSessionsTransferResult,
   recreateSession,
+  renameSession,
   type RecoverableSession,
 } from "./api";
 import { App } from "./App";
@@ -54,6 +55,7 @@ vi.mock("./api", async (importOriginal) => {
     listSessions: vi.fn(),
     recordClosedSessionTab: vi.fn(async () => undefined),
     recreateSession: vi.fn(),
+    renameSession: vi.fn(),
     listWorkspaces: vi.fn(),
     terminateSession: vi.fn(),
     transferSessionToWorkspace: vi.fn(),
@@ -716,6 +718,7 @@ describe("App routing", () => {
     getWorkspaceMock.mockReset();
     getWorkspaceQuickLinksMock.mockReset();
     listSessionsMock.mockReset();
+    vi.mocked(renameSession).mockReset();
     listWorkspacesMock.mockReset();
     terminateSessionMock.mockReset();
     transferSessionToWorkspaceMock.mockReset();
@@ -1432,6 +1435,44 @@ describe("App routing", () => {
     act(() => navigateConsoleSessionHistory?.("back"));
     expect(screen.getByRole("tab", { name: /alpha/ }).closest(".workspace-tab"))
       .not.toHaveAttribute("data-ready-unchecked");
+  });
+
+  it.each(["alpha", "beta"])("renames %s from Move / Nest while preserving the active tab and staged draft", async (target) => {
+    const nextName = `${target}-renamed`;
+    const known = [session("alpha", "$alpha"), session("beta", "$beta")];
+    vi.mocked(renameSession).mockResolvedValue({ previousSession: target, session: nextName, warnings: [] });
+    window.localStorage.setItem(`muxdeck-terminal-draft:${target}`, "unsent work");
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+    act(() => reportKnownSessions?.(known));
+
+    fireEvent.contextMenu(screen.getByRole("tab", { name: new RegExp(target) }));
+    const placement = screen.getByRole("dialog", { name: "Move / Nest" });
+    fireEvent.click(within(placement).getByRole("button", { name: "Rename tmux session" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Native tmux name" }), { target: { value: nextName } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rename tmux session" })).not.toBeInTheDocument());
+    expect(renameSession).toHaveBeenCalledWith(target, nextName);
+    expect(renderedTabs()).toEqual(known.map((item) => item.name === target ? nextName : item.name));
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/${target === "alpha" ? nextName : "alpha"}`);
+    expect(window.localStorage.getItem(`muxdeck-terminal-draft:${nextName}`)).toBe("unsent work");
+  });
+
+  it("refuses to rename a replacement session while the placement rename dialog is open", async () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    render(<App />);
+    act(() => reportKnownSessions?.([session("alpha", "$alpha"), session("beta", "$original")]));
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /beta/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Move / Nest" }))
+      .getByRole("button", { name: "Rename tmux session" }));
+    act(() => reportKnownSessions?.([session("alpha", "$alpha"), session("beta", "$replacement")]));
+    fireEvent.change(screen.getByRole("textbox", { name: "Native tmux name" }), { target: { value: "new-beta" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("This tmux session is no longer available.");
+    expect(renameSession).not.toHaveBeenCalled();
+    expect(renderedTabs()).toEqual(["alpha", "beta"]);
   });
 
   it("rewrites an active renamed session and its exact ordered URL tabs", () => {

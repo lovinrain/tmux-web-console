@@ -414,7 +414,7 @@ export function handoffRenamedSessionDraft(
   previousName: string,
   nextName: string,
   sessionId: string,
-  visibleDraft: string,
+  visibleDraft: string = readDraft(previousName),
 ): RenameSessionDraftResult {
   if (!previousName || !nextName || !sessionId || previousName === nextName) {
     return "unchanged";

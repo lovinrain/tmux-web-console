@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { listWorkspaces, type SavedWorkspace, type WorkspaceSessionTransferOperation } from "../api";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
-import { ArrowUpIcon, CheckIcon, CloseIcon, FolderIcon, SearchIcon } from "../icons";
+import { ArrowUpIcon, CheckIcon, CloseIcon, FolderIcon, SearchIcon, TerminalIcon } from "../icons";
 import { sessionDisplayTitle } from "../sessionDashboardModel";
 import {
   previousWorkspaceSibling, workspaceSessionDepth, workspaceSessionParent,
@@ -13,11 +13,12 @@ import "./SessionPlacementDialog.css";
 type PlacementProps = SessionWorkspaceTransferDialogProps & {
   sourceWorkspace: SessionWorkspaceState;
   onReparentSession: NonNullable<SessionWorkspaceTransferDialogProps["onReparentSession"]>;
+  onRequestRenameSession?: () => void;
 };
 
 export function SessionPlacementDialog({
   sessionNames, sourceWorkspace, sourceWorkspaceId, sourceWorkspaceName,
-  sessions = [], workspacePinnedSessions = [], onReparentSession, onTransfer, onClose,
+  sessions = [], workspacePinnedSessions = [], onReparentSession, onTransfer, onClose, onRequestRenameSession,
 }: PlacementProps) {
   const name = sessionNames[0];
   const id = useId();
@@ -147,7 +148,14 @@ export function SessionPlacementDialog({
         </button>
       </header>
       <div className="session-placement-source">
-        <strong title={name}>{title(name)}</strong>
+        <div className="session-placement-source-heading">
+          <strong title={name}>{title(name)}</strong>
+          {onRequestRenameSession && <button type="button" className="secondary-button session-placement-rename"
+            disabled={busy || !sourceAvailable || !sessions.some((session) => session.name === name)}
+            title="Rename the real tmux session" onClick={onRequestRenameSession}>
+            <TerminalIcon /> Rename tmux session
+          </button>}
+        </div>
         <span>{sourceLabel} / {currentParent ? title(currentParent) : "Top level"}</span>
         <p id={`${id}-hint`}>{branch.length > 1
           ? `${branch.length - 1} nested session${branch.length === 2 ? " comes" : "s come"} with it.`

@@ -336,18 +336,27 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
     await expect(placement).toBeVisible();
     await expect(up).toBeVisible();
     await expect(down).toBeVisible();
-    const controlBox = (await controls.boundingBox())!;
-    const placementBox = (await placement.boundingBox())!;
-    const upBox = (await up.boundingBox())!;
-    const downBox = (await down.boundingBox())!;
-    expect(placementBox.y).toBeCloseTo(upBox.y, 1);
-    expect(placementBox.height).toBeCloseTo(upBox.height, 1);
-    expect(placementBox.x + placementBox.width).toBeCloseTo(controlBox.x, 1);
-    expect(upBox.width).toBeCloseTo(downBox.width, 1);
-    expect(upBox.y).toBeCloseTo(downBox.y, 1);
-    expect(upBox.x).toBeCloseTo(controlBox.x, 1);
-    expect(upBox.x + upBox.width).toBeCloseTo(downBox.x, 1);
-    expect(downBox.x + downBox.width).toBeCloseTo(controlBox.x + controlBox.width, 1);
+    // The groups use display: contents in the responsive toolbar grid.
+    // Measure the buttons to check containment and reading order across rows.
+    const toolbarBox = (await navigation.getByRole("group", { name: "Workspace actions", exact: true }).boundingBox())!;
+    const boxes = await Promise.all([placement, up, down].map(async (button) => (await button.boundingBox())!));
+    for (const box of boxes) {
+      expect(box.x).toBeGreaterThanOrEqual(toolbarBox.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(toolbarBox.x + toolbarBox.width);
+      expect(box.y).toBeGreaterThanOrEqual(toolbarBox.y);
+      expect(box.y + box.height).toBeLessThanOrEqual(toolbarBox.y + toolbarBox.height);
+    }
+    expect(boxes[0].height).toBeCloseTo(boxes[1].height, 1);
+    expect(boxes[1].width).toBeCloseTo(boxes[2].width, 1);
+    for (let index = 1; index < boxes.length; index++) {
+      const previous = boxes[index - 1];
+      const current = boxes[index];
+      if (Math.abs(current.y - previous.y) < 1) {
+        expect(current.x).toBeGreaterThanOrEqual(previous.x + previous.width);
+      } else {
+        expect(current.y).toBeGreaterThanOrEqual(previous.y + previous.height);
+      }
+    }
   };
   for (const theme of ["dark", "light"]) {
     if (theme === "light") await page.getByRole("button", { name: "Light theme", exact: true }).click();
@@ -375,6 +384,76 @@ test("nested tabs remain distinguishable in dark, light, and compact sidebars", 
     }
     await page.screenshot({ path: join(reviewDirectory, `nested-sidebar-${theme}-compact.png`) });
   }
+});
+
+test("Move / Nest renames the right-clicked native session while keeping another tab active", async ({ page, context }) => {
+  const branch = `${sourceName}_rename-branch`;
+  const child = `${sourceName}_rename-child`;
+  const renamed = `${sourceName}_renamed-branch`;
+  for (const name of [branch, child]) {
+    execFileSync("tmux", [...tmux, "new-session", "-d", "-s", name, "bash", "--noprofile", "--norc"]);
+  }
+  const identities = [sourceName, branch, child].map(sessionIdentity);
+  expect((await context.request.put("/mux/api/session-title", {
+    data: { session: branch, title: "Implementation" },
+  })).ok()).toBe(true);
+  const response = await context.request.post("/mux/api/workspaces", { data: {
+    name: "Rename from placement", tabs: [sourceName, branch, child], activeSession: sourceName,
+    parents: { [branch]: sourceName, [child]: branch },
+  } });
+  expect(response.ok()).toBe(true);
+  const workspace = (await response.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  await page.addInitScript((name) => {
+    localStorage.setItem(`muxdeck-terminal-draft:${name}`, "unsent implementation notes");
+  }, branch);
+  await page.goto(`/mux/session/${sourceName}?workspace=${workspace.id}`);
+  await expectTree(page, workspace.tabs, workspace.parents!);
+  await tabRow(page, branch).getByRole("tab").click({ button: "right" });
+  const placement = page.getByRole("dialog", { name: "Move / Nest", exact: true });
+  await expect(placement.locator(".session-placement-source-heading > strong")).toHaveText("Implementation");
+  const renameButton = placement.getByRole("button", { name: "Rename tmux session", exact: true });
+  await expect(renameButton).toBeVisible();
+  await page.screenshot({ path: join(reviewDirectory, "placement-native-rename-dark.png") });
+  await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+  await page.screenshot({ path: join(reviewDirectory, "placement-native-rename-light.png") });
+  await renameButton.click();
+  await expect(placement).toBeHidden();
+  const rename = page.getByRole("dialog", { name: "Rename tmux session", exact: true });
+  const input = rename.getByRole("textbox", { name: "Native tmux name" });
+  await expect(input).toHaveValue(branch);
+  await expect(input).toBeFocused();
+  await input.fill(renamed);
+  await rename.getByRole("button", { name: "Rename session", exact: true }).click();
+  await expect(rename).toBeHidden();
+
+  const tabs = [sourceName, renamed, child];
+  const parents = { [renamed]: sourceName, [child]: renamed };
+  await expectTree(page, tabs, parents);
+  await expect(tabRow(page, sourceName).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(new RegExp(`/mux/session/${sourceName}\\?`));
+  await expect(tabRow(page, renamed).locator(".workspace-tab-title")).toHaveText("Implementation");
+  await expect.poll(async () => {
+    const saved = await readWorkspace(context.request, workspace.id);
+    return { tabs: saved.tabs, parents: saved.parents };
+  }).toEqual({ tabs, parents });
+  expect([sourceName, renamed, child].map(sessionIdentity)).toEqual(identities);
+  await page.reload();
+  await expectTree(page, tabs, parents);
+  await selectTab(page, renamed);
+  await expect(page.locator("#terminal-staged-input")).toHaveValue("unsent implementation notes");
+
+  const renamedAgain = `${sourceName}_renamed-again`;
+  await tabRow(page, renamed).getByRole("tab").click({ button: "right" });
+  await placement.getByRole("button", { name: "Rename tmux session", exact: true }).click();
+  await rename.getByRole("textbox", { name: "Native tmux name" }).fill(renamedAgain);
+  await rename.getByRole("button", { name: "Rename session", exact: true }).click();
+  await expect(rename).toBeHidden();
+  await expectTree(page, [sourceName, renamedAgain, child], { [renamedAgain]: sourceName, [child]: renamedAgain });
+  await expect(tabRow(page, renamedAgain).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(new RegExp(`/mux/session/${renamedAgain}\\?`));
+  await expect(page.locator("#terminal-staged-input")).toHaveValue("unsent implementation notes");
+  expect([sourceName, renamedAgain, child].map(sessionIdentity)).toEqual(identities);
 });
 
 test("existing branches move through the placement button, drag to nest, and transfer across workspaces", async ({ page, context }) => {
@@ -416,7 +495,7 @@ test("existing branches move through the placement button, drag to nest, and tra
   await expect(placementButton).toBeVisible();
   await placementButton.click();
   let dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
-  await expect(dialog.locator(".session-placement-source > strong")).toHaveText("API implementation");
+  await expect(dialog.locator(".session-placement-source-heading > strong")).toHaveText("API implementation");
   await expect(dialog.getByRole("searchbox", { name: "Find a parent session" })).toBeFocused();
   await expect(dialog.getByRole("radio", { name: "Nest under API tests", exact: true })).toHaveCount(0);
   await page.screenshot({ path: join(reviewDirectory, "placement-button-dialog.png") });
@@ -468,7 +547,7 @@ test("existing branches move through the placement button, drag to nest, and tra
   await selectTab(page, sourceName);
   await tabRow(page, branch).getByRole("button", { name: "Move / Nest API implementation", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
-  await expect(dialog.locator(".session-placement-source > strong")).toHaveText("API implementation");
+  await expect(dialog.locator(".session-placement-source-heading > strong")).toHaveText("API implementation");
   await dialog.getByRole("radio", { name: "Nest under Product", exact: true }).check();
   await dialog.getByRole("button", { name: "Nest session", exact: true }).click();
   await expectTree(page, source.tabs, source.parents!);

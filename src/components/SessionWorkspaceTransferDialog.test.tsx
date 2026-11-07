@@ -6,6 +6,7 @@ import {
   type WorkspaceSessionsTransferResult,
 } from "../api";
 import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
+import { session } from "./workspaceNavigation/testFixtures";
 
 vi.mock("../api", () => ({
   listWorkspaces: vi.fn(),
@@ -45,6 +46,41 @@ describe("SessionWorkspaceTransferDialog", () => {
     openSessions: ["root", "agent", "child", "shell"], recentSessions: ["agent"], groups: [],
     parents: { agent: "root", child: "agent" },
   };
+
+  it("opens the existing native rename dialog for the chosen tab and returns on cancel", async () => {
+    const target = session({ name: "agent", customTitle: "API implementation" });
+    const onRenameSession = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+    const onReparentSession = vi.fn();
+    const onTransfer = vi.fn();
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} sessions={[target]} onRenameSession={onRenameSession}
+      onReparentSession={onReparentSession} onTransfer={onTransfer} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename tmux session" }));
+    expect(screen.queryByRole("dialog", { name: "Move / Nest" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Native tmux name" })).toHaveValue("agent");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog", { name: "Move / Nest" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Find a parent session" })).toHaveFocus());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onRenameSession).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename tmux session" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Native tmux name" }), { target: { value: "new-agent" } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename session" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onRenameSession).toHaveBeenCalledWith(target, "new-agent");
+    expect(onReparentSession).not.toHaveBeenCalled();
+    expect(onTransfer).not.toHaveBeenCalled();
+  });
+
+  it("disables native rename for an unavailable session", () => {
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} sessions={[]} onRenameSession={vi.fn()}
+      onReparentSession={vi.fn()} onTransfer={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Rename tmux session" })).toBeDisabled();
+  });
 
   it("finds a parent locally, excludes its own branch, and keeps failed changes reviewable", async () => {
     const onReparentSession = vi.fn().mockRejectedValueOnce(new Error("Workspace changed; try again.")).mockResolvedValue(undefined);

@@ -17,7 +17,10 @@
 .session-placement-dialog button:disabled { opacity: 0.45; cursor: not-allowed; }
 .session-placement-workspace select { font-size: 12px; }
 .session-placement-source { display: grid; gap: 4px; padding: 16px 18px 8px; overflow-wrap: anywhere; }
-.session-placement-source > strong { font-size: 15px; }
+.session-placement-source-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.session-placement-source-heading > strong { min-width: 0; font-size: 15px; }
+.session-placement-rename { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; font-size: 11px; }
+.session-placement-rename svg { width: 14px; height: 14px; }
 .session-placement-source > span, .session-placement-source p { color: var(--muted); font-size: 11px; margin: 0; }
 .session-placement-source p { padding-top: 4px; }
 .session-placement-quick { display: flex; gap: 8px; padding: 8px 18px 16px; }
