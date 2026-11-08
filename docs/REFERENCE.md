@@ -348,6 +348,12 @@ refocuses the floating search; Escape closes it only while focus is inside.
 `Modal` returns to the centered picker. The presentation choice lasts for the
 current page; leaving the workspace or switching to mobile closes the picker.
 
+In floating form, **Minimize** collapses the picker to a small movable bar.
+Drag the bar or use its focused arrow-key handle to move it. **Restore** or a
+double-click on the title expands it with the same search and window size.
+The title-bar picker button, `Sessions`, and Find tab shortcut also restore it.
+Minimizing returns focus to the active terminal; Close still dismisses the picker.
+
 `Notes` in Focus reveals the Common, Workspace, and Session sticky-note cards.
 Choose a card to open its existing floating editor while keeping Focus active;
 autosave and pinning work as usual. Toggle `Notes` again to hide the cards.

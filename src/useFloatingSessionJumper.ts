@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 export const SESSION_JUMPER_GEOMETRY_PREFIX = "muxdeck.session-jumper.v1:";
+export const SESSION_JUMPER_MINIMIZED_WIDTH = 240;
+export const SESSION_JUMPER_MINIMIZED_HEIGHT = 36;
 const MARGIN = 12;
 
 export interface SessionJumperGeometry {
@@ -17,17 +19,19 @@ function viewport() {
   };
 }
 
-export function clampSessionJumperGeometry(value: SessionJumperGeometry): SessionJumperGeometry {
+export function clampSessionJumperGeometry(value: SessionJumperGeometry, minimized = false): SessionJumperGeometry {
   const view = viewport();
   const maxWidth = Math.max(1, view.width - MARGIN * 2);
   const maxHeight = Math.max(1, view.height - MARGIN * 2);
   const width = Math.round(Math.min(maxWidth, Math.max(Math.min(360, maxWidth), value.width)));
   const height = Math.round(Math.min(maxHeight, Math.max(Math.min(300, maxHeight), value.height)));
+  const visibleWidth = minimized ? Math.min(SESSION_JUMPER_MINIMIZED_WIDTH, maxWidth) : width;
+  const visibleHeight = minimized ? Math.min(SESSION_JUMPER_MINIMIZED_HEIGHT, maxHeight) : height;
   return {
     width,
     height,
-    x: Math.round(Math.max(MARGIN, Math.min(value.x, view.width - width - MARGIN))),
-    y: Math.round(Math.max(MARGIN, Math.min(value.y, view.height - height - MARGIN))),
+    x: Math.round(Math.max(MARGIN, Math.min(value.x, view.width - visibleWidth - MARGIN))),
+    y: Math.round(Math.max(MARGIN, Math.min(value.y, view.height - visibleHeight - MARGIN))),
   };
 }
 
@@ -48,7 +52,7 @@ function readGeometry(storageKey: string): SessionJumperGeometry {
 }
 
 /** The picker is keyed by workspace, so geometry remains local to that scope. */
-export function useFloatingSessionJumper(workspaceKey: string, floating: boolean) {
+export function useFloatingSessionJumper(workspaceKey: string, floating: boolean, minimized = false) {
   const storageKey = SESSION_JUMPER_GEOMETRY_PREFIX + workspaceKey;
   const [geometry, setGeometry] = useState(() => readGeometry(storageKey));
   const interactionCleanup = useRef<(() => void) | null>(null);
@@ -64,7 +68,7 @@ export function useFloatingSessionJumper(workspaceKey: string, floating: boolean
       interactionCleanup.current?.();
       return;
     }
-    const keepVisible = () => setGeometry((current) => clampSessionJumperGeometry(current));
+    const keepVisible = () => setGeometry((current) => clampSessionJumperGeometry(current, minimized));
     window.addEventListener("resize", keepVisible);
     window.visualViewport?.addEventListener?.("resize", keepVisible);
     keepVisible();
@@ -73,7 +77,7 @@ export function useFloatingSessionJumper(workspaceKey: string, floating: boolean
       window.visualViewport?.removeEventListener?.("resize", keepVisible);
       interactionCleanup.current?.();
     };
-  }, [floating]);
+  }, [floating, minimized]);
 
   const startInteraction = (event: PointerEvent<HTMLElement>, resizing: boolean) => {
     if (!floating || event.button !== 0
@@ -81,7 +85,7 @@ export function useFloatingSessionJumper(workspaceKey: string, floating: boolean
     event.preventDefault();
     event.stopPropagation();
     interactionCleanup.current?.();
-    const start = { ...geometry, clientX: event.clientX, clientY: event.clientY };
+    const start = { ...clampSessionJumperGeometry(geometry, minimized), clientX: event.clientX, clientY: event.clientY };
     const pointerId = event.pointerId;
     const move = (next: globalThis.PointerEvent) => {
       if (next.pointerId !== pointerId) return;
@@ -90,7 +94,7 @@ export function useFloatingSessionJumper(workspaceKey: string, floating: boolean
       const dy = next.clientY - start.clientY;
       setGeometry(clampSessionJumperGeometry(resizing
         ? { ...start, width: start.width + dx, height: start.height + dy }
-        : { ...start, x: start.x + dx, y: start.y + dy }));
+        : { ...start, x: start.x + dx, y: start.y + dy }, minimized));
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", move);
@@ -125,13 +129,24 @@ export function useFloatingSessionJumper(workspaceKey: string, floating: boolean
     event.preventDefault();
     event.stopPropagation();
     const distance = event.shiftKey ? 64 : 16;
-    setGeometry((current) => clampSessionJumperGeometry(resizing
-      ? { ...current, width: current.width + direction[0] * distance, height: current.height + direction[1] * distance }
-      : { ...current, x: current.x + direction[0] * distance, y: current.y + direction[1] * distance }));
+    setGeometry((current) => {
+      const visible = clampSessionJumperGeometry(current, minimized);
+      return clampSessionJumperGeometry(resizing
+        ? { ...visible, width: visible.width + direction[0] * distance, height: visible.height + direction[1] * distance }
+        : { ...visible, x: visible.x + direction[0] * distance, y: visible.y + direction[1] * distance }, minimized);
+    });
   };
+
+  const visibleGeometry = clampSessionJumperGeometry(geometry, minimized);
+  if (minimized) {
+    const view = viewport();
+    visibleGeometry.width = Math.min(SESSION_JUMPER_MINIMIZED_WIDTH, Math.max(1, view.width - MARGIN * 2));
+    visibleGeometry.height = Math.min(SESSION_JUMPER_MINIMIZED_HEIGHT, Math.max(1, view.height - MARGIN * 2));
+  }
 
   return {
     geometry,
+    visibleGeometry,
     move: (event: PointerEvent<HTMLElement>) => startInteraction(event, false),
     resize: (event: PointerEvent<HTMLElement>) => startInteraction(event, true),
     moveWithKeyboard: (event: KeyboardEvent<HTMLElement>) => adjustWithKeyboard(event, false),

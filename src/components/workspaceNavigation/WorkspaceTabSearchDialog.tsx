@@ -10,6 +10,8 @@ import { acquireBodyScrollLock } from "../../bodyScrollLock";
 import { SessionHistoryControls } from "../SessionHistoryControls";
 import {
   CloseIcon,
+  ContractIcon,
+  ExpandIcon,
   FolderIcon,
   SearchIcon,
   WindowMoveIcon
@@ -76,11 +78,13 @@ export function WorkspaceTabSearchDialog({
     ])
   )).filter((shortcut): shortcut is string => Boolean(shortcut));
   const [query, setQuery] = useState("");
+  const [minimized, setMinimized] = useState(false);
+  const isMinimized = floating && minimized;
   const [highlightedSession, setHighlightedSession] = useState<string | null>(activeSession);
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
-  const floatingWindow = useFloatingSessionJumper(workspaceKey, floating);
+  const floatingWindow = useFloatingSessionJumper(workspaceKey, floating, isMinimized);
   const listId = useId();
   const sessionsByName = useMemo(
     () => new Map(sessions.map((session) => [session.name, session])),
@@ -117,14 +121,14 @@ export function WorkspaceTabSearchDialog({
   }, [activeSession, normalizedQuery, results]);
 
   useEffect(() => {
-    if (!highlightedSession) return;
+    if (!highlightedSession || isMinimized) return;
     const frame = window.requestAnimationFrame(() => {
       document.getElementById(
         `${listId}-${encodeURIComponent(highlightedSession)}`,
       )?.scrollIntoView?.({ block: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [highlightedSession, listId]);
+  }, [highlightedSession, listId, isMinimized]);
 
   useEffect(() => {
     const previousFocus = restoreFocusRef.current;
@@ -183,9 +187,18 @@ export function WorkspaceTabSearchDialog({
   }, [floating, onClose]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => searchRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
+    setMinimized(false);
   }, [floating, focusRequest]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (isMinimized) {
+        const terminal = document.querySelector<HTMLElement>("#muxdeck-active-console .xterm-helper-textarea");
+        (terminal ?? (restoreFocusRef.current?.isConnected ? restoreFocusRef.current : null))?.focus();
+      } else searchRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [floating, focusRequest, isMinimized]);
 
   const moveHighlight = (offset: number) => {
     if (results.length === 0) return;
@@ -226,9 +239,10 @@ export function WorkspaceTabSearchDialog({
         ref={dialogRef}
         className="workspace-tab-search-dialog"
         data-floating={floating ? "true" : undefined}
+        data-minimized={isMinimized ? "true" : undefined}
         style={floating ? {
-          left: floatingWindow.geometry.x, top: floatingWindow.geometry.y,
-          width: floatingWindow.geometry.width, height: floatingWindow.geometry.height,
+          left: floatingWindow.visibleGeometry.x, top: floatingWindow.visibleGeometry.y,
+          width: floatingWindow.visibleGeometry.width, height: floatingWindow.visibleGeometry.height,
         } : undefined}
         role="dialog"
         aria-modal={!floating}
@@ -239,20 +253,27 @@ export function WorkspaceTabSearchDialog({
       >
         <header className="workspace-tab-search-header"
           tabIndex={floating ? 0 : undefined}
-          aria-label={floating ? "Move session jumper window" : undefined}
-          title={floating ? "Drag to move. Arrow keys move the window; Shift moves faster. Enter resets it." : undefined}
+          aria-label={floating ? isMinimized ? "Move minimized session jumper" : "Move session jumper window" : undefined}
+          title={floating ? isMinimized
+            ? "Drag to move. Double-click to restore. Arrow keys move the bar; Shift moves faster."
+            : "Drag to move. Arrow keys move the window; Shift moves faster. Enter resets it." : undefined}
           onPointerDown={floating ? floatingWindow.move : undefined}
           onKeyDown={floating ? floatingWindow.moveWithKeyboard : undefined}
+          onDoubleClick={(event) => {
+            if (isMinimized && event.target instanceof Element && !event.target.closest("button")) setMinimized(false);
+          }}
         >
           <div>
-            <p className="eyebrow">OPEN WORKSPACE TABS</p>
+            {!isMinimized && <p className="eyebrow">OPEN WORKSPACE TABS</p>}
             <h2 id="workspace-tab-search-title">Jump to tab</h2>
           </div>
           <div className="workspace-tab-search-header-actions">
-            <SessionHistoryControls back={sessionHistoryBack} forward={sessionHistoryForward}
-              onNavigate={onNavigateSessionHistory} />
-            <kbd>{findTabShortcut || "Button only"}</kbd>
-            {onFloatingChange && (
+            {!isMinimized && <>
+              <SessionHistoryControls back={sessionHistoryBack} forward={sessionHistoryForward}
+                onNavigate={onNavigateSessionHistory} />
+              <kbd>{findTabShortcut || "Button only"}</kbd>
+            </>}
+            {!isMinimized && onFloatingChange && (
               <button type="button" className="workspace-tab-search-mode-button"
                 aria-label={floating ? "Use modal session jumper" : "Float session jumper"}
                 title={floating ? "Return to a centered modal picker" : "Keep the session jumper open as a movable window"}
@@ -261,12 +282,24 @@ export function WorkspaceTabSearchDialog({
                 <WindowMoveIcon /><span>{floating ? "Modal" : "Float"}</span>
               </button>
             )}
+            {floating && (
+              <button type="button" className="icon-button workspace-session-jumper-minimize"
+                aria-label={isMinimized ? "Restore session jumper" : "Minimize session jumper"}
+                aria-expanded={!isMinimized} aria-controls={`${listId}-content`}
+                title={isMinimized ? "Restore the session switcher" : "Minimize to a movable bar"}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setMinimized((current) => !current)}
+              >
+                {isMinimized ? <ExpandIcon /> : <ContractIcon />}
+              </button>
+            )}
             <button type="button" className="icon-button" onClick={onClose} aria-label="Close tab search">
               <CloseIcon />
             </button>
           </div>
         </header>
 
+        <div className="workspace-tab-search-content" id={`${listId}-content`} hidden={isMinimized}>
         <label className="workspace-tab-search-field">
           <SearchIcon />
           <input
@@ -376,7 +409,8 @@ export function WorkspaceTabSearchDialog({
           <span><kbd>Enter</kbd> jump</span>
           <span><kbd>Esc</kbd> close</span>
         </footer>
-        {floating && (
+        </div>
+        {floating && !isMinimized && (
           <button type="button" className="workspace-session-jumper-resize"
             aria-label="Resize session jumper window"
             title="Drag to resize. Arrow keys resize the window; Shift resizes faster. Enter resets it."

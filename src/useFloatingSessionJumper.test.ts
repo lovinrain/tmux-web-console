@@ -35,6 +35,12 @@ describe("floating session jumper geometry", () => {
     expect(result.current.geometry).toEqual({ x: 168, y: 12, width: 500, height: 576 });
   });
 
+  it("uses the small bar's bounds without losing the expanded size", () => {
+    const minimized = clampSessionJumperGeometry({ x: 9999, y: 9999, width: 440, height: 480 }, true);
+    expect(minimized).toEqual({ x: 508, y: 852, width: 440, height: 480 });
+    expect(clampSessionJumperGeometry(minimized)).toEqual({ x: 308, y: 408, width: 440, height: 480 });
+  });
+
   it.each(["broken JSON", JSON.stringify({ x: "bad", y: 20, width: 400, height: 500 })])("uses safe defaults for malformed stored geometry", (value) => {
     localStorage.setItem(SESSION_JUMPER_GEOMETRY_PREFIX + "workspace:two", value);
     const { result } = renderHook(() => useFloatingSessionJumper("workspace:two", true));

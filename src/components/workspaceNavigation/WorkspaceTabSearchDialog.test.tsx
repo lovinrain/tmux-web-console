@@ -179,6 +179,66 @@ describe("WorkspaceTabSearchDialog", () => {
     expect(reopened.style.width).toBe(`${width}px`);
   });
 
+  it("minimizes to a movable bar and restores the same search and expanded size", () => {
+    const terminalHost = document.createElement("div");
+    terminalHost.id = "muxdeck-active-console";
+    terminalHost.innerHTML = '<textarea class="xterm-helper-textarea"></textarea>';
+    document.body.append(terminalHost);
+    const terminal = terminalHost.querySelector("textarea")!;
+    terminal.focus();
+    const props = { activeSession: "alpha", openSessions: ["alpha", "beta"], sessions,
+      workspaceKey: "test-minimized-jumper", floating: true, onSelect: vi.fn(), onClose: vi.fn() };
+    const view = render(<WorkspaceTabSearchDialog {...props} />);
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    fireEvent.keyDown(within(dialog).getByRole("button", { name: "Resize session jumper window" }), { key: "ArrowRight" });
+    const expanded = { width: dialog.style.width, height: dialog.style.height };
+    const search = within(dialog).getByRole("combobox");
+    fireEvent.change(search, { target: { value: "beta" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Minimize session jumper" }));
+    expect(dialog).toHaveAttribute("data-minimized", "true");
+    expect(Number.parseFloat(dialog.style.width)).toBeLessThan(280);
+    expect(Number.parseFloat(dialog.style.height)).toBeLessThan(44);
+    expect(within(dialog).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Resize session jumper window" })).not.toBeInTheDocument();
+    expect(terminal).toHaveFocus();
+    const before = { left: Number.parseFloat(dialog.style.left), top: Number.parseFloat(dialog.style.top) };
+    const handle = within(dialog).getByLabelText("Move minimized session jumper");
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    fireEvent.keyDown(handle, { key: "ArrowDown", shiftKey: true });
+    expect(Number.parseFloat(dialog.style.left)).toBe(before.left - 16);
+    expect(Number.parseFloat(dialog.style.top)).toBe(before.top + 64);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restore session jumper" }));
+    expect(dialog).not.toHaveAttribute("data-minimized");
+    expect(dialog.style.width).toBe(expanded.width);
+    expect(dialog.style.height).toBe(expanded.height);
+    expect(within(dialog).getByRole("combobox")).toBe(search);
+    expect(search).toHaveValue("beta");
+    expect(search).toHaveFocus();
+    expect(props.onSelect).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Minimize session jumper" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close tab search" }));
+    expect(props.onClose).toHaveBeenCalledOnce();
+    view.unmount();
+    terminalHost.remove();
+  });
+
+  it("restores a minimized picker on a focus request and when returning to modal form", () => {
+    const props = { activeSession: "alpha", openSessions: ["alpha", "beta"], sessions,
+      workspaceKey: "test-minimized-restore", floating: true, focusRequest: 0, onSelect: vi.fn(), onClose: vi.fn() };
+    const view = render(<WorkspaceTabSearchDialog {...props} />);
+    const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Minimize session jumper" }));
+    view.rerender(<WorkspaceTabSearchDialog {...props} focusRequest={1} />);
+    expect(dialog).not.toHaveAttribute("data-minimized");
+    expect(within(dialog).getByRole("combobox")).toHaveFocus();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Minimize session jumper" }));
+    view.rerender(<WorkspaceTabSearchDialog {...props} floating={false} focusRequest={1} />);
+    const modal = screen.getByRole("dialog", { name: "Jump to tab" });
+    expect(modal).toHaveAttribute("aria-modal", "true");
+    expect(within(modal).getByRole("combobox")).toBeVisible();
+    expect(within(modal).queryByRole("button", { name: "Restore session jumper" })).not.toBeInTheDocument();
+  });
+
   it("returns focus to the active terminal after the original terminal is replaced, without stealing outside focus", () => {
     const original = document.createElement("textarea");
     document.body.append(original);

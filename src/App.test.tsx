@@ -3000,8 +3000,15 @@ describe("App routing", () => {
     expect(dialog).toBeVisible();
     const outside = screen.getByRole("button", { name: "Back to sessions" });
     outside.focus();
+    fireEvent.change(search, { target: { value: "alpha" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Minimize session jumper" }));
+    expect(dialog).toHaveAttribute("data-minimized", "true");
+    act(() => navigateConsoleSessionHistory?.("back"));
+    expect(dialog).toHaveAttribute("data-minimized", "true");
     fireEvent.keyDown(window, { key: ":", code: "Semicolon", ctrlKey: true, shiftKey: true });
     await waitFor(() => expect(search).toHaveFocus());
+    expect(dialog).not.toHaveAttribute("data-minimized");
+    expect(search).toHaveValue("alpha");
     expect(screen.getAllByRole("dialog", { name: "Jump to tab" })).toHaveLength(1);
     fireEvent.click(outside);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Jump to tab" })).not.toBeInTheDocument());
