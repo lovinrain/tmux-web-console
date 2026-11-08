@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import { CloseIcon } from "../icons";
+import { sessionRenameError } from "../sessionRenameValidation";
 
 interface SessionRenameDialogProps {
   sessionName: string;
@@ -22,15 +23,12 @@ export function SessionRenameDialog({
   const [draft, setDraft] = useState(sessionName);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const blankName = !draft.trim();
   const invalidCharacters = draft.includes(":")
     || draft.includes(".")
     || draft.includes("\\");
   const trailingCommandSeparator = draft.endsWith(";");
-  const canRename = !blankName
+  const canRename = !sessionRenameError(draft)
     && draft !== sessionName
-    && !invalidCharacters
-    && !trailingCommandSeparator
     && !saving;
 
   useEffect(() => {

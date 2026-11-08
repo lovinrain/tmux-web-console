@@ -18,7 +18,51 @@
 .session-placement-workspace select { font-size: 12px; }
 .session-placement-source { display: grid; gap: 4px; padding: 16px 18px 8px; overflow-wrap: anywhere; }
 .session-placement-source-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-.session-placement-source-heading > strong { min-width: 0; font-size: 15px; }
+.session-name-controls { min-width: 0; flex: 1 1 240px; }
+.session-name-display-title { display: block; margin-bottom: 4px; font-size: 15px; }
+.session-name-row { display: flex; align-items: center; gap: 6px; }
+.session-name-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 3px 0;
+  color: var(--paper);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.session-name-label:not(:disabled):hover,
+.session-name-label:focus-visible { color: var(--acid); text-decoration: underline dotted; }
+.session-name-controls.has-display-title .session-name-label {
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 12px;
+  font-weight: 500;
+}
+.session-name-label:focus-visible { outline: 1px solid var(--acid); outline-offset: 3px; }
+.session-name-input {
+  min-width: 0;
+  min-height: 32px;
+  flex: 1 1 180px;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 12px;
+}
+.session-name-row > .session-name-action {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  flex: 0 0 auto;
+  padding: 5px;
+}
+.session-name-action svg { width: 14px; height: 14px; }
+.session-name-error { color: var(--red) !important; }
+.session-name-copy-status { color: var(--acid); font-size: 10px; }
+.session-name-manual-copy { display: grid; gap: 4px; margin-top: 6px; font-size: 11px; }
+.session-name-manual-copy input { min-width: 0; width: 100%; }
 .session-placement-rename { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; font-size: 11px; }
 .session-placement-rename svg { width: 14px; height: 14px; }
 .session-placement-source > span, .session-placement-source p { color: var(--muted); font-size: 11px; margin: 0; }

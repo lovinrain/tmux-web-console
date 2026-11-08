@@ -47,6 +47,57 @@ describe("SessionWorkspaceTransferDialog", () => {
     parents: { agent: "root", child: "agent" },
   };
 
+  it("copies the exact native name while the context displays a different title", async () => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    const target = session({ name: "agent", customTitle: "API implementation" });
+    const onRenameSession = vi.fn();
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} sessions={[target]} onRenameSession={onRenameSession}
+      onReparentSession={vi.fn()} onTransfer={vi.fn()} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Move / Nest" });
+    expect(within(dialog).getByRole("button", { name: "Edit tmux session name" })).toHaveTextContent("agent");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy tmux session name" }));
+    await waitFor(() => expect(copy).toHaveBeenCalledExactlyOnceWith("agent"));
+    expect(within(dialog).getByRole("status")).toHaveTextContent("Session name copied");
+    expect(onRenameSession).not.toHaveBeenCalled();
+  });
+
+  it("double-clicks the native name to edit, cancels with Escape, and saves once with Enter", async () => {
+    const target = session({ name: "agent", customTitle: "API implementation" });
+    let finish!: () => void;
+    const onRenameSession = vi.fn().mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const onReparentSession = vi.fn();
+    render(<SessionWorkspaceTransferDialog sessionNames={["agent"]} sourceWorkspaceId="source" sourceWorkspaceName="Current project"
+      sourceWorkspace={sourceTree} sessions={[target]} onRenameSession={onRenameSession}
+      onReparentSession={onReparentSession} onTransfer={vi.fn()} onClose={onClose} />);
+    const dialog = screen.getByRole("dialog", { name: "Move / Nest" });
+    const name = within(dialog).getByRole("button", { name: "Edit tmux session name" });
+    fireEvent.doubleClick(name);
+    let input = within(dialog).getByRole("textbox", { name: "Tmux session name" });
+    expect(input).toHaveValue("agent");
+    expect(input).toHaveFocus();
+    expect((input as HTMLInputElement).selectionStart).toBe(0);
+    expect((input as HTMLInputElement).selectionEnd).toBe(5);
+    fireEvent.change(input, { target: { value: "canceled-agent" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(dialog).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onRenameSession).not.toHaveBeenCalled();
+    fireEvent.doubleClick(within(dialog).getByRole("button", { name: "Edit tmux session name" }));
+    input = within(dialog).getByRole("textbox", { name: "Tmux session name" });
+    fireEvent.change(input, { target: { value: "  renamed-agent  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRenameSession).toHaveBeenCalledExactlyOnceWith(target, "  renamed-agent  ");
+    expect(input).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Close session placement" })).toBeDisabled();
+    expect(onReparentSession).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
   it("opens the existing native rename dialog for the chosen tab and returns on cancel", async () => {
     const target = session({ name: "agent", customTitle: "API implementation" });
     const onRenameSession = vi.fn().mockResolvedValue(undefined);

@@ -8,6 +8,7 @@ import {
   workspaceSessionTreeOrder, workspaceSubtree, type SessionWorkspaceState,
 } from "../workspaceState";
 import type { SessionWorkspaceTransferDialogProps } from "./SessionWorkspaceTransferDialog";
+import { SessionNameControls } from "./SessionNameControls";
 import "./SessionPlacementDialog.css";
 
 type PlacementProps = SessionWorkspaceTransferDialogProps & {
@@ -18,7 +19,7 @@ type PlacementProps = SessionWorkspaceTransferDialogProps & {
 
 export function SessionPlacementDialog({
   sessionNames, sourceWorkspace, sourceWorkspaceId, sourceWorkspaceName,
-  sessions = [], workspacePinnedSessions = [], onReparentSession, onTransfer, onClose, onRequestRenameSession,
+  sessions = [], workspacePinnedSessions = [], onReparentSession, onTransfer, onClose, onRequestRenameSession, onRenameSession,
 }: PlacementProps) {
   const name = sessionNames[0];
   const id = useId();
@@ -89,6 +90,7 @@ export function SessionPlacementDialog({
     };
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (!busyRef.current && event.target instanceof Element && event.target.closest("[data-session-name-editor]")) return;
         event.preventDefault();
         event.stopPropagation();
         if (!busyRef.current) closeRef.current();
@@ -135,6 +137,19 @@ export function SessionPlacementDialog({
     }
   };
 
+  const renameInline = onRenameSession ? async (target: (typeof sessions)[number], nextName: string) => {
+    if (busyRef.current || !sourceAvailable) throw new Error("This session is no longer available for renaming.");
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await onRenameSession(target, nextName);
+      closeRef.current();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  } : undefined;
+
   return <div className="workspace-transfer-backdrop session-placement-backdrop" role="presentation"
     onMouseDown={() => { if (!busyRef.current) onClose(); }}>
     <section ref={dialogRef} className="workspace-transfer-dialog session-placement-dialog" role="dialog"
@@ -149,7 +164,9 @@ export function SessionPlacementDialog({
       </header>
       <div className="session-placement-source">
         <div className="session-placement-source-heading">
-          <strong title={name}>{title(name)}</strong>
+          <SessionNameControls name={name} displayTitle={title(name)}
+            session={sessions.find((session) => session.name === name)}
+            disabled={busy || !sourceAvailable} onRename={renameInline} />
           {onRequestRenameSession && <button type="button" className="secondary-button session-placement-rename"
             disabled={busy || !sourceAvailable || !sessions.some((session) => session.name === name)}
             title="Rename the real tmux session" onClick={onRequestRenameSession}>

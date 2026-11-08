@@ -7218,6 +7218,58 @@ test("desktop side-rail status sort keeps stable order inside both partitions", 
   }
 });
 
+test("session context copies the native name and renames it inline without switching the active session", async ({ page, request, context }, testInfo) => {
+  const target = `${sessionName}-context-name`;
+  const renamed = `${target}-renamed`;
+  execFileSync("tmux", [...tmux, "new-session", "-d", "-s", target, "bash", "--noprofile", "--norc"]);
+  const identity = (name: string) => execFileSync("tmux",
+    [...tmux, "display-message", "-p", "-t", `${name}:0.0`, "#{session_id}:#{pane_id}:#{pane_pid}"], { encoding: "utf8" }).trim();
+  const before = identity(target);
+  try {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: E2E_ORIGIN });
+    expect((await request.put("/mux/api/session-title", { data: { session: target, title: "Context display title" } })).ok()).toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${sessionName}&tab=${target}`);
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    const tab = page.getByRole("tab", { name: /Context display title/ });
+    await tab.click({ button: "right" });
+    const dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
+    await expect(dialog).toBeVisible();
+    const label = dialog.getByRole("button", { name: "Edit tmux session name", exact: true });
+    await expect(label).toHaveText(target);
+    await dialog.getByRole("button", { name: "Copy tmux session name", exact: true }).click();
+    await expect(dialog.getByText("Session name copied", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(target);
+    await label.dblclick();
+    let input = dialog.getByRole("textbox", { name: "Tmux session name", exact: true });
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(target);
+    await input.fill("canceled-context-name");
+    await input.press("Escape");
+    await expect(dialog).toBeVisible();
+    expect(identity(target)).toBe(before);
+    await label.dblclick();
+    input = dialog.getByRole("textbox", { name: "Tmux session name", exact: true });
+    await input.fill(renamed);
+    await page.screenshot({ path: testInfo.outputPath("inline-session-name-edit.png") });
+    await input.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expectRoute(page, `/mux/session/${sessionName}`, [sessionName, renamed]);
+    expect(identity(renamed)).toBe(before);
+    await expect(tab).toHaveAttribute("aria-selected", "false");
+    await tab.click({ button: "right" });
+    await expect(label).toHaveText(renamed);
+    await dialog.getByRole("button", { name: "Copy tmux session name", exact: true }).click();
+    await expect(dialog.getByText("Session name copied", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(renamed);
+    await page.screenshot({ path: testInfo.outputPath("session-context-name-copy.png") });
+    await dialog.getByRole("button", { name: "Close session placement", exact: true }).click();
+  } finally {
+    const live = execFileSync("tmux", [...tmux, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8" }).trim().split("\n");
+    for (const name of [target, renamed]) if (live.includes(name)) execFileSync("tmux", [...tmux, "kill-session", "-t", `=${name}`]);
+  }
+});
+
 test("desktop Move / Nest transfers a session and deduplicates existing destinations", async ({
   page,
   request,
