@@ -108,6 +108,28 @@ def _entry(role: str, kind: str, text: str, timestamp: int | None) -> dict[str, 
             "timestamp": timestamp, "truncated": len(encoded) > MAX_MESSAGE_BYTES}
 
 
+def _claude_user_kind(record: dict[str, Any]) -> str:
+    """Claude's user protocol role also carries generated background input.
+
+    Origin is authoritative when present; older records can carry only the
+    turn/source markers. Never infer authorship from the message's wording or
+    XML, since a person can paste a task result or a literal notification.
+    """
+    origin = record.get("origin")
+    origin_kind = origin.get("kind") if isinstance(origin, dict) else None
+    if origin_kind == "human":
+        return "prompt"
+    if origin_kind == "task-notification":
+        return "tool"
+    if record.get("turnOrigin") == "human":
+        return "prompt"
+    if record.get("turnOrigin") == "task_notification":
+        return "tool"
+    if record.get("promptSource") == "system":
+        return "context"
+    return "prompt"
+
+
 def codex_compaction_matches(
     message: dict[str, Any], compaction: dict[str, Any], response_id: str | None,
 ) -> bool:
@@ -179,6 +201,12 @@ def visible_messages(agent: str, record: dict[str, Any]) -> list[dict[str, Any]]
         stop = message.get("stop_reason")
         if role == "user" and (record.get("isMeta") or record.get("isCompactSummary")):
             context, text = text, ""
+        elif role == "user":
+            user_kind = _claude_user_kind(record)
+            if user_kind == "tool":
+                role = "tool"
+            elif user_kind == "context":
+                context, text = text, ""
         if isinstance(content, list):
             for block in content:
                 if not isinstance(block, dict):

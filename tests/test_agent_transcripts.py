@@ -12,6 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.agent_reference import AgentReference, AgentReferenceDetector
 from tmux_console.agent_transcripts import AgentTranscriptReader, TranscriptChangedError
+from tmux_console.transcript_formats import visible_messages
 from tmux_console.app import SESSION_REGISTRY_KEY, create_app
 from tmux_console.scrollback import session_identity
 from tmux_console.tmux import Pane, Session, TmuxClient
@@ -117,6 +118,74 @@ def test_native_conversation_order_filters_context_and_duplicate_events(tmp_path
     assert [item["text"] for item in messages] == ["First request", "Tool output", "The answer"]
     assert [item["role"] for item in messages] == ["user", "tool", "assistant"]
     assert len({item["id"] for item in messages}) == 3
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("provenance", [
+    {"origin": {"kind": "task-notification", "producer": "session-task", "runId": "fixture-run"},
+     "promptSource": "system", "turnOrigin": "task_notification"},
+    {"origin": {"kind": "task-notification"}},
+    {"turnOrigin": "task_notification"},
+])
+def test_claude_background_notifications_are_tool_activity(provenance):
+    text = "<task-notification>\n<task-id>fixture-agent</task-id>\nResearch findings\n</task-notification>"
+    record = {"type": "user", "message": {"role": "user", "content": text}, **provenance}
+    entries = visible_messages("claude", record)
+    assert [(entry["role"], entry["kind"], entry["text"]) for entry in entries] == [("tool", "tool", text)]
+
+
+@pytest.mark.parametrize("provenance", [
+    {},
+    {"origin": {"kind": "human"}, "promptSource": "typed", "turnOrigin": "human"},
+    {"origin": {"kind": "human"}, "promptSource": "system", "turnOrigin": "task_notification"},
+    {"turnOrigin": "human", "promptSource": "system"},
+    {"origin": {"kind": "unknown"}, "promptSource": "pasted"},
+    {"origin": [], "turnOrigin": {}, "promptSource": None},
+])
+def test_claude_human_and_legacy_prompts_keep_literal_task_results(provenance):
+    text = "<task-notification>Literal pasted example</task-notification>\n\nResearch findings"
+    record = {"type": "user", "message": {"role": "user", "content": text}, **provenance}
+    entries = visible_messages("claude", record)
+    assert [(entry["role"], entry["kind"], entry["text"]) for entry in entries] == [("user", "prompt", text)]
+
+
+def test_claude_generated_system_input_is_context():
+    record = {"type": "user", "promptSource": "system", "message": {"role": "user", "content": "Generated reminder"}}
+    assert [(entry["role"], entry["kind"], entry["text"]) for entry in visible_messages("claude", record)] == [
+        ("user", "context", "Generated reminder"),
+    ]
+
+
+def test_claude_provenance_filters_notifications_before_paging_and_preserves_activity(tmp_path):
+    report = "<task-notification>Background research findings</task-notification>"
+    records = [
+        {"type": "user", "message": {"role": "user", "content": report}, "origin": {"kind": "task-notification"}},
+        {"type": "user", "message": {"role": "user", "content": "Real first request"}, "origin": {"kind": "human"}, "promptSource": "typed"},
+        {"type": "user", "message": {"role": "user", "content": report}, "turnOrigin": "task_notification"},
+        {"type": "user", "message": {"role": "user", "content": "System reminder"}, "promptSource": "system"},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Main agent reply"}], "stop_reason": "end_turn"}},
+        {"type": "user", "message": {"role": "user", "content": report}, "origin": {"kind": "human"}, "promptSource": "pasted"},
+    ]
+    path = write_native(tmp_path, "claude", records)
+    original = path.read_bytes()
+    reader = AgentTranscriptReader(roots={"claude": tmp_path})
+    results = {}
+    for view in ("conversation", "all"):
+        result = reader.read(references("claude"), view=view, limit=1)
+        messages = result["messages"][:]
+        while result["nextCursor"]:
+            result = reader.read(references("claude"), view=view, limit=1, cursor=result["nextCursor"])
+            messages.extend(result["messages"])
+        results[view] = messages
+    assert [(entry["text"], entry["kind"]) for entry in results["conversation"]] == [
+        ("Real first request", "prompt"), ("Main agent reply", "response"), (report, "prompt"),
+    ]
+    activity = results["all"]
+    assert [entry for entry in activity if entry["kind"] in {"prompt", "response"}] == results["conversation"]
+    assert [(entry["role"], entry["kind"]) for entry in activity] == [
+        ("tool", "tool"), ("user", "prompt"), ("tool", "tool"), ("user", "context"), ("assistant", "response"), ("user", "prompt"),
+    ]
+    assert len({entry["id"] for entry in activity}) == len(activity)
     assert path.read_bytes() == original
 
 
@@ -229,42 +298,59 @@ class TranscriptTmux(TmuxClient):
 
 
 class References(AgentReferenceDetector):
-    def __init__(self):
+    def __init__(self, agent="codex"):
         super().__init__()
+        self.agent = agent
         self.identifiers = {"%1": ID, "%2": OTHER}
         self.requested = []
 
     async def detect_pane(self, pane, *, refresh=False):
         self.requested.append((pane.id, refresh))
-        return AgentReference("codex", self.identifiers.get(pane.id))
+        return AgentReference(self.agent, self.identifiers.get(pane.id))
 
 
-async def test_live_pane_scoping_history_rename_and_name_reuse(tmp_path):
-    write_native(tmp_path, "codex", [codex_message("original conversation")])
-    write_native(tmp_path, "codex", [codex_message("second pane")], OTHER)
-    tmux, detector = TranscriptTmux(), References()
+@pytest.mark.parametrize("agent", ["codex", "claude"])
+async def test_live_pane_scoping_history_rename_and_name_reuse(tmp_path, agent):
+    def records(text):
+        if agent == "codex":
+            return [codex_message(text)]
+        return [
+            {"type": "user", "origin": {"kind": "task-notification"}, "promptSource": "system", "turnOrigin": "task_notification",
+             "message": {"role": "user", "content": "Background agent result"}},
+            {"type": "user", "origin": {"kind": "human"}, "promptSource": "typed", "message": {"role": "user", "content": text}},
+        ]
+
+    write_native(tmp_path, agent, records("original conversation"))
+    write_native(tmp_path, agent, records("second pane"), OTHER)
+    tmux, detector = TranscriptTmux(), References(agent)
+    tmux.session = replace(tmux.session, panes=[replace(pane, command=agent, title=agent) for pane in tmux.session.panes])
     app = create_app(tmux=tmux, agent_references=detector,
-                     agent_transcripts=AgentTranscriptReader(roots={"codex": tmp_path}), base_path="/mux")
+                     agent_transcripts=AgentTranscriptReader(roots={agent: tmp_path}), base_path="/mux")
     async with TestClient(TestServer(app)) as client:
         old_session = tmux.session
         path = "/mux/api/panes/%252/agent-transcript"
-        response = await client.get(path, params={"identity": session_identity(old_session)})
+        response = await client.get(path, params={"identity": session_identity(old_session), "view": "conversation"})
         assert response.status == 200
         assert response.headers["Cache-Control"] == "no-store"
         assert (await response.json())["messages"][0]["text"] == "second pane"
+        if agent == "claude":
+            activity = await (await client.get(path, params={"view": "all", "limit": "1"})).json()
+            assert [(entry["role"], entry["kind"], entry["text"]) for entry in activity["messages"]] == [
+                ("tool", "tool", "Background agent result"),
+            ]
         assert ("%2", True) in detector.requested
-        history_id = app[SESSION_REGISTRY_KEY].observe_history(old_session, AgentReference("codex", ID))
+        history_id = app[SESSION_REGISTRY_KEY].observe_history(old_session, AgentReference(agent, ID))
         tmux.session = replace(old_session, name="renamed")
         assert (await client.get(path)).status == 200
         history = f"/mux/api/session-history/{history_id}/agent-transcript"
         detector.identifiers["%2"] = None
         assert (await (await client.get(path)).json())["status"] == "unidentified"
         tmux.session = None
-        historical = await (await client.get(history, params={"source": f"codex:{ID}"})).json()
+        historical = await (await client.get(history, params={"source": f"{agent}:{ID}", "view": "conversation"})).json()
         assert historical["messages"][0]["text"] == "original conversation"
         tmux.session = replace(old_session, id="$2", created=200)
         assert (await client.get(path, params={"identity": session_identity(old_session)})).status == 409
-        assert (await client.get(history, params={"source": f"codex:{ID}"})).status == 200
+        assert (await client.get(history, params={"source": f"{agent}:{ID}"})).status == 200
 
 
 async def test_api_query_validation_and_identity_change_during_read(tmp_path):

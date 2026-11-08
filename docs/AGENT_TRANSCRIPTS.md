@@ -13,6 +13,14 @@ collapsed groups between messages. Text accompanying a tool call is kept separat
 from the tool payload. Unmarked assistant text stays visible so a provider without
 completion metadata does not lose its answers.
 
+Claude also saves background subagent completion notifications using the `user`
+protocol role. Native `origin.kind: task-notification` and `turnOrigin:
+task_notification` identify those as tool activity; `promptSource: system`
+identifies generated context. They remain available under **Show activity**.
+Explicit human origin takes precedence, and legacy records keep their previous
+classification. Pasting a result or a literal notification does not change its
+authorship merely because of its text.
+
 **First prompt** and **Latest loaded reply** navigate the loaded conversation.
 **Auto-load later messages** is enabled by default: approaching the bottom loads
 the next page while preserving the reading position. Its setting is remembered
