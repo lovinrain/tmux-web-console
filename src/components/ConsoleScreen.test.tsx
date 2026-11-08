@@ -2536,9 +2536,11 @@ describe("ConsoleScreen session identity", () => {
 
   it("hides and restores the header without replacing the terminal or losing notes and drafts", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
+    const onOpenTabSearch = vi.fn();
     renderWithTheme(<ConsoleScreen
       sessionName="test"
       onBack={vi.fn()}
+      onOpenTabSearch={onOpenTabSearch}
       headerNotes={<input aria-label="Header note" defaultValue="Keep this note" />}
       sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
     />);
@@ -2561,6 +2563,13 @@ describe("ConsoleScreen session identity", () => {
     expect(toggle).not.toBePressed();
     expect(toggle).toHaveAttribute("title", "Show console header");
     expect(toolbar).toBeVisible();
+    const switcher = within(toolbar).getByRole("button", { name: "Open session picker" });
+    expect(switcher).toBeVisible();
+    expect(switcher.closest('[aria-label="Current workspace"]')).not.toBeNull();
+    expect(switcher).toHaveAttribute("aria-haspopup", "dialog");
+    expect(fireEvent.mouseDown(switcher)).toBe(false);
+    fireEvent.click(switcher);
+    expect(onOpenTabSearch).toHaveBeenCalledExactlyOnceWith({ floating: true });
     expect(draft).toBeVisible();
     expect(screen.getByRole("navigation", { name: "Quick sessions" })).toBeVisible();
     expect(liveTerminalHandle.focus).toHaveBeenCalled();
@@ -2697,6 +2706,7 @@ describe("ConsoleScreen session identity", () => {
 
     view.rerender(<ThemeProvider><ConsoleScreen {...props} barVisibility={{ ...bars, sessionTabs: false }} tabSearchOpen /></ThemeProvider>);
     expect(switcher).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Open session picker" })).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(screen.getByRole("button", { name: "Enter desktop terminal focus" }));
     expect(within(title.parentElement!).queryByRole("group", { name: "Session navigation" })).not.toBeInTheDocument();
     const focusControls = screen.getByRole("group", { name: "Desktop terminal focus controls" });

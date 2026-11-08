@@ -32,7 +32,6 @@ import { useHeldTerminalView } from "../useHeldTerminalView";
 import {
   ArrowLeftIcon,
   CheckIcon,
-  ChevronRightIcon,
   ContractIcon,
   ExpandIcon,
   ExternalLinkIcon,
@@ -107,6 +106,7 @@ import {
 } from "./LiveTerminal";
 import { AgentRecoveryReference } from "./AgentRecoveryReference";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
+import { SessionHistoryButton } from "./SessionHistoryControls";
 import { ScrollControlIcon } from "./ScrollControlIcon";
 import { ScrollButton } from "./ScrollButton";
 import { MobileTerminalFocusControls } from "./MobileTerminalFocusControls";
@@ -338,6 +338,8 @@ interface ConsoleBarToolbarProps {
   workspaceName?: string | null;
   workspaceId?: string | null;
   showWorkspaceIdentity?: boolean;
+  onOpenSessionSwitcher?: () => void;
+  sessionSwitcherOpen?: boolean;
   hideSessionTabs?: boolean;
   availability?: Partial<Record<ConsoleBar, boolean>>;
   onChange: (bar: ConsoleBar, visible: boolean) => void;
@@ -421,6 +423,8 @@ function ConsoleBarToolbar({
   workspaceName,
   workspaceId,
   showWorkspaceIdentity = false,
+  onOpenSessionSwitcher,
+  sessionSwitcherOpen = false,
   hideSessionTabs = false,
   availability,
   onChange,
@@ -471,6 +475,20 @@ function ConsoleBarToolbar({
         >
           <GridIcon />
           <strong>{workspaceIdentity}</strong>
+          {onOpenSessionSwitcher && (
+            <button
+              type="button"
+              className="console-bar-toggle console-workspace-switcher"
+              aria-label="Open session picker"
+              aria-haspopup="dialog"
+              aria-expanded={sessionSwitcherOpen}
+              title="Open the session switcher"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onOpenSessionSwitcher}
+            >
+              <ListIcon />
+            </button>
+          )}
         </div>
       ) : <span className="console-bar-toolbar-label" aria-hidden="true">VIEW</span>}
       {workspaceLinks && (
@@ -626,36 +644,6 @@ function EphemeralTabMarker() {
       <ExternalLinkIcon />
       <span>Single tab</span>
     </div>
-  );
-}
-
-function SessionHistoryButton({
-  direction,
-  target,
-  onNavigate,
-  className,
-}: {
-  direction: "back" | "forward";
-  target?: string | null;
-  onNavigate?: (direction: "back" | "forward") => void;
-  className: string;
-}) {
-  const back = direction === "back";
-  return (
-    <button
-      type="button"
-      className={className}
-      data-direction={direction}
-      aria-label={back ? "Back to previous session" : "Forward to next session"}
-      title={target
-        ? `${back ? "Back" : "Forward"} to ${target}`
-        : back ? "No previous session" : "No next session"}
-      disabled={!target || !onNavigate}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() => onNavigate?.(direction)}
-    >
-      <ChevronRightIcon />
-    </button>
   );
 }
 
@@ -2288,6 +2276,10 @@ export function ConsoleScreen({
           workspaceName={workspaceName}
           workspaceId={workspaceId}
           showWorkspaceIdentity={!embedded}
+          onOpenSessionSwitcher={!mobileLayout && onOpenTabSearch
+            ? () => onOpenTabSearch({ floating: true })
+            : undefined}
+          sessionSwitcherOpen={tabSearchOpen}
           availability={{
             header: false,
             sessionTabs: Boolean(sessionNavigation),
@@ -2441,6 +2433,10 @@ export function ConsoleScreen({
         workspaceName={workspaceName}
         workspaceId={workspaceId}
         showWorkspaceIdentity={!embedded && !ephemeral}
+        onOpenSessionSwitcher={!mobileLayout && onOpenTabSearch
+          ? () => onOpenTabSearch({ floating: true })
+          : undefined}
+        sessionSwitcherOpen={tabSearchOpen}
         hideSessionTabs={ephemeral}
         availability={{ header: canHideHeader, sessionTabs: Boolean(sessionNavigation) }}
         onChange={setBarVisible}

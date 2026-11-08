@@ -331,6 +331,11 @@ and session renames follow their existing visits. The arrows are disabled at
 either end. History retains up to 100 visits for the current page and resets on
 reload or a workspace switch; tab order and staged drafts are preserved.
 
+The small session-picker icon beside the workspace name in the top title bar
+opens the floating picker, including when Header or Tabs are hidden. Back and
+Forward arrows inside both session pickers use the same visit history and
+disable at either end.
+
 In `Sessions`, choose `Float` to keep the session jumper open as a floating
 window. Selecting a session or using Back/Forward leaves it open, and the terminal
 remains usable. Live status, title, and tab-order updates preserve the highlighted

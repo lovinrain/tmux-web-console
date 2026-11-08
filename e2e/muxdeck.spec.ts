@@ -3054,6 +3054,35 @@ test("session history works beside the title and in Focus without losing drafts"
     await expectRoute(page, `/mux/session/${first}`, tabs);
     await page.screenshot({ path: testInfo.outputPath("session-title-history-dark.png") });
 
+    const toolbar = page.getByRole("group", { name: "Console bars" });
+    const headerToggle = toolbar.getByRole("button", { name: "Console header", exact: true });
+    const titleBarSwitcher = toolbar.getByRole("button", { name: "Open session picker", exact: true });
+    await headerToggle.click();
+    await expect(page.locator(".console-header")).toBeHidden();
+    await expect(titleBarSwitcher).toBeInViewport();
+    await titleBarSwitcher.click();
+    await expect(dialog).toHaveAttribute("data-floating", "true");
+    await expect(titleBarSwitcher).toHaveAttribute("aria-expanded", "true");
+    const windowBack = dialog.getByRole("button", { name: "Back", exact: true });
+    const windowForward = dialog.getByRole("button", { name: "Forward", exact: true });
+    await expect(windowBack).toBeDisabled();
+    await expect(windowForward).toHaveAttribute("title", `Forward to ${second}`);
+    await windowForward.click();
+    await expectRoute(page, `/mux/session/${second}`, tabs);
+    await expect(dialog).toBeVisible();
+    await expect(windowForward).toBeDisabled();
+    await expect(windowBack).toHaveAttribute("title", `Back to ${first}`);
+    await windowBack.click();
+    await expectRoute(page, `/mux/session/${first}`, tabs);
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("Keep this session draft");
+    await expect(page.locator(".console-header")).toBeHidden();
+    await page.screenshot({ path: testInfo.outputPath("hidden-header-session-picker.png") });
+    await dialog.getByRole("button", { name: "Close tab search", exact: true }).click();
+    await expect(titleBarSwitcher).toHaveAttribute("aria-expanded", "false");
+    await headerToggle.click();
+    await expect(page.locator(".console-header")).toBeVisible();
+
     await enterFocus.click();
     await expect(titleLine.getByRole("group", { name: "Session navigation" })).toHaveCount(0);
     await expect(switcher).toHaveText("Sessions");
@@ -3136,6 +3165,14 @@ test("session history works beside the title and in Focus without losing drafts"
       await expect(button).toHaveCSS("background-color", "rgb(233, 227, 216)");
     }
     await page.screenshot({ path: testInfo.outputPath("session-title-history-light-narrow.png") });
+    await toolbar.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+    await expect(titleBarSwitcher).toBeInViewport();
+    await titleBarSwitcher.click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Back", exact: true })).toBeInViewport();
+    await expect(dialog.getByRole("button", { name: "Forward", exact: true })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("title-bar-session-picker-light-narrow.png") });
+    await dialog.getByRole("button", { name: "Close tab search", exact: true }).click();
     await forward.click();
     await expectRoute(page, `/mux/session/${third}`, tabs);
     await back.click();

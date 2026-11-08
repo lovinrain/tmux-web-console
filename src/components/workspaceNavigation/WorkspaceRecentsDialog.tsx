@@ -6,6 +6,7 @@ import {
   useState
 } from "react";
 import { acquireBodyScrollLock } from "../../bodyScrollLock";
+import { SessionHistoryControls } from "../SessionHistoryControls";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -67,6 +68,9 @@ export function WorkspaceRecentsDialog({
   onDeleteTabGroup,
   onMoveTabGroup,
   onCloseRecents,
+  sessionHistoryBack,
+  sessionHistoryForward,
+  onNavigateSessionHistory,
   onClearRecents,
   onOpenDashboard,
   workspacePersistenceState = "unsaved",
@@ -279,9 +283,13 @@ export function WorkspaceRecentsDialog({
               </span>
             </div>
           </div>
-          <button type="button" className="icon-button" onClick={onCloseRecents} aria-label="Close session switcher">
-            <CloseIcon />
-          </button>
+          <div className="workspace-recents-header-actions">
+            <SessionHistoryControls back={sessionHistoryBack} forward={sessionHistoryForward}
+              onNavigate={onNavigateSessionHistory} />
+            <button type="button" className="icon-button" onClick={onCloseRecents} aria-label="Close session switcher">
+              <CloseIcon />
+            </button>
+          </div>
         </header>
 
         <label className="workspace-session-search">

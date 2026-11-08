@@ -1,0 +1,37 @@
+.session-picker-history-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-picker-history-controls > .session-picker-history-button {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 4px;
+}
+
+.session-picker-history-button > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.session-picker-history-button[data-direction="back"] > svg {
+  transform: rotate(180deg);
+}
+
+.workspace-recents-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 640px), (max-width: 1024px) and (pointer: coarse), (max-width: 1024px) and (max-height: 500px) {
+  .workspace-recents-header .session-picker-history-button {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+}

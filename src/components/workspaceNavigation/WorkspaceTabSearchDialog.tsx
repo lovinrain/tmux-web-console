@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent
 } from "react";
 import { acquireBodyScrollLock } from "../../bodyScrollLock";
+import { SessionHistoryControls } from "../SessionHistoryControls";
 import {
   CloseIcon,
   FolderIcon,
@@ -42,6 +43,9 @@ export interface WorkspaceTabSearchDialogProps {
   sessions: Session[];
   onSelect: (sessionName: string) => void;
   onClose: () => void;
+  sessionHistoryBack?: string | null;
+  sessionHistoryForward?: string | null;
+  onNavigateSessionHistory?: (direction: "back" | "forward") => void;
 }
 
 export function WorkspaceTabSearchDialog({
@@ -56,6 +60,9 @@ export function WorkspaceTabSearchDialog({
   sessions,
   onSelect,
   onClose,
+  sessionHistoryBack,
+  sessionHistoryForward,
+  onNavigateSessionHistory,
 }: WorkspaceTabSearchDialogProps) {
   const { bindings: shortcutBindings } = useShortcutSettings();
   const findTabShortcut = directShortcutLabel(shortcutBindings["workspace-find-tab"]);
@@ -242,6 +249,8 @@ export function WorkspaceTabSearchDialog({
             <h2 id="workspace-tab-search-title">Jump to tab</h2>
           </div>
           <div className="workspace-tab-search-header-actions">
+            <SessionHistoryControls back={sessionHistoryBack} forward={sessionHistoryForward}
+              onNavigate={onNavigateSessionHistory} />
             <kbd>{findTabShortcut || "Button only"}</kbd>
             {onFloatingChange && (
               <button type="button" className="workspace-tab-search-mode-button"

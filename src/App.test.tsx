@@ -2971,6 +2971,10 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "Float session jumper" }));
     const dialog = screen.getByRole("dialog", { name: "Jump to tab" });
     const search = within(dialog).getByRole("combobox");
+    const back = within(dialog).getByRole("button", { name: "Back" });
+    const forward = within(dialog).getByRole("button", { name: "Forward" });
+    expect(back).toBeDisabled();
+    expect(forward).toBeDisabled();
     fireEvent.change(search, { target: { value: "beta" } });
     fireEvent.keyDown(search, { key: "Enter" });
     expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "beta");
@@ -2978,10 +2982,20 @@ describe("App routing", () => {
     expect(search).toHaveValue("");
     expect(within(dialog).getByRole("option", { name: /beta/ })).toHaveTextContent("Current");
 
-    act(() => navigateConsoleSessionHistory?.("back"));
+    expect(back).toBeEnabled();
+    expect(back).toHaveAttribute("title", "Back to alpha");
+    expect(forward).toBeDisabled();
+    fireEvent.click(back);
     expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "alpha");
     expect(dialog).toBeVisible();
     fireEvent.keyDown(window, { key: ">", code: "Period", ctrlKey: true, shiftKey: true });
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "beta");
+    expect(dialog).toBeVisible();
+    fireEvent.click(back);
+    expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "alpha");
+    expect(back).toBeDisabled();
+    expect(forward).toHaveAttribute("title", "Forward to beta");
+    fireEvent.click(forward);
     expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute("data-session", "beta");
     expect(dialog).toBeVisible();
     const outside = screen.getByRole("button", { name: "Back to sessions" });

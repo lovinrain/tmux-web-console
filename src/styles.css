@@ -4437,6 +4437,7 @@ span.workspace-tab-group-toggle {
 
 .workspace-tab-search-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
@@ -4454,6 +4455,7 @@ span.workspace-tab-group-toggle {
 
 .workspace-tab-search-header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
 }
@@ -7785,6 +7787,9 @@ span.workspace-tab-group-toggle {
 }
 
 .console-workspace-identity {
+  position: sticky;
+  left: 0;
+  z-index: 2;
   display: flex;
   min-width: 120px;
   max-width: 230px;
@@ -7793,6 +7798,7 @@ span.workspace-tab-group-toggle {
   gap: 6px;
   margin-right: auto;
   color: var(--preset-text, #d2d8cf);
+  background: inherit;
 }
 
 .console-workspace-identity > svg {
@@ -7809,6 +7815,30 @@ span.workspace-tab-group-toggle {
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.console-workspace-identity > .console-workspace-switcher {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  flex: 0 0 auto;
+  padding: 3px;
+}
+
+.console-workspace-switcher > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.console-workspace-identity > .console-workspace-switcher::before {
+  content: none;
+}
+
+.console-workspace-switcher[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--cyan);
+  border-color: var(--cyan);
 }
 
 .console-bar-toolbar.has-workspace-links .console-workspace-identity {

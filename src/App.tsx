@@ -4690,6 +4690,9 @@ function AppRoutes() {
           sessions={knownSessions}
           onSelect={switchSession}
           onClose={closeTabSearch}
+          sessionHistoryBack={sessionNavigationHistory.previousSession}
+          sessionHistoryForward={sessionNavigationHistory.nextSession}
+          onNavigateSessionHistory={navigateSessionHistory}
         />
       )}
       {content}
@@ -4867,6 +4870,9 @@ function AppRoutes() {
         onOpenTabInNewWindow={openSessionInNewWindow}
         onCloseTab={closeSessionTab}
         onOpenRecents={openRecents}
+        sessionHistoryBack={sessionNavigationHistory.previousSession}
+        sessionHistoryForward={sessionNavigationHistory.nextSession}
+        onNavigateSessionHistory={navigateSessionHistory}
         onCloseRecents={closeRecents}
         onClearRecents={clearRecents}
         onOpenDashboard={returnToDashboard}
@@ -5135,6 +5141,9 @@ function AppRoutes() {
             onOpenTabInNewWindow={openSessionInNewWindow}
             onCloseTab={closeSessionTab}
             onOpenRecents={openRecents}
+            sessionHistoryBack={sessionNavigationHistory.previousSession}
+            sessionHistoryForward={sessionNavigationHistory.nextSession}
+            onNavigateSessionHistory={navigateSessionHistory}
             onCloseRecents={closeRecents}
             onClearRecents={clearRecents}
             onOpenDashboard={returnToDashboard}
@@ -5229,6 +5238,9 @@ function AppRoutes() {
             onCloseTab={closeSessionTab}
             onCloseNewSession={closeNewSessionView}
             onOpenRecents={openRecents}
+            sessionHistoryBack={sessionNavigationHistory.previousSession}
+            sessionHistoryForward={sessionNavigationHistory.nextSession}
+            onNavigateSessionHistory={navigateSessionHistory}
             onCloseRecents={closeRecents}
             onClearRecents={clearRecents}
             onOpenDashboard={returnToDashboard}

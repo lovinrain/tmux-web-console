@@ -54,6 +54,9 @@ export interface SessionWorkspaceNavigationProps {
   onMoveTabGroup?: (groupId: string, direction: -1 | 1) => void;
   onCloseNewSession?: () => void;
   onOpenRecents: () => void;
+  sessionHistoryBack?: string | null;
+  sessionHistoryForward?: string | null;
+  onNavigateSessionHistory?: (direction: "back" | "forward") => void;
   onCloseRecents: () => void;
   onClearRecents: () => void;
   onOpenDashboard: () => void;

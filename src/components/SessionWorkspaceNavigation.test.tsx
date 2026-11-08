@@ -707,6 +707,7 @@ describe("SessionWorkspaceNavigation", () => {
     const onOpenRecents = vi.fn();
     const onCloseRecents = vi.fn();
     const onMoveTabGroup = vi.fn();
+    const onNavigateSessionHistory = vi.fn();
     render(
       <SessionWorkspaceNavigation
         {...navigationProps({
@@ -722,6 +723,9 @@ describe("SessionWorkspaceNavigation", () => {
           onSaveTabGroup: vi.fn(),
           onDeleteTabGroup: vi.fn(),
           onMoveTabGroup,
+          sessionHistoryBack: "alpha",
+          sessionHistoryForward: "zulu",
+          onNavigateSessionHistory,
           onOpenRecents,
           onCloseRecents,
         })}
@@ -729,6 +733,12 @@ describe("SessionWorkspaceNavigation", () => {
     );
 
     const overview = screen.getByRole("dialog", { name: "Switch sessions" });
+    const history = within(overview).getByRole("group", { name: "Session visit history" });
+    expect(within(history).getByRole("button", { name: "Back" })).toHaveAttribute("title", "Back to alpha");
+    expect(within(history).getByRole("button", { name: "Forward" })).toHaveAttribute("title", "Forward to zulu");
+    fireEvent.click(within(history).getByRole("button", { name: "Back" }));
+    fireEvent.click(within(history).getByRole("button", { name: "Forward" }));
+    expect(onNavigateSessionHistory.mock.calls).toEqual([["back"], ["forward"]]);
     fireEvent.click(within(overview).getByRole("button", {
       name: "Move Review lane group down",
     }));
