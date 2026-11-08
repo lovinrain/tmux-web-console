@@ -19,7 +19,7 @@ type PlacementProps = SessionWorkspaceTransferDialogProps & {
 
 export function SessionPlacementDialog({
   sessionNames, sourceWorkspace, sourceWorkspaceId, sourceWorkspaceName,
-  sessions = [], workspacePinnedSessions = [], onReparentSession, onTransfer, onClose, onRequestRenameSession, onRenameSession,
+  sessions = [], workspacePinnedSessions = [], onReparentSession, onTransfer, onClose, onRequestRenameSession, onRenameSession, onUpdateSessionTitle,
 }: PlacementProps) {
   const name = sessionNames[0];
   const id = useId();
@@ -150,6 +150,18 @@ export function SessionPlacementDialog({
     }
   } : undefined;
 
+  const updateTitleInline = onUpdateSessionTitle ? async (target: (typeof sessions)[number], nextTitle: string) => {
+    if (busyRef.current || !sourceAvailable) throw new Error("This session is no longer available for editing.");
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await onUpdateSessionTitle(target, nextTitle);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  } : undefined;
+
   return <div className="workspace-transfer-backdrop session-placement-backdrop" role="presentation"
     onMouseDown={() => { if (!busyRef.current) onClose(); }}>
     <section ref={dialogRef} className="workspace-transfer-dialog session-placement-dialog" role="dialog"
@@ -166,7 +178,7 @@ export function SessionPlacementDialog({
         <div className="session-placement-source-heading">
           <SessionNameControls name={name} displayTitle={title(name)}
             session={sessions.find((session) => session.name === name)}
-            disabled={busy || !sourceAvailable} onRename={renameInline} />
+            disabled={busy || !sourceAvailable} onRename={renameInline} onUpdateTitle={updateTitleInline} />
           {onRequestRenameSession && <button type="button" className="secondary-button session-placement-rename"
             disabled={busy || !sourceAvailable || !sessions.some((session) => session.name === name)}
             title="Rename the real tmux session" onClick={onRequestRenameSession}>

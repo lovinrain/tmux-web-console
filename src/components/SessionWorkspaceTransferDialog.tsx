@@ -33,6 +33,7 @@ export interface SessionWorkspaceTransferDialogProps {
   sessions?: readonly Session[];
   onReparentSession?: (sessionName: string, parentName: string | null) => void | Promise<void>;
   onRenameSession?: (session: Session, name: string) => Promise<void>;
+  onUpdateSessionTitle?: (session: Session, title: string) => Promise<void>;
   onClose: () => void;
   onTransfer: (
     sessionNames: string[],

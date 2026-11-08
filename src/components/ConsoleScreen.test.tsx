@@ -473,7 +473,9 @@ describe("ConsoleScreen session identity", () => {
   it("foregrounds the retained file browser in normal and focus views", async () => {
     vi.mocked(listSessions).mockResolvedValue([session()]);
     renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Browse files in /work" }));
+    const browse = await screen.findByRole("button", { name: "Browse files in /work" });
+    await waitFor(() => expect(browse).toBeEnabled());
+    fireEvent.click(browse);
     const panel = await screen.findByRole("dialog", { name: "Files" });
     fireEvent.change(within(panel).getByLabelText("Filter files"), { target: { value: "keep this" } });
     fireEvent.click(within(panel).getByRole("button", { name: "Background" }));

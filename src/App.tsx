@@ -35,6 +35,7 @@ import {
   terminateSession,
   transferSessionToWorkspace,
   transferSessionsToWorkspace,
+  updateSessionTitle,
   updateWorkspace,
   updateWorkspaceActivity,
   type GlobalCallbackSnapshot,
@@ -4584,6 +4585,17 @@ function AppRoutes() {
             const result = await renameSession(session.name, name);
             handoffRenamedSessionDraft(session.name, result.session, session.id);
             renameOpenSession(session.name, result.session, session.id, result.warnings);
+          }}
+          onUpdateSessionTitle={async (session, title) => {
+            const currentSession = knownSessionsRef.current.find((item) => item.name === session.name);
+            if (!currentSession || !hasSessionIdentity(currentSession, session)) {
+              throw new Error("This tmux session is no longer available. Reopen Move / Nest to try again.");
+            }
+            const customTitle = await updateSessionTitle(session.name, title);
+            const latestSession = knownSessionsRef.current.find((item) => (
+              item.name === session.name && hasSessionIdentity(item, session)
+            ));
+            if (latestSession) updateKnownSession({ ...latestSession, customTitle });
           }}
           onClose={() => setBulkWorkspaceTransfer(null)}
           onTransfer={async (sessionNames, destinationId, operation, revision, parent) => {

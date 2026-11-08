@@ -98,6 +98,42 @@ describe("SessionWorkspaceTransferDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 
+  it("cancels title edits with Escape and keeps the context open after a title save", async () => {
+    const target = session({ name: "agent", customTitle: "API implementation" });
+    let finish!: () => void;
+    const onUpdateSessionTitle = vi.fn().mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const onRenameSession = vi.fn();
+    const props = { sessionNames: ["agent"], sourceWorkspaceId: "source", sourceWorkspaceName: "Current project",
+      sourceWorkspace: sourceTree, sessions: [target], onRenameSession, onUpdateSessionTitle,
+      onReparentSession: vi.fn(), onTransfer: vi.fn(), onClose };
+    const view = render(<SessionWorkspaceTransferDialog {...props} />);
+    const dialog = screen.getByRole("dialog", { name: "Move / Nest" });
+    fireEvent.doubleClick(within(dialog).getByRole("button", { name: "Edit session display title" }));
+    let input = within(dialog).getByRole("textbox", { name: "Session display title" });
+    fireEvent.change(input, { target: { value: "Canceled" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(dialog).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onUpdateSessionTitle).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Edit display title" }));
+    input = within(dialog).getByRole("textbox", { name: "Session display title" });
+    fireEvent.change(input, { target: { value: "Implementation complete" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onUpdateSessionTitle).toHaveBeenCalledExactlyOnceWith(target, "Implementation complete");
+    expect(input).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Close session placement" })).toBeDisabled();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(within(dialog).queryByRole("textbox", { name: "Session display title" })).not.toBeInTheDocument());
+    view.rerender(<SessionWorkspaceTransferDialog {...props} sessions={[{ ...target, customTitle: "Implementation complete" }]} />);
+    expect(within(dialog).getByRole("button", { name: "Edit session display title" })).toHaveTextContent("Implementation complete");
+    expect(dialog).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onRenameSession).not.toHaveBeenCalled();
+  });
+
   it("opens the existing native rename dialog for the chosen tab and returns on cancel", async () => {
     const target = session({ name: "agent", customTitle: "API implementation" });
     const onRenameSession = vi.fn().mockResolvedValue(undefined);

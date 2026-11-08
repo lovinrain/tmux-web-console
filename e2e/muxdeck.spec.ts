@@ -7218,9 +7218,10 @@ test("desktop side-rail status sort keeps stable order inside both partitions", 
   }
 });
 
-test("session context copies the native name and renames it inline without switching the active session", async ({ page, request, context }, testInfo) => {
+test("session context edits and copies display title and native name independently without switching the active session", async ({ page, request, context }, testInfo) => {
   const target = `${sessionName}-context-name`;
   const renamed = `${target}-renamed`;
+  const updatedTitle = "Lead: ICT follow-ups (sub-minute, drill-down) + Lab fixes, login, retention";
   execFileSync("tmux", [...tmux, "new-session", "-d", "-s", target, "bash", "--noprofile", "--norc"]);
   const identity = (name: string) => execFileSync("tmux",
     [...tmux, "display-message", "-p", "-t", `${name}:0.0`, "#{session_id}:#{pane_id}:#{pane_pid}"], { encoding: "utf8" }).trim();
@@ -7228,10 +7229,11 @@ test("session context copies the native name and renames it inline without switc
   try {
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: E2E_ORIGIN });
     expect((await request.put("/mux/api/session-title", { data: { session: target, title: "Context display title" } })).ok()).toBe(true);
+    expect((await request.put("/mux/api/session-tags", { data: { session: target, tags: ["work", "research"] } })).ok()).toBe(true);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`/mux/session/${sessionName}?tab=${sessionName}&tab=${target}`);
     await expect(page.locator(".connection-badge")).toContainText("Live");
-    const tab = page.getByRole("tab", { name: /Context display title/ });
+    let tab = page.getByRole("tab", { name: /Context display title/ });
     await tab.click({ button: "right" });
     const dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
     await expect(dialog).toBeVisible();
@@ -7240,16 +7242,34 @@ test("session context copies the native name and renames it inline without switc
     await dialog.getByRole("button", { name: "Copy tmux session name", exact: true }).click();
     await expect(dialog.getByText("Session name copied", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(target);
-    await label.dblclick();
-    let input = dialog.getByRole("textbox", { name: "Tmux session name", exact: true });
-    await expect(input).toBeFocused();
-    await expect(input).toHaveValue(target);
-    await input.fill("canceled-context-name");
-    await input.press("Escape");
+    await dialog.getByRole("button", { name: "Copy session display title", exact: true }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Context display title");
+    const titleLabel = dialog.getByRole("button", { name: "Edit session display title", exact: true });
+    await titleLabel.dblclick();
+    let titleInput = dialog.getByRole("textbox", { name: "Session display title", exact: true });
+    await expect(titleInput).toBeFocused();
+    await expect(titleInput).toHaveValue("Context display title");
+    await titleInput.fill("Canceled title");
+    await titleInput.press("Escape");
     await expect(dialog).toBeVisible();
+    await expect(titleLabel).toHaveText("Context display title");
+    await dialog.getByRole("button", { name: "Edit display title", exact: true }).click();
+    titleInput = dialog.getByRole("textbox", { name: "Session display title", exact: true });
+    await titleInput.fill(updatedTitle);
+    await titleInput.press("Enter");
+    await expect(titleLabel).toHaveText(updatedTitle);
+    await expect(dialog).toBeVisible();
+    await expect(label).toHaveText(target);
+    const saved = (await (await request.get("/mux/api/sessions")).json()).sessions.find((item: { name: string }) => item.name === target);
+    expect(saved.customTitle).toBe(updatedTitle);
+    expect(saved.tags).toEqual(["work", "research"]);
     expect(identity(target)).toBe(before);
-    await label.dblclick();
-    input = dialog.getByRole("textbox", { name: "Tmux session name", exact: true });
+    await dialog.getByRole("button", { name: "Copy session display title", exact: true }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(updatedTitle);
+    tab = page.getByRole("tab", { name: /Lead: ICT follow-ups/ });
+    await dialog.getByRole("button", { name: "Rename tmux session inline", exact: true }).click();
+    const input = dialog.getByRole("textbox", { name: "Tmux session name", exact: true });
+    await expect(input).toHaveValue(target);
     await input.fill(renamed);
     await page.screenshot({ path: testInfo.outputPath("inline-session-name-edit.png") });
     await input.press("Enter");
@@ -7262,7 +7282,21 @@ test("session context copies the native name and renames it inline without switc
     await dialog.getByRole("button", { name: "Copy tmux session name", exact: true }).click();
     await expect(dialog.getByText("Session name copied", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(renamed);
-    await page.screenshot({ path: testInfo.outputPath("session-context-name-copy.png") });
+    await expect(titleLabel).toHaveText(updatedTitle);
+    await dialog.getByRole("button", { name: "Copy session display title", exact: true }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(updatedTitle);
+    if (await page.locator("html").getAttribute("data-theme") !== "light") {
+      await page.evaluate(() => window.dispatchEvent(new Event("muxdeck:toggle-theme")));
+    }
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.screenshot({ path: testInfo.outputPath("session-context-title-and-name-light.png") });
+    await dialog.getByRole("button", { name: "Edit display title", exact: true }).click();
+    await dialog.getByRole("textbox", { name: "Session display title", exact: true }).fill("");
+    await dialog.getByRole("button", { name: "Save session display title", exact: true }).click();
+    await expect(titleLabel).toHaveText("No display title");
+    await expect(dialog.getByRole("button", { name: "Copy session display title", exact: true })).toBeDisabled();
+    await expect(label).toHaveText(renamed);
+    expect(identity(renamed)).toBe(before);
     await dialog.getByRole("button", { name: "Close session placement", exact: true }).click();
   } finally {
     const live = execFileSync("tmux", [...tmux, "list-sessions", "-F", "#{session_name}"], { encoding: "utf8" }).trim().split("\n");

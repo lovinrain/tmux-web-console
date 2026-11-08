@@ -1087,12 +1087,14 @@ sessions. Up moves the selected session out of its parent; Down nests it under t
 previous sibling in the same tab group. Both keep its children attached and the session selected.
 A half is disabled when its move is unavailable.
 You can also open `Move / Nest` in the session controls or right-click any workspace tab.
-Double-click the session name in this window to rename it inline. Press `Enter`
-or click the checkmark to save; `Escape` or the cancel button ends the edit.
-When a display title is set, the real tmux name appears beneath it. The small
-copy button copies that real name to the browser clipboard. The separate
-`Rename tmux session` dialog remains available, and a native rename preserves
-the display title.
+The window labels the optional `Display title` and the real `Tmux session name`
+separately. Each row has a pencil button to edit and a copy button for its saved
+value. Double-click either value to edit it inline too. Press `Enter` or click
+the checkmark to save; `Escape` or the cancel button ends the edit. Saving a
+display title keeps this window open and preserves tags. Clear the title by
+saving an empty value; its copy button is disabled until a title is set.
+The separate `Rename tmux session` dialog remains available, and a native rename
+preserves the display title.
 Choose the destination workspace, then `Top level` or an existing parent session.
 The chooser searches session names and titles and previews the resulting
 location. `Up one level` moves out of the current parent; `Nest under previous`
