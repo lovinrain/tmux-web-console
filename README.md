@@ -14,8 +14,9 @@ when you disconnect.
 
 - **A file browser beside your terminal.** Open the current project folder,
   search nested files, preview Markdown, images, PDFs, and sandboxed HTML pages,
-  edit text, upload files, or download a selection as a ZIP. Stage a file's path
-  directly into your next prompt.
+  edit text, upload files, or download a selection as a ZIP. Upload a selected
+  file to the public Clipboard with one click and copy its share link. Stage a
+  file's path directly into your next prompt.
 - **Sticky notes that stay with your work.** Keep multi-page notebooks for
   Common, Workspace, and Session notes. They autosave to the server; floating,
   resizable windows can stay pinned while you switch sessions.

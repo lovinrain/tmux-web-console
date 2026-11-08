@@ -31,6 +31,8 @@ import {
   sessionFilePdfUrl,
   sessionFileSvgUrl,
   uploadSessionFile,
+  uploadSessionFileToClipboard,
+  type ClipboardFileUpload,
   type SessionDirectoryListing,
   type SessionFileEntry,
   type SessionFilePreview,
@@ -575,6 +577,7 @@ export function SessionFilesPanel({
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const layerTriggerRef = useRef<HTMLElement | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const clipboardAbortRef = useRef<AbortController | null>(null);
   const archiveAbortRef = useRef<AbortController | null>(null);
   const addressAbortRef = useRef<AbortController | null>(null);
   const listingAbortRef = useRef<AbortController | null>(null);
@@ -630,6 +633,8 @@ export function SessionFilesPanel({
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [clipboardUploading, setClipboardUploading] = useState(false);
+  const [clipboardResult, setClipboardResult] = useState<ClipboardFileUpload | null>(null);
   const [taskItems, setTaskItems] = useState<TaskItem[]>([]);
   const [taskHeadings, setTaskHeadings] = useState<TaskHeadings>({
     active: "UPLOADING",
@@ -669,7 +674,7 @@ export function SessionFilesPanel({
     ...(retainedView || browseRoot !== panePath ? { root: browseRoot } : {}),
   }), [browseRoot, paneId, panePath, retainedView, sessionId, sessionName]);
 
-  const busy = uploading || archiving || working || addressResolving;
+  const busy = uploading || archiving || working || addressResolving || clipboardUploading;
   const editorDirty = editing && editorValue !== editorOrigin;
 
   const keepVisible = useCallback(() => {
@@ -756,6 +761,8 @@ export function SessionFilesPanel({
     identityRef.current = identity;
     uploadAbortRef.current?.abort();
     uploadAbortRef.current = null;
+    clipboardAbortRef.current?.abort();
+    clipboardAbortRef.current = null;
     archiveAbortRef.current?.abort();
     archiveAbortRef.current = null;
     addressAbortRef.current?.abort();
@@ -796,6 +803,8 @@ export function SessionFilesPanel({
     recentEntriesRef.current = storedRecents;
     setRecentEntries(storedRecents);
     setActionStatus(null);
+    setClipboardUploading(false);
+    setClipboardResult(null);
     setTaskItems([]);
     setUploading(false);
     setArchiving(false);
@@ -811,6 +820,14 @@ export function SessionFilesPanel({
     setManualCopyPath(null);
     handledOpenPathRequestRef.current = null;
   }, [identity, panePath, sessionId]);
+
+  useEffect(() => {
+    clipboardAbortRef.current?.abort();
+    clipboardAbortRef.current = null;
+    setClipboardUploading(false);
+    setClipboardResult(null);
+    return () => { clipboardAbortRef.current?.abort(); };
+  }, [fileTarget, selected?.absolutePath]);
 
   useEffect(() => {
     // Hiding/backgrounding the browser is a security boundary too: returning
@@ -2416,6 +2433,41 @@ export function SessionFilesPanel({
     setActionStatus(fallbackMessage);
   };
 
+  const uploadSelectedToClipboard = async () => {
+    if (
+      !selected || selected.kind !== "file" || !selected.accessible || selected.size === 0
+      || editorDirty || editorSaving || busy || clipboardAbortRef.current
+    ) return;
+    const controller = new AbortController();
+    clipboardAbortRef.current = controller;
+    const requestIdentity = identity;
+    setClipboardUploading(true);
+    setClipboardResult(null);
+    setActionStatus(`Uploading ${selected.name} to public Clipboard…`);
+    try {
+      const result = await uploadSessionFileToClipboard(fileTarget, selected.path, controller.signal);
+      if (controller.signal.aborted || identityRef.current !== requestIdentity) return;
+      setClipboardResult(result);
+      setActionStatus(`Uploaded ${result.name} to public Clipboard`);
+    } catch (error) {
+      if (!controller.signal.aborted && identityRef.current === requestIdentity) {
+        setActionStatus(errorMessage(error, "Could not upload to Clipboard"));
+      }
+    } finally {
+      if (clipboardAbortRef.current === controller) {
+        clipboardAbortRef.current = null;
+        setClipboardUploading(false);
+      }
+    }
+  };
+
+  const copyClipboardLink = async () => {
+    if (!clipboardResult) return;
+    setActionStatus(await copyPath(clipboardResult.url)
+      ? "Clipboard link copied"
+      : "Select the Clipboard link to copy it manually");
+  };
+
   const copyCurrentPath = async () => {
     if (!pathTarget) return;
     await copyPathIntoAddress(
@@ -3708,6 +3760,23 @@ export function SessionFilesPanel({
                 <span>Open webpage</span>
               </a>
             )}
+            {selected?.kind === "file" && selected.accessible && (
+              <button
+                type="button"
+                className="session-file-clipboard-upload"
+                disabled={busy || selected.size === 0 || editorDirty || editorSaving}
+                aria-label="Upload selected file to Clipboard"
+                title={editorDirty || editorSaving
+                  ? "Save your edits before uploading to Clipboard"
+                  : selected.size === 0
+                    ? "Clipboard cannot store an empty file"
+                    : "Upload this file to the public Clipboard at /c"}
+                onClick={() => void uploadSelectedToClipboard()}
+              >
+                <ArrowUpIcon />
+                <span>{clipboardUploading ? "Uploading…" : "Upload to Clipboard"}</span>
+              </button>
+            )}
             <button
               type="button"
               className="primary"
@@ -3722,6 +3791,14 @@ export function SessionFilesPanel({
           </div>
           {actionStatus && (
             <p className="session-file-action-status" role="status">{actionStatus}</p>
+          )}
+          {clipboardResult && (
+            <div className="session-file-clipboard-result" role="group" aria-label="Uploaded Clipboard file">
+              <a href={clipboardResult.url} target="_blank" rel="noopener noreferrer">{clipboardResult.url}</a>
+              <button type="button" onClick={() => void copyClipboardLink()} aria-label="Copy uploaded Clipboard link">
+                <WindowCopyIcon />Copy link
+              </button>
+            </div>
           )}
           {manualCopyPath && (
             <div className="session-file-manual-copy" role="group" aria-label="Copy this path">

@@ -1599,9 +1599,10 @@ html.session-files-panel-splitting .session-files-splitter > span {
 }
 
 .session-file-path-actions {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 5px;
   padding: 6px;
   background: #151e1a;
@@ -1609,6 +1610,7 @@ html.session-files-panel-splitting .session-files-splitter > span {
 }
 
 .session-file-path-actions > div {
+  flex: 1 0 100%;
   min-width: 0;
   align-self: center;
 }
@@ -1678,6 +1680,42 @@ html.session-files-panel-splitting .session-files-splitter > span {
   background: rgba(104, 223, 208, 0.07);
   border-bottom: 1px solid rgba(104, 223, 208, 0.14);
   font-size: 8px;
+}
+
+.session-file-clipboard-result {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+}
+
+.session-file-clipboard-result > a {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--files-accent);
+}
+
+.session-file-clipboard-result > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 6px;
+  color: var(--paper);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.session-file-clipboard-result svg {
+  width: 12px;
+  height: 12px;
 }
 
 .session-file-preview-empty {

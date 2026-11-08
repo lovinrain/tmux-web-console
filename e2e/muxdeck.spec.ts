@@ -1800,6 +1800,13 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
 
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
+    const clipboardRequests: URL[] = [];
+    const clipboardUrl = "https://la.99818888.xyz/c/123";
+    await page.route(/\/api\/sessions\/[^/]+\/files\/clipboard(?:\?|$)/, async (route) => {
+      expect(route.request().method()).toBe("POST");
+      clipboardRequests.push(new URL(route.request().url()));
+      await route.fulfill({ status: 201, json: { url: clipboardUrl, name: "read me.txt", size: Buffer.byteLength(fixtureContent) } });
+    });
     await page.goto(`/mux/session/${sessionName}?tab=${encodeURIComponent(sessionName)}`);
     await expect(page.locator(".connection-badge")).toContainText("Live", {
       timeout: 10_000,
@@ -1829,6 +1836,23 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     await expect(textPreview).toHaveCSS("white-space", "pre-wrap");
     await expect(textPreview).toHaveCSS("overflow-wrap", "anywhere");
     await expect(browser.locator(".session-file-path-actions code")).toHaveText(fixtureFile);
+    expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
+    expect(clipboardRequests).toHaveLength(0);
+    const clipboardUpload = browser.getByRole("button", { name: "Upload selected file to Clipboard" });
+    await clipboardUpload.click();
+    const clipboardResult = browser.getByRole("group", { name: "Uploaded Clipboard file" });
+    await expect(clipboardResult.getByRole("link", { name: clipboardUrl })).toHaveAttribute("href", clipboardUrl);
+    await expect(clipboardResult.getByRole("button", { name: "Copy uploaded Clipboard link" })).toBeVisible();
+    expect(clipboardRequests).toHaveLength(1);
+    expect(clipboardRequests[0].pathname).toBe(`/mux/api/sessions/${sessionName}/files/clipboard`);
+    expect(Object.fromEntries(clipboardRequests[0].searchParams)).toEqual({
+      sessionId: expect.stringMatching(/^\$\d+$/),
+      paneId,
+      path: `${fixtureName}/read me.txt`,
+      root: panePath,
+    });
+    await expect(page.getByRole("textbox", { name: "Staged input" })).toHaveValue("");
+    expect(readFileSync(fixtureFile, "utf8")).toBe(fixtureContent);
     expect(workspaceTmuxContentSnapshot(sessionName)).toBe(terminalBefore);
 
     const header = browser.locator(".session-files-header");
@@ -1952,6 +1976,10 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     expect(compactPanel!.height).toBeCloseTo(260, 0);
     await expect(splitter).toBeVisible();
     await expect(browser.getByRole("button", { name: "File read me.txt" })).toBeVisible();
+    await clipboardUpload.scrollIntoViewIfNeeded();
+    const compactUploadBox = await clipboardUpload.boundingBox();
+    expect(compactUploadBox).not.toBeNull();
+    expect(compactUploadBox!.x + compactUploadBox!.width).toBeLessThanOrEqual(compactPanel!.x + compactPanel!.width);
     await page.screenshot({ path: "artifacts/desktop-cwd-file-browser-compact.png" });
     await resizeHandle.press("Enter");
     const resetPanel = await browser.boundingBox();
@@ -1960,6 +1988,7 @@ test("desktop CWD browser previews text and images and stages pane-scoped files"
     expect(resetPanel!.height).toBeCloseTo(560, 0);
 
     await browser.getByRole("button", { name: `File ${fixtureImageName}` }).click();
+    await expect(clipboardResult).toBeHidden();
     const imagePreview = browser.getByRole("img", {
       name: `Preview of ${fixtureImageName}`,
     });

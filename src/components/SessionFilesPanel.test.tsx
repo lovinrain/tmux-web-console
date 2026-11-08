@@ -18,6 +18,7 @@ import {
   sessionFilePdfUrl,
   sessionFileSvgUrl,
   uploadSessionFile,
+  uploadSessionFileToClipboard,
   type SessionDirectoryListing,
   type SessionFileEntry,
   type SessionFilePreview,
@@ -54,6 +55,7 @@ vi.mock("../api", () => ({
   sessionFilePdfUrl: vi.fn(),
   sessionFileSvgUrl: vi.fn(),
   uploadSessionFile: vi.fn(),
+  uploadSessionFileToClipboard: vi.fn(),
 }));
 
 function apiError(message: string, status: number): Error {
@@ -229,6 +231,107 @@ afterEach(() => {
 });
 
 describe("SessionFilesPanel", () => {
+  it("uploads the selected file once, shows its public link, and copies that link", async () => {
+    const file = entry("read me.txt", "reports/read me.txt", "file");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [file]));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(file.name, file.path, "file contents"));
+    let complete!: (result: { url: string; name: string; size: number }) => void;
+    vi.mocked(uploadSessionFileToClipboard).mockReturnValue(new Promise((resolve) => { complete = resolve; }));
+    const { onInsertPath } = renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    expect(uploadSessionFileToClipboard).not.toHaveBeenCalled();
+    fireEvent.click(await within(panel).findByRole("button", { name: "File read me.txt" }));
+    const upload = within(panel).getByRole("button", { name: "Upload selected file to Clipboard" });
+    expect(upload).toHaveAttribute("title", "Upload this file to the public Clipboard at /c");
+    fireEvent.click(upload);
+    fireEvent.click(upload);
+    expect(uploadSessionFileToClipboard).toHaveBeenCalledTimes(1);
+    expect(uploadSessionFileToClipboard).toHaveBeenCalledWith(
+      { session: "agent", sessionId: "$7", paneId: "%3" },
+      file.path,
+      expect.any(AbortSignal),
+    );
+    expect(upload).toBeDisabled();
+    expect(upload).toHaveTextContent("Uploading…");
+    expect(within(panel).queryByRole("group", { name: "Uploaded Clipboard file" })).not.toBeInTheDocument();
+    const url = "https://la.99818888.xyz/c/123";
+    await act(async () => complete({ url, name: file.name, size: 14 }));
+    const result = within(panel).getByRole("group", { name: "Uploaded Clipboard file" });
+    expect(within(result).getByRole("link", { name: url })).toHaveAttribute("href", url);
+    expect(within(result).getByRole("link", { name: url })).toHaveAttribute("rel", "noopener noreferrer");
+    expect(upload).toBeEnabled();
+    expect(within(panel).getByRole("status")).toHaveTextContent("Uploaded read me.txt to public Clipboard");
+    fireEvent.click(within(result).getByRole("button", { name: "Copy uploaded Clipboard link" }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(url));
+    expect(within(panel).getByRole("status")).toHaveTextContent("Clipboard link copied");
+    expect(onInsertPath).not.toHaveBeenCalled();
+  });
+
+  it("reports a rejected Clipboard upload without retrying or showing a success link", async () => {
+    const file = entry("notes.txt", "notes.txt", "file");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [file]));
+    vi.mocked(previewSessionFile).mockResolvedValue(textPreview(file.name, file.path, "notes"));
+    vi.mocked(uploadSessionFileToClipboard).mockRejectedValue(apiError("Clipboard is full", 507));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "File notes.txt" }));
+    const upload = within(panel).getByRole("button", { name: "Upload selected file to Clipboard" });
+    fireEvent.click(upload);
+    expect(await within(panel).findByText("Clipboard is full")).toBeInTheDocument();
+    expect(upload).toBeEnabled();
+    expect(uploadSessionFileToClipboard).toHaveBeenCalledTimes(1);
+    expect(within(panel).queryByRole("group", { name: "Uploaded Clipboard file" })).not.toBeInTheDocument();
+  });
+
+  it("aborts an upload on a session change, ignores its late result, and aborts on close", async () => {
+    const first = entry("first.txt", "first.txt", "file");
+    const second = entry("second.txt", "second.txt", "file");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [first, second]));
+    vi.mocked(previewSessionFile).mockImplementation(async (_target, path) => textPreview(path, path, "contents"));
+    let complete!: (result: { url: string; name: string; size: number }) => void;
+    vi.mocked(uploadSessionFileToClipboard).mockReturnValue(new Promise((resolve) => { complete = resolve; }));
+    const { rerender, unmount } = renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "File first.txt" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Upload selected file to Clipboard" }));
+    const signal = vi.mocked(uploadSessionFileToClipboard).mock.calls[0][2]!;
+    rerender(<SessionFilesPanel sessionName="agent-two" sessionId="$8" paneId="%4" panePath="/work/project" onClose={vi.fn()} onInsertPath={vi.fn(() => true)} />);
+    expect(signal.aborted).toBe(true);
+    await act(async () => complete({ url: "https://la.99818888.xyz/c/123", name: first.name, size: 14 }));
+    expect(within(panel).queryByRole("group", { name: "Uploaded Clipboard file" })).not.toBeInTheDocument();
+    fireEvent.click(await within(panel).findByRole("button", { name: "File second.txt" }));
+    expect(within(panel).getByRole("button", { name: "Upload selected file to Clipboard" })).toBeEnabled();
+    vi.mocked(uploadSessionFileToClipboard).mockReturnValue(new Promise(() => {}));
+    fireEvent.click(within(panel).getByRole("button", { name: "Upload selected file to Clipboard" }));
+    const secondSignal = vi.mocked(uploadSessionFileToClipboard).mock.calls[1][2]!;
+    expect(secondSignal.aborted).toBe(false);
+    unmount();
+    expect(secondSignal.aborted).toBe(true);
+  });
+
+  it("disables Clipboard upload for empty files and unsaved edits", async () => {
+    const empty = entry("empty.txt", "empty.txt", "file", { size: 0 });
+    const notes = entry("notes.txt", "notes.txt", "file");
+    vi.mocked(listSessionFiles).mockResolvedValue(listing("", [empty, notes]));
+    vi.mocked(previewSessionFile).mockImplementation(async (_target, path) => textPreview(path, path, path === "empty.txt" ? "" : "saved text"));
+    renderPanel();
+    const panel = await screen.findByRole("dialog", { name: "Files" });
+    expect(within(panel).queryByRole("button", { name: "Upload selected file to Clipboard" })).not.toBeInTheDocument();
+    fireEvent.click(await within(panel).findByRole("button", { name: "File empty.txt" }));
+    const upload = within(panel).getByRole("button", { name: "Upload selected file to Clipboard" });
+    expect(upload).toBeDisabled();
+    fireEvent.click(upload);
+    fireEvent.click(within(panel).getByRole("button", { name: "File notes.txt" }));
+    fireEvent.click(await within(panel).findByRole("button", { name: "Edit notes.txt" }));
+    fireEvent.change(within(panel).getByLabelText("Contents of notes.txt"), { target: { value: "unsaved text" } });
+    expect(upload).toBeDisabled();
+    expect(upload).toHaveAttribute("title", "Save your edits before uploading to Clipboard");
+    fireEvent.click(upload);
+    expect(uploadSessionFileToClipboard).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Discard" }));
+    expect(upload).toBeEnabled();
+  });
+
   it("backgrounds without remounting or losing an unsaved editor, selection, filter or layout", async () => {
     const target = entry("notes.md", "notes.md", "file", { size: 5 });
     vi.mocked(listSessionFiles).mockResolvedValue(listing("", [target]));

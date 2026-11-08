@@ -782,6 +782,23 @@ export async function uploadSessionFile(
   );
 }
 
+export interface ClipboardFileUpload {
+  url: string;
+  name: string;
+  size: number;
+}
+
+export async function uploadSessionFileToClipboard(
+  target: SessionFileTarget,
+  path: string,
+  signal?: AbortSignal,
+): Promise<ClipboardFileUpload> {
+  return jsonRequest<ClipboardFileUpload>(sessionFileUrl(target, "clipboard", path), {
+    method: "POST",
+    signal,
+  });
+}
+
 async function sessionFileMutation<T>(
   target: SessionFileTarget,
   route: string,

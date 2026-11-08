@@ -193,6 +193,7 @@ def test_control_scope_excludes_unrelated_stores_auth_files_and_browser_routes(p
         "/api/sessions/agent/files/image", "/api/sessions/agent/files/svg",
         "/api/sessions/agent/files/pdf", "/api/sessions/agent/files/html",
         "/api/sessions/agent/files/download", "/api/sessions/agent/files/archive",
+        "/api/sessions/agent/files/clipboard",
         "/api/sessions/agent/files/upload", "/api/sessions/agent/files/create",
         "/api/sessions/agent/files/move", "/api/sessions/agent/files/copy",
         "/api/sessions/agent/files/delete", "/api/sessions/agent/files/content",

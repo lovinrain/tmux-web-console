@@ -69,6 +69,7 @@ import {
   transferSessionsToWorkspace,
   uploadSessionAttachment,
   uploadSessionFile,
+  uploadSessionFileToClipboard,
   updateSessionIgnored,
   updateSessionStar,
   updateSessionWorkspacePin,
@@ -80,6 +81,16 @@ import {
   listWorkspaces,
 } from "./api";
 import type { Session } from "./types";
+
+it("uploads one selected file to Clipboard with its pane and browse-root scope", async () => {
+  const result = { url: "https://la.99818888.xyz/c/123", name: "notes.txt", size: 10 };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 201 }));
+  vi.stubGlobal("fetch", fetchMock);
+  const controller = new AbortController();
+  expect(await uploadSessionFileToClipboard({ session: "agent/one", sessionId: "$7", paneId: "%3", root: "/work/project" }, "folder/notes.txt", controller.signal)).toEqual(result);
+  expect(fetchMock).toHaveBeenCalledWith(`${BASE_PATH}/api/sessions/agent%2Fone/files/clipboard?sessionId=%247&paneId=%253&path=folder%2Fnotes.txt&root=%2Fwork%2Fproject`,
+    { method: "POST", signal: controller.signal, headers: { Accept: "application/json" } });
+});
 
 it("deletes a fold with workspace versions and explicit live or missing session fences", async () => {
   const workspace = { id: "workspace/one", sessionRevision: 3, updatedAt: 42 } as SavedWorkspace;

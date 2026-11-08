@@ -1015,10 +1015,32 @@ fields are JSON unless noted.
 | `POST /api/sessions/{session}/files/delete` | Optional `recursive` boolean | Deletes one entry. This is destructive. |
 | `PUT /api/sessions/{session}/files/content` | `content`; optional `expectedModified` | Saves text with an optional modification-time conflict fence. |
 | `POST /api/sessions/{session}/files/archive` | Exactly one of `names` or `paths` arrays | Streams a ZIP of selected files/folders. |
+| `POST /api/sessions/{session}/files/clipboard` | No body; query requires `path` | Streams one existing file to Clipboard; returns `{url,name,size}` with `201`. |
 
 The archive response includes `X-Muxdeck-Archive-*` count/size headers. File
 limits are bounded; inspect a `413` error instead of assuming an upload or
 archive completed.
+
+### Upload to Clipboard
+
+The file preview's **Upload to Clipboard** button publishes the selected file
+to the existing Clip service and offers its URL plus **Copy link**. Save or
+discard unsaved text edits first. Empty files cannot be uploaded.
+
+Muxdeck streams the file from server to server, preserving its filename without
+loading the full file into browser memory. The destination defaults to
+`http://127.0.0.1:8899/c`; administrators can override it with
+`MUXDECK_CLIPBOARD_BASE_URL`, an HTTP(S) base URL without credentials. Clients
+cannot choose another destination. The service must expose Clip's JSON stats
+and multipart paste APIs and allow anonymous writes (`mode: "open"`). Its
+reported file-size limit applies; the existing installation accepts 512 MiB.
+Muxdeck does not forward browser cookies or authentication to Clip.
+
+Clipboard entries are public at `/c`. This is an explicit publication action
+using the usual authenticated file-browser route and pane/root checks; it
+does not change the source file or submit terminal input. Uploads are never
+retried automatically. If a connection fails after sending a file, check
+Clipboard before clicking again because the entry may already have been saved.
 
 ## Terminal history and real-time APIs
 

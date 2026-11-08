@@ -57,6 +57,12 @@ from .callback_messages import (
     CallbackMessageStoreUnavailable,
     default_callback_messages_path,
 )
+from .clipboard_upload import (
+    ClipboardFile,
+    ClipboardUploader,
+    ClipboardUploadError,
+    prepare_clipboard_file,
+)
 from .control_auth import (
     ControlTokenVerifier,
     control_token_allows,
@@ -284,6 +290,7 @@ NOTE_CAPTURES_KEY = web.AppKey("note_captures", NoteCaptureService)
 AGENT_REFERENCES_KEY = web.AppKey("agent_references", AgentReferenceDetector)
 AGENT_RECOVERY_KEY = web.AppKey("agent_recovery", AgentReferenceRecovery)
 AGENT_TRANSCRIPTS_KEY = web.AppKey("agent_transcripts", AgentTranscriptReader)
+CLIPBOARD_KEY = web.AppKey("clipboard_uploader", ClipboardUploader)
 TRANSCRIPT_READ_LIMIT_KEY = web.AppKey("transcript_read_limit", asyncio.Semaphore)
 SUBMITTED_MESSAGES_KEY = web.AppKey("submitted_messages", SubmittedMessageStore)
 SCROLLBACK_KEY = web.AppKey("scrollback", ScrollbackStore)
@@ -1228,6 +1235,7 @@ def create_app(
     submitted_messages: SubmittedMessageStore | None = None,
     scrollback: ScrollbackStore | None = None,
     agent_transcripts: AgentTranscriptReader | None = None,
+    clipboard: ClipboardUploader | None = None,
     work_links: WorkLinkStore | None = None,
 ) -> web.Application:
     app = web.Application(
@@ -1328,6 +1336,7 @@ def create_app(
     history_capture_wake = asyncio.Event()
     app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[AGENT_TRANSCRIPTS_KEY] = agent_transcripts or AgentTranscriptReader()
+    app[CLIPBOARD_KEY] = clipboard or ClipboardUploader()
     app[AGENT_RECOVERY_KEY] = AgentReferenceRecovery(app[TMUX_KEY], app[AGENT_TRANSCRIPTS_KEY])
     app[TRANSCRIPT_READ_LIMIT_KEY] = asyncio.Semaphore(3)
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
@@ -3095,6 +3104,29 @@ def create_app(
                 ),
             },
         )
+
+    async def upload_session_file_to_clipboard(request: web.Request) -> web.Response:
+        context = await session_file_context(
+            request,
+            required_fields=("sessionId", "paneId", "path"),
+        )
+        if isinstance(context, web.Response):
+            return context
+        root_path, relative_path, pane_id = context
+        source = await execute_session_file_operation(
+            root_path, relative_path, pane_id, within_boundary(prepare_clipboard_file),
+        )
+        if isinstance(source, web.Response):
+            return source
+        if not isinstance(source, ClipboardFile):
+            raise TypeError("clipboard file operation returned an invalid result")
+        try:
+            uploaded = await app[CLIPBOARD_KEY].upload(source)
+            return web.json_response(uploaded, status=201)
+        except ClipboardUploadError as error:
+            return json_error(str(error), error.status)
+        finally:
+            source.handle.close()
 
     async def preview_session_file_image(request: web.Request) -> web.StreamResponse:
         context = await session_file_context(
@@ -6808,6 +6840,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/files/download",
         download_session_file,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/files/clipboard",
+        upload_session_file_to_clipboard,
     )
     app.router.add_post(
         f"{prefix}/api/sessions/{session_segment}/files/archive",

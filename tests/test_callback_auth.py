@@ -65,6 +65,7 @@ def test_callback_scope_is_an_exact_method_and_path_allowlist(prefix: str) -> No
         ("/api/callback-messages", "DELETE"),
         ("/api/callback-messages-extra", "POST"),
         ("/api/sessions", "GET"),
+        ("/api/sessions/agent/files/clipboard", "POST"),
         ("/ws/terminal", "GET"),
     ):
         assert not callback_token_allows(prefix + path, prefix, method)
