@@ -1930,6 +1930,14 @@ def create_app(
                     },
                 },
                 "workspace": workspace_api_capabilities(),
+                "notes": {
+                    "scopes": ["global", "workspace", "session"],
+                    "agentMethods": ["GET", "POST"],
+                    "postOperation": "append",
+                    "defaultPage": "first",
+                    "pageIdSupported": True,
+                    "automaticRetry": False,
+                },
                 "workLinks": work_links,
                 "callbackMessages": {
                     "persistent": True,
@@ -4781,6 +4789,53 @@ def create_app(
             "notebook": notebook,
         })
 
+    async def append_scoped_note(request: web.Request) -> web.Response:
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError, RecursionError):
+            return json_error("request body must be JSON", 400)
+        if not isinstance(payload, dict):
+            return json_error("request body must be an object", 400)
+        unknown = sorted(str(field) for field in set(payload) - {"text", "pageId"})
+        if unknown:
+            return json_error(f"unknown field: {unknown[0]}", 400)
+        if "text" not in payload:
+            return json_error("text is required", 400)
+        scope = "workspace" if "workspace_id" in request.match_info else (
+            "session" if "session" in request.match_info else "common"
+        )
+        identity = request.match_info.get("workspace_id") or request.match_info.get("session")
+        try:
+            if scope == "session":
+                assert identity is not None
+                identity = validate_session_name(identity)
+                async with app[SESSION_RENAME_LOCK_KEY]:
+                    await app[TMUX_KEY].get_session(identity)
+                    notebook = app[WORKSPACES_KEY].append_note(
+                        scope, payload["text"], identity=identity, page_id=payload.get("pageId"),
+                    )
+            else:
+                notebook = app[WORKSPACES_KEY].append_note(
+                    scope, payload["text"], identity=identity, page_id=payload.get("pageId"),
+                )
+        except TmuxSessionNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TmuxError, WorkspaceStoreUnavailable) as error:
+            return json_error(str(error), 503)
+        except WorkspaceNotFoundError as error:
+            return json_error(str(error), 404)
+        except (TypeError, ValueError) as error:
+            return json_error(str(error), 400)
+        except OSError:
+            LOGGER.exception("Unable to append scoped note")
+            return json_error("unable to append note", 500)
+        return web.json_response({
+            "scope": "global" if scope == "common" else scope,
+            "pageId": payload.get("pageId") or notebook["pages"][0]["id"],
+            "note": notebook["pages"][0]["content"],
+            "notebook": notebook,
+        })
+
     async def replace_common_note(request: web.Request) -> web.Response:
         try:
             payload = await request.json()
@@ -6914,6 +6969,7 @@ def create_app(
         replace_common_workspace_quick_links,
     )
     app.router.add_get(f"{prefix}/api/common-note", get_common_note)
+    app.router.add_post(f"{prefix}/api/common-note", append_scoped_note)
     app.router.add_put(f"{prefix}/api/common-note", replace_common_note)
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/quick-links",
@@ -6926,6 +6982,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/note",
         get_session_note,
+    )
+    app.router.add_post(
+        f"{prefix}/api/sessions/{session_segment}/note",
+        append_scoped_note,
     )
     app.router.add_put(
         f"{prefix}/api/sessions/{session_segment}/note",
@@ -7052,6 +7112,10 @@ def create_app(
     app.router.add_get(
         f"{prefix}/api/workspaces/{{workspace_id}}/note",
         get_workspace_note,
+    )
+    app.router.add_post(
+        f"{prefix}/api/workspaces/{{workspace_id}}/note",
+        append_scoped_note,
     )
     app.router.add_put(
         f"{prefix}/api/workspaces/{{workspace_id}}/note",

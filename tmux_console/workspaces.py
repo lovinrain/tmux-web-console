@@ -2112,6 +2112,60 @@ class WorkspaceStore:
                 for link in self._session_quick_links.get(session_name, ())
             ]
 
+    def append_note(
+        self,
+        scope: str,
+        text: object,
+        *,
+        identity: str | None = None,
+        page_id: object = None,
+    ) -> dict[str, list[dict[str, str]]]:
+        """Append to one saved page while holding the same lock as replacements."""
+        content = normalize_scoped_note(text, "text")
+        if not content:
+            raise ValueError("text cannot be blank")
+        selected_id = (
+            _validate_scoped_note_page_id(page_id, "pageId")
+            if page_id is not None else None
+        )
+        with self._lock:
+            self._ensure_writable()
+            if scope == "common":
+                if identity is not None:
+                    raise ValueError("the common note has no scoped identity")
+                notebook = self._notes.common
+            elif scope == "workspace":
+                if not isinstance(identity, str):
+                    raise TypeError("workspace identity must be a string")
+                identity = _validate_workspace_id(identity)
+                self._find(identity)
+                notebook = self._notes.workspaces.get(identity, default_scoped_note_notebook())
+            elif scope == "session":
+                if not isinstance(identity, str):
+                    raise TypeError("session identity must be a string")
+                identity = validate_session_name(identity)
+                notebook = self._notes.sessions.get(identity, default_scoped_note_notebook())
+            else:
+                raise ValueError("unknown note scope")
+            selected_id = selected_id or notebook.pages[0].id
+            target = next((page for page in notebook.pages if page.id == selected_id), None)
+            if target is None:
+                raise ValueError("pageId does not name a notebook page")
+            separator = "" if not target.content or target.content.endswith("\n\n") else (
+                "\n" if target.content.endswith("\n") else "\n\n"
+            )
+            updated = replace(notebook, pages=tuple(
+                replace(page, content=page.content + separator + content)
+                if page.id == selected_id else page
+                for page in notebook.pages
+            )).to_dict()
+            if scope == "common":
+                return self.replace_common_notebook(updated)
+            assert identity is not None
+            if scope == "workspace":
+                return self.replace_workspace_notebook(identity, updated)
+            return self.replace_session_notebook(identity, updated)
+
     def replace_session_quick_links(
         self,
         session_name: str,

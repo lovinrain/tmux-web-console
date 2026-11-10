@@ -1607,6 +1607,77 @@ def test_scoped_note_validation_accepts_large_notes():
     assert normalize_scoped_note(note) == note
 
 
+@pytest.mark.parametrize(("scope", "identity"), (("common", None), ("workspace", "workspace-id"), ("session", "agent")))
+def test_append_note_preserves_other_pages_and_persists(tmp_path, scope, identity):
+    path = tmp_path / "workspaces.json"
+    store = WorkspaceStore(path, id_factory=lambda: "workspace-id")
+    store.create_workspace(name="Project", tabs=["agent"], active_session="agent")
+    notebook = {"pages": [
+        {"id": "first", "name": "Plan", "content": "Keep this"},
+        {"id": "details", "name": "Results", "content": "Existing"},
+    ]}
+    if scope == "common":
+        store.replace_common_notebook(notebook)
+    elif scope == "workspace":
+        store.replace_workspace_notebook(identity, notebook)
+    else:
+        store.replace_session_notebook(identity, notebook)
+    result = store.append_note(scope, "Added\r\n雪", identity=identity, page_id="details")
+    expected = {"pages": [notebook["pages"][0], {**notebook["pages"][1], "content": "Existing\n\nAdded\n雪"}]}
+    assert result == expected
+    reloaded = WorkspaceStore(path)
+    if scope == "common":
+        assert reloaded.get_common_notebook() == expected
+    elif scope == "workspace":
+        assert reloaded.get_workspace_notebook(identity) == expected
+    else:
+        assert reloaded.get_session_notebook(identity) == expected
+
+
+@pytest.mark.parametrize(("existing", "expected"), (
+    ("", "New"), ("Old", "Old\n\nNew"),
+    ("Old\n", "Old\n\nNew"), ("Old\n\n", "Old\n\nNew"),
+))
+def test_append_note_defaults_to_first_page_and_keeps_existing_text(tmp_path, existing, expected):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_notebook({"pages": [{"id": "first", "name": "Plan", "content": existing}]})
+    assert store.append_note("common", "New")["pages"][0] == {"id": "first", "name": "Plan", "content": expected}
+
+
+@pytest.mark.parametrize("text", (None, False, 42, "", " \n\t", "bad\x00text", "bad\ud800text"))
+def test_append_note_rejects_bad_text_without_changing_the_notebook(tmp_path, text):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_note("Existing")
+    with pytest.raises((TypeError, ValueError)):
+        store.append_note("common", text)
+    assert store.get_common_note() == "Existing"
+
+
+def test_append_note_rejects_unknown_targets_and_pages_without_mutation(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_note("Existing")
+    for options in ({"scope": "unknown"}, {"scope": "common", "identity": "unexpected"},
+                    {"scope": "common", "page_id": "missing"}, {"scope": "session"}):
+        with pytest.raises((TypeError, ValueError)):
+            store.append_note(text="New", **options)
+    with pytest.raises(WorkspaceNotFoundError):
+        store.append_note("workspace", "New", identity="missing")
+    assert store.get_common_note() == "Existing"
+
+
+def test_concurrent_note_posts_preserve_every_message(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_note("Existing")
+    messages = [f"Message {number}" for number in range(40)]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda text: store.append_note("common", text), messages))
+    parts = store.get_common_note().split("\n\n")
+    assert parts[0] == "Existing"
+    assert sorted(parts[1:]) == sorted(messages)
+
+
 def test_scoped_notebooks_migrate_legacy_notes_and_persist_pages(tmp_path):
     path = tmp_path / "workspaces.json"
     store = WorkspaceStore(path, id_factory=lambda: "workspace-id")

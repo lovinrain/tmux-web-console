@@ -678,6 +678,29 @@ Responses contain both `note` and `notebook`.
 | `GET`, `PUT /api/workspaces/{workspaceId}/note` | One saved workspace. |
 | `GET`, `PUT /api/sessions/{session}/note` | One live session. |
 
+Trusted agents can use the control credential to `GET` these notebooks and
+`POST` text to any of the same three routes. `POST` appends to the first page by
+default; an optional `pageId` selects another existing page. It preserves page
+IDs, names, order, and all other pages. Line endings are normalized and a blank
+line separates the new text from existing text. Blank posts and unknown pages
+are rejected. Whole-notebook `PUT` remains available to browser authentication.
+The callback-only credential cannot read or post notes.
+
+```json
+{"text":"Agent findings\nDetails go here","pageId":"results"}
+```
+
+The response contains `scope` (`global`, `workspace`, or `session`), `pageId`,
+the legacy first-page `note`, and the saved `notebook`. Appends are serialized
+under the workspace store lock and use its atomic persistence. No state-schema
+change is required. Each accepted POST adds text; requests are not idempotent
+and clients must not automatically retry an uncertain delivery. `GET
+/api/capabilities` advertises this behavior under `notes`.
+
+The existing browser note editor keeps a local snapshot and uses last-writer-wins
+replacement. Reload an already-open browser page to see externally posted notes
+before editing them. See [agent scratchpad commands](AGENT_ORCHESTRATION.md#scratchpad-posting).
+
 ## Tmux sessions
 
 ### Inventory and lifecycle

@@ -123,6 +123,40 @@ stderr. They return a nonzero status for HTTP errors and do not automatically
 retry mutations. `muxdeckctl api METHOD /api/... --json @request.json` exposes
 the documented JSON API for operations without a dedicated CLI command.
 
+## Scratchpad posting
+
+Use the trusted control credential to read or append text to the Common/global,
+saved-workspace, or live-session scratchpad. `scratchpad` is an alias for `notes`:
+
+```bash
+muxdeckctl notes post --scope global --text 'xxxx'
+muxdeckctl notes post --scope workspace --text 'xxxx'
+muxdeckctl notes post --scope session --text 'xxxx'
+muxdeckctl notes post --scope workspace --workspace WORKSPACE_ID --file report.md
+muxdeckctl notes post --scope session --session worker-a --stdin < report.md
+muxdeckctl notes get --scope global
+```
+
+For session/workspace scope, omitted targets use `TMUX_PANE` and the configured
+loopback server's inventory. The current workspace is the most recently active
+saved workspace containing that session, preferring one where it is the active
+tab. Outside tmux, with ambiguous linked sessions, or with a remote server,
+provide `--session`, `--workspace`, or an explicit server `--pane`. Workspace
+scope requires a saved workspace. Explicit workspace targets are IDs.
+
+Posts append to the first notebook page. Use `notes get` to discover page IDs,
+then `--page-id PAGE_ID` to post to another existing page. Text can come from
+`--text`, a UTF-8 `--file` (`-` means stdin), or `--stdin`. Neither the CLI nor
+the API retries a write. After uncertain delivery, read the notebook before
+deciding whether to post again. Refresh already-open browser pages to see
+external posts before editing; the existing browser editor replaces its saved
+notebook snapshot. Agent access permits read/append, while browser credentials
+are required for replacement. Callback-only credentials do not allow notes.
+
+The underlying operations are `GET`/`POST /api/common-note`,
+`GET`/`POST /api/workspaces/{workspaceId}/note`, and
+`GET`/`POST /api/sessions/{session}/note`. See [the API contract](API.md#notes-and-notebooks).
+
 ## Session tickets, PRs, and documents
 
 Run `muxdeckctl work-links context` inside a running agent's tmux pane to discover

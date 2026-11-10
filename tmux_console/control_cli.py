@@ -181,6 +181,81 @@ def _session_record(client: ControlClient, name: str) -> dict[str, Any]:
     raise ControlError("session not found in the current inventory")
 
 
+def _note_path(client: ControlClient, args: argparse.Namespace) -> str:
+    for field in ("workspace", "session", "pane"):
+        value = getattr(args, field)
+        if value is not None and not value.strip():
+            raise ControlError(f"--{field} cannot be blank")
+    if args.scope in {"global", "common"}:
+        if args.workspace or args.session or args.pane:
+            raise ControlError("global notes do not take a workspace, session or pane target")
+        return "/api/common-note"
+    if args.workspace:
+        if args.scope != "workspace":
+            raise ControlError("--workspace requires workspace scope")
+        return f"/api/workspaces/{_segment(args.workspace)}/note"
+    if args.session:
+        if args.scope != "session":
+            raise ControlError("--session requires session scope")
+        return f"/api/sessions/{_segment(args.session)}/note"
+    if not args.pane and not is_loopback_url(args.url):
+        raise ControlError("current targeting requires a loopback server; specify --workspace, --session or --pane")
+    pane_id = args.pane or os.environ.get("TMUX_PANE")
+    if not pane_id or not re.fullmatch(r"%[0-9]+", pane_id):
+        raise ControlError("no current tmux pane; specify --workspace, --session or --pane")
+    inventory = client.request("GET", "/api/sessions")
+    matches = [record for record in inventory.get("sessions", [])
+               if isinstance(record, dict) and any(
+                   isinstance(pane, dict) and pane.get("id") == pane_id
+                   for pane in record.get("panes", [])
+               )]
+    if len(matches) != 1 or not isinstance(matches[0].get("name"), str):
+        raise ControlError("current pane has no unique session on this server; specify an explicit target")
+    current_tmux = os.environ.get("TMUX")
+    if current_tmux and not args.pane:
+        try:
+            context = current_tmux.rsplit(",", 2)
+            if len(context) != 3:
+                raise ValueError("invalid tmux context")
+            server_pid = int(context[1])
+        except (IndexError, ValueError) as error:
+            raise ControlError("invalid current tmux context; specify an explicit target") from error
+        if server_pid <= 0 or matches[0].get("serverPid") != server_pid:
+            raise ControlError("current pane belongs to another tmux server; specify an explicit target")
+    session_name = matches[0]["name"]
+    if args.scope == "session":
+        return f"/api/sessions/{_segment(session_name)}/note"
+    workspaces = client.request("GET", "/api/workspaces")
+    candidates = [workspace for workspace in workspaces.get("workspaces", [])
+                  if isinstance(workspace, dict) and isinstance(workspace.get("id"), str)
+                  and session_name in workspace.get("tabs", [])]
+    if not candidates:
+        raise ControlError("current session is not in a saved workspace; specify --workspace")
+
+    def rank(workspace: dict[str, Any]) -> tuple[bool, float, str]:
+        activity = workspace.get("lastActiveAt", workspace.get("updatedAt", 0))
+        timestamp = float(activity) if isinstance(activity, (int, float)) and math.isfinite(activity) else 0.0
+        return workspace.get("activeSession") == session_name, timestamp, workspace["id"]
+
+    workspace_id = max(candidates, key=rank)["id"]
+    return f"/api/workspaces/{_segment(workspace_id)}/note"
+
+
+def _note_command(client: ControlClient, args: argparse.Namespace) -> dict[str, Any]:
+    payload: dict[str, Any] | None = None
+    if args.action == "post":
+        text = (args.text if args.text is not None else
+                Path(args.file).read_text(encoding="utf-8") if args.file is not None and args.file != "-" else
+                sys.stdin.read())
+        if not text.strip():
+            raise ControlError("note text cannot be blank")
+        payload = {"text": text}
+        if args.page_id is not None:
+            payload["pageId"] = args.page_id
+    path = _note_path(client, args)
+    return client.request("POST" if args.action == "post" else "GET", path, payload)
+
+
 def _record_identity(record: dict[str, Any], pane_id: str | None = None) -> dict[str, Any]:
     identity = {"sessionId": record.get("id"), "sessionCreated": record.get("created"),
                 "serverStarted": record.get("serverStarted"), "serverPid": record.get("serverPid")}
@@ -492,6 +567,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=10, help="HTTP timeout in seconds")
     commands = parser.add_subparsers(dest="resource", required=True)
     commands.add_parser("capabilities")
+    notes = commands.add_parser("notes", aliases=["scratchpad"], help="read scratchpads or append text without replacing pages")
+    note_commands = notes.add_subparsers(dest="action", required=True)
+    for action in ("get", "post"):
+        note = note_commands.add_parser(action)
+        note.add_argument("--scope", choices=("global", "common", "workspace", "session"), required=True)
+        target = note.add_mutually_exclusive_group()
+        target.add_argument("--workspace", help="saved workspace ID; defaults to the current session's workspace")
+        target.add_argument("--session", help="native session name; defaults to the current tmux pane's session")
+        target.add_argument("--pane", help="resolve current session/workspace using this pane instead of TMUX_PANE")
+        if action == "post":
+            text = note.add_mutually_exclusive_group(required=True)
+            text.add_argument("--text", help="literal note text")
+            text.add_argument("--file", help="read UTF-8 note text from this file, or - for stdin")
+            text.add_argument("--stdin", action="store_true", help="read literal note text from stdin")
+            note.add_argument("--page-id", help="existing notebook page ID; defaults to its first page")
     work_links = commands.add_parser("work-links", help="discover session links and agent refresh instructions")
     work_link_commands = work_links.add_subparsers(dest="action", required=True)
     context = work_link_commands.add_parser("context", help="discover links/config; defaults to this tmux pane")
@@ -599,6 +689,8 @@ def main(argv: list[str] | None = None) -> int:
         status = 0
         if args.resource == "capabilities":
             result = client.request("GET", "/api/capabilities")
+        elif args.resource in {"notes", "scratchpad"}:
+            result = _note_command(client, args)
         elif args.resource == "work-links":
             if args.action == "config":
                 result = client.request("PATCH" if args.json_payload else "GET", "/api/work-links/config",

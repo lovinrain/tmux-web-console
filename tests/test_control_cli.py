@@ -99,6 +99,111 @@ def test_transport_preserves_base_path_auth_and_literal_json(http_server):
     assert headers["Content-Type"] == "application/json"
 
 
+@pytest.mark.parametrize("resource", ("notes", "scratchpad"))
+def test_note_posts_send_literal_text_and_page_selection_once(monkeypatch, resource):
+    text = "Literal $(not-a-command)\n雪"
+    status, client = run_fake(monkeypatch, [resource, "post", "--scope", "global",
+                                          "--text", text, "--page-id", "results"], [{"pageId": "results"}])
+    assert status == 0
+    assert client.calls == [("POST", "/api/common-note", {"text": text, "pageId": "results"})]
+
+
+def test_note_posts_accept_utf8_files_and_stdin(monkeypatch, tmp_path):
+    path = tmp_path / "report.md"
+    path.write_text("Report\n雪", encoding="utf-8")
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "workspace",
+                                          "--workspace", "project", "--file", str(path)], [{}])
+    assert status == 0
+    assert client.calls == [("POST", "/api/workspaces/project/note", {"text": "Report\n雪"})]
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("From stdin\n"))
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "session",
+                                          "--session", "agent/one #2", "--stdin"], [{}])
+    assert status == 0
+    assert client.calls == [("POST", "/api/sessions/agent%2Fone%20%232/note", {"text": "From stdin\n"})]
+
+
+def test_note_targets_default_to_the_current_tmux_context(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%2")
+    monkeypatch.setenv("TMUX", "/tmp/note-test,1000,1")
+    monkeypatch.setenv("MUXDECK_URL", "http://127.0.0.1:7683/mux")
+    status, client = run_fake(monkeypatch, ["notes", "get", "--scope", "session"], [{"sessions": [SESSION]}, {}])
+    assert status == 0
+    assert client.calls == [("GET", "/api/sessions", None), ("GET", "/api/sessions/worker/note", None)]
+    workspaces = [
+        {"id": "inactive", "tabs": ["worker"], "activeSession": "other", "lastActiveAt": 100},
+        {"id": "older", "tabs": ["worker"], "activeSession": "worker", "lastActiveAt": 1},
+        {"id": "current", "tabs": ["worker"], "activeSession": "worker", "lastActiveAt": 2},
+    ]
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "workspace", "--text", "Update"],
+                              [{"sessions": [SESSION]}, {"workspaces": workspaces}, {}])
+    assert status == 0
+    assert client.calls[-1] == ("POST", "/api/workspaces/current/note", {"text": "Update"})
+
+
+@pytest.mark.parametrize("arguments", (
+    ["--scope", "global", "--text", "  "],
+    ["--scope", "global", "--session", "worker", "--text", "Text"],
+    ["--scope", "session", "--workspace", "project", "--text", "Text"],
+    ["--scope", "workspace", "--session", "worker", "--text", "Text"],
+    ["--scope", "session", "--text", "Text"],
+))
+def test_note_posts_reject_invalid_or_missing_context_before_contacting_server(monkeypatch, arguments):
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    status, client = run_fake(monkeypatch, ["notes", "post", *arguments], [])
+    assert status == 1
+    assert client.calls == []
+
+
+def test_note_current_targeting_rejects_ambiguous_panes_and_absent_workspaces(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%2")
+    monkeypatch.setenv("TMUX", "/tmp/note-test,1000,1")
+    monkeypatch.setenv("MUXDECK_URL", "http://127.0.0.1:7683/mux")
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "session", "--text", "Text"],
+                              [{"sessions": [SESSION, {**SESSION, "name": "linked"}]}])
+    assert status == 1
+    assert all(method != "POST" for method, _, _ in client.calls)
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "workspace", "--text", "Text"],
+                              [{"sessions": [SESSION]}, {"workspaces": []}])
+    assert status == 1
+    assert all(method != "POST" for method, _, _ in client.calls)
+
+
+def test_note_posts_do_not_retry_an_uncertain_response(monkeypatch):
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "global", "--text", "Text"],
+                              [cli.ControlError("delivery may be uncertain")])
+    assert status == 1
+    assert client.calls == [("POST", "/api/common-note", {"text": "Text"})]
+
+
+def test_note_current_targeting_checks_the_tmux_server_and_allows_explicit_panes(monkeypatch):
+    monkeypatch.setenv("TMUX_PANE", "%2")
+    monkeypatch.setenv("TMUX", "/tmp/another-server,2000,1")
+    monkeypatch.setenv("MUXDECK_URL", "http://127.0.0.1:7683/mux")
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "session", "--text", "Text"],
+                              [{"sessions": [SESSION]}])
+    assert status == 1
+    assert client.calls == [("GET", "/api/sessions", None)]
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "session", "--pane", "%2", "--text", "Text"],
+                              [{"sessions": [SESSION]}, {}])
+    assert status == 0
+    assert client.calls[-1] == ("POST", "/api/sessions/worker/note", {"text": "Text"})
+
+
+@pytest.mark.parametrize(("scope", "flag"), (("workspace", "--workspace"), ("session", "--session"), ("session", "--pane")))
+def test_note_posts_reject_blank_explicit_targets_instead_of_using_current_context(monkeypatch, scope, flag):
+    monkeypatch.setenv("TMUX_PANE", "%2")
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", scope, flag, "", "--text", "Text"], [])
+    assert status == 1
+    assert client.calls == []
+
+
+def test_note_posts_reject_blank_file_paths_instead_of_reading_stdin(monkeypatch):
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("Must not be posted"))
+    status, client = run_fake(monkeypatch, ["notes", "post", "--scope", "global", "--file", ""], [])
+    assert status == 1
+    assert client.calls == []
+
+
 def test_work_link_context_discovers_current_pane_or_explicit_session(monkeypatch):
     monkeypatch.setenv("TMUX_PANE", "%42")
     status, client = run_fake(monkeypatch, ["work-links", "context"], [{"links": []}])
