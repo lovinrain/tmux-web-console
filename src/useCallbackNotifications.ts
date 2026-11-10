@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CALLBACK_NOTIFICATION_STORAGE_KEY,
+  CALLBACK_NOTIFICATION_WORKSPACE_PREFIX,
+  CALLBACK_NOTIFICATION_SCOPES,
   CALLBACK_NOTIFICATION_DISMISS_PREFIX,
   CALLBACK_NOTIFICATION_MUTE_PREFIX,
   CALLBACK_NOTIFICATION_DISMISS_RETENTION,
@@ -21,6 +23,24 @@ function readScope(): CallbackNotificationScope {
     return parseCallbackNotificationScope(window.localStorage.getItem(CALLBACK_NOTIFICATION_STORAGE_KEY));
   } catch {
     return "off";
+  }
+}
+
+function readWorkspaceScopes(): Map<string, CallbackNotificationScope> | null {
+  try {
+    const result = new Map<string, CallbackNotificationScope>();
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX)) continue;
+      try {
+        const id = decodeURIComponent(key.slice(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX.length));
+        const scope = CALLBACK_NOTIFICATION_SCOPES.find((option) => option.value === localStorage.getItem(key))?.value;
+        if (id && id.length <= 128 && scope) result.set(id, scope);
+      } catch { /* Ignore malformed optional preferences. */ }
+    }
+    return result;
+  } catch {
+    return null;
   }
 }
 
@@ -97,9 +117,22 @@ function readSessionMutes(): Set<string> | null {
 
 export function useCallbackNotifications(input: Omit<CallbackNotificationInput, "scope"> & {
   workspaceKey: string;
+  workspaceId?: string | null;
   sessionsLoaded: boolean;
 }) {
   const [scope, updateScope] = useState(readScope);
+  const [workspaceScopes, updateWorkspaceScopes] = useState(() => readWorkspaceScopes() ?? new Map<string, CallbackNotificationScope>());
+  const unsavedWorkspaceScopes = useRef(new Map<string, CallbackNotificationScope | null>());
+  const receiveWorkspaceScopes = useCallback((stored: Map<string, CallbackNotificationScope>) => {
+    const next = new Map(stored);
+    for (const [id, value] of unsavedWorkspaceScopes.current) {
+      if (value === null) next.delete(id);
+      else next.set(id, value);
+    }
+    updateWorkspaceScopes(next);
+  }, []);
+  const workspaceScope = input.workspaceId ? workspaceScopes.get(input.workspaceId) ?? null : null;
+  const effectiveScope = workspaceScope ?? scope;
   const [notifications, setNotifications] = useState<CallbackNotification[]>([]);
   const observation = useRef(initialCallbackNotificationObservation());
   const [initialDismissals] = useState(readDismissals);
@@ -131,9 +164,31 @@ export function useCallbackNotifications(input: Omit<CallbackNotificationInput, 
       // Notification preferences still work for this page when storage is blocked.
     }
   }, []);
+  const setWorkspaceScope = useCallback((next: CallbackNotificationScope | null) => {
+    const id = input.workspaceId;
+    if (!id) return;
+    updateWorkspaceScopes((current) => {
+      const result = new Map(current);
+      if (next === null) result.delete(id);
+      else result.set(id, next);
+      return result;
+    });
+    try {
+      const key = CALLBACK_NOTIFICATION_WORKSPACE_PREFIX + encodeURIComponent(id);
+      if (next === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, next);
+      unsavedWorkspaceScopes.current.delete(id);
+    } catch {
+      unsavedWorkspaceScopes.current.set(id, next);
+    }
+  }, [input.workspaceId]);
   useEffect(() => {
     const receive = (event: StorageEvent) => {
       if (event.key === CALLBACK_NOTIFICATION_STORAGE_KEY || event.key === null) updateScope(readScope());
+      if (event.key?.startsWith(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX) || event.key === null) {
+        const next = readWorkspaceScopes();
+        if (next) receiveWorkspaceScopes(next);
+      }
       if (event.key?.startsWith(CALLBACK_NOTIFICATION_MUTE_PREFIX) || event.key === null) {
         if (event.key !== null) {
           try {
@@ -166,6 +221,10 @@ export function useCallbackNotifications(input: Omit<CallbackNotificationInput, 
       }
     };
     const refresh = () => {
+      const preferences = readWorkspaceScopes();
+      if (preferences) {
+        receiveWorkspaceScopes(preferences);
+      }
       const next = readSessionMutes();
       if (next) receiveSessionMutes(next);
       dismissed.current = new Set([...dismissed.current, ...readDismissals()].slice(-MAX_CALLBACK_NOTIFICATION_DISMISSALS));
@@ -180,13 +239,13 @@ export function useCallbackNotifications(input: Omit<CallbackNotificationInput, 
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [rememberDismissal, receiveSessionMutes]);
+  }, [rememberDismissal, receiveSessionMutes, receiveWorkspaceScopes]);
 
-  const scopedWorkspaceKey = scope === "workspace" ? input.workspaceKey : null;
-  useEffect(() => setNotifications([]), [scope, scopedWorkspaceKey]);
+  const scopedWorkspaceKey = effectiveScope === "workspace" ? input.workspaceKey : null;
+  useEffect(() => setNotifications([]), [effectiveScope, scopedWorkspaceKey]);
   useEffect(() => {
     if (!input.sessionsLoaded) return;
-    const next = observeCallbackNotifications(observation.current, { ...input, scope });
+    const next = observeCallbackNotifications(observation.current, { ...input, scope: effectiveScope });
     observation.current = next.observation;
     if (next.notifications.length) {
       const sharedDismissals = readDismissals();
@@ -203,7 +262,7 @@ export function useCallbackNotifications(input: Omit<CallbackNotificationInput, 
     for (const identity of quietEndings.current) {
       if (!next.observation.sessions.has(identity)) quietEndings.current.delete(identity);
     }
-  }, [scope, input.sessions, input.sessionsLoaded, input.snapshot, input.callbacksLoaded,
+  }, [effectiveScope, input.sessions, input.sessionsLoaded, input.snapshot, input.callbacksLoaded,
     input.workspaceSessionNames, input.workspaceCallbackSessions, input.workspaceName]);
 
   useEffect(() => {
@@ -258,5 +317,6 @@ export function useCallbackNotifications(input: Omit<CallbackNotificationInput, 
   const expire = useCallback((id: string) => {
     setNotifications((current) => current.filter((item) => item.id !== id));
   }, []);
-  return { scope, setScope, notifications, dismiss, expire, mutedSessions, muteSession, unmuteSession };
+  return { scope, setScope, workspaceScope, setWorkspaceScope, effectiveScope,
+    notifications, dismiss, expire, mutedSessions, muteSession, unmuteSession };
 }

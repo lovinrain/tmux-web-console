@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CALLBACK_NOTIFICATION_STORAGE_KEY, CALLBACK_NOTIFICATION_DISMISS_PREFIX,
   CALLBACK_NOTIFICATION_MUTE_PREFIX,
+  CALLBACK_NOTIFICATION_WORKSPACE_PREFIX,
   CALLBACK_NOTIFICATION_DISMISS_RETENTION, MAX_CALLBACK_NOTIFICATION_DISMISSALS,
   type CallbackNotificationInput,
 } from "./callbackNotifications";
@@ -33,6 +34,74 @@ const dismissalKey = (id: string) => `${CALLBACK_NOTIFICATION_DISMISS_PREFIX}${e
 beforeEach(() => window.localStorage.clear());
 
 describe("callback notification preferences", () => {
+  it("inherits globally, overrides each saved workspace independently, and restores inheritance without replay", () => {
+    const initial = { ...live, workspaceId: "one" };
+    const first = renderHook(useCallbackNotifications, { initialProps: initial });
+    expect(first.result.current.workspaceScope).toBeNull();
+    act(() => first.result.current.setWorkspaceScope("workspace"));
+    expect(first.result.current.scope).toBe("off");
+    expect(first.result.current.effectiveScope).toBe("workspace");
+    first.rerender({ ...initial, snapshot: reports(1) });
+    expect(first.result.current.notifications).toHaveLength(1);
+    first.rerender({ ...initial, workspaceId: "two", workspaceKey: "two", snapshot: reports(1) });
+    expect(first.result.current.effectiveScope).toBe("off");
+    expect(first.result.current.notifications).toEqual([]);
+    act(() => first.result.current.setWorkspaceScope("off"));
+    act(() => first.result.current.setScope("all"));
+    expect(first.result.current.effectiveScope).toBe("off");
+    first.rerender({ ...initial, snapshot: reports(1, 2) });
+    expect(first.result.current.effectiveScope).toBe("workspace");
+    act(() => first.result.current.setWorkspaceScope(null));
+    expect(first.result.current.effectiveScope).toBe("all");
+    expect(first.result.current.workspaceScope).toBeNull();
+    expect(localStorage.getItem(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX + "one")).toBeNull();
+    first.unmount();
+    const restored = renderHook(useCallbackNotifications, { initialProps: { ...initial, workspaceId: "two" } });
+    expect(restored.result.current.scope).toBe("all");
+    expect(restored.result.current.effectiveScope).toBe("off");
+    expect(restored.result.current.notifications).toEqual([]);
+  });
+
+  it("shares workspace preferences across tabs, preserves independent workspace writes, and refreshes missed updates", () => {
+    localStorage.setItem(CALLBACK_NOTIFICATION_STORAGE_KEY, "all");
+    const first = renderHook(useCallbackNotifications, { initialProps: { ...live, workspaceId: "one" } });
+    const second = renderHook(useCallbackNotifications, { initialProps: { ...live, workspaceId: "two", workspaceKey: "two" } });
+    act(() => first.result.current.setWorkspaceScope("off"));
+    act(() => second.result.current.setWorkspaceScope("watched"));
+    const key = CALLBACK_NOTIFICATION_WORKSPACE_PREFIX + "one";
+    expect(localStorage.getItem(key)).toBe("off");
+    expect(localStorage.getItem(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX + "two")).toBe("watched");
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key, newValue: "off" })));
+    expect(first.result.current.effectiveScope).toBe("off");
+    expect(second.result.current.effectiveScope).toBe("watched");
+    act(() => {
+      localStorage.setItem(key, "workspace");
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(first.result.current.effectiveScope).toBe("workspace");
+    act(() => {
+      localStorage.removeItem(key);
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: null }));
+    });
+    expect(first.result.current.effectiveScope).toBe("all");
+    expect(second.result.current.effectiveScope).toBe("watched");
+  });
+
+  it("ignores malformed workspace preferences and keeps failed-to-persist choices for the active page", () => {
+    localStorage.setItem(CALLBACK_NOTIFICATION_STORAGE_KEY, "all");
+    localStorage.setItem(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX + "one", "invalid");
+    localStorage.setItem(CALLBACK_NOTIFICATION_WORKSPACE_PREFIX + "%bad", "off");
+    const { result } = renderHook(useCallbackNotifications, { initialProps: { ...live, workspaceId: "one" } });
+    expect(result.current.workspaceScope).toBeNull();
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    act(() => result.current.setWorkspaceScope("off"));
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(result.current.effectiveScope).toBe("off");
+    write.mockRestore();
+    act(() => result.current.setWorkspaceScope(null));
+    expect(result.current.effectiveScope).toBe("all");
+  });
+
   it("mutes a session across future reports and reloads, then re-enables only future events", () => {
     localStorage.setItem(CALLBACK_NOTIFICATION_STORAGE_KEY, "all");
     const first = renderHook(useCallbackNotifications, { initialProps: live });

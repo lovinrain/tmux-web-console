@@ -14,6 +14,34 @@ const item: CallbackNotification = {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("callback notification controls", () => {
+  it("keeps workspace overrides separate from global choices and allows restoring the global default", () => {
+    const global = vi.fn();
+    function Settings() {
+      const [scope, setScope] = useState<CallbackNotificationScope | null>(null);
+      return <CallbackNotificationSettings scope="all" onChange={global}
+        workspaceOverride={{ name: "Research", scope, onChange: setScope }} />;
+    }
+    render(<Settings />);
+    const button = screen.getByRole("button", { name: "Workspace callback notifications" });
+    fireEvent.click(button);
+    expect(screen.getByRole("radio", { name: /^Use global setting/ })).toBeChecked();
+    expect(screen.getByRole("dialog")).toHaveTextContent("Research");
+    fireEvent.click(screen.getByRole("radio", { name: /^Off/ }));
+    expect(button).toHaveAttribute("data-enabled", "false");
+    expect(global).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("radio", { name: /^Use global setting/ }));
+    expect(button).toHaveAttribute("data-enabled", "true");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(button).toHaveFocus();
+  });
+
+  it("explains why a temporary workspace has no saved override", () => {
+    render(<CallbackNotificationSettings scope="off" onChange={vi.fn()} disabled
+      workspaceOverride={{ name: "Temporary", scope: null, onChange: vi.fn() }} />);
+    expect(screen.getByRole("button", { name: "Workspace callback notifications" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Workspace callback notifications" })).toHaveAttribute("title", "Save this workspace to customize its notifications");
+  });
+
   it("lists muted sessions and re-enables an individual session while leaving the menu open", () => {
     function Settings() {
       const [muted, setMuted] = useState<MutedCallbackSession[]>([

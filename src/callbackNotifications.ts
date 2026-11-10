@@ -7,6 +7,7 @@ import {
 import type { Session } from "./types";
 
 export const CALLBACK_NOTIFICATION_STORAGE_KEY = `muxdeck.callback-notifications.v1:${import.meta.env.BASE_URL}`;
+export const CALLBACK_NOTIFICATION_WORKSPACE_PREFIX = `muxdeck.callback-notifications-workspace.v1:${import.meta.env.BASE_URL}:`;
 export const CALLBACK_NOTIFICATION_DISMISS_PREFIX = `muxdeck.callback-notification-dismissed.v1:${import.meta.env.BASE_URL}:`;
 export const CALLBACK_NOTIFICATION_MUTE_PREFIX = `muxdeck.callback-notification-muted.v1:${import.meta.env.BASE_URL}:`;
 export const CALLBACK_NOTIFICATION_DISMISS_RETENTION = 7 * 24 * 60 * 60 * 1_000;

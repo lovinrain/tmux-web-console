@@ -106,3 +106,16 @@ install -m 600 /root/tmux-web-console/docs/AGENT_CALLBACKS.md ~/s/g/cb.md
 ```
 
 The helper requires Python 3.10+ and a Linux `/proc` filesystem for automatic tmux ancestry checks. It has no third-party dependencies. Server token provisioning and service configuration are documented in the deployment guide.
+
+## Browser notification preferences
+
+The bell beside Callbacks controls the global browser default. The adjacent grid
+button sets a saved-workspace override, or restores **Use global setting**. A local
+choice wins over the default while that workspace is open in the tab, including
+enabling notices when the default is Off. Choices persist by workspace ID in this
+browser and synchronize across its tabs; temporary workspaces must be saved first.
+
+These settings affect floating notices only. Agent reports are still stored and
+remain available for review when notifications are Off. Session mutes and On hold
+continue to suppress notices. Notification preferences are browser-local and
+are not changed by the callback posting API.

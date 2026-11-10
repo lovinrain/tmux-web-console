@@ -329,6 +329,72 @@ test("closing a callback notification clears it from other open workspaces and l
   for (const current of [page, other]) await expect(notices(current).getByRole("article")).toHaveCount(0);
 });
 
+test("workspace notification overrides persist independently and inherit the global default", async ({ page, context }, testInfo) => {
+  const sessionName = `workspace-notifications-${randomUUID()}`;
+  const workspaces: SavedWorkspace[] = [];
+  for (const name of ["Quiet workspace", "Inherited workspace"]) {
+    const response = await context.request.post("/mux/api/workspaces", {
+      data: { name, tabs: [sessionName], activeSession: sessionName },
+    });
+    expect(response.ok()).toBe(true);
+    const workspace = (await response.json()).workspace as SavedWorkspace;
+    workspaceIds.push(workspace.id);
+    workspaces.push(workspace);
+  }
+  await page.goto(`/mux/?workspace=${workspaces[0].id}`);
+  const global = page.getByRole("button", { name: "Callback notifications", exact: true });
+  const local = page.getByRole("button", { name: "Workspace callback notifications", exact: true });
+  await expect(global.locator("xpath=following-sibling::button[1]")).toHaveAccessibleName("Workspace callback notifications");
+  await global.click();
+  const globalSettings = page.getByRole("dialog", { name: "Callback notifications", exact: true });
+  await globalSettings.getByRole("radio", { name: /^All sessions/ }).check();
+  await globalSettings.getByRole("button", { name: "Close notification settings" }).click();
+  await local.click();
+  const localSettings = page.getByRole("dialog", { name: "Workspace callback notifications", exact: true });
+  await expect(localSettings.getByRole("radio", { name: /^Use global setting/ })).toBeChecked();
+  await localSettings.getByRole("radio", { name: /^Off/ }).check();
+  await localSettings.screenshot({ path: testInfo.outputPath("workspace-notification-settings.png") });
+  await localSettings.getByRole("button", { name: "Close notification settings" }).click();
+
+  const other = await context.newPage();
+  await other.goto(`/mux/?workspace=${workspaces[1].id}`);
+  await expect(other.getByRole("heading", { name: workspaces[1].name, exact: true })).toBeVisible();
+  await page.reload();
+  await expect(local).toHaveAttribute("data-enabled", "false");
+  await expect(other.getByRole("button", { name: "Workspace callback notifications", exact: true })).toHaveAttribute("data-enabled", "true");
+  const publish = async (message: string) => {
+    const posted = await agentRequest.post("/mux/api/callback-messages", {
+      data: { sessionName, message, agentType: "codex", cwd: "/tmp/workspace-notifications", requestId: randomUUID() },
+    });
+    expect(posted.status()).toBe(201);
+    const callback = (await posted.json()).callback as CallbackMessage;
+    callbackIds.push(callback.id);
+    return callback;
+  };
+  const notices = (current: Page) => current.getByRole("region", { name: "Callback notifications", exact: true });
+  const first = await publish("Only the inherited workspace should show this notice.");
+  await expect(notices(other).getByRole("article")).toContainText(first.message);
+  await expect(notices(page).getByRole("article")).toHaveCount(0);
+  await other.getByRole("button", { name: "Callback notifications", exact: true }).click();
+  const otherSettings = other.getByRole("dialog", { name: "Callback notifications", exact: true });
+  await otherSettings.getByRole("radio", { name: /^Off/ }).check();
+  await otherSettings.getByRole("button", { name: "Close notification settings" }).click();
+  await expect(global).toHaveAttribute("data-enabled", "false");
+  await local.click();
+  await localSettings.getByRole("radio", { name: /^This workspace/ }).check();
+  await localSettings.getByRole("button", { name: "Close notification settings" }).click();
+  await expect(notices(page).getByRole("article")).toHaveCount(0);
+  const second = await publish("The local override works even when the global setting is off.");
+  await expect(notices(page).getByRole("article")).toContainText(second.message);
+  await expect(notices(other).getByRole("article")).toHaveCount(0);
+  await local.click();
+  await localSettings.getByRole("radio", { name: /^Use global setting/ }).check();
+  await localSettings.getByRole("button", { name: "Close notification settings" }).click();
+  await expect(local).toHaveAttribute("data-enabled", "false");
+  const pending = await agentRequest.get("/mux/api/callback-messages?status=pending");
+  expect((await pending.json()).messages).toContainEqual(expect.objectContaining({ id: second.id, reviewedAt: null }));
+});
+
 test("a script credential can read callbacks but cannot inspect or control sessions", async ({ playwright, baseURL }) => {
   expect((await agentRequest.get("/mux/api/callback-messages?status=all")).ok()).toBe(true);
   expect((await agentRequest.get("/mux/api/sessions")).status()).toBe(403);

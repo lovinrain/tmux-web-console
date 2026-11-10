@@ -4550,6 +4550,7 @@ function AppRoutes() {
       ? [] : workspaceCallbackSessions,
     workspaceName,
     workspaceKey: locationWorkspaceId ?? temporaryTerminalKey,
+    workspaceId: locationWorkspaceId,
   });
 
   const withWorkspaceSyncNotice = (content: ReactNode) => (
@@ -4744,6 +4745,8 @@ function AppRoutes() {
       onSelectSession={dashboard ? openSession : switchSession}
       notificationScope={callbackNotifications.scope}
       onNotificationScopeChange={callbackNotifications.setScope}
+      workspaceNotificationScope={callbackNotifications.workspaceScope}
+      onWorkspaceNotificationScopeChange={callbackNotifications.setWorkspaceScope}
       notificationMutedSessions={callbackNotifications.mutedSessions}
       onNotificationSessionUnmute={callbackNotifications.unmuteSession}
     />
@@ -4820,6 +4823,8 @@ function AppRoutes() {
           onSelectSession={switchSession}
           notificationScope={callbackNotifications.scope}
           onNotificationScopeChange={callbackNotifications.setScope}
+          workspaceNotificationScope={callbackNotifications.workspaceScope}
+          onWorkspaceNotificationScopeChange={callbackNotifications.setWorkspaceScope}
           notificationMutedSessions={callbackNotifications.mutedSessions}
           onNotificationSessionUnmute={callbackNotifications.unmuteSession}
         />

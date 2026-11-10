@@ -20,6 +20,9 @@ html .workspace-callback-status-control > button.callback-notification-toggle {
   cursor: pointer;
 }
 html .workspace-callback-status-control > button.callback-notification-toggle[data-enabled="true"] { color: var(--amber); }
+html .workspace-callback-status-control > button.callback-notification-toggle:not(:last-child) { border-radius: 0; }
+html .workspace-callback-status-control > button.callback-notification-toggle:disabled { opacity: .45; cursor: default; }
+html .workspace-callback-status-control > button.callback-notification-toggle[data-enabled="false"] > i { background: var(--muted); }
 html .workspace-callback-status-control > button.callback-notification-toggle:is(:hover, [aria-expanded="true"]) {
   background: var(--ink-soft);
   border-color: var(--muted);
@@ -66,6 +69,7 @@ html .workspace-callback-status-control > button.callback-notification-toggle:is
 .callback-notification-settings input { flex: 0 0 auto; margin: 3px 0 0; accent-color: var(--amber); }
 .callback-notification-settings label strong { display: block; font-size: 12px; font-weight: 650; }
 .callback-notification-settings small { display: block; color: var(--muted); font-size: 11px; }
+.callback-notification-settings > small { overflow-wrap: anywhere; }
 .callback-notification-settings p { margin: 10px 0; color: var(--muted); font-size: 11px; }
 .callback-notification-settings button, .callback-toast button {
   display: inline-flex;

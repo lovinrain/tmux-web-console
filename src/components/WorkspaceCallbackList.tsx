@@ -123,6 +123,8 @@ interface WorkspaceCallbackListProps {
   onSelectSession: (sessionName: string) => void;
   notificationScope?: CallbackNotificationScope;
   onNotificationScopeChange?: (scope: CallbackNotificationScope) => void;
+  workspaceNotificationScope?: CallbackNotificationScope | null;
+  onWorkspaceNotificationScopeChange?: (scope: CallbackNotificationScope | null) => void;
   notificationMutedSessions?: readonly MutedCallbackSession[];
   onNotificationSessionUnmute?: (identity: string) => void;
 }
@@ -325,6 +327,8 @@ export function WorkspaceCallbackList({
   onSelectSession,
   notificationScope,
   onNotificationScopeChange,
+  workspaceNotificationScope,
+  onWorkspaceNotificationScopeChange,
   notificationMutedSessions,
   onNotificationSessionUnmute,
 }: WorkspaceCallbackListProps) {
@@ -1406,6 +1410,11 @@ export function WorkspaceCallbackList({
         {notificationScope !== undefined && onNotificationScopeChange && <CallbackNotificationSettings
           scope={notificationScope} onChange={onNotificationScopeChange}
           mutedSessions={notificationMutedSessions} onUnmuteSession={onNotificationSessionUnmute} />}
+        {notificationScope !== undefined && onNotificationScopeChange && onWorkspaceNotificationScopeChange
+          && <CallbackNotificationSettings key={workspaceId ?? "unsaved"} scope={notificationScope}
+            onChange={onNotificationScopeChange} disabled={!workspaceId}
+            workspaceOverride={{ name: workspaceName || "this workspace", scope: workspaceNotificationScope ?? null,
+              onChange: onWorkspaceNotificationScopeChange }} />}
       </div>
       {floatingPanel && createPortal(floatingPanel, document.body)}
     </>

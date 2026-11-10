@@ -100,8 +100,14 @@ See which agents are ready, read their reports, and review them from one queue.
 
 Click the **bell beside Callbacks** in the title bar to enable floating
 notifications for **Watched callbacks**, **This workspace**, or **All sessions**
-across every workspace. Notifications start **Off** and remember your choice
-in this browser. New reports, finished work, and ended sessions appear by name;
+as the browser's global default. Notifications start **Off** and remember your choice
+in this browser. The **grid button beside the bell** opens **Workspace callback notifications**:
+use the global setting, or choose Off, Watched callbacks, This workspace, or All sessions
+for this saved workspace. An explicit workspace choice overrides the global default,
+including enabling notices when the default is Off. It applies while that workspace
+is open in the tab, survives reloads and workspace renames, and synchronizes across
+this browser's tabs. Save a temporary workspace before setting its override.
+New reports, finished work, and ended sessions appear by name;
 existing callbacks are not replayed when you enable notifications or reload.
 Notices fade after eight seconds, pause while hovered, focused, or in a hidden
 browser tab, and dismiss when clicked or closed. Dismissing a notice leaves its
