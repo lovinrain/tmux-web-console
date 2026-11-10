@@ -108,6 +108,46 @@ def test_note_posts_send_literal_text_and_page_selection_once(monkeypatch, resou
     assert client.calls == [("POST", "/api/common-note", {"text": text, "pageId": "results"})]
 
 
+def test_empty_page_creation_does_not_read_stdin_and_empty_updates_clear_only_the_selected_page(monkeypatch):
+    def forbidden_read():
+        raise AssertionError("an empty new page must not consume stdin")
+
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(read=forbidden_read))
+    revision = "a" * 64
+    status, client = run_fake(monkeypatch, ["notes", "add-page", "--scope", "global", "--name", "New",
+                                          "--revision", revision], [{}])
+    assert status == 0
+    assert client.calls == [("POST", "/api/common-note/pages", {"name": "New", "content": "", "expectedRevision": revision})]
+    status, client = run_fake(monkeypatch, ["notes", "set", "--scope", "global", "--page-id", "results",
+                                          "--text", "", "--revision", revision], [{}])
+    assert status == 0
+    assert client.calls == [("PATCH", "/api/common-note/pages/results", {"content": "", "expectedRevision": revision})]
+
+
+@pytest.mark.parametrize("arguments", [
+    ["update", "--page-id", "main", "--text", "New"],
+    ["clear", "--page-id", "main"],
+    ["delete-page", "--page-id", "main"],
+    ["clear", "--revision", "a" * 64],
+])
+def test_note_destructive_edits_require_a_revision_and_an_explicit_clear_target(monkeypatch, arguments):
+    def forbidden_client(*args, **kwargs):
+        raise AssertionError("invalid arguments must not contact the server")
+
+    monkeypatch.setattr(cli, "ControlClient", forbidden_client)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["notes", *arguments, "--scope", "global"])
+    assert error.value.code == 2
+
+
+def test_notebook_replacement_does_not_fetch_a_fresh_revision_or_retry_after_conflict(monkeypatch):
+    revision = "a" * 64
+    status, client = run_fake(monkeypatch, ["notes", "update", "--scope", "global", "--page-id", "main",
+                                          "--text", "New", "--revision", revision], [cli.ControlError("HTTP 409: changed")])
+    assert status == 1
+    assert client.calls == [("PATCH", "/api/common-note/pages/main", {"content": "New", "expectedRevision": revision})]
+
+
 def test_note_posts_accept_utf8_files_and_stdin(monkeypatch, tmp_path):
     path = tmp_path / "report.md"
     path.write_text("Report\n雪", encoding="utf-8")

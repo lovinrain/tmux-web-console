@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiRequestError,
   getCommonNote,
   getCommonNotebook,
   getSessionNote,
@@ -28,7 +29,8 @@ import {
   ScopedStickyNotes,
 } from "./ScopedStickyNotes";
 
-vi.mock("../api", () => ({
+vi.mock("../api", async (importOriginal) => ({
+  ApiRequestError: (await importOriginal<typeof import("../api")>()).ApiRequestError,
   getCommonNote: vi.fn(),
   getCommonNotebook: vi.fn(),
   getSessionNote: vi.fn(),
@@ -336,10 +338,13 @@ describe("ScopedStickyNotes", () => {
     expect(screen.getByRole("button", { name: "Edit session note" })).toBeEnabled();
   });
 
-  it("debounces saves and serializes writes so the newest draft wins", async () => {
-    const firstSave = deferred<string>();
-    const secondSave = deferred<string>();
-    vi.mocked(replaceWorkspaceNote)
+  it("debounces and serializes saves using the revision from each successful write", async () => {
+    const firstSave = deferred<ScopedNoteNotebook>();
+    const secondSave = deferred<ScopedNoteNotebook>();
+    const initialRevision = "a".repeat(64);
+    const nextRevision = "b".repeat(64);
+    vi.mocked(getWorkspaceNotebook).mockResolvedValue({ ...notebook("Workspace plan"), revision: initialRevision });
+    vi.mocked(replaceWorkspaceNotebook)
       .mockImplementationOnce(() => firstSave.promise)
       .mockImplementationOnce(() => secondSave.promise);
     await renderLoadedNotes();
@@ -351,33 +356,76 @@ describe("ScopedStickyNotes", () => {
     expect(textarea).toHaveFocus();
     fireEvent.change(textarea, { target: { value: "First draft" } });
     act(() => vi.advanceTimersByTime(649));
-    expect(replaceWorkspaceNote).not.toHaveBeenCalled();
+    expect(replaceWorkspaceNotebook).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(1));
     await flushPromises();
-    expect(replaceWorkspaceNote).toHaveBeenCalledTimes(1);
-    expect(replaceWorkspaceNote).toHaveBeenLastCalledWith(
+    expect(replaceWorkspaceNotebook).toHaveBeenCalledTimes(1);
+    expect(replaceWorkspaceNotebook).toHaveBeenLastCalledWith(
       "workspace-one",
-      "First draft",
+      { ...notebook("First draft"), revision: initialRevision },
     );
 
     fireEvent.change(textarea, { target: { value: "Final draft" } });
     act(() => vi.advanceTimersByTime(650));
     await flushPromises();
-    expect(replaceWorkspaceNote).toHaveBeenCalledTimes(1);
+    expect(replaceWorkspaceNotebook).toHaveBeenCalledTimes(1);
 
-    firstSave.resolve("First draft");
+    firstSave.resolve({ ...notebook("First draft"), revision: nextRevision });
     await flushPromises();
-    expect(replaceWorkspaceNote).toHaveBeenCalledTimes(2);
-    expect(replaceWorkspaceNote).toHaveBeenLastCalledWith(
+    expect(replaceWorkspaceNotebook).toHaveBeenCalledTimes(2);
+    expect(replaceWorkspaceNotebook).toHaveBeenLastCalledWith(
       "workspace-one",
-      "Final draft",
+      { ...notebook("Final draft"), revision: nextRevision },
     );
     expect(within(editor).getByRole("status")).toHaveTextContent("Saving...");
 
-    secondSave.resolve("Final draft");
+    secondSave.resolve({ ...notebook("Final draft"), revision: "c".repeat(64) });
     await flushPromises();
     expect(within(editor).getByRole("status")).toHaveTextContent("Saved");
     expect(textarea).toHaveValue("Final draft");
+  });
+
+  it("keeps a conflicted draft, stops stale autosaves, and resumes only after an explicit reload", async () => {
+    const initialRevision = "a".repeat(64);
+    const latestRevision = "b".repeat(64);
+    vi.mocked(getCommonNotebook)
+      .mockResolvedValueOnce({ ...notebook("Original"), revision: initialRevision })
+      .mockResolvedValueOnce({ pages: [...notebook("Agent update").pages,
+        { id: "results", name: "Agent results", content: "Keep this page" }], revision: latestRevision });
+    vi.mocked(replaceCommonNotebook)
+      .mockRejectedValueOnce(new ApiRequestError("Notes changed elsewhere", 409))
+      .mockImplementationOnce(async (value) => ({ ...value, revision: "c".repeat(64) }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    await renderLoadedNotes();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Edit common note" }));
+    const editor = screen.getByRole("dialog", { name: "Common" });
+    const textarea = within(editor).getByRole("textbox", { name: "Note" });
+    fireEvent.change(textarea, { target: { value: "My draft" } });
+    act(() => vi.advanceTimersByTime(650));
+    await flushPromises();
+    expect(textarea).toHaveValue("My draft");
+    expect(within(editor).getByRole("status")).toHaveTextContent("Your draft is kept here");
+    fireEvent.change(textarea, { target: { value: "Keep editing my draft" } });
+    act(() => vi.advanceTimersByTime(650));
+    await flushPromises();
+    expect(replaceCommonNotebook).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(editor).getByRole("button", { name: "Reload latest" }));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(textarea).toHaveValue("Keep editing my draft");
+    expect(getCommonNotebook).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(editor).getByRole("button", { name: "Reload latest" }));
+    await flushPromises();
+    expect(textarea).toHaveValue("Agent update");
+    expect(within(editor).queryByRole("button", { name: "Reload latest" })).not.toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: "Updated from latest" } });
+    act(() => vi.advanceTimersByTime(650));
+    await flushPromises();
+    expect(replaceCommonNotebook).toHaveBeenLastCalledWith({ pages: [
+      { id: "main", name: "Page 1", content: "Updated from latest" },
+      { id: "results", name: "Agent results", content: "Keep this page" },
+    ], revision: latestRevision });
+    expect(within(editor).getByRole("status")).toHaveTextContent("Saved");
   });
 
   it("flushes the current draft before closing and clears a saved note", async () => {

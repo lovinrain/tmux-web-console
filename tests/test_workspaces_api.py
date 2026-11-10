@@ -13,6 +13,7 @@ from tmux_console.workspaces import (
     MAX_WORKSPACE_TABS,
     WORKSPACE_STORE_UNAVAILABLE_MESSAGE,
     WorkspaceStore,
+    scoped_note_revision,
 )
 
 
@@ -26,7 +27,8 @@ def note_payload(note, *, pages=None):
         "pages": pages
         or [{"id": "main", "name": "Page 1", "content": note}]
     }
-    return {"note": notebook["pages"][0]["content"], "notebook": notebook}
+    return {"note": notebook["pages"][0]["content"], "notebook": notebook,
+            "revision": scoped_note_revision(notebook)}
 
 
 @pytest.mark.asyncio

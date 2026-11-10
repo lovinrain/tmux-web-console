@@ -1402,6 +1402,8 @@ export interface ScopedNotePage {
 
 export interface ScopedNoteNotebook {
   pages: ScopedNotePage[];
+  /** Opaque revision of the saved snapshot; omitted by older servers. */
+  revision?: string;
 }
 
 export interface CreateWorkspaceInput {
@@ -1588,6 +1590,7 @@ export async function replaceSessionNote(
 interface ScopedNoteResponse {
   note: string;
   notebook?: ScopedNoteNotebook;
+  revision?: string;
 }
 
 function notebookFromResponse(result: ScopedNoteResponse): ScopedNoteNotebook {
@@ -1596,9 +1599,10 @@ function notebookFromResponse(result: ScopedNoteResponse): ScopedNoteNotebook {
     && Array.isArray(result.notebook.pages)
     && result.notebook.pages.length
   ) {
-    return result.notebook;
+    return { ...result.notebook, ...(result.revision ? { revision: result.revision } : {}) };
   }
   return {
+    ...(result.revision ? { revision: result.revision } : {}),
     pages: [{
       id: "main",
       name: "Page 1",
@@ -1624,7 +1628,8 @@ export async function replaceCommonNotebook(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notebook }),
+      body: JSON.stringify({ notebook: { pages: notebook.pages },
+        ...(notebook.revision ? { expectedRevision: notebook.revision } : {}) }),
     },
   ));
 }
@@ -1648,7 +1653,8 @@ export async function replaceWorkspaceNotebook(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notebook }),
+      body: JSON.stringify({ notebook: { pages: notebook.pages },
+        ...(notebook.revision ? { expectedRevision: notebook.revision } : {}) }),
     },
   ));
 }
@@ -1672,7 +1678,8 @@ export async function replaceSessionNotebook(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ notebook }),
+      body: JSON.stringify({ notebook: { pages: notebook.pages },
+        ...(notebook.revision ? { expectedRevision: notebook.revision } : {}) }),
     },
   ));
 }

@@ -242,18 +242,64 @@ def _note_path(client: ControlClient, args: argparse.Namespace) -> str:
 
 
 def _note_command(client: ControlClient, args: argparse.Namespace) -> dict[str, Any]:
+    action = {"append": "post", "set": "update"}.get(args.action, args.action)
     payload: dict[str, Any] | None = None
-    if args.action == "post":
+    page_id = getattr(args, "page_id", None)
+    if page_id is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", page_id):
+        raise ControlError("page id must contain 1..64 ASCII letters, numbers, hyphens or underscores")
+    revision = args.revision
+    if revision is not None:
+        if revision.startswith("@"):
+            revision = _json_object(revision).get("revision")
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+            raise ControlError("--revision must be a revision from notes get, or @a saved response file")
+    if action in {"post", "update", "add-page"}:
+        if args.file is not None and not args.file.strip():
+            raise ControlError("--file cannot be blank")
         text = (args.text if args.text is not None else
                 Path(args.file).read_text(encoding="utf-8") if args.file is not None and args.file != "-" else
-                sys.stdin.read())
-        if not text.strip():
+                sys.stdin.read() if args.stdin or args.file == "-" else "")
+        if action == "post" and not text.strip():
             raise ControlError("note text cannot be blank")
-        payload = {"text": text}
-        if args.page_id is not None:
-            payload["pageId"] = args.page_id
+        payload = {"text" if action == "post" else "content": text}
+    if action == "replace":
+        payload = {"notebook": _json_object(args.json_payload)}
+    elif action == "clear":
+        payload = {"content": ""} if page_id else {}
+    elif action == "rename-page":
+        payload = {"name": args.name}
+    elif action == "delete-page":
+        payload = {}
+    elif action == "reorder":
+        payload = {"pageIds": args.page_ids}
+    if payload is not None and revision is not None:
+        payload["expectedRevision"] = revision
     path = _note_path(client, args)
-    return client.request("POST" if args.action == "post" else "GET", path, payload)
+    if action == "pages":
+        if args.offset < 0 or not 1 <= args.limit <= 128:
+            raise ControlError("--offset must be nonnegative and --limit must be 1..128")
+        path += f"/pages?offset={args.offset}&limit={args.limit}"
+        if revision is not None:
+            path += f"&revision={revision}"
+    elif action == "post" and page_id is not None:
+        assert payload is not None
+        payload["pageId"] = page_id
+    elif action == "add-page":
+        assert payload is not None
+        payload["name"] = args.name
+        if page_id is not None:
+            payload["id"] = page_id
+        if args.after_page_id is not None:
+            payload["afterPageId"] = args.after_page_id
+        path += "/pages"
+    elif page_id is not None:
+        path += f"/pages/{_segment(page_id)}"
+    method = {"get": "GET", "pages": "GET", "post": "POST", "add-page": "POST", "replace": "PUT",
+              "update": "PATCH", "rename-page": "PATCH", "delete-page": "DELETE", "reorder": "PATCH",
+              "clear": "PATCH" if page_id else "DELETE"}[action]
+    if action == "get" and revision is not None:
+        path += f"?revision={revision}"
+    return client.request(method, path, payload)
 
 
 def _record_identity(record: dict[str, Any], pane_id: str | None = None) -> dict[str, Any]:
@@ -567,21 +613,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=10, help="HTTP timeout in seconds")
     commands = parser.add_subparsers(dest="resource", required=True)
     commands.add_parser("capabilities")
-    notes = commands.add_parser("notes", aliases=["scratchpad"], help="read scratchpads or append text without replacing pages")
+    notes = commands.add_parser("notes", aliases=["scratchpad"], help="read and manage scoped notebooks and their pages")
     note_commands = notes.add_subparsers(dest="action", required=True)
-    for action in ("get", "post"):
-        note = note_commands.add_parser(action)
+    for action in ("get", "pages", "post", "update", "replace", "clear", "add-page", "rename-page", "delete-page", "reorder"):
+        aliases = {"post": ["append"], "update": ["set"]}.get(action, [])
+        note = note_commands.add_parser(action, aliases=aliases)
         note.add_argument("--scope", choices=("global", "common", "workspace", "session"), required=True)
         target = note.add_mutually_exclusive_group()
         target.add_argument("--workspace", help="saved workspace ID; defaults to the current session's workspace")
         target.add_argument("--session", help="native session name; defaults to the current tmux pane's session")
         target.add_argument("--pane", help="resolve current session/workspace using this pane instead of TMUX_PANE")
-        if action == "post":
-            text = note.add_mutually_exclusive_group(required=True)
+        note.add_argument("--revision", required=action not in {"get", "pages", "post"},
+                          help="revision from notes get, or @a saved response file; required for edits")
+        if action in {"post", "update", "add-page"}:
+            text = note.add_mutually_exclusive_group(required=action != "add-page")
             text.add_argument("--text", help="literal note text")
             text.add_argument("--file", help="read UTF-8 note text from this file, or - for stdin")
             text.add_argument("--stdin", action="store_true", help="read literal note text from stdin")
-            note.add_argument("--page-id", help="existing notebook page ID; defaults to its first page")
+        if action in {"get", "post", "update", "add-page", "rename-page", "delete-page"}:
+            note.add_argument("--page-id", required=action in {"update", "rename-page", "delete-page"},
+                              help="existing page ID (or an optional new ID for add-page)")
+        if action == "pages":
+            note.add_argument("--offset", type=int, default=0)
+            note.add_argument("--limit", type=int, default=50)
+        if action in {"add-page", "rename-page"}:
+            note.add_argument("--name", required=True, help="page name")
+        if action == "add-page":
+            note.add_argument("--after-page-id", help="insert after this page; defaults to the end")
+        if action == "replace":
+            note.add_argument("--json", dest="json_payload", required=True, help="whole notebook JSON {pages: [...]}, @file or - for stdin")
+        if action == "reorder":
+            note.add_argument("--page-ids", nargs="+", required=True, help="every existing page ID in the desired order")
+        if action == "clear":
+            clear_target = note.add_mutually_exclusive_group(required=True)
+            clear_target.add_argument("--page-id", help="clear one page's text, preserving its name and ID")
+            clear_target.add_argument("--all-pages", action="store_true", help="clear text on all pages, preserving their names and IDs")
     work_links = commands.add_parser("work-links", help="discover session links and agent refresh instructions")
     work_link_commands = work_links.add_subparsers(dest="action", required=True)
     context = work_link_commands.add_parser("context", help="discover links/config; defaults to this tmux pane")

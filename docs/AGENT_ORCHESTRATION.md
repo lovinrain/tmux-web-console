@@ -125,8 +125,8 @@ the documented JSON API for operations without a dedicated CLI command.
 
 ## Scratchpad posting
 
-Use the trusted control credential to read or append text to the Common/global,
-saved-workspace, or live-session scratchpad. `scratchpad` is an alias for `notes`:
+Use the trusted control credential to read and manage the Common/global,
+saved-workspace, or live-session notebook. `scratchpad` is an alias for `notes`:
 
 ```bash
 muxdeckctl notes post --scope global --text 'xxxx'
@@ -144,18 +144,48 @@ tab. Outside tmux, with ambiguous linked sessions, or with a remote server,
 provide `--session`, `--workspace`, or an explicit server `--pane`. Workspace
 scope requires a saved workspace. Explicit workspace targets are IDs.
 
-Posts append to the first notebook page. Use `notes get` to discover page IDs,
-then `--page-id PAGE_ID` to post to another existing page. Text can come from
-`--text`, a UTF-8 `--file` (`-` means stdin), or `--stdin`. Neither the CLI nor
-the API retries a write. After uncertain delivery, read the notebook before
-deciding whether to post again. Refresh already-open browser pages to see
-external posts before editing; the existing browser editor replaces its saved
-notebook snapshot. Agent access permits read/append, while browser credentials
-are required for replacement. Callback-only credentials do not allow notes.
+Every command accepts the same scope/target flags. Use an explicit workspace or
+session when working across multiple targets. Page IDs are stable; page names
+may repeat. Text sources are `--text`, UTF-8 `--file` (`-` means stdin), or
+`--stdin`.
 
-The underlying operations are `GET`/`POST /api/common-note`,
-`GET`/`POST /api/workspaces/{workspaceId}/note`, and
-`GET`/`POST /api/sessions/{session}/note`. See [the API contract](API.md#notes-and-notebooks).
+| Command | Behavior and extra arguments |
+| --- | --- |
+| `notes get` | Full notebook and revision; `--page-id ID` reads only one page. |
+| `notes pages` | Page metadata with `--offset 0 --limit 50`; `nextOffset` continues pagination. Optional `--revision REV` detects a changed listing. |
+| `notes post` (alias `append`) | Append text to the first page, or `--page-id ID`; optional `--revision REV`. |
+| `notes update` (alias `set`) | `--page-id ID` plus a text source replaces only that page's text. |
+| `notes add-page` | `--name NAME`, optional text source, `--page-id NEW_ID`, and `--after-page-id ID`. |
+| `notes rename-page` | `--page-id ID --name NAME`. |
+| `notes clear` | `--page-id ID` clears one page, or `--all-pages` clears every page's text while keeping IDs/names/order. |
+| `notes delete-page` | `--page-id ID`; deleting the last page is rejected. |
+| `notes reorder` | `--page-ids FIRST SECOND ...` must include every existing ID exactly once. |
+| `notes replace` | `--json @notebook.json` overrides the entire notebook with `{ "pages": [{ "id", "name", "content" }] }`. Literal JSON or `-` for stdin also works. |
+
+All mutations except append require `--revision REV` from the last read or
+successful write. `--revision @snapshot.json` reads the `revision` field from a
+saved response. Keep each response in a new file to avoid truncating an input
+snapshot through shell redirection:
+
+```bash
+muxdeckctl notes get --scope workspace --workspace WORKSPACE_ID > before.json
+muxdeckctl notes update --scope workspace --workspace WORKSPACE_ID --page-id main \
+  --file revised.md --revision @before.json > after.json
+muxdeckctl notes add-page --scope workspace --workspace WORKSPACE_ID --name Results \
+  --file results.md --revision @after.json > with-results.json
+```
+
+A `409` requires a fresh read and a decision about the newer text; the CLI never
+silently fetches a newer revision to force a stale edit through. No writes retry
+automatically. After uncertain delivery, read before deciding whether to write
+again. Clearing notebook text leaves captures/images to their separate actions.
+Callback-only credentials do not allow notes. Reload browser pages after the
+upgrade to use revision-aware saves; the editor retains conflicting drafts and
+offers **Reload latest** with confirmation before discarding unsaved changes.
+
+The routes are `/api/common-note`, `/api/workspaces/{workspaceId}/note`, and
+`/api/sessions/{session}/note`, plus their `/pages` and `/pages/{pageId}` resources.
+See [the full API contract](API.md#notes-and-notebooks).
 
 ## Session tickets, PRs, and documents
 

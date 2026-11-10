@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -69,6 +70,7 @@ _PANE_LAYOUTS_OMITTED = object()
 _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
 _EXPECTED_UPDATED_AT_OMITTED = object()
+_NOTE_REVISION_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
 WORKSPACE_SCHEMA_VERSION = 16
 WORKSPACE_STORE_UNAVAILABLE_MESSAGE = (
@@ -616,6 +618,12 @@ class ScopedNoteNotebook:
 
     def to_dict(self) -> dict[str, list[dict[str, str]]]:
         return {"pages": [page.to_dict() for page in self.pages]}
+
+
+def scoped_note_revision(notebook: dict[str, list[dict[str, str]]]) -> str:
+    """An opaque content revision, including page identity, names and order."""
+    encoded = json.dumps(notebook, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def default_scoped_note_notebook(note: str = "") -> ScopedNoteNotebook:
@@ -2112,6 +2120,119 @@ class WorkspaceStore:
                 for link in self._session_quick_links.get(session_name, ())
             ]
 
+    def _scoped_notebook(self, scope: str, identity: str | None) -> dict[str, list[dict[str, str]]]:
+        if scope == "common":
+            if identity is not None:
+                raise ValueError("the common note has no scoped identity")
+            return self.get_common_notebook()
+        if not isinstance(identity, str):
+            raise TypeError(f"{scope} identity must be a string")
+        if scope == "workspace":
+            return self.get_workspace_notebook(identity)
+        if scope == "session":
+            return self.get_session_notebook(identity)
+        raise ValueError("unknown note scope")
+
+    def read_notebook(self, scope: str, *, identity: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            notebook = self._scoped_notebook(scope, identity)
+            return {"note": notebook["pages"][0]["content"], "notebook": notebook,
+                    "revision": scoped_note_revision(notebook)}
+
+    def edit_notebook(
+        self,
+        scope: str,
+        operation: str,
+        changes: dict[str, Any],
+        *,
+        identity: str | None = None,
+        expected_revision: object = _NOTE_REVISION_OMITTED,
+    ) -> dict[str, Any]:
+        """Apply one notebook operation with its revision check inside the write lock."""
+        with self._lock:
+            self._ensure_writable()
+            current = self._scoped_notebook(scope, identity)
+            revision = scoped_note_revision(current)
+            if expected_revision is not _NOTE_REVISION_OMITTED:
+                if (not isinstance(expected_revision, str) or len(expected_revision) != 64
+                        or any(char not in "0123456789abcdef" for char in expected_revision)):
+                    raise ValueError("expectedRevision must be a revision returned by a notebook read")
+                if expected_revision != revision:
+                    raise WorkspaceResourceConflictError(
+                        "These notes changed elsewhere. Read the latest notebook before saving again."
+                    )
+            pages = [dict(page) for page in current["pages"]]
+            selected_id = changes.get("pageId", pages[0]["id"])
+            page: dict[str, str] | None = None
+            if operation in {"append", "update-page", "delete-page"}:
+                selected_id = _validate_scoped_note_page_id(selected_id, "pageId")
+                page = next((item for item in pages if item["id"] == selected_id), None)
+                if page is None:
+                    raise WorkspaceResourceNotFoundError("pageId does not name a notebook page")
+            if operation == "append":
+                assert page is not None
+                text = normalize_scoped_note(changes["text"], "text")
+                if not text:
+                    raise ValueError("text cannot be blank")
+                existing = page["content"]
+                separator = "" if not existing or existing.endswith("\n\n") else (
+                    "\n" if existing.endswith("\n") else "\n\n"
+                )
+                page["content"] = existing + separator + text
+            elif operation == "replace":
+                if "notebook" in changes:
+                    pages = validate_scoped_note_notebook(changes["notebook"]).to_dict()["pages"]
+                else:
+                    pages[0]["content"] = normalize_scoped_note(changes["note"])
+            elif operation == "create-page":
+                selected_id = _validate_scoped_note_page_id(changes.get("id", uuid.uuid4().hex), "id")
+                if any(item["id"] == selected_id for item in pages):
+                    raise WorkspaceResourceConflictError("a notebook page with that id already exists")
+                added = {"id": selected_id,
+                         "name": _normalize_scoped_note_page_name(changes["name"], "name"),
+                         "content": normalize_scoped_note(changes.get("content", ""), "content")}
+                position = len(pages)
+                if "afterPageId" in changes:
+                    after = _validate_scoped_note_page_id(changes["afterPageId"], "afterPageId")
+                    position = next((i + 1 for i, item in enumerate(pages) if item["id"] == after), -1)
+                    if position < 0:
+                        raise WorkspaceResourceNotFoundError("afterPageId does not name a notebook page")
+                pages.insert(position, added)
+            elif operation == "update-page":
+                assert page is not None
+                if "name" in changes:
+                    page["name"] = _normalize_scoped_note_page_name(changes["name"], "name")
+                if "content" in changes:
+                    page["content"] = normalize_scoped_note(changes["content"], "content")
+            elif operation == "delete-page":
+                if len(pages) == 1:
+                    raise WorkspaceResourceConflictError("the last notebook page cannot be deleted; clear its text instead")
+                pages = [item for item in pages if item["id"] != selected_id]
+            elif operation == "clear":
+                pages = [{**item, "content": ""} for item in pages]
+            elif operation == "reorder":
+                order = changes["pageIds"]
+                if (not isinstance(order, list) or not all(isinstance(item, str) for item in order)
+                        or len(order) != len(pages) or set(order) != {item["id"] for item in pages}):
+                    raise ValueError("pageIds must contain every existing page id exactly once")
+                by_id = {item["id"]: item for item in pages}
+                pages = [by_id[page_id] for page_id in order]
+            else:
+                raise ValueError("unknown notebook operation")
+            updated = validate_scoped_note_notebook({"pages": pages}).to_dict()
+            if scope == "common":
+                saved = self.replace_common_notebook(updated)
+            else:
+                assert identity is not None
+                saved = (self.replace_workspace_notebook(identity, updated) if scope == "workspace"
+                         else self.replace_session_notebook(identity, updated))
+            result: dict[str, Any] = {"note": saved["pages"][0]["content"], "notebook": saved,
+                                      "revision": scoped_note_revision(saved)}
+            if operation in {"append", "create-page", "update-page"}:
+                result["pageId"] = selected_id
+                result["page"] = next(item for item in saved["pages"] if item["id"] == selected_id)
+            return result
+
     def append_note(
         self,
         scope: str,
@@ -2120,51 +2241,13 @@ class WorkspaceStore:
         identity: str | None = None,
         page_id: object = None,
     ) -> dict[str, list[dict[str, str]]]:
-        """Append to one saved page while holding the same lock as replacements."""
-        content = normalize_scoped_note(text, "text")
-        if not content:
-            raise ValueError("text cannot be blank")
-        selected_id = (
-            _validate_scoped_note_page_id(page_id, "pageId")
-            if page_id is not None else None
-        )
-        with self._lock:
-            self._ensure_writable()
-            if scope == "common":
-                if identity is not None:
-                    raise ValueError("the common note has no scoped identity")
-                notebook = self._notes.common
-            elif scope == "workspace":
-                if not isinstance(identity, str):
-                    raise TypeError("workspace identity must be a string")
-                identity = _validate_workspace_id(identity)
-                self._find(identity)
-                notebook = self._notes.workspaces.get(identity, default_scoped_note_notebook())
-            elif scope == "session":
-                if not isinstance(identity, str):
-                    raise TypeError("session identity must be a string")
-                identity = validate_session_name(identity)
-                notebook = self._notes.sessions.get(identity, default_scoped_note_notebook())
-            else:
-                raise ValueError("unknown note scope")
-            selected_id = selected_id or notebook.pages[0].id
-            target = next((page for page in notebook.pages if page.id == selected_id), None)
-            if target is None:
-                raise ValueError("pageId does not name a notebook page")
-            separator = "" if not target.content or target.content.endswith("\n\n") else (
-                "\n" if target.content.endswith("\n") else "\n\n"
-            )
-            updated = replace(notebook, pages=tuple(
-                replace(page, content=page.content + separator + content)
-                if page.id == selected_id else page
-                for page in notebook.pages
-            )).to_dict()
-            if scope == "common":
-                return self.replace_common_notebook(updated)
-            assert identity is not None
-            if scope == "workspace":
-                return self.replace_workspace_notebook(identity, updated)
-            return self.replace_session_notebook(identity, updated)
+        changes: dict[str, Any] = {"text": text}
+        if page_id is not None:
+            changes["pageId"] = page_id
+        try:
+            return self.edit_notebook(scope, "append", changes, identity=identity)["notebook"]
+        except WorkspaceResourceNotFoundError as error:
+            raise ValueError(str(error)) from error
 
     def replace_session_quick_links(
         self,

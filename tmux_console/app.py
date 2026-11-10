@@ -149,6 +149,7 @@ from .note_capture_api import (
     create_note_capture_service,
     register_note_capture_routes,
 )
+from .notes_api import note_api_capabilities, register_note_routes
 from .pty_bridge import PtyBridge, clamp_size
 from .scrollback import (
     ScrollbackRecorder,
@@ -236,8 +237,6 @@ from .workspaces import (
     WorkspaceStoreUnavailable,
     WorkspaceTransferConflictError,
     WorkspaceUpdateConflict,
-    normalize_scoped_note,
-    validate_scoped_note_notebook,
     validate_workspace_quick_links,
     workspace_api_capabilities,
 )
@@ -1930,14 +1929,7 @@ def create_app(
                     },
                 },
                 "workspace": workspace_api_capabilities(),
-                "notes": {
-                    "scopes": ["global", "workspace", "session"],
-                    "agentMethods": ["GET", "POST"],
-                    "postOperation": "append",
-                    "defaultPage": "first",
-                    "pageIdSupported": True,
-                    "automaticRetry": False,
-                },
+                "notes": note_api_capabilities(),
                 "workLinks": work_links,
                 "callbackMessages": {
                     "persistent": True,
@@ -4779,96 +4771,8 @@ def create_app(
             return json_error("unable to save workspace quick links", 500)
         return web.json_response({"links": links})
 
-    async def get_common_note(_: web.Request) -> web.Response:
-        try:
-            notebook = app[WORKSPACES_KEY].get_common_notebook()
-        except WorkspaceStoreUnavailable as error:
-            return json_error(str(error), 503)
-        return web.json_response({
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
 
-    async def append_scoped_note(request: web.Request) -> web.Response:
-        try:
-            payload = await request.json()
-        except (ValueError, TypeError, RecursionError):
-            return json_error("request body must be JSON", 400)
-        if not isinstance(payload, dict):
-            return json_error("request body must be an object", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"text", "pageId"})
-        if unknown:
-            return json_error(f"unknown field: {unknown[0]}", 400)
-        if "text" not in payload:
-            return json_error("text is required", 400)
-        scope = "workspace" if "workspace_id" in request.match_info else (
-            "session" if "session" in request.match_info else "common"
-        )
-        identity = request.match_info.get("workspace_id") or request.match_info.get("session")
-        try:
-            if scope == "session":
-                assert identity is not None
-                identity = validate_session_name(identity)
-                async with app[SESSION_RENAME_LOCK_KEY]:
-                    await app[TMUX_KEY].get_session(identity)
-                    notebook = app[WORKSPACES_KEY].append_note(
-                        scope, payload["text"], identity=identity, page_id=payload.get("pageId"),
-                    )
-            else:
-                notebook = app[WORKSPACES_KEY].append_note(
-                    scope, payload["text"], identity=identity, page_id=payload.get("pageId"),
-                )
-        except TmuxSessionNotFoundError as error:
-            return json_error(str(error), 404)
-        except (TmuxError, WorkspaceStoreUnavailable) as error:
-            return json_error(str(error), 503)
-        except WorkspaceNotFoundError as error:
-            return json_error(str(error), 404)
-        except (TypeError, ValueError) as error:
-            return json_error(str(error), 400)
-        except OSError:
-            LOGGER.exception("Unable to append scoped note")
-            return json_error("unable to append note", 500)
-        return web.json_response({
-            "scope": "global" if scope == "common" else scope,
-            "pageId": payload.get("pageId") or notebook["pages"][0]["id"],
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
 
-    async def replace_common_note(request: web.Request) -> web.Response:
-        try:
-            payload = await request.json()
-        except (ValueError, TypeError, RecursionError):
-            return json_error("request body must be JSON", 400)
-        if not isinstance(payload, dict):
-            return json_error("request body must be an object", 400)
-        if "note" not in payload and "notebook" not in payload:
-            return json_error("note or notebook is required", 400)
-        if "note" in payload and "notebook" in payload:
-            return json_error("provide either note or notebook, not both", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"note", "notebook"})
-        if unknown:
-            return json_error(f"unknown field: {unknown[0]}", 400)
-        try:
-            if "notebook" in payload:
-                notebook = app[WORKSPACES_KEY].replace_common_notebook(
-                    payload["notebook"]
-                )
-            else:
-                app[WORKSPACES_KEY].replace_common_note(payload["note"])
-                notebook = app[WORKSPACES_KEY].get_common_notebook()
-        except WorkspaceStoreUnavailable as error:
-            return json_error(str(error), 503)
-        except (TypeError, ValueError) as error:
-            return json_error(str(error), 400)
-        except OSError:
-            LOGGER.exception("Unable to save common note")
-            return json_error("unable to save common note", 500)
-        return web.json_response({
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
 
     async def get_session_quick_links(request: web.Request) -> web.Response:
         session_name = request.match_info["session"]
@@ -4931,141 +4835,9 @@ def create_app(
             return json_error("unable to save session quick links", 500)
         return web.json_response({"links": links})
 
-    async def get_session_note(request: web.Request) -> web.Response:
-        session_name = request.match_info["session"]
-        try:
-            session_name = validate_session_name(session_name)
-        except ValueError as error:
-            return json_error(str(error), 400)
 
-        try:
-            async with app[SESSION_RENAME_LOCK_KEY]:
-                await app[TMUX_KEY].get_session(session_name)
-                notebook = app[WORKSPACES_KEY].get_session_notebook(session_name)
-        except TmuxSessionNotFoundError as error:
-            return json_error(str(error), 404)
-        except TmuxError as error:
-            return json_error(str(error), 503)
-        except WorkspaceStoreUnavailable as error:
-            return json_error(str(error), 503)
-        return web.json_response({
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
 
-    async def replace_session_note(request: web.Request) -> web.Response:
-        session_name = request.match_info["session"]
-        try:
-            payload = await request.json()
-        except (ValueError, TypeError, RecursionError):
-            return json_error("request body must be JSON", 400)
-        if not isinstance(payload, dict):
-            return json_error("request body must be an object", 400)
-        if "note" not in payload and "notebook" not in payload:
-            return json_error("note or notebook is required", 400)
-        if "note" in payload and "notebook" in payload:
-            return json_error("provide either note or notebook, not both", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"note", "notebook"})
-        if unknown:
-            return json_error(f"unknown field: {unknown[0]}", 400)
-        try:
-            session_name = validate_session_name(session_name)
-            if "notebook" in payload:
-                validate_scoped_note_notebook(payload["notebook"])
-            else:
-                normalize_scoped_note(payload["note"])
-        except (TypeError, ValueError) as error:
-            return json_error(str(error), 400)
 
-        try:
-            async with app[SESSION_RENAME_LOCK_KEY]:
-                await app[TMUX_KEY].get_session(session_name)
-                if "notebook" in payload:
-                    notebook = app[WORKSPACES_KEY].replace_session_notebook(
-                        session_name,
-                        payload["notebook"],
-                    )
-                else:
-                    app[WORKSPACES_KEY].replace_session_note(
-                        session_name,
-                        payload["note"],
-                    )
-                    notebook = app[WORKSPACES_KEY].get_session_notebook(
-                        session_name
-                    )
-        except TmuxSessionNotFoundError as error:
-            return json_error(str(error), 404)
-        except TmuxError as error:
-            return json_error(str(error), 503)
-        except WorkspaceStoreUnavailable as error:
-            return json_error(str(error), 503)
-        except (TypeError, ValueError) as error:
-            return json_error(str(error), 400)
-        except OSError:
-            LOGGER.exception("Unable to save note for tmux session %s", session_name)
-            return json_error("unable to save session note", 500)
-        return web.json_response({
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
-
-    async def get_workspace_note(request: web.Request) -> web.Response:
-        try:
-            notebook = app[WORKSPACES_KEY].get_workspace_notebook(
-                request.match_info["workspace_id"]
-            )
-        except WorkspaceStoreUnavailable as error:
-            return json_error(str(error), 503)
-        except WorkspaceNotFoundError as error:
-            return json_error(str(error), 404)
-        except (TypeError, ValueError) as error:
-            return json_error(str(error), 400)
-        return web.json_response({
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
-
-    async def replace_workspace_note(request: web.Request) -> web.Response:
-        try:
-            payload = await request.json()
-        except (ValueError, TypeError, RecursionError):
-            return json_error("request body must be JSON", 400)
-        if not isinstance(payload, dict):
-            return json_error("request body must be an object", 400)
-        if "note" not in payload and "notebook" not in payload:
-            return json_error("note or notebook is required", 400)
-        if "note" in payload and "notebook" in payload:
-            return json_error("provide either note or notebook, not both", 400)
-        unknown = sorted(str(field) for field in set(payload) - {"note", "notebook"})
-        if unknown:
-            return json_error(f"unknown field: {unknown[0]}", 400)
-        try:
-            if "notebook" in payload:
-                notebook = app[WORKSPACES_KEY].replace_workspace_notebook(
-                    request.match_info["workspace_id"],
-                    payload["notebook"],
-                )
-            else:
-                app[WORKSPACES_KEY].replace_workspace_note(
-                    request.match_info["workspace_id"],
-                    payload["note"],
-                )
-                notebook = app[WORKSPACES_KEY].get_workspace_notebook(
-                    request.match_info["workspace_id"]
-                )
-        except WorkspaceStoreUnavailable as error:
-            return json_error(str(error), 503)
-        except WorkspaceNotFoundError as error:
-            return json_error(str(error), 404)
-        except (TypeError, ValueError) as error:
-            return json_error(str(error), 400)
-        except OSError:
-            LOGGER.exception("Unable to save workspace note")
-            return json_error("unable to save workspace note", 500)
-        return web.json_response({
-            "note": notebook["pages"][0]["content"],
-            "notebook": notebook,
-        })
 
     async def workspace_resource_payload(
         request: web.Request,
@@ -6968,9 +6740,6 @@ def create_app(
         f"{prefix}/api/workspace-quick-links",
         replace_common_workspace_quick_links,
     )
-    app.router.add_get(f"{prefix}/api/common-note", get_common_note)
-    app.router.add_post(f"{prefix}/api/common-note", append_scoped_note)
-    app.router.add_put(f"{prefix}/api/common-note", replace_common_note)
     app.router.add_get(
         f"{prefix}/api/sessions/{session_segment}/quick-links",
         get_session_quick_links,
@@ -6979,17 +6748,10 @@ def create_app(
         f"{prefix}/api/sessions/{session_segment}/quick-links",
         replace_session_quick_links,
     )
-    app.router.add_get(
-        f"{prefix}/api/sessions/{session_segment}/note",
-        get_session_note,
-    )
-    app.router.add_post(
-        f"{prefix}/api/sessions/{session_segment}/note",
-        append_scoped_note,
-    )
-    app.router.add_put(
-        f"{prefix}/api/sessions/{session_segment}/note",
-        replace_session_note,
+    register_note_routes(
+        app, prefix, store=app[WORKSPACES_KEY], tmux=app[TMUX_KEY],
+        rename_lock=app[SESSION_RENAME_LOCK_KEY],
+        is_control=lambda request: CONTROL_AUTHORIZATION_REQUEST_KEY in request,
     )
     app.router.add_get(f"{prefix}/api/workspaces", list_workspaces)
     app.router.add_post(f"{prefix}/api/workspaces", create_workspace)
@@ -7108,18 +6870,6 @@ def create_app(
     app.router.add_put(
         f"{prefix}/api/workspaces/{{workspace_id}}/quick-links",
         replace_workspace_quick_links,
-    )
-    app.router.add_get(
-        f"{prefix}/api/workspaces/{{workspace_id}}/note",
-        get_workspace_note,
-    )
-    app.router.add_post(
-        f"{prefix}/api/workspaces/{{workspace_id}}/note",
-        append_scoped_note,
-    )
-    app.router.add_put(
-        f"{prefix}/api/workspaces/{{workspace_id}}/note",
-        replace_workspace_note,
     )
     app.router.add_get(f"{prefix}/api/workspaces/{{workspace_id}}/stream", workspace_stream)
     app.router.add_get(f"{prefix}/api/workspaces/{{workspace_id}}", get_workspace)

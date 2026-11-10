@@ -1738,6 +1738,90 @@ def test_scoped_notebook_validation_rejects_invalid_values(notebook, message):
         validate_scoped_note_notebook(notebook)
 
 
+@pytest.mark.parametrize("operation,changes", [
+    ("update-page", {"pageId": "main", "name": " "}),
+    ("update-page", {"pageId": "main", "content": "bad\x00text"}),
+    ("update-page", {"pageId": "missing", "content": "No"}),
+    ("create-page", {"name": "New", "id": "main"}),
+    ("create-page", {"name": "New", "id": "bad/id"}),
+    ("create-page", {"name": "New", "afterPageId": "missing"}),
+    ("create-page", {"name": "x" * 81}),
+    ("reorder", {"pageIds": ["main", "main"]}),
+    ("reorder", {"pageIds": ["missing"]}),
+    ("reorder", {"pageIds": [None]}),
+    ("replace", {"notebook": {"pages": []}}),
+    ("delete-page", {"pageId": "main"}),
+])
+def test_notebook_operations_reject_bad_changes_without_mutation(tmp_path, operation, changes):
+    from tmux_console.workspaces import WorkspaceResourceNotFoundError
+
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_note("Keep")
+    before = store.read_notebook("common")
+    with pytest.raises((TypeError, ValueError, WorkspaceResourceNotFoundError)):
+        store.edit_notebook("common", operation, changes, expected_revision=before["revision"])
+    assert store.read_notebook("common") == before
+
+
+@pytest.mark.parametrize("revision", [None, True, 0, "", "bad", "x" * 64])
+def test_notebook_operations_validate_revision_values(tmp_path, revision):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    before = store.read_notebook("common")
+    with pytest.raises(ValueError, match="expectedRevision"):
+        store.edit_notebook("common", "clear", {}, expected_revision=revision)
+    assert store.read_notebook("common") == before
+
+
+def test_notebook_revisions_fence_concurrent_replacements_and_preserve_other_pages(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tmux_console.workspaces import WorkspaceResourceConflictError
+
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_notebook({"pages": [{"id": "main", "name": "Main", "content": "Base"},
+                                             {"id": "other", "name": "Other", "content": "Keep"}]})
+    revision = store.read_notebook("common")["revision"]
+
+    def update(index):
+        try:
+            store.edit_notebook("common", "update-page", {"pageId": "main", "content": f"Update {index}"}, expected_revision=revision)
+            return True
+        except WorkspaceResourceConflictError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        assert sum(executor.map(update, range(40))) == 1
+    saved = store.read_notebook("common")
+    assert saved["notebook"]["pages"][1] == {"id": "other", "name": "Other", "content": "Keep"}
+    assert saved == WorkspaceStore(store.path).read_notebook("common")
+
+
+def test_notebook_page_limit_and_persistence_failure_preserve_revision(tmp_path, monkeypatch):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    store.replace_common_notebook({"pages": [{"id": f"page-{i}", "name": f"Page {i}", "content": ""} for i in range(128)]})
+    before = store.read_notebook("common")
+    with pytest.raises(ValueError, match="128 pages"):
+        store.edit_notebook("common", "create-page", {"name": "Too many"}, expected_revision=before["revision"])
+    assert store.read_notebook("common") == before
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_persist", fail)
+    with pytest.raises(OSError, match="disk full"):
+        store.edit_notebook("common", "update-page", {"pageId": "page-0", "content": "No"}, expected_revision=before["revision"])
+    assert store.read_notebook("common") == WorkspaceStore(store.path).read_notebook("common") == before
+
+
+def test_notebook_revision_is_independent_of_other_workspace_changes(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    before = store.read_notebook("common")
+    store.create_workspace(name="Unrelated", tabs=[], active_session=None)
+    saved = store.edit_notebook("common", "create-page", {"name": "New"}, expected_revision=before["revision"])
+    assert len(saved["notebook"]["pages"]) == 2
+    assert saved["pageId"] != "main"
+
+
 @pytest.mark.parametrize(
     ("validator", "value", "message"),
     [

@@ -1432,6 +1432,7 @@ describe("saved workspace API", () => {
   });
 
   it("loads and replaces scoped note notebooks with legacy response fallback", async () => {
+    const revision = "a".repeat(64);
     const notebook = {
       pages: [
         { id: "main", name: "Plan", content: "First" },
@@ -1446,28 +1447,30 @@ describe("saved workspace API", () => {
       .mockResolvedValueOnce(response({
         note: "First",
         notebook,
+        revision,
       }))
       .mockResolvedValueOnce(response({ note: "Legacy" }))
       .mockImplementation(async () => response({
         note: "First",
         notebook,
+        revision,
       }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getCommonNotebook()).resolves.toEqual(notebook);
+    await expect(getCommonNotebook()).resolves.toEqual({ ...notebook, revision });
     await expect(getWorkspaceNotebook("workspace/id")).resolves.toEqual({
       pages: [{ id: "main", name: "Page 1", content: "Legacy" }],
     });
-    await expect(getSessionNotebook("agent/name")).resolves.toEqual(notebook);
-    await expect(replaceCommonNotebook(notebook)).resolves.toEqual(notebook);
-    await expect(replaceWorkspaceNotebook("workspace/id", notebook))
-      .resolves.toEqual(notebook);
-    await expect(replaceSessionNotebook("agent/name", notebook))
-      .resolves.toEqual(notebook);
+    await expect(getSessionNotebook("agent/name")).resolves.toEqual({ ...notebook, revision });
+    await expect(replaceCommonNotebook({ ...notebook, revision })).resolves.toEqual({ ...notebook, revision });
+    await expect(replaceWorkspaceNotebook("workspace/id", { ...notebook, revision }))
+      .resolves.toEqual({ ...notebook, revision });
+    await expect(replaceSessionNotebook("agent/name", { ...notebook, revision }))
+      .resolves.toEqual({ ...notebook, revision });
 
     expect(fetchMock.mock.calls[3][1]).toEqual(expect.objectContaining({
       method: "PUT",
-      body: JSON.stringify({ notebook }),
+      body: JSON.stringify({ notebook, expectedRevision: revision }),
     }));
     expect(fetchMock.mock.calls[4][0]).toBe(
       `${BASE_PATH}/api/workspaces/workspace%2Fid/note`,
@@ -1475,6 +1478,20 @@ describe("saved workspace API", () => {
     expect(fetchMock.mock.calls[5][0]).toBe(
       `${BASE_PATH}/api/sessions/agent%2Fname/note`,
     );
+    for (const call of fetchMock.mock.calls.slice(3)) {
+      expect(JSON.parse(call[1].body)).toEqual({ notebook, expectedRevision: revision });
+    }
+  });
+
+  it("keeps notebook revision protection after a conflict and never retries a replacement", async () => {
+    const snapshot = { pages: [{ id: "main", name: "Page 1", content: "Draft" }], revision: "a".repeat(64) };
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ error: "Notes changed elsewhere" }), {
+      status: 409, headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(replaceCommonNotebook(snapshot)).rejects.toMatchObject({ status: 409 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ notebook: { pages: snapshot.pages }, expectedRevision: snapshot.revision });
   });
 
   it("creates a workspace with its ordered tabs and active session", async () => {

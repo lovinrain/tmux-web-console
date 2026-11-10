@@ -670,7 +670,9 @@ Each note scope is a notebook with one or more ordered pages:
 ```
 
 `PUT` accepts exactly one of `note` (legacy first-page text) or `notebook`.
-Responses contain both `note` and `notebook`.
+Full-notebook responses contain `note`, `notebook`, and an opaque `revision`.
+The legacy `note` is the current first page's text. Successful reads and writes
+also return the quoted revision in `ETag`.
 
 | Method and route | Scope |
 | --- | --- |
@@ -678,28 +680,49 @@ Responses contain both `note` and `notebook`.
 | `GET`, `PUT /api/workspaces/{workspaceId}/note` | One saved workspace. |
 | `GET`, `PUT /api/sessions/{session}/note` | One live session. |
 
-Trusted agents can use the control credential to `GET` these notebooks and
-`POST` text to any of the same three routes. `POST` appends to the first page by
-default; an optional `pageId` selects another existing page. It preserves page
-IDs, names, order, and all other pages. Line endings are normalized and a blank
-line separates the new text from existing text. Blank posts and unknown pages
-are rejected. Whole-notebook `PUT` remains available to browser authentication.
-The callback-only credential cannot read or post notes.
+The same operations work for all three scopes. Below, `BASE` means one of those
+note routes; the normal installation prefixes it with `/mux`. The trusted
+control credential permits every operation. Callback-only credentials permit none.
 
-```json
-{"text":"Agent findings\nDetails go here","pageId":"results"}
-```
+| Method and route | Payload/query | Behavior |
+| --- | --- | --- |
+| `GET BASE` | None | Read all ordered pages, legacy first-page text, and revision. |
+| `GET BASE/pages` | `offset=0`, `limit=50`, optional `revision` | List page metadata (`id`, `name`, `characters`) without downloading text. Returns `offset`, `limit`, `total`, `nextOffset`, and `revision`. Limit is 1–128. |
+| `GET BASE/pages/{pageId}` | Optional `revision` | Read one `{page, revision}`. |
+| `POST BASE` | `{text, pageId?, expectedRevision?}` | Append to the first or selected page. Normalize line endings and separate existing/new text with a blank line. Blank posts are rejected. |
+| `PUT BASE` | `{notebook, expectedRevision}` or `{note, expectedRevision}` | Replace/override the entire notebook, or only legacy first-page text. The legacy form preserves all other pages and metadata. |
+| `PATCH BASE` | `{pageIds: [...], expectedRevision}` | Reorder pages. Every existing ID must appear exactly once. |
+| `DELETE BASE` | `{expectedRevision}` | Clear text on every page, preserving page IDs, names, and order. |
+| `POST BASE/pages` | `{name, content?, id?, afterPageId?, expectedRevision}` | Add a page (`201`). Defaults to empty text, a generated ID, and the end of the notebook. |
+| `PATCH BASE/pages/{pageId}` | `{name?, content?, expectedRevision}` | Rename and/or replace one page's text. At least one field is required; other pages are preserved. Empty `content` clears that page. |
+| `DELETE BASE/pages/{pageId}` | `{expectedRevision}` | Remove one page. The last remaining page cannot be deleted; clear it instead. |
 
-The response contains `scope` (`global`, `workspace`, or `session`), `pageId`,
-the legacy first-page `note`, and the saved `notebook`. Appends are serialized
-under the workspace store lock and use its atomic persistence. No state-schema
-change is required. Each accepted POST adds text; requests are not idempotent
-and clients must not automatically retry an uncertain delivery. `GET
-/api/capabilities` advertises this behavior under `notes`.
+All agent mutations except append require a revision from the last read or
+successful write. Supply it as `expectedRevision` in JSON or as one strong
+`If-Match: "<revision>"` header. Missing preconditions return `428`; stale
+revisions return `409` without modifying data. A revision covers text, page IDs,
+names and order, and is checked inside the same store lock as the write.
+Optional `revision` on page-list/page reads detects changes between paginated
+requests (`409`); continue with a fresh listing after a conflict.
 
-The existing browser note editor keeps a local snapshot and uses last-writer-wins
-replacement. Reload an already-open browser page to see externally posted notes
-before editing them. See [agent scratchpad commands](AGENT_ORCHESTRATION.md#scratchpad-posting).
+Mutations return the saved full notebook and new revision; append, page creation,
+and page update also include `pageId` and `page`. Unknown targets/pages return
+`404` (the compatible append route retains `400` for an unknown page). Invalid
+payloads, IDs, names, page limits or permutations return `400`; duplicate page
+IDs and deletion of the last page return `409`. The existing limits remain 128
+pages, 64-character ASCII IDs, and 80-character names. Names may be duplicated;
+address pages by stable ID. Clearing/deleting text pages does not delete sticky-note
+captures or images, which use their existing separate APIs.
+
+Writes reuse atomic persistence without a state-schema change. No operation
+automatically retries; after uncertain delivery, read before deciding to write
+again. `GET /api/capabilities` advertises these contracts under `notes`.
+
+The current browser editor sends its saved snapshot revision, preserves a
+conflicted draft, and offers **Reload latest** before further saving. Reloading
+asks before discarding unsaved changes. Legacy browser PUTs without a revision
+retain compatibility behavior, so reload already-open browser pages after this
+upgrade to enable conflict protection. See [agent commands](AGENT_ORCHESTRATION.md#scratchpad-posting).
 
 ## Tmux sessions
 

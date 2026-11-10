@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  ApiRequestError,
   getCommonNotebook,
   getSessionNotebook,
   getWorkspaceNotebook,
@@ -185,7 +186,8 @@ interface StickyNoteEditorProps {
   sidebarOpen: boolean;
   defaultSize: NoteDefaultSize;
   onDefaultSizeChange: (value: NoteDefaultSize) => void;
-  onSave: (notebook: ScopedNoteNotebook) => Promise<void>;
+  onSave: (notebook: ScopedNoteNotebook) => Promise<ScopedNoteNotebook>;
+  onReload: () => Promise<ScopedNoteNotebook>;
   onClose: () => void;
   onPinnedChange: (pinned: boolean) => void;
   onPositionChange: (position: FloatingNotePosition) => void;
@@ -475,7 +477,7 @@ function newPageId(): string {
 }
 
 function notebookSignature(notebook: ScopedNoteNotebook): string {
-  return JSON.stringify(notebook);
+  return JSON.stringify(notebook.pages);
 }
 
 function scopeDescription(scope: NoteScope, scopeName: string): string {
@@ -590,6 +592,7 @@ function StickyNoteEditor({
   defaultSize,
   onDefaultSizeChange,
   onSave,
+  onReload,
   onClose,
   onPinnedChange,
   onPositionChange,
@@ -611,6 +614,8 @@ function StickyNoteEditor({
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const draftRef = useRef(notebook);
+  const savedRevisionRef = useRef(notebook.revision);
+  const conflictRef = useRef(false);
   const lastQueuedRef = useRef(notebookSignature(notebook));
   const failedValueRef = useRef<string | null>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
@@ -625,6 +630,7 @@ function StickyNoteEditor({
   const [draft, setDraft] = useState(notebook);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveConflict, setSaveConflict] = useState(false);
   const [closing, setClosing] = useState(false);
   const [lastSizePreset, setLastSizePreset] = useState<NoteSizePreset>(
     defaultSize === "remember" ? "small" : defaultSize,
@@ -682,7 +688,13 @@ function StickyNoteEditor({
 
     const operation = queueRef.current
       .catch(() => undefined)
-      .then(() => onSaveRef.current(value));
+      .then(async () => {
+        if (conflictRef.current) throw new ApiRequestError("Notes changed elsewhere. Reload the latest notes before saving.", 409);
+        const saved = await onSaveRef.current({ ...value,
+          ...(savedRevisionRef.current ? { revision: savedRevisionRef.current } : {}) });
+        savedRevisionRef.current = saved.revision;
+        return saved;
+      });
     queueRef.current = operation.then(() => undefined, () => undefined);
     const result = operation.then(
       () => {
@@ -699,9 +711,15 @@ function StickyNoteEditor({
       (error: unknown) => {
         queuedRequestCountRef.current -= 1;
         failedValueRef.current = signature;
+        if (error instanceof ApiRequestError && error.status === 409) {
+          conflictRef.current = true;
+          if (mountedRef.current) setSaveConflict(true);
+        }
         if (mountedRef.current && version === requestVersionRef.current) {
           setSaveState("error");
-          setSaveError(errorMessage(error, "Unable to save this note."));
+          setSaveError(conflictRef.current
+            ? "Notes changed elsewhere. Your draft is kept here. Reload the latest notes before saving."
+            : errorMessage(error, "Unable to save this note."));
         }
         return false;
       },
@@ -713,6 +731,10 @@ function StickyNoteEditor({
   const scheduleSave = useCallback((value: ScopedNoteNotebook) => {
     const signature = notebookSignature(value);
     clearAutosaveTimer();
+    if (conflictRef.current) {
+      setSaveState("error");
+      return;
+    }
     if (
       signature === lastQueuedRef.current
       && failedValueRef.current !== signature
@@ -766,6 +788,41 @@ function StickyNoteEditor({
     setClosing(false);
   }, [clearAutosaveTimer, commitPageName, enqueueSave, onClose]);
 
+  const reloadLatest = async () => {
+    if (!window.confirm("Reload the latest saved notes? Your unsaved changes in this window will be discarded.")) return;
+    clearAutosaveTimer();
+    closingRef.current = true;
+    setClosing(true);
+    ++requestVersionRef.current;
+    try {
+      await queueRef.current;
+      const saved = await onReload();
+      if (!mountedRef.current) return;
+      savedRevisionRef.current = saved.revision;
+      conflictRef.current = false;
+      failedValueRef.current = null;
+      latestRequestRef.current = null;
+      lastQueuedRef.current = notebookSignature(saved);
+      draftRef.current = saved;
+      setDraft(saved);
+      const page = saved.pages.find((candidate) => candidate.id === selectedPageId) ?? saved.pages[0];
+      pageNameRef.current = page.name;
+      setPageName(page.name);
+      onSelectedPageChange(page.id);
+      setSaveConflict(false);
+      setSaveError(null);
+      setSaveState("saved");
+    } catch (error) {
+      if (mountedRef.current) {
+        setSaveState("error");
+        setSaveError(errorMessage(error, "Unable to reload these notes."));
+      }
+    } finally {
+      closingRef.current = false;
+      if (mountedRef.current) setClosing(false);
+    }
+  };
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -783,12 +840,13 @@ function StickyNoteEditor({
       const latestDraft = draftRef.current;
       const latestSignature = notebookSignature(latestDraft);
       if (
-        latestSignature !== lastQueuedRef.current
-        || failedValueRef.current === latestSignature
+        !conflictRef.current && (latestSignature !== lastQueuedRef.current
+        || failedValueRef.current === latestSignature)
       ) {
         void queueRef.current
           .catch(() => undefined)
-          .then(() => onSaveRef.current(latestDraft))
+          .then(() => conflictRef.current ? undefined : onSaveRef.current({ ...latestDraft,
+            ...(savedRevisionRef.current ? { revision: savedRevisionRef.current } : {}) }))
           .catch(() => undefined);
       }
     };
@@ -1362,6 +1420,7 @@ function StickyNoteEditor({
             ref={textareaRef}
             id={textareaId}
             value={selectedPage.content}
+            disabled={closing}
             placeholder="Pin a reminder, command, handoff, or next step..."
             onChange={(event) => updateSelectedPageContent(event.target.value)}
           />
@@ -1400,7 +1459,12 @@ function StickyNoteEditor({
         >
           <TrashIcon /> Clear
         </button>
-        {saveState === "error" && (
+        {saveConflict ? (
+          <button type="button" className="secondary-button" disabled={closing}
+            onClick={() => void reloadLatest()}>
+            Reload latest
+          </button>
+        ) : saveState === "error" && (
           <button
             type="button"
             className="secondary-button"
@@ -1604,19 +1668,30 @@ export function ScopedStickyNotes({
     if (scope === "common") {
       const saved = await replaceCommonNotebook(notebook);
       setCommon({ identity: "common", notebook: saved, loading: false, error: null });
-      return;
+      return saved;
     }
     if (scope === "workspace") {
       const saved = await replaceWorkspaceNotebook(identity, notebook);
       if (workspaceId === identity) {
         setWorkspace({ identity, notebook: saved, loading: false, error: null });
       }
-      return;
+      return saved;
     }
     const saved = await replaceSessionNotebook(identity, notebook);
     if (sessionName === identity) {
       setSession({ identity, notebook: saved, loading: false, error: null });
     }
+    return saved;
+  };
+
+  const reloadNote = async (scope: NoteScope, identity: string) => {
+    const saved = scope === "common" ? await getCommonNotebook()
+      : scope === "workspace" ? await getWorkspaceNotebook(identity) : await getSessionNotebook(identity);
+    const snapshot = { identity, notebook: saved, loading: false, error: null };
+    if (scope === "common") setCommon(snapshot);
+    else if (scope === "workspace" && workspaceId === identity) setWorkspace(snapshot);
+    else if (scope === "session" && sessionName === identity) setSession(snapshot);
+    return saved;
   };
 
   const currentWorkspace: NoteSnapshot = workspace.identity === workspaceId
@@ -1846,6 +1921,7 @@ export function ScopedStickyNotes({
           defaultSize={defaultSize}
           onDefaultSizeChange={setDefaultSize}
           onSave={(notebook) => saveNote(editor.scope, editor.identity, notebook)}
+          onReload={() => reloadNote(editor.scope, editor.identity)}
           onClose={() => closeEditor(editor)}
           onPinnedChange={(pinned) => {
             writeNoteWindowPreference(editor.key, {

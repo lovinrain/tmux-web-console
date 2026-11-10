@@ -102,6 +102,46 @@ test("page sidebar keeps named pages easy to find and opens the main page by def
   await expect(editor.getByRole("textbox", { name: "Note", exact: true })).toHaveValue("Validate release notes");
 });
 
+test("agent notebook changes cannot be overwritten by a stale browser draft", async ({ page, request }) => {
+  const endpoint = "/mux/api/common-note";
+  const initialPages = [
+    { id: "main", name: "Page 1", content: "Original main page" },
+    { id: "handoff", name: "Handoff", content: "Preserve this second page" },
+  ];
+  expect((await request.put(endpoint, { data: { notebook: { pages: initialPages } } })).ok()).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(sessionUrl);
+  await page.getByRole("button", { name: "Edit common note" }).click();
+  const editor = page.getByRole("dialog", { name: "Common", exact: true });
+  const text = editor.getByRole("textbox", { name: "Note", exact: true });
+  await expect(text).toHaveValue("Original main page");
+  expect((await request.post(endpoint, { data: { text: "Agent appended", pageId: "main" } })).ok()).toBe(true);
+  const appended = await (await request.get(endpoint)).json();
+  expect((await request.post(endpoint + "/pages", { data: {
+    name: "Agent results", id: "agent-results", content: "New agent page", expectedRevision: appended.revision,
+  } })).status()).toBe(201);
+
+  await text.fill("My stale browser draft");
+  await expect(editor.getByRole("status")).toContainText("Your draft is kept here");
+  await expect(text).toHaveValue("My stale browser draft");
+  const protectedNotes = await (await request.get(endpoint)).json();
+  expect(protectedNotes.notebook.pages).toEqual([
+    { ...initialPages[0], content: "Original main page\n\nAgent appended" }, initialPages[1],
+    { id: "agent-results", name: "Agent results", content: "New agent page" },
+  ]);
+  page.once("dialog", (dialog) => dialog.accept());
+  await editor.getByRole("button", { name: "Reload latest", exact: true }).click();
+  await expect(text).toHaveValue("Original main page\n\nAgent appended");
+  await expect(editor.getByRole("complementary", { name: "Notebook pages" }).getByRole("button", { name: /Agent results/ })).toBeVisible();
+  await text.fill("Updated after reload");
+  await expect(editor.getByRole("status")).toHaveText("Saved");
+  const saved = await (await request.get(endpoint)).json();
+  expect(saved.notebook.pages).toEqual([
+    { ...initialPages[0], content: "Updated after reload" }, initialPages[1],
+    { id: "agent-results", name: "Agent results", content: "New agent page" },
+  ]);
+});
+
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 600 }]) {
   test(`tmux line buttons move one row without shell input at ${viewport.width}px`, async ({ page }) => {
     test.setTimeout(60_000);

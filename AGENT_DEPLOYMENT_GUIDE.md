@@ -652,9 +652,11 @@ groups and collapse state, named pane layouts and assignments, workspace-specifi
 quick links, active session, and last-active time. A separate common quick-link list is pinned across all
 workspaces. Session-specific quick-link lists are keyed by native tmux name and
 follow the active session across temporary and saved workspaces. Common,
-workspace, and session notes use the same scopes and last-write-wins replacement;
-deleting a workspace also deletes only its workspace-scoped note. Quick-link
-and note replacements retain those semantics. Saved-workspace pages subscribe
+workspace, and session notes use the same scopes. The current notebook editor
+and agent mutations use saved revisions to reject stale replacements; legacy
+browser note PUTs without a revision retain compatibility behavior. Deleting a
+workspace also deletes only its workspace-scoped note. Quick-link replacements
+retain last-write-wins semantics. Saved-workspace pages subscribe
 to `/api/workspaces/{workspaceId}/stream` for complete initial/reconnect and
 changed snapshots, with a four-second polling fallback and refocus refresh.
 The proxy must allow unbuffered SSE for this route as well as the session and
@@ -1342,6 +1344,19 @@ the explicit `400` error `unknown field: expectedUpdatedAt`; it remembers that
 decision for the current page, including page-exit requests. It never strips
 the check on `409`. Reload after the backend upgrade to clear that compatibility
 decision and restore guarded writes.
+
+### Notebook management
+
+Agent notebook/page management requires the updated backend and frontend
+together. Build the frontend in staging and reload existing browser pages to
+enable revision-aware notebook saves. Revisions are computed from the existing
+notebook representation; no workspace schema or SQLite migration is required.
+Agents can read/list pages, append, update, replace, clear, add/rename/delete
+pages, and reorder them through the existing authenticated note routes. Writes
+other than append require a saved revision. The editor retains a conflicting
+draft and asks before reloading the latest notebook. Preserve the existing
+notebook JSON and capture database/images in the ordinary private rollback
+backup. See [notebook APIs](docs/API.md#notes-and-notebooks).
 
 ### Automatic session completion
 
