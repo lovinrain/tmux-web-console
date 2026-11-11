@@ -2046,15 +2046,17 @@ a:focus-visible {
 }
 
 .session-messages-toggle.has-memos {
-  color: var(--cyan);
-  border-color: rgba(104, 223, 208, 0.34);
+  color: #f1fffc;
+  background: #145f57;
+  border-color: #75d7c7;
+  box-shadow: 0 0 0 2px rgba(104, 223, 208, 0.16);
 }
 
 .session-messages-toggle.has-queued {
-  color: var(--amber);
-  background: rgba(255, 182, 72, 0.08);
-  border-color: rgba(255, 182, 72, 0.48);
-  box-shadow: 0 0 14px rgba(255, 182, 72, 0.1);
+  color: #342000;
+  background: #ffc266;
+  border-color: #ffe2b3;
+  box-shadow: 0 0 0 2px rgba(255, 182, 72, 0.2);
 }
 
 .session-messages-toggle svg {
@@ -2070,23 +2072,25 @@ a:focus-visible {
   top: -6px;
   right: -5px;
   display: grid;
-  min-width: 16px;
-  height: 16px;
-  padding-inline: 3px;
+  min-width: 22px;
+  height: 22px;
+  padding-inline: 4px;
   place-items: center;
-  color: #0b0e0c;
-  background: var(--cyan);
+  color: #fff;
+  background: #c62762;
   border: 2px solid #20261e;
   border-radius: 99px;
   font-family: "JetBrains Mono Variable", monospace;
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
 }
 
 .session-messages-toggle > span.queued {
-  min-width: 22px;
-  color: #171108;
-  background: var(--amber);
+  min-width: 28px;
+  color: #fff;
+  background: #b92b20;
 }
 
 .session-tmux-name {
@@ -13715,34 +13719,44 @@ html.workspace-tab-rail-resizing * {
   color: var(--cyan);
 }
 
+.memo-key.has-memos,
+.composer-memo-open.has-memos {
+  color: #f1fffc;
+  background: #145f57;
+  border-color: #75d7c7;
+  box-shadow: 0 0 0 2px rgba(104, 223, 208, 0.16);
+}
+
 .memo-key.has-queued {
-  color: #ffd59b;
-  background: rgba(255, 182, 72, 0.08);
-  border-color: rgba(255, 182, 72, 0.42);
+  color: #342000;
+  background: #ffc266;
+  border-color: #ffe2b3;
+  box-shadow: 0 0 0 2px rgba(255, 182, 72, 0.2);
 }
 
 .memo-count {
   display: inline-grid;
-  min-width: 18px;
-  height: 18px;
+  min-width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   padding-inline: 5px;
   place-items: center;
-  color: #bff7ee;
-  background: rgba(104, 223, 208, 0.12);
-  border: 1px solid rgba(104, 223, 208, 0.3);
+  color: #fff;
+  background: #c62762;
+  border: 2px solid #ffe2ed;
   border-radius: 99px;
   font-family: "JetBrains Mono Variable", monospace;
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
 }
 
 .memo-count.queued {
-  color: #241809;
-  background: var(--amber);
-  border-color: #ffd08d;
+  color: #fff;
+  background: #b92b20;
+  border-color: #ffe4d5;
 }
 
 .snippet-key {
@@ -15782,9 +15796,10 @@ html.history-resizing * {
   }
 
   .composer-memo-open.has-queued {
-    color: #ffd59b;
-    background: rgba(255, 182, 72, 0.08);
-    border-color: rgba(255, 182, 72, 0.42);
+    color: #342000;
+    background: #ffc266;
+    border-color: #ffe2b3;
+    box-shadow: 0 0 0 2px rgba(255, 182, 72, 0.2);
   }
 
   .console-shell[data-mobile-focus="input"] .composer-actions-primary .primary-button,
@@ -15913,25 +15928,27 @@ html.history-resizing * {
   }
 
   .mobile-console-focus-button.input.has-queued-memos {
-    color: #ffd59b;
-    border-color: rgba(255, 182, 72, 0.5);
+    color: #342000;
+    background: #ffc266;
+    border-color: #ffe2b3;
   }
 
   .mobile-console-memo-count {
     display: inline-grid;
     min-width: 24px;
-    height: 18px;
+    height: 22px;
     flex: 0 0 auto;
     padding-inline: 5px;
     place-items: center;
-    color: #241809;
-    background: var(--amber);
-    border: 1px solid #ffd08d;
+    color: #fff;
+    background: #b92b20;
+    border: 2px solid #ffe4d5;
     border-radius: 99px;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 850;
     line-height: 1;
     white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
   }
 
   .mobile-console-focus-button.input.has-queued-memos > span:not(.mobile-console-focus-attention) {
@@ -16314,9 +16331,9 @@ html.history-resizing * {
   }
 
   .mobile-console-focus-button.input.has-queued-memos .mobile-console-memo-count {
-    min-width: 20px;
+    min-width: 22px;
     padding-inline: 3px;
-    font-size: 7px;
+    font-size: 9px;
   }
 
 }

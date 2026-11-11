@@ -701,9 +701,9 @@ describe("InputBar", () => {
     expect(onToggleMobileDistractionFree).toHaveBeenCalledTimes(2);
   });
 
-  it("makes queued memo work visible and directly reachable from mobile input", () => {
+  it("highlights memo content and clears the indicators when the memo is emptied", () => {
     const onOpenMessages = vi.fn();
-    render(
+    const view = render(
       <InputBar
         {...props}
         messageCount={4}
@@ -726,6 +726,22 @@ describe("InputBar", () => {
     });
     expect(within(shortcuts).getAllByRole("button")[0]).toBe(shortcutMemo);
     expect(shortcutMemo).toHaveClass("has-queued");
+    expect(mobileMemo).toHaveClass("has-queued");
+
+    view.rerender(<InputBar {...props} messageCount={4} onOpenMessages={onOpenMessages} />);
+    for (const button of [mobileMemo, shortcutMemo]) {
+      expect(button).toHaveClass("has-memos");
+      expect(button).not.toHaveClass("has-queued");
+      expect(button.querySelector(".memo-count")).toHaveTextContent("4");
+    }
+    expect(mobileMemo).toHaveAccessibleName("Open memo, 4 saved");
+    expect(shortcutMemo).toHaveAccessibleName("Open memoranda, 4 saved");
+
+    view.rerender(<InputBar {...props} onOpenMessages={onOpenMessages} />);
+    for (const button of [mobileMemo, shortcutMemo]) {
+      expect(button).not.toHaveClass("has-memos", "has-queued");
+      expect(button.querySelector(".memo-count")).toBeNull();
+    }
   });
 
   it("signals queued work inside the compact M action in distraction-free input", () => {

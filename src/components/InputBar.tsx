@@ -1116,7 +1116,9 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
               type="button"
               className={queuedMessageCount > 0
                 ? "composer-mobile-control composer-memo-open has-queued"
-                : "composer-mobile-control composer-memo-open"}
+                : messageCount > 0
+                  ? "composer-mobile-control composer-memo-open has-memos"
+                  : "composer-mobile-control composer-memo-open"}
               aria-label={queuedMessageCount > 0
                 ? `Open memo, ${queuedMessageCount} queued`
                 : messageCount > 0
@@ -1398,7 +1400,11 @@ function TerminalInputShortcuts({
         {additionalShortcuts}
         <button
           type="button"
-          className={queuedMessageCount > 0 ? "key-button memo-key has-queued" : "key-button memo-key"}
+          className={queuedMessageCount > 0
+            ? "key-button memo-key has-queued"
+            : messageCount > 0
+              ? "key-button memo-key has-memos"
+              : "key-button memo-key"}
           onClick={onOpenMessages}
           disabled={!onOpenMessages}
           aria-label={queuedMessageCount > 0

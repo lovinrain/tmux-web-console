@@ -782,27 +782,28 @@ html[data-theme="light"] .session-messages-toggle:hover {
 }
 
 html[data-theme="light"] .session-messages-toggle.has-memos {
-  color: #006d64;
-  background: #e6f3f0;
-  border-color: #7baea8;
+  color: #fff;
+  background: #08796d;
+  border-color: #00584f;
+  box-shadow: 0 0 0 2px rgba(8, 121, 109, 0.18);
 }
 
 html[data-theme="light"] .session-messages-toggle.has-queued {
-  color: #8b5005;
-  background: #fff1d4;
-  border-color: #c99049;
-  box-shadow: 0 0 12px rgba(185, 108, 11, 0.12);
+  color: #512d00;
+  background: #ffcf70;
+  border-color: #ad6209;
+  box-shadow: 0 0 0 2px rgba(173, 98, 9, 0.18);
 }
 
 html[data-theme="light"] .session-messages-toggle > span {
   color: #fff;
-  background: #087a70;
+  background: #c62762;
   border-color: #f3efe7;
 }
 
 html[data-theme="light"] .session-messages-toggle > span.queued {
-  color: #fff9ef;
-  background: #9f5b08;
+  color: #fff;
+  background: #b92b20;
 }
 
 html[data-theme="light"] .session-meta span + span::before {
@@ -1550,16 +1551,16 @@ html[data-theme="light"] .mobile-console-focus-button.input.needs-input:not([ari
 }
 
 html[data-theme="light"] .mobile-console-focus-button.input.has-queued-memos {
-  color: #8b5005;
-  background: #fff7e8;
-  border-color: #c99049;
+  color: #512d00;
+  background: #ffcf70;
+  border-color: #ad6209;
 }
 
 html[data-theme="light"] .mobile-console-memo-count,
 html[data-theme="light"] .memo-count.queued {
-  color: #fff9ef;
-  background: #9f5b08;
-  border-color: #7a4300;
+  color: #fff;
+  background: #b92b20;
+  border-color: #ffe4d5;
 }
 
 html[data-theme="light"] .mobile-console-focus-attention {
@@ -3914,9 +3915,10 @@ html[data-theme="light"] .composer-memo-open {
 }
 
 html[data-theme="light"] .composer-memo-open.has-queued {
-  color: #8b5005;
-  background: #fff1d4;
-  border-color: #c99049;
+  color: #512d00;
+  background: #ffcf70;
+  border-color: #ad6209;
+  box-shadow: 0 0 0 2px rgba(173, 98, 9, 0.18);
 }
 
 html[data-theme="light"] .composer-memo-queued-count {
@@ -4144,16 +4146,25 @@ html[data-theme="light"] .memo-key {
   color: #006d64;
 }
 
+html[data-theme="light"] .memo-key.has-memos,
+html[data-theme="light"] .composer-memo-open.has-memos {
+  color: #fff;
+  background: #08796d;
+  border-color: #00584f;
+  box-shadow: 0 0 0 2px rgba(8, 121, 109, 0.18);
+}
+
 html[data-theme="light"] .memo-key.has-queued {
-  color: #8b5005;
-  background: #fff1d4;
-  border-color: #c99049;
+  color: #512d00;
+  background: #ffcf70;
+  border-color: #ad6209;
+  box-shadow: 0 0 0 2px rgba(173, 98, 9, 0.18);
 }
 
 html[data-theme="light"] .memo-count {
-  color: #006d64;
-  background: #dff1ed;
-  border-color: #7baea8;
+  color: #fff;
+  background: #c62762;
+  border-color: #ffe2ed;
 }
 
 /* History, compose, session-title, and missing-session overlays */
