@@ -21,6 +21,7 @@ import {
   getGlobalCallbackSessions,
   getWorkspace,
   listSessions,
+  preArchiveSession,
   recordClosedSessionTab,
   recreateSession,
   renameSession,
@@ -511,11 +512,20 @@ function withoutTerminatedSessions(
  */
 function attachedRecoverableSessions(
   sessions: Session[],
+  terminated: readonly SessionIdentity[] = [],
+  previous: readonly RecoverableSession[] = [],
 ): RecoverableSession[] | null {
   const attached = (
     sessions as Session[] & { recoverableSessions?: RecoverableSession[] }
   ).recoverableSessions;
-  return Array.isArray(attached) ? attached : null;
+  if (!Array.isArray(attached)) return null;
+  // An older inventory may still contain the identity just pre-archived here.
+  // Keep its recovery controls until a snapshot observes the closure.
+  const retained = previous.filter((record) => record.preArchived
+    && !attached.some((item) => item.name === record.name)
+    && sessions.some((session) => session.name === record.name
+      && terminated.some((identity) => hasSessionIdentity(session, identity))));
+  return retained.length ? [...attached, ...retained] : attached;
 }
 
 function isDashboardPath(path: string): boolean {
@@ -1347,7 +1357,7 @@ function AppRoutes() {
       knownSessionsRef.current = currentSessions;
       setKnownSessions(currentSessions);
       if (receivedSessionInventory) setSessionInventoryLoaded(true);
-      const hydratedRecoverable = attachedRecoverableSessions(sessions);
+      const hydratedRecoverable = attachedRecoverableSessions(sessions, terminatedSessionsRef.current, recoverableSessionsRef.current);
       if (hydratedRecoverable) setRecoverableSessions(hydratedRecoverable);
       failedWorkspaceActivity.current = null;
       lastSavedWorkspaceActivity.current = null;
@@ -1366,7 +1376,8 @@ function AppRoutes() {
       const paneRoute = parsePaneLayoutRoute(current.path);
       let path = current.path;
       if (route || (resume && isDashboardPath(current.path))) {
-        path = route && !resume && forkSyncGroupFromSearch(current.search)
+        path = route && !resume && (forkSyncGroupFromSearch(current.search)
+          || hydratedRecoverable?.some((record) => record.name === route.sessionName && record.preArchived))
           && savedWorkspace.tabs.includes(route.sessionName)
           ? sessionPath(route.sessionName, route.recentsOpen)
           : landingSession
@@ -3880,6 +3891,26 @@ function AppRoutes() {
     }
   }, [closeSessionTab]);
 
+  const preArchiveOpenSession = useCallback(async (target: Session) => {
+    const recovery = await preArchiveSession(target);
+    if (!appMounted.current) return;
+    const identity: SessionIdentity = {
+      id: target.id, created: target.created,
+      serverStarted: target.serverStarted, serverPid: target.serverPid,
+    };
+    terminatedSessionsRef.current.push(identity);
+    const remaining = knownSessionsRef.current.filter((session) => !hasSessionIdentity(session, identity));
+    knownSessionsRef.current = remaining;
+    setKnownSessions(remaining);
+    setRecoverableSessions((current) => {
+      const next = current.filter((item) => item.name !== target.name);
+      if (!remaining.some((session) => session.name === target.name)) next.push(recovery);
+      recoverableSessionsRef.current = next;
+      return next;
+    });
+    setRecoveryRefreshKey((key) => key + 1);
+  }, []);
+
   const requestBulkSessionAction = useCallback((action: BulkSessionAction, names: string[]) => {
     const selected = new Set(names);
     const active = parseSessionRoute(currentLocation().path)?.sessionName;
@@ -3941,7 +3972,7 @@ function AppRoutes() {
       sessions,
       terminatedSessionsRef.current,
     );
-    const recoverable = attachedRecoverableSessions(sessions);
+    const recoverable = attachedRecoverableSessions(sessions, terminatedSessionsRef.current, recoverableSessionsRef.current);
     if (recoverable) setRecoverableSessions(recoverable);
     knownSessionsRef.current = currentSessions;
     setKnownSessions(currentSessions);
@@ -3952,7 +3983,7 @@ function AppRoutes() {
   const refreshSessionInventory = useCallback(async () => {
     const sessions = await listSessions();
     if (!appMounted.current) return;
-    const recoverable = attachedRecoverableSessions(sessions);
+    const recoverable = attachedRecoverableSessions(sessions, terminatedSessionsRef.current, recoverableSessionsRef.current);
     if (recoverable) setRecoverableSessions(recoverable);
     const currentSessions = withoutTerminatedSessions(
       sessions,
@@ -4923,6 +4954,7 @@ function AppRoutes() {
         onSaveWorkspace={saveCurrentWorkspace}
         onRenameWorkspace={renameCurrentWorkspace}
         onSessionTerminated={terminateOpenSession}
+        onSessionPreArchived={preArchiveOpenSession}
       />
     );
 
@@ -4955,6 +4987,9 @@ function AppRoutes() {
             keyboardShortcutsEnabled={active}
             onActivate={onActivate}
             terminalFocusRequest={focusRequestToken}
+            sessionRecovery={recoveryByName.get(sessionName) ?? null}
+            onRecreateSession={() => recreateWorkspaceSession({ name: sessionName, recovery: recoveryByName.get(sessionName) })}
+            recreateSessionBusy={recreatingSession === sessionName}
             sessionSnapshot={knownSessions.find(
               (session) => session.name === sessionName,
             ) ?? null}
@@ -4979,6 +5014,7 @@ function AppRoutes() {
               || workspacePersistenceState === "error"}
             onSessionRenamed={renameOpenSession}
             onSessionTerminated={terminateOpenSession}
+            onSessionPreArchived={preArchiveOpenSession}
             onSessionCopied={completeCopiedSession}
             onSplitWorkspace={splitSessionIntoNewWorkspace}
             forkSync={forkSync}
@@ -5102,6 +5138,7 @@ function AppRoutes() {
           || workspacePersistenceState === "error"}
         onSessionRenamed={renameOpenSession}
         onSessionTerminated={terminateOpenSession}
+        onSessionPreArchived={preArchiveOpenSession}
         onSessionCopied={completeCopiedSession}
         onSplitWorkspace={splitSessionIntoNewWorkspace}
         forkSync={forkSync}
@@ -5192,6 +5229,7 @@ function AppRoutes() {
             onSaveWorkspace={saveCurrentWorkspace}
             onRenameWorkspace={renameCurrentWorkspace}
             onSessionTerminated={terminateOpenSession}
+            onSessionPreArchived={preArchiveOpenSession}
           />
         )}
       />
@@ -5289,6 +5327,7 @@ function AppRoutes() {
             onSaveWorkspace={saveCurrentWorkspace}
             onRenameWorkspace={renameCurrentWorkspace}
             onSessionTerminated={terminateOpenSession}
+            onSessionPreArchived={preArchiveOpenSession}
           />
         )}
       />

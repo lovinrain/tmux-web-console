@@ -2213,6 +2213,7 @@ html[data-theme="light"] .workspace-tab-window-move:disabled {
   color: #9b9f96;
 }
 
+html[data-theme="light"] .workspace-tab-pre-archive,
 html[data-theme="light"] .workspace-tab-close {
   color: #7c8478;
 }

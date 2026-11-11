@@ -18,6 +18,7 @@ import type {
 } from "../api";
 import {
   AddSessionsIcon,
+  ArchiveIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -72,6 +73,7 @@ import { NEW_SESSION_PANEL_ID } from "./NewSessionScreen";
 import { SessionAgentIcon, sessionAgentInfo } from "./SessionAgentIcon";
 import { SessionHistoryDialog } from "./SessionHistoryDialog";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
+import { SessionPreArchiveDialog } from "./SessionPreArchiveDialog";
 import {
   WorkspaceCommandPalette
 } from "./WorkspaceCommandPalette";
@@ -302,6 +304,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [saveAfterRecents, setSaveAfterRecents] = useState(false);
   const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
+  const [preArchiveTarget, setPreArchiveTarget] = useState<Session | null>(null);
   const [recentsQuery, setRecentsQuery] = useState("");
   const [reorderAnnouncement, setReorderAnnouncement] = useState("");
   const [windowActionError, setWindowActionError] = useState("");
@@ -1650,6 +1653,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     }
     const index = openSessions.indexOf(sessionName);
     const session = sessionsByName.get(sessionName);
+    const preArchived = !session && recoverableSessions.some((item) => item.name === sessionName && item.preArchived);
     const state = workspaceSessionState(session);
     const dead = state === "dead";
     const title = tabTitle(sessionName, sessionsByName);
@@ -1682,6 +1686,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         className={active ? "workspace-tab active" : "workspace-tab"}
         data-workspace-session-name={sessionName}
         data-session-dead={dead ? "true" : undefined}
+        data-session-pre-archived={preArchived ? "true" : undefined}
         data-ready-unchecked={readyUnchecked ? "true" : undefined}
         data-session-parent={tree?.parentName}
         data-session-depth={tree?.depth}
@@ -1712,7 +1717,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           role="tab"
           aria-selected={active}
           aria-controls={active ? "muxdeck-active-console" : undefined}
-          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[state]}` : ", unavailable"}${readyUnchecked ? ", unread" : ""}${selectedForMove ? deadTabsOnlySelected ? ", selected for cleanup" : ", selected for moving" : ""}`}
+          aria-label={`${title}${group ? `, ${group.name} group` : ""}${session ? `, ${STATE_LABELS[state]}` : preArchived ? ", Pre-archived" : ", unavailable"}${readyUnchecked ? ", unread" : ""}${selectedForMove ? deadTabsOnlySelected ? ", selected for cleanup" : ", selected for moving" : ""}`}
           aria-keyshortcuts={directShortcutAria(tabShortcutBinding)}
           title={`${tabShortcut ? `${title} (${tabShortcut})` : title} · ${agentLabel}${dead ? " · Dead: all tmux panes have exited" : ""}${readyUnchecked ? " · Unread — open this session to mark it as read" : ""}${tree ? ` · ${tree.description}` : ""}${desktopTabMultiSelectEnabled ? " - Shift-click a range; Ctrl/Cmd-click individual tabs" : ""}`}
           tabIndex={active ? 0 : -1}
@@ -1769,6 +1774,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           />
           <span className="workspace-tab-title">{title}</span>
           {dead && <span className="workspace-tab-dead-label" aria-hidden="true">Dead</span>}
+          {preArchived && <span className="workspace-tab-pre-archived-label" aria-hidden="true">Pre-archived</span>}
           <SessionAgentIcon session={session} />
         </button>
         {tree && onReparentSession && props.onTransferSelectedSessions && (
@@ -1846,6 +1852,14 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
               <WindowCopyIcon />
             </button>
           </span>
+        )}
+        {tabActionsVisible && session && props.onSessionPreArchived && (
+          <button type="button" className="workspace-tab-pre-archive"
+            onClick={() => setPreArchiveTarget(session)}
+            aria-label={`Pre-archive ${title} session`} aria-haspopup="dialog"
+            title="Pre-archive session and keep its tab for recovery">
+            <ArchiveIcon />
+          </button>
         )}
         {tabActionsVisible && session && onSessionTerminated && (
           <button
@@ -2805,7 +2819,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
         closeDisabledReason={props.foldCloseDisabledReason}
         onRecover={props.onRecoverFoldSession ? (name, mode) => props.onRecoverFoldSession!(previewFold.id, name, mode) : undefined} />}
 
-      {recentsOpen && !terminateTarget && !groupDialog && !previewFold && (
+      {recentsOpen && !terminateTarget && !preArchiveTarget && !groupDialog && !previewFold && (
         <WorkspaceRecentsDialog
           {...props}
           sessionsByName={sessionsByName}
@@ -2841,6 +2855,11 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
           onTerminate={terminateSelectedSession}
           onFallbackFocus={focusTerminateReplacement}
         />
+      )}
+      {preArchiveTarget && props.onSessionPreArchived && (
+        <SessionPreArchiveDialog session={preArchiveTarget}
+          onClose={() => setPreArchiveTarget(null)} onPreArchive={props.onSessionPreArchived}
+          onFallbackFocus={focusTerminateReplacement} />
       )}
 
       {saveDialogOpen && onSaveWorkspace && workspacePersistenceState === "unsaved" && (

@@ -81,6 +81,13 @@ async def test_real_muxdeck_receiver_rejects_delayed_old_launch_and_input(author
         missing = await client.post("/mux/api/sessions/mxp-worker/input", json={**IDENTITY, "text": "omitted"})
         assert missing.status == 400
         assert not tmux.inputs
+        archive_identity = {key: value for key, value in IDENTITY.items() if not key.startswith("pane")}
+        stale_archive = await client.post("/mux/api/sessions/mxp-worker/pre-archive", json={
+            **archive_identity, "muxpilot": envelope(context(authority)),
+        })
+        assert stale_archive.status == 409
+        missing_archive = await client.post("/mux/api/sessions/mxp-worker/pre-archive", json=archive_identity)
+        assert missing_archive.status == 400
         fresh = context(authority, owner="replacement", generation=replacement["generation"])
         accepted = await client.post("/mux/api/sessions/mxp-worker/input", json={**input_body, "muxpilot": envelope(fresh)})
         assert accepted.status == 200

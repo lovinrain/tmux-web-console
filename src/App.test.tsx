@@ -15,6 +15,7 @@ import {
   getWorkspace,
   getWorkspaceQuickLinks,
   listSessions,
+  preArchiveSession,
   listWorkspaces,
   reviewGlobalCallbackSession,
   subscribeToCallbackSessions,
@@ -53,6 +54,7 @@ vi.mock("./api", async (importOriginal) => {
     getWorkspace: vi.fn(),
     getWorkspaceQuickLinks: vi.fn(),
     listSessions: vi.fn(),
+    preArchiveSession: vi.fn(),
     recordClosedSessionTab: vi.fn(async () => undefined),
     recreateSession: vi.fn(),
     renameSession: vi.fn(),
@@ -82,6 +84,7 @@ const listSessionsMock = vi.mocked(listSessions);
 const recreateSessionMock = vi.mocked(recreateSession);
 const listWorkspacesMock = vi.mocked(listWorkspaces);
 const terminateSessionMock = vi.mocked(terminateSession);
+const preArchiveSessionMock = vi.mocked(preArchiveSession);
 const transferSessionToWorkspaceMock = vi.mocked(transferSessionToWorkspace);
 const transferSessionsToWorkspaceMock = vi.mocked(transferSessionsToWorkspace);
 const reviewGlobalCallbackSessionMock = vi.mocked(reviewGlobalCallbackSession);
@@ -97,6 +100,7 @@ const updateWorkspaceActivityMock = vi.mocked(updateWorkspaceActivity);
 
 let pendingNewSessionCompletion: ((session: string, sessionId?: string) => void) | null = null;
 let consoleSessionRecovery: RecoverableSession | null = null;
+let reportSessionPreArchive: ((session: Session) => Promise<void>) | null = null;
 let recreateConsoleSession: (() => void | Promise<void>) | null = null;
 let forgetConsoleSession: (() => void | Promise<void>) | null = null;
 let forgetDashboardSession: ((recovery: RecoverableSession) => Promise<void>) | null = null;
@@ -311,6 +315,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     onSessionWorkspaceTransfer,
     onSessionRenamed,
     onSessionTerminated,
+    onSessionPreArchived,
     onSessionCopied,
     copySessionDisabled = false,
     onSplitWorkspace,
@@ -376,6 +381,7 @@ vi.mock("./components/ConsoleScreen", () => ({
       serverStarted: number,
       serverPid: number,
     ) => Promise<void>;
+    onSessionPreArchived?: (session: Session) => Promise<void>;
     onSessionCopied?: (
       sourceName: string,
       sessionName: string,
@@ -404,6 +410,7 @@ vi.mock("./components/ConsoleScreen", () => ({
     reportSessionWorkspaceTransfer = onSessionWorkspaceTransfer ?? null;
     reportSessionRename = onSessionRenamed ?? null;
     reportSessionTerminate = onSessionTerminated ?? null;
+    reportSessionPreArchive = onSessionPreArchived ?? null;
     reportSessionCopy = onSessionCopied ?? null;
     consoleSessionRecovery = sessionRecovery ?? null;
     recreateConsoleSession = onRecreateSession ?? null;
@@ -721,6 +728,7 @@ describe("App routing", () => {
     vi.mocked(renameSession).mockReset();
     listWorkspacesMock.mockReset();
     terminateSessionMock.mockReset();
+    preArchiveSessionMock.mockReset();
     transferSessionToWorkspaceMock.mockReset();
     transferSessionsToWorkspaceMock.mockReset();
     reviewGlobalCallbackSessionMock.mockReset();
@@ -767,6 +775,7 @@ describe("App routing", () => {
     pendingNewSessionCompletion = null;
     reportSessionRename = null;
     reportSessionTerminate = null;
+    reportSessionPreArchive = null;
     reportSessionCopy = null;
     reportKnownSessions = null;
     navigateConsoleSessionHistory = null;
@@ -3205,6 +3214,32 @@ describe("App routing", () => {
     expectWorkspaceSearch("", []);
   });
 
+  it("pre-archives the active session in place and preserves recovery through stale inventory", async () => {
+    replaceUrl(sessionUrl("alpha", "?tab=alpha&tab=beta"));
+    const target = session("alpha", "$1");
+    const other = session("beta", "$2");
+    const recovery = recoverable("alpha", { preArchived: true });
+    preArchiveSessionMock.mockResolvedValue(recovery);
+    render(<App />);
+    act(() => reportKnownSessions?.(withRecovery([target, other], [])));
+    await act(async () => { await reportSessionPreArchive?.(target); });
+
+    expect(preArchiveSessionMock).toHaveBeenCalledWith(target);
+    expect(terminateSessionMock).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+    expect(openTabs()).toEqual(["alpha", "beta"]);
+    expect(consoleSessionRecovery).toEqual(recovery);
+    expect(screen.getByRole("tab", { name: "alpha, Pre-archived" })).toBeVisible();
+
+    act(() => reportKnownSessions?.(withRecovery([target, other], [])));
+    expect(consoleSessionRecovery).toEqual(recovery);
+    act(() => reportKnownSessions?.(withRecovery([other], [recovery])));
+    expect(consoleSessionRecovery).toEqual(recovery);
+    act(() => reportKnownSessions?.(withRecovery([session("alpha", "$new"), other], [])));
+    expect(consoleSessionRecovery).toBeNull();
+    expect(openTabs()).toEqual(["alpha", "beta"]);
+  });
+
   it("terminates the exact active session and routes to the neighboring quick tab", async () => {
     replaceUrl(sessionUrl(
       "second%20work",
@@ -5176,6 +5211,20 @@ describe("App routing", () => {
       expect(new URLSearchParams(window.location.search).get("workspace")).toBe(
         "workspace-one",
       );
+    });
+
+    it("keeps an explicitly opened pre-archived tab after reload while another tab is live", async () => {
+      const recovery = recoverable("archived", { preArchived: true });
+      getWorkspaceMock.mockResolvedValue(savedWorkspace({ tabs: ["beta", "archived"], activeSession: "beta" }));
+      listSessionsMock.mockResolvedValue(withRecovery([session("beta", "$beta")], [recovery]));
+      replaceUrl(`${BASE_PATH}/session/archived?workspace=workspace-one`);
+
+      render(<App />);
+
+      await waitFor(() => expect(consoleSessionRecovery).toEqual(recovery));
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/archived`);
+      expect(openTabs()).toEqual(["beta", "archived"]);
+      expect(screen.getByRole("tab", { name: "archived, Pre-archived" })).toBeVisible();
     });
 
     it("reports the live tab count to the dashboard after a restart", async () => {

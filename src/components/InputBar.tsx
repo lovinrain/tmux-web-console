@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ArchiveIcon,
   CloseIcon,
   ContractIcon,
   EditIcon,
@@ -84,6 +85,7 @@ interface InputBarProps {
   onEditSessionTitle?: () => void;
   onRenameSession?: () => void;
   onTerminateSession?: () => void;
+  onPreArchiveSession?: () => void;
   onOpenMessages?: () => void;
   onOpenSnippets?: () => void;
   onUploadAttachment?: SessionAttachmentUploader;
@@ -1371,6 +1373,7 @@ function TerminalInputShortcuts({
   onEditSessionTitle,
   onRenameSession,
   onTerminateSession,
+  onPreArchiveSession,
   onOpenMessages,
   onOpenSnippets,
   messageCount = 0,
@@ -1463,6 +1466,12 @@ function TerminalInputShortcuts({
         >
           <RefreshIcon /> <span>Redraw</span>
         </button>
+        {onPreArchiveSession && <button type="button"
+          className="key-button pre-archive-session-key"
+          onClick={onPreArchiveSession} aria-label="Pre-archive session" aria-haspopup="dialog"
+          title="End this session and keep its tab for recovery">
+          <ArchiveIcon /><span>Pre-archive</span>
+        </button>}
         <button
           type="button"
           className="key-button terminate-session-key"

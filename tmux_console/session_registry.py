@@ -62,9 +62,10 @@ class RecoveryRecord:
     first_seen_at: int
     last_seen_at: int
     recoverable: bool
+    pre_archived: bool = False
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "id": self.id,
             "name": self.name,
             "directory": self.directory,
@@ -74,12 +75,26 @@ class RecoveryRecord:
             "lastSeenAt": self.last_seen_at,
             "directoryAvailable": Path(self.directory).is_dir(),
         }
+        if self.pre_archived:
+            result["preArchived"] = True
+        return result
 
 
 REGISTRY_COLUMNS = """
     registry_id, tmux_name, working_directory, tmux_session_id,
     session_created, server_started, server_pid, agent_type,
     agent_session_id, first_seen_at, last_seen_at, recoverable
+"""
+# An intentionally ended session whose recovery remains enabled is pre-archived.
+# This also describes Fold and close, using the existing durable history state.
+RECOVERY_SELECT_COLUMNS = REGISTRY_COLUMNS + """,
+    EXISTS (
+        SELECT 1 FROM session_history h
+        WHERE h.tmux_id = sessions.tmux_session_id
+            AND h.created = sessions.session_created
+            AND h.server_started = sessions.server_started
+            AND h.server_pid = sessions.server_pid AND h.state = 'ended'
+    ) AS pre_archived
 """
 REGISTRY_COLUMN_NAMES = (
     "registry_id",
@@ -98,6 +113,10 @@ REGISTRY_COLUMN_NAMES = (
 
 
 def _row_to_record(row: sqlite3.Row) -> RecoveryRecord:
+    try:
+        pre_archived = bool(row["pre_archived"])
+    except IndexError:
+        pre_archived = False
     return RecoveryRecord(
         id=row["registry_id"],
         name=row["tmux_name"],
@@ -111,6 +130,7 @@ def _row_to_record(row: sqlite3.Row) -> RecoveryRecord:
         first_seen_at=row["first_seen_at"],
         last_seen_at=row["last_seen_at"],
         recoverable=bool(row["recoverable"]),
+        pre_archived=pre_archived,
     )
 
 
@@ -328,7 +348,7 @@ class SessionRegistry:
                         if history["id"] not in live_history_ids:
                             connection.execute("UPDATE session_history SET state = 'missing', ended_at = ? WHERE id = ?", (timestamp, history["id"]))
                     rows = connection.execute(
-                        f"SELECT {REGISTRY_COLUMNS} FROM sessions "
+                        f"SELECT {RECOVERY_SELECT_COLUMNS} FROM sessions "
                         "WHERE recoverable = 1 ORDER BY last_seen_at DESC, tmux_name"
                     ).fetchall()
                 return [
@@ -567,7 +587,7 @@ class SessionRegistry:
         with self._lock:
             try:
                 row = self._require_connection().execute(
-                    f"SELECT {REGISTRY_COLUMNS} FROM sessions "
+                    f"SELECT {RECOVERY_SELECT_COLUMNS} FROM sessions "
                     "WHERE registry_id = ? AND recoverable = 1",
                     (registry_id,),
                 ).fetchone()
@@ -575,6 +595,24 @@ class SessionRegistry:
                 raise self._database_error(error) from error
         if row is None:
             raise RecoveryRecordNotFoundError(registry_id)
+        return _row_to_record(row)
+
+    def get_recovery_for_identity(
+        self, name: str, tmux_session_id: str, session_created: int,
+        server_started: int, server_pid: int,
+    ) -> RecoveryRecord:
+        with self._lock:
+            try:
+                row = self._require_connection().execute(
+                    f"SELECT {RECOVERY_SELECT_COLUMNS} FROM sessions "
+                    "WHERE tmux_name = ? AND tmux_session_id = ? AND session_created = ? "
+                    "AND server_started = ? AND server_pid = ? AND recoverable = 1",
+                    (name, tmux_session_id, session_created, server_started, server_pid),
+                ).fetchone()
+            except (OSError, sqlite3.Error) as error:
+                raise self._database_error(error) from error
+        if row is None:
+            raise RecoveryRecordNotFoundError(name)
         return _row_to_record(row)
 
     def forget(self, registry_id: str) -> bool:

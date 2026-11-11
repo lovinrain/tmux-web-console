@@ -91,6 +91,7 @@ export interface SessionWorkspaceNavigationProps {
     serverStarted: number,
     serverPid: number,
   ) => Promise<void>;
+  onSessionPreArchived?: (session: Session) => Promise<void>;
 }
 
 export type WorkspaceTabOrientation = "horizontal" | "vertical";

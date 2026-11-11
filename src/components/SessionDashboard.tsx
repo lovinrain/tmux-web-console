@@ -1263,7 +1263,8 @@ export function SessionDashboard({
           <header className="session-section-header">
             <div>
               <p className="eyebrow">RECOVERY</p>
-              <h2 id="recovery-heading"><HistoryIcon /> Missing after restart</h2>
+              <h2 id="recovery-heading"><HistoryIcon /> {recoverableSessions.some((item) => item.preArchived)
+                ? "Pre-archived and missing sessions" : "Missing after restart"}</h2>
             </div>
             <span>
               {query
@@ -1288,6 +1289,7 @@ export function SessionDashboard({
                       {recoveryAgentLabel(recovery.agentType)}
                     </span>
                     <strong>{recovery.name}</strong>
+                    {recovery.preArchived && <span>Pre-archived</span>}
                     <small>seen {relativeTime(recovery.lastSeenAt)}</small>
                   </div>
                   <p className={recovery.directoryAvailable ? "" : "unavailable"}>

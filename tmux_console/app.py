@@ -1340,15 +1340,21 @@ def create_app(
     app[TRANSCRIPT_READ_LIMIT_KEY] = asyncio.Semaphore(3)
     app[SESSION_RENAME_LOCK_KEY] = asyncio.Lock()
 
-    async def terminate_observed_session(target: Session) -> None:
+    async def terminate_observed_session(
+        target: Session, *, preserve_recovery: bool = False,
+        observed_sessions: list[Session] | None = None,
+    ) -> None:
         """Shared termination path; callers hold the native-session mutation lock."""
         references = await app[AGENT_REFERENCES_KEY].detect_sessions([target])
         registry = app[SESSION_REGISTRY_KEY]
-        history_id = registry.observe_history(target, references.get(target.name))
+        recovered = await app[AGENT_RECOVERY_KEY].recover_sessions([target], prune_cache=False) if preserve_recovery else None
+        if observed_sessions is not None:
+            registry.reconcile(observed_sessions, references, recovered_references=recovered)
+        history_id = registry.observe_history(target, references.get(target.name), recovered_references=recovered)
         registry.record_history_titles({target.name: app[TITLES_KEY].get_title(target.name)})
         registry.sync_history_workspaces(app[WORKSPACES_KEY].list_workspaces())
         recovery_state_changed = registry.set_recovery_for_identity(
-            target.name, target.id, target.created, target.server_started, target.server_pid, False,
+            target.name, target.id, target.created, target.server_started, target.server_pid, preserve_recovery,
         )
         try:
             await asyncio.wait_for(app[SCROLLBACK_RECORDER_KEY].sample([target], force=True), 3)
@@ -2489,11 +2495,7 @@ def create_app(
                     409,
                 )
             try:
-                created_session = await app[TMUX_KEY].create_session(
-                    record.name,
-                    theme=requested_theme,
-                    start_directory=directory,
-                )
+                created_session = await app[TMUX_KEY].create_shell_session(record.name, directory, theme=requested_theme)
             except ValueError as error:
                 return json_error(str(error), 400)
             except TmuxError as error:
@@ -3731,7 +3733,7 @@ def create_app(
         except TmuxError as error:
             return json_error(str(error), 503)
 
-    async def terminate_session(request: web.Request) -> web.Response:
+    async def terminate_session(request: web.Request, *, pre_archive: bool = False) -> web.Response:
         session_name = request.match_info["session"]
         try:
             session_name = validate_tmux_session_name(session_name)
@@ -3819,6 +3821,13 @@ def create_app(
                 # Retrying a committed termination should preserve the successful
                 # postcondition without risking a same-name replacement.
                 try:
+                    if pre_archive:
+                        record = app[SESSION_REGISTRY_KEY].get_recovery_for_identity(
+                            session_name, session_id, session_created, server_started, server_pid,
+                        )
+                        if not record.pre_archived:
+                            return json_error("session is no longer live; refresh before pre-archiving it", 409)
+                        return web.json_response({"recovery": record.to_dict()})
                     app[SESSION_REGISTRY_KEY].set_recovery_for_identity(
                         session_name,
                         session_id,
@@ -3827,6 +3836,8 @@ def create_app(
                         server_pid,
                         False,
                     )
+                except RecoveryRecordNotFoundError:
+                    return json_error("session is no longer live; refresh before pre-archiving it", 409)
                 except SessionRegistryUnavailable as error:
                     return json_error(str(error), 503)
                 return web.Response(status=204)
@@ -3841,7 +3852,16 @@ def create_app(
                 )
 
             try:
-                await terminate_observed_session(target)
+                await terminate_observed_session(
+                    target, preserve_recovery=pre_archive,
+                    observed_sessions=current_sessions if pre_archive else None,
+                )
+                if pre_archive:
+                    record = app[SESSION_REGISTRY_KEY].get_recovery_for_identity(
+                        session_name, session_id, session_created, server_started, server_pid,
+                    )
+                    app[SESSION_STREAM_BROKER_KEY].notify_change()
+                    return web.json_response({"recovery": record.to_dict()})
             except ValueError as error:
                 return json_error(str(error), 400)
             except TmuxSessionIdentityChangedError as error:
@@ -3849,6 +3869,9 @@ def create_app(
             except (TmuxError, SessionRegistryUnavailable, WorkspaceStoreUnavailable) as error:
                 return json_error(str(error), 503)
         return web.Response(status=204)
+
+    async def pre_archive_session(request: web.Request) -> web.Response:
+        return await terminate_session(request, pre_archive=True)
 
     async def rename_session(request: web.Request) -> web.Response:
         try:
@@ -6701,6 +6724,7 @@ def create_app(
         save_session_file_content,
     )
     app.router.add_delete(f"{prefix}/api/sessions/{session_segment}", terminate_session)
+    app.router.add_post(f"{prefix}/api/sessions/{session_segment}/pre-archive", pre_archive_session)
     app.router.add_put(
         f"{prefix}/api/sessions/{session_segment}/end-when-finished", set_session_end_when_finished,
     )

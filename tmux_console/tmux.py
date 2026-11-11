@@ -793,10 +793,10 @@ class TmuxClient:
                     existing_names.add(candidate)
                     increment += 1
 
-    async def create_shell_session(self, name: str, directory: str) -> CreatedSession:
+    async def create_shell_session(self, name: str, directory: str, theme: str | None = None) -> CreatedSession:
         directory = validate_tmux_start_directory(directory)
         async with self._session_creation_lock:
-            return await self._create_session(name, start_directory=directory, shell_only=True)
+            return await self._create_session(name, theme, start_directory=directory, shell_only=True)
 
     async def _create_session(
         self,

@@ -128,6 +128,7 @@ _ALLOWED_ROUTES = (
     ("/api/session-history", ("GET", "HEAD")),
     ("/api/worker-terminal", ("GET", "HEAD")),
     ("/api/sessions/agent", ("DELETE",)),
+    ("/api/sessions/agent/pre-archive", ("POST",)),
     ("/api/sessions/agent/copy", ("POST",)),
     ("/api/sessions/agent/input", ("POST",)),
     ("/api/sessions/agent/capture", ("GET", "HEAD")),

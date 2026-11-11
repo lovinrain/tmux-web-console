@@ -1366,6 +1366,16 @@ identity, and use the existing background history sampler. No state-schema
 migration is needed. Requests survive a Muxdeck restart; older rollback releases
 ignore them. See [automatic session completion](docs/SESSION_COMPLETION.md).
 
+### Individual session pre-archive
+
+**Pre-archive** requires the updated backend and frontend together. It preserves
+recovery metadata before closing one confirmed native session, retaining its
+tabs and workspace organization. The status derives from existing ended history
+with recovery enabled, including fold-and-close sessions; registry schema 5 and
+workspace schema 16 are unchanged. Keep ordinary private state backups and
+reload open pages. **Recreate shell** uses the explicit shell launcher and
+bypasses tmux's default command. See [Pre-archived sessions](docs/SESSION_PRE_ARCHIVE.md).
+
 ### Trusted controller setup
 
 `muxdeckctl` is installed with the Python package and talks to the existing

@@ -1436,7 +1436,7 @@ describe("session classification", () => {
     expect(screen.getByText(/1 sessions \/ live/i)).toBeVisible();
   });
 
-  it("recreates missing sessions as an explicit fresh shell and opens it", async () => {
+  it.each([false, true])("recreates missing sessions as an explicit fresh shell (pre-archived: %s)", async (preArchived) => {
     let streamOptions: Parameters<typeof subscribeToSessions>[0] | undefined;
     const onOpen = vi.fn();
     vi.mocked(listSessions).mockResolvedValue([]);
@@ -1451,6 +1451,7 @@ describe("session classification", () => {
     act(() => streamOptions?.onSessions([], [{
       id: "registry-id",
       name: "restored-work",
+      preArchived,
       directory: "/work/project",
       agentType: "codex",
       agentSessionId: "12345678-1234-1234-1234-1234567890ab",
@@ -1459,7 +1460,8 @@ describe("session classification", () => {
       directoryAvailable: true,
     }]));
 
-    expect(screen.getByRole("heading", { name: /Missing after restart/i })).toBeVisible();
+    expect(screen.getByRole("heading", { name: preArchived
+      ? /Pre-archived and missing sessions/i : /Missing after restart/i })).toBeVisible();
     expect(screen.getByText(/never resumes an agent automatically/i)).toBeVisible();
     expect(screen.getByText("12345678-1234-1234-1234-1234567890ab")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Recreate shell" }));

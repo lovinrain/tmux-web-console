@@ -31,6 +31,7 @@ import { useConsoleSession } from "../useConsoleSession";
 import { useHeldTerminalView } from "../useHeldTerminalView";
 import {
   ArrowLeftIcon,
+  ArchiveIcon,
   CheckIcon,
   ContractIcon,
   ExpandIcon,
@@ -120,6 +121,7 @@ import {
   type SessionFileOpenRequest,
 } from "./SessionFilesPanel";
 import { SessionTerminateDialog } from "./SessionTerminateDialog";
+import { SessionPreArchiveDialog } from "./SessionPreArchiveDialog";
 import { SessionWorkspaceTransferDialog } from "./SessionWorkspaceTransferDialog";
 import {
   DEFAULT_DESKTOP_TAB_RAIL_WIDTH,
@@ -213,6 +215,7 @@ interface ConsoleScreenProps {
     serverStarted: number,
     serverPid: number,
   ) => Promise<void>;
+  onSessionPreArchived?: (session: Session) => Promise<void>;
   onSessionCopied?: (
     sourceName: string,
     sessionName: string,
@@ -737,6 +740,7 @@ export function ConsoleScreen({
   onRequestSessionPlacement,
   onSessionRenamed,
   onSessionTerminated,
+  onSessionPreArchived,
   onSessionCopied,
   onSplitWorkspace,
   forkSync,
@@ -838,6 +842,7 @@ export function ConsoleScreen({
     serverPid: number;
     title: string | null;
   } | null>(null);
+  const [preArchiveTarget, setPreArchiveTarget] = useState<Session | null>(null);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [copyingSource, setCopyingSource] = useState<string | null>(null);
@@ -1596,6 +1601,7 @@ export function ConsoleScreen({
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
+    setPreArchiveTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
     setWorkspaceTransferOpen(false);
@@ -1614,6 +1620,7 @@ export function ConsoleScreen({
     setTitleEditorOpen(false);
     setRenameEditorOpen(false);
     setTerminateTarget(null);
+    setPreArchiveTarget(null);
     setMessagesOpen(false);
     setSnippetsOpen(false);
     setWorkspaceTransferOpen(false);
@@ -2311,8 +2318,8 @@ export function ConsoleScreen({
           aria-label={`${sessionName} session unavailable`}
         >
           <div className="missing-session-theme"><ThemeToggle /></div>
-          <TerminalIcon />
-          <p className="eyebrow">SESSION UNAVAILABLE</p>
+          {sessionRecovery?.preArchived ? <ArchiveIcon /> : <TerminalIcon />}
+          <p className="eyebrow">{sessionRecovery?.preArchived ? "PRE-ARCHIVED" : "SESSION UNAVAILABLE"}</p>
           <h1>{sessionName}</h1>
           {showCollapsedSessionSwitcher && (
             <SessionNavigationControls
@@ -2322,7 +2329,9 @@ export function ConsoleScreen({
               shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
             />
           )}
-          <p>{currentLookupError}</p>
+          <p>{sessionRecovery?.preArchived
+            ? "This session was pre-archived. Recreate its shell when you are ready, or copy a command to resume a recorded conversation."
+            : currentLookupError}</p>
           {onRecreateSession && (
             <div className="missing-session-recovery">
               {sessionRecovery ? (
@@ -3197,6 +3206,15 @@ export function ConsoleScreen({
             <TerminalIcon />
             <span>Live</span>
           </button>
+          {onSessionPreArchived && <button type="button"
+            className="terminal-view-control pre-archive-session-control"
+            aria-label="Pre-archive session" aria-haspopup="dialog"
+            title="End this session and keep its tab for recovery"
+            disabled={!session}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => session && setPreArchiveTarget(session)}>
+            <ArchiveIcon /><span>Pre-archive</span>
+          </button>}
           <button
             type="button"
             className="terminal-view-control terminate-session-control"
@@ -3443,6 +3461,9 @@ export function ConsoleScreen({
         onTerminateSession={session && onSessionTerminated
           ? openTerminateEditor
           : undefined}
+        onPreArchiveSession={session && onSessionPreArchived
+          ? () => setPreArchiveTarget(session)
+          : undefined}
         onOpenMessages={session ? () => setMessagesOpen(true) : undefined}
         onOpenSnippets={() => setSnippetsOpen(true)}
         onUploadAttachment={uploadAttachment}
@@ -3553,6 +3574,10 @@ export function ConsoleScreen({
             )}
           />
         )}
+      {!workspaceOverlayOpen && preArchiveTarget && onSessionPreArchived && (
+        <SessionPreArchiveDialog session={preArchiveTarget}
+          onClose={() => setPreArchiveTarget(null)} onPreArchive={onSessionPreArchived} />
+      )}
       {!workspaceOverlayOpen && terminateTarget && (
         <SessionTerminateDialog
           sessionName={terminateTarget.name}

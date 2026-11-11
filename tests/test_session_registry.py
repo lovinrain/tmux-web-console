@@ -140,6 +140,31 @@ def test_intentional_end_disables_recovery_but_new_identity_reenables_it(tmp_pat
     assert registry.reconcile([], observed_at=130)[0].tmux_session_id == "$2"
 
 
+def test_pre_archive_status_uses_durable_history_and_does_not_follow_a_replacement(tmp_path: Path):
+    path = tmp_path / "sessions.sqlite3"
+    registry = SessionRegistry(path)
+    original = session(path=str(tmp_path))
+    registry.reconcile([original], observed_at=100)
+    history_id = registry.observe_history(original)
+    registry.mark_history(history_id, ended=True)
+    registry.close()
+
+    registry = SessionRegistry(path)
+    record = registry.reconcile([], observed_at=110)[0]
+    assert record.pre_archived
+    assert record.to_dict()["preArchived"] is True
+    assert registry.get_recovery_for_identity("work", "$1", 100, 90, 42) == record
+    registry.forget(record.id)
+    registry.restore_forgotten(record)
+    assert registry.get_recoverable(record.id).pre_archived
+
+    replacement = session(session_id="$2", path=str(tmp_path))
+    registry.reconcile([replacement], observed_at=120)
+    assert not registry.reconcile([], observed_at=130)[0].pre_archived
+    with pytest.raises(RecoveryRecordNotFoundError):
+        registry.get_recovery_for_identity("work", "$1", 100, 90, 42)
+
+
 def test_forget_is_idempotent_and_removes_only_the_registry_row(tmp_path: Path):
     registry = SessionRegistry(
         tmp_path / "sessions.sqlite3",

@@ -61,6 +61,7 @@ _PATTERN_ROUTES: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = tuple(
     (re.compile(pattern), frozenset(methods))
     for pattern, methods in (
         (rf"/api/sessions/{_SESSION}", {"DELETE"}),
+        (rf"/api/sessions/{_SESSION}/pre-archive", {"POST"}),
         (rf"/api/sessions/{_SESSION}/copy", {"POST"}),
         (rf"/api/sessions/{_SESSION}/input", {"POST"}),
         (rf"/api/sessions/{_SESSION}/capture", _READ),

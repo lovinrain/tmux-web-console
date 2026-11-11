@@ -190,7 +190,7 @@ def receiver_middleware(prefix: str, receiver: FencedReceiver | None = None) -> 
         session = request.match_info.get("session")
         copying = session is not None and request.method == "POST" and request.path.endswith("/copy")
         control = session is not None and (
-            (request.method == "POST" and request.path.endswith("/input")) or
+            (request.method == "POST" and request.path.endswith(("/input", "/pre-archive"))) or
             (request.method == "DELETE" and request.path == launch_path + "/" + session)
         )
         workspace_create = request.method == "POST" and request.path == workspace_path

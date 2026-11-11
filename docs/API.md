@@ -735,6 +735,7 @@ upgrade to enable conflict protection. See [agent commands](AGENT_ORCHESTRATION.
 | `POST /api/sessions/{session}/copy` | `sessionId`; optional `theme` | Creates a session in the source PWD with the next available suffixed name. |
 | `PUT /api/session-name` | `session`, `name` | Renames a live native tmux session and migrates Muxdeck references. |
 | `DELETE /api/sessions/{session}` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid` | Terminates exactly the identified tmux session. This is destructive. |
+| `POST /api/sessions/{session}/pre-archive` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid` | Saves recovery metadata before ending exactly this session; keeps workspace tabs and returns `{recovery}` with `preArchived: true`. See [Pre-archived sessions](SESSION_PRE_ARCHIVE.md). |
 | `POST /api/sessions/{session}/attention` | `sessionId`, `sessionCreated`, `serverStarted`, `serverPid`, `action` (`read` or `unread`), `latestReadyEvent` | Returns `{readyAttention:{latestReadyEvent,lastCheckedEvent}}` for the exact live identity. |
 
 Omitting `launchMode` retains the configured tmux default-shell behavior; it

@@ -411,7 +411,7 @@ test("Move / Nest renames the right-clicked native session while keeping another
   await expectTree(page, workspace.tabs, workspace.parents!);
   await tabRow(page, branch).getByRole("tab").click({ button: "right" });
   const placement = page.getByRole("dialog", { name: "Move / Nest", exact: true });
-  await expect(placement.locator(".session-placement-source-heading > strong")).toHaveText("Implementation");
+  await expect(placement.getByRole("button", { name: "Edit session display title", exact: true })).toHaveText("Implementation");
   const renameButton = placement.getByRole("button", { name: "Rename tmux session", exact: true });
   await expect(renameButton).toBeVisible();
   await page.screenshot({ path: join(reviewDirectory, "placement-native-rename-dark.png") });
@@ -495,7 +495,7 @@ test("existing branches move through the placement button, drag to nest, and tra
   await expect(placementButton).toBeVisible();
   await placementButton.click();
   let dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
-  await expect(dialog.locator(".session-placement-source-heading > strong")).toHaveText("API implementation");
+  await expect(dialog.getByRole("button", { name: "Edit session display title", exact: true })).toHaveText("API implementation");
   await expect(dialog.getByRole("searchbox", { name: "Find a parent session" })).toBeFocused();
   await expect(dialog.getByRole("radio", { name: "Nest under API tests", exact: true })).toHaveCount(0);
   await page.screenshot({ path: join(reviewDirectory, "placement-button-dialog.png") });
@@ -547,7 +547,7 @@ test("existing branches move through the placement button, drag to nest, and tra
   await selectTab(page, sourceName);
   await tabRow(page, branch).getByRole("button", { name: "Move / Nest API implementation", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "Move / Nest", exact: true });
-  await expect(dialog.locator(".session-placement-source-heading > strong")).toHaveText("API implementation");
+  await expect(dialog.getByRole("button", { name: "Edit session display title", exact: true })).toHaveText("API implementation");
   await dialog.getByRole("radio", { name: "Nest under Product", exact: true }).check();
   await dialog.getByRole("button", { name: "Nest session", exact: true }).click();
   await expectTree(page, source.tabs, source.parents!);

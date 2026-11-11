@@ -97,6 +97,51 @@ test("nonadjacent folds preserve the active terminal and survive URL reload and 
   expect(identities()).toEqual(before);
 });
 
+test("pre-archiving one tab retains its nested position, syncs recovery and recreates in place", async ({ page, context }) => {
+  const before = identities();
+  await context.addInitScript(() => localStorage.setItem("muxdeck-desktop-tab-actions-visible", "true"));
+  const response = await context.request.post("/mux/api/workspaces", { data: {
+    name: "Pre-archive one session", tabs: names, activeSession: a, parents: { [child]: a },
+  } });
+  expect(response.ok()).toBe(true);
+  const workspace = (await response.json()).workspace as SavedWorkspace;
+  workspaceIds.push(workspace.id);
+  const href = `/mux/session/${a}?workspace=${workspace.id}`;
+  await page.goto(href);
+  const second = await context.newPage();
+  await second.goto(href);
+  await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  await expect(row(second, a).getByRole("tab")).toBeVisible();
+
+  await page.getByRole("button", { name: "Pre-archive session", exact: true }).filter({ visible: true }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Pre-archive session?", exact: true });
+  await expect(confirm).toContainText("every program");
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(identities()).toEqual(before);
+
+  await row(page, a).getByRole("button", { name: `Pre-archive ${a} session`, exact: true }).click();
+  await confirm.getByRole("button", { name: "Pre-archive session", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByText("PRE-ARCHIVED", { exact: true })).toBeVisible();
+  await expect(second.getByText("PRE-ARCHIVED", { exact: true })).toBeVisible();
+  await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  expect(new URL(page.url()).pathname).toBe(`/mux/session/${a}`);
+  expect(identities()).toEqual(before.filter((line) => !line.startsWith(`${a}:`)));
+  const saved = (await (await context.request.get(`/mux/api/workspaces/${workspace.id}`)).json()).workspace as SavedWorkspace;
+  expect(saved.tabs).toEqual(names);
+  expect(saved.parents).toEqual({ [child]: a });
+  await page.reload();
+  await expect(page.getByText("PRE-ARCHIVED", { exact: true })).toBeVisible();
+  await expect(row(page, a).getByRole("tab")).toHaveAccessibleName(`${a}, Pre-archived`);
+  await page.screenshot({ path: test.info().outputPath("session-pre-archived.png") });
+  await page.getByRole("button", { name: "Recreate shell", exact: true }).click();
+  await expect(page.getByText("PRE-ARCHIVED", { exact: true })).toBeHidden();
+  await expect(second.getByText("PRE-ARCHIVED", { exact: true })).toBeHidden();
+  await expect(row(page, a).getByRole("tab")).toHaveAttribute("aria-selected", "true");
+  expect(new URL(page.url()).pathname).toBe(`/mux/session/${a}`);
+  expect(identities().filter((line) => !line.startsWith(`${a}:`))).toEqual(before.filter((line) => !line.startsWith(`${a}:`)));
+});
+
 test("fold-and-close preserves a saved nested tree and recovers shells from its preview", async ({ page, context }) => {
   const original = identities();
   const parents = { [a]: root, [child]: a, [gap]: root, [b]: root };

@@ -2777,7 +2777,7 @@ describe("ConsoleScreen session identity", () => {
     ));
   });
 
-  it("recreates a missing shell from the unavailable view", async () => {
+  it.each([false, true])("recreates a missing shell from the recovery view (pre-archived: %s)", async (preArchived) => {
     vi.mocked(listSessions).mockResolvedValue([]);
     const onRecreateSession = vi.fn();
     const onForgetSession = vi.fn();
@@ -2789,6 +2789,7 @@ describe("ConsoleScreen session identity", () => {
         sessionNavigation={<nav aria-label="Quick sessions">Workspace tabs</nav>}
         sessionRecovery={{
           id: "registry-ended",
+          preArchived,
           name: "ended",
           directory: "/srv/ended",
           agentType: "claude",
@@ -2804,7 +2805,9 @@ describe("ConsoleScreen session identity", () => {
       />,
     );
 
-    expect(await screen.findByText("This tmux session no longer exists.")).toBeVisible();
+    expect(await screen.findByText(preArchived
+      ? "This session was pre-archived. Recreate its shell when you are ready, or copy a command to resume a recorded conversation."
+      : "This tmux session no longer exists.")).toBeVisible();
     expect(screen.getByText("/srv/ended")).toBeVisible();
     expect(screen.getByText("agent-1")).toBeVisible();
 

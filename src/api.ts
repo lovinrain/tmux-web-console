@@ -33,6 +33,7 @@ export interface RecoverableSession {
   firstSeenAt: number;
   lastSeenAt: number;
   directoryAvailable: boolean;
+  preArchived?: boolean;
 }
 
 export interface SessionHistoryEntry {
@@ -928,6 +929,23 @@ export async function terminateSession(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, sessionCreated, serverStarted, serverPid }),
   });
+}
+
+export async function preArchiveSession(session: Session): Promise<RecoverableSession> {
+  const result = await jsonRequest<{ recovery: RecoverableSession }>(
+    `/api/sessions/${encodeURIComponent(session.name)}/pre-archive`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.id,
+        sessionCreated: session.created,
+        serverStarted: session.serverStarted,
+        serverPid: session.serverPid,
+      }),
+    },
+  );
+  return result.recovery;
 }
 
 export function updateSessionEndWhenFinished(

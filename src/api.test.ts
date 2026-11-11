@@ -37,6 +37,7 @@ import {
   listQueuedMessages,
   listCallbackMessages,
   previewSessionFile,
+  preArchiveSession,
   resolveSessionFilePath,
   renameSession,
   recreateSession,
@@ -892,6 +893,23 @@ describe("session file browser API", () => {
 });
 
 describe("session termination API", () => {
+  it("pre-archives the encoded session by full identity and returns its recovery record", async () => {
+    const target = { ...session(), name: "work/name #1" };
+    const recovery = { id: "saved", name: target.name, preArchived: true };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ recovery }), {
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(preArchiveSession(target)).resolves.toEqual(recovery);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE_PATH}/api/sessions/work%2Fname%20%231/pre-archive`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({
+        sessionId: target.id, sessionCreated: target.created,
+        serverStarted: target.serverStarted, serverPid: target.serverPid,
+      }) }),
+    );
+  });
+
   it("terminates the encoded native session by stable id and accepts an empty response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
