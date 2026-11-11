@@ -180,14 +180,14 @@ async def test_partial_close_can_retry_without_losing_metadata_or_repeating_clos
 
 
 @pytest.mark.asyncio
-async def test_shell_recovery_bypasses_default_command_and_response_retry_reuses_only_its_own_shell(fold_env, tmp_path):
+async def test_shell_recovery_bypasses_default_command_and_response_retry_reuses_only_its_own_shell(fold_env, tmp_path, wait_for_session_directory):
     tmux, client, store, _registry, workspace, url, _confirmed, close, _refs = fold_env
     assert (await close()).status == 200
     await tmux.run(["set-option", "-g", "default-command", "printf UNEXPECTED_DEFAULT_COMMAND"])
     response = await client.post(f"{url}/recover", json={"session": "a", "mode": "shell"})
     assert response.status == 201, await response.text()
     restored = await response.json()
-    session = await tmux.get_session("a")
+    session = await wait_for_session_directory(tmux, "a", tmp_path)
     assert session.id == restored["sessionId"] and not session.active_pane.dead
     assert session.active_pane.path == str(tmp_path)
     assert session.active_pane.command in {"bash", "sh", "zsh", "fish", "dash"}

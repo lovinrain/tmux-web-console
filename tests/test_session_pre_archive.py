@@ -54,7 +54,7 @@ async def pre_archive_env(tmp_path):
 
 
 @pytest.mark.parametrize("only_session", [False, True])
-async def test_pre_archive_saves_metadata_before_closure_keeps_tabs_and_recreates_only_a_shell(pre_archive_env, tmp_path, monkeypatch, only_session):
+async def test_pre_archive_saves_metadata_before_closure_keeps_tabs_and_recreates_only_a_shell(pre_archive_env, tmp_path, monkeypatch, only_session, wait_for_session_directory):
     tmux, registry, workspaces, client, target, payload, saved_workspaces = pre_archive_env
     if only_session:
         for session in await tmux.list_sessions():
@@ -96,7 +96,7 @@ async def test_pre_archive_saves_metadata_before_closure_keeps_tabs_and_recreate
 
     response = await client.post(f'/mux/api/recoverable-sessions/{recovery["id"]}/recreate', json={})
     assert response.status == 201, await response.text()
-    restored = await tmux.get_session(target.name)
+    restored = await wait_for_session_directory(tmux, target.name, tmp_path)
     assert restored.identity != target.identity and restored.active_pane.path == str(tmp_path)
     assert not restored.active_pane.dead
     assert workspaces.list_workspaces() == saved_workspaces

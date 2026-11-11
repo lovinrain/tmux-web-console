@@ -21,13 +21,13 @@ class References(AgentReferenceDetector):
 
 
 @pytest.mark.asyncio
-async def test_explicit_shell_recreation_works_without_a_running_tmux_server(tmp_path):
+async def test_explicit_shell_recreation_works_without_a_running_tmux_server(tmp_path, wait_for_session_directory):
     socket = f"muxdeck-history-empty-{os.getpid()}-{time.time_ns()}"
     tmux = TmuxClient(socket_name=socket)
     try:
         assert await tmux.list_sessions() == []
         created = await tmux.create_shell_session("explicit-restored-shell", str(tmp_path))
-        restored = await tmux.get_session(created.name)
+        restored = await wait_for_session_directory(tmux, created.name, tmp_path)
         assert restored.active_pane.path == str(tmp_path)
         assert not restored.active_pane.dead
     finally:
@@ -35,7 +35,7 @@ async def test_explicit_shell_recreation_works_without_a_running_tmux_server(tmp
 
 
 @pytest.mark.asyncio
-async def test_recycle_history_workspace_close_end_and_safe_restore(tmp_path):
+async def test_recycle_history_workspace_close_end_and_safe_restore(tmp_path, wait_for_session_directory):
     socket = f"muxdeck-history-test-{os.getpid()}-{time.time_ns()}"
     tmux = TmuxClient(socket_name=socket)
     client = TestClient(TestServer(create_app(tmux=tmux, agent_references=References(), base_path="")))
@@ -91,7 +91,7 @@ async def test_recycle_history_workspace_close_end_and_safe_restore(tmp_path):
         restored = await response.json()
         assert restored["session"] == source.name
         assert restored["sessionId"] not in {source.id, replacement.id}
-        assert (await tmux.get_session(source.name)).active_pane.path == str(tmp_path)
+        assert (await wait_for_session_directory(tmux, source.name, tmp_path)).active_pane.path == str(tmp_path)
         assert (await history())[0]["id"] == entry["id"]
         response = await client.get("/api/session-history", params={"q": source.name})
         assert len((await response.json())["entries"]) == 3

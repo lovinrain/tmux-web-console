@@ -13,7 +13,7 @@ from tmux_console.tmux import TmuxClient
 
 
 @pytest.mark.asyncio
-async def test_workspace_utility_shell_lifecycle_and_identity(tmp_path):
+async def test_workspace_utility_shell_lifecycle_and_identity(tmp_path, wait_for_session_directory):
     socket = f"muxdeck-utility-test-{os.getpid()}-{time.time_ns()}"
     tmux = TmuxClient(socket_name=socket)
     client = TestClient(TestServer(create_app(tmux=tmux, base_path="")))
@@ -21,7 +21,7 @@ async def test_workspace_utility_shell_lifecycle_and_identity(tmp_path):
     try:
         await client.start_server()
         source = await tmux.create_session("source", start_directory=str(tmp_path))
-        original = await tmux.get_session(source.name)
+        original = await wait_for_session_directory(tmux, source.name, tmp_path)
         # A utility terminal must not inherit a default command that starts an agent.
         await tmux.run(["set-option", "-g", "default-command", "printf NOT_A_SHELL"])
         payload = {"workspaceKey": key, "sourceSession": source.name, "sourceSessionId": source.id, "create": False}
@@ -45,9 +45,21 @@ async def test_workspace_utility_shell_lifecycle_and_identity(tmp_path):
         assert len({terminal["id"] for terminal in terminals}) == 1
         utility = terminals[0]
         assert utility["id"] != source.id
+        await wait_for_session_directory(tmux, utility["name"], tmp_path)
+        # Refresh the API snapshot after the new shell has completed startup.
+        response = await client.post("/api/utility-terminal", json=payload)
+        assert response.status == 200
+        utility = (await response.json())["terminal"]
         assert utility["panes"][0]["path"] == str(tmp_path)
         assert len(await tmux.list_sessions()) == 2
-        assert (await tmux.get_session(source.name)).to_dict() == original.to_dict()
+        current_source = (await tmux.get_session(source.name)).to_dict()
+        original_source = original.to_dict()
+        # Startup output can advance activity without changing the source pane.
+        for snapshot in (current_source, original_source):
+            snapshot.pop("activity")
+            for pane in snapshot["panes"]:
+                pane.pop("activity")
+        assert current_source == original_source
 
         # Identity-bound WebSockets cannot attach to a name reused by another session.
         response = await client.get("/ws/terminal", params={"session": utility["name"], "identity": "stale"})

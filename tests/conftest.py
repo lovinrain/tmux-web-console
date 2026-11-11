@@ -1,6 +1,27 @@
+import asyncio
 from pathlib import Path
 
 import pytest
+
+from tmux_console.tmux import Session, TmuxClient
+
+
+@pytest.fixture
+def wait_for_session_directory():
+    """tmux can acknowledge a fork before its shell has entered the requested CWD."""
+    async def wait(tmux: TmuxClient, name: str, directory: Path) -> Session:
+        observed = None
+        try:
+            async with asyncio.timeout(3):
+                while True:
+                    session = await tmux.get_session(name)
+                    observed = session.active_pane.path if session.active_pane else None
+                    if observed == str(directory):
+                        return session
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            pytest.fail(f"Session {name} did not enter {directory}; observed {observed}")
+    return wait
 
 
 @pytest.fixture(scope="session")
