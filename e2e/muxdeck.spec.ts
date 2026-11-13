@@ -6230,9 +6230,10 @@ test("workspace saved from console stays bound through navigation and restores c
     await expectRoute(page, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
     expect(await inputFrames()).toBe(0);
 
-    // A bookmarked snapshot cannot replace the newer server-side hierarchy.
+    // A bookmarked snapshot cannot replace the newer server-side hierarchy,
+    // but the session it names stays selected over the saved active session.
     await page.goto(staleSavedUrl);
-    await expectRoute(page, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
+    await expectRoute(page, `/mux/session/${parent}`, savedTabs, { workspace: workspaceId });
     expect(JSON.parse(new URL(page.url()).searchParams.get("tab-parent") ?? "{}"))
       .toEqual(expectedStructure.parents);
 
@@ -6241,7 +6242,8 @@ test("workspace saved from console stays bound through navigation and restores c
     await authenticatePage(secondPage);
     await secondPage.goto(`${new URL(page.url()).origin}/mux/?workspace=${workspaceId}`);
     await secondPage.getByRole("button", { name: `Resume workspace ${workspaceName}`, exact: true }).click();
-    await expectRoute(secondPage, `/mux/session/${child}`, savedTabs, { workspace: workspaceId });
+    // Resume follows the selection the bookmark page saved last.
+    await expectRoute(secondPage, `/mux/session/${parent}`, savedTabs, { workspace: workspaceId });
     expect(JSON.parse(new URL(secondPage.url()).searchParams.get("tab-parent") ?? "{}"))
       .toEqual(expectedStructure.parents);
     expect(initialTabs.map(workspaceTmuxIdentity)).toEqual(originalIdentities);

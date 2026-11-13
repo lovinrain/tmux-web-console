@@ -1045,6 +1045,10 @@ Open pages subscribe to a workspace event stream, so tab additions, closes,
 group changes, and other workspace updates propagate without a reload. Each
 page keeps its current selected session when that tab remains available. If it
 is removed, the page selects a surviving tab or returns to the landing page.
+A session link `/session/<name>?workspace=<id>` selects that tab when it is
+live (or pre-archived) in the workspace. The workspace's saved active session,
+which is only the last selection made by some page, is used only when the link
+names no such tab, for example the old name of a renamed session.
 Connecting or reconnecting receives the full current server record; when
 streaming is unavailable, pages fetch it every four seconds and on refocus.
 The same connection carries the global callback snapshot, so saved-workspace

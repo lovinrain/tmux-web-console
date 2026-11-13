@@ -1336,11 +1336,27 @@ function AppRoutes() {
         sessions,
         terminatedSessionsRef.current,
       );
-      const targetSession = liveWorkspaceSession(savedWorkspace, currentSessions);
-      const landingSession = workspaceLandingSession(savedWorkspace, currentSessions);
+      const hydratedRecoverable = attachedRecoverableSessions(sessions, terminatedSessionsRef.current, recoverableSessionsRef.current);
+      // A session link (`/session/<name>?workspace=<id>`) names the tab to show.
+      // The saved active session is only the last selection of some page, so it
+      // must not replace a route tab that is live, fork-synced, or pre-archived.
+      const loadedRoute = resume ? null : parseSessionRoute(currentLocation().path);
+      const routeSession = loadedRoute
+        && savedWorkspace.tabs.includes(loadedRoute.sessionName)
+        && (
+          currentSessions.some((session) => session.name === loadedRoute.sessionName)
+          || forkSyncGroupFromSearch(currentLocation().search)
+          || hydratedRecoverable?.some((record) => (
+            record.name === loadedRoute.sessionName && record.preArchived
+          ))
+        )
+        ? loadedRoute.sessionName
+        : null;
+      const targetSession = routeSession ?? liveWorkspaceSession(savedWorkspace, currentSessions);
+      const landingSession = routeSession ?? workspaceLandingSession(savedWorkspace, currentSessions);
       const restoredWorkspace = restoreWorkspaceTabs(
         createSessionWorkspace(),
-        savedWorkspace.activeSession ?? targetSession ?? undefined,
+        routeSession ?? savedWorkspace.activeSession ?? targetSession ?? undefined,
         savedWorkspace.tabs,
         savedWorkspace.groups ?? [],
         savedWorkspace.parents ?? {}, savedWorkspace.folds ?? [],
@@ -1357,7 +1373,6 @@ function AppRoutes() {
       knownSessionsRef.current = currentSessions;
       setKnownSessions(currentSessions);
       if (receivedSessionInventory) setSessionInventoryLoaded(true);
-      const hydratedRecoverable = attachedRecoverableSessions(sessions, terminatedSessionsRef.current, recoverableSessionsRef.current);
       if (hydratedRecoverable) setRecoverableSessions(hydratedRecoverable);
       failedWorkspaceActivity.current = null;
       lastSavedWorkspaceActivity.current = null;
@@ -1376,9 +1391,7 @@ function AppRoutes() {
       const paneRoute = parsePaneLayoutRoute(current.path);
       let path = current.path;
       if (route || (resume && isDashboardPath(current.path))) {
-        path = route && !resume && (forkSyncGroupFromSearch(current.search)
-          || hydratedRecoverable?.some((record) => record.name === route.sessionName && record.preArchived))
-          && savedWorkspace.tabs.includes(route.sessionName)
+        path = route && route.sessionName === routeSession
           ? sessionPath(route.sessionName, route.recentsOpen)
           : landingSession
           ? sessionPath(landingSession, Boolean(route?.recentsOpen))
