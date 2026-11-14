@@ -128,8 +128,10 @@ describe("SessionNameControls", () => {
     const manual = await screen.findByRole("textbox", { name: "Session name to copy" });
     expect(copy).toHaveBeenCalledExactlyOnceWith(name);
     expect(manual).toHaveValue(name);
-    expect(manual).toHaveFocus();
-    expect((manual as HTMLInputElement).selectionEnd).toBe(name.length);
+    await waitFor(() => {
+      expect(manual).toHaveFocus();
+      expect((manual as HTMLInputElement).selectionEnd).toBe(name.length);
+    });
     expect(onRename).not.toHaveBeenCalled();
   });
 });
