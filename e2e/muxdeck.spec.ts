@@ -1696,7 +1696,9 @@ test("desktop file attachments stage or paste host-readable paths", async ({
   await page.locator(".terminal-host .xterm-helper-textarea").press("Control+C");
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(attach).toBeHidden();
+  await page.getByRole("navigation", { name: "Mobile console focus" })
+    .getByRole("button", { name: "Input", exact: true }).click();
+  await expect(attach).toBeVisible();
   await expect(page.locator(".terminal-attachment-feedback")).toBeHidden();
 });
 

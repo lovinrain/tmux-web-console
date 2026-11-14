@@ -20,6 +20,94 @@ test.beforeAll(() => {
   mkdirSync(screenshotDirectory, { recursive: true });
 });
 
+test.afterAll(() => {
+  execFileSync("tmux", [...tmux, "kill-session", "-t", `=${sessionName}`]);
+});
+
+test.describe("mobile staged-input tools", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test("inserts snippets and picks files with visible feedback without sending", async ({ page, context }, info) => {
+    await context.addInitScript(() => localStorage.setItem("muxdeck-theme", "dark"));
+    expect((await context.request.post("/mux/api/auth/login", {
+      data: { username: E2E_AUTH_USERNAME, password: E2E_AUTH_PASSWORD },
+    })).ok()).toBe(true);
+    const original = await (await context.request.get("/mux/api/snippets")).json();
+    const snippet = { id: `mobile-${process.pid}`, type: "snippet", name: "Mobile review", text: "Review this file: " };
+    expect((await context.request.put("/mux/api/snippets", {
+      data: { revision: original.revision, tree: [...original.tree, snippet] },
+    })).ok()).toBe(true);
+    const pane = execFileSync("tmux", [...tmux, "list-panes", "-a", "-F", "#{session_name}\t#{pane_id}"], { encoding: "utf8" })
+      .split("\n").find((line) => line.startsWith(`${sessionName}\t`))?.split("\t")[1];
+    expect(pane).toMatch(/^%\d+$/);
+    const terminalText = () => execFileSync("tmux", [...tmux, "capture-pane", "-p", "-S", "-2000", "-t", pane!],
+      { encoding: "utf8" }).trim();
+    try {
+      await page.goto(`/mux/session/${sessionName}?tab=${sessionName}`);
+      const inputMode = page.getByRole("button", { name: "Input", exact: true });
+      await inputMode.tap();
+      const input = page.getByRole("textbox", { name: "Staged input", exact: true });
+      await expect(input).toBeVisible();
+      const insert = page.getByRole("button", { name: "Insert snippet into staged input", exact: true });
+      const attach = page.getByRole("button", { name: "Attach files to staged input", exact: true });
+      for (const width of [390, 320]) {
+        await page.setViewportSize({ width, height: 844 });
+        for (const button of [insert, attach]) {
+          await expect(button).toBeInViewport({ ratio: 1 });
+          const box = (await button.boundingBox())!;
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      const before = terminalText();
+      await insert.tap();
+      const picker = page.getByRole("dialog", { name: "Insert into staged input", exact: true });
+      await picker.getByRole("searchbox", { name: "Search all snippets" }).fill("Mobile review");
+      await picker.getByRole("button", { name: "Insert", exact: true }).tap();
+      await expect(picker).toBeHidden();
+      await expect(input).toHaveValue(snippet.text);
+
+      const upload = (url: URL) => url.pathname === `/mux/api/sessions/${sessionName}/attachments`;
+      await page.route(upload, (route) => route.fulfill({ status: 503,
+        contentType: "application/json", body: JSON.stringify({ error: "Upload unavailable; try again." }) }));
+      const failedChooser = page.waitForEvent("filechooser");
+      await attach.tap();
+      await (await failedChooser).setFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("mobile notes") });
+      await expect(page.locator(".composer-attachment-status.error")).toBeVisible();
+      await expect(page.locator(".composer-attachment-status.error")).toContainText("Upload unavailable");
+      await expect(input).toHaveValue(snippet.text);
+      await page.unroute(upload);
+
+      const chooser = page.waitForEvent("filechooser");
+      await attach.tap();
+      await (await chooser).setFiles({ name: "mobile-image.png", mimeType: "image/png",
+        buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGPMuH+BgYGBiYGBgYGBAQAY1gIbcvXzXwAAAABJRU5ErkJggg==", "base64") });
+      const card = page.getByRole("region", { name: "Uploaded files" });
+      await expect(card).toBeVisible();
+      await expect(card.locator("img")).toBeVisible();
+      const path = await card.getByRole("button", { name: "Copy server path for mobile-image.png" }).getAttribute("title");
+      expect(path).toContain(process.env.MUXDECK_PLAYWRIGHT_UPLOADS_DIR);
+      await expect(input).toHaveValue(snippet.text + path);
+      await expect(page.locator(".composer-attachment-status")).toBeVisible();
+      await expect(page.locator(".composer-attachment-status")).toContainText("File path staged at the cursor");
+      expect(terminalText()).toBe(before);
+      await page.screenshot({ path: info.outputPath("mobile-composer-tools.png"), animations: "disabled" });
+      await page.getByRole("button", { name: "Enter distraction-free input", exact: true }).tap();
+      await expect(insert).toBeVisible();
+      await expect(attach).toBeVisible();
+      await page.screenshot({ path: info.outputPath("mobile-composer-tools-focus.png"), animations: "disabled" });
+    } finally {
+      const latest = await (await context.request.get("/mux/api/snippets")).json();
+      expect((await context.request.put("/mux/api/snippets", {
+        data: { revision: latest.revision, tree: original.tree },
+      })).ok()).toBe(true);
+    }
+  });
+});
+
 test("staged-input snippet picker manages folders, text, shortcuts, and deletion in place", async ({
   page,
   request,

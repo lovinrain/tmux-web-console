@@ -1354,7 +1354,12 @@ describe("InputBar", () => {
     expect(textarea.selectionEnd).toBe(11);
   });
 
-  it("uploads a desktop file, stages its host path at the cursor, and never auto-sends", async () => {
+  it.each(["desktop", "mobile"])("uploads a selected %s file at the cursor without auto-sending", async (layout) => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: layout === "mobile", media: query, onchange: null,
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+    })));
     let finishUpload: ((value: {
       name: string;
       path: string;

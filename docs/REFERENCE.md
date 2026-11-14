@@ -560,9 +560,10 @@ Save updates the shared library without inserting anything or changing the
 staged draft. A conflicting save keeps the form edits and offers a library
 reload before retrying; a conflicting deletion requires another confirmation.
 
-`Attach files` is the adjacent desktop-only attachment flow. The file picker, a
-file pasted into the staged textarea, and files dropped over the composer all
-use the same behavior. Muxdeck accepts any non-empty file, limits each file to
+`Insert snippet` and `Attach files` are available beside the staged-input heading
+on desktop and on a second row beneath that heading on phones. The file picker
+works on both layouts; desktop also accepts files pasted into the staged textarea
+or dropped over the composer. Muxdeck accepts any non-empty file, limits each file to
 12 MiB, and stores it with private permissions under `MUXDECK_UPLOADS_DIR`. A
 selection can contain up to six files. Their shell-safe absolute host paths are
 inserted at the textarea's current cursor; nothing is sent to tmux until the

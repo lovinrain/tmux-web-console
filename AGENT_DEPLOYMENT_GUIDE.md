@@ -1018,8 +1018,10 @@ merely to test that the application itself has no login.
     the configured upload directory without sending it automatically. An image
     should additionally show a preview. Confirm that dropping another arbitrary
     file over the live desktop terminal uploads it and pastes its shell-safe path
-    without Enter, the run user can read both files, each file is `0600`, and all
-    attachment affordances are hidden at compact mobile width. Do not upload
+    without Enter, the run user can read both files, and each file is `0600`.
+    At compact mobile width, confirm the staged-input file picker, upload feedback
+    and file cards remain available with touch-sized controls. Terminal drop
+    overlays remain desktop-only. Do not upload
     sensitive material merely for a smoke test.
 17. In that disposable session, open the desktop pane-CWD browser and upload a
     small file into a disposable folder with both the picker and drag-and-drop.

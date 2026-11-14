@@ -696,7 +696,6 @@ const SessionComposer = forwardRef<SessionComposerHandle, InputBarProps>(functio
     if (
       !onUploadAttachment
       || attachmentUploadPendingRef.current
-      || !desktopAttachmentsAvailable()
     ) return;
     if (files.length === 0) {
       setAttachmentUploadError(true);
