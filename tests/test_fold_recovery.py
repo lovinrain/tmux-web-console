@@ -188,6 +188,11 @@ async def test_shell_recovery_bypasses_default_command_and_response_retry_reuses
     assert response.status == 201, await response.text()
     restored = await response.json()
     session = await wait_for_session_directory(tmux, "a", tmp_path)
+    # tmux can report its fork after chdir but before exec starts the shell.
+    async with asyncio.timeout(3):
+        while session.active_pane.command == "tmux":
+            await asyncio.sleep(.01)
+            session = await tmux.get_session("a")
     assert session.id == restored["sessionId"] and not session.active_pane.dead
     assert session.active_pane.path == str(tmp_path)
     assert session.active_pane.command in {"bash", "sh", "zsh", "fish", "dash"}
