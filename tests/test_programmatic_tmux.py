@@ -97,12 +97,12 @@ async def test_literal_command_environment_and_fast_exit_are_preserved(disposabl
         await client.send_pane_input(created.name, **identity(created), text="do not execute")
 
 
-async def test_programmatic_shell_overrides_default_command(disposable_tmux, tmp_path):
+async def test_programmatic_shell_overrides_default_command(disposable_tmux, tmp_path, wait_for_session_directory):
     client = disposable_tmux
     forbidden = tmp_path / "default-agent-was-launched"
     await client.run(["set-option", "-g", "default-command", f"touch {forbidden}"])
     created = await client.create_session("shell", launch_mode="shell", start_directory=str(tmp_path))
-    session = await client.get_session(created.name)
+    session = await wait_for_session_directory(client, created.name, tmp_path)
     assert not session.active_pane.dead
     assert session.active_pane.path == str(tmp_path)
     assert not forbidden.exists()
