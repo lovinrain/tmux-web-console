@@ -8121,6 +8121,37 @@ span.workspace-tab-group-toggle {
   height: 16px;
 }
 
+.console-title-copy-button[data-copied="true"] {
+  color: var(--acid);
+}
+
+.console-title-manual-copy {
+  display: grid;
+  max-width: 360px;
+  gap: 5px;
+  padding-block: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.console-title-manual-copy > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.console-title-manual-copy input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px;
+  color: var(--paper);
+  background: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: inherit;
+}
+
 .console-session-history-button[data-direction="back"] svg {
   transform: rotate(180deg);
 }
@@ -15545,6 +15576,12 @@ html.history-resizing * {
 
   .console-title-line h1 {
     font-size: 14px;
+  }
+
+  .console-title-copy-button,
+  .console-title-manual-copy button {
+    width: 44px;
+    height: 44px;
   }
 
   .console-title-line .agent-badge,

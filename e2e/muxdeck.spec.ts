@@ -2974,6 +2974,53 @@ test("mobile Focus floats shortcut buttons without changing desktop focus", asyn
   }
 });
 
+test("session title copies directly from the console header on desktop and mobile", async ({
+  page, request, context,
+}, testInfo) => {
+  const title = "Release review: copy this session title – α";
+  expect((await request.put("/mux/api/session-title", {
+    data: { session: sessionName, title },
+  })).ok()).toBe(true);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/mux/session/${sessionName}?tab=${sessionName}`);
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    await expect(page.locator(".connection-badge")).toContainText("Live");
+    const frames = await trackTerminalInputFrames(page, ["click", "keydown"]);
+    const copy = page.locator(".console-title-line").getByRole("button", { name: "Copy session title", exact: true });
+    await expect(copy).toBeInViewport();
+    await page.locator(".console-header").screenshot({ path: testInfo.outputPath("session-title-copy-desktop.png") });
+    await copy.focus();
+    await page.keyboard.press("Enter");
+    await expect(copy).toHaveAttribute("title", "Session title copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(title);
+
+    await page.setViewportSize({ width: 320, height: 740 });
+    await expect(copy).toBeInViewport();
+    const box = (await copy.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await expect(copy).toHaveAttribute("title", "Copy session title");
+    await page.locator(".console-header").screenshot({ path: testInfo.outputPath("session-title-copy-mobile.png") });
+    await copy.click();
+    await expect(copy).toHaveAttribute("title", "Session title copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(title);
+
+    expect((await request.put("/mux/api/session-title", {
+      data: { session: sessionName, title: "" },
+    })).ok()).toBe(true);
+    await expect(page.getByRole("heading", { name: sessionName, exact: true })).toBeVisible();
+    await copy.click();
+    await expect(copy).toHaveAttribute("title", "Session title copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(sessionName);
+    expect(await frames()).toBe(0);
+  } finally {
+    await request.put("/mux/api/session-title", { data: { session: sessionName, title: "" } });
+  }
+});
+
 test("session history works beside the title and in Focus without losing drafts", async ({
   page, request,
 }, testInfo) => {

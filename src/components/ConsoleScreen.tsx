@@ -115,6 +115,7 @@ import { MessageQueueDialog } from "./MessageQueueDialog";
 import { activePane, classifyPane } from "./SessionDashboard";
 import { SnippetPickerDialog } from "./SnippetPickerDialog";
 import { SessionTitleDialog } from "./SessionTitleDialog";
+import { ConsoleSessionTitle } from "./ConsoleSessionTitle";
 import { SessionRenameDialog } from "./SessionRenameDialog";
 import {
   SessionFilesPanel,
@@ -2577,8 +2578,7 @@ export function ConsoleScreen({
           </button>
         )}
         <div className="console-identity">
-          <div className="console-title-line">
-            <h1>{session?.customTitle || sessionName}</h1>
+          <ConsoleSessionTitle title={session?.customTitle || sessionName}>
             <span className={`agent-badge ${classification.tone}`}>{classification.label}</span>
             {!embedded && !ephemeral && !desktopTerminalFocus
               && (onNavigateSessionHistory || showCollapsedSessionSwitcher) && (
@@ -2590,7 +2590,7 @@ export function ConsoleScreen({
                 shortcut={directShortcutAria(shortcutBindings["workspace-find-tab"])}
               />
             )}
-          </div>
+          </ConsoleSessionTitle>
           <button
             type="button"
             className="console-cwd-button"

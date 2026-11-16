@@ -307,6 +307,72 @@ function layOutHeader(container: HTMLElement, offscreen: HTMLElement[]) {
   });
 }
 
+describe("ConsoleScreen title copying", () => {
+  it.each([null, "Release review: α & β"])("copies the displayed title beside the heading (%s)", async (customTitle) => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    vi.mocked(listSessions).mockResolvedValue([session(customTitle)]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+
+    const title = customTitle || "test";
+    const heading = await screen.findByRole("heading", { name: title });
+    const button = screen.getByRole("button", { name: "Copy session title" });
+    expect(heading.nextElementSibling).toBe(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button).toHaveAttribute("title", "Session title copied"));
+    expect(copy).toHaveBeenCalledExactlyOnceWith(title);
+    expect(renameSession).not.toHaveBeenCalled();
+    expect(updateSessionTitle).not.toHaveBeenCalled();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+  });
+
+  it.each(["denied", "unavailable"])("offers the selected title for manual copying when clipboard access is %s", async (failure) => {
+    const copy = vi.fn().mockRejectedValue(new Error("Denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true, value: failure === "denied" ? { writeText: copy } : undefined,
+    });
+    const title = "Review: 雪 & α";
+    vi.mocked(listSessions).mockResolvedValue([session(title)]);
+    renderWithTheme(<ConsoleScreen sessionName="test" onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: title });
+    const button = screen.getByRole("button", { name: "Copy session title" });
+    fireEvent.click(button);
+
+    const manual = await screen.findByRole("textbox", { name: "Session title to copy" });
+    expect(manual).toHaveValue(title);
+    expect(manual).toHaveAttribute("readonly");
+    await waitFor(() => {
+      expect(manual).toHaveFocus();
+      expect((manual as HTMLInputElement).selectionEnd).toBe(title.length);
+    });
+    fireEvent.keyDown(manual, { key: "Escape" });
+    expect(manual).not.toBeInTheDocument();
+    expect(button).toHaveFocus();
+    expect(liveTerminalHandle.send).not.toHaveBeenCalled();
+  });
+
+  it("ignores a pending copy result after switching to another title", async () => {
+    const pending = deferred<void>();
+    const copy = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+    vi.mocked(listSessions).mockResolvedValue([session("First title"), session("Next title", "next")]);
+    const onBack = vi.fn();
+    const view = renderWithTheme(<ConsoleScreen sessionName="test" onBack={onBack} />);
+    await screen.findByRole("heading", { name: "First title" });
+    fireEvent.click(screen.getByRole("button", { name: "Copy session title" }));
+
+    view.rerender(<ThemeProvider><ConsoleScreen sessionName="next" onBack={onBack} /></ThemeProvider>);
+    await screen.findByRole("heading", { name: "Next title" });
+    await act(async () => pending.resolve(undefined));
+    const button = screen.getByRole("button", { name: "Copy session title" });
+    expect(button).toHaveAttribute("title", "Copy session title");
+    fireEvent.click(button);
+    await waitFor(() => expect(copy).toHaveBeenLastCalledWith("Next title"));
+    expect(copy).toHaveBeenNthCalledWith(1, "First title");
+  });
+});
+
 describe("ConsoleScreen session identity", () => {
   it("switches from the cached inventory without reconnecting or blanking workspace controls", async () => {
     const first = session("First session");
