@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isBareSessionIndexRoute,
+  isKnownAppRoute,
   isWorkspaceRoute,
   newSessionPath,
   paneLayoutPath,
@@ -45,5 +47,17 @@ describe("workspace routes", () => {
     ["/sessions/newer", false],
   ])("recognizes workspace route %s: %s", (path, expected) => {
     expect(isWorkspaceRoute(path as string)).toBe(expected);
+  });
+
+  it("classifies bare /session index routes and known app routes", () => {
+    expect(isBareSessionIndexRoute("/session")).toBe(true);
+    expect(isBareSessionIndexRoute("/session/")).toBe(true);
+    expect(isBareSessionIndexRoute("/session/alpha")).toBe(false);
+    expect(isKnownAppRoute("/")).toBe(true);
+    expect(isKnownAppRoute("/snippets")).toBe(true);
+    expect(isKnownAppRoute("/worker")).toBe(true);
+    expect(isKnownAppRoute("/session/alpha")).toBe(true);
+    expect(isKnownAppRoute("/session")).toBe(false);
+    expect(isKnownAppRoute("/sessions")).toBe(false);
   });
 });

@@ -56,3 +56,17 @@ export function paneLayoutPath(layoutId: string): string {
 export function isWorkspaceRoute(path: string): boolean {
   return Boolean(parseSessionRoute(path) || parseNewSessionRoute(path) || parsePaneLayoutRoute(path));
 }
+
+export function isBareSessionIndexRoute(path: string): boolean {
+  return path === "/session" || path === "/session/";
+}
+
+export function isKnownAppRoute(path: string): boolean {
+  return path === "/"
+    || path === ""
+    || isWorkspaceRoute(path)
+    || path === "/snippets"
+    || path === "/snippets/"
+    || path === "/worker"
+    || path === "/worker/";
+}

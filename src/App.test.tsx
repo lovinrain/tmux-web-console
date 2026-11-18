@@ -6705,5 +6705,66 @@ describe("App routing", () => {
       );
       expect(openTabs()).toEqual(["ended-one", "ended-two"]);
     });
+
+    it("canonicalizes bare /session to dashboard and opens saved workspaces into console", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "beta",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(`${BASE_PATH}/session`);
+
+      render(<App />);
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Dashboard" })).toBeVisible();
+        expect(window.location.pathname).toBe(`${BASE_PATH}/`);
+      });
+
+      act(() => openSavedWorkspaceFromDashboard?.(serverWorkspace));
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+          "data-session",
+          "beta",
+        );
+      });
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+    });
+
+    it("resolves /session?workspace= and /session?tab= directly to the active session route", async () => {
+      const serverWorkspace = savedWorkspace({
+        tabs: ["alpha", "beta"],
+        activeSession: "beta",
+      });
+      getWorkspaceMock.mockResolvedValue(serverWorkspace);
+      listSessionsMock.mockResolvedValue([
+        session("alpha", "$alpha"),
+        session("beta", "$beta"),
+      ]);
+      replaceUrl(`${BASE_PATH}/session?workspace=workspace-one`);
+
+      const first = render(<App />);
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+          "data-session",
+          "beta",
+        );
+      });
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/beta`);
+      first.unmount();
+
+      replaceUrl(`${BASE_PATH}/session?tab=alpha&tab=beta`);
+      render(<App />);
+      await waitFor(() => {
+        expect(screen.getByRole("main", { name: "Console" })).toHaveAttribute(
+          "data-session",
+          "alpha",
+        );
+      });
+      expect(window.location.pathname).toBe(`${BASE_PATH}/session/alpha`);
+    });
   });
 });

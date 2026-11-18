@@ -13,6 +13,7 @@ import type {
 } from "./types";
 import { normalizeWorkspaceParents, WORKSPACE_TAB_GROUP_COLORS, type WorkspaceTabGroup, type WorkspaceSessionParents } from "./workspaceState";
 import { normalizeWorkspaceTabFolds, sameWorkspaceTabFolds, type WorkspaceTabFold } from "./workspaceFolds";
+import { subscribeSharedEventStream } from "./sharedEventStream";
 import type { Theme } from "./theme";
 
 export const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -1007,64 +1008,46 @@ export function subscribeToSessions({
   onStatus,
   onError,
 }: SessionStreamOptions): () => void {
-  if (typeof EventSource === "undefined") {
-    throw new Error("Server-sent events are not supported by this browser");
-  }
-
-  onStatus?.("connecting");
-  const source = new EventSource(`${BASE_PATH}/api/sessions/stream`);
-  let closed = false;
-
-  const handleSessions = (event: MessageEvent<string>) => {
-    if (closed) return;
-
-    try {
-      const payload = JSON.parse(event.data) as {
-        sessions?: unknown;
-        recoverableSessions?: unknown;
-        inventoryVersion?: unknown;
-      };
-      if (!Array.isArray(payload.sessions)) {
-        throw new Error("Session stream event did not contain a sessions array");
-      }
-      if (
-        payload.recoverableSessions !== undefined
-        && !Array.isArray(payload.recoverableSessions)
-      ) {
-        throw new Error("Session stream event contained an invalid recovery list");
-      }
-      attachInventoryVersion(payload.sessions as Session[], payload.inventoryVersion);
-      if (payload.recoverableSessions === undefined) {
-        onSessions(payload.sessions as Session[]);
-      } else {
-        onSessions(
-          payload.sessions as Session[],
-          payload.recoverableSessions as RecoverableSession[],
-        );
-      }
-    } catch (error) {
-      const streamError = error instanceof Error ? error : new Error(String(error));
-      onStatus?.("error");
-      onError?.(streamError);
-    }
-  };
-
-  source.addEventListener("sessions", handleSessions);
-  source.onopen = () => {
-    if (!closed) onStatus?.("open");
-  };
-  source.onerror = () => {
-    if (closed) return;
-    onStatus?.("error");
-    onError?.(new Error("Session stream connection failed"));
-  };
-
-  return () => {
-    if (closed) return;
-    closed = true;
-    source.removeEventListener("sessions", handleSessions);
-    source.close();
-  };
+  return subscribeSharedEventStream(
+    `${BASE_PATH}/api/sessions/stream`,
+    "sessions",
+    "Session stream connection failed",
+    {
+      onEvent: (rawData) => {
+        try {
+          const payload = JSON.parse(rawData) as {
+            sessions?: unknown;
+            recoverableSessions?: unknown;
+            inventoryVersion?: unknown;
+          };
+          if (!Array.isArray(payload.sessions)) {
+            throw new Error("Session stream event did not contain a sessions array");
+          }
+          if (
+            payload.recoverableSessions !== undefined
+            && !Array.isArray(payload.recoverableSessions)
+          ) {
+            throw new Error("Session stream event contained an invalid recovery list");
+          }
+          attachInventoryVersion(payload.sessions as Session[], payload.inventoryVersion);
+          if (payload.recoverableSessions === undefined) {
+            onSessions(payload.sessions as Session[]);
+          } else {
+            onSessions(
+              payload.sessions as Session[],
+              payload.recoverableSessions as RecoverableSession[],
+            );
+          }
+        } catch (error) {
+          const streamError = error instanceof Error ? error : new Error(String(error));
+          onStatus?.("error");
+          onError?.(streamError);
+        }
+      },
+      onStatus,
+      onError,
+    },
+  );
 }
 
 export type CallbackStreamStatus = "connecting" | "open" | "error";
@@ -1133,46 +1116,28 @@ export function subscribeToCallbackSessions({
   onStatus,
   onError,
 }: CallbackStreamOptions): () => void {
-  if (typeof EventSource === "undefined") {
-    throw new Error("Server-sent events are not supported by this browser");
-  }
-
-  onStatus?.("connecting");
-  const source = new EventSource(`${BASE_PATH}/api/callback-sessions/stream`);
-  let closed = false;
-
-  const handleCallbacks = (event: MessageEvent<string>) => {
-    if (closed) return;
-
-    try {
-      const payload: unknown = JSON.parse(event.data);
-      if (!isGlobalCallbackSnapshot(payload)) {
-        throw new Error("Callback stream event contained an invalid snapshot");
-      }
-      onSnapshot(payload);
-    } catch (error) {
-      const streamError = error instanceof Error ? error : new Error(String(error));
-      onStatus?.("error");
-      onError?.(streamError);
-    }
-  };
-
-  source.addEventListener("callbacks", handleCallbacks);
-  source.onopen = () => {
-    if (!closed) onStatus?.("open");
-  };
-  source.onerror = () => {
-    if (closed) return;
-    onStatus?.("error");
-    onError?.(new Error("Callback stream connection failed"));
-  };
-
-  return () => {
-    if (closed) return;
-    closed = true;
-    source.removeEventListener("callbacks", handleCallbacks);
-    source.close();
-  };
+  return subscribeSharedEventStream(
+    `${BASE_PATH}/api/callback-sessions/stream`,
+    "callbacks",
+    "Callback stream connection failed",
+    {
+      onEvent: (rawData) => {
+        try {
+          const payload: unknown = JSON.parse(rawData);
+          if (!isGlobalCallbackSnapshot(payload)) {
+            throw new Error("Callback stream event contained an invalid snapshot");
+          }
+          onSnapshot(payload);
+        } catch (error) {
+          const streamError = error instanceof Error ? error : new Error(String(error));
+          onStatus?.("error");
+          onError?.(streamError);
+        }
+      },
+      onStatus,
+      onError,
+    },
+  );
 }
 
 export async function updateSessionTitle(
@@ -1815,50 +1780,32 @@ export function subscribeToWorkspace(
   workspaceId: string,
   { onWorkspace, onCallbacks, onStatus, onError }: WorkspaceStreamOptions,
 ): () => void {
-  if (typeof EventSource === "undefined") {
-    throw new Error("Server-sent events are not supported by this browser");
-  }
-
-  onStatus?.("connecting");
-  const source = new EventSource(`${BASE_PATH}${workspacePath(workspaceId)}/stream`);
-  let closed = false;
-
-  const handleWorkspace = (event: MessageEvent<string>) => {
-    if (closed) return;
-    try {
-      const payload: unknown = JSON.parse(event.data);
-      if (!isRecord(payload) || (
-        payload.workspace !== null && !isWorkspaceSnapshot(payload.workspace, workspaceId)
-      ) || (
-        payload.callbacks !== undefined && !isGlobalCallbackSnapshot(payload.callbacks)
-      )) {
-        throw new Error("Workspace stream event contained an invalid snapshot");
-      }
-      onWorkspace(payload.workspace as SavedWorkspace | null);
-      if (payload.callbacks !== undefined) onCallbacks?.(payload.callbacks as GlobalCallbackSnapshot);
-    } catch (error) {
-      onStatus?.("error");
-      onError?.(error instanceof Error ? error : new Error(String(error)));
-    }
-  };
-
-  source.addEventListener("workspace", handleWorkspace);
-  source.onopen = () => {
-    if (!closed) onStatus?.("open");
-  };
-  // EventSource reconnects automatically and receives a fresh canonical snapshot.
-  source.onerror = () => {
-    if (closed) return;
-    onStatus?.("error");
-    onError?.(new Error("Workspace stream connection failed"));
-  };
-
-  return () => {
-    if (closed) return;
-    closed = true;
-    source.removeEventListener("workspace", handleWorkspace);
-    source.close();
-  };
+  return subscribeSharedEventStream(
+    `${BASE_PATH}${workspacePath(workspaceId)}/stream`,
+    "workspace",
+    "Workspace stream connection failed",
+    {
+      onEvent: (rawData) => {
+        try {
+          const payload: unknown = JSON.parse(rawData);
+          if (!isRecord(payload) || (
+            payload.workspace !== null && !isWorkspaceSnapshot(payload.workspace, workspaceId)
+          ) || (
+            payload.callbacks !== undefined && !isGlobalCallbackSnapshot(payload.callbacks)
+          )) {
+            throw new Error("Workspace stream event contained an invalid snapshot");
+          }
+          onWorkspace(payload.workspace as SavedWorkspace | null);
+          if (payload.callbacks !== undefined) onCallbacks?.(payload.callbacks as GlobalCallbackSnapshot);
+        } catch (error) {
+          onStatus?.("error");
+          onError?.(error instanceof Error ? error : new Error(String(error)));
+        }
+      },
+      onStatus,
+      onError,
+    },
+  );
 }
 
 export async function createWorkspace(

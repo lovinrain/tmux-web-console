@@ -204,6 +204,8 @@ def receiver_middleware(prefix: str, receiver: FencedReceiver | None = None) -> 
             known_managed = managed_name(session) or binding is not None or workspace_binding is not None
             try:
                 payload = await request.json()
+            except ConnectionError:
+                return web.Response(status=499)
             except (ValueError, TypeError, RecursionError):
                 if known_managed:
                     raise FenceError("managed operation requires a JSON authority envelope", 400) from None

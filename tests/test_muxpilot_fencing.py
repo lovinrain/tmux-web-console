@@ -231,6 +231,31 @@ async def test_managed_workspace_projections_reject_stale_epoch_and_omitted_auth
         assert (await added.json())["workspace"]["tabs"] == ["mxp-main", "mxp-worker"]
 
 
+async def test_fencing_middleware_handles_disconnected_client_without_500(authority):
+    receiver = FencedReceiver(authority[0])
+    called = False
+
+    async def activity(_request):
+        nonlocal called
+        called = True
+        return web.json_response({"ok": True})
+
+    middleware = receiver_middleware("/mux", receiver)
+
+    class DisconnectedRequest:
+        def __init__(self) -> None:
+            self.method = "POST"
+            self.path = "/mux/api/workspaces/ws-1/activity"
+            self.match_info = {"workspace_id": "ws-1"}
+
+        async def json(self):
+            raise ConnectionResetError("Connection lost")
+
+    response = await middleware(DisconnectedRequest(), activity)
+    assert response.status == 499
+    assert not called
+
+
 async def test_managed_delete_empty_success_retains_confirmed_receipt(authority):
     receiver = FencedReceiver(authority[0])
     ctx = context(authority)

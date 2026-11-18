@@ -1105,6 +1105,9 @@ async def authentication_middleware(
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
+    prefix_root = request.app[BASE_PATH_KEY]
+    if prefix_root and request.path == "/" and request.method in {"GET", "HEAD"}:
+        return await handler(request)
     mode = request.app[AUTH_MODE_KEY]
     if mode is AuthMode.NONE:
         return await handler(request)
@@ -6329,7 +6332,11 @@ def create_app(
         )
         ignore_size = request.query.get("ignoreSize", "0") == "1"
         websocket = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_INPUT_BYTES)
-        await websocket.prepare(request)
+        try:
+            await websocket.prepare(request)
+        except ConnectionError:
+            LOGGER.debug("Terminal WebSocket client disconnected during handshake")
+            return web.Response(status=499)
 
         try:
             bridge = await PtyBridge.attach(
@@ -6575,7 +6582,18 @@ def create_app(
                     await app[WORKSPACE_VIEWS_KEY].sync_sizes()
         return websocket
 
-    async def spa(_: web.Request) -> web.StreamResponse:
+    async def redirect_to_base_root(request: web.Request) -> web.StreamResponse:
+        query = (
+            f"?{request.rel_url.raw_query_string}"
+            if request.rel_url.raw_query_string
+            else ""
+        )
+        return web.Response(status=302, headers={"Location": f"{prefix}/{query}"})
+
+    async def spa(request: web.Request) -> web.StreamResponse:
+        tail = request.match_info.get("tail", "")
+        if tail == "api" or tail.startswith("api/"):
+            return json_error("not found", 404)
         index = DIST / "index.html"
         if not index.exists():
             return web.Response(
@@ -6931,7 +6949,11 @@ def create_app(
     app.router.add_get(f"{prefix}/ws/terminal", terminal)
     if DIST.exists():
         app.router.add_static(f"{prefix}/assets/", DIST / "assets", name="assets")
-    app.router.add_get(prefix or "/", spa)
+    if prefix:
+        app.router.add_get("/", redirect_to_base_root)
+        app.router.add_get(prefix, redirect_to_base_root)
+    else:
+        app.router.add_get("/", spa)
     app.router.add_get(f"{prefix}/{{tail:.*}}", spa)
     return app
 

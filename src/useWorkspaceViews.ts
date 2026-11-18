@@ -55,7 +55,10 @@ export function useWorkspaceViews(workspaceId: string | null, search: string, se
       } finally { busy = false; }
     };
     void poll();
-    const timer = window.setInterval(() => { void poll(); }, 2000);
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void poll();
+    }, 2000);
     const onFocus = () => { void poll(); };
     const onVisible = () => { if (document.visibilityState === "visible") onFocus(); };
     window.addEventListener("focus", onFocus);

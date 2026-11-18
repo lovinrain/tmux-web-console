@@ -486,3 +486,31 @@ async def test_basic_mode_authenticates_websocket_handshake(monkeypatch, tmp_pat
         await client.close()
 
     assert bridge.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_base_path_redirects_root_and_rejects_unknown_api_routes():
+    client = TestClient(
+        TestServer(
+            create_app(
+                tmux=AuthFakeTmux(),
+                base_path="/mux",
+                trusted_origins=(),
+            )
+        )
+    )
+    try:
+        await client.start_server()
+        root = await client.get("/", allow_redirects=False)
+        assert root.status == 302
+        assert root.headers["Location"] == "/mux/"
+
+        bare_base = await client.get("/mux?q=agent", allow_redirects=False)
+        assert bare_base.status == 302
+        assert bare_base.headers["Location"] == "/mux/?q=agent"
+
+        unknown_api = await client.get("/mux/api/does-not-exist")
+        assert unknown_api.status == 404
+        assert await unknown_api.json() == {"error": "not found"}
+    finally:
+        await client.close()

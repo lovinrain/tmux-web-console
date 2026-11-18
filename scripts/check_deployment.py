@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import ipaddress
 import json
@@ -13,11 +14,13 @@ import stat
 import subprocess
 import time
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+UTC = getattr(dt, "UTC", dt.timezone(dt.timedelta(0)))
 
 COMMAND_TIMEOUT = 8
 HTTP_TIMEOUT = 5

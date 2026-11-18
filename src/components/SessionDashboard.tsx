@@ -263,7 +263,7 @@ function replaceDashboardUrl(route: SessionDashboardRouteState): void {
   const openSessions = workspaceTabsFromSearch(currentSearch);
   const dashboardSearch = serializeSessionDashboardSearch(route, currentSearch);
   const search = searchWithWorkspaceTabs(dashboardSearch, openSessions);
-  const target = workspaceHref(window.location.pathname, search, window.location.hash);
+  const target = workspaceHref(`${BASE_PATH}/`, search, window.location.hash);
   window.history.replaceState(window.history.state, "", target);
 }
 

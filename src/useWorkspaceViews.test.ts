@@ -71,3 +71,19 @@ it("ignores a stale eviction snapshot after explicit Rejoin or workspace navigat
   expect(hook.result.current.paused).toBe(false);
   expect(hook.result.current.identity.scope).toBe("workspace:two");
 });
+
+it("pauses periodic snapshot polling while the tab is hidden and refreshes when visible again", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  visibility.mockReturnValue("hidden");
+  renderHook(() => useWorkspaceViews("one", "", ["alpha"]));
+  await act(async () => {});
+  expect(api.getWorkspaceViews).toHaveBeenCalledTimes(1);
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+  expect(api.getWorkspaceViews).toHaveBeenCalledTimes(1);
+
+  visibility.mockReturnValue("visible");
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(api.getWorkspaceViews).toHaveBeenCalledTimes(2);
+  visibility.mockRestore();
+});

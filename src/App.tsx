@@ -52,6 +52,8 @@ import { useWorkspaceSeparators } from "./useWorkspaceSeparators";
 import { useSessionNavigationHistory } from "./useSessionNavigationHistory";
 import { useWorkspaceTabSearch } from "./useWorkspaceTabSearch";
 import {
+  isBareSessionIndexRoute,
+  isKnownAppRoute,
   newSessionPath,
   paneLayoutPath,
   parseNewSessionRoute,
@@ -1280,6 +1282,13 @@ function AppRoutes() {
     }
 
     const current = currentLocation();
+    const detachedPath = isBareSessionIndexRoute(current.path)
+      ? (workspaceRef.current.openSessions[0]
+        ? sessionPath(workspaceRef.current.openSessions[0])
+        : "/")
+      : isKnownAppRoute(current.path)
+        ? current.path
+        : "/";
     const search = searchWithSavedWorkspaceId(
       searchWithWorkspaceState(
         current.search,
@@ -1289,8 +1298,8 @@ function AppRoutes() {
       ),
       null,
     );
-    replaceLocation(window.history.state, current.path, search);
-    setLocation({ path: current.path, search });
+    replaceLocation(window.history.state, detachedPath, search);
+    setLocation({ path: detachedPath, search });
     setWorkspaceSyncProblem(message ? { kind: "detached", message } : null);
   }, [
     recordWorkspaceGroupsSupport,
@@ -1390,7 +1399,7 @@ function AppRoutes() {
       const route = parseSessionRoute(current.path);
       const paneRoute = parsePaneLayoutRoute(current.path);
       let path = current.path;
-      if (route || (resume && isDashboardPath(current.path))) {
+      if (route || isBareSessionIndexRoute(current.path) || (resume && isDashboardPath(current.path))) {
         path = route && route.sessionName === routeSession
           ? sessionPath(route.sessionName, route.recentsOpen)
           : landingSession
@@ -1401,6 +1410,8 @@ function AppRoutes() {
         && !restoredPaneLayouts.some((layout) => layout.id === paneRoute.layoutId)
       ) {
         path = landingSession ? sessionPath(landingSession) : "/";
+      } else if (!isKnownAppRoute(current.path)) {
+        path = resume && landingSession ? sessionPath(landingSession) : "/";
       }
       const search = searchWithSavedWorkspaceId(
         searchWithWorkspaceState(
@@ -2031,6 +2042,37 @@ function AppRoutes() {
   const newSessionRoute = parseNewSessionRoute(location.path);
   const paneLayoutRoute = parsePaneLayoutRoute(location.path);
   const locationWorkspaceId = savedWorkspaceIdFromSearch(location.search);
+
+  useLayoutEffect(() => {
+    const current = currentLocation();
+    if (isBareSessionIndexRoute(current.path)) {
+      const savedId = savedWorkspaceIdFromSearch(current.search);
+      if (savedId && workspaceSyncProblem?.kind !== "load") {
+        if (hydratedWorkspaceIdRef.current !== savedId) return;
+      }
+      const fallbackTab = workspaceRef.current.openSessions[0];
+      const normalizedPath = fallbackTab ? sessionPath(fallbackTab) : "/";
+      replaceLocation(window.history.state, normalizedPath, current.search);
+      syncLocation();
+      return;
+    }
+    if (!isKnownAppRoute(current.path)) {
+      replaceLocation(window.history.state, "/", current.search);
+      setLocation({ path: "/", search: current.search });
+      return;
+    }
+    if (isDashboardPath(current.path) && BASE_PATH && window.location.pathname === BASE_PATH) {
+      replaceLocation(window.history.state, "/", current.search);
+    }
+  }, [
+    hydratedWorkspaceId,
+    location.path,
+    location.search,
+    replaceLocation,
+    syncLocation,
+    workspace.openSessions,
+    workspaceSyncProblem?.kind,
+  ]);
   const changeForkSyncSearch = useCallback((search: string) => {
     replaceLocation(window.history.state, currentLocation().path, search);
     syncLocation();
@@ -5350,6 +5392,14 @@ function AppRoutes() {
   if (location.path === "/snippets" || location.path === "/snippets/") {
     return withWorkspaceSyncNotice(
       <SnippetLibrary onOpenSessions={returnFromSnippets} />,
+    );
+  }
+
+  if (isBareSessionIndexRoute(location.path) && locationWorkspaceId && !workspaceSyncProblem) {
+    return withWorkspaceSyncNotice(
+      <main className="workspace-pane-loading">
+        <p>Opening saved workspace...</p>
+      </main>,
     );
   }
 
