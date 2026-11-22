@@ -5205,6 +5205,10 @@ function AppRoutes() {
         sessionNavigation={(
           <SessionWorkspaceNavigation
             activeSession={sessionName}
+            onHideInputAndHeader={() => {
+              setConsoleBarVisibility("header", false);
+              setConsoleBarVisibility("stagedInput", false);
+            }}
             separators={workspaceSeparators.anchors}
             separatorsBefore={workspaceSeparators.beforeAnchors}
             separatorsBusy={workspaceSeparators.busy}

@@ -198,6 +198,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
     onReparentSession,
     onSortTabsByWorkingState,
     onToggleTabActions,
+    onHideInputAndHeader,
     onOpenTabInNewWindow,
     onSaveTabGroup,
     onAddTabsToGroup,
@@ -1924,6 +1925,7 @@ export function SessionWorkspaceNavigation(props: SessionWorkspaceNavigationProp
       ? sortTabsByWorkingState
       : undefined,
     onToggleTabActions,
+    onHideInputAndHeader,
     onCloseActiveTab: activeSession && onCloseTab
       ? () => onCloseTab(activeSession)
       : undefined,

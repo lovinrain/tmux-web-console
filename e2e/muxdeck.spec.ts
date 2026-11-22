@@ -2536,6 +2536,29 @@ test("desktop header hides and restores while preserving the live terminal and m
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
   }
 
+  const inputToggle = toolbar.getByRole("button", { name: "Staged input", exact: true });
+  await page.keyboard.press("Control+Shift+H");
+  let commandSearch = page.getByRole("combobox", { name: "Search commands" });
+  await commandSearch.fill("hid");
+  await expect(page.locator('[role="option"][aria-selected="true"] strong')).toHaveText("hid");
+  await commandSearch.press("Enter");
+  await expect(header).toBeHidden();
+  await expect(page.locator(".staged-composer")).toBeHidden();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(inputToggle).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("tablist", { name: "Session workspace tabs" })).toBeVisible();
+
+  await page.keyboard.press("Control+Shift+H");
+  commandSearch = page.getByRole("combobox", { name: "Search commands" });
+  await commandSearch.fill("hid");
+  await commandSearch.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(inputToggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await inputToggle.click();
+  await expect(header).toBeVisible();
+  await expect(draft).toHaveValue("Keep this draft when the header is hidden");
+
   await header.getByRole("button", { name: "Light theme", exact: true }).click();
   await page.setViewportSize({ width: 672, height: 900 });
   await expect(hide).toBeInViewport();

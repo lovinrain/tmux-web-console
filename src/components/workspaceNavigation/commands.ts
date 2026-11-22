@@ -38,6 +38,7 @@ export interface WorkspaceCommandContext {
   onCreateTabGroup?: () => void;
   onSortTabsByWorkingState?: () => void;
   onToggleTabActions?: () => void;
+  onHideInputAndHeader?: () => void;
   onCloseActiveTab?: () => void;
 }
 
@@ -76,6 +77,7 @@ export function buildWorkspaceCommands({
   onCreateTabGroup,
   onSortTabsByWorkingState,
   onToggleTabActions,
+  onHideInputAndHeader,
   onCloseActiveTab,
 }: WorkspaceCommandContext): WorkspaceCommand[] {
   const activeSessionLoaded = Boolean(
@@ -250,6 +252,16 @@ export function buildWorkspaceCommands({
       disabled: !activeSessionLoaded,
       disabledReason: "Open a live session first.",
     }, "view-session-tabs"),
+    {
+      id: "view-hide-input-and-header",
+      label: "hid",
+      description: "Hide staged input and the console header button panel.",
+      category: "View",
+      keywords: ["header", "composer", "input", "controls"],
+      disabled: !activeSessionLoaded || !onHideInputAndHeader,
+      disabledReason: "Open a session console first.",
+      run: () => onHideInputAndHeader?.(),
+    },
     shortcutCommand({
       id: "view-terminal-focus",
       label: "Enter or exit terminal Focus",

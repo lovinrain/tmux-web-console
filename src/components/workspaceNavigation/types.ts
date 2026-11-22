@@ -43,6 +43,7 @@ export interface SessionWorkspaceNavigationProps {
   onBulkSessionAction?: (action: "close" | "end", sessionNames: string[]) => void;
   onSortTabsByWorkingState?: () => void;
   onToggleTabActions?: () => void;
+  onHideInputAndHeader?: () => void;
   onOpenTabInNewWindow?: (
     sessionName: string,
     mode: OpenTabInNewWindowMode,

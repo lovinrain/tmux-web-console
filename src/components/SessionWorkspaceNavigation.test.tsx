@@ -880,7 +880,8 @@ describe("SessionWorkspaceNavigation", () => {
   });
 
   it("fuzzy-searches and runs desktop commands and open tabs", async () => {
-    const props = navigationProps();
+    const onHideInputAndHeader = vi.fn();
+    const props = navigationProps({ onHideInputAndHeader });
     const shortcutActions: ShortcutActionId[] = [];
     const captureShortcut = (event: Event) => {
       shortcutActions.push((event as CustomEvent<ShortcutActionId>).detail);
@@ -920,6 +921,26 @@ describe("SessionWorkspaceNavigation", () => {
       .toHaveTextContent("Ctrl+Shift+I");
     fireEvent.keyDown(snippetSearch, { key: "Enter" });
     expect(shortcutActions).toContain("input-insert-snippet");
+
+    fireEvent.click(trigger);
+    const hidePalette = screen.getByRole("dialog", { name: "Run a command" });
+    const hideSearch = within(hidePalette).getByRole("combobox", { name: "Search commands" });
+    fireEvent.change(hideSearch, { target: { value: "hid" } });
+    expect(within(hidePalette).getByRole("option", {
+      name: /Hide staged input and the console header button panel/,
+    })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(hideSearch, { key: "Enter" });
+    expect(onHideInputAndHeader).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(trigger);
+    const tabsPalette = screen.getByRole("dialog", { name: "Run a command" });
+    const tabsSearch = within(tabsPalette).getByRole("combobox", { name: "Search commands" });
+    fireEvent.change(tabsSearch, { target: { value: "hide" } });
+    expect(within(tabsPalette).getByRole("option", { name: /Hide session tabs/ }))
+      .toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(tabsSearch, { key: "Enter" });
+    expect(shortcutActions).toContain("view-session-tabs");
+    expect(onHideInputAndHeader).toHaveBeenCalledTimes(1);
 
     fireEvent.click(trigger);
     const reopened = screen.getByRole("dialog", { name: "Run a command" });
