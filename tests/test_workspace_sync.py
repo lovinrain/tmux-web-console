@@ -237,6 +237,44 @@ async def test_workspace_stream_scopes_resource_writes_and_ignores_failures(tmp_
 
 
 @pytest.mark.asyncio
+async def test_child_order_publishes_one_snapshot_and_no_events_for_noops_or_failures(tmp_path, monkeypatch):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Order", tabs=["root", "a", "b"], active_session="root",
+                                      parents={"a": "root", "b": "root"})
+    application = create_app(workspaces=store, base_path="")
+    broker = application[WORKSPACE_STREAM_BROKER_KEY]
+    queue = await broker.subscribe(original["id"], original, callback_snapshot(store))
+    await queue.get()
+    route = f"/api/workspaces/{original['id']}/children"
+    payload = {"parent": "root", "order": ["b", "a"], "sessionRevision": 0}
+    async with TestClient(TestServer(application)) as client:
+        response = await client.put(route, json=payload)
+        assert response.status == 200
+        updated = (await response.json())["workspace"]
+        assert json.loads(queue.get_nowait())["workspace"] == updated
+        assert queue.empty()
+        response = await client.put(route, json=payload)
+        assert response.status == 200
+        assert (await response.json())["changed"] is False
+        assert queue.empty()
+        response = await client.put(route, json={**payload, "order": ["a"]})
+        assert response.status == 400
+        assert queue.empty()
+
+        def fail_persist(*_args):
+            raise OSError("disk full")
+
+        before = store.path.read_bytes()
+        monkeypatch.setattr(store, "_persist", fail_persist)
+        response = await client.put(route, json={**payload, "order": ["a", "b"]})
+        assert response.status == 500
+        assert store.path.read_bytes() == before
+        assert store.get_workspace(original["id"]) == updated
+        assert queue.empty()
+        await broker.unsubscribe(original["id"], queue)
+
+
+@pytest.mark.asyncio
 async def test_workspace_stream_multiplexes_callback_only_updates_and_deduplicates(tmp_path):
     store = WorkspaceStore(tmp_path / "workspaces.json")
     original = store.create_workspace(name="Shared", tabs=["a"], active_session="a")

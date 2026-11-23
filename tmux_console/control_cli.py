@@ -539,6 +539,17 @@ def _workspace_command(client: ControlClient, args: argparse.Namespace) -> dict[
             "session": args.session, "direction": args.direction,
             **_cas(workspace, args.revision),
         })
+    if args.action in {"order", "sort"}:
+        payload = {"parent": None if args.parent == "-" else args.parent,
+                   **_cas(workspace, args.revision)}
+        if args.action == "order":
+            payload["order"] = args.sessions
+        else:
+            payload["sortBy"] = {"key": "titlePrefix", "order": args.prefix.split(","),
+                                 "delimiter": args.delimiter}
+            if args.separators:
+                payload["separators"] = True
+        return client.request("PUT", path + "/children", payload)
     if args.action in {"add", "remove"}:
         revision = workspace["sessionRevision"] if args.revision is None else args.revision
         return client.request("POST" if args.action == "add" else "DELETE", path + "/sessions",
@@ -693,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("name")
     create.add_argument("sessions", nargs="*")
     create.add_argument("--active")
-    for action in ("get", "add", "remove", "parent", "move"):
+    for action in ("get", "add", "remove", "parent", "move", "order", "sort"):
         command = workspaces.add_parser(action)
         command.add_argument("workspace")
         if action != "get":
@@ -703,6 +714,14 @@ def build_parser() -> argparse.ArgumentParser:
         elif action == "move":
             command.add_argument("session")
             command.add_argument("direction", choices=("up", "down"))
+        elif action in {"order", "sort"}:
+            command.add_argument("parent", help="parent session name, or - for the top level")
+            if action == "order":
+                command.add_argument("sessions", nargs="+")
+            else:
+                command.add_argument("--prefix", required=True, help="comma-separated title prefixes in order")
+                command.add_argument("--delimiter", default=" · ")
+                command.add_argument("--separators", action="store_true", help="add missing separators between prefix blocks")
         elif action == "parent":
             command.add_argument("child")
             command.add_argument("parent", nargs="?")

@@ -21,6 +21,7 @@ from tmux_console.workspaces import (
     WORKSPACE_SCHEMA_VERSION,
     WORKSPACE_STORE_UNAVAILABLE_MESSAGE,
     WorkspaceNotFoundError,
+    WorkspaceOrderMismatchError,
     WorkspacePinCapacityError,
     WorkspaceSessionRevisionConflict,
     WorkspaceStore,
@@ -221,6 +222,205 @@ def test_concurrent_relative_moves_compose_or_reject_the_stale_version(tmp_path,
     assert canonical["tabs"] == (["b", "a", "c"] if guarded else ["b", "c", "a"])
     assert canonical["updatedAt"] == original["updatedAt"] + (1 if guarded else 2)
     assert WorkspaceStore(store.path).get_workspace(original["id"]) == canonical
+
+
+def test_order_workspace_children_carries_nine_branches_and_preserves_metadata(tmp_path, monkeypatch):
+    store = WorkspaceStore(tmp_path / "workspaces.json", clock=lambda: 10)
+    children = ["L-a", "P-a", "R-a", "R-b", "L-b", "P-b", "L-c", "P-c", "R-c"]
+    descendants = ["grandchild", "great-grandchild", "grandchild-2", "grandchild-3"]
+    family = ["leader", children[0], *descendants, *children[1:]]
+    parents = {child: "leader" for child in children}
+    parents.update({"grandchild": "L-a", "great-grandchild": "grandchild",
+                    "grandchild-2": "L-a", "grandchild-3": "L-a", "before-child": "before"})
+    snapshots = [{
+        "name": name, "historyId": f"{index:08x}-0000-4000-8000-000000000001",
+        "directory": "/project", "title": name, "agentType": None, "agentSessionId": None,
+        "sessionId": f"${index}", "sessionCreated": 1, "serverStarted": 1, "serverPid": 1, "savedAt": 1,
+    } for index, name in enumerate(["L-a", *descendants, "P-a", "R-a"], 1)]
+    original = store.create_workspace(
+        name="Prefix tree", tabs=["before", "before-child", *family, "after"],
+        active_session="great-grandchild", parents=parents,
+        groups=[workspace_group("family", family, collapsed=True)],
+        folds=[{"id": "fold", "tabs": ["L-a", "P-a", "R-a"], "closedSessions": snapshots}],
+        separators=["R-b", "after"], separators_before=["L-c"], callback_sessions=["R-c"],
+    )
+    store.set_session_workspace_pinned("L-b", True)
+    original = store.get_workspace(original["id"])
+    before = json.loads(store.path.read_text())
+    writes = []
+    persist = store._persist
+
+    def record_write(*args):
+        writes.append(True)
+        return persist(*args)
+
+    monkeypatch.setattr(store, "_persist", record_write)
+    order = ["R-a", "R-b", "R-c", "L-a", "L-b", "L-c", "P-a", "P-b", "P-c"]
+    result = store.order_workspace_children(
+        original["id"], parent="leader", order=order,
+        session_revision=original["sessionRevision"], expected_updated_at=original["updatedAt"],
+    )
+    assert result["changed"] is True
+    updated = result["workspace"]
+    expected_family = ["leader", "R-a", "R-b", "R-c", "L-a", *descendants,
+                       "L-b", "L-c", "P-a", "P-b", "P-c"]
+    assert updated["tabs"] == ["before", "before-child", *expected_family, "after"]
+    assert updated["groups"] == [workspace_group("family", expected_family, collapsed=True)]
+    assert updated["folds"] == [{
+        "id": "fold", "tabs": ["R-a", "L-a", "P-a"],
+        "closedSessions": [item for name in updated["tabs"] for item in snapshots if item["name"] == name],
+    }]
+    for key in original.keys() - {"tabs", "groups", "folds", "updatedAt"}:
+        assert updated[key] == original[key]
+    assert updated["updatedAt"] == original["updatedAt"] + 1
+    after = json.loads(store.path.read_text())
+    assert {key: value for key, value in before.items() if key != "workspaces"} == {
+        key: value for key, value in after.items() if key != "workspaces"
+    }
+    persisted = store.path.read_bytes()
+    assert store.order_workspace_children(
+        original["id"], parent="leader", order=order, session_revision=original["sessionRevision"],
+        expected_updated_at=updated["updatedAt"],
+    ) == {"workspace": updated, "changed": False}
+    assert store.path.read_bytes() == persisted
+    assert len(writes) == 1
+    assert WorkspaceStore(store.path).get_workspace(original["id"]) == updated
+
+
+@pytest.mark.parametrize("order", list(permutations(["a", "b", "c"])))
+def test_order_top_level_children_preserves_each_nested_branch(tmp_path, order):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(
+        name="Roots", tabs=["a", "a-child", "b", "b-child", "c"], active_session="a-child",
+        parents={"a-child": "a", "b-child": "b"},
+    )
+    branches = {"a": ["a", "a-child"], "b": ["b", "b-child"], "c": ["c"]}
+    result = store.order_workspace_children(original["id"], parent=None, order=list(order), session_revision=0)
+    assert result["workspace"]["tabs"] == [name for root in order for name in branches[root]]
+    assert result["changed"] is (list(order) != ["a", "b", "c"])
+
+
+@pytest.mark.parametrize(("order", "missing", "extra", "duplicate"), [
+    (["a"], ["b"], [], []),
+    (["a", "b", "other"], [], ["other"], []),
+    (["a", "a", "b"], [], [], ["a"]),
+    (["other", "other", "a-child"], ["a", "b"], ["other", "a-child"], ["other"]),
+])
+def test_child_order_mismatch_reports_all_details_without_writing(tmp_path, order, missing, extra, duplicate):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Children", tabs=["root", "a", "a-child", "b", "other"],
+                                      active_session="root", parents={"a": "root", "a-child": "a", "b": "root"})
+    before = store.path.read_bytes()
+    with pytest.raises(WorkspaceOrderMismatchError) as caught:
+        store.order_workspace_children(original["id"], parent="root", order=order, session_revision=0)
+    assert (caught.value.missing, caught.value.extra, caught.value.duplicate) == (missing, extra, duplicate)
+    assert store.path.read_bytes() == before
+    assert store.get_workspace(original["id"]) == original
+
+
+@pytest.mark.parametrize("delimiter", [" · ", " :: "])
+def test_child_prefix_sort_is_stable_and_uses_current_titles(tmp_path, delimiter):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    children = ["parked", "unlisted", "running-2", "untitled", "long", "running-1", "plain"]
+    original = store.create_workspace(name="Prefixes", tabs=["root", *children], active_session="root",
+                                      parents={child: "root" for child in children})
+    titles = {"parked": f"P{delimiter}Parked", "unlisted": f"X{delimiter}Other",
+              "running-2": f" R {delimiter}Second", "long": f"L{delimiter}Watch",
+              "running-1": f"R{delimiter}First", "plain": "Ordinary title"}
+    sort_by = {"key": "titlePrefix", "order": ["R", "L", "P"], "delimiter": delimiter}
+    result = store.order_workspace_children(original["id"], parent="root", sort_by=sort_by,
+                                            session_revision=0, title_lookup=titles.get)
+    assert result["order"] == ["running-2", "running-1", "long", "parked", "unlisted", "untitled", "plain"]
+    assert result["workspace"]["tabs"] == ["root", *result["order"]]
+    titles["running-2"] = f"P{delimiter}Finished"
+    updated = store.order_workspace_children(original["id"], parent="root", sort_by=sort_by,
+                                             session_revision=0, title_lookup=titles.get)
+    assert updated["order"] == ["running-1", "long", "running-2", "parked", "unlisted", "untitled", "plain"]
+
+
+def test_child_sort_adds_only_missing_block_separators_and_is_idempotent(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    children = ["running", "long", "parked", "unknown"]
+    original = store.create_workspace(
+        name="Block lines", tabs=["root", "running", "running-child", "long", "parked", "unknown", "other"],
+        active_session="root", parents={**{child: "root" for child in children}, "running-child": "running"},
+        separators=["running-child", "other"], separators_before=["parked"],
+    )
+    titles = {"running": "R · Work", "long": "L · Watch", "parked": "P · Done"}
+    arguments = {"parent": "root", "sort_by": {"key": "titlePrefix", "order": ["R", "L", "P"]},
+                 "separators": True, "session_revision": 0, "title_lookup": titles.get}
+    result = store.order_workspace_children(original["id"], **arguments)
+    assert result["changed"] is True
+    assert result["workspace"]["tabs"] == original["tabs"]
+    assert result["workspace"]["separators"] == original["separators"]
+    assert result["workspace"]["separatorsBefore"] == ["parked", "unknown"]
+    before = store.path.read_bytes()
+    assert store.order_workspace_children(original["id"], **arguments)["changed"] is False
+    assert store.path.read_bytes() == before
+
+
+def test_top_level_child_order_keeps_group_membership_or_rejects_split_groups(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Groups", tabs=["a", "b", "c"], active_session="a",
+                                      groups=[workspace_group("group", ["a", "b"])])
+    before = store.path.read_bytes()
+    with pytest.raises(ValueError, match="group contiguous"):
+        store.order_workspace_children(original["id"], parent=None, order=["a", "c", "b"], session_revision=0)
+    assert store.path.read_bytes() == before
+    result = store.order_workspace_children(original["id"], parent=None, order=["c", "b", "a"], session_revision=0)
+    assert result["workspace"]["groups"] == [workspace_group("group", ["b", "a"])]
+
+
+def test_child_order_and_concurrent_browser_activity_use_one_workspace_version(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json", clock=lambda: 10)
+    original = store.create_workspace(name="Concurrent", tabs=["root", "a", "b"], active_session="root",
+                                      parents={"a": "root", "b": "root"})
+    barrier = threading.Barrier(2)
+
+    def mutate(operation):
+        barrier.wait(timeout=2)
+        try:
+            if operation == "order":
+                return store.order_workspace_children(original["id"], parent="root", order=["b", "a"],
+                                                       session_revision=0, expected_updated_at=original["updatedAt"])
+            return store.record_activity(original["id"], tabs=original["tabs"], active_session="a",
+                                         session_revision=0, expected_updated_at=original["updatedAt"])
+        except WorkspaceUpdateConflict:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(mutate, ["order", "activity"]))
+    assert sum(result is not None for result in results) == 1
+    updated = store.get_workspace(original["id"])
+    assert (updated["tabs"], updated["activeSession"]) in [
+        (["root", "b", "a"], "root"), (["root", "a", "b"], "a"),
+    ]
+    assert WorkspaceStore(store.path).get_workspace(original["id"]) == updated
+
+
+@pytest.mark.parametrize(("tabs", "parent"), [([], None), (["leaf"], "leaf")])
+def test_order_empty_children_is_a_noop(tmp_path, tabs, parent):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Empty", tabs=tabs, active_session=parent)
+    before = store.path.read_bytes()
+    assert store.order_workspace_children(original["id"], parent=parent, order=[], session_revision=0) == {
+        "workspace": original, "changed": False,
+    }
+    assert store.path.read_bytes() == before
+
+
+def test_child_order_preserves_unrelated_positions_in_legacy_tab_order(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Legacy", tabs=["root", "a", "b", "a-child", "other"],
+                                      active_session="root", parents={"a": "root", "b": "root", "a-child": "a"})
+    result = store.order_workspace_children(original["id"], parent="root", order=["b", "a"], session_revision=0)
+    assert result["workspace"]["tabs"] == ["root", "b", "a", "a-child", "other"]
+    store.update_workspace(original["id"], tabs=["root", "b", "a", "other", "a-child"],
+                           update_tabs=True, session_revision=0)
+    before = store.path.read_bytes()
+    with pytest.raises(ValueError, match="unrelated tab positions"):
+        store.order_workspace_children(original["id"], parent="root", order=["b", "a"], session_revision=0)
+    assert store.path.read_bytes() == before
 
 
 def three_pane_layout():

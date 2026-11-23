@@ -280,7 +280,18 @@ muxdeckctl workspaces group add WORKSPACE_ID payments payments-tests
 muxdeckctl workspaces parent WORKSPACE_ID payments-tests --detach
 muxdeckctl workspaces move WORKSPACE_ID payments-tests up
 muxdeckctl workspaces move WORKSPACE_ID payments-tests down
+muxdeckctl workspaces order WORKSPACE_ID payments-leader payments-tests payments-review
+muxdeckctl workspaces sort WORKSPACE_ID payments-leader --prefix R,L,P --separators
 ```
+
+`workspaces order` supplies every direct child of the parent in the desired
+order. `workspaces sort` stably groups children by saved title prefixes, such as
+`R · Work`, `L · Watch`, and `P · Done`. Each child carries its descendants.
+Use `-` as the parent to order top-level branches. Both commands fetch
+`sessionRevision` and `updatedAt` and send one version-fenced write. Prefix
+sorting supports `--delimiter` and can add missing block boundaries with
+`--separators`. The response reports `changed`, and sorting includes the
+computed child `order`.
 
 ### Safe retries and launch uncertainty
 

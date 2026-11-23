@@ -10,8 +10,10 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -70,6 +72,8 @@ _PANE_LAYOUTS_OMITTED = object()
 _CALLBACK_SESSIONS_OMITTED = object()
 _ACTIVE_SESSION_OMITTED = object()
 _EXPECTED_UPDATED_AT_OMITTED = object()
+_ORDER_OMITTED = object()
+_SORT_BY_OMITTED = object()
 _NOTE_REVISION_OMITTED = object()
 MAX_SESSION_RENAME_REVISION = (1 << 53) - 1
 WORKSPACE_SCHEMA_VERSION = 16
@@ -102,6 +106,7 @@ def workspace_api_capabilities() -> dict[str, Any]:
         "groupColors": list(WORKSPACE_GROUP_COLORS),
         "sessionInsertPositions": ["start", "end", "before", "after"],
         "sessionMoveDirections": ["up", "down"],
+        "childSortKeys": ["titlePrefix"],
         "separatorPlacements": ["before", "after"],
         "paneSplitDirections": ["horizontal", "vertical"],
     }
@@ -996,6 +1001,62 @@ def _move_workspace_session(
     return moved, _reconcile_workspace_groups(ordered_groups, moved)
 
 
+def _validate_workspace_child_order(value: object, children: list[str]) -> list[str]:
+    if not isinstance(value, list):
+        raise TypeError("order must be an array")
+    for index, name in enumerate(value):
+        if not isinstance(name, str):
+            raise TypeError(f"order[{index}] must be a session-name string")
+        validate_session_name(name)
+        _validate_unicode(name, f"order[{index}]")
+    counts = Counter(value)
+    child_set = set(children)
+    missing = [name for name in children if name not in counts]
+    extra = [name for name in counts if name not in child_set]
+    duplicate = [name for name, count in counts.items() if count > 1]
+    if missing or extra or duplicate:
+        raise WorkspaceOrderMismatchError(missing, extra, duplicate)
+    return list(value)
+
+
+def _validate_workspace_child_sort(value: object) -> tuple[list[str], str]:
+    if not isinstance(value, dict):
+        raise TypeError("sortBy must be an object")
+    if set(value) - {"key", "order", "delimiter"}:
+        raise ValueError("sortBy supports only key, order and delimiter")
+    if value.get("key") != "titlePrefix":
+        raise ValueError("sortBy.key must be titlePrefix")
+    order = value.get("order")
+    if not isinstance(order, list):
+        raise TypeError("sortBy.order must be an array of prefixes")
+    prefixes: list[str] = []
+    for prefix in order:
+        if not isinstance(prefix, str) or not prefix.strip():
+            raise ValueError("sortBy.order must contain nonempty strings")
+        _validate_unicode(prefix, "sortBy.order")
+        prefixes.append(prefix.strip())
+    if len(set(prefixes)) != len(prefixes):
+        raise ValueError("sortBy.order contains duplicate prefixes")
+    delimiter = value.get("delimiter", " · ")
+    if not isinstance(delimiter, str) or not delimiter:
+        raise ValueError("sortBy.delimiter must be a nonempty string")
+    _validate_unicode(delimiter, "sortBy.delimiter")
+    return prefixes, delimiter
+
+
+def _workspace_child_branches(
+    tabs: tuple[str, ...], parents: dict[str, str], children: list[str],
+) -> dict[str, list[str]]:
+    branches: dict[str, list[str]] = {child: [] for child in children}
+    for tab in tabs:
+        root = tab
+        while root not in branches and root in parents:
+            root = parents[root]
+        if root in branches:
+            branches[root].append(tab)
+    return branches
+
+
 def _rename_workspace_groups(
     groups: tuple[WorkspaceGroup, ...],
     workspace_tabs: tuple[str, ...],
@@ -1496,6 +1557,14 @@ class WorkspaceResourceNotFoundError(LookupError):
 
 class WorkspaceResourceConflictError(ValueError):
     pass
+
+
+class WorkspaceOrderMismatchError(ValueError):
+    def __init__(self, missing: list[str], extra: list[str], duplicate: list[str]) -> None:
+        super().__init__("E-ORDER-MISMATCH")
+        self.missing = missing
+        self.extra = extra
+        self.duplicate = duplicate
 
 
 class _WorkspaceDirectorySyncError(OSError):
@@ -2754,6 +2823,95 @@ class WorkspaceStore:
                 session_revision=revision,
             )
             return {"moved": True, "workspace": workspace}
+
+    def order_workspace_children(
+        self,
+        workspace_id: str,
+        *,
+        parent: object,
+        session_revision: object,
+        order: object = _ORDER_OMITTED,
+        sort_by: object = _SORT_BY_OMITTED,
+        separators: object = False,
+        expected_updated_at: object = _EXPECTED_UPDATED_AT_OMITTED,
+        title_lookup: Callable[[str], str | None] | None = None,
+    ) -> dict[str, Any]:
+        """Reorder complete sibling branches in one version-fenced state write."""
+        workspace_id = _validate_workspace_id(workspace_id)
+        if parent is not None:
+            if not isinstance(parent, str):
+                raise TypeError("parent must be a session-name string or null")
+            validate_session_name(parent)
+            _validate_unicode(parent, "parent")
+        if (order is _ORDER_OMITTED) == (sort_by is _SORT_BY_OMITTED):
+            raise ValueError("provide exactly one of order or sortBy")
+        if not isinstance(separators, bool):
+            raise TypeError("separators must be a boolean")
+        if separators and sort_by is _SORT_BY_OMITTED:
+            raise ValueError("separators requires sortBy")
+        revision = _validate_session_revision(session_revision)
+        version = (
+            _validate_timestamp(expected_updated_at, "expectedUpdatedAt")
+            if expected_updated_at is not _EXPECTED_UPDATED_AT_OMITTED else None
+        )
+        with self._lock:
+            self._ensure_writable()
+            current = self._find(workspace_id)
+            self._check_session_revision(revision)
+            if version is not None and version != current.updated_at:
+                raise WorkspaceUpdateConflict(current.updated_at, version)
+            if parent is not None and parent not in current.tabs:
+                raise WorkspaceResourceNotFoundError(f"workspace parent not found: {parent}")
+            parents = dict(current.parents)
+            children = [name for name in current.tabs if parents.get(name) == parent]
+            ranks: dict[str, int] = {}
+            if sort_by is _SORT_BY_OMITTED:
+                ordered = _validate_workspace_child_order(order, children)
+            else:
+                prefixes, delimiter = _validate_workspace_child_sort(sort_by)
+                if title_lookup is None:
+                    raise ValueError("title lookup is required for titlePrefix sorting")
+                prefix_ranks = {prefix: index for index, prefix in enumerate(prefixes)}
+                ranks = {
+                    name: prefix_ranks.get(
+                        (title_lookup(name) or "").split(delimiter, 1)[0].strip(), len(prefixes),
+                    ) for name in children
+                }
+                ordered = sorted(children, key=ranks.__getitem__)
+
+            branches = _workspace_child_branches(current.tabs, parents, children)
+            members = {name for branch in branches.values() for name in branch}
+            replacement = iter(name for child in ordered for name in branches[child])
+            tabs = tuple(next(replacement) if name in members else name for name in current.tabs)
+            positions = {name: index for index, name in enumerate(tabs)}
+            for child, branch in branches.items():
+                start = positions[child]
+                if tuple(branch) != tabs[start:start + len(branch)]:
+                    raise ValueError("child branches must be contiguous to preserve unrelated tab positions")
+            groups = _reconcile_workspace_groups(current.groups, tabs)
+            if len(groups) != len(current.groups):
+                raise ValueError("order must keep each tab group contiguous")
+
+            before = list(current.separators_before)
+            if separators:
+                for previous, child in pairwise(ordered):
+                    if (ranks[previous] != ranks[child] and child not in before
+                            and branches[previous][-1] not in current.separators):
+                        before.append(child)
+            added_separators = tuple(before) != current.separators_before
+            changed = tabs != current.tabs or groups != current.groups or added_separators
+            workspace = self._workspace_dict(current)
+            if changed:
+                workspace = self.update_workspace(
+                    workspace_id, tabs=list(tabs), update_tabs=True,
+                    groups=[group.to_dict() for group in groups], update_groups=True,
+                    separators_before=before, update_separators_before=added_separators,
+                    session_revision=revision,
+                )
+            result = {"workspace": workspace, "changed": changed}
+            if sort_by is not _SORT_BY_OMITTED:
+                result["order"] = ordered
+            return result
 
     def replace_workspace_sessions(
         self,

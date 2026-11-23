@@ -321,6 +321,7 @@ stream, avoiding unnecessary HTTP/1.1 connection slots across open tabs.
 | `GET /api/workspaces/{workspaceId}/sessions` | None | `sessions`, `activeSession`, and `sessionRevision`. |
 | `POST /api/workspaces/{workspaceId}/sessions` | `sessions`, `sessionRevision`; optional `position`, `relativeTo`, `activeSession` | Adds missing names without duplicates and returns `added` plus the workspace. |
 | `POST /api/workspaces/{workspaceId}/sessions/move` | `session`, `direction`, `sessionRevision`; optional `expectedUpdatedAt` | Moves one sibling position up or down and returns `{moved, workspace}`. |
+| `PUT /api/workspaces/{workspaceId}/children` | `parent`, `sessionRevision`, and exactly one of `order` or `sortBy`, with optional `expectedUpdatedAt` and `separators` | Orders one parent's direct children with their branches and returns `{workspace, changed}`. Prefix sorting also returns the computed `order`. |
 | `PUT /api/workspaces/{workspaceId}/sessions` | `sessions`, `sessionRevision`; optional `activeSession` | Replaces/reorders the full tab list atomically. |
 | `DELETE /api/workspaces/{workspaceId}/sessions` | `sessions`, `sessionRevision` | Removes existing names and returns `removed` plus the workspace. |
 
@@ -378,6 +379,80 @@ response. The CLI fetches both version checks automatically:
 muxdeckctl workspaces move WORKSPACE_ID review-b up
 muxdeckctl workspaces move WORKSPACE_ID review-b down
 ```
+
+### Order sibling branches
+
+`PUT /api/workspaces/{workspaceId}/children` orders every direct child of one
+parent in a single write. Set `parent` to the parent's tab name, or `null` for
+the top level. The parent and its children may refer to ended sessions.
+
+```json
+{
+  "parent": "overseer",
+  "order": ["running-a", "running-b", "watcher", "parked"],
+  "sessionRevision": 7,
+  "expectedUpdatedAt": 1780000000000
+}
+```
+
+`order` must contain each current direct child exactly once. A mismatch returns
+HTTP `400` with `error` and `code` both equal to `E-ORDER-MISMATCH`, plus arrays
+`missing`, `extra`, and `duplicate`. Rejected orders leave the saved file intact.
+An empty order is valid when the parent has no children. A missing workspace or
+parent returns `404`.
+
+Each child carries its descendants in their existing internal order. The
+reordered branches stay contiguous, and tabs outside those branches retain their
+array positions. Existing group membership, parent links, active selection,
+pins, pane layouts, and separator anchors are preserved. Group member arrays
+and fold roots follow the resulting tab order, including saved fold recovery
+metadata. At the top level, an order that splits a named group returns `400`.
+Legacy tab arrangements whose branches cannot be made contiguous while retaining
+unrelated tab positions also return `400`.
+
+`sessionRevision` is required. Supplying `expectedUpdatedAt` also fences browser
+tab edits. Both checks run under the workspace lock before applying the order,
+and stale values return `409`. A changed order advances `updatedAt`, preserves
+the global session revision, and produces one workspace stream update. An
+identical order returns `200` with `changed: false`, preserving timestamps and
+the saved file and producing no stream event.
+
+For stable prefix grouping, supply `sortBy` in place of `order`. Set the optional
+top-level `separators` flag to add missing boundaries between prefix blocks.
+
+```json
+{
+  "parent": "overseer",
+  "sortBy": {"key": "titlePrefix", "order": ["R", "L", "P"], "delimiter": " · "},
+  "separators": true,
+  "sessionRevision": 7,
+  "expectedUpdatedAt": 1780000000000
+}
+```
+
+The prefix is the trimmed portion of the saved title before the first delimiter.
+The default delimiter is `" · "`. Prefix matching is case-sensitive, and the
+prefix list must contain unique nonempty strings. Unlisted prefixes and untitled
+tabs form the last block. Current relative order is preserved within each block.
+Saved titles are read by session name, so ended-session tabs participate too.
+The response includes the computed direct-child `order` alongside `workspace`
+and `changed`.
+
+`separators: true` adds before-session anchors at missing block boundaries. An
+existing before-session anchor on the next branch, or an after-session anchor
+on the preceding branch's last tab, already covers that boundary. Existing
+anchors are retained. Adding separators counts as a change even when child
+order already matches.
+
+```bash
+muxdeckctl workspaces order WORKSPACE_ID overseer running-a running-b watcher parked
+muxdeckctl workspaces sort WORKSPACE_ID overseer --prefix R,L,P --separators
+muxdeckctl workspaces sort WORKSPACE_ID - --prefix R,L,P --delimiter ' · '
+```
+
+The CLI uses `-` for a top-level parent, fetches both version checks, sends one
+write, and exits nonzero on HTTP errors. After a `409`, re-read the workspace
+and decide whether to issue a fresh command.
 
 ### Groups
 

@@ -229,6 +229,7 @@ from .workspace_views import (
 from .workspaces import (
     WorkspaceForgetSnapshot,
     WorkspaceNotFoundError,
+    WorkspaceOrderMismatchError,
     WorkspacePinCapacityError,
     WorkspaceResourceConflictError,
     WorkspaceResourceNotFoundError,
@@ -4904,6 +4905,11 @@ def create_app(
             (WorkspaceSessionRevisionConflict, WorkspaceUpdateConflict, WorkspaceResourceConflictError),
         ):
             return json_error(str(error), 409)
+        if isinstance(error, WorkspaceOrderMismatchError):
+            return web.json_response({
+                "error": str(error), "code": "E-ORDER-MISMATCH",
+                "missing": error.missing, "extra": error.extra, "duplicate": error.duplicate,
+            }, status=400)
         if isinstance(error, (TypeError, ValueError)):
             return json_error(str(error), 400)
         if isinstance(error, OSError):
@@ -4988,6 +4994,36 @@ def create_app(
             WorkspaceUpdateConflict, TypeError, ValueError, OSError,
         ) as error:
             return workspace_resource_error(error, action="move workspace session")
+        return web.json_response(result)
+
+    async def order_workspace_children(request: web.Request) -> web.Response:
+        payload, error_response = await workspace_resource_payload(
+            request, required={"parent", "sessionRevision"},
+            optional={"order", "sortBy", "separators", "expectedUpdatedAt"},
+        )
+        if error_response is not None:
+            return error_response
+        assert payload is not None
+        try:
+            kwargs: dict[str, Any] = {}
+            for field, argument in (
+                ("order", "order"), ("sortBy", "sort_by"),
+                ("expectedUpdatedAt", "expected_updated_at"),
+            ):
+                if field in payload:
+                    kwargs[argument] = payload[field]
+            result = app[WORKSPACES_KEY].order_workspace_children(
+                request.match_info["workspace_id"], parent=payload["parent"],
+                session_revision=payload["sessionRevision"],
+                separators=payload.get("separators", False),
+                title_lookup=app[TITLES_KEY].get_title, **kwargs,
+            )
+        except (
+            WorkspaceStoreUnavailable, WorkspaceNotFoundError,
+            WorkspaceResourceNotFoundError, WorkspaceSessionRevisionConflict,
+            WorkspaceUpdateConflict, TypeError, ValueError, OSError,
+        ) as error:
+            return workspace_resource_error(error, action="order workspace children")
         return web.json_response(result)
 
     async def replace_workspace_sessions(request: web.Request) -> web.Response:
@@ -6812,6 +6848,10 @@ def create_app(
     app.router.add_post(
         f"{prefix}/api/workspaces/{{workspace_id}}/sessions/move",
         move_workspace_session,
+    )
+    app.router.add_put(
+        f"{prefix}/api/workspaces/{{workspace_id}}/children",
+        order_workspace_children,
     )
     app.router.add_delete(
         f"{prefix}/api/workspaces/{{workspace_id}}/sessions",

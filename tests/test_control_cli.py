@@ -477,6 +477,31 @@ def test_workspace_move_uses_relative_api_and_both_version_guards(monkeypatch, c
     assert json.loads(capsys.readouterr().out) == result
 
 
+@pytest.mark.parametrize(("arguments", "fields"), [
+    (["order", "project", "controller", "b", "a"], {"parent": "controller", "order": ["b", "a"]}),
+    (["order", "project", "-", "other", "controller"], {"parent": None, "order": ["other", "controller"]}),
+    (["sort", "project", "controller", "--prefix", "R,L,P"],
+     {"parent": "controller", "sortBy": {"key": "titlePrefix", "order": ["R", "L", "P"], "delimiter": " · "}}),
+    (["sort", "project", "-", "--prefix", "R,L,P", "--delimiter", " :: ", "--separators"],
+     {"parent": None, "sortBy": {"key": "titlePrefix", "order": ["R", "L", "P"], "delimiter": " :: "}, "separators": True}),
+])
+@pytest.mark.parametrize("error", [None, "HTTP 409: control request failed"])
+def test_workspace_child_order_cli_fences_once_and_never_retries(monkeypatch, capsys, arguments, fields, error):
+    result = {"workspace": WORKSPACE, "changed": True}
+    status, client = run_fake(monkeypatch, ["workspaces", *arguments],
+                              [{"workspace": WORKSPACE}, cli.ControlError(error) if error else result])
+    assert status == (1 if error else 0)
+    assert client.calls == [
+        ("GET", "/api/workspaces/project", None),
+        ("PUT", "/api/workspaces/project/children", {**fields, "sessionRevision": 7, "expectedUpdatedAt": 123}),
+    ]
+    output = capsys.readouterr()
+    if error:
+        assert output.out == "" and "HTTP 409" in output.err
+    else:
+        assert json.loads(output.out) == result
+
+
 def test_group_remove_reorders_hole_and_preserves_coverage(monkeypatch, capsys):
     workspace = copy.deepcopy(WORKSPACE)
     workspace["tabs"] = ["controller", "middle", "other"]

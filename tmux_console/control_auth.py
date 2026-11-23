@@ -85,6 +85,7 @@ _PATTERN_ROUTES: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = tuple(
         (rf"/api/workspaces/{_ID}/note/pages", _READ | {"POST"}),
         (rf"/api/workspaces/{_ID}/note/pages/{_SMALL_ID}", _READ | {"PATCH", "DELETE"}),
         (rf"/api/workspaces/{_ID}/sessions/move", {"POST"}),
+        (rf"/api/workspaces/{_ID}/children", {"PUT"}),
         (rf"/api/workspaces/{_ID}/callback-sessions", _READ | {"POST", "DELETE"}),
         (rf"/api/workspaces/{_ID}/groups", _READ | {"POST"}),
         (rf"/api/workspaces/{_ID}/groups/{_SMALL_ID}", _READ | {"PATCH", "DELETE"}),

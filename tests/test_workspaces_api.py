@@ -6,6 +6,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.app import create_app
+from tmux_console.metadata import SessionTitleStore
 from tmux_console.workspaces import (
     MAX_SESSION_RENAME_REVISION,
     MAX_WORKSPACE_GROUPS,
@@ -237,6 +238,88 @@ async def test_workspace_move_api_rejects_invalid_requests_without_writes(tmp_pa
         assert response.status == status
         assert "error" in await response.json()
     assert path.read_bytes() == before
+    assert store.get_workspace(original["id"]) == original
+
+
+@pytest.mark.asyncio
+async def test_workspace_children_api_reorders_and_sorts_ended_session_titles(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    titles = SessionTitleStore(tmp_path / "titles.json")
+    titles.set_title("ended", "P · Saved result")
+    titles.set_title("running", "R · Active work")
+    original = store.create_workspace(name="Children", tabs=["root", "ended", "running", "untitled"],
+                                      active_session="root", parents={name: "root" for name in ["ended", "running", "untitled"]})
+    route = f"/mux/api/workspaces/{original['id']}/children"
+    async with TestClient(TestServer(create_app(workspaces=store, titles=titles, base_path="/mux"))) as client:
+        response = await client.put(route, json={"parent": "root", "order": ["untitled", "running", "ended"],
+                                                "sessionRevision": 0, "expectedUpdatedAt": original["updatedAt"]})
+        assert response.status == 200
+        result = await response.json()
+        assert result["changed"] is True
+        assert result["workspace"]["tabs"] == ["root", "untitled", "running", "ended"]
+        response = await client.put(route, json={"parent": "root", "sortBy": {"key": "titlePrefix", "order": ["R", "L", "P"]},
+                                                "separators": True, "sessionRevision": 0})
+        assert response.status == 200
+        result = await response.json()
+        assert result["order"] == ["running", "ended", "untitled"]
+        assert result["workspace"]["tabs"] == ["root", *result["order"]]
+        assert result["workspace"]["separatorsBefore"] == ["ended", "untitled"]
+        before = store.path.read_bytes()
+        response = await client.put(route, json={"parent": "root", "order": ["running", "ended", "untitled"],
+                                                "sessionRevision": 0, "expectedUpdatedAt": result["workspace"]["updatedAt"]})
+        assert response.status == 200
+        assert await response.json() == {"workspace": result["workspace"], "changed": False}
+        assert store.path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_workspace_children_api_returns_structured_order_mismatch(tmp_path):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Children", tabs=["root", "a", "b"], active_session="root",
+                                      parents={"a": "root", "b": "root"})
+    before = store.path.read_bytes()
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.put(f"/api/workspaces/{original['id']}/children", json={
+            "parent": "root", "order": ["a", "a", "extra"], "sessionRevision": 0,
+        })
+        assert response.status == 400
+        assert await response.json() == {"error": "E-ORDER-MISMATCH", "code": "E-ORDER-MISMATCH",
+                                        "missing": ["b"], "extra": ["extra"], "duplicate": ["a"]}
+    assert store.path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fields", "status"), [
+    ({"sessionRevision": 0, "order": ["a"]}, 400),
+    ({"parent": "root", "order": ["a"]}, 400),
+    ({"parent": "root", "sessionRevision": 0}, 400),
+    ({"parent": "root", "sessionRevision": 0, "order": [], "sortBy": {}}, 400),
+    ({"parent": 123, "sessionRevision": 0, "order": []}, 400),
+    ({"parent": "absent", "sessionRevision": 0, "order": []}, 404),
+    ({"parent": "root", "sessionRevision": 1, "order": ["a"]}, 409),
+    ({"parent": "root", "sessionRevision": 0, "order": ["a"], "expectedUpdatedAt": 0}, 409),
+    ({"parent": "root", "sessionRevision": 0, "order": ["a"], "expectedUpdatedAt": None}, 400),
+    ({"parent": "root", "sessionRevision": 0, "order": ["a"], "unexpected": True}, 400),
+    ({"parent": "root", "sessionRevision": 0, "order": None}, 400),
+    ({"parent": "root", "sessionRevision": 0, "order": [123]}, 400),
+    ({"parent": "root", "sessionRevision": 0, "order": ["a"], "separators": True}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": None}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "invalid", "order": []}}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "titlePrefix", "order": "R,L,P"}}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "titlePrefix", "order": ["R", " R "]}}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "titlePrefix", "order": [""]}}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "titlePrefix", "order": [], "delimiter": ""}}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "titlePrefix", "order": [], "extra": True}}, 400),
+    ({"parent": "root", "sessionRevision": 0, "sortBy": {"key": "titlePrefix", "order": []}, "separators": 1}, 400),
+])
+async def test_workspace_children_api_rejects_invalid_or_stale_writes(tmp_path, fields, status):
+    store = WorkspaceStore(tmp_path / "workspaces.json")
+    original = store.create_workspace(name="Children", tabs=["root", "a"], active_session="root", parents={"a": "root"})
+    before = store.path.read_bytes()
+    async with TestClient(TestServer(create_app(workspaces=store, base_path=""))) as client:
+        response = await client.put(f"/api/workspaces/{original['id']}/children", json=fields)
+        assert response.status == status
+    assert store.path.read_bytes() == before
     assert store.get_workspace(original["id"]) == original
 
 
