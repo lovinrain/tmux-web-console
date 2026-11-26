@@ -14,6 +14,7 @@ import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl, type WorkspaceViewIdentity } from "../api";
 import { attachCodexComposerTheme } from "../codexComposerTheme";
 import { stripCopilotCopyBorder } from "../copilotClipboard";
+import { attachCopilotPromptTheme } from "../copilotPromptTheme";
 import {
   desktopAttachmentsAvailable,
   MAX_ATTACHMENT_UPLOAD_BATCH,
@@ -27,6 +28,7 @@ import {
 } from "../terminalInput";
 import { TerminalFileLinkProvider } from "../terminalFileLinks";
 import { captureTerminal, type TerminalCaptureSnapshot } from "../terminalCapture";
+import type { TerminalRowTheme } from "../terminalRowTheme";
 import { TERMINAL_PALETTE_THEMES, type TerminalThemeMode } from "../terminalTheme";
 import { useOptionalTheme } from "../theme";
 import type { ConnectionState } from "../types";
@@ -161,7 +163,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     selectionCallbackRef.current = onSelectionChange;
     const agentKindRef = useRef(agentKind);
     agentKindRef.current = agentKind;
-    const codexThemeRef = useRef<ReturnType<typeof attachCodexComposerTheme> | null>(null);
+    const promptThemeRef = useRef<TerminalRowTheme | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const onViewEvictedRef = useRef(onViewEvicted);
     onViewEvictedRef.current = onViewEvicted;
@@ -620,7 +622,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       };
 
       const terminal = new Terminal({
-        // Codex composer shading uses xterm's public decoration API.
+        // Agent prompt shading uses xterm's public decoration API.
         allowProposedApi: true,
         cursorBlink: true,
         cursorStyle: "bar",
@@ -1039,8 +1041,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
           socketRef.current.close(1000, "view closed");
         }
         socketRef.current = null;
-        codexThemeRef.current?.dispose();
-        codexThemeRef.current = null;
+        promptThemeRef.current?.dispose();
+        promptThemeRef.current = null;
         terminal.dispose();
         selection.dispose();
         selectionCallbackRef.current?.("");
@@ -1050,12 +1052,14 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
 
     useEffect(() => {
       const terminal = terminalRef.current;
-      if (!terminal || agentKind !== "codex") return;
-      const adapter = attachCodexComposerTheme(terminal, theme, terminalTheme.background);
-      codexThemeRef.current = adapter;
+      const attachTheme = agentKind === "codex" ? attachCodexComposerTheme
+        : agentKind === "copilot" ? attachCopilotPromptTheme : null;
+      if (!terminal || !attachTheme) return;
+      const adapter = attachTheme(terminal, theme, terminalTheme.background);
+      promptThemeRef.current = adapter;
       return () => {
         adapter.dispose();
-        if (codexThemeRef.current === adapter) codexThemeRef.current = null;
+        if (promptThemeRef.current === adapter) promptThemeRef.current = null;
       };
       // Theme updates are applied in place below; agent detection must not reconnect the PTY.
     }, [agentKind, identity, ignoreSize, onPaneChange, onStateChange, session, viewId, viewScope, viewGroup]);
@@ -1063,7 +1067,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     useEffect(() => {
       if (terminalRef.current) {
         terminalRef.current.options.theme = terminalTheme;
-        codexThemeRef.current?.setTheme(theme, terminalTheme.background);
+        promptThemeRef.current?.setTheme(theme, terminalTheme.background);
       }
     }, [theme, terminalTheme]);
 

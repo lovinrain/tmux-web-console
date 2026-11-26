@@ -1,34 +1,20 @@
-import type { IBuffer, IBufferCell, IDisposable, IMarker, Terminal } from "@xterm/xterm";
+import type { IBuffer, IBufferCell, Terminal } from "@xterm/xterm";
+import {
+  attachTerminalRowTheme,
+  highlightSpans,
+  shadeTerminalBackground,
+  type TerminalThemeRow,
+} from "./terminalRowTheme";
 import type { TerminalThemeMode } from "./terminalTheme";
 
-// Codex blends its startup terminal background with white (12%) or black (4%)
-// and caches that color. Preserve the existing defaults for mode-only callers.
-const COMPOSER_BACKGROUNDS: Record<TerminalThemeMode, string> = {
-  dark: "#282a29",
-  light: "#f0f0eb",
-};
-
+// Codex caches its startup fill. Recompute the same blend on a browser theme change.
 function composerBackground(theme: TerminalThemeMode, terminalBackground?: string): string {
-  if (!terminalBackground || !/^#[0-9a-f]{6}$/i.test(terminalBackground)) {
-    return COMPOSER_BACKGROUNDS[theme];
-  }
-  const color = Number.parseInt(terminalBackground.slice(1), 16);
-  const channels = [color >>> 16, (color >>> 8) & 255, color & 255];
-  const amount = theme === "dark" ? 0.12 : 0.04;
-  const blend = theme === "dark" ? 255 : 0;
-  return `#${channels.map((channel) => (
-    Math.floor(channel * (1 - amount) + blend * amount).toString(16).padStart(2, "0")
-  )).join("")}`;
+  return shadeTerminalBackground(theme, terminalBackground, theme === "dark" ? 0.12 : 0.04);
 }
 
 interface Background {
   mode: number;
   color: number;
-}
-
-interface ComposerRow {
-  y: number;
-  spans: Array<{ x: number; width: number }>;
 }
 
 interface BackgroundBand {
@@ -96,7 +82,7 @@ function hasPrompt(buffer: IBuffer, band: BackgroundBand, pattern: RegExp, endY 
   return false;
 }
 
-function composerRows(terminal: Terminal): ComposerRow[] {
+function composerRows(terminal: Terminal): TerminalThemeRow[] {
   const buffer = terminal.buffer.active;
   const cursorY = buffer.baseY + buffer.cursorY;
   const cursorX = Math.min(buffer.cursorX, terminal.cols - 1);
@@ -121,23 +107,11 @@ function composerRows(terminal: Terminal): ComposerRow[] {
     if (hasPrompt(buffer, band, /^\s{0,3}›(?:\s|$)/u)) bands.push(band);
   }
 
-  const rows = new Map<number, ComposerRow>();
+  const rows = new Map<number, TerminalThemeRow>();
   for (const { left, right, top, bottom } of bands) {
     for (let y = Math.max(top, buffer.viewportY); y <= Math.min(bottom, viewportEnd - 1); y += 1) {
       const line = buffer.getLine(y)!;
-      const spans: ComposerRow["spans"] = [];
-      let start: number | null = null;
-      for (let x = left; x <= right; x += 1) {
-        // Preserve application selection/reverse-video highlights as well as all
-        // foreground attributes. Browser selection also stays above this layer.
-        const decorate = x < right && !line.getCell(x)?.isInverse();
-        if (decorate && start === null) start = x;
-        if (!decorate && start !== null) {
-          spans.push({ x: start, width: x - start });
-          start = null;
-        }
-      }
-      rows.set(y, { y, spans });
+      rows.set(y, { y, spans: highlightSpans(line, left, right) });
     }
   }
   return [...rows.values()].sort((a, b) => a.y - b.y);
@@ -148,86 +122,8 @@ export function attachCodexComposerTheme(
   terminal: Terminal,
   initialTheme: TerminalThemeMode,
   terminalBackground?: string,
-): {
-  setTheme: (theme: TerminalThemeMode, terminalBackground?: string) => void;
-  dispose: () => void;
-} {
-  let theme = initialTheme;
-  let backgroundColor = composerBackground(theme, terminalBackground);
-  let disposed = false;
-  let frame: number | undefined;
-  let signature = "";
-  let activeBuffer: IBuffer = terminal.buffer.active;
-  const decorations: IDisposable[] = [];
-  const markers: IMarker[] = [];
-
-  const clear = () => {
-    for (const decoration of decorations.splice(0)) decoration.dispose();
-    for (const marker of markers.splice(0)) marker.dispose();
-    signature = "";
-  };
-
-  const update = () => {
-    if (disposed) return;
-    const buffer = terminal.buffer.active;
-    if (activeBuffer !== buffer) {
-      clear();
-      activeBuffer = buffer;
-    }
-    const rows = composerRows(terminal);
-    const decoratedRows = rows.filter((row) => row.spans.length > 0);
-    const nextSignature = JSON.stringify([theme, backgroundColor, rows]);
-    if (
-      signature === nextSignature
-      && markers.every((marker, index) => !marker.isDisposed && marker.line === decoratedRows[index]?.y)
-    ) return;
-    clear();
-    signature = nextSignature;
-    for (const row of decoratedRows) {
-      const marker = terminal.registerMarker(row.y - buffer.baseY - buffer.cursorY);
-      markers.push(marker);
-      for (const span of row.spans) {
-        const decoration = terminal.registerDecoration({
-          marker,
-          ...span,
-          backgroundColor,
-          layer: "bottom",
-        });
-        if (decoration) decorations.push(decoration);
-      }
-    }
-  };
-
-  const schedule = () => {
-    if (disposed || frame !== undefined) return;
-    frame = requestAnimationFrame(() => {
-      frame = undefined;
-      update();
-    });
-  };
-
-  const listeners = [
-    terminal.onWriteParsed(schedule),
-    terminal.onResize(schedule),
-    terminal.onScroll(schedule),
-    terminal.buffer.onBufferChange(() => {
-      clear();
-      schedule();
-    }),
-  ];
-  update();
-
-  return {
-    setTheme(nextTheme, nextTerminalBackground) {
-      theme = nextTheme;
-      backgroundColor = composerBackground(theme, nextTerminalBackground);
-      update();
-    },
-    dispose() {
-      disposed = true;
-      if (frame !== undefined) cancelAnimationFrame(frame);
-      for (const listener of listeners) listener.dispose();
-      clear();
-    },
-  };
+) {
+  return attachTerminalRowTheme(
+    terminal, { rows: composerRows, background: composerBackground }, initialTheme, terminalBackground,
+  );
 }
