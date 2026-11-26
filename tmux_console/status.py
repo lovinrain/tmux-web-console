@@ -4,6 +4,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
 
 from .tmux import Pane, Session, TmuxClient, TmuxError
@@ -180,10 +181,13 @@ PI_COMMAND_PATTERN = re.compile(
 PI_DECISION_PATTERN = re.compile(r"\bEnter to select\b.*\bEscape/Ctrl\+C to cancel\b", re.IGNORECASE)
 OMP_TITLE_PATTERN = re.compile(r"^π (?P<state>[>!:⠁-⣿○◔◑◕●/|\\-])(?: |$)")
 OMP_COMPOSER_PATTERN = re.compile(r"^\s*╰─(?:\s|$)")
+OMP_EDITOR_RULE_PATTERN = re.compile(r"\s*─{3,}(?:\s+\S.*\s+─+)?\s*")
+OMP_EDITOR_PROMPT_PATTERN = re.compile(r"\s*❯(?:\s|$)")
 OMP_COMMAND_PATTERN = re.compile(r"\s*─{2,}\s+\S\s+Running(?:…|\.\.\.)\s+\([^()]+ to cancel\)\s+─+\s*")
 OPENCODE_FOOTER_PATTERN = re.compile(
     r"\b(?:shift\+)?tab\s+agents\s+ctrl\+p\s+commands\s*$", re.IGNORECASE
 )
+OPENCODE_COMMAND_HINT_PATTERN = re.compile(r"\bctrl\+p\s+commands\b", re.IGNORECASE)
 OPENCODE_MINI_FOOTER_PATTERN = re.compile(r"\s·\s+ctrl\+p\s+menu\s*$", re.IGNORECASE)
 OPENCODE_ACTIVITY_PATTERN = re.compile(r"\besc\s+interrupt\b", re.IGNORECASE)
 OPENCODE_ACTIVITY_BAR_PATTERN = re.compile(r"\s*[■⬝]+\s+esc\s+interrupt\b", re.IGNORECASE)
@@ -662,6 +666,14 @@ def _pi_screen_state(lines: list[str], _title: str) -> AgentState:
     return AgentState("unknown", "Pi input controls are not recognized")
 
 
+def _omp_has_ruled_composer(footer: list[str]) -> bool:
+    # The editor sits between horizontal rules, with an optional status line below it.
+    return any(PROMPT_RULE_PATTERN.fullmatch(line) for line in footer[-2:]) and any(
+        OMP_EDITOR_RULE_PATTERN.fullmatch(rule) and OMP_EDITOR_PROMPT_PATTERN.match(prompt)
+        for rule, prompt in pairwise(footer[:-1])
+    )
+
+
 def _omp_screen_state(lines: list[str], title: str) -> AgentState:
     title_match = OMP_TITLE_PATTERN.match(title)
     title_state = title_match["state"] if title_match else None
@@ -677,8 +689,9 @@ def _omp_screen_state(lines: list[str], title: str) -> AgentState:
         return AgentState("working", "OMP is running a turn")
     if any("Select provider to login" in line for line in footer):
         return AgentState("waiting_human", "OMP is waiting for provider setup")
-    if (title_state == ">" or title.startswith("π:")) and any(
-        OMP_COMPOSER_PATTERN.match(line) for line in footer[-4:]
+    if (title_state == ">" or title.startswith("π:")) and (
+        any(OMP_COMPOSER_PATTERN.match(line) for line in footer[-4:])
+        or _omp_has_ruled_composer(footer)
     ):
         return AgentState("waiting_human", "OMP is idle at its input prompt")
     return AgentState("unknown", "OMP input controls are not recognized")
@@ -698,17 +711,31 @@ def _opencode_screen_state(lines: list[str], title: str) -> AgentState:
         OPENCODE_BUSY_HEADER_PATTERN.fullmatch(line) for line in lines[:3]
     ):
         return AgentState("working", "OpenCode is running a turn")
-    for line in reversed(footer):
-        if OPENCODE_FOOTER_PATTERN.search(line) or OPENCODE_MINI_FOOTER_PATTERN.search(line):
+    # The command hint can share the control row with workspace and session details.
+    command_hint_below_composer = (
+        open_code_title
+        and len(footer) >= 3
+        and footer[-3].lstrip().startswith("┃")
+        and bool(OPENCODE_COMPOSER_RULE_PATTERN.fullmatch(footer[-2]))
+        and bool(OPENCODE_COMMAND_HINT_PATTERN.search(footer[-1]))
+    )
+    for offset, line in enumerate(reversed(footer)):
+        if (
+            (offset == 0 and command_hint_below_composer)
+            or OPENCODE_FOOTER_PATTERN.search(line)
+            or OPENCODE_MINI_FOOTER_PATTERN.search(line)
+        ):
             if OPENCODE_ACTIVITY_PATTERN.search(line):
                 return AgentState("working", "OpenCode is running a turn")
             return AgentState("waiting_human", "OpenCode is idle at its input prompt")
         if OPENCODE_ACTIVITY_BAR_PATTERN.match(line):
             return AgentState("working", "OpenCode is running a turn")
     # OpenCode drops its shortcut hints when the pane is narrow.
-    if open_code_title and footer and OPENCODE_COMPOSER_RULE_PATTERN.fullmatch(footer[-1]):
-        if any(line.lstrip().startswith("┃ ") for line in footer[:-1]):
-            return AgentState("waiting_human", "OpenCode is idle at its input prompt")
+    if (
+        open_code_title and footer and OPENCODE_COMPOSER_RULE_PATTERN.fullmatch(footer[-1])
+        and any(line.lstrip().startswith("┃ ") for line in footer[:-1])
+    ):
+        return AgentState("waiting_human", "OpenCode is idle at its input prompt")
     return AgentState("unknown", "OpenCode input controls are not recognized")
 
 

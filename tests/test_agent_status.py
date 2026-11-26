@@ -4,15 +4,24 @@ from typing import cast
 
 import pytest
 
-from tmux_console.status import AgentStateDetector, classify_agent_state, classify_agent_type
+from tmux_console.status import (
+    AgentStateDetector,
+    classify_agent_state,
+    classify_agent_type,
+)
 from tmux_console.tmux import Pane, Session, TmuxClient
-
 
 RULE = "────────────────────────────────────"
 PI_FOOTER = "/work (main)\n0.0%/128k (auto)                probe-model"
 PI_IDLE = f"{RULE}\n\n{RULE}\n{PI_FOOTER}"
 OMP_IDLE = " π > ⬢ Probe Model > work ▶────19%────────16K─\n╰─"
 OPENCODE_IDLE = "┃ Ask anything\n╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\nshift+tab agents  ctrl+p commands"
+OMP_RULED_COMPOSER = f"{RULE} probe-model [auto] ─\n❯\n{RULE}"
+OMP_RULED_IDLE = f"{OMP_RULED_COMPOSER}\n  0 tokens · /work · main"
+OPENCODE_EXTENDED_FOOTER = (
+    "┃  Build · probe-model\n╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    "  /work · main      build · tab  ctrl+p commands    0 tokens"
+)
 AGY_IDLE = f"{RULE}\n>\n{RULE}\n? for shortcuts                Gemini"
 
 
@@ -76,6 +85,11 @@ def test_pi_model_selector_is_a_user_decision():
     ("title", "screen", "expected"),
     [
         ("π > work", OMP_IDLE, "waiting_human"),
+        ("π > work", OMP_RULED_IDLE, "waiting_human"),
+        ("π > work", OMP_RULED_COMPOSER, "waiting_human"),
+        ("π > work", OMP_RULED_IDLE.replace("❯", "❯ Draft\ncontinued"), "waiting_human"),
+        ("π ⠋ work", OMP_RULED_IDLE, "working"),
+        ("π > work", f"{RULE}\n❯ Previous example\nOld output", "unknown"),
         ("π: work", OMP_IDLE, "waiting_human"),
         ("π : work", OMP_IDLE, "working"),
         ("π ⠋ work", OMP_IDLE, "working"),
@@ -93,6 +107,12 @@ def test_omp_detects_state_from_title_and_current_controls(title, screen, expect
     ("screen", "expected"),
     [
         (OPENCODE_IDLE, "waiting_human"),
+        (OPENCODE_EXTENDED_FOOTER, "waiting_human"),
+        (OPENCODE_EXTENDED_FOOTER.replace(
+            "ctrl+p commands", "■■⬝⬝ esc interrupt · ctrl+p commands"
+        ), "working"),
+        (f"■■⬝⬝ esc interrupt\nOld output\n{OPENCODE_EXTENDED_FOOTER}", "waiting_human"),
+        ("/work · main  ctrl+p commands  0 tokens", "unknown"),
         (OPENCODE_IDLE.replace("shift+tab", "tab"), "waiting_human"),
         ("┃ Ask anything…\n╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀", "waiting_human"),
         ("▪ oc mini v2.4.2 · /work\n┃ Ask anything\nDefault · probe-model · probe · ctrl+p menu",
@@ -142,8 +162,13 @@ def test_opencode_selectors_can_keep_the_idle_footer(heading):
         (f"Thinking... 12s\n1/2 steps\n{AGY_IDLE}", "working"),
         (f"Thinking... 12s\nA previous reply.\n{AGY_IDLE}", "waiting_human"),
         (f"Running command... 18s\n{AGY_IDLE}", "running_command"),
-        ("Welcome to the Antigravity CLI. You are currently not signed in.\n"
-         "Select login method:\n↑/↓ Navigate · enter Select", "waiting_human"),
+        (
+            (
+                "Welcome to the Antigravity CLI. You are currently not signed in.\n"
+                "Select login method:\n↑/↓ Navigate · enter Select"
+            ),
+            "waiting_human",
+        ),
         ("Yes, and always allow 'pwd' in this conversation\nNo, deny access", "waiting_human"),
         ("Thinking... 12s\nA partial terminal capture.", "unknown"),
         ("? for shortcuts", "unknown"),

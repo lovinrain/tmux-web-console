@@ -25,3 +25,16 @@ Retrieved 2026-10-20 (UTC):
 - `deepseek.svg`: DeepSeek's whale mark from the same LobeHub Icons commit
   and static SVG directory linked above. MIT license reproduced in
   `LICENSE-lobe-icons.txt`.
+
+### Retrieved 2026-11-26 (UTC)
+
+- `pi.svg` uses the Pi web app's favicon from
+  https://github.com/earendil-works/pi/blob/05dc8d239d0857cc092687506cfbe88bde29a9a1/apps/p2/public/icons/favicon.svg.
+  The MIT license is in `LICENSE-pi.txt`.
+- `oh-my-pi.svg` uses the foreground path from https://omp.sh/favicon.svg.
+  The MIT license is in `LICENSE-oh-my-pi.txt`.
+- `opencode.svg` uses the foreground paths from
+  https://github.com/anomalyco/opencode/blob/3f5bb21f163a95f5fe8f354875b1157d7f66137d/packages/identity/mark.svg.
+  The MIT license is in `LICENSE-opencode.txt`.
+- `antigravity.svg` uses the foreground silhouette from
+  https://antigravity.google/favicon.svg.
