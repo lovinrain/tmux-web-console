@@ -12,10 +12,19 @@ describe("agent scroll recommendations", () => {
     ["cursor", "tmux"],
     ["grok", "application"],
     ["dsh-tui", "application"],
+    ["pi", "tmux"],
+    ["omp", "tmux"],
+    ["opencode", "tmux"],
+    ["agy", "tmux"],
     ["shells", "tmux"],
     ["other", "tmux"],
   ] as const)("recommends %s scrolling using %s", (kind, expected) => {
     expect(preferredAgentScrollMode(kind)).toBe(expected);
+  });
+
+  it.each(["pi", "opencode"] as const)("uses app scrolling only in the full-screen %s view", (kind) => {
+    expect(preferredAgentScrollMode(kind, false)).toBe("tmux");
+    expect(preferredAgentScrollMode(kind, true)).toBe("application");
   });
 
   it("uses agent-specific tuning when known and plain wheel scrolling for every other kind", () => {
@@ -23,7 +32,7 @@ describe("agent scroll recommendations", () => {
     expect(applicationScrollProfile("codex")).toBe("codex");
     expect(applicationScrollProfile("copilot")).toBe("copilot");
     expect(applicationScrollProfile("grok")).toBe("grok");
-    for (const kind of ["cursor", "dsh-tui", "shells", "other"] as const) {
+    for (const kind of ["cursor", "dsh-tui", "pi", "omp", "opencode", "agy", "shells", "other"] as const) {
       expect(applicationScrollProfile(kind)).toBe("wheel");
     }
   });

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock, call
 
 import pytest
 
+from tmux_console.agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from tmux_console.submitted_messages import (
     SubmittedMessageStore,
     SubmittedMessageStoreUnavailable,
@@ -177,6 +179,124 @@ def test_concurrent_refreshes_do_not_duplicate_messages(archive):
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(lambda _: store.sync(refs), range(8)))
     assert len(store.list_messages(refs)["messages"]) == 30
+
+
+def native_prompt(source_id, text, **fields):
+    return {
+        "id": f"display:{source_id}", "sourceId": source_id, "text": text,
+        "timestamp": 1_767_225_600_000, "kind": "prompt", "role": "user", **fields,
+    }
+
+
+def native_page(*messages, cursor=None, partial=False):
+    return {"messages": list(messages), "status": "available", "nextCursor": cursor, "partial": partial}
+
+
+@pytest.mark.parametrize(("agent", "identifier"), [
+    ("pi", "Pi_history-A"), ("omp", "OMP_history-A"), ("opencode", "ses_" + "aZ" * 13),
+    ("agy", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+])
+def test_native_archive_keeps_distinct_submissions_and_exact_conversation_ids(archive, agent, identifier):
+    store, paths = archive
+    refs = [reference(agent, identifier)]
+    reader = Mock(spec=AgentTranscriptReader)
+    reader.native_source_signature.return_value = (1,)
+    reader.read_native_prompts.return_value = native_page(
+        native_prompt("first", "  full prompt\n第二行  "),
+        native_prompt("repeat", "  full prompt\n第二行  "),
+        native_prompt("attachment", "draft", sourceText="Final text\n\n[Attachments]", complete=False),
+        native_prompt("system", "Generated context", kind="context"),
+        native_prompt("assistant", "Assistant output", role="assistant", kind="response"),
+    )
+    store.sync_native(refs, reader)
+    store.sync_native(refs, reader)
+    reader.read_native_prompts.assert_called_once_with(agent, identifier, cursor=None, limit=100)
+    expected = store.list_messages(refs)
+    assert [entry["text"] for entry in expected["messages"]] == [
+        "Final text\n\n[Attachments]", "  full prompt\n第二行  ", "  full prompt\n第二行  ",
+    ]
+    assert [entry["complete"] for entry in expected["messages"]] == [False, True, True]
+    assert {entry["submittedAt"] for entry in expected["messages"]} == {1_767_225_600_000}
+    assert {entry["agentSessionId"] for entry in expected["messages"]} == {identifier}
+    assert expected["sources"] == [{"agentType": agent, "status": "available"}]
+    if agent != "agy":
+        assert store.list_messages([reference(agent, identifier.lower())])["messages"] == []
+
+    reader.native_source_signature.return_value = (2,)
+    reader.read_native_prompts.return_value = native_page(
+        native_prompt("first", "  full prompt\n第二行  ", id="changed display position"),
+        native_prompt("repeat", "  full prompt\n第二行  ", id="changed display position again"),
+        native_prompt("attachment", "Final text with restored content", complete=True),
+    )
+    store.sync_native(refs, reader)
+    updated = store.list_messages(refs)["messages"]
+    assert [entry["id"] for entry in updated] == [entry["id"] for entry in expected["messages"]]
+    assert updated[0]["text"] == "Final text with restored content"
+    assert all(entry["complete"] for entry in updated)
+
+    store.close()
+    reader.native_source_signature.return_value = None
+    reopened = SubmittedMessageStore(store.path, history_paths=paths)
+    try:
+        reopened.sync_native(refs, reader)
+        assert reopened.list_messages(refs) == {
+            "messages": updated, "nextCursor": None,
+            "sources": [{"agentType": agent, "status": "missing"}],
+        }
+    finally:
+        reopened.close()
+
+
+def test_native_archive_resumes_pages_and_retries_replaced_sources(archive, monkeypatch):
+    monkeypatch.setattr("tmux_console.submitted_messages.MAX_NATIVE_PAGES_PER_SYNC", 1)
+    store, _ = archive
+    refs = [reference("pi", "Pi_history-A")]
+    reader = Mock(spec=AgentTranscriptReader)
+    reader.native_source_signature.return_value = (1,)
+    reader.read_native_prompts.side_effect = [
+        native_page(native_prompt("first", "First input"), cursor="next"),
+        native_page(native_prompt("second", "Second input"), cursor="later"),
+        TranscriptChangedError(),
+        native_page(native_prompt("third", "New input"), partial=True),
+    ]
+    store.sync_native(refs, reader)
+    assert store.list_messages(refs)["sources"] == [{"agentType": "pi", "status": "partial"}]
+    store.sync_native(refs, reader)
+    reader.native_source_signature.return_value = (2,)
+    store.sync_native(refs, reader)
+    assert [entry["text"] for entry in store.list_messages(refs)["messages"]] == ["Second input", "First input"]
+    store.sync_native(refs, reader)
+    store.sync_native(refs, reader)
+    assert reader.read_native_prompts.call_args_list == [
+        call("pi", "Pi_history-A", cursor=cursor, limit=100)
+        for cursor in (None, "next", "later", None)
+    ]
+    saved = store.list_messages(refs)
+    assert [entry["text"] for entry in saved["messages"]] == ["New input", "Second input", "First input"]
+    assert saved["sources"] == [{"agentType": "pi", "status": "partial"}]
+
+
+def test_native_archive_reports_source_status_for_the_requested_conversations(archive):
+    store, _ = archive
+    present, missing, unreadable = [
+        reference("omp", identifier) for identifier in ("present", "missing", "unreadable")
+    ]
+    reader = Mock(spec=AgentTranscriptReader)
+    reader.native_source_signature.return_value = (1,)
+    reader.read_native_prompts.side_effect = [
+        {"status": "missing"},
+        native_page(),
+        {"status": "unreadable"},
+        native_page(),
+    ]
+    store.sync_native([present, missing, unreadable], reader)
+    assert store.list_messages([present, missing])["sources"] == [{"agentType": "omp", "status": "partial"}]
+    assert store.list_messages([present])["sources"] == [{"agentType": "omp", "status": "available"}]
+    assert store.list_messages([missing])["sources"] == [{"agentType": "omp", "status": "missing"}]
+    assert store.list_messages([unreadable])["sources"] == [{"agentType": "omp", "status": "unreadable"}]
+    store.sync_native([present, missing, unreadable], reader)
+    assert reader.read_native_prompts.call_count == 4
+    assert store.list_messages([unreadable])["sources"] == [{"agentType": "omp", "status": "available"}]
 
 
 def test_unavailable_archive_preserves_existing_file_and_reports_failure(tmp_path):

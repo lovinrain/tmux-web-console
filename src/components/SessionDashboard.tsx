@@ -41,30 +41,33 @@ import {
 } from "../icons";
 import {
   DEFAULT_SESSION_SORT,
+  SESSION_KIND_FILTERS,
   SESSION_STATE_ORDER,
   filterRecoverableSessions,
   filterSessions,
   groupSessionsByTag,
-  paneCommandKind,
+  paneKind,
   parseSessionDashboardSearch,
   sessionStateChangedAt,
   serializeSessionDashboardSearch,
   sessionMatchesTagFilters,
   sortSessions,
   type SessionDashboardRouteState,
-  type SessionKindFilter,
   type SessionSortKey,
   type SessionStateFilter,
   type SessionViewMode,
 } from "../sessionDashboardModel";
 import {
+  AGENT_DISPLAY_LABELS,
   SESSION_TAG_LABELS,
   SESSION_TAGS,
+  isAgentType,
   type AgentState,
   type Pane,
   type Session,
   type SessionTag,
 } from "../types";
+import { agentDisplayLabel } from "../agentResume";
 import {
   isolatedWorkspaceSearch,
   searchWithSavedWorkspaceId,
@@ -134,17 +137,6 @@ const VIEW_MODE_KEY = "muxdeck-session-view";
 const SORT_MODE_KEY = "muxdeck-session-sort";
 const SORT_PRIORITY_KEY = "muxdeck-session-sort-priority";
 const GROUP_MODE_KEY = "muxdeck-session-group";
-const KIND_FILTERS: SessionKindFilter[] = [
-  "all",
-  "agents",
-  "claude",
-  "codex",
-  "copilot",
-  "cursor",
-  "grok",
-  "dsh-tui",
-  "shells",
-];
 const STATE_GROUP_ORDER = [...SESSION_STATE_ORDER];
 const DASHBOARD_QUERY_KEYS = [
   "q",
@@ -177,25 +169,11 @@ const STATE_FILTERS: SessionStateFilter[] = [
   "other",
 ];
 
-export function classifyPane(pane?: Pane): { label: string; tone: string } {
-  switch (paneCommandKind(pane?.command || "", pane?.title || "")) {
-    case "claude":
-      return { label: "Claude", tone: "claude" };
-    case "codex":
-      return { label: "Codex", tone: "codex" };
-    case "copilot":
-      return { label: "Copilot", tone: "copilot" };
-    case "cursor":
-      return { label: "Cursor", tone: "cursor" };
-    case "grok":
-      return { label: "Grok", tone: "grok" };
-    case "dsh-tui":
-      return { label: "DSH TUI", tone: "dsh-tui" };
-    case "shells":
-      return { label: "Shell", tone: "shell" };
-    default:
-      return { label: pane?.command || "Process", tone: "process" };
-  }
+export function classifyPane(pane?: Pane, session?: Session | null): { label: string; tone: string } {
+  const kind = paneKind(pane, session);
+  if (isAgentType(kind)) return { label: AGENT_DISPLAY_LABELS[kind], tone: kind };
+  if (kind === "shells") return { label: "Shell", tone: "shell" };
+  return { label: pane?.command || "Process", tone: "process" };
 }
 
 export function activePane(session: Session): Pane | undefined {
@@ -284,11 +262,6 @@ function sessionConsoleHref(sessionName: string): string {
 function recoveryItemsFromSessions(sessions: Session[]): RecoverableSession[] {
   return (sessions as Session[] & { recoverableSessions?: RecoverableSession[] })
     .recoverableSessions ?? [];
-}
-
-function recoveryAgentLabel(agentType: RecoverableSession["agentType"]): string {
-  if (!agentType) return "Shell";
-  return agentType[0].toUpperCase() + agentType.slice(1);
 }
 
 function savedWorkspaceConsoleHref(workspace: SavedWorkspace): string {
@@ -380,7 +353,7 @@ function SessionItem({
   const tagsDescriptionId = useId();
   const workspaceDescriptionId = useId();
   const pane = activePane(session);
-  const classification = classifyPane(pane);
+  const classification = classifyPane(pane, session);
   const tags = session.tags ?? [];
   const hiddenTags = tags.slice(3);
   const cardStyle = { "--i": Math.min(index, 14) } as CSSProperties;
@@ -1080,7 +1053,7 @@ export function SessionDashboard({
         <p className="section-index">01 / SELECT</p>
         <h2>Pick up where<br />the agents left off.</h2>
         <div className="intro-copy">
-          <p>Open any running Claude, Codex, Copilot, Cursor, Grok, DSH TUI, or shell session. Output stays live; input goes straight to its tmux client.</p>
+          <p>Open a running agent or shell session. Output stays live and input goes straight to its tmux client.</p>
           {onResumeWorkspace && workspaceReturnSession && workspaceTabCount > 0 && (
             <button
               type="button"
@@ -1153,7 +1126,7 @@ export function SessionDashboard({
         </label>
         <div className="filter-stack">
           <div className="filter-row kind-filter-row" aria-label="Session type">
-            {KIND_FILTERS.map((item) => (
+            {SESSION_KIND_FILTERS.map((item) => (
               <button
                 key={item}
                 type="button"
@@ -1161,7 +1134,7 @@ export function SessionDashboard({
                 onClick={() => updateRoute({ ...route, kind: item })}
                 aria-pressed={filter === item}
               >
-                {item === "dsh-tui" ? "DSH TUI" : item}
+                {isAgentType(item) ? AGENT_DISPLAY_LABELS[item] : item}
               </button>
             ))}
           </div>
@@ -1286,7 +1259,7 @@ export function SessionDashboard({
                 <article className="recovery-card" key={recovery.id}>
                   <div className="recovery-card-heading">
                     <span className={`agent-badge ${recovery.agentType ?? "shell"}`}>
-                      {recoveryAgentLabel(recovery.agentType)}
+                      {agentDisplayLabel(recovery.agentType)}
                     </span>
                     <strong>{recovery.name}</strong>
                     {recovery.preArchived && <span>Pre-archived</span>}

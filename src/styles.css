@@ -757,8 +757,15 @@ a:focus-visible {
 
 .filter-stack {
   display: grid;
+  min-width: 0;
+  max-width: 100%;
   gap: 7px;
   justify-items: end;
+}
+
+.kind-filter-row {
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 
 .state-filter-row {
@@ -1794,6 +1801,30 @@ a:focus-visible {
   color: #8ba8ff;
   background: rgba(139, 168, 255, 0.09);
   border-color: rgba(139, 168, 255, 0.24);
+}
+
+.agent-badge.pi {
+  color: #f3a9c2;
+  background: rgba(243, 169, 194, 0.09);
+  border-color: rgba(243, 169, 194, 0.24);
+}
+
+.agent-badge.omp {
+  color: #e5c370;
+  background: rgba(229, 195, 112, 0.09);
+  border-color: rgba(229, 195, 112, 0.24);
+}
+
+.agent-badge.opencode {
+  color: #71dbbb;
+  background: rgba(113, 219, 187, 0.09);
+  border-color: rgba(113, 219, 187, 0.24);
+}
+
+.agent-badge.agy {
+  color: #c5b0ff;
+  background: rgba(197, 176, 255, 0.09);
+  border-color: rgba(197, 176, 255, 0.24);
 }
 
 .agent-badge.shell {
@@ -15028,7 +15059,7 @@ html.history-resizing * {
 
   .kind-filter-row {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(5.25rem, 1fr));
   }
 
   .kind-filter-row .filter-chip {

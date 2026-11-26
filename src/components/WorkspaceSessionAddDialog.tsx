@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { agentDisplayLabel } from "../agentResume";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 import { fuzzyFieldsScore } from "../fuzzySearch";
 import {
@@ -18,7 +19,7 @@ import {
   StarIcon,
   TerminalIcon,
 } from "../icons";
-import { paneCommandKind, sessionDisplayTitle } from "../sessionDashboardModel";
+import { paneKind, sessionDisplayTitle } from "../sessionDashboardModel";
 import type { RecoverableSession } from "../api";
 import type { AgentState, Pane, Session } from "../types";
 
@@ -62,33 +63,10 @@ function activePane(session: Session): Pane | undefined {
     ?? session.panes[0];
 }
 
-function recoveryAgentLabel(agentType: RecoverableSession["agentType"]): string {
-  switch (agentType) {
-    case "claude": return "Claude";
-    case "codex": return "Codex";
-    case "copilot": return "Copilot";
-    case "cursor": return "Cursor";
-    case "grok": return "Grok";
-    case "dsh-tui": return "DSH TUI";
-    default: return "Shell";
-  }
-}
-
 function agentLabel(session: Session, pane: Pane | undefined): string {
-  const kind = session.agentType ?? paneCommandKind(
-    pane?.command ?? "",
-    pane?.title ?? "",
-  );
-  switch (kind) {
-    case "claude": return "Claude";
-    case "codex": return "Codex";
-    case "copilot": return "Copilot";
-    case "cursor": return "Cursor";
-    case "grok": return "Grok";
-    case "dsh-tui": return "DSH TUI";
-    case "shells": return "Shell";
-    default: return pane?.command || "Session";
-  }
+  const kind = paneKind(pane, session);
+  if (kind === "other") return pane?.command || "Session";
+  return kind === "shells" ? "Shell" : agentDisplayLabel(kind);
 }
 
 function scoreLiveSession(session: Session, normalizedQuery: string): number | null {
@@ -183,6 +161,7 @@ export function rankAddableEntries(
         recovery.name,
         recovery.directory,
         recovery.agentType ?? "",
+        agentDisplayLabel(recovery.agentType),
         recovery.agentSessionId ?? "",
         "missing",
       ]);
@@ -420,7 +399,7 @@ export function WorkspaceSessionAddDialog({
                   <span className="workspace-state-dot unavailable" aria-hidden="true" />
                   <div className="workspace-session-add-copy">
                     <strong>{entry.name}</strong>
-                    <span>{recoveryAgentLabel(recovery.agentType)}</span>
+                    <span>{agentDisplayLabel(recovery.agentType)}</span>
                     <small title={recovery.directory}>{recovery.directory}</small>
                   </div>
                   <div className="workspace-session-add-badges">

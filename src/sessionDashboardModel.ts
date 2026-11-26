@@ -1,31 +1,18 @@
 import type { RecoverableSession } from "./api";
 import {
+  AGENT_DISPLAY_LABELS,
+  AGENT_TYPES,
   SESSION_TAGS,
+  isAgentType,
   type AgentState,
+  type AgentType,
   type Pane,
   type Session,
   type SessionTag,
 } from "./types";
 
-export type SessionKindFilter =
-  | "all"
-  | "agents"
-  | "claude"
-  | "codex"
-  | "copilot"
-  | "cursor"
-  | "grok"
-  | "dsh-tui"
-  | "shells";
-export type SessionKind =
-  | "claude"
-  | "codex"
-  | "copilot"
-  | "cursor"
-  | "grok"
-  | "dsh-tui"
-  | "shells"
-  | "other";
+export type SessionKindFilter = AgentType | "all" | "agents" | "shells";
+export type SessionKind = AgentType | "shells" | "other";
 export type SessionStateFilter = "any" | AgentState;
 export type SessionViewMode = "cards" | "list";
 export type SessionGroupMode = "none" | "state" | "tag";
@@ -72,18 +59,7 @@ export const DEFAULT_SESSION_DASHBOARD_ROUTE: Readonly<SessionDashboardRouteStat
   sort: [...DEFAULT_SESSION_SORT],
 };
 
-const KIND_FILTERS = new Set<SessionKindFilter>([
-  "all",
-  "agents",
-  "claude",
-  "codex",
-  "copilot",
-  "cursor",
-  "grok",
-  "dsh-tui",
-  "shells",
-]);
-const AGENT_KINDS = new Set<SessionKind>(["claude", "codex", "copilot", "cursor", "grok", "dsh-tui"]);
+export const SESSION_KIND_FILTERS: readonly SessionKindFilter[] = ["all", "agents", ...AGENT_TYPES, "shells"];
 /** The Cursor CLI installs as `cursor-agent` plus a bare `agent` symlink. */
 const CURSOR_PANE_COMMANDS = new Set(["agent", "cursor", "cursor-agent"]);
 const DSH_TUI_PANE_COMMANDS = new Set(["dsh-tui", "dst"]);
@@ -155,9 +131,7 @@ function parseKind(value: string | null): SessionKindFilter {
   if (normalized === "cursor-agent") return "cursor";
   if (normalized === "dst") return "dsh-tui";
   if (normalized === "shell") return "shells";
-  return KIND_FILTERS.has(normalized as SessionKindFilter)
-    ? normalized as SessionKindFilter
-    : "all";
+  return normalized === "agents" || normalized === "shells" || isAgentType(normalized) ? normalized : "all";
 }
 
 function parseState(value: string | null): SessionStateFilter {
@@ -401,13 +375,20 @@ export function paneCommandKind(command: string, title = ""): SessionKind {
     DSH_TUI_PANE_COMMANDS.has(normalized)
     || (DSH_TUI_RUNTIME_COMMANDS.has(normalized) && DSH_TUI_TITLE_PATTERN.test(title.trim()))
   ) return "dsh-tui";
+  if (normalized === "pi" || normalized === "omp" || normalized === "agy" || normalized === "opencode") {
+    return normalized;
+  }
+  if (/^opencode\.v\d+\.\d+\.\d+$/.test(normalized)) return "opencode";
   if (SHELL_PANE_COMMANDS.has(normalized)) return "shells";
   return "other";
 }
 
-function sessionKind(session: Session): SessionKind {
-  const pane = activePane(session);
-  return paneCommandKind(pane?.command || "", pane?.title || "");
+export function paneKind(pane?: Pane, session?: Session | null): SessionKind {
+  if (isAgentType(pane?.agentType)) return pane.agentType;
+  if (session && isAgentType(session.agentType) && pane?.id === activePane(session)?.id) {
+    return session.agentType;
+  }
+  return paneCommandKind(pane?.command ?? "", pane?.title ?? "");
 }
 
 export function sessionMatchesTagFilters(
@@ -432,18 +413,21 @@ export function filterSessions(
   const needle = filters.query.trim().toLowerCase();
   return sessions.filter((session) => {
     const pane = activePane(session);
-    const kind = sessionKind(session);
+    const kind = paneKind(pane, session);
+    const agent = isAgentType(kind) ? kind : null;
     const matchesQuery = !needle || [
       session.name,
       session.customTitle,
       pane?.path,
       pane?.title,
       pane?.command,
+      agent,
+      agent ? AGENT_DISPLAY_LABELS[agent] : null,
       ...(session.tags ?? []),
       ...(session.workLinks ?? []).flatMap((link) => [link.label, link.title, link.url, link.status?.state]),
     ].filter(Boolean).some((value) => value!.toLowerCase().includes(needle));
     const matchesKind = filters.kind === "all"
-      || (filters.kind === "agents" && AGENT_KINDS.has(kind))
+      || (filters.kind === "agents" && agent !== null)
       || filters.kind === kind;
     const matchesState = filters.state === "any" || filters.state === session.agentState;
     return matchesQuery
@@ -467,6 +451,7 @@ export function filterRecoverableSessions(
     record.name,
     record.directory,
     record.agentType,
+    isAgentType(record.agentType) ? AGENT_DISPLAY_LABELS[record.agentType] : null,
     record.agentSessionId,
   ].filter(Boolean).some((value) => value!.toLowerCase().includes(needle)));
 }

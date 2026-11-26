@@ -233,7 +233,7 @@ describe("HistoryPanel", () => {
     const submitted = screen.getByRole("tab", { name: "Submitted messages" });
     expect(submitted).toHaveFocus();
     expect(submitted).toHaveAttribute("aria-selected", "true");
-    await screen.findByText(/No Claude Code or Codex conversation ID/);
+    await screen.findByText(/No supported agent conversation/);
     expect(listSubmittedMessages).toHaveBeenCalledWith({ sessionName: "agent", identity: "$1:1:1:1" }, "", null, expect.any(AbortSignal));
     fireEvent.keyDown(submitted, { key: "ArrowRight" });
     const transcript = screen.getByRole("tab", { name: "Transcript" });
@@ -254,9 +254,9 @@ describe("HistoryPanel", () => {
     expect(createHistorySnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it("opens a Codex transcript first and offers terminal history when it is unavailable", async () => {
+  it("opens a detected OpenCode transcript first and offers terminal history when it is unavailable", async () => {
     vi.mocked(loadAgentTranscript).mockResolvedValue({ sources: [], selectedSource: null, status: "missing", messages: [], nextCursor: null, partial: false, notice: "The local transcript was not found." });
-    render(<HistoryPanel pane={{ ...pane(), command: "codex" }} sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
+    render(<HistoryPanel pane={pane()} agentKind="opencode" sessionIdentity="$1:1:1:1" onClose={vi.fn()} />);
     expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("aria-selected", "true");
     await screen.findByText("The local transcript was not found.");
     expect(createHistorySnapshot).not.toHaveBeenCalled();

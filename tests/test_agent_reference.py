@@ -578,3 +578,163 @@ def test_claude_process_registration_follows_the_current_conversation(tmp_path: 
     # A stale PID registration must not override a live process's reference.
     registration.write_text(json.dumps({"pid": 100, "procStart": "1", "sessionId": current}))
     assert discover_agent_session_id(pane(command="claude"), "claude", **options) == previous
+
+
+NATIVE_ID = "01a219a4-fbc3-765e-ada8-5ec05be30114"
+OLD_NATIVE_ID = "019cdef0-1234-7abc-8def-1234567890ab"
+OPENCODE_ID = "ses_AbCdEf12345678901234567890"
+
+
+def native_journal(root: Path, identifier: str, *, reserved_title: bool = False) -> Path:
+    path = root / "--work--" / f"2026-11-26T20-56-12-483Z_{identifier}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = [{"type": "title", "v": 1, "title": None}] if reserved_title else []
+    records.append({"type": "session", "version": 3, "id": identifier, "cwd": "/work"})
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    return path
+
+
+@pytest.mark.parametrize(("agent", "options", "expected"), [
+    ("pi", ["--session-id", "Team_Branch.01"], "Team_Branch.01"),
+    ("pi", ["--session", NATIVE_ID], NATIVE_ID),
+    ("omp", ["--session=" + NATIVE_ID.upper()], NATIVE_ID.upper()),
+    ("omp", ["--resume", NATIVE_ID], NATIVE_ID),
+    ("opencode", ["-s", OPENCODE_ID], OPENCODE_ID),
+    ("agy", ["--conversation=" + NATIVE_ID.upper()], NATIVE_ID),
+    ("agy", ["--resume", NATIVE_ID], NATIVE_ID),
+    ("agy", ["-r", NATIVE_ID], NATIVE_ID),
+])
+def test_extended_agent_explicit_arguments_preserve_native_id(agent, options, expected, tmp_path):
+    proc_root = tmp_path / "proc"
+    process(proc_root, 100, [agent, *options])
+    assert discover_agent_session_id(
+        pane(command=agent), agent, proc_root=proc_root, native_roots={agent: tmp_path / "sessions"},
+    ) == expected
+
+
+def test_pi_does_not_bind_prefix_or_prompt_text_as_a_session(tmp_path):
+    proc_root = tmp_path / "proc"
+    sessions = tmp_path / "pi" / "sessions"
+    transcript = native_journal(sessions, "Team_Branch.01")
+    pi = process(proc_root, 100, ["pi", "--session", "Team"])
+    for args, expected in [
+        (["--session", "Team"], None),
+        (["--", "--session-id", "Team_Branch.01"], None),
+        (["--session", "Team_Branch.01"], "Team_Branch.01"),
+        (["--session", str(transcript)], "Team_Branch.01"),
+    ]:
+        (pi / "cmdline").write_bytes(b"\0".join(value.encode() for value in ["pi", *args]))
+        assert discover_agent_session_id(
+            pane(command="pi"), "pi", proc_root=proc_root, native_roots={"pi": sessions},
+        ) == expected
+
+
+def test_omp_exact_journal_and_owner_lease_win_over_launch_id(tmp_path):
+    proc_root = tmp_path / "proc"
+    omp = process(proc_root, 100, ["omp", "--resume", OLD_NATIVE_ID])
+    sessions = tmp_path / ".omp" / "agent" / "sessions"
+    current = native_journal(sessions, NATIVE_ID, reserved_title=True)
+    lease = tmp_path / ".omp" / "run" / "session-owners" / NATIVE_ID
+    lease.parent.mkdir(parents=True)
+    lease.touch()
+    (omp / "fd" / "5").symlink_to(current)
+    (omp / "fd" / "6").symlink_to(lease)
+    for remaining_fds in ({"5", "6"}, {"5"}, {"6"}):
+        for number, target in [("5", current), ("6", lease)]:
+            link = omp / "fd" / number
+            link.unlink(missing_ok=True)
+            if number in remaining_fds:
+                link.symlink_to(target)
+        assert discover_agent_session_id(
+            pane(command="omp"), "omp", proc_root=proc_root, native_roots={"omp": sessions},
+        ) == NATIVE_ID
+
+
+def test_omp_tty_breadcrumb_requires_freshness_and_exact_cwd(tmp_path):
+    proc_root = tmp_path / "proc"
+    omp = process(proc_root, 100, ["omp"])
+    (proc_root / "stat").write_text("btime 100\n")
+    (omp / "stat").write_text("100 (omp) S 1 " + " ".join(["0"] * 17) + " 50 0 0\n")
+    (omp / "fd" / "0").symlink_to("/dev/pts/98765")
+    sessions = tmp_path / ".omp" / "agent" / "sessions"
+    journal = native_journal(sessions, NATIVE_ID, reserved_title=True)
+    marker = sessions.parent / "terminal-sessions" / "pts-98765"
+    marker.parent.mkdir()
+    for cwd, modified, expected in [
+        ("/work", 105, NATIVE_ID),
+        ("/work", 99, None),
+        ("/other", 105, None),
+    ]:
+        marker.write_text(f"{cwd}\n{journal}\ncwdstat 0 1\n")
+        os.utime(marker, (modified, modified))
+        assert discover_agent_session_id(
+            pane(command="omp"), "omp", proc_root=proc_root, native_roots={"omp": sessions},
+        ) == expected
+
+
+def test_agy_foreground_descriptors_disambiguate_cli_id_and_conflicts(tmp_path):
+    proc_root = tmp_path / "proc"
+    agy = process(proc_root, 100, ["/bin/agy", "--conversation", OLD_NATIVE_ID])
+    root = tmp_path / "antigravity-cli"
+    for number, path in [
+        ("5", root / "presence" / f"{NATIVE_ID}.lock"),
+        ("6", root / "conversations" / f"{NATIVE_ID}.db-wal"),
+        ("7", tmp_path / "other" / f"{OLD_NATIVE_ID}.lock"),
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        (agy / "fd" / number).symlink_to(path)
+    assert discover_agent_session_id(
+        pane(command="agy"), "agy", proc_root=proc_root, native_roots={"agy": root},
+    ) == NATIVE_ID
+    (agy / "fd" / "8").symlink_to(root / "presence" / f"{OLD_NATIVE_ID}.lock")
+    assert discover_agent_session_id(
+        pane(command="agy"), "agy", proc_root=proc_root, native_roots={"agy": root},
+    ) is None
+
+
+def test_opencode_visible_local_title_wins_over_launch_id_except_in_remote_mode(tmp_path, monkeypatch):
+    proc_root = tmp_path / "proc"
+    previous = "ses_1234567890abcdefghijklmnop"
+    cli = process(proc_root, 100, ["opencode.v1.2.20", "-s", previous])
+    root = tmp_path / "opencode"
+    title = "OC | Current"
+    open_pane = pane(command="opencode", title=title)
+
+    def title_candidate(directory, cwd, pane_title):
+        assert (directory, cwd, pane_title) == (root, "/work", title)
+        return OPENCODE_ID
+
+    monkeypatch.setattr("tmux_console.agent_reference.opencode_session_for_pane", title_candidate)
+    assert discover_agent_session_id(
+        open_pane, "opencode", proc_root=proc_root, native_roots={"opencode": root},
+    ) == OPENCODE_ID
+    (cli / "cmdline").write_bytes(b"\0".join(value.encode() for value in [
+        "opencode", "--session", previous, "--server", "http://127.0.0.1:8000",
+    ]))
+    assert discover_agent_session_id(
+        open_pane, "opencode", proc_root=proc_root, native_roots={"opencode": root},
+    ) == previous
+
+
+async def test_pi_live_session_info_uses_exact_file_and_header(tmp_path):
+    proc_root = tmp_path / "proc"
+    process(proc_root, 100, ["pi"])
+    root = tmp_path / "pi" / "sessions"
+    journal = native_journal(root, NATIVE_ID)
+
+    class PiTmux:
+        text = ""
+
+        async def capture_visible(self, pane_id):
+            assert pane_id == "%1"
+            return self.text
+
+    tmux = PiTmux()
+    detector = AgentReferenceDetector(proc_root=proc_root, native_roots={"pi": root}, tmux=tmux)
+    target = pane(command="pi", title="π - work")
+    split = len(str(journal)) // 2
+    tmux.text = f" Session Info\n\n File: {str(journal)[:split]}\n {str(journal)[split:]}\n ID: {NATIVE_ID}\n\n Messages\n User: 1"
+    assert await detector.detect_pane(target, refresh=True) == AgentReference("pi", NATIVE_ID)
+    tmux.text = tmux.text.replace(f"ID: {NATIVE_ID}", f"ID: {OLD_NATIVE_ID}")
+    assert await detector.detect_pane(target, refresh=True) == AgentReference("pi", None)

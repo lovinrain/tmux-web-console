@@ -8,6 +8,17 @@ describe("agentResumeCommand", () => {
     expect(agentResumeCommand("codex", id)).toBe(`codex resume ${id}`);
     expect(agentResumeCommand("cursor", id)).toBe(`cursor-agent --resume ${id}`);
     expect(agentResumeCommand("grok", id)).toBe(`grok -r ${id}`);
+    expect(agentResumeCommand("pi", id)).toBe(`pi --session ${id}`);
+    expect(agentResumeCommand("omp", id)).toBe(`omp --resume ${id}`);
+    expect(agentResumeCommand("agy", id)).toBe(`agy --conversation ${id}`);
+    const openCodeId = "ses_1234567890abcdefghijklmnop";
+    expect(agentResumeCommand("opencode", openCodeId, "/work/project"))
+      .toBe(`cd -- '/work/project' && opencode --session ${openCodeId}`);
+  });
+
+  it.each(["pi", "omp", "opencode", "agy"] as const)("only offers %s resume for an exact native ID", (agent) => {
+    expect(agentResumeCommand(agent, "--help")).toBeNull();
+    expect(agentResumeCommand(agent, "../session.jsonl")).toBeNull();
   });
 
   it.each([
@@ -51,6 +62,10 @@ describe("agentDisplayLabel", () => {
   it("names each agent and falls back to Shell", () => {
     expect(agentDisplayLabel("claude")).toBe("Claude");
     expect(agentDisplayLabel("cursor")).toBe("Cursor");
+    expect(agentDisplayLabel("pi")).toBe("Pi");
+    expect(agentDisplayLabel("omp")).toBe("OMP");
+    expect(agentDisplayLabel("opencode")).toBe("OpenCode");
+    expect(agentDisplayLabel("agy")).toBe("Antigravity");
     expect(agentDisplayLabel(null)).toBe("Shell");
   });
 });

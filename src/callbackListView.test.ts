@@ -218,12 +218,29 @@ describe("callback list view", () => {
     const entries = [
       entry("ended", { session: undefined, messages: [message({ agentType: "Claude" })] }),
       entry("changed", { session: session("changed", { agentType: "codex" }), messages: [message({ agentType: "claude" })] }),
-      entry("new-agent", { session: undefined, messages: [message({ agentType: "opencode" })] }),
+      entry("new-agent", { session: undefined, messages: [message({ agentType: "future-agent" })] }),
       entry("unknown", { session: undefined }),
     ];
     expect(view(entries, { agent: "claude" })).toEqual(["ended", "changed"]);
     expect(view(entries, { agent: "codex" })).toEqual(["changed"]);
     expect(view(entries, { agent: "other" })).toEqual(["new-agent", "unknown"]);
+  });
+
+  it("filters and groups detected Antigravity panes and ended OpenCode reports", () => {
+    const entries = [
+      entry("active", { session: session("active", {
+        panes: [pane("node", { agentType: "agy" })],
+      }) }),
+      entry("ended", { session: undefined, messages: [message({ agentType: "OpenCode" })] }),
+    ];
+    const preferences = parseCallbackListViewPreferences(JSON.stringify({
+      group: "agent", agent: "agy", collapsedGroups: ["agent:agy", "agent:opencode"],
+    }));
+    expect(preferences.collapsedGroups).toEqual(["agent:agy", "agent:opencode"]);
+    expect(view(entries, preferences, "Antigravity")).toEqual(["active"]);
+    expect(view(entries, { agent: "opencode" })).toEqual(["ended"]);
+    expect(groupCallbacks(entries, "agent").map(({ key, label }) => [key, label]))
+      .toEqual([["agent:opencode", "OpenCode"], ["agent:agy", "Antigravity"]]);
   });
 
   it("infers agent type from the active pane only when live agent metadata is absent", () => {

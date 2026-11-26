@@ -633,6 +633,30 @@ html[data-theme="light"] .agent-badge.dsh-tui {
   border-color: #b3bff0;
 }
 
+html[data-theme="light"] .agent-badge.pi {
+  color: #8e3150;
+  background: #f9e3eb;
+  border-color: #e1afc0;
+}
+
+html[data-theme="light"] .agent-badge.omp {
+  color: #70530b;
+  background: #f6ecd4;
+  border-color: #d5c18b;
+}
+
+html[data-theme="light"] .agent-badge.opencode {
+  color: #096b51;
+  background: #ddf3ea;
+  border-color: #9acfbf;
+}
+
+html[data-theme="light"] .agent-badge.agy {
+  color: #624399;
+  background: #eee7fb;
+  border-color: #c7b7e5;
+}
+
 html[data-theme="light"] .agent-badge.shell {
   color: #006c63;
   background: #dcefeb;

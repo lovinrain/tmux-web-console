@@ -13,6 +13,15 @@
 
 .session-agent-icon > svg { width: 100%; height: 100%; }
 
+.session-agent-monogram {
+  font-size: 6.5px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.session-agent-icon.pi .session-agent-monogram { font-size: 13px; }
+
 .session-agent-brand {
   display: block;
   width: 100%;

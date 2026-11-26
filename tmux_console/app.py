@@ -23,6 +23,7 @@ from muxpilot.fencing import receiver_middleware
 
 from .agent_reference import AgentReferenceDetector
 from .agent_reference_recovery import AgentReferenceRecovery
+from .agent_sources import EXTENDED_TRANSCRIPT_AGENTS
 from .agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from .auth import (
     AuthConfigurationError,
@@ -175,7 +176,7 @@ from .snippets import (
     SnippetStore,
     SnippetStoreUnavailable,
 )
-from .status import AgentStateDetector
+from .status import AgentStateDetector, classify_agent_type
 from .submitted_messages import (
     SubmittedMessageStore,
     SubmittedMessageStoreUnavailable,
@@ -480,6 +481,10 @@ class SessionSnapshotBuilder:
             next_state_history[item.name] = (item.id, state.name, changed_at)
 
             record = item.to_dict()
+            for pane, pane_record in zip(item.panes, record["panes"], strict=True):
+                pane_agent_type = classify_agent_type(pane)
+                if pane_agent_type is not None:
+                    pane_record["agentType"] = pane_agent_type
             if item.name in attention:
                 record["readyAttention"] = attention[item.name]
             reference = references.get(item.name)
@@ -1337,8 +1342,10 @@ def create_app(
         app[TMUX_KEY], app[SESSION_REGISTRY_KEY], app[SCROLLBACK_KEY],
     )
     history_capture_wake = asyncio.Event()
-    app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector()
     app[AGENT_TRANSCRIPTS_KEY] = agent_transcripts or AgentTranscriptReader()
+    app[AGENT_REFERENCES_KEY] = agent_references or AgentReferenceDetector(
+        tmux=app[TMUX_KEY], native_roots=app[AGENT_TRANSCRIPTS_KEY].roots,
+    )
     app[CLIPBOARD_KEY] = clipboard or ClipboardUploader()
     app[AGENT_RECOVERY_KEY] = AgentReferenceRecovery(app[TMUX_KEY], app[AGENT_TRANSCRIPTS_KEY])
     app[TRANSCRIPT_READ_LIMIT_KEY] = asyncio.Semaphore(3)
@@ -1560,6 +1567,7 @@ def create_app(
                     pass
                 history_capture_wake.clear()
                 live = None
+                native_references: list[dict[str, Any]] = []
                 try:
                     # Keep recording even when no browser has a session stream
                     # open. Observe a successful inventory without sending input.
@@ -1570,6 +1578,15 @@ def create_app(
                                        if pane != session.active_pane]
                         other_references = await application[AGENT_REFERENCES_KEY].detect_panes(other_panes)
                         recovered = await application[AGENT_RECOVERY_KEY].recover_sessions(live)
+                        observed = [
+                            *references.values(), *other_references.values(),
+                            *(reference for matches in recovered.values() for reference in matches),
+                        ]
+                        native_references = [
+                            {"agentType": reference.agent_type, "agentSessionId": reference.session_id}
+                            for reference in observed
+                            if reference.agent_type in EXTENDED_TRANSCRIPT_AGENTS and reference.session_id
+                        ]
                         for session in live:
                             application[SESSION_REGISTRY_KEY].observe_history(
                                 session, references.get(session.name),
@@ -1592,6 +1609,11 @@ def create_app(
                 try:
                     known = application[SESSION_REGISTRY_KEY].list_agent_references()
                     await asyncio.to_thread(application[SUBMITTED_MESSAGES_KEY].sync, known)
+                    if native_references:
+                        await asyncio.to_thread(
+                            application[SUBMITTED_MESSAGES_KEY].sync_native,
+                            native_references, application[AGENT_TRANSCRIPTS_KEY],
+                        )
                 except (SessionRegistryUnavailable, SubmittedMessageStoreUnavailable):
                     LOGGER.warning("Unable to archive submitted messages")
 
@@ -6138,12 +6160,16 @@ def create_app(
                     ):
                         return json_error("session identity changed", 409)
                     references = await app[AGENT_REFERENCES_KEY].detect_sessions([session])
-                    history_id = app[SESSION_REGISTRY_KEY].observe_history(session, references.get(session.name))
+                    recovered = await app[AGENT_RECOVERY_KEY].recover_sessions([session], prune_cache=False)
+                    history_id = app[SESSION_REGISTRY_KEY].observe_history(
+                        session, references.get(session.name), recovered_references=recovered,
+                    )
             else:
                 app[SESSION_REGISTRY_KEY].get_history(history_id)
             agents = app[SESSION_REGISTRY_KEY].list_session_agents(history_id)
             known = app[SESSION_REGISTRY_KEY].list_agent_references()
             await asyncio.to_thread(app[SUBMITTED_MESSAGES_KEY].sync, known)
+            await asyncio.to_thread(app[SUBMITTED_MESSAGES_KEY].sync_native, agents, app[AGENT_TRANSCRIPTS_KEY])
             result = await asyncio.to_thread(
                 app[SUBMITTED_MESSAGES_KEY].list_messages, agents,
                 before=before, query=query, limit=limit,

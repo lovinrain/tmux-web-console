@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
-import { paneCommandKind, sessionDisplayTitle } from "../../sessionDashboardModel";
+import { paneKind, sessionDisplayTitle } from "../../sessionDashboardModel";
 import { sessionHasOnlyDeadPanes } from "../../sessionLifecycle";
-import type { AgentState, Pane, Session } from "../../types";
+import { AGENT_DISPLAY_LABELS, type AgentState, type Pane, type Session } from "../../types";
 import { workspaceSessionDepth, type WorkspaceSessionParents } from "../../workspaceState";
 import type { WorkspacePersistenceState } from "./types";
 
@@ -77,17 +77,11 @@ export function activePane(session: Session): Pane | undefined {
   return session.panes.find((pane) => pane.id === session.activePaneId) || session.panes[0];
 }
 
-export function paneLabel(pane?: Pane): string {
-  switch (paneCommandKind(pane?.command || "", pane?.title || "")) {
-    case "claude": return "Claude";
-    case "codex": return "Codex";
-    case "copilot": return "Copilot";
-    case "cursor": return "Cursor";
-    case "grok": return "Grok";
-    case "dsh-tui": return "DSH TUI";
-    case "shells": return "Shell";
-    default: return pane?.command || "Process";
-  }
+export function paneLabel(pane?: Pane, session?: Session): string {
+  const kind = paneKind(pane, session);
+  if (kind === "shells") return "Shell";
+  if (kind === "other") return pane?.command || "Process";
+  return AGENT_DISPLAY_LABELS[kind];
 }
 
 export function tabTitle(sessionName: string, sessionsByName: ReadonlyMap<string, Session>): string {

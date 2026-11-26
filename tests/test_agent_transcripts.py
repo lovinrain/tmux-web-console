@@ -309,6 +309,55 @@ class References(AgentReferenceDetector):
         return AgentReference(self.agent, self.identifiers.get(pane.id))
 
 
+async def test_live_pi_inventory_transcript_and_durable_submitted_prompt(tmp_path):
+    class PiTmux(TranscriptTmux):
+        async def get_session(self, name):
+            assert name == self.session.name
+            return self.session
+
+        async def capture_visible(self, *args, **kwargs):
+            return "──────────────────\n\n──────────────────\n~/fixture\n0.0%/128k (auto)   probe-model"
+
+    identifier = "CaseSensitive_Pi"
+    timestamp = "2026-11-26T20:00:00Z"
+    journal = tmp_path / "--test-project--" / f"2026-11-26T20-00-00-000Z_{identifier}.jsonl"
+    journal.parent.mkdir()
+    journal.write_text("".join(json.dumps(record) + "\n" for record in [
+        {"type": "session", "id": identifier, "version": 3, "timestamp": timestamp, "cwd": "/tmp"},
+        {"type": "message", "id": "human", "timestamp": timestamp,
+         "message": {"role": "user", "content": "Original case-sensitive Pi prompt"}},
+        {"type": "message", "id": "internal", "timestamp": timestamp,
+         "message": {"role": "user", "synthetic": True, "content": "Internal context"}},
+        {"type": "message", "id": "reply", "timestamp": timestamp,
+         "message": {"role": "assistant", "content": "Pi answer", "stopReason": "stop"}},
+    ]))
+    tmux, detector = PiTmux(), References("pi")
+    tmux.session = replace(tmux.session, panes=[replace(tmux.session.panes[0], command="pi", title="π - fixture")])
+    detector.identifiers["%1"] = identifier
+    app = create_app(tmux=tmux, agent_references=detector,
+                     agent_transcripts=AgentTranscriptReader(roots={"pi": tmp_path}), base_path="")
+    async with TestClient(TestServer(app)) as client:
+        inventory = await (await client.get("/api/sessions")).json()
+        observed = next(item for item in inventory["sessions"] if item["name"] == "work")
+        assert observed["agentType"] == observed["panes"][0]["agentType"] == "pi"
+        assert observed["agentState"] == "waiting_human"
+        assert observed["agentSessionId"] == identifier
+        response = await client.get("/api/panes/%251/agent-transcript", params={"view": "conversation"})
+        assert response.status == 200
+        assert [(entry["kind"], entry["text"]) for entry in (await response.json())["messages"]] == [
+            ("prompt", "Original case-sensitive Pi prompt"), ("response", "Pi answer"),
+        ]
+        archive = "/api/sessions/work/submitted-messages"
+        response = await client.get(archive)
+        assert response.status == 200
+        messages = (await response.json())["messages"]
+        assert [(entry["agentSessionId"], entry["text"]) for entry in messages] == [
+            (identifier, "Original case-sensitive Pi prompt"),
+        ]
+        journal.unlink()
+        assert (await (await client.get(archive)).json())["messages"] == messages
+
+
 @pytest.mark.parametrize("agent", ["codex", "claude"])
 async def test_live_pane_scoping_history_rename_and_name_reuse(tmp_path, agent):
     def records(text):

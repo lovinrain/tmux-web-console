@@ -89,7 +89,7 @@ describe("SessionHistoryDialog", () => {
     vi.mocked(listSubmittedMessages).mockResolvedValue({ messages: [], nextCursor: null, sources: [] });
     render(<SessionHistoryDialog onClose={vi.fn()} onOpenSession={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Submitted messages for named-agent" }));
-    await screen.findByText(/No Claude Code or Codex conversation ID/);
+    await screen.findByText(/No supported agent conversation/);
     expect(listSubmittedMessages).toHaveBeenCalledWith({ historyId: entry.id }, "", null, expect.any(AbortSignal));
     expect(restoreSessionHistory).not.toHaveBeenCalled();
   });

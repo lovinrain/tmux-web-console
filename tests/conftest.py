@@ -67,7 +67,8 @@ def isolate_default_state_files(
     monkeypatch.delenv("MUXDECK_NOTE_IMAGES_MAX_BYTES", raising=False)
     monkeypatch.setenv("MUXDECK_CODEX_HISTORY_FILE", str(state_dir / "codex-history.jsonl"))
     monkeypatch.setenv("MUXDECK_CLAUDE_HISTORY_FILE", str(state_dir / "claude-history.jsonl"))
-    for agent in ("CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK"):
+    monkeypatch.delenv("MUXPILOT_STATE_ROOT", raising=False)
+    for agent in ("CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK", "PI", "OMP", "OPENCODE", "AGY"):
         monkeypatch.setenv(f"MUXDECK_{agent}_TRANSCRIPTS_DIR", str(state_dir / "transcripts" / agent.lower()))
     monkeypatch.delenv("MUXDECK_AUTH_FILE", raising=False)
     monkeypatch.delenv("MUXDECK_AUTH_MODE", raising=False)

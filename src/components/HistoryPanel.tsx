@@ -11,11 +11,11 @@ import {
 } from "react";
 import { createHistorySnapshot, loadHistoryPage } from "../api";
 import { CloseIcon, RefreshIcon } from "../icons";
-import type { HistoryPage, Pane } from "../types";
+import { isAgentType, type HistoryPage, type Pane } from "../types";
 import { SubmittedMessages } from "./SubmittedMessages";
 import { SavedScrollback } from "./SavedScrollback";
 import { AgentTranscript } from "./AgentTranscript";
-import { paneCommandKind } from "../sessionDashboardModel";
+import { paneKind, type SessionKind } from "../sessionDashboardModel";
 import { formatTimestamp, useDisplayTimeZone } from "../timeZone";
 import { acquireBodyScrollLock } from "../bodyScrollLock";
 
@@ -30,6 +30,7 @@ const HISTORY_LOAD_OLDER_DISTANCE = 160;
 
 interface HistoryPanelProps {
   pane: Pane;
+  agentKind?: SessionKind;
   sessionName?: string;
   sessionIdentity?: string;
   onClose: () => void;
@@ -57,6 +58,7 @@ function clampWidth(width: number, viewportWidth: number): number {
 
 export function HistoryPanel({
   pane,
+  agentKind = paneKind(pane),
   sessionName,
   sessionIdentity,
   onClose,
@@ -64,7 +66,7 @@ export function HistoryPanel({
   onPreferredWidthChange,
 }: HistoryPanelProps) {
   const viewId = useId();
-  const isAgent = ["codex", "claude", "copilot", "cursor", "grok"].includes(paneCommandKind(pane.command, pane.title));
+  const isAgent = isAgentType(agentKind) && agentKind !== "dsh-tui";
   const [view, selectView] = useState<"transcript" | "scrollback" | "recorded" | "submitted">(isAgent ? "transcript" : "scrollback");
   const views = sessionName ? ["transcript", "scrollback", "recorded", "submitted"] as const : ["transcript", "scrollback", "recorded"] as const;
   const viewLabels = { transcript: "Transcript", scrollback: "Scrollback", recorded: "Recorded output", submitted: "Submitted messages" };

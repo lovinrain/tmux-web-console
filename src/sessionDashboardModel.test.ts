@@ -8,6 +8,7 @@ import {
   filterSessions,
   groupSessionsByTag,
   paneCommandKind,
+  paneKind,
   parseSessionDashboardSearch,
   serializeSessionDashboardSearch,
   sessionDisplayTitle,
@@ -316,6 +317,40 @@ describe("session dashboard filters", () => {
     expect(names("?kind=grok")).toEqual(["grok-one"]);
     expect(names("?kind=dsh-tui")).toEqual(["dsh-one", "dsh-node"]);
     expect(names("?kind=shells")).toEqual(["wrong-command", "shell-one"]);
+  });
+
+  it.each([
+    ["pi", "pi"],
+    ["omp", "omp"],
+    ["opencode", "opencode.v1.2.2"],
+    ["agy", "agy"],
+  ] as const)("recognizes %s and round-trips its dashboard filter", (agent, command) => {
+    const detected = session({ panes: [pane({ command })] });
+    const shell = session({ name: "shell", id: "$2" });
+    const route = parseSessionDashboardSearch(`?kind=${agent}`);
+    expect(paneCommandKind(command)).toBe(agent);
+    expect(serializeSessionDashboardSearch(route)).toBe(`?kind=${agent}`);
+    expect(filterSessions([detected, shell], route)).toEqual([detected]);
+    expect(filterSessions([detected, shell], { ...route, kind: "agents" })).toEqual([detected]);
+  });
+
+  it("prefers pane identity and uses session identity only for the active pane", () => {
+    const foreground = pane({ command: "node" });
+    const otherAgent = pane({ id: "%2", command: "bun", agentType: "omp" });
+    const shell = pane({ id: "%3" });
+    const detected = session({
+      name: "wrapped",
+      agentType: "agy",
+      panes: [foreground, otherAgent, shell],
+    });
+    expect(paneKind(foreground, detected)).toBe("agy");
+    expect(paneKind(otherAgent, detected)).toBe("omp");
+    expect(paneKind(shell, detected)).toBe("shells");
+    expect(filterSessions([detected], parseSessionDashboardSearch("?q=Antigravity&kind=agy")))
+      .toEqual([detected]);
+    expect(paneCommandKind("node", "π - work")).toBe("other");
+    expect(paneCommandKind("node", "π > work")).toBe("other");
+    expect(paneCommandKind("opencode-extension")).toBe("other");
   });
 
   it("includes any selected tag, then removes every excluded match", () => {

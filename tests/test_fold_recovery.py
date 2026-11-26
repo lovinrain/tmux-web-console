@@ -6,19 +6,23 @@ import os
 import shlex
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tmux_console.agent_reference import AgentReference, AgentReferenceDetector
-from tmux_console.app import create_app
-from tmux_console.fold_recovery import IDENTITY_FIELDS, agent_resume_argv, session_fence
+from tmux_console.app import AGENT_TRANSCRIPTS_KEY, create_app
+from tmux_console.fold_recovery import IDENTITY_FIELDS, _agent_executable, agent_resume_argv, session_fence
 from tmux_console.metadata import SessionTitleStore
 from tmux_console.session_registry import RecoveryRecordNotFoundError, SessionRegistry
 from tmux_console.tmux import TmuxClient, TmuxError
+from tmux_console.workspace_folds import FoldSessionSnapshot, validate_fold_snapshot
 from tmux_console.workspaces import WorkspaceStore, WorkspaceStoreUnavailable
 
 AGENT_ID = "12345678-1234-1234-1234-123456789012"
+CASED_AGENT_ID = "AbCD5678-1234-1234-1234-12345678AbCD"
+NATIVE_OPENCODE_ID = "ses_123456789012aBcDeFgHiJkLmN"
 
 
 class References(AgentReferenceDetector):
@@ -207,28 +211,60 @@ async def test_shell_recovery_bypasses_default_command_and_response_retry_reuses
 
 
 @pytest.mark.asyncio
-async def test_agent_recovery_uses_exact_saved_id_and_directory_without_typing_into_a_pane(fold_env, tmp_path, monkeypatch):
-    tmux, client, _store, _registry, _workspace, url, _confirmed, close, _refs = fold_env
+@pytest.mark.parametrize(("agent_type", "identifier", "resume_option"), [
+    ("codex", AGENT_ID, "resume"),
+    ("opencode", NATIVE_OPENCODE_ID, "--session"),
+])
+async def test_agent_recovery_uses_exact_saved_id_and_directory_without_typing_into_a_pane(
+    fold_env, tmp_path, monkeypatch, agent_type, identifier, resume_option,
+):
+    tmux, client, _store, registry, _workspace, url, _confirmed, close, refs = fold_env
+    refs.agent_type = agent_type
+    refs.identifier = identifier
     assert (await close()).status == 200
-    root = tmp_path / "native" / "sessions" / "2026" / "10" / "12"
-    root.mkdir(parents=True)
-    transcript = root / f"rollout-2026-10-12-{AGENT_ID}.jsonl"
-    transcript.write_text(json.dumps({"type": "session_meta", "payload": {"id": AGENT_ID, "cwd": str(tmp_path), "source": "cli"}}) + "\n")
-    from tmux_console.app import AGENT_TRANSCRIPTS_KEY
-    client.app[AGENT_TRANSCRIPTS_KEY].roots["codex"] = tmp_path / "native"
-    binary = tmp_path / "codex"
+    refs.identifier = None
+    if agent_type == "codex":
+        root = tmp_path / "native" / "sessions" / "2026" / "10" / "12"
+        root.mkdir(parents=True)
+        transcript = root / f"rollout-2026-10-12-{identifier}.jsonl"
+        transcript.write_text(json.dumps({"type": "session_meta", "payload": {
+            "id": identifier, "cwd": str(tmp_path), "source": "cli",
+        }}) + "\n")
+        client.app[AGENT_TRANSCRIPTS_KEY].roots["codex"] = tmp_path / "native"
+        binary = tmp_path / "codex"
+        monkeypatch.setattr("tmux_console.fold_recovery.shutil.which",
+                            lambda name: str(binary) if name == "codex" else None)
+    else:
+        def exact_transcript(sources, *, limit, view):
+            assert limit == 1 and view == "conversation"
+            assert [(item["agentType"], item["agentSessionId"]) for item in sources] == [
+                (agent_type, identifier)
+            ]
+            return {"status": "available"}
+
+        monkeypatch.setattr(client.app[AGENT_TRANSCRIPTS_KEY], "read", exact_transcript)
+        binary = tmp_path / ".opencode" / "bin" / "opencode"
+        binary.parent.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("tmux_console.fold_recovery.shutil.which",
+                            lambda name: str(binary) if name == str(binary) else None)
     marker = tmp_path / "agent-started.txt"
     binary.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {shlex.quote(str(marker))}\npwd >> {shlex.quote(str(marker))}\nexec sleep 60\n")
     binary.chmod(0o700)
-    monkeypatch.setattr("tmux_console.fold_recovery.shutil.which", lambda name: str(binary) if name == "codex" else None)
     response = await client.post(f"{url}/recover", json={"session": "a", "mode": "agent"})
     assert response.status == 201, await response.text()
     for _ in range(50):
         if marker.exists():
             break
         await asyncio.sleep(.01)
-    assert marker.read_text().splitlines() == ["resume", AGENT_ID, str(tmp_path)]
-    assert not (await tmux.get_session("a")).active_pane.dead
+    assert marker.read_text().splitlines() == [resume_option, identifier, str(tmp_path)]
+    resumed = await tmux.get_session("a")
+    assert not resumed.active_pane.dead
+    history = registry.history_for_identity(resumed.id, resumed.created, resumed.server_started, resumed.server_pid)
+    assert history is not None
+    assert registry.latest_recorded_agent(history["id"]) == {
+        "agentType": agent_type, "agentSessionId": identifier,
+    }
 
 
 @pytest.mark.parametrize("unavailable", ["transcript", "cli", "unidentified"])
@@ -472,10 +508,42 @@ async def test_delete_archives_and_removes_dead_tmux_containers(delete_fold_env)
     assert {item["name"] for item in registry.list_history(workspace_id=workspace["id"], recycled=True)["entries"]} >= {"a", "child", "b"}
 
 
-@pytest.mark.parametrize(("agent", "expected"), [
-    ("claude", ["claude", "-r"]), ("codex", ["codex", "resume"]),
-    ("cursor", ["cursor-agent", "--resume"]), ("grok", ["grok", "-r"]), ("copilot", None),
+@pytest.mark.parametrize(("agent", "identifier", "expected"), [
+    ("claude", AGENT_ID, ["claude", "-r"]), ("codex", AGENT_ID, ["codex", "resume"]),
+    ("cursor", AGENT_ID, ["cursor-agent", "--resume"]), ("grok", AGENT_ID, ["grok", "-r"]),
+    ("copilot", AGENT_ID, None),
+    ("pi", AGENT_ID, ["pi", "--session"]), ("omp", AGENT_ID, ["omp", "--resume"]),
+    ("opencode", NATIVE_OPENCODE_ID, ["opencode", "--session"]),
+    ("agy", CASED_AGENT_ID, ["agy", "--conversation"]),
 ])
-def test_resume_argv_supports_only_verified_commands_and_exact_identifiers(agent, expected):
-    assert agent_resume_argv(agent, AGENT_ID) == ([*expected, AGENT_ID] if expected else None)
+def test_resume_argv_supports_only_verified_commands_and_exact_identifiers(agent, identifier, expected):
+    assert agent_resume_argv(agent, identifier) == ([*expected, identifier] if expected else None)
     assert agent_resume_argv(agent, "$(touch /tmp/injected)") is None
+
+
+@pytest.mark.parametrize(("agent", "identifier", "directory"), [
+    ("pi", AGENT_ID, ".local/bin"),
+    ("omp", AGENT_ID, ".local/bin"),
+    ("opencode", NATIVE_OPENCODE_ID, ".opencode/bin"),
+    ("agy", CASED_AGENT_ID, ".local/bin"),
+])
+def test_fold_provider_installation_and_snapshot_keep_exact_reference(agent, identifier, directory, tmp_path, monkeypatch):
+    snapshot = FoldSessionSnapshot(
+        name="a", historyId=AGENT_ID, directory=str(tmp_path), title=None,
+        agentType=agent, agentSessionId=identifier, sessionId="$1", sessionCreated=1,
+        serverStarted=2, serverPid=3, savedAt=4,
+    )
+    assert validate_fold_snapshot(snapshot.to_dict()) == snapshot
+
+    binary = tmp_path / directory / agent
+    binary.parent.mkdir(parents=True)
+    binary.touch()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "missing"))
+    assert _agent_executable(agent) is None
+    binary.chmod(0o700)
+    assert _agent_executable(agent) == str(binary)
+    on_path = tmp_path / agent
+    on_path.touch(mode=0o700)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert _agent_executable(agent) == str(on_path)

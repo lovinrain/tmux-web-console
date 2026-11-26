@@ -1,5 +1,25 @@
 import type { WorkLinkSummary } from "./workLinks";
 
+export const AGENT_DISPLAY_LABELS = {
+  claude: "Claude",
+  codex: "Codex",
+  copilot: "Copilot",
+  cursor: "Cursor",
+  grok: "Grok",
+  "dsh-tui": "DSH TUI",
+  pi: "Pi",
+  omp: "OMP",
+  opencode: "OpenCode",
+  agy: "Antigravity",
+} as const;
+
+export type AgentType = keyof typeof AGENT_DISPLAY_LABELS;
+export const AGENT_TYPES: readonly AgentType[] = Object.keys(AGENT_DISPLAY_LABELS) as AgentType[];
+
+export function isAgentType(value: unknown): value is AgentType {
+  return typeof value === "string" && Object.hasOwn(AGENT_DISPLAY_LABELS, value);
+}
+
 export interface Pane {
   id: string;
   index: number;
@@ -17,6 +37,7 @@ export interface Pane {
   alternate_on: boolean;
   dead: boolean;
   activity: number;
+  agentType?: AgentType | null;
 }
 
 export const SESSION_TAGS = [
@@ -61,8 +82,8 @@ export interface Session {
   readyAttention?: SessionAttention;
   /** Ends this native session after its current or next observed work finishes. */
   endWhenFinished?: boolean;
-  /** Passive recovery metadata only; never an instruction to resume an agent. */
-  agentType?: "claude" | "codex" | "copilot" | "cursor" | "grok" | "dsh-tui" | null;
+  /** The detected agent in the active pane. */
+  agentType?: AgentType | null;
   agentSessionId?: string | null;
   customTitle: string | null;
   tags: SessionTag[];

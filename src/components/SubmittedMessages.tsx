@@ -4,10 +4,11 @@ import {
   type SubmittedMessagePage,
   type SubmittedMessageTarget,
 } from "../api";
+import { agentDisplayLabel } from "../agentResume";
 import { RefreshIcon } from "../icons";
 import "./SubmittedMessages.css";
 
-const agentLabel = (agent: string) => agent === "claude" ? "Claude Code" : "Codex";
+const agentLabel = (agent: string) => agent === "claude" ? "Claude Code" : agentDisplayLabel(agent);
 
 export function SubmittedMessages({ target }: { target: SubmittedMessageTarget }) {
   const [query, setQuery] = useState("");
@@ -58,7 +59,7 @@ export function SubmittedMessages({ target }: { target: SubmittedMessageTarget }
   };
 
   return <section className="submitted-messages" aria-label="Submitted messages">
-    <p className="submitted-messages-description">Input saved after submission in Claude Code and Codex. Saved messages remain when tmux scrollback is cleared.</p>
+    <p className="submitted-messages-description">Submitted prompts saved from agent conversations remain available when tmux scrollback is cleared.</p>
     <form className="submitted-messages-search" onSubmit={(event) => {
       event.preventDefault(); setSearch(query.trim()); refresh();
     }}>
@@ -77,7 +78,7 @@ export function SubmittedMessages({ target }: { target: SubmittedMessageTarget }
       {!loading && !error && page?.messages.length === 0 && <p className="submitted-messages-empty">
         {search ? "No submitted messages match your search."
           : page.sources.length ? "No submitted messages recorded yet."
-            : "No Claude Code or Codex conversation ID has been recorded for this session yet."}
+            : "No supported agent conversation has been recorded for this session yet."}
       </p>}
       {page?.messages.map((message) => <article className="submitted-message" key={message.id}>
         <header>

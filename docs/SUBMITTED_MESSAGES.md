@@ -1,11 +1,13 @@
 # Submitted messages
 
 Open **Pane scrollback → Submitted messages** to search and copy input submitted
-in Claude Code or Codex. Each entry shows its agent and submission time. Older
+in Claude Code, Codex, Pi, OMP, OpenCode, or Antigravity. Each entry shows its
+agent and submission time. Older
 entries load on demand. **Session history / Agents → Submitted messages** also
 opens the archive for a session that has ended, without restarting its shell.
 
-Muxdeck reads the agents' native `history.jsonl` input records after submission.
+Muxdeck reads native `history.jsonl` input records from Claude Code and Codex
+and saved prompt records from Pi, OMP, OpenCode, and Antigravity.
 This includes input entered directly in a terminal and the final text after
 editing. It does not reconstruct prompts from keystrokes or log drafts, pasted
 text awaiting submission, or assistant output. Native input history can include
@@ -32,8 +34,9 @@ every five seconds, even with no browser open. Conversation discovery has the
 existing up-to-30-second cache. Opening or refreshing the view also imports
 available input. The first import recovers older entries still present in native
 history. If native history recording is disabled, a conversation ID cannot be
-detected, or the native file has already been removed, missing submissions cannot
-be recovered. Other coding agents currently have no submitted-input adapter.
+detected, or the native file has already been removed, missing submissions
+cannot be recovered. The native source directories for Pi, OMP, OpenCode, and
+Antigravity follow the transcript configuration. [Agent transcripts](AGENT_TRANSCRIPTS.md)
 
 Saved entries survive tmux scrollback truncation, native input-history rotation,
 session termination, and Muxdeck restarts. There is no automatic archive expiry.

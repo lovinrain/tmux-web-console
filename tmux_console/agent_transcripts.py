@@ -8,18 +8,34 @@ import os
 import re
 import sqlite3
 import stat
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from .agent_reference import UUID_PATTERN
+from .agent_sources import (
+    EXTENDED_TRANSCRIPT_AGENTS,
+    UUID_PATTERN,
+    default_extended_transcript_roots,
+    normalize_agent_session_id,
+)
+from .agy_sessions import agy_has_session, agy_revision, locate_agy_db, read_agy_records
+from .opencode_sessions import (
+    locate_opencode_db,
+    opencode_has_session,
+    opencode_revision,
+    read_opencode_records,
+)
+from .pi_sessions import locate_pi_session, pi_session_header, read_pi_session_header
 from .transcript_formats import (
     CONVERSATION_KINDS,
     codex_compaction_matches,
+    pi_submitted_message,
     visible_messages,
 )
 
-AGENTS = ("codex", "claude", "copilot", "cursor", "grok")
+AGENTS = {"codex", "claude", "copilot", "cursor", "grok"} | EXTENDED_TRANSCRIPT_AGENTS
+_SQLITE_TRANSCRIPT_AGENTS = {"opencode", "agy"}
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 MAX_SCAN_BYTES = 32 * 1024 * 1024
 MAX_PAGE_BYTES = 1024 * 1024
@@ -46,8 +62,11 @@ def default_transcript_roots() -> dict[str, Path]:
         "cursor": home / ".cursor" / "chats",
         "grok": Path(os.environ.get("GROK_HOME", home / ".grok")) / "sessions",
     }
-    return {agent: Path(os.environ.get(f"MUXDECK_{agent.upper()}_TRANSCRIPTS_DIR", root))
-            for agent, root in defaults.items()}
+    return {
+        **{agent: Path(os.environ.get(f"MUXDECK_{agent.upper()}_TRANSCRIPTS_DIR", root))
+           for agent, root in defaults.items()},
+        **default_extended_transcript_roots(),
+    }
 
 
 def _source_key(agent: dict[str, Any]) -> str:
@@ -110,6 +129,12 @@ def _digest(source: BinaryIO, start: int, length: int) -> str:
 
 
 def _native_header(source: BinaryIO, agent: str, identifier: str) -> None:
+    if agent in {"pi", "omp"}:
+        record = read_pi_session_header(source, allow_title=agent == "omp")
+        source.seek(0)
+        if not pi_session_header(record, identifier):
+            raise _Unsupported("The native transcript header does not match the recorded conversation.")
+        return
     if agent not in {"codex", "copilot"}:
         return
     line = source.readline(MAX_RECORD_BYTES + 1)
@@ -166,6 +191,81 @@ def _codex_compaction_follows(
         source.seek(position)
 
 
+@contextmanager
+def _native_database(path: Path, *, timeout: float = 1) -> Iterator[sqlite3.Connection]:
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=timeout)) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        # A read transaction pins metadata and records, including committed WAL data.
+        connection.execute("BEGIN")
+        yield connection
+
+
+def _stat_signature(path: Path) -> tuple[int, int, int, int, int]:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("the native transcript is not a regular file")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _database_signature(path: Path) -> tuple[int | None, ...]:
+    signature: list[int | None] = list(_stat_signature(path)[:4])
+    absent = (None,) * 4
+    for suffix in ("-wal", "-journal"):
+        try:
+            companion = _stat_signature(path.with_name(path.name + suffix))[:4]
+            # SQLite may create an empty sidecar or update its inode metadata
+            # while opening a WAL-mode database for reading.
+            signature.extend(companion if companion[2] else absent)
+        except FileNotFoundError:
+            signature.extend(absent)
+    return tuple(signature)
+
+
+def _pi_prompt_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
+    prompt = pi_submitted_message(record)
+    if prompt is None:
+        return []
+    text, timestamp, complete = prompt
+    return [{
+        "role": "user", "kind": "prompt", "text": text, "timestamp": timestamp,
+        "truncated": False, "complete": complete, "sourceId": record.get("id"),
+    }]
+
+
+def _append_page_entries(
+    entries: list[dict[str, Any]], messages: list[dict[str, Any]], *, view: str,
+    part: int, limit: int, size: int, key: str,
+) -> tuple[int | None, int, bool]:
+    """Append visible entries and return the index of the first deferred entry."""
+    if part and part >= len(entries):
+        raise ValueError("invalid transcript cursor; refresh the transcript")
+    partial = False
+    for index, entry in enumerate(entries):
+        if index < part or view == "conversation" and entry["kind"] not in CONVERSATION_KINDS:
+            continue
+        if view == "prompts" and entry["kind"] != "prompt":
+            continue
+        source_text = entry.pop("sourceText", None)
+        if view == "prompts":
+            if source_text is not None:
+                entry["text"], entry["truncated"] = source_text, False
+        else:
+            entry.pop("sourceId", None)
+            entry.pop("complete", None)
+        try:
+            length = len(entry["text"].encode("utf-8"))
+        except UnicodeError:
+            partial = True
+            continue
+        if len(messages) >= limit or messages and size + length > MAX_PAGE_BYTES:
+            return index, size, partial
+        entry["id"] = f"{key}:{index}"
+        messages.append(entry)
+        size += length
+        partial |= entry["truncated"]
+    return None, size, partial
+
+
 class AgentTranscriptReader:
     def __init__(self, *, roots: dict[str, Path] | None = None) -> None:
         self.roots = default_transcript_roots() if roots is None else roots
@@ -199,10 +299,51 @@ class AgentTranscriptReader:
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
             return False
 
+    def accepts_native_reference(self, agent: str, identifier: str) -> bool:
+        """Verify the exact recorded ID against its native conversation store."""
+        normalized = normalize_agent_session_id(agent, identifier)
+        if agent not in EXTENDED_TRANSCRIPT_AGENTS or normalized is None:
+            return False
+        try:
+            path = self._locate(agent, normalized)
+            if path is None:
+                return False
+            if agent in _SQLITE_TRANSCRIPT_AGENTS:
+                has_session = opencode_has_session if agent == "opencode" else agy_has_session
+                with _native_database(path, timeout=0.1) as connection:
+                    return has_session(connection, normalized)
+            with _open_file(path) as source:
+                _native_header(source, agent, normalized)
+            return True
+        except (OSError, sqlite3.Error, ValueError):
+            return False
+
+    def native_source_signature(self, agent: str, identifier: str) -> tuple | None:
+        """Get a cheap freshness check for a submitted-message archive source."""
+        normalized = normalize_agent_session_id(agent, identifier)
+        if agent not in EXTENDED_TRANSCRIPT_AGENTS or normalized is None:
+            return None
+        try:
+            path = self._locate(agent, normalized)
+            if path is None:
+                return None
+            if agent in _SQLITE_TRANSCRIPT_AGENTS:
+                return _database_signature(path)
+            return _stat_signature(path)
+        except FileNotFoundError:
+            return None
+
     def _locate(self, agent: str, identifier: str) -> Path | None:
         root = self.roots.get(agent)
         if root is None or not root.exists():
             return None
+        if agent in {"pi", "omp"}:
+            path = locate_pi_session(root, identifier)
+            return _confined_file(root, path) if path is not None else None
+        if agent == "opencode":
+            return locate_opencode_db(root)
+        if agent == "agy":
+            return locate_agy_db(root, identifier)
         if agent == "copilot":
             path = root / identifier / "events.jsonl"
             return _confined_file(root, path) if path.exists() else None
@@ -246,10 +387,27 @@ class AgentTranscriptReader:
         self, agents: list[dict[str, Any]], *, selected: str | None = None,
         cursor: str | None = None, limit: int = 50, view: str = "all",
     ) -> dict[str, Any]:
-        if not 1 <= limit <= 100:
-            raise ValueError("limit must be between 1 and 100")
         if view not in {"conversation", "all"}:
             raise ValueError("view must be conversation or all")
+        return self._read(agents, selected=selected, cursor=cursor, limit=limit, view=view)
+
+    def read_native_prompts(
+        self, agent: str, identifier: str, *, cursor: str | None = None, limit: int = 100,
+    ) -> dict[str, Any]:
+        """Read submitted input with native source IDs and attachment completeness."""
+        if agent not in EXTENDED_TRANSCRIPT_AGENTS:
+            raise ValueError("native prompt reader does not support this agent")
+        return self._read(
+            [{"agentType": agent, "agentSessionId": identifier}],
+            selected=None, cursor=cursor, limit=limit, view="prompts",
+        )
+
+    def _read(
+        self, agents: list[dict[str, Any]], *, selected: str | None, cursor: str | None,
+        limit: int, view: str,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
         sources = list({
             _source_key(item): {"key": _source_key(item), "agentType": item["agentType"],
                                 "agentSessionId": item.get("agentSessionId")}
@@ -267,20 +425,27 @@ class AgentTranscriptReader:
                                   "partial": False, "notice": "No conversation ID has been recorded for this pane."}
         if chosen is None or not chosen["agentSessionId"]:
             return result
-        agent, identifier = chosen["agentType"], chosen["agentSessionId"]
-        if agent not in AGENTS or not isinstance(identifier, str) or not UUID_PATTERN.fullmatch(identifier):
+        agent = chosen["agentType"]
+        identifier = normalize_agent_session_id(agent, chosen["agentSessionId"])
+        if agent not in AGENTS or identifier is None:
             result.update(status="unsupported", notice="This agent's native transcript format is not supported.")
             return result
         position = _decode_cursor(cursor, chosen["key"], view)
         try:
-            path = self._locate(agent, identifier.lower())
+            path = self._locate(agent, identifier)
             if path is None:
-                result.update(status="missing", notice="The recorded conversation's local transcript was not found. It may have been removed or stored in a different agent directory.")
-                return result
-            if agent == "cursor":
+                if position is not None and agent in EXTENDED_TRANSCRIPT_AGENTS:
+                    raise TranscriptChangedError("The transcript changed or rotated. Refresh to read it again.")
+                page = None
+            elif agent == "cursor":
                 page = self._read_cursor(path, identifier, chosen["key"], position, limit, view)
+            elif agent in _SQLITE_TRANSCRIPT_AGENTS:
+                page = self._read_sqlite(path, agent, identifier, chosen["key"], position, limit, view)
             else:
                 page = self._read_jsonl(path, agent, identifier, chosen["key"], position, limit, view)
+            if page is None:
+                result.update(status="missing", notice="The recorded conversation's local transcript was not found. It may have been removed or stored in a different agent directory.")
+                return result
             result.update(status="available", notice=None, **page)
             if result["partial"]:
                 result["notice"] = "Some native records could not be read or were too large. Long entries are marked when shortened."
@@ -339,7 +504,7 @@ class AgentTranscriptReader:
                     if agent == "claude" and record.get("sessionId", identifier) != identifier:
                         partial = True
                         continue
-                    entries = visible_messages(agent, record)
+                    entries = _pi_prompt_entries(record) if view == "prompts" else visible_messages(agent, record)
                 except (ValueError, TypeError, RecursionError):
                     partial = True
                     continue
@@ -351,21 +516,12 @@ class AgentTranscriptReader:
                         for entry in entries:
                             if entry["kind"] == "response":
                                 entry["kind"] = "context"
-                if part and part >= len(entries):
-                    raise ValueError("invalid transcript cursor; refresh the transcript")
-                deferred = False
-                for index, entry in enumerate(entries):
-                    if index < part or view == "conversation" and entry["kind"] not in CONVERSATION_KINDS:
-                        continue
-                    length = len(entry["text"].encode("utf-8"))
-                    if len(messages) >= limit or messages and size + length > MAX_PAGE_BYTES:
-                        part, deferred = index, True
-                        break
-                    entry["id"] = f"{key}:{start}:{index}"
-                    messages.append(entry)
-                    size += length
-                    partial |= entry["truncated"]
-                if deferred:
+                deferred, size, entries_partial = _append_page_entries(
+                    entries, messages, view=view, part=part, limit=limit, size=size, key=f"{key}:{start}",
+                )
+                partial |= entries_partial
+                if deferred is not None:
+                    part = deferred
                     source.seek(start)
                     break
                 part = 0
@@ -386,11 +542,7 @@ class AgentTranscriptReader:
         file_id = [info.st_dev, info.st_ino]
         if cursor is not None and cursor["file"] != file_id:
             raise TranscriptChangedError("The transcript changed or rotated. Refresh to read it again.")
-        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
-            connection.execute("PRAGMA query_only = ON")
-            # A read transaction gives the metadata and its blobs one consistent view,
-            # including committed messages in Cursor's live WAL.
-            connection.execute("BEGIN")
+        with _native_database(path) as connection:
             row = connection.execute("SELECT value FROM meta WHERE key = '0' AND length(value) <= ?", (MAX_RECORD_BYTES,)).fetchone()
             try:
                 meta = json.loads(bytes.fromhex(row[0])) if row else None
@@ -430,21 +582,12 @@ class AgentTranscriptReader:
                 except (ValueError, TypeError, RecursionError):
                     entries = []
                     partial = True
-                if part and part >= len(entries):
-                    raise ValueError("invalid transcript cursor; refresh the transcript")
-                deferred = False
-                for index, entry in enumerate(entries):
-                    if index < part or view == "conversation" and entry["kind"] not in CONVERSATION_KINDS:
-                        continue
-                    length = len(entry["text"].encode("utf-8"))
-                    if len(messages) >= limit or messages and size + length > MAX_PAGE_BYTES:
-                        part, deferred = index, True
-                        break
-                    entry["id"] = f"{key}:{root}:{offset}:{index}"
-                    messages.append(entry)
-                    size += length
-                    partial |= entry["truncated"]
-                if deferred:
+                deferred, size, entries_partial = _append_page_entries(
+                    entries, messages, view=view, part=part, limit=limit, size=size, key=f"{key}:{root}:{offset}",
+                )
+                partial |= entries_partial
+                if deferred is not None:
+                    part = deferred
                     break
                 part = 0
                 offset += 1
@@ -452,6 +595,73 @@ class AgentTranscriptReader:
                 "v": 2, "source": key, "view": view, "part": part,
                 "file": file_id, "root": root, "offset": offset,
             }) if offset < len(ids) else None}
+
+
+    def _read_sqlite(
+        self, path: Path, agent: str, identifier: str, key: str,
+        cursor: dict[str, Any] | None, limit: int, view: str,
+    ) -> dict[str, Any] | None:
+        signature = _database_signature(path)
+        file_id = list(signature[:2])
+        if cursor is not None and cursor["file"] != file_id:
+            raise TranscriptChangedError("The transcript changed or rotated. Refresh to read it again.")
+        offset = cursor["offset"] if cursor else 0
+        part = cursor["part"] if cursor else 0
+        if offset >= (1 << 63):
+            raise ValueError("invalid transcript cursor; refresh the transcript")
+        get_revision = opencode_revision if agent == "opencode" else agy_revision
+        read_records = read_opencode_records if agent == "opencode" else read_agy_records
+        with _native_database(path) as connection:
+            try:
+                native_revision = get_revision(connection, identifier)
+            except ValueError as error:
+                raise _Unsupported(str(error)) from error
+            if native_revision is None:
+                if cursor is not None:
+                    raise TranscriptChangedError("The transcript changed or rotated. Refresh to read it again.")
+                if agent == "agy":
+                    raise _Unsupported("The native transcript metadata does not match the recorded conversation.")
+                return None
+            # OpenCode shares the database with unrelated sessions. Antigravity's
+            # per-conversation file and WAL also detect same-size edits to older steps.
+            revision_input = native_revision if agent == "opencode" else repr((native_revision, signature))
+            revision = hashlib.sha256(revision_input.encode()).hexdigest()
+            if cursor is not None and cursor.get("revision") != revision:
+                raise TranscriptChangedError("The transcript changed or rotated. Refresh to read it again.")
+
+            messages: list[dict[str, Any]] = []
+            size = scanned = 0
+            partial = more = False
+            records = read_records(
+                connection, identifier, offset=offset,
+                limit=MAX_RECORDS_PER_PAGE + 1, max_record_bytes=MAX_RECORD_BYTES,
+            )
+            for index, (entries, record_bytes, record_partial) in enumerate(records):
+                if (index >= MAX_RECORDS_PER_PAGE or len(messages) >= limit or scanned >= MAX_SCAN_BYTES
+                        or scanned and scanned + record_bytes > MAX_SCAN_BYTES):
+                    more = True
+                    break
+                scanned += record_bytes
+                partial |= record_partial
+                deferred, size, entries_partial = _append_page_entries(
+                    entries, messages, view=view, part=part, limit=limit, size=size, key=f"{key}:{offset}",
+                )
+                partial |= entries_partial
+                if deferred is not None:
+                    part, more = deferred, True
+                    break
+                part = 0
+                offset += 1
+            if part and not more:
+                raise ValueError("invalid transcript cursor; refresh the transcript")
+            if list(_stat_signature(path)[:2]) != file_id:
+                raise TranscriptChangedError("The transcript changed or rotated. Refresh to read it again.")
+            if agent == "agy" and _database_signature(path) != signature:
+                raise TranscriptChangedError("The transcript changed while being read. Refresh to retry.")
+            return {"messages": messages, "partial": partial, "nextCursor": _encode_cursor({
+                "v": 2, "source": key, "view": view, "part": part,
+                "file": file_id, "revision": revision, "offset": offset,
+            }) if more else None}
 
 
 def _cursor_message_ids(data: bytes) -> list[str]:

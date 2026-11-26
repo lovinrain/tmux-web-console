@@ -1,18 +1,13 @@
 import type { RecoverableSession } from "./api";
+import { AGENT_DISPLAY_LABELS, isAgentType } from "./types";
 
 export type RecoveryAgentType = RecoverableSession["agentType"];
 
-export const AGENT_DISPLAY_LABELS: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  copilot: "Copilot",
-  cursor: "Cursor",
-  grok: "Grok",
-  "dsh-tui": "DSH TUI",
-};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OPENCODE_SESSION_ID = /^ses_[A-Za-z0-9]{26}$/;
 
-export function agentDisplayLabel(agentType: RecoveryAgentType): string {
-  return agentType ? AGENT_DISPLAY_LABELS[agentType] ?? agentType : "Shell";
+export function agentDisplayLabel(agentType?: string | null): string {
+  return isAgentType(agentType) ? AGENT_DISPLAY_LABELS[agentType] : agentType || "Shell";
 }
 
 /**
@@ -29,6 +24,10 @@ export function agentResumeCommand(
   directory?: string,
 ): string | null {
   if (!sessionId) return null;
+  if ((agentType === "pi" || agentType === "omp" || agentType === "agy") && sessionId.match(UUID)?.[0] !== sessionId) {
+    return null;
+  }
+  if (agentType === "opencode" && sessionId.match(OPENCODE_SESSION_ID)?.[0] !== sessionId) return null;
   // Keep recorded values literal when the command is pasted into a shell.
   const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
   const id = /^[A-Za-z0-9_-]+$/.test(sessionId) ? sessionId : quote(sessionId);
@@ -38,6 +37,10 @@ export function agentResumeCommand(
     case "codex": command = `codex resume ${id}`; break;
     case "cursor": command = `cursor-agent --resume ${id}`; break;
     case "grok": command = `grok -r ${id}`; break;
+    case "pi": command = `pi --session ${id}`; break;
+    case "omp": command = `omp --resume ${id}`; break;
+    case "opencode": command = `opencode --session ${id}`; break;
+    case "agy": command = `agy --conversation ${id}`; break;
     default: return null;
   }
   return directory ? `cd -- ${quote(directory)} && ${command}` : command;

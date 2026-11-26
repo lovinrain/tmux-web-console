@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 import time
 from dataclasses import dataclass
 
-from .agent_reference import AgentReference, UUID_PATTERN
+from .agent_reference import AgentReference
+from .agent_sources import UUID_PATTERN, normalize_agent_session_id
 from .agent_transcripts import AgentTranscriptReader
+from .status import AgentType
 from .tmux import MAX_PANE_CAPTURE_BYTES, MAX_PANE_CAPTURE_LINES, Pane, Session, TmuxClient, TmuxError
 
 MAX_RECOVERED_REFERENCES = 16
@@ -16,26 +19,58 @@ _RESUME = re.compile(rf"codex resume (?P<id>{UUID_PATTERN.pattern})", re.I)
 _INLINE = re.compile(r"To continue this session, run\s+(.+)", re.I)
 
 
-def codex_reconnect_references(text: str) -> list[AgentReference]:
-    """Accept CLI exit instructions, not UUIDs or arbitrary shell commands."""
+def _native_reconnect_reference(previous: str, line: str) -> AgentReference | None:
+    agent: AgentType
+    if previous == "To resume this session:":
+        agent, option, optional = "pi", "--session", "--session-dir"
+    elif previous == "Resume this session with":
+        agent, option, optional = "omp", "--resume", "--profile"
+    else:
+        return None
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return None
+    if len(parts) not in {3, 5} or parts[0] != agent or parts[-2] != option:
+        return None
+    if len(parts) == 5 and (parts[1] != optional or not parts[2]):
+        return None
+    identifier = normalize_agent_session_id(agent, parts[-1])
+    return AgentReference(agent, identifier) if identifier is not None else None
+
+
+def _reconnect_references(text: str, *, include_extended: bool) -> list[AgentReference]:
     tail = text.encode("utf-8", "replace")[-MAX_PANE_CAPTURE_BYTES:].decode("utf-8", "ignore")
     lines = _ANSI.sub("", tail).splitlines()
-    references: dict[str, AgentReference] = {}
+    references: dict[tuple[str | None, str | None], AgentReference] = {}
     for index, raw in enumerate(lines):
         line = raw.strip()
+        previous = lines[index - 1].strip() if index else ""
         inline = _INLINE.fullmatch(line)
-        command = inline.group(1) if inline else (
-            line if index and lines[index - 1].strip() == "To reconnect, run:" else ""
-        )
+        command = inline.group(1) if inline else line if previous == "To reconnect, run:" else ""
         match = _RESUME.fullmatch(command)
-        if match is not None:
-            identifier = match.group("id").lower()
+        reference = (
+            AgentReference("codex", match.group("id").lower()) if match else
+            _native_reconnect_reference(previous, line) if include_extended else None
+        )
+        if reference is not None:
+            key = reference.agent_type, reference.session_id
             # A repeated instruction belongs at its latest position.
-            references.pop(identifier, None)
-            references[identifier] = AgentReference("codex", identifier)
+            references.pop(key, None)
+            references[key] = reference
             if len(references) > MAX_RECOVERED_REFERENCES:
                 references.pop(next(iter(references)))
     return list(references.values())
+
+
+def codex_reconnect_references(text: str) -> list[AgentReference]:
+    """Accept the Codex CLI's own exit instructions."""
+    return _reconnect_references(text, include_extended=False)
+
+
+def agent_reconnect_references(text: str) -> list[AgentReference]:
+    """Recover IDs from supported CLIs' exact exit instructions."""
+    return _reconnect_references(text, include_extended=True)
 
 
 @dataclass(frozen=True)
@@ -84,7 +119,7 @@ class AgentReferenceRecovery:
                     rows = min(MAX_PANE_CAPTURE_LINES, max(1, MAX_PANE_CAPTURE_BYTES // max(1, pane.width * 4)))
                     start = max(-pane.history_size, end - rows + 1)
                     capture = await self._tmux.capture_history_slice(pane, start, end)
-                    candidates = codex_reconnect_references("\n".join(capture.lines))
+                    candidates = agent_reconnect_references("\n".join(capture.lines))
                     accepted = await asyncio.to_thread(self._validate, candidates) if candidates else []
                 except TmuxError:
                     # A vanished pane is routine and must not break inventory.
@@ -105,5 +140,13 @@ class AgentReferenceRecovery:
         return results
 
     def _validate(self, candidates: list[AgentReference]) -> list[AgentReference]:
-        return [reference for reference in candidates if reference.session_id is not None
-                and self._transcripts.accepts_codex_reference(reference.session_id)]
+        accepted = []
+        for reference in candidates:
+            agent, identifier = reference.agent_type, reference.session_id
+            if agent == "codex" and identifier is not None:
+                valid = self._transcripts.accepts_codex_reference(identifier)
+            else:
+                valid = agent is not None and identifier is not None and self._transcripts.accepts_native_reference(agent, identifier)
+            if valid:
+                accepted.append(reference)
+        return accepted

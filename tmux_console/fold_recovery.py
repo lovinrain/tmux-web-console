@@ -10,12 +10,14 @@ import logging
 import shutil
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 
-from .agent_reference import UUID_PATTERN, AgentReferenceDetector
+from .agent_reference import AgentReference, AgentReferenceDetector
 from .agent_reference_recovery import AgentReferenceRecovery
+from .agent_sources import normalize_agent_session_id
 from .agent_transcripts import AgentTranscriptReader
 from .metadata import SessionTitleStore
 from .scrollback import ScrollbackRecorder, ScrollbackStoreUnavailable
@@ -43,6 +45,22 @@ from .workspaces import (
 
 LOGGER = logging.getLogger("muxdeck.folds")
 IDENTITY_FIELDS = ("sessionId", "sessionCreated", "serverStarted", "serverPid")
+RESUME_ARGUMENTS = {
+    "claude": ("claude", "-r"),
+    "codex": ("codex", "resume"),
+    "cursor": ("cursor-agent", "--resume"),
+    "grok": ("grok", "-r"),
+    "pi": ("pi", "--session"),
+    "omp": ("omp", "--resume"),
+    "opencode": ("opencode", "--session"),
+    "agy": ("agy", "--conversation"),
+}
+AGENT_BIN_DIRECTORIES = {
+    "pi": ".local/bin",
+    "omp": ".local/bin",
+    "opencode": ".opencode/bin",
+    "agy": ".local/bin",
+}
 
 
 def session_fence(session: Session) -> dict[str, Any]:
@@ -51,11 +69,17 @@ def session_fence(session: Session) -> dict[str, Any]:
 
 
 def agent_resume_argv(agent: str | None, identifier: str | None) -> list[str] | None:
-    if not identifier or not UUID_PATTERN.fullmatch(identifier):
+    if (agent is None or agent not in RESUME_ARGUMENTS or identifier is None
+            or normalize_agent_session_id(agent, identifier) is None):
         return None
-    commands = {"claude": ["claude", "-r"], "codex": ["codex", "resume"],
-                "cursor": ["cursor-agent", "--resume"], "grok": ["grok", "-r"]}
-    return [*commands[agent], identifier] if agent in commands else None
+    return [*RESUME_ARGUMENTS[agent], identifier]
+
+
+def _agent_executable(program: str) -> str | None:
+    directory = AGENT_BIN_DIRECTORIES.get(program)
+    return shutil.which(program) or (
+        shutil.which(str(Path.home() / directory / program)) if directory else None
+    )
 
 
 def register_fold_recovery_routes(
@@ -262,6 +286,7 @@ def register_fold_recovery_routes(
                     raise TmuxSessionIdentityChangedError("A live session already uses this name; it will not be replaced")
                 directory = validate_tmux_start_directory(snapshot["directory"])
                 command = None
+                reference = None
                 if payload["mode"] == "agent":
                     command = agent_resume_argv(snapshot["agentType"], snapshot["agentSessionId"])
                     if command is None:
@@ -269,13 +294,14 @@ def register_fold_recovery_routes(
                     if not any((agent["agentType"], agent["agentSessionId"]) == (snapshot["agentType"], snapshot["agentSessionId"])
                                for agent in registry.list_session_agents(snapshot["historyId"])):
                         raise ValueError("coding conversation does not belong to the recorded session")
-                    executable = shutil.which(command[0])
+                    executable = _agent_executable(command[0])
                     if executable is None:
                         raise TmuxSessionIdentityChangedError(f"{command[0]} is unavailable on this host; recover the shell only")
                     command[0] = executable
                     source = await asyncio.to_thread(transcripts.read, [snapshot], limit=1, view="conversation")
                     if source["status"] != "available":
                         raise TmuxSessionIdentityChangedError(source.get("notice") or "The saved coding conversation is unavailable; recover the shell only")
+                    reference = AgentReference(snapshot["agentType"], command[-1])
                 # A workspace can change while the transcript is being checked.
                 latest = workspaces.get_workspace(workspace["id"])
                 latest_fold = next((item for item in latest.get("folds", [])
@@ -293,7 +319,7 @@ def register_fold_recovery_routes(
                         name=created.name, id=created.id, windows=1, attached=0,
                         created=created.session_created, server_started=created.server_started,
                         server_pid=created.server_pid,
-                    ))
+                    ), reference)
                 except SessionRegistryUnavailable:
                     warnings.append("session was recovered but its complete history identity could not be saved")
                 return web.json_response({"session": created.name, "sessionId": created.id, "created": True,

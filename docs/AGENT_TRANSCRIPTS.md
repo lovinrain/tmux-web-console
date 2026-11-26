@@ -1,8 +1,9 @@
 # Agent transcripts
 
 Open **Pane scrollback → Transcript** to read the coding agent's local
-conversation. Recognized Codex, Claude Code, Copilot, Cursor, and Grok panes open
-this view first. It can show messages that the terminal replaced with a notice
+conversation. Recognized Codex, Claude Code, Copilot, Cursor, Grok, Pi, OMP,
+OpenCode, and Antigravity panes open this view first. It can show messages that
+the terminal replaced with a notice
 such as “Earlier messages are available — press ctrl+t to view the full
 transcript,” or that tmux no longer retains.
 
@@ -100,10 +101,16 @@ history limit.
 | Copilot | `ID/events.jsonl` | `~/.copilot/session-state` |
 | Cursor CLI | `PROJECT/ID/store.db` | `~/.cursor/chats` |
 | Grok | `PROJECT/ID/chat_history.jsonl` | `$GROK_HOME/sessions`, otherwise `~/.grok/sessions` |
+| Pi | `PROJECT/TIMESTAMP_ID.jsonl` | `~/.pi/agent/sessions` |
+| OMP | `PROJECT/TIMESTAMP_ID.jsonl` | `~/.omp/agent/sessions` |
+| OpenCode | `opencode.db` | `$XDG_DATA_HOME/opencode` or `~/.local/share/opencode` |
+| Antigravity | `conversations/ID.db` | `~/.gemini/antigravity-cli` |
 
 Override a directory with `MUXDECK_CODEX_TRANSCRIPTS_DIR`,
 `MUXDECK_CLAUDE_TRANSCRIPTS_DIR`, `MUXDECK_COPILOT_TRANSCRIPTS_DIR`,
-`MUXDECK_CURSOR_TRANSCRIPTS_DIR`, or `MUXDECK_GROK_TRANSCRIPTS_DIR`. The configured
+`MUXDECK_CURSOR_TRANSCRIPTS_DIR`, `MUXDECK_GROK_TRANSCRIPTS_DIR`,
+`MUXDECK_PI_TRANSCRIPTS_DIR`, `MUXDECK_OMP_TRANSCRIPTS_DIR`,
+`MUXDECK_OPENCODE_TRANSCRIPTS_DIR`, or `MUXDECK_AGY_TRANSCRIPTS_DIR`. The configured
 directory must retain the corresponding layout above. The Muxdeck service user
 must be able to read it. Tests use separate directories for every provider.
 
@@ -122,6 +129,14 @@ to the exact CLI process before old resume arguments or unrelated open
 transcripts. Multiple distinct holds in one process remain unidentified rather
 than guessing a conversation. These references use the existing persistent
 session registry and require no state-schema migration.
+
+Pi may replace its process arguments and close its journal between writes.
+Opening Pi's `/session` information exposes the active conversation to Muxdeck.
+Pi and OMP exit instructions can also supply IDs from retained tmux output.
+OpenCode can identify a conversation by explicit ID or by a unique native
+title and working-directory match. Antigravity exposes its active conversation
+through its presence lock or open database. Pi, OMP, and OpenCode keep the
+original spelling of case-sensitive IDs.
 
 After Codex exits, Muxdeck can recover IDs from its explicit reconnect messages
 in the retained pane output. Background observation and opening Session history

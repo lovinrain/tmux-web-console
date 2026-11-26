@@ -4,21 +4,27 @@ import asyncio
 import json
 import os
 import re
+import sqlite3
+import stat
 import time
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import islice
 from pathlib import Path
+from typing import BinaryIO
 
-from .status import AgentType, classify_agent_type
-from .tmux import Pane, Session
-
-UUID_PATTERN = re.compile(
-    r"(?<![0-9a-f])"
-    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
-    r"(?![0-9a-f])",
-    re.IGNORECASE,
+from .agent_sources import (
+    EXTENDED_TRANSCRIPT_AGENTS,
+    UUID_PATTERN as UUID_PATTERN,
+    default_extended_transcript_roots,
+    normalize_agent_session_id,
 )
+from .opencode_sessions import opencode_session_for_pane
+from .pi_sessions import locate_pi_session, read_pi_session_header
+from .status import AgentType, classify_agent_type
+from .tmux import Pane, Session, TmuxClient, TmuxError
+
 MAX_DESCENDANT_PROCESSES = 48
 MAX_PROCESS_DEPTH = 8
 MAX_AGENT_PROCESSES = 6
@@ -27,6 +33,13 @@ MAX_TRANSCRIPT_HEADER_LINES = 12
 MAX_TRANSCRIPT_CANDIDATES = 64
 # Tolerate a little skew between the recorded start time and the first entry.
 TRANSCRIPT_START_TOLERANCE_SECONDS = 60.0
+_NATIVE_SESSION_FLAGS = {
+    "pi": {"--session", "--session-id"},
+    "omp": {"--resume", "--session", "-r"},
+    "opencode": {"--session", "-s"},
+    "agy": {"--conversation", "--resume", "-r"},
+}
+_OPENCODE_EXECUTABLE = re.compile(r"opencode(?:2|\.v[0-9]+(?:\.[0-9]+)*)?")
 
 
 def default_claude_projects_root() -> Path:
@@ -270,6 +283,19 @@ def _process_arguments(proc_root: Path, process_id: int) -> list[str]:
 def _looks_like_agent_process(arguments: list[str], agent_type: AgentType) -> bool:
     if not arguments:
         return False
+    if agent_type in EXTENDED_TRANSCRIPT_AGENTS:
+        executable = Path(arguments[0]).name
+        if agent_type == "opencode":
+            return _OPENCODE_EXECUTABLE.fullmatch(executable) is not None
+        if executable == agent_type:
+            return True
+        return (
+            agent_type in {"pi", "omp"} and executable in {"node", "nodejs", "bun"}
+            and len(arguments) > 1 and (
+                Path(arguments[1]).name == agent_type
+                or agent_type == "pi" and "pi-coding-agent" in arguments[1]
+            )
+        )
     normalized = " ".join(arguments).casefold()
     executable = Path(arguments[0]).name.casefold()
     if agent_type == "cursor":
@@ -334,25 +360,26 @@ def _path_matches_agent(path: str, agent_type: AgentType) -> bool:
     return False
 
 
+def _open_descriptor_paths(proc_root: Path, process_id: int) -> Iterator[tuple[Path, str]]:
+    try:
+        with os.scandir(proc_root / str(process_id) / "fd") as entries:
+            for descriptor in islice(entries, MAX_FDS_PER_PROCESS):
+                try:
+                    yield Path(descriptor.path), os.readlink(descriptor.path)
+                except OSError:
+                    continue
+    except OSError:
+        return
+
+
 def _open_reference_paths(
     proc_root: Path,
     process_id: int,
     agent_type: AgentType,
 ) -> list[tuple[int, str, str]]:
-    fd_root = proc_root / str(process_id) / "fd"
-    try:
-        with os.scandir(fd_root) as entries:
-            descriptors = list(islice(entries, MAX_FDS_PER_PROCESS))
-    except OSError:
-        return []
-
     matches: list[tuple[int, str, str]] = []
     held_matches: list[tuple[int, str, str]] = []
-    for descriptor in descriptors:
-        try:
-            target = os.readlink(descriptor.path)
-        except OSError:
-            continue
+    for descriptor, target in _open_descriptor_paths(proc_root, process_id):
         if agent_type == "copilot":
             path = Path(target)
             identifier = path.parent.name
@@ -370,7 +397,7 @@ def _open_reference_paths(
             # In-process Codex workers can keep newer rollouts open in the same
             # process. Their explicit source marker must not replace the CLI chat.
             try:
-                header = json.loads(_read_bytes(Path(descriptor.path)).split(b"\n", 1)[0])
+                header = json.loads(_read_bytes(descriptor).split(b"\n", 1)[0])
                 payload = header.get("payload", {}) if isinstance(header, dict) else {}
                 source = payload.get("source") if isinstance(payload, dict) else None
                 if (isinstance(source, dict) and "subagent" in source
@@ -382,11 +409,230 @@ def _open_reference_paths(
         if not identifiers:
             continue
         try:
-            modified_ns = os.stat(descriptor.path).st_mtime_ns
+            modified_ns = descriptor.stat().st_mtime_ns
         except OSError:
             modified_ns = 0
         matches.append((modified_ns, target, identifiers[-1].lower()))
     return held_matches or matches
+
+
+def _option_values(arguments: list[str], options: set[str]) -> Iterator[tuple[str, str]]:
+    for index, value in enumerate(arguments):
+        if value == "--":
+            break
+        option, assigned, argument = value.partition("=")
+        if option in options:
+            if assigned:
+                yield option, argument
+            elif index + 1 < len(arguments) and not arguments[index + 1].startswith("-"):
+                yield option, arguments[index + 1]
+
+
+def _confined_native_file(root: Path, target: Path) -> Path | None:
+    if not target.is_absolute():
+        return None
+    resolved = root.resolve()
+    for base in (resolved, root.absolute()):
+        if target.is_relative_to(base):
+            path = resolved / target.relative_to(base)
+            if path.resolve(strict=True) == path and path.is_file():
+                return path
+            break
+    return None
+
+
+def _open_regular_file(path: Path) -> BinaryIO:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("native session data must be a regular file")
+        return os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _journal_reference(
+    agent: str, root: Path, target: Path, *, directory: str | None = None,
+) -> str | None:
+    if target.suffix != ".jsonl":
+        return None
+    try:
+        path = _confined_native_file(root, target)
+        if path is None or len(path.relative_to(root.resolve()).parts) > 2:
+            return None
+        with _open_regular_file(path) as source:
+            record = read_pi_session_header(source, allow_title=agent == "omp")
+    except (OSError, RuntimeError):
+        return None
+    if record is None:
+        return None
+    if directory is not None and record.get("cwd") != directory:
+        return None
+    return normalize_agent_session_id(agent, record.get("id"))
+
+
+def _explicit_native_session(
+    arguments: list[str], agent: str, directory: str, root: Path | None,
+) -> str | None:
+    identifiers: set[str] = set()
+    for option, value in _option_values(arguments[1:], _NATIVE_SESSION_FLAGS[agent]):
+        identifier = normalize_agent_session_id(agent, value)
+        if agent in {"pi", "omp"} and root is not None and option != "--session-id":
+            if "/" in value or value.endswith(".jsonl"):
+                path = Path(directory) / value
+                identifier = _journal_reference(agent, root, path)
+            elif identifier is not None and not UUID_PATTERN.fullmatch(identifier):
+                # --session accepts ID prefixes. Require an exact native header
+                # for a custom ID, while --session-id itself is always exact.
+                try:
+                    candidate_path = locate_pi_session(root, identifier)
+                except OSError:
+                    candidate_path = None
+                if candidate_path is None or _journal_reference(agent, root, candidate_path.absolute()) != identifier:
+                    identifier = None
+        if identifier is not None:
+            identifiers.add(identifier)
+    return next(iter(identifiers)) if len(identifiers) == 1 else None
+
+
+def _omp_tty_session(proc_root: Path, process_id: int, root: Path, directory: str) -> str | None:
+    terminal = proc_root / str(process_id) / "fd" / "0"
+    try:
+        tty = re.fullmatch(r"/dev/pts/([0-9]+)", os.readlink(terminal))
+        started = _process_start_time(proc_root, process_id)
+        if tty is None or started is None:
+            return None
+        marker = _confined_native_file(root.parent, root.absolute().parent / "terminal-sessions" / f"pts-{tty[1]}")
+        if marker is None:
+            return None
+        with _open_regular_file(marker) as source:
+            written = os.fstat(source.fileno()).st_mtime
+            if written < started:
+                return None
+            # The devpts inode is recreated on allocation of a reused TTY.
+            try:
+                terminal_info = terminal.stat()
+            except FileNotFoundError:
+                terminal_info = None
+            if terminal_info is not None and stat.S_ISCHR(terminal_info.st_mode) and written < terminal_info.st_ctime:
+                return None
+            data = source.read(8193)
+            if len(data) > 8192:
+                return None
+        contents = data.decode("utf-8").splitlines()
+        if len(contents) < 2 or not contents[0] or contents[0] != directory:
+            return None
+        return _journal_reference("omp", root, Path(contents[0]) / contents[1], directory=directory)
+    except (OSError, RuntimeError, UnicodeError):
+        return None
+
+
+def _omp_open_sessions(proc_root: Path, process_id: int, root: Path) -> set[str]:
+    resolved = root.resolve()
+    owner_roots = {
+        resolved.parent.parent / "run" / "session-owners",
+        Path.home() / ".omp" / "run" / "session-owners",
+    }
+    identifiers = set()
+    for _, target in _open_descriptor_paths(proc_root, process_id):
+        path = Path(target)
+        if path.parent in owner_roots and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", path.name):
+            # OMP hashes lease names for IDs containing other characters.
+            identifier = (
+                None if re.fullmatch(r"h-[0-9a-f]{16}", path.name)
+                else normalize_agent_session_id("omp", path.name)
+            )
+        else:
+            identifier = _journal_reference("omp", resolved, path)
+        if identifier is not None:
+            identifiers.add(identifier)
+    return identifiers
+
+
+def _agy_open_sessions(proc_root: Path, process_id: int, root: Path) -> set[str]:
+    identifiers = set()
+    resolved = root.resolve()
+    for _, target in _open_descriptor_paths(proc_root, process_id):
+        path = Path(target)
+        value: str | None
+        if path.parent == resolved / "presence" and path.suffix == ".lock":
+            value = path.stem
+        elif path.parent == resolved / "conversations":
+            match = re.fullmatch(r"(.+)\.db(?:-wal|-shm)?", path.name)
+            value = match[1] if match else None
+        else:
+            continue
+        identifier = normalize_agent_session_id("agy", value)
+        if identifier is not None:
+            identifiers.add(identifier)
+    return identifiers
+
+
+def _is_foreground_process(proc_root: Path, process_id: int) -> bool:
+    data = _read_bytes(proc_root / str(process_id) / "stat", 8192).decode("utf-8", "replace")
+    try:
+        fields = data[data.rindex(")") + 2:].split()
+        group, foreground = int(fields[2]), int(fields[5])
+        return foreground <= 0 or group == foreground
+    except (ValueError, IndexError):
+        return True
+
+
+def _discover_native_session(
+    pane: Pane, agent: AgentType, proc_root: Path, root: Path | None,
+) -> str | None:
+    for process_id in _bounded_process_tree(proc_root, pane.process_pid):
+        arguments = _process_arguments(proc_root, process_id)
+        if not _looks_like_agent_process(arguments, agent) or not _is_foreground_process(proc_root, process_id):
+            continue
+        if root is not None:
+            try:
+                if agent == "omp":
+                    held = _omp_open_sessions(proc_root, process_id, root)
+                    if held:
+                        return next(iter(held)) if len(held) == 1 else None
+                    breadcrumb = _omp_tty_session(proc_root, process_id, root, pane.path)
+                    if breadcrumb is not None:
+                        return breadcrumb
+                elif agent == "agy":
+                    held = _agy_open_sessions(proc_root, process_id, root)
+                    if held:
+                        return next(iter(held)) if len(held) == 1 else None
+                elif agent == "opencode" and arguments[1:2] != ["attach"] and not any(
+                    arg.partition("=")[0] == "--server" for arg in arguments[1:]
+                ):
+                    identifier = opencode_session_for_pane(root, pane.path, pane.title)
+                    if identifier is not None:
+                        return identifier
+            except (OSError, RuntimeError, sqlite3.Error):
+                pass
+        # The foreground CLI can run other agent subprocesses. Only its own
+        # identifiers are relevant to the pane.
+        return _explicit_native_session(arguments, agent, pane.path, root)
+    return None
+
+
+def _pi_displayed_session(screen: str, root: Path, directory: str) -> str | None:
+    matches = set()
+    lines = screen[-65_536:].splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "Session Info":
+            continue
+        block = [row.strip() for row in lines[index + 1:index + 13]]
+        fields = [offset for offset, row in enumerate(block) if row.startswith(("File:", "ID:"))]
+        if len(fields) != 2 or block[0] or block[fields[1] + 1:fields[1] + 3] != ["", "Messages"]:
+            continue
+        file_index, id_index = fields
+        if not block[file_index].startswith("File:") or not block[id_index].startswith("ID:"):
+            continue
+        identifier = block[id_index].removeprefix("ID:").strip()
+        if normalize_agent_session_id("pi", identifier) is None:
+            continue
+        path = "".join([block[file_index].removeprefix("File:").strip(), *block[file_index + 1:id_index]])
+        if _journal_reference("pi", root, Path(path), directory=directory) == identifier:
+            matches.add(identifier)
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def discover_agent_session_id(
@@ -395,7 +641,11 @@ def discover_agent_session_id(
     *,
     proc_root: Path = Path("/proc"),
     claude_projects_root: Path | None = None,
+    native_roots: Mapping[str, Path] | None = None,
 ) -> str | None:
+    if agent_type in EXTENDED_TRANSCRIPT_AGENTS:
+        roots = default_extended_transcript_roots() if native_roots is None else native_roots
+        return _discover_native_session(pane, agent_type, proc_root, roots.get(agent_type))
     agent_processes = 0
     foreground_process: int | None = None
     launcher_reference: str | None = None
@@ -459,8 +709,12 @@ class AgentReferenceDetector:
         concurrency: int = 3,
         proc_root: Path = Path("/proc"),
         claude_projects_root: Path | None = None,
+        native_roots: Mapping[str, Path] | None = None,
+        tmux: TmuxClient | None = None,
     ) -> None:
         self._claude_projects_root = claude_projects_root
+        self._native_roots = default_extended_transcript_roots() if native_roots is None else native_roots
+        self._tmux = tmux
         self._cache_seconds = cache_seconds
         self._missing_cache_seconds = missing_cache_seconds
         self._limit = asyncio.Semaphore(concurrency)
@@ -480,7 +734,16 @@ class AgentReferenceDetector:
             session_id = await asyncio.to_thread(
                 discover_agent_session_id, pane, agent_type, proc_root=self._proc_root,
                 claude_projects_root=self._claude_projects_root,
+                native_roots=self._native_roots,
             )
+            pi_root = self._native_roots.get("pi")
+            if session_id is None and agent_type == "pi" and pi_root is not None and self._tmux is not None:
+                try:
+                    screen = await self._tmux.capture_visible(pane.id)
+                except TmuxError:
+                    pass
+                else:
+                    session_id = await asyncio.to_thread(_pi_displayed_session, screen, pi_root, pane.path)
         reference = AgentReference(agent_type, session_id)
         ttl = self._cache_seconds if session_id is not None else self._missing_cache_seconds
         self._cache[pane.id] = _CachedReference(signature, now + ttl, reference)

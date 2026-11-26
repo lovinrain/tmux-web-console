@@ -10,6 +10,7 @@ from tmux_console.agent_reference import AgentReference
 from tmux_console.agent_reference_recovery import (
     MAX_RECOVERED_REFERENCES,
     AgentReferenceRecovery,
+    agent_reconnect_references,
     codex_reconnect_references,
 )
 from tmux_console.agent_transcripts import AgentTranscriptReader
@@ -196,3 +197,38 @@ def test_recovered_ids_do_not_overwrite_a_known_past_conversation_or_cross_panes
     assert current["agent_id"] is None
     assert [item["agentSessionId"] for item in registry.list_session_agents(current["id"])] == [ID]
     registry.close()
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("To resume this session:\npi --session Team_Run.01", [AgentReference("pi", "Team_Run.01")]),
+    ("To resume this session:\npi --session-dir '/tmp/custom root' --session Team_Run.01", [AgentReference("pi", "Team_Run.01")]),
+    (f"Resume this session with\nomp --resume {ID.upper()}", [AgentReference("omp", ID.upper())]),
+    (f"Resume this session with\nomp --profile work --resume {ID}", [AgentReference("omp", ID)]),
+    (f"pi --session {ID}", []),
+    (f"> To resume this session:\n> pi --session {ID}", []),
+    (f"To resume this session:\npi --session {ID} extra", []),
+    (f"To resume this session:\nomp --resume {ID}", []),
+])
+def test_pi_omp_recovery_accepts_only_authored_resume_instructions(text, expected):
+    assert agent_reconnect_references(text) == expected
+
+
+async def test_pi_omp_recovery_requires_matching_native_journals(tmp_path):
+    pi = tmp_path / "pi"
+    omp = tmp_path / "omp"
+    for root, name, actual_id, reserved_title in [
+        (pi, "Team_Run.01", "Team_Run.01", False),
+        (omp, ID, OTHER, True),
+    ]:
+        project = root / "--work--"
+        project.mkdir(parents=True)
+        records = [{"type": "title", "v": 1, "title": None}] if reserved_title else []
+        records.append({"type": "session", "version": 3, "id": actual_id, "cwd": "/work"})
+        path = project / f"2026-11-26T20-56-12-483Z_{name}.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    tmux = RecoveryTmux(
+        f"To resume this session:\npi --session Team_Run.01\nResume this session with\nomp --resume {ID}\n"
+    )
+    recovery = AgentReferenceRecovery(tmux, AgentTranscriptReader(roots={"pi": pi, "omp": omp}))
+    assert await recovery.recover_sessions([tmux.session]) == {"%1": [AgentReference("pi", "Team_Run.01")]}

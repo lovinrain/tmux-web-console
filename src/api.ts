@@ -1,4 +1,5 @@
 import type {
+  AgentType,
   HistoryPage,
   SavedScrollbackPage,
   SavedScrollbackPart,
@@ -29,7 +30,7 @@ export interface RecoverableSession {
   id: string;
   name: string;
   directory: string;
-  agentType: "claude" | "codex" | "copilot" | "cursor" | "grok" | "dsh-tui" | null;
+  agentType: AgentType | null;
   agentSessionId: string | null;
   firstSeenAt: number;
   lastSeenAt: number;
@@ -169,7 +170,7 @@ export function recoverWorkspaceFoldSession(workspaceId: string, foldId: string,
 
 export interface SubmittedMessage {
   id: string;
-  agentType: "claude" | "codex";
+  agentType: AgentType;
   agentSessionId: string;
   submittedAt: number;
   text: string;
@@ -179,7 +180,7 @@ export interface SubmittedMessage {
 export interface SubmittedMessagePage {
   messages: SubmittedMessage[];
   nextCursor: string | null;
-  sources: Array<{ agentType: "claude" | "codex"; status: "available" | "missing" | "unreadable" | "partial" }>;
+  sources: Array<{ agentType: AgentType; status: "available" | "missing" | "unreadable" | "partial" }>;
 }
 
 export type SubmittedMessageTarget = { sessionName: string; identity?: string } | { historyId: string };

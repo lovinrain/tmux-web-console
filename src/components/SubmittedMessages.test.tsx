@@ -42,12 +42,14 @@ describe("SubmittedMessages", () => {
   it("shows saved input with incomplete-paste and unavailable-source notices", async () => {
     vi.mocked(listSubmittedMessages).mockResolvedValue({
       ...initial, nextCursor: null,
-      messages: [{ ...initial.messages[0], complete: false, text: "Fix [Pasted text #1]" }],
-      sources: [{ agentType: "claude", status: "missing" }],
+      messages: [{ ...initial.messages[0], agentType: "agy", complete: false, text: "Fix [Pasted text #1]" }],
+      sources: [{ agentType: "agy", status: "missing" }],
     });
     render(<SubmittedMessages target={{ historyId: "ended-session" }} />);
     await screen.findByText("Fix [Pasted text #1]");
     expect(listSubmittedMessages).toHaveBeenCalledWith({ historyId: "ended-session" }, "", null, expect.any(AbortSignal));
+    expect(screen.getByText("Antigravity")).toHaveAttribute("title", "Conversation conversation");
+    expect(screen.getByText(/Antigravity input history is currently unavailable/)).toBeInTheDocument();
     expect(screen.getByText(/Some pasted content/)).toBeInTheDocument();
     expect(screen.getByText(/Previously saved messages are retained/)).toBeInTheDocument();
   });

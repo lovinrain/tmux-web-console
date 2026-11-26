@@ -11,7 +11,16 @@ from .tmux import Pane, Session, TmuxClient, TmuxError
 AgentStateName = Literal[
     "working", "running_command", "waiting_human", "waiting_command", "unknown", "other"
 ]
-AgentType = Literal["claude", "codex", "copilot", "cursor", "grok", "dsh-tui"]
+AgentType = Literal[
+    "claude", "codex", "copilot", "cursor", "grok", "dsh-tui", "pi", "omp", "opencode", "agy"
+]
+DIRECT_AGENT_TYPES: dict[str, AgentType] = {
+    "claude": "claude", "codex": "codex", "grok": "grok",
+    "pi": "pi", "omp": "omp", "agy": "agy",
+}
+# The current OpenCode binary is named opencode. The legacy binary's versioned
+# name can also appear truncated by Linux's process name field.
+OPENCODE_COMMAND_PATTERN = re.compile(r"opencode(?:\.v\d+\.\d+\.\d+)?")
 COMMAND_WAIT_PATTERN = re.compile(
     r"^\s*(?:[•●✻✽✶✳✢\u2801-\u28ff]\s+)?waiting for "
     r"(?P<kind>background terminals?|agents?)"
@@ -80,10 +89,6 @@ DSH_TUI_COMMANDS = frozenset({"dsh-tui", "dst"})
 # dsh-TUI 0.16 publishes this branded OSC title for both idle and working turns.
 DSH_TUI_RUNTIME_COMMANDS = frozenset({"node", "dsh"})
 DSH_TUI_TITLE_PATTERN = re.compile(r"^[⠂⠐✦] 🐋(?: |$)")
-AGENT_COMMANDS = (
-    frozenset({"claude", "codex", "grok", COPILOT_COMMAND})
-    | CURSOR_COMMANDS | DSH_TUI_COMMANDS
-)
 # Claude Code 2.1.233 uses the circle-halves spinner in tmux titles. Older
 # Claude, Codex, and Grok versions use braille frames instead.
 CLAUDE_WORKING_TITLE_FRAMES = frozenset({"\u25d0", "\u25d3", "\u25d1", "\u25d2"})
@@ -164,6 +169,39 @@ GROK_TASK_HEADER_PATTERN = re.compile(r"^\s*[▾▸]\s+Tasks\s+\d+\s*$")
 GROK_WORKING_TASK_FRAMES = frozenset("⋅:⸬⁙")
 GROK_TASK_ROW_PATTERN = re.compile(
     r"^\s*(?P<frame>[⋅:⸬⁙●✓√])\s+(?P<kind>\S+)\s+\S.*$"
+)
+PROMPT_RULE_PATTERN = re.compile(r"\s*─{3,}\s*")
+PI_RULE_PATTERN = re.compile(r"\s*─{2,}(?:\s+[↑↓]\s+\d+\s+more\s+─+)?\s*")
+PI_CONTEXT_PATTERN = re.compile(r"(?:^|\s)(?:\?|\d+(?:\.\d+)?%)/\d+(?:\.\d+)?[kKmMbB]?(?:\s|$)")
+PI_ACTIVE_RULE_PATTERN = re.compile(r"\s*─{2,}\s*[⠁-⣿](?:\s+\S.*|─*)\s*")
+PI_COMMAND_PATTERN = re.compile(
+    r"\s*[⠁-⣿]\s+Running(?:\.\.\.|…)\s+\([^()]+ to cancel\)\s*"
+)
+PI_DECISION_PATTERN = re.compile(r"\bEnter to select\b.*\bEscape/Ctrl\+C to cancel\b", re.IGNORECASE)
+OMP_TITLE_PATTERN = re.compile(r"^π (?P<state>[>!:⠁-⣿○◔◑◕●/|\\-])(?: |$)")
+OMP_COMPOSER_PATTERN = re.compile(r"^\s*╰─(?:\s|$)")
+OMP_COMMAND_PATTERN = re.compile(r"\s*─{2,}\s+\S\s+Running(?:…|\.\.\.)\s+\([^()]+ to cancel\)\s+─+\s*")
+OPENCODE_FOOTER_PATTERN = re.compile(
+    r"\b(?:shift\+)?tab\s+agents\s+ctrl\+p\s+commands\s*$", re.IGNORECASE
+)
+OPENCODE_MINI_FOOTER_PATTERN = re.compile(r"\s·\s+ctrl\+p\s+menu\s*$", re.IGNORECASE)
+OPENCODE_ACTIVITY_PATTERN = re.compile(r"\besc\s+interrupt\b", re.IGNORECASE)
+OPENCODE_ACTIVITY_BAR_PATTERN = re.compile(r"\s*[■⬝]+\s+esc\s+interrupt\b", re.IGNORECASE)
+OPENCODE_BUSY_HEADER_PATTERN = re.compile(r"\s*[⠁-⣿]\s+\S.*\s\+\s*")
+OPENCODE_PERMISSION_PATTERN = re.compile(
+    r"\bAllow once\b.*\bReject\b.*\benter\s+confirm\b", re.IGNORECASE
+)
+OPENCODE_SELECTOR_PATTERN = re.compile(
+    r"\s*(?:Commands|Select model|Search (?:commands|models))\s{2,}esc\s*"
+)
+OPENCODE_COMPOSER_RULE_PATTERN = re.compile(r"\s*╹▀{3,}\s*")
+AGY_FOOTER_PATTERN = re.compile(r"\s*\? for shortcuts(?:\s|$)")
+AGY_PROMPT_PATTERN = re.compile(r"\s*>(?:\s|$)")
+AGY_CHECKLIST_PATTERN = re.compile(r"\s*\d+/\d+ steps\b.*")
+AGY_ACTIVITY_PATTERN = re.compile(
+    r"\s*(?:[^\w\s]\s+)?(?P<operation>Thinking|Running command)(?:\.\.\.|…)"
+    r"\s+\d+(?:\.\d+)?[hms](?:\s+\d+[ms])*\s*",
+    re.IGNORECASE,
 )
 SCREEN_TAIL_LINES = 20
 ACTIVITY_STALE_SECONDS = 15
@@ -439,12 +477,10 @@ def classify_agent_type(pane: Pane | None) -> AgentType | None:
     if pane is None or pane.dead:
         return None
     command = pane.command.casefold()
-    if command == "claude":
-        return "claude"
-    if command == "codex":
-        return "codex"
-    if command == "grok":
-        return "grok"
+    if command in DIRECT_AGENT_TYPES:
+        return DIRECT_AGENT_TYPES[command]
+    if OPENCODE_COMMAND_PATTERN.fullmatch(command):
+        return "opencode"
     if command in CURSOR_COMMANDS:
         return "cursor"
     if _is_copilot_pane(command, pane.title):
@@ -603,6 +639,118 @@ def _classify_grok_state(
     return AgentState("unknown", "Grok footer state signal is not recognized")
 
 
+def _pi_screen_state(lines: list[str], _title: str) -> AgentState:
+    footer = lines[-SCREEN_TAIL_LINES:]
+    if any(PI_DECISION_PATTERN.search(line) for line in footer[-6:]):
+        return AgentState("waiting_human", "Pi is waiting on a selection")
+    usage_row = next(
+        (index for index in reversed(range(max(0, len(lines) - 5), len(lines)))
+         if PI_CONTEXT_PATTERN.search(lines[index])),
+        -1,
+    )
+    bottom = usage_row - 2  # Pi puts its working directory and context usage after the editor.
+    if bottom < 1 or not PI_RULE_PATTERN.fullmatch(lines[bottom]):
+        return AgentState("unknown", "Pi input controls are not recognized")
+    for top in reversed(range(bottom)):
+        if PI_ACTIVE_RULE_PATTERN.fullmatch(lines[top]):
+            return AgentState("working", "Pi is running a turn")
+        if PI_RULE_PATTERN.fullmatch(lines[top]):
+            # The live shell widget prints its spinner above the editor.
+            if any(PI_COMMAND_PATTERN.fullmatch(line) for line in lines[max(0, top - 4):top]):
+                return AgentState("running_command", "Pi is running a terminal command")
+            return AgentState("waiting_human", "Pi is idle at its input prompt")
+    return AgentState("unknown", "Pi input controls are not recognized")
+
+
+def _omp_screen_state(lines: list[str], title: str) -> AgentState:
+    title_match = OMP_TITLE_PATTERN.match(title)
+    title_state = title_match["state"] if title_match else None
+    footer = lines[-SCREEN_TAIL_LINES:]
+    if title_state == "!" or (
+        any(line.lstrip().startswith("╭─ Allow tool:") for line in footer)
+        and any("approve · ⎋ deny" in line for line in footer)
+    ):
+        return AgentState("waiting_human", "OMP is waiting on an approval or response")
+    if any(OMP_COMMAND_PATTERN.fullmatch(line) for line in footer[-8:]):
+        return AgentState("running_command", "OMP is running a terminal command")
+    if title_state not in {None, ">"} or any(line.strip() == "⎋ Working…" for line in footer[-6:]):
+        return AgentState("working", "OMP is running a turn")
+    if any("Select provider to login" in line for line in footer):
+        return AgentState("waiting_human", "OMP is waiting for provider setup")
+    if (title_state == ">" or title.startswith("π:")) and any(
+        OMP_COMPOSER_PATTERN.match(line) for line in footer[-4:]
+    ):
+        return AgentState("waiting_human", "OMP is idle at its input prompt")
+    return AgentState("unknown", "OMP input controls are not recognized")
+
+
+def _opencode_screen_state(lines: list[str], title: str) -> AgentState:
+    footer = lines[-6:]
+    footer_text = " ".join(line.strip() for line in footer)
+    if OPENCODE_PERMISSION_PATTERN.search(footer_text):
+        return AgentState("waiting_human", "OpenCode is waiting on an approval decision")
+    open_code_title = title == "OpenCode" or title.startswith("OC | ")
+    if open_code_title and any(OPENCODE_SELECTOR_PATTERN.fullmatch(line) for line in lines):
+        return AgentState("waiting_human", "OpenCode is waiting on a selection")
+    # OpenCode shows a spinner in the header just before the interrupt hint
+    # reaches the footer on a new turn.
+    if open_code_title and any(
+        OPENCODE_BUSY_HEADER_PATTERN.fullmatch(line) for line in lines[:3]
+    ):
+        return AgentState("working", "OpenCode is running a turn")
+    for line in reversed(footer):
+        if OPENCODE_FOOTER_PATTERN.search(line) or OPENCODE_MINI_FOOTER_PATTERN.search(line):
+            if OPENCODE_ACTIVITY_PATTERN.search(line):
+                return AgentState("working", "OpenCode is running a turn")
+            return AgentState("waiting_human", "OpenCode is idle at its input prompt")
+        if OPENCODE_ACTIVITY_BAR_PATTERN.match(line):
+            return AgentState("working", "OpenCode is running a turn")
+    # OpenCode drops its shortcut hints when the pane is narrow.
+    if open_code_title and footer and OPENCODE_COMPOSER_RULE_PATTERN.fullmatch(footer[-1]):
+        if any(line.lstrip().startswith("┃ ") for line in footer[:-1]):
+            return AgentState("waiting_human", "OpenCode is idle at its input prompt")
+    return AgentState("unknown", "OpenCode input controls are not recognized")
+
+
+def _agy_screen_state(lines: list[str], _title: str) -> AgentState:
+    footer = lines[-SCREEN_TAIL_LINES:]
+    if any("Select login method:" in line for line in footer) and any(
+        "You are currently not signed in." in line for line in footer
+    ):
+        return AgentState("waiting_human", "Antigravity CLI is waiting for sign-in")
+    if any("Yes, and always allow" in line for line in footer) and any(
+        "No, deny access" in line for line in footer
+    ):
+        return AgentState("waiting_human", "Antigravity CLI is waiting on an approval decision")
+    if (len(footer) < 4 or not AGY_FOOTER_PATTERN.match(footer[-1])
+            or not PROMPT_RULE_PATTERN.fullmatch(footer[-2])):
+        return AgentState("unknown", "Antigravity CLI input controls are not recognized")
+    for index in reversed(range(len(footer) - 2)):
+        if not PROMPT_RULE_PATTERN.fullmatch(footer[index]):
+            continue
+        if not AGY_PROMPT_PATTERN.match(footer[index + 1]):
+            break
+        for line in reversed(footer[max(0, index - 6):index]):
+            if not line.strip() or AGY_CHECKLIST_PATTERN.fullmatch(line):
+                continue
+            activity = AGY_ACTIVITY_PATTERN.fullmatch(line)
+            if activity and activity["operation"].casefold() == "running command":
+                return AgentState("running_command", "Antigravity CLI is running a terminal command")
+            if activity or line.strip() == "Press esc to interrupt generation.":
+                return AgentState("working", "Antigravity CLI is running a turn")
+            break
+        return AgentState("waiting_human", "Antigravity CLI is idle at its input prompt")
+    return AgentState("unknown", "Antigravity CLI input controls are not recognized")
+
+
+SCREEN_AGENT_CLASSIFIERS = {
+    "pi": _pi_screen_state,
+    "omp": _omp_screen_state,
+    "opencode": _opencode_screen_state,
+    "agy": _agy_screen_state,
+}
+
+
 def classify_agent_state(
     pane: Pane | None,
     visible_screen: str | None = None,
@@ -614,19 +762,22 @@ def classify_agent_state(
         return AgentState("unknown", "The active pane has exited")
 
     command = pane.command.lower()
-    copilot_pane = _is_copilot_pane(command, pane.title)
-    dsh_tui_pane = _is_dsh_tui_pane(command, pane.title)
-    if command not in AGENT_COMMANDS and not copilot_pane and not dsh_tui_pane:
-        return AgentState(
-            "other", "No Claude, Codex, Copilot, Cursor, Grok, or DSH TUI activity signal"
-        )
-    if command in CURSOR_COMMANDS:
+    agent_type = classify_agent_type(pane)
+    if agent_type is None:
+        return AgentState("other", "No agent activity signal")
+    screen_classifier = SCREEN_AGENT_CLASSIFIERS.get(agent_type)
+    if screen_classifier:
+        state = screen_classifier(_rendered_lines(visible_screen or ""), pane.title.strip())
+        if state.name in {"working", "running_command"} and _activity_is_stale(pane, now):
+            return AgentState("unknown", "Agent activity indicator is stale")
+        return state
+    if agent_type == "cursor":
         return _classify_cursor_state(pane, visible_screen, now)
-    if copilot_pane:
+    if agent_type == "copilot":
         return _classify_copilot_state(pane, visible_screen, now)
-    if command == "grok":
+    if agent_type == "grok":
         return _classify_grok_state(pane, visible_screen, now)
-    if dsh_tui_pane:
+    if agent_type == "dsh-tui":
         title = pane.title.strip()
         if not DSH_TUI_TITLE_PATTERN.match(title):
             return AgentState("unknown", "DSH TUI title state signal is not recognized")
@@ -700,6 +851,7 @@ def _needs_screen_capture(pane: Pane, state: AgentState) -> bool:
     command = pane.command.lower()
     return (
         state.name in {"working", "running_command"}
+        or classify_agent_type(pane) in SCREEN_AGENT_CLASSIFIERS
         or _is_copilot_pane(command, pane.title)
         or command in CURSOR_COMMANDS
         or command == "grok"

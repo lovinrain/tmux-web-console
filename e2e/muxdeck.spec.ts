@@ -8531,6 +8531,9 @@ test("mobile ignored sessions persist collapsed and remain recoverable", async (
     await page.goto("/mux/");
     const ignoredSection = page.locator("details.ignored-section");
     const ignoredSummary = ignoredSection.locator("summary");
+    const antigravityFilter = page.getByRole("button", { name: "Antigravity", exact: true });
+    await expect(antigravityFilter).toBeVisible();
+    expect(await antigravityFilter.evaluate((button) => button.scrollWidth <= button.clientWidth)).toBe(true);
     await expect(ignoredSection).toBeVisible();
     await expect(ignoredSection).not.toHaveAttribute("open", "");
     await expect(ignoredSection.locator(".ignored-section-count")).toHaveText("0");
@@ -8636,14 +8639,16 @@ test("mobile dashboard manages memoranda and sends acknowledged staged input", a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/dashboard-mobile.png", fullPage: true });
 
-  await page.getByRole("button", { name: "claude", exact: true }).click();
+  await page.getByRole("button", { name: "Claude", exact: true }).click();
   await expect(page.getByRole("heading", { name: "No matching sessions" })).toBeVisible();
-  await page.getByRole("button", { name: "grok", exact: true }).click();
+  await page.getByRole("button", { name: "Grok", exact: true }).click();
   await expect(page).toHaveURL(/\?kind=grok$/);
   await expect(page.getByRole("heading", { name: "No matching sessions" })).toBeVisible();
-  await page.getByRole("button", { name: "copilot", exact: true }).click();
+  await page.getByRole("button", { name: "Copilot", exact: true }).click();
   await expect(page).toHaveURL(/\?kind=copilot$/);
   await expect(page.getByRole("heading", { name: "No matching sessions" })).toBeVisible();
+  await page.getByRole("button", { name: "Antigravity", exact: true }).click();
+  await expect(page).toHaveURL(/\?kind=agy$/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
     .toBe(true);
   await page.getByRole("button", { name: "shells", exact: true }).click();

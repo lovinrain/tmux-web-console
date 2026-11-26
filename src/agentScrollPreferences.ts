@@ -16,11 +16,16 @@ const AGENT_SCROLL_MODE: Readonly<Record<SessionKind, AgentScrollMode>> = {
   cursor: "tmux",
   grok: "application",
   "dsh-tui": "application",
+  pi: "tmux",
+  omp: "tmux",
+  opencode: "tmux",
+  agy: "tmux",
   shells: "tmux",
   other: "tmux",
 };
 
 // Recommendations depend only on the detected agent, never on prior clicks.
-export function preferredAgentScrollMode(kind: SessionKind): AgentScrollMode {
+export function preferredAgentScrollMode(kind: SessionKind, alternateOn = false): AgentScrollMode {
+  if (alternateOn && (kind === "pi" || kind === "opencode")) return "application";
   return AGENT_SCROLL_MODE[kind];
 }

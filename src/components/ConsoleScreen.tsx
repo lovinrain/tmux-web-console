@@ -64,7 +64,7 @@ import {
   type OverflowBox,
   type OverflowCandidate,
 } from "../headerOverflow";
-import { paneCommandKind } from "../sessionDashboardModel";
+import { paneKind } from "../sessionDashboardModel";
 import { sessionReadyIdentity } from "../sessionReadyAttention";
 import { CTRL_END_SEQUENCE } from "../terminalInput";
 import { resolveTerminalFileLinkPath } from "../terminalFileLinks";
@@ -955,9 +955,9 @@ export function ConsoleScreen({
     : session?.activePaneId ?? null;
   const pane: Pane | undefined = session?.panes.find((item) => item.id === paneId)
     || (session ? activePane(session) : undefined);
-  const classification = classifyPane(pane);
-  const scrollAgentKind = paneCommandKind(pane?.command || "", pane?.title || "");
-  const preferredScrollMode = preferredAgentScrollMode(scrollAgentKind);
+  const classification = classifyPane(pane, session);
+  const scrollAgentKind = paneKind(pane, session);
+  const preferredScrollMode = preferredAgentScrollMode(scrollAgentKind, pane?.alternate_on);
   const nativeScrollProfile = applicationScrollProfile(scrollAgentKind);
   const preferredLineScrollMode = preferredScrollMode;
   // Track actual scrolling separately from the agent recommendation so Live
@@ -3522,6 +3522,7 @@ export function ConsoleScreen({
         <HistoryPanel
           key={`${session?.id}:${session?.created}:${session?.serverStarted}:${session?.serverPid}:${pane.id}`}
           pane={pane}
+          agentKind={scrollAgentKind}
           sessionName={sessionName}
           sessionIdentity={session ? `${session.id}:${session.created}:${session.serverStarted}:${session.serverPid}` : undefined}
           onClose={() => setHistoryOpen(false)}

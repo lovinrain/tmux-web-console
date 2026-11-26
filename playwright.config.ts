@@ -19,7 +19,7 @@ const scrollbackFile = `/tmp/muxdeck-playwright-${runId}-scrollback.sqlite3`;
 const codexHistoryFile = `/tmp/muxdeck-playwright-${runId}-codex-history.jsonl`;
 const claudeHistoryFile = `/tmp/muxdeck-playwright-${runId}-claude-history.jsonl`;
 const transcriptsDirectory = `/tmp/muxdeck-playwright-${runId}-transcripts`;
-const transcriptEnvironment = Object.fromEntries(["CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK"].map(
+const transcriptEnvironment = Object.fromEntries(["CODEX", "CLAUDE", "COPILOT", "CURSOR", "GROK", "PI", "OMP", "OPENCODE", "AGY"].map(
   (agent) => [`MUXDECK_${agent}_TRANSCRIPTS_DIR`, `${transcriptsDirectory}/${agent.toLowerCase()}`],
 ));
 const callbacksFile = `/tmp/muxdeck-playwright-${runId}-callbacks.sqlite3`;

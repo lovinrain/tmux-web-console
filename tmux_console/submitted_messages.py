@@ -8,20 +8,40 @@ import os
 import re
 import sqlite3
 import threading
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agent_reference import UUID_PATTERN
+from .agent_sources import EXTENDED_TRANSCRIPT_AGENTS, normalize_agent_session_id
+from .agent_transcripts import AgentTranscriptReader, TranscriptChangedError
 from .session_registry import default_session_registry_path
 
 LOGGER = logging.getLogger("muxdeck.submitted_messages")
-SUPPORTED_AGENTS = ("claude", "codex")
+HISTORY_FILE_AGENTS = ("claude", "codex")
+SUPPORTED_AGENTS = (*HISTORY_FILE_AGENTS, *EXTENDED_TRANSCRIPT_AGENTS)
 MAX_NATIVE_RECORD_BYTES = 16 * 1024 * 1024
+MAX_NATIVE_PAGES_PER_SYNC = 4
+MAX_NATIVE_SOURCE_STATES = 1024
 MAX_TIMESTAMP = 253_402_300_799_999
 PASTED_TEXT = re.compile(r"\[Pasted text #(\d+)(?: \+\d+ lines)?\]")
 CONTENT_HASH = re.compile(r"[0-9a-f]{16,128}")
+UPSERT_MESSAGE = """
+    INSERT INTO submitted_messages (
+        agent_type, agent_session_id, source_key, submitted_at, text, complete
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(agent_type, agent_session_id, source_key) DO UPDATE SET
+        text = excluded.text, complete = excluded.complete
+    WHERE submitted_messages.complete = 0 AND excluded.complete = 1
+"""
+
+
+@dataclass(frozen=True)
+class _NativeSourceState:
+    signature: tuple[Any, ...] | None = None
+    status: str = "available"
+    cursor: str | None = None
 
 
 class SubmittedMessageStoreUnavailable(OSError):
@@ -48,13 +68,16 @@ def default_native_history_paths() -> dict[str, Path]:
     }
 
 
-def _references(references: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
+def _references(
+    references: Iterable[Mapping[str, Any]],
+    agents: Iterable[str] = SUPPORTED_AGENTS,
+) -> set[tuple[str, str]]:
     return {
-        (str(reference["agentType"]), str(reference["agentSessionId"]).lower())
+        (agent, identifier)
         for reference in references
-        if reference.get("agentType") in SUPPORTED_AGENTS
-        and isinstance(reference.get("agentSessionId"), str)
-        and UUID_PATTERN.fullmatch(reference["agentSessionId"])
+        if isinstance(agent := reference.get("agentType"), str)
+        and agent in agents
+        and (identifier := normalize_agent_session_id(agent, reference.get("agentSessionId"))) is not None
     }
 
 
@@ -108,6 +131,7 @@ class SubmittedMessageStore:
         self._connection: sqlite3.Connection | None = None
         self._signatures: dict[str, tuple[Any, ...]] = {}
         self._source_status: dict[str, str] = {}
+        self._native_sources: OrderedDict[tuple[str, str], _NativeSourceState] = OrderedDict()
         try:
             self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             self._connection = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
@@ -150,16 +174,115 @@ class SubmittedMessageStore:
         return self._connection
 
     def sync(self, references: Iterable[Mapping[str, Any]]) -> None:
-        known = _references(references)
+        known = _references(references, HISTORY_FILE_AGENTS)
         with self._lock:
             connection = self._require_connection()
             try:
-                for agent in SUPPORTED_AGENTS:
+                for agent in HISTORY_FILE_AGENTS:
                     ids = frozenset(identifier for kind, identifier in known if kind == agent)
                     if ids:
                         self._sync_source(connection, agent, ids)
             except sqlite3.Error as error:
                 raise SubmittedMessageStoreUnavailable("unable to save submitted messages") from error
+
+    def sync_native(
+        self, references: Iterable[Mapping[str, Any]], reader: AgentTranscriptReader,
+    ) -> None:
+        known = _references(references, EXTENDED_TRANSCRIPT_AGENTS)
+        with self._lock:
+            connection = self._require_connection()
+            try:
+                for reference in sorted(known):
+                    self._sync_native_source(connection, reader, reference)
+            except sqlite3.Error as error:
+                raise SubmittedMessageStoreUnavailable("unable to save submitted messages") from error
+
+    def _remember_native_source(self, reference: tuple[str, str], state: _NativeSourceState) -> None:
+        self._native_sources[reference] = state
+        self._native_sources.move_to_end(reference)
+        if len(self._native_sources) > MAX_NATIVE_SOURCE_STATES:
+            self._native_sources.popitem(last=False)
+
+    def _sync_native_source(
+        self, connection: sqlite3.Connection, reader: AgentTranscriptReader, reference: tuple[str, str],
+    ) -> None:
+        agent, identifier = reference
+        try:
+            signature = reader.native_source_signature(agent, identifier)
+        except (OSError, sqlite3.Error):
+            self._remember_native_source(reference, _NativeSourceState(status="unreadable"))
+            return
+        if signature is None:
+            self._remember_native_source(reference, _NativeSourceState(status="missing"))
+            return
+
+        previous = self._native_sources.get(reference)
+        if previous is not None and previous.signature == signature and previous.cursor is None:
+            self._native_sources.move_to_end(reference)
+            return
+
+        # A JSONL cursor can finish its original snapshot while the journal grows.
+        # A replaced source or changed SQLite snapshot asks us to start again.
+        state = previous if previous is not None and previous.cursor else _NativeSourceState(signature)
+        for _ in range(MAX_NATIVE_PAGES_PER_SYNC):
+            try:
+                page = reader.read_native_prompts(agent, identifier, cursor=state.cursor, limit=100)
+            except TranscriptChangedError:
+                state = _NativeSourceState(signature)
+                self._remember_native_source(reference, _NativeSourceState(status="partial"))
+                continue
+            except (OSError, sqlite3.Error):
+                self._remember_native_source(reference, _NativeSourceState(status="unreadable"))
+                return
+
+            if page["status"] != "available":
+                state = (_NativeSourceState(state.signature, "missing") if page["status"] == "missing"
+                         else _NativeSourceState(status="unreadable"))
+                self._remember_native_source(reference, state)
+                return
+
+            partial = self._save_native_prompts(connection, reference, page["messages"]) or page["partial"]
+            state = _NativeSourceState(
+                state.signature, "partial" if partial else state.status, page["nextCursor"],
+            )
+            self._remember_native_source(reference, state)
+            if state.cursor is None:
+                return
+
+    def _save_native_prompts(
+        self, connection: sqlite3.Connection, reference: tuple[str, str], messages: Iterable[dict[str, Any]],
+    ) -> bool:
+        partial = False
+        rows = []
+        for message in messages:
+            if message.get("kind") != "prompt" or message.get("role") != "user":
+                continue
+            text = message.get("sourceText", message.get("text"))
+            timestamp = message.get("timestamp")
+            source_id = message.get("sourceId")
+            if source_id is None and reference[0] in {"pi", "omp"}:
+                source_key = message["id"]
+            elif isinstance(source_id, str) or type(source_id) is int:
+                source_key = f"native:{source_id}"
+            else:
+                partial = True
+                continue
+            if not isinstance(text, str) or not text.strip() or type(timestamp) is not int or not 0 <= timestamp <= MAX_TIMESTAMP:
+                partial = True
+                continue
+            try:
+                if len(text.encode("utf-8")) > MAX_NATIVE_RECORD_BYTES:
+                    partial = True
+                    continue
+                key = hashlib.sha256(source_key.encode("utf-8")).hexdigest()
+            except UnicodeError:
+                partial = True
+                continue
+            complete = message.get("complete", True) and not message.get("truncated")
+            rows.append((*reference, f"native:{key}", timestamp, text, int(complete)))
+        with connection:
+            connection.executemany(UPSERT_MESSAGE, rows)
+        return partial
 
     def _sync_source(self, connection: sqlite3.Connection, agent: str, ids: frozenset[str]) -> None:
         path = self._paths.get(agent)
@@ -231,14 +354,7 @@ class SubmittedMessageStore:
                     except UnicodeError:
                         partial = True
                         continue
-                    connection.execute("""
-                        INSERT INTO submitted_messages (
-                            agent_type, agent_session_id, source_key, submitted_at, text, complete
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(agent_type, agent_session_id, source_key) DO UPDATE SET
-                            text = excluded.text, complete = excluded.complete
-                        WHERE submitted_messages.complete = 0 AND excluded.complete = 1
-                    """, (agent, identifier.lower(), source_key, submitted_at, text, int(complete)))
+                    connection.execute(UPSERT_MESSAGE, (agent, identifier.lower(), source_key, submitted_at, text, int(complete)))
             self._source_status[agent] = "partial" if partial else "available"
             self._signatures[agent] = signature
         except FileNotFoundError:
@@ -247,6 +363,20 @@ class SubmittedMessageStore:
         except OSError:
             self._source_status[agent] = "unreadable"
             self._signatures.pop(agent, None)
+
+    def _source_statuses(self, known: list[tuple[str, str]]) -> list[dict[str, str]]:
+        statuses: dict[str, set[str]] = {}
+        for reference in known:
+            agent, _ = reference
+            state = self._native_sources.get(reference)
+            status = (("partial" if state.cursor else state.status) if state is not None
+                      else self._source_status.get(agent, "missing"))
+            statuses.setdefault(agent, set()).add(status)
+        return [{
+            "agentType": agent,
+            "status": (values.pop() if len(values) == 1
+                       else "partial" if values & {"available", "partial"} else "unreadable"),
+        } for agent, values in statuses.items()]
 
     def list_messages(
         self,
@@ -294,7 +424,5 @@ class SubmittedMessageStore:
             return {
                 "messages": messages,
                 "nextCursor": f"{rows[limit - 1]['submitted_at']}:{rows[limit - 1]['id']}" if len(rows) > limit else None,
-                "sources": [{
-                    "agentType": agent, "status": self._source_status.get(agent, "missing"),
-                } for agent in sorted({agent for agent, _ in known})],
+                "sources": self._source_statuses(known),
             }

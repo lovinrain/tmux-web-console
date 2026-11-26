@@ -101,6 +101,39 @@ def _timestamp(value: object) -> int | None:
         return None
 
 
+def _pi_human_prompt(message: dict[str, Any]) -> bool:
+    return (
+        message.get("role") == "user"
+        and message.get("synthetic") is not True
+        and message.get("attribution") != "agent"
+    )
+
+
+def _pi_message_timestamp(record: dict[str, Any], message: dict[str, Any]) -> int | None:
+    timestamp = message.get("timestamp")
+    if type(timestamp) is int and 0 <= timestamp <= 8_640_000_000_000_000:
+        return timestamp
+    return _timestamp(record.get("timestamp"))
+
+
+def pi_submitted_message(record: dict[str, Any]) -> tuple[str, int, bool] | None:
+    """Return one submitted prompt without truncating or deduplicating text."""
+    message = record.get("message")
+    if record.get("type") != "message" or not isinstance(message, dict) or not _pi_human_prompt(message):
+        return None
+    content = message.get("content")
+    text = _text(content)
+    timestamp = _pi_message_timestamp(record, message)
+    if not text.strip() or timestamp is None:
+        return None
+    has_attachment = isinstance(content, list) and any(
+        isinstance(block, dict)
+        and block.get("type") in ("image", "image_url", "input_image", "document", "input_file", "file")
+        for block in content
+    )
+    return text, timestamp, not has_attachment
+
+
 def _entry(role: str, kind: str, text: str, timestamp: int | None) -> dict[str, Any]:
     encoded = text.encode("utf-8", errors="replace")
     return {"role": role, "kind": kind,
@@ -236,6 +269,40 @@ def visible_messages(agent: str, record: dict[str, Any]) -> list[dict[str, Any]]
             role = "tool"
             result = data.get("result")
             text = _text(result.get("content")) if isinstance(result, dict) else _text(result)
+    elif agent in {"pi", "omp"}:
+        message = record.get("message")
+        if record.get("type") != "message" or not isinstance(message, dict):
+            return []
+        role = message.get("role")
+        if not isinstance(role, str):
+            return []
+        content = message.get("content")
+        timestamp = _pi_message_timestamp(record, message)
+        if role == "user":
+            text = _text(content)
+            if not _pi_human_prompt(message):
+                context, text = text, ""
+        elif role == "assistant":
+            text = _text(content)
+            if message.get("stopReason") in ("toolUse", "pending", "deferred", "error", "aborted"):
+                phase = "progress"
+            if isinstance(content, list):
+                tools.extend(
+                    _tool(block.get("name"), block.get("arguments"))
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "toolCall"
+                )
+        elif role == "toolResult":
+            role = "tool"
+            text = _text(content)
+        elif role in {"bashExecution", "pythonExecution"}:
+            name, argument = ("bash", "command") if role == "bashExecution" else ("python", "code")
+            role = "tool"
+            text = "\n\n".join(filter(None, (_tool(name, message.get(argument)), _text(message.get("output")))))
+        elif role in {"custom", "hookMessage"} and message.get("display") is True:
+            role = "assistant"
+            text = _text(content)
+            phase = "progress"
     elif agent == "cursor":
         role = record.get("role")
         options = record.get("providerOptions")

@@ -91,7 +91,7 @@ export function WorkspaceSessionRow({
           <strong>{displayTitle}</strong>
           <span>
             {displayTitle !== sessionName ? `${sessionName} / ` : ""}
-            {session ? paneLabel(pane) : "tmux session ended"}
+            {session ? paneLabel(pane, session) : "tmux session ended"}
           </span>
           {tree && (
             <span className="workspace-session-parent-label">

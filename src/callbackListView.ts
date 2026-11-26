@@ -1,6 +1,6 @@
 import type { CallbackCustomGroup, CallbackMessage } from "./api";
-import { paneCommandKind, type SessionKind } from "./sessionDashboardModel";
-import type { Session } from "./types";
+import { paneKind, type SessionKind } from "./sessionDashboardModel";
+import { AGENT_DISPLAY_LABELS, AGENT_TYPES, isAgentType, type Session } from "./types";
 
 /** A message about an ended identity must not describe a shell reusing its name. */
 export function callbackSessionsForScope(
@@ -53,12 +53,7 @@ export const CALLBACK_STATUS_OPTIONS = [
 
 export const CALLBACK_AGENT_OPTIONS = [
   { value: "all", label: "All agents" },
-  { value: "claude", label: "Claude" },
-  { value: "codex", label: "Codex" },
-  { value: "copilot", label: "Copilot" },
-  { value: "cursor", label: "Cursor" },
-  { value: "grok", label: "Grok" },
-  { value: "dsh-tui", label: "DSH TUI" },
+  ...AGENT_TYPES.map((value) => ({ value, label: AGENT_DISPLAY_LABELS[value] })),
   { value: "shells", label: "Shells" },
   { value: "other", label: "Other / unknown" },
 ] as const;
@@ -178,7 +173,8 @@ function optionValue<T extends string>(
 
 function validCollapsedGroupKey(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 2048 || /[\u0000-\u001f\u007f]/u.test(value)) return false;
-  return /^(status:(ready|working|waiting|unknown|ended|on-hold)|agent:(claude|codex|copilot|cursor|grok|dsh-tui|shells|multiple|other)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
+  if (value.startsWith("agent:")) return AGENT_GROUPS.some((group) => group.key === value);
+  return /^(status:(ready|working|waiting|unknown|ended|on-hold)|workspace:(multiple|global|(id|name):.+)|custom:(ungrouped|id:[A-Za-z0-9_-]{1,128}))$/u.test(value);
 }
 
 export function validateCallbackListViewPreferences(value: unknown): CallbackListViewPreferences {
@@ -210,8 +206,7 @@ export function parseCallbackListViewPreferences(raw: string | null): CallbackLi
 function reportedAgentKind(agentType: string): SessionKind {
   const normalized = agentType.trim().toLowerCase();
   if (normalized === "shell" || normalized === "shells") return "shells";
-  return CALLBACK_AGENT_OPTIONS.some((option) => option.value === normalized)
-    && normalized !== "all" ? normalized as SessionKind : "other";
+  return isAgentType(normalized) ? normalized : "other";
 }
 
 function entryAgentKinds(entry: CallbackListEntry): Set<SessionKind> {
@@ -220,7 +215,7 @@ function entryAgentKinds(entry: CallbackListEntry): Set<SessionKind> {
   if (session) {
     const pane = session.panes.find((candidate) => candidate.id === session.activePaneId)
       ?? session.panes[0];
-    kinds.add(session.agentType ?? paneCommandKind(pane?.command ?? "", pane?.title ?? ""));
+    kinds.add(paneKind(pane, session));
   }
   for (const message of entry.messages) kinds.add(reportedAgentKind(message.agentType));
   if (kinds.size === 0) kinds.add("other");
@@ -233,6 +228,7 @@ function entrySearchText(entry: CallbackListEntry, agents: ReadonlySet<SessionKi
     sessionDisplayName(entry.session, entry.name),
     ...entry.workspaceNames,
     ...agents,
+    ...Array.from(agents, (kind) => isAgentType(kind) ? AGENT_DISPLAY_LABELS[kind] : ""),
     ...(entry.session?.panes.flatMap((pane) => [pane.command, pane.path, pane.title]) ?? []),
     ...entry.messages.flatMap((message) => [message.message, message.cwd, message.agentType]),
   ].join(" ").toLowerCase();
