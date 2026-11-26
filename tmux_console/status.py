@@ -61,10 +61,10 @@ COPILOT_COMMAND = "copilot"
 COPILOT_NODE_COMMAND = "node"
 COPILOT_TITLE = "github copilot"
 # Copilot keeps a static tmux title throughout a turn. Its bottom status row is
-# the reliable distinction: live turns show both Working and the interrupt hint,
-# while an idle prompt shows the command/help shortcuts.
+# the reliable distinction: live turns show Working and either esc interrupt or
+# ctrl+c interrupt. An idle prompt shows the command/help shortcuts.
 COPILOT_WORKING_PATTERN = re.compile(
-    r"^\s*(?:[^\w\s]\s+)?working\b.*\besc\s+interrupt\b", re.IGNORECASE
+    r"^\s*(?:[^\w\s]\s+)?working\b.*\b(?:esc|ctrl\+c)\s+interrupt\b", re.IGNORECASE
 )
 COPILOT_IDLE_PATTERN = re.compile(
     r"/\s+commands\s+\u00b7\s+\?\s+help\s+\u00b7\s+tab\s+next\s+tab\b",

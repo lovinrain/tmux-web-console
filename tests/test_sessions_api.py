@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Literal
 from unittest.mock import AsyncMock
 from urllib.parse import quote
@@ -2686,6 +2688,34 @@ async def test_rename_session_api_returns_success_when_message_migration_fails(
         assert messages.list_messages(new_name) == []
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_copilot_turn_creates_one_unread_ready_event(tmp_path):
+    session = add_active_pane(make_session("copilot-one"), str(tmp_path), command="copilot")
+    session.panes[0] = replace(session.panes[0], activity=int(time.time()), title="GitHub Copilot")
+    tmux = FakeTmux([[session]])
+    capture = AsyncMock()
+    tmux.capture_visible = capture
+    application = create_app(tmux=tmux, agent_states=AgentStateDetector(cache_seconds=0), base_path="")
+    working = "◎ Working · 200 B ctrl+c interrupt    Gemini 4 Carbon · High · 936K context"
+    idle = "← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"
+
+    async with TestClient(TestServer(application)) as client:
+        for footer, state, ready_event in [
+            (idle, "waiting_human", 0),
+            (working, "working", 0),
+            (idle, "waiting_human", 1),
+            (idle, "waiting_human", 1),
+        ]:
+            capture.return_value = f"❯ \n{footer}"
+            response = await client.get("/api/sessions")
+            assert response.status == 200
+            snapshot = (await response.json())["sessions"][0]
+            assert snapshot["agentState"] == state
+            assert snapshot["readyAttention"] == {
+                "latestReadyEvent": ready_event, "lastCheckedEvent": 0,
+            }
 
 
 @pytest.mark.asyncio

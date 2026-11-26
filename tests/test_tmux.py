@@ -1957,16 +1957,21 @@ def test_grok_stale_command_activity_stays_unclear_instead_of_ready():
         "\u2839 Working - GitHub Copilot",
     ],
 )
-def test_copilot_uses_its_visible_footer_to_distinguish_work_and_input(title: str):
+@pytest.mark.parametrize(
+    "footer",
+    [
+        "◎ Working · 5.1 KiB esc interrupt    Auto -> gpt-5.6-luna",
+        "◎ Working ctrl+c interrupt    Gemini 4 Carbon · 936K context",
+        "○ Working · 200 B ctrl+c interrupt    Gemini 4 Carbon · 936K context",
+        "● Working ctrl+c interrupt    Gemini 4 Carbon · High · 936K context",
+    ],
+)
+def test_copilot_uses_its_visible_footer_to_distinguish_work_and_input(title: str, footer: str):
     pane = agent_pane(command="copilot", title=title)
 
     working = classify_agent_state(
         pane,
-        visible_screen=(
-            "\u25cf Streaming the response\n\n"
-            "\u276f \n"
-            "\u25ce Working \u00b7 5.1 KiB esc interrupt    Auto -> gpt-5.6-luna"
-        ),
+        visible_screen=f"● Streaming the response\n\n❯ \n {footer}",
         now=1000,
     )
     idle = classify_agent_state(
@@ -1974,7 +1979,7 @@ def test_copilot_uses_its_visible_footer_to_distinguish_work_and_input(title: st
         visible_screen=(
             "\u25cf Finished the response\n\n"
             "\u276f \n"
-            "\u2190 open sidebar \u00b7 / commands \u00b7 ? help \u00b7 tab next tab\n"
+            "← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab\n"
             "Auto -> gpt-5.6-luna"
         ),
         now=1000,
@@ -2077,16 +2082,14 @@ def test_copilot_detects_selection_prompts_as_needing_input():
     assert state.reason == "Copilot is waiting on a selection"
 
 
-def test_copilot_requires_a_fresh_specific_footer_signal():
+@pytest.mark.parametrize("interrupt_hint", ["esc", "ctrl+c"])
+def test_copilot_requires_a_fresh_specific_footer_signal(interrupt_hint: str):
     pane = agent_pane(command="copilot", title="GitHub Copilot")
-    working_screen = (
-        "\u276f \n"
-        "\u25cb Working \u00b7 1.2 KiB esc interrupt    Auto -> gpt-5.6-luna"
-    )
+    working_footer = f"○ Working · 1.2 KiB {interrupt_hint} interrupt    Auto -> gpt-5.6-luna"
 
     unavailable = classify_agent_state(pane, now=1000)
     stale = classify_agent_state(
-        replace(pane, activity=900), visible_screen=working_screen, now=1000
+        replace(pane, activity=900), visible_screen=f"❯ \n{working_footer}", now=1000
     )
     ambiguous = classify_agent_state(
         pane,
@@ -2096,7 +2099,7 @@ def test_copilot_requires_a_fresh_specific_footer_signal():
     old_status_above_idle_prompt = classify_agent_state(
         pane,
         visible_screen=(
-            "\u25ce Working \u00b7 1.2 KiB esc interrupt\n"
+            f"{working_footer}\n"
             "\u25cf That was the previous status line.\n\n"
             "\u276f \n"
             "\u2190 open sidebar \u00b7 / commands \u00b7 ? help \u00b7 tab next tab"
@@ -2461,27 +2464,21 @@ async def test_detect_sessions_grok_capture_failure_does_not_report_ready():
     assert states["grok-command"].name == "unknown"
 
 
-@pytest.mark.parametrize(
-    ("command", "title"),
-    [
-        ("copilot", "Review status detection - GitHub Copilot"),
-        ("node", "Review status detection - GitHub Copilot"),
-    ],
-)
+@pytest.mark.parametrize("command", ["copilot", "node"])
+@pytest.mark.parametrize("interrupt_hint", ["esc", "ctrl+c"])
 async def test_detect_sessions_captures_copilot_footers(
-    command: str, title: str
+    command: str, interrupt_hint: str,
 ):
     copilot = agent_pane(
         id="%47",
         command=command,
-        title=title,
+        title="Review status detection - GitHub Copilot",
         activity=int(time.time()),
     )
     tmux = RecordingTmux(
         {
             copilot.id: (
-                "\u276f \n"
-                "\u25ce Working \u00b7 697 B esc interrupt    Auto -> gpt-5.6-luna"
+                f"❯ \n◎ Working · 697 B {interrupt_hint} interrupt    Gemini 4 Carbon · 936K context"
             )
         }
     )
