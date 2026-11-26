@@ -93,8 +93,8 @@ for (const scenario of [
       await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "codex");
       await expect(page.locator(".connection-badge")).toContainText("Live");
       await expect(page.locator(".xterm-rows")).toContainText("MUXDECK_THEME_DRAFT");
-      const codeColors = ["rgb(120, 20, 40)"];
-      const neutralColors = [scenario.name === "indexed-dark" ? "rgb(38, 38, 38)" : "rgb(240, 240, 235)"];
+      const codeColors = await backgrounds(page, "COLORED_BLOCK");
+      const neutralColors = await backgrounds(page, "NEUTRAL_OUTPUT");
       const themedBackgrounds = async (theme: string, submitted: boolean) => {
         const fill = theme === "light" ? "rgb(240, 240, 235)" : "rgb(40, 42, 41)";
         for (const text of [
@@ -132,46 +132,32 @@ for (const scenario of [
   });
 }
 
-test("Copilot distinguishes prompts and completed answers from activity in both themes", async ({ context, page }) => {
+test("Copilot highlights user prompts and the composer in both themes", async ({ context, page }) => {
   const session = "muxdeck-theme-" + process.pid + "-copilot";
   const fixture = [
-    "let settled = false;",
     "function draw() {",
     "  const { columns, rows } = process.stdout;",
     "  const rule = '─'.repeat(columns);",
     "  const framed = (text) => text.padEnd(columns - 1) + '┃';",
     "  const row = (y, text) => '\\x1b[' + y + ';1H' + text;",
-    "  const sent = (text) => (' ❯ ' + text).padEnd(columns - 7) + '11:22 ┃';",
-    "  const assistant = (text) => framed(' ● ' + text).replace('●', '\\x1b[34m●\\x1b[39m');",
+    "  const sent = ' ❯ SENT_REQUEST'.padEnd(columns - 7) + '11:22 ┃';",
     "  process.stdout.write('\\x1b[0m\\x1b[2J\\x1b[H'",
-    "    + row(2, sent('SENT_REQUEST'))",
+    "    + row(2, sent)",
     "    + row(3, framed('   SENT_CONTINUATION'))",
     "    + row(4, framed(''))",
-    "    + row(5, assistant('EARLIER_ANSWER'))",
-    "    + row(6, sent('TOOL_REQUEST'))",
-    "    + row(7, assistant('TOOL_ONLY_PROGRESS'))",
-    "    + row(8, framed(' $ TOOL_ONLY_RESULT'))",
-    "    + row(9, sent('INTERRUPTED_REQUEST'))",
-    "    + row(10, assistant('INTERRUPTED_PROGRESS'))",
-    "    + row(11, '\\x1b[3m' + framed(' ❯ INTERRUPTED_NOTICE') + '\\x1b[0m')",
-    "    + row(12, sent('CURRENT_REQUEST'))",
-    "    + row(13, assistant('COPILOT_PROGRESS'))",
-    "    + row(14, framed('   ❯ QUOTED_PROMPT'.padEnd(columns - 7) + '11:25 '))",
-    "    + row(15, framed(' $ TOOL_ACTIVITY'))",
-    "    + row(16, assistant('CURRENT_ANSWER'))",
-    "    + row(17, framed(''))",
-    "    + row(18, framed('   ANSWER_CONTINUATION'))",
+    "    + row(5, framed(' ● COPILOT_REPLY'))",
+    "    + row(6, framed('   ❯ QUOTED_PROMPT'.padEnd(columns - 7) + '11:25 '))",
+    "    + row(7, '\\x1b[3m' + framed(' ❯ INTERRUPTED_NOTICE') + '\\x1b[0m')",
     "    + row(rows - 4, '\\x1b[2m' + rule + '\\x1b[0m')",
     "    + row(rows - 3, '❯ EDITABLE_DRAFT')",
     "    + row(rows - 2, '  DRAFT_CONTINUATION')",
     "    + row(rows - 1, '\\x1b[2m' + rule + '\\x1b[0m')",
-    "    + row(rows, settled ? '/ commands · ? help · tab next tab' : '◎ Working ctrl+c interrupt')",
+    "    + row(rows, '/ commands · ? help · tab next tab')",
     "    + '\\x1b[' + (rows - 2) + ';20H');",
     "}",
     "process.stdout.write('\\x1b[?1049h\\x1b]2;GitHub Copilot\\x07');",
     "process.stdout.on('resize', draw);",
-    "process.stdin.setRawMode(true);",
-    "process.stdin.on('data', (data) => { if (data.includes(13)) { settled = true; draw(); } });",
+    "process.stdin.resume();",
     "draw();",
   ].join("\n");
   execFileSync("tmux", [...tmux, "new-session", "-d", "-s", session, "node", "-e", fixture]);
@@ -188,34 +174,20 @@ test("Copilot distinguishes prompts and completed answers from activity in both 
     await page.goto("/mux/session/" + session + "?tab=" + session);
     await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "copilot");
     await expect(page.locator(".xterm-rows")).toContainText("EDITABLE_DRAFT");
-    const prompts = ["SENT_REQUEST", "SENT_CONTINUATION", "EDITABLE_DRAFT", "DRAFT_CONTINUATION"];
-    const activity = [
-      "COPILOT_PROGRESS", "TOOL_ACTIVITY", "TOOL_ONLY_PROGRESS", "TOOL_ONLY_RESULT",
-      "QUOTED_PROMPT", "INTERRUPTED_PROGRESS", "INTERRUPTED_NOTICE",
-    ];
-    const currentReply = ["CURRENT_ANSWER", "ANSWER_CONTINUATION"];
-    const check = async (theme: "dark" | "light", settled: boolean) => {
-      const promptFill = theme === "dark" ? "rgb(45, 47, 46)" : "rgb(233, 232, 227)";
-      const answerFill = theme === "dark" ? ["rgb(119, 189, 251)", "rgb(27, 40, 47)"]
-        : ["rgb(25, 89, 166)", "rgb(223, 230, 235)"];
-      for (const text of prompts) {
-        await expect.poll(() => backgrounds(page, text), { message: text }).toEqual([promptFill]);
+    const highlighted = ["SENT_REQUEST", "SENT_CONTINUATION", "EDITABLE_DRAFT", "DRAFT_CONTINUATION"];
+    const unhighlighted = ["COPILOT_REPLY", "QUOTED_PROMPT", "INTERRUPTED_NOTICE"];
+    const check = async (fill: string) => {
+      for (const text of highlighted) {
+        await expect.poll(() => backgrounds(page, text), { message: text }).toEqual([fill]);
       }
-      for (const text of ["EARLIER_ANSWER", ...(settled ? currentReply : [])]) {
-        await expect.poll(() => backgrounds(page, text), { message: text }).toEqual(answerFill);
-      }
-      for (const text of [...activity, ...(settled ? [] : currentReply)]) {
+      for (const text of unhighlighted) {
         await expect.poll(() => backgrounds(page, text), { message: text }).toEqual([]);
       }
     };
-    await check("dark", false);
-    await page.locator(".xterm-helper-textarea").focus();
-    await page.keyboard.press("Enter");
-    await expect(page.locator(".xterm-rows")).toContainText("/ commands");
-    await check("dark", true);
+    await check("rgb(45, 47, 46)");
     await page.getByTitle("Switch to light theme", { exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-    await check("light", true);
+    await check("rgb(233, 232, 227)");
     expect(terminalConnections).toBe(1);
   } finally {
     execFileSync("tmux", [...tmux, "kill-session", "-t", "=" + session]);

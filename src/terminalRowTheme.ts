@@ -3,7 +3,7 @@ import { TERMINAL_THEMES, type TerminalThemeMode } from "./terminalTheme";
 
 export interface TerminalThemeRow {
   y: number;
-  spans: Array<{ x: number; width: number; backgroundColor?: string }>;
+  spans: Array<{ x: number; width: number }>;
 }
 
 export interface TerminalRowTheme {
@@ -15,17 +15,16 @@ export function shadeTerminalBackground(
   theme: TerminalThemeMode,
   terminalBackground: string | undefined,
   amount: number,
-  tint = theme === "dark" ? "#ffffff" : "#000000",
 ): string {
   const background = terminalBackground && /^#[0-9a-f]{6}$/i.test(terminalBackground)
     ? terminalBackground
     : TERMINAL_THEMES[theme].background!;
-  const blend = [1, 3, 5].map((offset) => {
-    const channel = Number.parseInt(background.slice(offset, offset + 2), 16);
-    const target = Number.parseInt(tint.slice(offset, offset + 2), 16);
-    return Math.floor(channel * (1 - amount) + target * amount).toString(16).padStart(2, "0");
-  });
-  return "#" + blend.join("");
+  const color = Number.parseInt(background.slice(1), 16);
+  const channels = [color >>> 16, (color >>> 8) & 255, color & 255];
+  const blend = theme === "dark" ? 255 : 0;
+  return "#" + channels.map((channel) => (
+    Math.floor(channel * (1 - amount) + blend * amount).toString(16).padStart(2, "0")
+  )).join("");
 }
 
 export function highlightSpans(
@@ -50,15 +49,13 @@ export function highlightSpans(
 export function attachTerminalRowTheme(
   terminal: Terminal,
   profile: {
-    rows: (terminal: Terminal, theme: TerminalThemeMode, terminalBackground?: string) => TerminalThemeRow[];
+    rows: (terminal: Terminal) => TerminalThemeRow[];
     background: (theme: TerminalThemeMode, terminalBackground?: string) => string;
   },
   initialTheme: TerminalThemeMode,
   terminalBackground?: string,
 ): TerminalRowTheme {
-  let theme = initialTheme;
-  let currentBackground = terminalBackground;
-  let backgroundColor = profile.background(theme, currentBackground);
+  let backgroundColor = profile.background(initialTheme, terminalBackground);
   let disposed = false;
   let frame: number | undefined;
   let signature = "";
@@ -79,7 +76,7 @@ export function attachTerminalRowTheme(
       clear();
       activeBuffer = buffer;
     }
-    const rows = profile.rows(terminal, theme, currentBackground).filter((row) => row.spans.length > 0);
+    const rows = profile.rows(terminal).filter((row) => row.spans.length > 0);
     const nextSignature = JSON.stringify([backgroundColor, rows]);
     if (
       signature === nextSignature
@@ -94,8 +91,8 @@ export function attachTerminalRowTheme(
       for (const span of row.spans) {
         const decoration = terminal.registerDecoration({
           marker,
-          backgroundColor,
           ...span,
+          backgroundColor,
           layer: "bottom",
         });
         if (decoration) decorations.push(decoration);
@@ -123,10 +120,8 @@ export function attachTerminalRowTheme(
   update();
 
   return {
-    setTheme(nextTheme, nextTerminalBackground) {
-      theme = nextTheme;
-      currentBackground = nextTerminalBackground;
-      backgroundColor = profile.background(theme, currentBackground);
+    setTheme(theme, nextTerminalBackground) {
+      backgroundColor = profile.background(theme, nextTerminalBackground);
       update();
     },
     dispose() {
