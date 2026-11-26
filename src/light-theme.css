@@ -610,9 +610,9 @@ html[data-theme="light"] .agent-badge.claude {
 }
 
 html[data-theme="light"] .agent-badge.copilot {
-  color: #00688f;
-  background: #dcf3fa;
-  border-color: #92d2e5;
+  color: #812e87;
+  background: #f8e6fa;
+  border-color: #d5a1d9;
 }
 
 html[data-theme="light"] .agent-badge.cursor {
@@ -646,9 +646,9 @@ html[data-theme="light"] .agent-badge.omp {
 }
 
 html[data-theme="light"] .agent-badge.opencode {
-  color: #096b51;
-  background: #ddf3ea;
-  border-color: #9acfbf;
+  color: #23662d;
+  background: #e1f3df;
+  border-color: #a6caa7;
 }
 
 html[data-theme="light"] .agent-badge.agy {
@@ -658,9 +658,9 @@ html[data-theme="light"] .agent-badge.agy {
 }
 
 html[data-theme="light"] .agent-badge.shell {
-  color: #006c63;
-  background: #dcefeb;
-  border-color: #a8d1ca;
+  color: #4f5b69;
+  background: #e9edf1;
+  border-color: #bcc6d0;
 }
 
 html[data-theme="light"] .agent-badge.process {

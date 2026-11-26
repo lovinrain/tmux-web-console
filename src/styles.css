@@ -1780,9 +1780,9 @@ a:focus-visible {
 }
 
 .agent-badge.copilot {
-  color: #51d4ff;
-  background: rgba(81, 212, 255, 0.09);
-  border-color: rgba(81, 212, 255, 0.24);
+  color: #e88eef;
+  background: rgba(232, 142, 239, 0.09);
+  border-color: rgba(232, 142, 239, 0.28);
 }
 
 .agent-badge.cursor {
@@ -1816,9 +1816,9 @@ a:focus-visible {
 }
 
 .agent-badge.opencode {
-  color: #71dbbb;
-  background: rgba(113, 219, 187, 0.09);
-  border-color: rgba(113, 219, 187, 0.24);
+  color: #5bd881;
+  background: rgba(91, 216, 129, 0.09);
+  border-color: rgba(91, 216, 129, 0.27);
 }
 
 .agent-badge.agy {
@@ -1828,9 +1828,9 @@ a:focus-visible {
 }
 
 .agent-badge.shell {
-  color: var(--cyan);
-  background: rgba(104, 223, 208, 0.07);
-  border-color: rgba(104, 223, 208, 0.18);
+  color: #cbd2d9;
+  background: rgba(203, 210, 217, 0.07);
+  border-color: rgba(203, 210, 217, 0.24);
 }
 
 .agent-badge.process {
