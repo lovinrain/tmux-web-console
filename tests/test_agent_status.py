@@ -23,6 +23,7 @@ OPENCODE_EXTENDED_FOOTER = (
     "  /work · main      build · tab  ctrl+p commands    0 tokens"
 )
 AGY_IDLE = f"{RULE}\n>\n{RULE}\n? for shortcuts                Gemini"
+AGY_ACTIVE = f"{RULE}\n>\n{RULE}\nesc to cancel                Gemini"
 
 
 def pane(command: str, title: str = "", *, now: int = 1000) -> Pane:
@@ -157,6 +158,11 @@ def test_opencode_selectors_can_keep_the_idle_footer(heading):
     ("screen", "expected"),
     [
         (AGY_IDLE, "waiting_human"),
+        (AGY_ACTIVE, "working"),
+        (f"⡿ Updating the output\n└ Waiting for a result\n{AGY_ACTIVE}", "working"),
+        (f"Running command... 18s\n{AGY_ACTIVE}", "running_command"),
+        (f"esc to cancel\nEarlier output\n{AGY_IDLE}", "waiting_human"),
+        (f"{RULE}\nEarlier output\n{RULE}\nesc to cancel", "unknown"),
         (AGY_IDLE.replace("\n>\n", "\n> A draft\nsecond line\n"), "waiting_human"),
         (f"Thinking... 12s\n{AGY_IDLE}", "working"),
         (f"Thinking... 12s\n1/2 steps\n{AGY_IDLE}", "working"),
@@ -190,7 +196,7 @@ async def test_detector_captures_current_agent_controls():
         "%1": PI_IDLE,
         "%2": f"─── ⣾ Running… (⎋ to cancel) ──\n\n{OMP_IDLE}",
         "%3": OPENCODE_IDLE,
-        "%4": AGY_IDLE,
+        "%4": AGY_ACTIVE,
     }
 
     class CaptureTmux:
@@ -209,5 +215,5 @@ async def test_detector_captures_current_agent_controls():
     results = await AgentStateDetector().detect_sessions(cast(TmuxClient, CaptureTmux()), sessions)
     assert {name: state.name for name, state in results.items()} == {
         "pi": "waiting_human", "omp": "running_command",
-        "opencode": "waiting_human", "agy": "waiting_human",
+        "opencode": "waiting_human", "agy": "working",
     }

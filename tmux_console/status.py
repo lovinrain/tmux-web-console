@@ -199,7 +199,9 @@ OPENCODE_SELECTOR_PATTERN = re.compile(
     r"\s*(?:Commands|Select model|Search (?:commands|models))\s{2,}esc\s*"
 )
 OPENCODE_COMPOSER_RULE_PATTERN = re.compile(r"\s*╹▀{3,}\s*")
-AGY_FOOTER_PATTERN = re.compile(r"\s*\? for shortcuts(?:\s|$)")
+AGY_FOOTER_PATTERN = re.compile(
+    r"\s*(?:(?P<cancel>esc to cancel)|\? for shortcuts)(?:\s|$)", re.IGNORECASE
+)
 AGY_PROMPT_PATTERN = re.compile(r"\s*>(?:\s|$)")
 AGY_CHECKLIST_PATTERN = re.compile(r"\s*\d+/\d+ steps\b.*")
 AGY_ACTIVITY_PATTERN = re.compile(
@@ -749,8 +751,8 @@ def _agy_screen_state(lines: list[str], _title: str) -> AgentState:
         "No, deny access" in line for line in footer
     ):
         return AgentState("waiting_human", "Antigravity CLI is waiting on an approval decision")
-    if (len(footer) < 4 or not AGY_FOOTER_PATTERN.match(footer[-1])
-            or not PROMPT_RULE_PATTERN.fullmatch(footer[-2])):
+    controls = AGY_FOOTER_PATTERN.match(footer[-1]) if footer else None
+    if len(footer) < 4 or controls is None or not PROMPT_RULE_PATTERN.fullmatch(footer[-2]):
         return AgentState("unknown", "Antigravity CLI input controls are not recognized")
     for index in reversed(range(len(footer) - 2)):
         if not PROMPT_RULE_PATTERN.fullmatch(footer[index]):
@@ -766,6 +768,8 @@ def _agy_screen_state(lines: list[str], _title: str) -> AgentState:
             if activity or line.strip() == "Press esc to interrupt generation.":
                 return AgentState("working", "Antigravity CLI is running a turn")
             break
+        if controls["cancel"]:
+            return AgentState("working", "Antigravity CLI is running a turn")
         return AgentState("waiting_human", "Antigravity CLI is idle at its input prompt")
     return AgentState("unknown", "Antigravity CLI input controls are not recognized")
 
