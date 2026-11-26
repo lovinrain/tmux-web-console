@@ -694,7 +694,9 @@ async def test_real_tmux_websocket_input_output_resize_history_and_titles(
 
 
 @pytest.mark.asyncio
-async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path, monkeypatch):
+async def test_real_tmux_create_session_api_is_immediately_attachable(
+    tmp_path, monkeypatch, wait_for_session_directory,
+):
     home = tmp_path / "home" / "tester"
     home.mkdir(parents=True)
     monkeypatch.setattr("tmux_console.tmux.Path.home", lambda: home)
@@ -758,17 +760,7 @@ async def test_real_tmux_create_session_api_is_immediately_attachable(tmp_path, 
         assert directory_response.status == 201
         directory_name = (await directory_response.json())["session"]
         assert re.fullmatch(r"working-directory--Acme-project--[0-9a-f]{8}", directory_name)
-        assert (
-            await tmux_client.run(
-                [
-                    "list-panes",
-                    "-t",
-                    f"={directory_name}",
-                    "-F",
-                    "#{pane_current_path}",
-                ]
-            )
-        ).strip() == str(working_directory)
+        await wait_for_session_directory(tmux_client, directory_name, working_directory)
 
         themed_name = "grok-light"
         themed_response = await client.post(
