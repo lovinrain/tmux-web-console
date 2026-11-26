@@ -14,7 +14,7 @@ import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl, type WorkspaceViewIdentity } from "../api";
 import { attachCodexComposerTheme } from "../codexComposerTheme";
 import { stripCopilotCopyBorder } from "../copilotClipboard";
-import { attachCopilotPromptTheme } from "../copilotPromptTheme";
+import { attachCopilotTerminalTheme } from "../copilotTerminalTheme";
 import {
   desktopAttachmentsAvailable,
   MAX_ATTACHMENT_UPLOAD_BATCH,
@@ -1053,7 +1053,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     useEffect(() => {
       const terminal = terminalRef.current;
       const attachTheme = agentKind === "codex" ? attachCodexComposerTheme
-        : agentKind === "copilot" ? attachCopilotPromptTheme : null;
+        : agentKind === "copilot" ? attachCopilotTerminalTheme : null;
       if (!terminal || !attachTheme) return;
       const adapter = attachTheme(terminal, theme, terminalTheme.background);
       promptThemeRef.current = adapter;
