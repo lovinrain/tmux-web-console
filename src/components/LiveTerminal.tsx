@@ -13,6 +13,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalWebSocketUrl, type WorkspaceViewIdentity } from "../api";
 import { attachCodexComposerTheme } from "../codexComposerTheme";
+import { stripCopilotCopyBorder } from "../copilotClipboard";
 import {
   desktopAttachmentsAvailable,
   MAX_ATTACHMENT_UPLOAD_BATCH,
@@ -158,6 +159,8 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
     const terminalRef = useRef<Terminal | null>(null);
     const selectionCallbackRef = useRef(onSelectionChange);
     selectionCallbackRef.current = onSelectionChange;
+    const agentKindRef = useRef(agentKind);
+    agentKindRef.current = agentKind;
     const codexThemeRef = useRef<ReturnType<typeof attachCodexComposerTheme> | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
     const onViewEvictedRef = useRef(onViewEvicted);
@@ -657,6 +660,16 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
       const terminalDocument = terminalElement?.ownerDocument;
       const replayedMouseEvents = new WeakSet<MouseEvent>();
 
+      const handleCopy = (event: ClipboardEvent) => {
+        if (agentKindRef.current !== "copilot" || !event.clipboardData || !terminal.hasSelection()) return;
+        const selection = terminal.getSelection();
+        const text = stripCopilotCopyBorder(terminal, selection);
+        if (text === selection) return;
+        event.clipboardData.setData("text/plain", text);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      };
+
       terminal.attachCustomKeyEventHandler((event) => {
         if (!browserCopyModeRef.current || event.altKey) return true;
         const clipboardModifier = macBrowser
@@ -763,6 +776,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         }
       };
 
+      terminalElement?.addEventListener("copy", handleCopy, true);
       terminalElement?.addEventListener("mousedown", handleModifiedLinkMouseEvent, true);
       terminalElement?.addEventListener("mouseup", handleModifiedLinkMouseEvent, true);
       terminalElement?.addEventListener("mousedown", handleCopyMouseDown, true);
@@ -1002,6 +1016,7 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
         if (redrawRef.current === redraw) redrawRef.current = null;
         copySelectionActiveRef.current = false;
         copyWheelRemainderRef.current = 0;
+        terminalElement?.removeEventListener("copy", handleCopy, true);
         terminalElement?.removeEventListener("mousedown", handleModifiedLinkMouseEvent, true);
         terminalElement?.removeEventListener("mouseup", handleModifiedLinkMouseEvent, true);
         terminalElement?.removeEventListener("mousedown", handleCopyMouseDown, true);

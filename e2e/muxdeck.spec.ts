@@ -2449,6 +2449,44 @@ test("desktop Copy mode uses the browser clipboard while a TUI owns the mouse", 
   }
 });
 
+test("desktop Copy mode removes Copilot's right frame from the clipboard", async ({ context, page }) => {
+  const copilotSession = sessionName + "-copilot-copy";
+  const answer = ["● • fusion", "   • gemini-4-hydrogen", "   • echo a | b ┃"];
+  const fixture = [
+    "const answer = " + JSON.stringify(answer) + ";",
+    "const render = () => {",
+    "  const frame = answer.map((line) => line.padEnd(process.stdout.columns - 1) + '┃');",
+    "  process.stdout.write('\\x1b[2J\\x1b[H\\x1b[?1003h' + frame.join('\\r\\n'));",
+    "};",
+    "process.stdout.write('\\x1b]2;GitHub Copilot\\x07');",
+    "process.stdout.on('resize', render);",
+    "process.stdin.resume();",
+    "render();",
+  ].join("\n");
+  execFileSync("tmux", [...tmux, "new-session", "-d", "-s", copilotSession, "node", "-e", fixture]);
+  try {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: E2E_ORIGIN });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/mux/session/" + copilotSession + "?tab=" + copilotSession);
+    await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "copilot");
+    const terminalScreen = page.locator(".terminal-host .xterm-screen");
+    await expect(terminalScreen).toContainText("gemini-4-hydrogen");
+    await page.getByRole("button", { name: "Browser terminal copy mode" }).click();
+
+    const box = (await terminalScreen.boundingBox())!;
+    const cellHeight = box.height / workspacePaneHeight(copilotSession);
+    await page.mouse.move(box.x + 2, box.y + cellHeight / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width - 1, box.y + cellHeight * 2.5, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.press("Control+C");
+
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(answer.join("\n"));
+  } finally {
+    execFileSync("tmux", [...tmux, "kill-session", "-t", "=" + copilotSession]);
+  }
+});
+
 test("workspace name stays in the top-left toolbar for saved and temporary workspaces", async ({
   page,
   request,
