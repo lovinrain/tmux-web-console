@@ -55,6 +55,10 @@ deployment artifacts as part of delivery. Preserve unrelated work.
   pre-upgrade state backups. Protect additional releases and artifacts while they
   are referenced by processes, service configuration, or dependency symlinks, or
   needed for pending deployment acceptance or a migration rollback.
+- Reuse the live scrollback database for routine releases and compatible rollbacks.
+  Take a compressed snapshot only when the change puts scrollback at risk or a
+  state migration or explicit recovery backup needs it. See section 4.4 of the
+  deployment guide.
 - Exclude live JSON/SQLite stores, session history, credentials, and uploaded user
   files from routine artifact cleanup. Do not remove the only remaining copy of
   user data merely because an older backup is outside the retention window.

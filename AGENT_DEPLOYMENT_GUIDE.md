@@ -279,17 +279,32 @@ caddy validate --config /etc/caddy/Caddyfile
 ```
 
 Back up the existing unit, the relevant Caddy configuration, all six state JSON
-files, every configured SQLite database (including recovery, callbacks,
-submitted messages, scrollback and launch requests), the upload directory when
-present, and the old release path. Preserve control and callback credentials
-separately as private secrets when automation access is in scope. Stop only Muxdeck or use
-SQLite's backup API before copying the database so the backup is consistent. Use
-timestamped copies; do not overwrite the only known-good copy. In particular,
-retain the pre-upgrade
-`session-titles.json` through the rollback window because its schema may be
-upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
+files, and all configured SQLite stores except scrollback. Include the uploads
+and note image directories when present, and record the old release path.
+Preserve control and callback credentials separately as private secrets when
+automation access is in scope.
+Stop only Muxdeck or use SQLite's backup API for consistent database copies.
+Use timestamped copies and preserve the only known-good copy. Retain the
+pre-upgrade `session-titles.json` through the rollback window because its schema
+may be upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
 the first workspace-state write can upgrade it to schema 16, and a release that
 only understands versions 1 through 15 cannot read the upgraded document.
+
+Routine releases and compatible rollbacks use the existing `scrollback.sqlite3`
+in place. Record this in the deployment backup manifest.
+Take a separate scrollback snapshot before a schema or storage change that
+could alter or invalidate the existing data, for state migration, or for an
+explicit recovery backup. Use the actual configured path (see section 6).
+The helper takes a consistent SQLite snapshot, compresses it with `zstd`, and
+prints the SHA-256 of the restored database after verifying the archive. Save
+that digest in the private backup manifest. Set `MUXDEPLOY_BACKUP_DIR` to the
+existing private backup directory and use a new archive filename.
+
+```bash
+python3 scripts/backup_scrollback.py \
+  "$MUXDEPLOY_STATE_DIR/scrollback.sqlite3" \
+  "$MUXDEPLOY_BACKUP_DIR/scrollback.sqlite3.zst"
+```
 
 ## 5. Build a clean release
 
@@ -431,10 +446,10 @@ capture limits, and history-file overrides for isolated installations and tests.
 
 Saved beginning and recent output uses a separate private `scrollback.sqlite3`
 archive beside the recovery registry, overridden by `MUXDECK_SCROLLBACK_FILE`.
-It uses schema version 1 and mode `0600`. Back it up with SQLite's backup API
-alongside the recovery and submitted-message databases, include it in private
-state migrations, and retain it during rollback; older code ignores it. This
-does not change any existing state schema. Never include its terminal text in
+It uses schema version 1 and mode `0600`. Include it in private state migrations
+and keep using the live file on compatible rollback. Use the compressed SQLite
+snapshot in section 4.4 when a change requires a separate backup. Older code
+without saved scrollback ignores the file. Never include its terminal text in
 source archives or deployment evidence. Output recording begins with the first
 available capture after installation and cannot recover previously lost output.
 See [Saved scrollback](docs/SCROLLBACK.md) for sampling, bounds, and limitations.
@@ -1168,6 +1183,12 @@ For a failed replacement:
    Preserve the upload directory separately. An older release ignores it; do not
    delete attachments created after the pre-deployment backup merely to roll back
    application code.
+   Reuse the live scrollback database on compatible rollback. If a scrollback
+   migration requires a restore, preserve the current database separately while
+   Muxdeck is stopped. For a `.sqlite3.zst` backup, extract into a private staging
+   directory with `zstd -dc`, compare the staged file's `sha256sum` with the
+   backup manifest or cleanup audit, and run SQLite `PRAGMA quick_check` before
+   installing it with the original owner and mode `0600`.
    Preserve `auth.json` separately even when the rollback release does not
    support it. Before exposing an older unauthenticated release, remove the
    public route or add a separate authenticated proxy/access layer; retaining an
@@ -1288,11 +1309,9 @@ tree:
 1. stage the new archive in a new exact directory;
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
-4. retain the external state directory unchanged and keep timestamped
-   pre-upgrade copies of all six JSON state files, all configured SQLite
-   databases (including `launch-requests.sqlite3`), plus the upload directory
-   when it exists; preserve private credentials separately;
-   include `note-captures.sqlite3` and its matching `note-images/` when present;
+4. retain the external state directory and take the private rollback backups in
+   section 4.4. Keep compatible scrollback in place and use a compressed snapshot
+   when that section calls for one;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;

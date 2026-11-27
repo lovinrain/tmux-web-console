@@ -76,10 +76,10 @@ workspace, callback, and submitted-message schemas do not change.
 
 There is no automatic expiry. Storage is bounded per pane's two output sections
 and grows as more pane incarnations are recorded; submitted-input retention is
-independent. Back up this database with SQLite's backup API alongside
-`sessions.sqlite3` and `submitted-messages.sqlite3`. Include it in private state
-migrations, preserve it during rollback, and exclude it from source archives.
-Older releases leave the separate file alone.
+independent. Routine upgrades and compatible rollbacks keep using the live
+file. Take a compressed SQLite snapshot for a change that puts existing
+scrollback at risk, a state migration, or a recovery backup. Keep snapshots
+private and outside source archives. See the [deployment backup procedure](../AGENT_DEPLOYMENT_GUIDE.md#44-inspect-an-existing-deployment).
 
 The endpoints use normal console authentication. Callback-only tokens cannot
 read saved terminal output. Unavailable archives return `503` while live
