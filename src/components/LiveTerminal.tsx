@@ -1052,9 +1052,12 @@ export const LiveTerminal = forwardRef<LiveTerminalHandle, LiveTerminalProps>(
 
     useEffect(() => {
       const terminal = terminalRef.current;
+      if (!terminal) return;
+      // OMP can emit a fixed draft color designed for a different terminal background.
+      terminal.options.minimumContrastRatio = agentKind === "omp" ? 4.5 : 1;
       const attachTheme = agentKind === "codex" ? attachCodexComposerTheme
         : agentKind === "copilot" ? attachCopilotPromptTheme : null;
-      if (!terminal || !attachTheme) return;
+      if (!attachTheme) return;
       const adapter = attachTheme(terminal, theme, terminalTheme.background);
       promptThemeRef.current = adapter;
       return () => {

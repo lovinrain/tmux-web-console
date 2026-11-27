@@ -193,3 +193,56 @@ test("Copilot highlights user prompts and the composer in both themes", async ({
     execFileSync("tmux", [...tmux, "kill-session", "-t", "=" + session]);
   }
 });
+
+test("OMP draft text stays readable across browser themes", async ({ context, page }) => {
+  const session = `muxdeck-theme-${process.pid}-omp`;
+  // OMP's light theme paints draft text as explicit black on the terminal background.
+  const fixture = [
+    "import ctypes, os, sys, tty",
+    "assert ctypes.CDLL(None).prctl(15, b'omp', 0, 0, 0) == 0",
+    "tty.setraw(sys.stdin.fileno())",
+    "os.write(1, b'OMP_EDITOR_READY\\r\\n')",
+    "while data := os.read(0, 4096):",
+    "    os.write(1, b'\\x1b[38;5;16m' + data)",
+  ].join("\n");
+  execFileSync("tmux", [
+    ...tmux, "new-session", "-d", "-s", session,
+    "bash", "--noprofile", "--norc", "-c", 'exec -a omp python3 -c "$1"', "fixture", fixture,
+  ]);
+  try {
+    expect((await context.request.post("/mux/api/auth/login", {
+      data: { username: E2E_AUTH_USERNAME, password: E2E_AUTH_PASSWORD },
+    })).ok()).toBe(true);
+    await context.addInitScript(() => localStorage.setItem("muxdeck-theme", "dark"));
+    await page.setViewportSize({ width: 1366, height: 900 });
+    let terminalConnections = 0;
+    page.on("websocket", (socket) => {
+      if (socket.url().includes("/ws/terminal")) terminalConnections += 1;
+    });
+    await page.goto(`/mux/session/${session}?tab=${session}`);
+    await expect(page.locator(".console-shell")).toHaveAttribute("data-scroll-agent", "omp");
+    await expect(page.locator(".xterm-rows")).toContainText("OMP_EDITOR_READY");
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("OMP_DRAFT");
+    const draft = page.locator(".xterm-rows span").filter({ hasText: "OMP_DRAFT" });
+    await expect(draft).toBeVisible();
+    await expect.poll(() => draft.evaluate((text) => {
+      const viewport = text.closest(".xterm-scrollable-element")!;
+      const luminance = (color: string) => {
+        const [r, g, b] = color.match(/\d+/g)!.map((channel) => Number(channel) / 255)
+          .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const foreground = luminance(getComputedStyle(text).color);
+      const background = luminance(getComputedStyle(viewport).backgroundColor);
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+    })).toBeGreaterThanOrEqual(4.5);
+
+    await page.getByTitle("Switch to light theme", { exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(draft).toHaveCSS("color", "rgb(0, 0, 0)");
+    expect(terminalConnections).toBe(1);
+  } finally {
+    execFileSync("tmux", [...tmux, "kill-session", "-t", `=${session}`]);
+  }
+});
