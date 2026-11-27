@@ -35,7 +35,7 @@ again. Preserve unrelated work and follow the deployment safety checks above.
   like the current activity while silently preparing the next step.
 - For routine deployment checks, reuse `scripts/check_deployment.py` and its
   generated report; see section 13 of `AGENT_DEPLOYMENT_GUIDE.md`. Retain
-  task-specific tests, backups, and migration checks. Extend shared tooling when
+  task-specific test and migration evidence. Extend shared tooling when
   a recurring check is missing instead of writing a new temporary verifier.
 - Build frontend releases in a staging directory. The live `dist/` is served
   immediately, so building in the running checkout deploys before validation.
@@ -51,14 +51,12 @@ deployment artifacts as part of delivery. Preserve unrelated work.
   generated frontend builds, and clean worktrees whose commits are already merged.
   Use normal Git worktree removal; do not force removal of dirty, locked, or
   unmerged worktrees.
-- Keep the current release plus two previous rollback releases with their matching
-  pre-upgrade state backups. Protect additional releases and artifacts while they
-  are referenced by processes, service configuration, or dependency symlinks, or
-  needed for pending deployment acceptance or a migration rollback.
-- Reuse the live scrollback database for routine releases and compatible rollbacks.
-  Take a compressed snapshot only when the change puts scrollback at risk or a
-  state migration or explicit recovery backup needs it. See section 4.4 of the
-  deployment guide.
+- Keep the current release plus two previous code releases. Protect additional
+  releases and artifacts while referenced by processes, service configuration,
+  or dependency symlinks, or needed for pending deployment acceptance.
+- Use the live state directory for deployments and compatible code rollbacks.
+  Retain release code and changed service or proxy configuration for rollback.
+  See sections 4.4 and 12 of the deployment guide.
 - Exclude live JSON/SQLite stores, session history, credentials, and uploaded user
   files from routine artifact cleanup. Do not remove the only remaining copy of
   user data merely because an older backup is outside the retention window.

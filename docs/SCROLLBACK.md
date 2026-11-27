@@ -76,10 +76,9 @@ workspace, callback, and submitted-message schemas do not change.
 
 There is no automatic expiry. Storage is bounded per pane's two output sections
 and grows as more pane incarnations are recorded; submitted-input retention is
-independent. Routine upgrades and compatible rollbacks keep using the live
-file. Take a compressed SQLite snapshot for a change that puts existing
-scrollback at risk, a state migration, or a recovery backup. Keep snapshots
-private and outside source archives. See the [deployment backup procedure](../AGENT_DEPLOYMENT_GUIDE.md#44-inspect-an-existing-deployment).
+independent. Deployments and compatible code rollbacks keep using the live
+file. Keep it private and outside source archives. See the [state migration
+procedure](../AGENT_DEPLOYMENT_GUIDE.md#6-optional-runtime-state-migration).
 
 The endpoints use normal console authentication. Callback-only tokens cannot
 read saved terminal output. Unavailable archives return `503` while live

@@ -127,7 +127,7 @@ shell variables; do not repurpose `HOME` or another standard environment name.
 
 | Fact | Recommended/default | Notes |
 | --- | --- | --- |
-| Deployment type | fresh or replacement | A replacement requires backups and rollback data. |
+| Deployment type | fresh or replacement | A replacement reuses live state and retains the prior release. |
 | App directory | `/opt/muxdeck` or tmux owner's home | Must be absolute, traversable by the run user, and contain no whitespace. Never put a non-root service under `/root`. |
 | Run user/group | target tmux owner | Must list the intended sessions using the same tmux command/socket. |
 | Python | 3.11+ | Needs venv/pip support. |
@@ -278,33 +278,12 @@ journalctl -u muxdeck.service -n 100 --no-pager
 caddy validate --config /etc/caddy/Caddyfile
 ```
 
-Back up the existing unit, the relevant Caddy configuration, all six state JSON
-files, and all configured SQLite stores except scrollback. Include the uploads
-and note image directories when present, and record the old release path.
-Preserve control and callback credentials separately as private secrets when
-automation access is in scope.
-Stop only Muxdeck or use SQLite's backup API for consistent database copies.
-Use timestamped copies and preserve the only known-good copy. Retain the
-pre-upgrade `session-titles.json` through the rollback window because its schema
-may be upgraded by the new release. Also retain the pre-upgrade `workspaces.json`:
-the first workspace-state write can upgrade it to schema 16, and a release that
-only understands versions 1 through 15 cannot read the upgraded document.
-
-Routine releases and compatible rollbacks use the existing `scrollback.sqlite3`
-in place. Record this in the deployment backup manifest.
-Take a separate scrollback snapshot before a schema or storage change that
-could alter or invalidate the existing data, for state migration, or for an
-explicit recovery backup. Use the actual configured path (see section 6).
-The helper takes a consistent SQLite snapshot, compresses it with `zstd`, and
-prints the SHA-256 of the restored database after verifying the archive. Save
-that digest in the private backup manifest. Set `MUXDEPLOY_BACKUP_DIR` to the
-existing private backup directory and use a new archive filename.
-
-```bash
-python3 scripts/backup_scrollback.py \
-  "$MUXDEPLOY_STATE_DIR/scrollback.sqlite3" \
-  "$MUXDEPLOY_BACKUP_DIR/scrollback.sqlite3.zst"
-```
+Record the prior release path and the configured state paths. Keep a copy of
+the unit or relevant Caddy configuration if the deployment changes it. Reuse
+the existing JSON and SQLite stores, scrollback, credentials, uploads, and note
+images in place. Skip state snapshots as part of deployment. Section 6 covers
+an explicitly requested move of state to a different installation. Section 12
+covers code rollback against the live state.
 
 ## 5. Build a clean release
 
@@ -437,19 +416,17 @@ Submitted-message history uses a separate private `submitted-messages.sqlite3`
 archive beside the configured recovery registry, overridden by
 `MUXDECK_SUBMITTED_MESSAGES_FILE`. It contains submitted Claude Code/Codex input
 text and uses schema version 1, with no change to the recovery or workspace
-schemas. Back it up consistently with SQLite's backup API alongside
-`sessions.sqlite3`, include it in private state migrations, and retain it during
-rollback; older code ignores the separate archive. Do not include it in source
-archives or print its contents in deployment evidence. Native agent history is
+schemas. Include it alongside `sessions.sqlite3` in private state migrations.
+Keep the live archive in place during rollback. Older code ignores it. Keep it
+private and outside source archives and deployment evidence. Native agent history is
 read only. See [Submitted messages](docs/SUBMITTED_MESSAGES.md) for source paths,
 capture limits, and history-file overrides for isolated installations and tests.
 
 Saved beginning and recent output uses a separate private `scrollback.sqlite3`
 archive beside the recovery registry, overridden by `MUXDECK_SCROLLBACK_FILE`.
 It uses schema version 1 and mode `0600`. Include it in private state migrations
-and keep using the live file on compatible rollback. Use the compressed SQLite
-snapshot in section 4.4 when a change requires a separate backup. Older code
-without saved scrollback ignores the file. Never include its terminal text in
+and keep using the live file on compatible rollback. Older code without saved
+scrollback ignores the file. Never include its terminal text in
 source archives or deployment evidence. Output recording begins with the first
 available capture after installation and cannot recover previously lost output.
 See [Saved scrollback](docs/SCROLLBACK.md) for sampling, bounds, and limitations.
@@ -461,33 +438,30 @@ session markers. It uses schema version 3 and does not alter workspace or recove
 schemas. Versions 1 and 2 upgrade transactionally at startup, preserving all
 reports, review history, and existing groups. Version 1 gains the group tables and
 their independent revision; version 3 adds the hold table, with changes fenced by
-the callback-message revision. Keep a consistent pre-upgrade backup: older
-releases reject version 3. To roll back, stop only
-Muxdeck, retain the upgraded database separately, and restore the pre-upgrade
-database alongside the older code. Never downgrade `user_version` in place.
+the callback-message revision. Releases that reject version 3 cannot roll back
+against that database. Use code that supports its live schema and preserve
+`user_version`.
 `MUXDECK_CALLBACKS_FILE` overrides its path; otherwise it lives beside
-the configured workspace file. Back it up using SQLite's backup API alongside
-the recovery registry, migrate it as a private `0600` file, and retain it during
-rollback even when the older release does not display messages. The callback
-token file described in section 13 is a separate secret: migrate it privately
+the configured workspace file. Migrate it as a private `0600` file and keep it
+in place on rollback. The callback token file described in section 13 is a
+separate secret. Migrate it privately
 only when agent callback access should carry over.
 
 Native PR/Jira/Google Docs links use a separate private `work-links.sqlite3`
 beside the configured session registry, overridden by `MUXDECK_WORK_LINKS_FILE`.
 Schema version 1 contains provider settings/access instructions, session-history
 associations, retained notes, and agent-reported status. Include it in private
-SQLite backups and migrations; preserve it on rollback because older releases
-ignore it. It does not upgrade existing state schemas. No provider credentials,
+state migrations and keep it in place on rollback. Older releases ignore it.
+It does not upgrade existing state schemas. No provider credentials,
 public routes, or polling jobs are required. Deploy backend and frontend together.
 See [Work links](docs/WORK_LINKS.md) for configuration and agent discovery.
 
 Sticky-note captures use a separate schema-1 `note-captures.sqlite3` beside the
 session registry (`MUXDECK_NOTE_CAPTURES_FILE`) and private `note-images/` beside
-that database (`MUXDECK_NOTE_IMAGES_DIR`). Back up both together while stopping
-only Muxdeck: use SQLite's backup API for the database and a private copy of the
-image directory without following symlinks. Include them in state migrations,
-preserve them on rollback, and exclude them from routine deployment-artifact
-cleanup and source archives. Keep the database/images mode `0600` and directory
+that database (`MUXDECK_NOTE_IMAGES_DIR`). For a state migration, stop only
+Muxdeck and copy the database and image directory together without following
+symlinks. Keep both live stores in place on rollback and exclude them from routine
+deployment-artifact cleanup and source archives. Keep the database/images mode `0600` and directory
 mode `0700`. Existing schemas are unchanged; older releases ignore these stores.
 Default image storage is 256 MiB, overridden by `MUXDECK_NOTE_IMAGES_MAX_BYTES`.
 Across all note scopes, images expire seven days after their source session is
@@ -502,8 +476,8 @@ Programmatic launch idempotency uses a separate private
 `launch-requests.sqlite3`, overridden by `MUXDECK_LAUNCH_REQUESTS_FILE`, beside
 the configured recovery registry. Schema version 1 stores request fingerprints,
 reservations and creation receipts, not the original argument vector or
-environment overlay. Back it up with SQLite's backup API alongside the other
-databases, migrate it as a private `0600` file, and retain it during rollback.
+environment overlay. Migrate it as a private `0600` file and keep it in place
+during rollback.
 Deleting or replacing it with an older copy can permit a previously submitted
 request ID to launch again. An interrupted pending reservation deliberately
 returns an uncertain `409`; inspect the tmux inventory and controller evidence
@@ -535,11 +509,9 @@ Initially idle sessions begin read; old browser-local badges are not imported.
 Read/unread updates use the existing session event stream, including across
 independent browser profiles. Reload older pages after this upgrade.
 
-Back up `sessions.sqlite3` consistently before a backend upgrade, retain the
-private backup, and deploy backend and frontend together. Older releases reject
-version 5. Rollback requires stopping only Muxdeck, retaining the upgraded
-database separately, and restoring the pre-upgrade database with the old code.
-Never downgrade `user_version` in place. Keep the registry private (`0600`).
+Deploy backend and frontend together. Older releases reject schema 5. Roll back
+to code that supports the live registry schema and preserve `user_version`.
+Keep the registry private (`0600`).
 
 The workspace file uses schema version 16. Version 1 loads at workspace session
 revision zero; versions 1 and 2 load with no tab groups, and versions 1
@@ -585,9 +557,9 @@ most 128 pages with 80-character names; page content has no separate character
 validator. Each workspace callback list permits 64 unique session names, and the
 explicit global callback list permits 256 unique session names. Workspace
 callback entries are always included in the deduplicated global queue.
-Keep a pre-upgrade copy for rollback because a release that only understands
-versions 1 through 15 rejects the version 16 document. As with snippets, an
-unreadable, malformed, or unsupported existing
+Releases that only understand versions 1 through 15 reject a version 16
+document. Some older releases also reject blank quick-link titles in schema 14.
+As with snippets, an unreadable, malformed, or unsupported existing
 workspace file makes that store unavailable; Muxdeck returns `503` for workspace
 APIs instead of overwriting the file.
 
@@ -598,7 +570,7 @@ atomically rewrites that file as version 4. This upgrade needs no separate
 migration command, but it
 creates a rollback boundary: a version-3 release will discard tags on its next
 metadata write, while a version-1-or-2 release can additionally discard ignored
-status. Keep the timestamped pre-upgrade file until the new release is accepted.
+status. Use a rollback release that preserves the live title metadata.
 An unreadable, malformed, or unsupported future title file disables metadata
 writes instead of being overwritten; repair the configured file and restart
 Muxdeck.
@@ -606,8 +578,7 @@ Muxdeck.
 The snippet file loads schemas 1 and 2. Schema 2 supports optional shortcut
 aliases on snippet leaves (up to eight non-whitespace words, each at most 32
 characters). Loading a version-1 file does not rewrite it; the next snippet
-save atomically writes version 2. Preserve the pre-upgrade `snippets.json` for
-rollback because older releases reject version 2.
+save atomically writes version 2, which older releases reject.
 
 The shortcut file uses schema version 8. Version 7 loads by adding Open scrollback
 with `KeyP` only in unoccupied direct/shortcut-window layers. Version 6 loads by adding Insert snippet
@@ -622,8 +593,8 @@ floating utility-terminal binding with `KeyJ`; version 2 adds the floating
 staged-input binding with `KeyY`, and version 1 first adds the quick
 temporary-session binding with `KeyK`. Each legacy upgrade adds the later bindings
 in that order; occupied keys leave only that layer unbound. The next keymap save
-atomically writes version 8. Keep a pre-upgrade copy for rollback: releases that
-only understand versions 1 through 7 reject version 8. An unreadable, malformed,
+atomically writes version 8. Releases that only understand versions 1 through 7
+reject version 8. An unreadable, malformed,
 conflicting, or unsupported shortcut file makes that store unavailable instead
 of overwriting it.
 
@@ -1104,7 +1075,7 @@ The deployment agent should report:
 - the selected authentication mode and its expected unauthenticated result;
   for `server`, whether same-profile tabs shared the login; for `basic`, whether
   the browser challenge succeeded; never report a password or bearer cookie;
-- source/unit/Caddy, JSON/SQLite state, and uploaded-attachment backups retained for rollback;
+- previous release and changed configuration retained for rollback;
 - build/test commands and results;
 - local and external health results;
 - pre/post tmux identity comparison;
@@ -1116,8 +1087,10 @@ server or returns an unexpected session count.
 
 ## 12. Rollback
 
-Keep the previous release and all backups until the human accepts the new
-deployment.
+Keep the previous release and any prior unit or proxy configuration through
+deployment acceptance. Roll back to code that can read and preserve the live
+state. If a change introduced an incompatible schema, deploy a forward fix or
+a rollback build that supports the new schema.
 
 For a failed replacement:
 
@@ -1125,80 +1098,11 @@ For a failed replacement:
 2. Validate the restored Caddy configuration, then reload Caddy.
 3. Stop only `muxdeck.service`, then restore the prior systemd unit or point it
    back to the prior release.
-4. Restore all six state JSON files and `sessions.sqlite3` only while Muxdeck is
-   stopped; preserve owner and modes. Preserve `workspaces.json` even when the rollback release
-   does not understand it, so a later compatible release can recover the saved
-   workspace list.
-   When rolling back to a release that only understands workspace versions 1
-   through 15, retain the version-16 file separately and restore the pre-upgrade
-   workspace file. Older releases reject version 16 and cannot read saved folds.
-   When rolling back to a release that only understands workspace versions 1
-   through 14, retain the version-15 file separately and restore the pre-upgrade
-   workspace file. Older releases reject version 15 and cannot display folds.
-   Releases before optional quick-link titles reject blank link labels, including
-   in schema-14 workspace files. Before rolling back to such a release, retain
-   the current file privately and restore the pre-upgrade `workspaces.json` while
-   Muxdeck is stopped. Do not downgrade or discard other live state to fix labels.
-   When rolling back to a release that only understands workspace-file versions
-   1 through 13, retain the version-14 file separately and restore the pre-upgrade
-   workspace file; older releases cannot read nested tab relationships.
-   When rolling back to a release that only understands workspace-file versions
-   1 through 10, retain the version-11 file separately and restore the pre-upgrade
-   workspace file; older releases cannot read workspace callback lists. A release
-   that only understands versions 1 through 12 additionally cannot read the
-   explicit global callback list in the version-13 document; retain that file
-   separately and restore the pre-upgrade workspace file. A release that only
-   understands versions 1 through 9 additionally cannot read named pane layouts
-   or their session assignments and split ratios.
-   When rolling back to version 8 or earlier, retain the version-9 file separately
-   and restore the pre-upgrade workspace file; older releases cannot read
-   before-session separators. A separator anchors before or after a session and
-   follows Muxdeck renames; removing that tab also removes the separator.
-   When rolling back to a release that only understands workspace-file versions
-   1 through 6, retain a separate copy of the version-7 file and restore the
-   pre-upgrade `workspaces.json`; global pins and inherited-membership provenance
-   are unavailable to that older release. Versions 1 through 5 also lack scoped
-   notes, versions 1 through 4 lack session-specific quick links, and versions 1
-   through 3 additionally lack common and workspace-specific quick links.
-   When rolling back to a release that only writes title-file version 1 through
-   3, retain a separate copy of the version-4 file and restore the pre-upgrade
-   `session-titles.json`; tags are unavailable to that older release and would be
-   discarded by its next metadata write. Version-1-or-2 releases can also lose
-   ignored statuses.
-   When rolling back to a release that only reads snippet-file version 1,
-   preserve the version-2 document and restore the pre-upgrade `snippets.json`.
-   When rolling back to a release that only understands shortcut-file version 7
-   or earlier, preserve the version-8 document and restore the pre-upgrade
-   `shortcuts.json`; the Open scrollback binding is unavailable there.
-   When rolling back to a release that only understands shortcut-file version 6
-   or earlier, preserve the version-7 document and restore the pre-upgrade
-   `shortcuts.json`; the Insert snippet binding is unavailable there.
-   When rolling back to a release that only understands shortcut-file version 5
-   or earlier, also restore the pre-upgrade
-   `shortcuts.json`; the workspace-callback action is unavailable there. A
-   release that only understands version 4 or earlier additionally lacks the
-   pane-navigation action. Version-3 releases also lack the utility-terminal
-   action, and version-2 releases additionally lack the floating-input binding.
-   A version-1 release also lacks the quick temporary-session binding.
-   Preserve the upload directory separately. An older release ignores it; do not
-   delete attachments created after the pre-deployment backup merely to roll back
-   application code.
-   Reuse the live scrollback database on compatible rollback. If a scrollback
-   migration requires a restore, preserve the current database separately while
-   Muxdeck is stopped. For a `.sqlite3.zst` backup, extract into a private staging
-   directory with `zstd -dc`, compare the staged file's `sha256sum` with the
-   backup manifest or cleanup audit, and run SQLite `PRAGMA quick_check` before
-   installing it with the original owner and mode `0600`.
-   Preserve `auth.json` separately even when the rollback release does not
-   support it. Before exposing an older unauthenticated release, remove the
-   public route or add a separate authenticated proxy/access layer; retaining an
-   ignored auth file does not protect old application code.
-   Retain the current `launch-requests.sqlite3` even if the rollback release
-   ignores it. Restoring an older launch-request backup discards newer duplicate
-   fences, so reconcile outstanding attempts before allowing launch traffic
-   after a database restore. Keep the control and callback token files private;
-   retaining an ignored control credential does not grant a rollback release
-   any automation features or protect an otherwise unauthenticated route.
+4. Point the rollback release at the same live state paths. Keep workspaces,
+   titles, histories, launch receipts, uploads, note images, and credentials in
+   place. Check the schema and field compatibility described in section 6.
+   An older release that lacks application authentication requires a private
+   route or separate authenticated access control before serving traffic.
 5. Run `systemctl daemon-reload` and start only `muxdeck.service`.
 6. Recheck local health, external routing, persistent session organization, and
    the recorded tmux identities.
@@ -1276,7 +1180,7 @@ checks. Recheck the recorded boot ID and process start ticks before each signal;
 signal only that exact console PID, never its process group, container, tmux
 server, or panes. The checker is read-only and does not authorize a restart.
 Preserve the original launch arguments/environment privately in memory, retain
-rollback code and state backups, and verify the existing auth mode, loopback
+the prior code, and verify the existing auth mode, loopback
 binding, base path, and socket. Do not record credential values.
 
 Every phase prints its start, result, and elapsed time immediately. Commands
@@ -1292,7 +1196,7 @@ Protected assets correctly return `401` without a login. The checker verifies
 that denial, the server-mode login redirect, Basic challenges when applicable,
 and rejection of an untrusted Host. It does not create credentials or claim to
 validate authenticated application behavior. Keep task-specific browser tests,
-database/migration checks, CI results, and rollback backups as separate evidence.
+database/migration checks, and CI results as separate evidence.
 
 Do independent development in a separate worktree before changing a dirty live
 checkout. Stage frontend builds outside the live `dist/`, validate them, then
@@ -1309,9 +1213,7 @@ tree:
 1. stage the new archive in a new exact directory;
 2. create a fresh venv and run `npm ci` + build there;
 3. run source and loopback checks on the staged release;
-4. retain the external state directory and take the private rollback backups in
-   section 4.4. Keep compatible scrollback in place and use a compressed snapshot
-   when that section calls for one;
+4. reuse the external state directory in place as described in section 4.4;
 5. render/verify a unit pointing at the new release;
 6. restart only Muxdeck;
 7. validate health and tmux identities;
@@ -1346,16 +1248,14 @@ normal observation; the existing SQLite schema remains version 5. Reload open
 browser pages to use stable history cursors and complete-conversation export.
 Exports read native agent storage through the existing authenticated endpoint;
 PDF uses a browser print view and requires no new service, port, or proxy route.
-Rollback to the preceding schema-5 release can keep current state. Preserve
-the separate pre-schema-5 backup when retaining older rollback code.
+The preceding schema-5 release can roll back against the live state.
 
 Workspace streaming and `expectedUpdatedAt` checks do not themselves require a
 schema change. Nested tab relationships were introduced in schema 14; arbitrary
 tab folds use schema 15; saved fold-and-close metadata uses schema 16. Legacy
-files upgrade atomically on the next state write. Keep the
-pre-upgrade workspace file for rollback, deploy backend and frontend together,
-and reload open pages to enable folds. Older clients that omit `folds` preserve
-the existing placeholders when writing activity. No tmux change is required.
+files upgrade atomically on the next state write. Deploy backend and frontend
+together and reload open pages to enable folds. Older clients that omit `folds`
+preserve the existing placeholders when writing activity. No tmux change is required.
 When deploying this change under an authorized
 update, include both the backend and rebuilt frontend. Reload existing browser
 pages so they use the version-aware client; a previously loaded older bundle
@@ -1375,9 +1275,8 @@ notebook representation; no workspace schema or SQLite migration is required.
 Agents can read/list pages, append, update, replace, clear, add/rename/delete
 pages, and reorder them through the existing authenticated note routes. Writes
 other than append require a saved revision. The editor retains a conflicting
-draft and asks before reloading the latest notebook. Preserve the existing
-notebook JSON and capture database/images in the ordinary private rollback
-backup. See [notebook APIs](docs/API.md#notes-and-notebooks).
+draft and asks before reloading the latest notebook. Keep the notebook JSON,
+capture database, and images in place. See [notebook APIs](docs/API.md#notes-and-notebooks).
 
 ### Automatic session completion
 
@@ -1393,9 +1292,8 @@ ignore them. See [automatic session completion](docs/SESSION_COMPLETION.md).
 recovery metadata before closing one confirmed native session, retaining its
 tabs and workspace organization. The status derives from existing ended history
 with recovery enabled, including fold-and-close sessions; registry schema 5 and
-workspace schema 16 are unchanged. Keep ordinary private state backups and
-reload open pages. **Recreate shell** uses the explicit shell launcher and
-bypasses tmux's default command. See [Pre-archived sessions](docs/SESSION_PRE_ARCHIVE.md).
+workspace schema 16 are unchanged. Reload open pages. **Recreate shell** uses
+the explicit shell launcher and bypasses tmux's default command. See [Pre-archived sessions](docs/SESSION_PRE_ARCHIVE.md).
 
 ### Trusted controller setup
 

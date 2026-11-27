@@ -187,7 +187,7 @@ creates a new incarnation; explicitly add any links wanted there.
 
 The private `work-links.sqlite3` file lives beside the configured session registry;
 `MUXDECK_WORK_LINKS_FILE` overrides it. Schema version 1 is separate from workspace
-and registry schemas. Include it in private SQLite backups and keep it on rollback;
-older releases ignore it. A damaged/unsupported database returns `503` for this
+and registry schemas. Keep it in place during deployments and code rollbacks.
+Older releases ignore it. A damaged/unsupported database returns `503` for this
 feature while terminal access remains available. Do not edit a running database
 by hand.

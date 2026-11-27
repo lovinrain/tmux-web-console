@@ -1651,7 +1651,7 @@ schema rather than replacing it.
 The current metadata schema is version 4. Existing version 1 through 3 files
 load without a separate migration command and initially have no tags; the next
 title, tag, star, or ignored-status write atomically rewrites the file as version
-4. Keep a pre-upgrade copy when rollback is possible. A release that only knows
+4. A release that only knows
 version 3 will discard tags on its next metadata write; releases that only know
 version 1 or 2 can additionally discard ignored status. An unreadable,
 malformed, or unsupported future metadata document disables metadata writes
@@ -1660,8 +1660,7 @@ instead of being replaced; repair the configured file and restart Muxdeck.
 `MUXDECK_SNIPPETS_FILE` stores the global folder/snippet tree. Unlike staged
 drafts, it lives on the server and is shared across browsers.
 Snippet documents load versions 1 and 2; the next save writes version 2 with
-optional shortcut aliases. Keep the pre-upgrade file for rollback to a release
-that only reads version 1.
+optional shortcut aliases. A release that only reads version 1 rejects it.
 
 `MUXDECK_SHORTCUTS_FILE` stores the global desktop keymap. It is shared across
 browsers, uses revision-checked whole-document writes, and defaults to the
@@ -1679,8 +1678,8 @@ floating utility terminal with `J`; version 2 adds floating input with `Y`, and
 version 1 first adds the quick temporary session with `K`. Upgrades add each
 later action in order, and a conflict leaves only that layer unbound instead of
 replacing a custom key. The first keymap save atomically rewrites a version 1
-through 7 document as version 8. Keep a pre-upgrade backup when rollback to an
-older release is possible.
+through 7 document as version 8. Use a rollback release that supports the live
+shortcut schema.
 
 `MUXDECK_AUTH_MODE` selects `server`, `basic`, or `none` when the process starts.
 `server` uses the Muxdeck form login and remembered-device cookies. `basic` uses
@@ -1943,8 +1942,7 @@ characters, quick-link URLs to 2,048 characters, every notebook to 128 pages
 with 80-character names, workspace callback lists to 64 unique session names,
 and the explicit global callback list to 256 unique session names.
 Page content has no separate character validator. Writes use an
-atomic file replacement. Keep a pre-upgrade copy when
-rollback is possible because releases that only understand versions 1 through 15
+atomic file replacement. Releases that only understand versions 1 through 15
 reject the version 16 document. If an existing workspace file is unreadable,
 malformed, or uses an unsupported schema, the workspace API returns `503` and
 refuses to overwrite it until the file is repaired and Muxdeck is restarted.
