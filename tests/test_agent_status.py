@@ -24,6 +24,11 @@ OPENCODE_EXTENDED_FOOTER = (
 )
 AGY_IDLE = f"{RULE}\n>\n{RULE}\n? for shortcuts                Gemini"
 AGY_ACTIVE = f"{RULE}\n>\n{RULE}\nesc to cancel                Gemini"
+AGY_QUEUED = (
+    "▸ Follow-up question (alt+m to send immediately)\n"
+    f"{RULE}\n>\n{RULE}\n"
+    "  Press up to edit queued messages                Gemini"
+)
 
 
 def pane(command: str, title: str = "", *, now: int = 1000) -> Pane:
@@ -159,6 +164,11 @@ def test_opencode_selectors_can_keep_the_idle_footer(heading):
     [
         (AGY_IDLE, "waiting_human"),
         (AGY_ACTIVE, "working"),
+        (
+            f"⣽  1/2 steps · Running command...\n  ⎿  ✓ Prepare input\n     ● Run command\n{AGY_QUEUED}",
+            "working",
+        ),
+        (f"{AGY_QUEUED}\n{AGY_IDLE}", "waiting_human"),
         (f"⡿ Updating the output\n└ Waiting for a result\n{AGY_ACTIVE}", "working"),
         (f"Running command... 18s\n{AGY_ACTIVE}", "running_command"),
         (f"esc to cancel\nEarlier output\n{AGY_IDLE}", "waiting_human"),
@@ -178,6 +188,7 @@ def test_opencode_selectors_can_keep_the_idle_footer(heading):
         ("Yes, and always allow 'pwd' in this conversation\nNo, deny access", "waiting_human"),
         ("Thinking... 12s\nA partial terminal capture.", "unknown"),
         ("? for shortcuts", "unknown"),
+        ("Press up to edit queued messages", "unknown"),
     ],
 )
 def test_agy_requires_current_native_controls(screen, expected):
@@ -196,7 +207,7 @@ async def test_detector_captures_current_agent_controls():
         "%1": PI_IDLE,
         "%2": f"─── ⣾ Running… (⎋ to cancel) ──\n\n{OMP_IDLE}",
         "%3": OPENCODE_IDLE,
-        "%4": AGY_ACTIVE,
+        "%4": AGY_QUEUED,
     }
 
     class CaptureTmux:
